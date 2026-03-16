@@ -1,0 +1,186 @@
+# Test Case: Structured Output Multi-Turn Chat - OpenAI Python
+# Verifies native response_format structured output durability across 5 turns
+# with the OpenAI provider. Fills the gap left by tc08 which is single-turn only.
+
+name: "Structured Multi-Turn Chat - OpenAI Py"
+description: "Verify native response_format structured output across 5 turns with OpenAI provider"
+tags:
+  - llm
+  - openai
+  - structured
+  - python
+  - multi-turn
+timeout: 180
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy UC-level OpenAI provider artifacts
+  - name: "Copy OpenAI provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/openai-provider /workspace/"
+    capture: copy_provider_output
+
+  # Copy TC-level chat-openai-agent artifacts
+  - name: "Copy chat-openai-agent to workspace"
+    handler: shell
+    command: "cp -r /artifacts/chat-openai-agent /workspace/"
+    capture: copy_agent_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # Start OpenAI provider
+  - name: "Start OpenAI provider"
+    handler: shell
+    command: "meshctl start openai-provider/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_provider_output
+
+  # Wait for provider to register
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 10
+
+  # Verify provider is running
+  - name: "Verify provider is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: provider_list_output
+
+  # Start chat-openai-agent (depends on openai-provider)
+  - name: "Start chat-openai-agent"
+    handler: shell
+    command: "meshctl start chat-openai-agent/main.py -d"
+    workdir: /workspace
+    capture: start_agent_output
+
+  # Wait for agent to register and resolve provider
+  - name: "Wait for agent to register"
+    handler: wait
+    seconds: 10
+
+  # Verify all agents running
+  - name: "Verify all agents running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: all_list_output
+
+  # === 5 SEQUENTIAL CHAT TURNS ===
+  - name: "Turn 1 - Ocean question"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "What makes the ocean blue?"}}'
+    workdir: /workspace
+    capture: turn_1
+
+  - name: "Turn 2 - Follow-up about sky"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "How does that relate to the sky color?"}}'
+    workdir: /workspace
+    capture: turn_2
+
+  - name: "Turn 3 - Rainbows"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "Tell me about rainbows then"}}'
+    workdir: /workspace
+    capture: turn_3
+
+  - name: "Turn 4 - Favorite color"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "What'\''s your favorite color and why?"}}'
+    workdir: /workspace
+    capture: turn_4
+
+  - name: "Turn 5 - Summary"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "Summarize what we discussed"}}'
+    workdir: /workspace
+    capture: turn_5
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Provider and agent started successfully
+  - expr: ${captured.provider_list_output} contains 'openai-provider'
+    message: "openai-provider should appear in meshctl list"
+  - expr: ${captured.all_list_output} contains 'chat-openai-agent'
+    message: "chat-openai-agent should appear in meshctl list"
+
+  # === ALL 5 TURNS: structured output should contain reply field ===
+  - expr: ${captured.turn_1} contains '"reply"'
+    message: "Turn 1 should contain reply field (valid structured output)"
+  - expr: ${captured.turn_1} not contains 'ValidationError'
+    message: "Turn 1 should not have ValidationError"
+  - expr: ${captured.turn_1} not contains 'Expecting value'
+    message: "Turn 1 should not have JSON parse error"
+
+  - expr: ${captured.turn_2} contains '"reply"'
+    message: "Turn 2 should contain reply field"
+  - expr: ${captured.turn_2} not contains 'ValidationError'
+    message: "Turn 2 should not have ValidationError"
+  - expr: ${captured.turn_2} not contains 'Expecting value'
+    message: "Turn 2 should not have JSON parse error"
+
+  - expr: ${captured.turn_3} contains '"reply"'
+    message: "Turn 3 should contain reply field"
+  - expr: ${captured.turn_3} not contains 'ValidationError'
+    message: "Turn 3 should not have ValidationError"
+  - expr: ${captured.turn_3} not contains 'Expecting value'
+    message: "Turn 3 should not have JSON parse error"
+
+  - expr: ${captured.turn_4} contains '"reply"'
+    message: "Turn 4 should contain reply field"
+  - expr: ${captured.turn_4} not contains 'ValidationError'
+    message: "Turn 4 should not have ValidationError"
+  - expr: ${captured.turn_4} not contains 'Expecting value'
+    message: "Turn 4 should not have JSON parse error"
+
+  - expr: ${captured.turn_5} contains '"reply"'
+    message: "Turn 5 should contain reply field"
+  - expr: ${captured.turn_5} not contains 'ValidationError'
+    message: "Turn 5 should not have ValidationError"
+  - expr: ${captured.turn_5} not contains 'Expecting value'
+    message: "Turn 5 should not have JSON parse error"
+
+  # === STRUCTURAL CHECKS: sentiment and topic fields ===
+  - expr: ${captured.turn_1} contains '"sentiment"'
+    message: "Turn 1 should contain sentiment field"
+  - expr: ${captured.turn_3} contains '"sentiment"'
+    message: "Turn 3 should contain sentiment field"
+  - expr: ${captured.turn_5} contains '"sentiment"'
+    message: "Turn 5 should contain sentiment field"
+  - expr: ${captured.turn_1} contains '"topic"'
+    message: "Turn 1 should contain topic field"
+  - expr: ${captured.turn_3} contains '"topic"'
+    message: "Turn 3 should contain topic field"
+  - expr: ${captured.turn_5} contains '"topic"'
+    message: "Turn 5 should contain topic field"
+
+  # === ERROR CHECKS ===
+  - expr: ${captured.turn_1} not contains 'Mesh provider not resolved'
+    message: "Turn 1 should not have provider error"
+  - expr: ${captured.turn_5} not contains 'Mesh provider not resolved'
+    message: "Turn 5 should not have provider error"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

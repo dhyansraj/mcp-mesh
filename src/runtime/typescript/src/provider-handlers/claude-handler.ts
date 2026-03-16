@@ -4,16 +4,17 @@
  * Optimized for Claude API (Claude 3.x, Sonnet, Opus, Haiku)
  * using Anthropic's best practices for tool calling and JSON responses.
  *
- * Supports two output modes (TEXT + HINT only):
- * - hint: Use prompt-based JSON instructions with DECISION GUIDE (~95% reliable)
- * - text: Plain text output for str return types (fastest)
- *
- * Native response_format (strict mode) is NOT used due to cross-runtime
- * incompatibilities when tools are present, and grammar compilation overhead.
+ * Dual output strategy (matching Python SDK):
+ * - formatSystemPrompt (direct calls): HINT mode — prompt-based JSON instructions
+ *   with DECISION GUIDE for callers that don't control the provider-side API call.
+ * - prepareRequest (mesh delegation): native response_format with strict JSON schema
+ *   for provider-side enforcement. The caller controls the full API call and can
+ *   pass response_format directly to the Anthropic API.
  *
  * Features:
  * - Anti-XML tool calling instructions
  * - DECISION GUIDE for tool vs. direct JSON response decisions
+ * - Native response_format for structured output in mesh delegation
  *
  * Note: Prompt caching is not yet implemented for AI SDK v6.
  * TODO: Re-enable via experimental_providerOptions when AI SDK v6 supports it.
@@ -23,6 +24,9 @@ import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
 import {
   convertMessagesToVercelFormat,
+  sanitizeSchemaForStructuredOutput,
+  makeSchemaStrict,
+  defaultDetermineOutputMode,
   BASE_TOOL_INSTRUCTIONS,
   CLAUDE_ANTI_XML_INSTRUCTION,
   type ProviderHandler,
@@ -48,13 +52,12 @@ const debug = createDebug("claude-handler");
  * - Native tool calling (via Anthropic messages API)
  * - Performs best with anti-XML tool calling instructions
  *
- * Output Modes (TEXT + HINT only):
- * - hint: JSON schema in prompt with DECISION GUIDE (~95% reliable)
- * - text: Plain text output for str return types (fastest)
- *
- * Native response_format (strict mode) is not used. HINT mode with
- * detailed prompt instructions provides sufficient reliability (~95%)
- * without cross-runtime incompatibilities and grammar compilation overhead.
+ * Dual output strategy (matching Python SDK):
+ * - formatSystemPrompt: Adds brief JSON note in strict mode, detailed HINT
+ *   instructions in hint mode. Used for belt-and-suspenders prompt guidance.
+ * - prepareRequest: Sets native response_format with strict JSON schema when
+ *   outputMode is "strict". Used for mesh delegation where the provider
+ *   controls the full API call.
  *
  * Best Practices (from Anthropic docs):
  * - Add anti-XML instructions to prevent <invoke> style tool calls
@@ -66,7 +69,8 @@ export class ClaudeHandler implements ProviderHandler {
   /**
    * Prepare request parameters for Claude API with output mode support.
    *
-   * Output Mode Strategy (TEXT + HINT only):
+   * Output Mode Strategy:
+   * - strict: Set response_format with strict JSON schema (native enforcement)
    * - hint: No response_format, rely on prompt instructions (~95% reliable)
    * - text: No response_format, plain text output (fastest)
    *
@@ -93,13 +97,6 @@ export class ClaudeHandler implements ProviderHandler {
     // Convert messages to Vercel AI SDK format (shared utility)
     let convertedMessages = convertMessagesToVercelFormat(messages);
 
-    // Note: In hint mode, JSON instructions are added by formatSystemPrompt() which
-    // is called by llm-provider.ts before prepareRequest(). We don't duplicate here.
-    // The formatSystemPrompt() method handles the DECISION GUIDE when tools are present.
-    if (determinedMode === "hint" && outputSchema) {
-      debug(`Using hint mode (JSON instructions added by formatSystemPrompt)`);
-    }
-
     const request: PreparedRequest = {
       messages: convertedMessages,
       ...rest,
@@ -122,13 +119,39 @@ export class ClaudeHandler implements ProviderHandler {
       request.topP = topP;
     }
 
+    // Skip structured output for text mode or no schema
+    if (determinedMode === "text" || !outputSchema) {
+      return request;
+    }
+
+    // Only add response_format in "strict" mode (native enforcement)
+    // Hint mode relies on prompt instructions instead
+    if (determinedMode === "strict") {
+      const sanitizedSchema = sanitizeSchemaForStructuredOutput(outputSchema.schema);
+      const strictSchema = makeSchemaStrict(sanitizedSchema, { addAllRequired: true });
+
+      request.responseFormat = {
+        type: "json_schema",
+        jsonSchema: {
+          name: outputSchema.name,
+          schema: strictSchema,
+          strict: true,
+        },
+      };
+
+      debug(`Using response_format with strict schema: ${outputSchema.name}`);
+    } else if (determinedMode === "hint" && outputSchema) {
+      debug(`Using hint mode (JSON instructions added by formatSystemPrompt)`);
+    }
+
     return request;
   }
 
   /**
    * Format system prompt for Claude with output mode support.
    *
-   * Output Mode Strategy (TEXT + HINT only):
+   * Output Mode Strategy:
+   * - strict: Brief JSON note (response_format handles schema enforcement)
    * - hint: Add detailed JSON schema instructions with DECISION GUIDE in prompt
    * - text: No JSON instructions (plain text output)
    */
@@ -155,6 +178,27 @@ export class ClaudeHandler implements ProviderHandler {
     // Add output format instructions based on mode
     if (determinedMode === "text") {
       // Text mode: No JSON instructions
+      return systemContent;
+    }
+
+    // Skip JSON instructions for no schema
+    if (!outputSchema) {
+      return systemContent;
+    }
+
+    // Strict mode: response_format handles enforcement.
+    // When tools are present, add DECISION GUIDE so Claude knows when to
+    // call tools vs return JSON directly (matches Java handler behavior).
+    if (determinedMode === "strict") {
+      if (toolSchemas && toolSchemas.length > 0) {
+        systemContent += `
+DECISION GUIDE:
+- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
+- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
+- After calling a tool and receiving results, STOP calling tools and return your final JSON response.
+`;
+      }
+      systemContent += `\n\nYour final response will be structured as JSON matching the ${outputSchema.name} format.`;
       return systemContent;
     }
 
@@ -216,7 +260,7 @@ CRITICAL: Your response must be ONLY the raw JSON object.
   getCapabilities(): VendorCapabilities {
     return {
       nativeToolCalling: true, // Claude has native function calling
-      structuredOutput: false, // Uses HINT mode (prompt-based), not native response_format
+      structuredOutput: true, // Native response_format support in mesh delegation
       streaming: true, // Supports streaming
       vision: true, // Claude 3+ supports vision
       jsonMode: false, // No native JSON mode used
@@ -225,36 +269,17 @@ CRITICAL: Your response must be ONLY the raw JSON object.
   }
 
   /**
-   * Determine the output mode based on schema complexity.
+   * Determine the optimal output mode for Claude.
    *
-   * Claude Strategy (Option A):
-   * - Always use "hint" mode (prompt-based) for schemas, never "strict"
-   * - Vercel AI SDK's generateObject() for Anthropic has issues with nested schemas
-   * - Anthropic's native structured output is slow and requires beta header
-   * - Prompt-based JSON instructions are fast and ~95% reliable for Claude
-   *
-   * Logic:
-   * - If overrideMode specified, use it
-   * - If no schema (string return type), use "text" mode
-   * - If schema exists, always use "hint" mode (prompt-based)
+   * Uses the default implementation which returns "strict" for schemas.
+   * This enables native response_format enforcement in mesh delegation
+   * (provider-side), matching the Python SDK behavior.
    */
   determineOutputMode(
     outputSchema: OutputSchema | null,
     overrideMode?: OutputMode
   ): OutputMode {
-    // Allow explicit override
-    if (overrideMode) {
-      return overrideMode;
-    }
-
-    // No schema means text mode (string return type)
-    if (!outputSchema) {
-      return "text";
-    }
-
-    // Always use hint mode for Claude - generateObject() has issues with Anthropic
-    // and native structured output is slow. Prompt-based JSON is fast and reliable.
-    return "hint";
+    return defaultDetermineOutputMode(outputSchema, overrideMode);
   }
 
 }

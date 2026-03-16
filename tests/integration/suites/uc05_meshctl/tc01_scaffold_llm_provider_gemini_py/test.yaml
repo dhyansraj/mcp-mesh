@@ -61,4 +61,3 @@ assertions:
     message: "Should NOT use outdated gemini-1.5-flash model"
 post_run:
   - routine: global.cleanup_workspace
-disabled: true

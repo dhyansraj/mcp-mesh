@@ -5,12 +5,189 @@ This module provides convenience decorators that build on top of the core
 mesh decorators to simplify common patterns like zero-code LLM providers.
 """
 
+import asyncio
+import json
 import logging
 from typing import Any, Optional
 
 from _mcp_mesh.shared.logging_config import format_log_value
 
 logger = logging.getLogger(__name__)
+
+
+async def _provider_agentic_loop(
+    effective_model: str,
+    messages: list,
+    tools: list,
+    tool_endpoints: dict[str, str],
+    model_params: dict,
+    litellm_kwargs: dict,
+    max_iterations: int = 10,
+    loop_logger: logging.Logger | None = None,
+) -> dict[str, Any]:
+    """Execute tools provider-side and return final response.
+
+    Runs a full agentic loop on the provider: calls the LLM, executes any
+    tool calls via MCP proxies, feeds results back, and repeats until the
+    LLM produces a final text response (no tool calls).
+
+    Args:
+        effective_model: LiteLLM model identifier to use.
+        messages: Conversation messages (will be copied internally).
+        tools: OpenAI-format tool schemas (already cleaned of _mesh_endpoint).
+        tool_endpoints: Mapping of tool_name -> MCP endpoint URL.
+        model_params: Extra model parameters for litellm.completion().
+        litellm_kwargs: Base kwargs captured by the decorator.
+        max_iterations: Safety limit on loop iterations.
+        loop_logger: Logger instance for debug/info output.
+
+    Returns:
+        Message dict with role, content, and optionally _mesh_usage.
+    """
+    import litellm
+
+    from _mcp_mesh.engine.unified_mcp_proxy import UnifiedMCPProxy
+
+    iteration = 0
+    current_messages = list(messages)
+
+    while iteration < max_iterations:
+        iteration += 1
+
+        completion_args: dict[str, Any] = {
+            "model": effective_model,
+            "messages": current_messages,
+            "tools": tools,
+            **litellm_kwargs,
+        }
+        if model_params:
+            completion_args.update(model_params)
+
+        response = await asyncio.to_thread(litellm.completion, **completion_args)
+        message = response.choices[0].message
+
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            if loop_logger:
+                loop_logger.debug(
+                    f"Provider executing {len(message.tool_calls)} tool calls "
+                    f"(iteration {iteration}/{max_iterations})"
+                )
+
+            # Add assistant message with tool_calls to conversation
+            assistant_msg: dict[str, Any] = {
+                "role": "assistant",
+                "content": message.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": tc.type,
+                        "function": {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in message.tool_calls
+                ],
+            }
+            current_messages.append(assistant_msg)
+
+            # Execute each tool call via MCP proxy
+            for tc in message.tool_calls:
+                tool_name = tc.function.name
+                endpoint = tool_endpoints.get(tool_name)
+
+                if not endpoint:
+                    if loop_logger:
+                        loop_logger.warning(
+                            f"No endpoint for tool {tool_name}, returning error"
+                        )
+                    tool_result = json.dumps(
+                        {"error": f"Tool {tool_name} not available"}
+                    )
+                else:
+                    try:
+                        args = (
+                            json.loads(tc.function.arguments)
+                            if tc.function.arguments
+                            else {}
+                        )
+                        proxy = UnifiedMCPProxy(
+                            endpoint=endpoint, function_name=tool_name
+                        )
+                        result = await proxy.call_tool(tool_name, args)
+
+                        if isinstance(result, (dict, list)):
+                            tool_result = json.dumps(result)
+                        elif result is None:
+                            tool_result = ""
+                        else:
+                            tool_result = str(result)
+
+                        if loop_logger:
+                            loop_logger.debug(
+                                f"Tool {tool_name} result: {tool_result[:200]}"
+                            )
+                    except Exception as e:
+                        if loop_logger:
+                            loop_logger.error(f"Tool {tool_name} execution failed: {e}")
+                        tool_result = json.dumps({"error": str(e)})
+
+                current_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": tool_result,
+                    }
+                )
+        else:
+            # No tool calls - final response
+            content = message.content
+            if isinstance(content, list):
+                text_parts = []
+                for block in content:
+                    if block is None:
+                        continue
+                    elif isinstance(block, dict):
+                        text_value = block.get("text", "")
+                        text_parts.append(
+                            str(text_value) if text_value is not None else ""
+                        )
+                    else:
+                        try:
+                            text_parts.append(str(block))
+                        except Exception:
+                            continue
+                content = "".join(text_parts)
+
+            message_dict: dict[str, Any] = {
+                "role": message.role,
+                "content": content if content else "",
+            }
+
+            if hasattr(response, "usage") and response.usage:
+                usage = response.usage
+                message_dict["_mesh_usage"] = {
+                    "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                    "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+                    "model": effective_model,
+                }
+
+            if loop_logger:
+                loop_logger.info(
+                    f"Provider-managed loop completed in {iteration} iterations"
+                )
+
+            return message_dict
+
+    # Safety: max iterations reached
+    if loop_logger:
+        loop_logger.warning(
+            f"Provider-managed loop hit max iterations ({max_iterations})"
+        )
+    return {
+        "role": "assistant",
+        "content": "Maximum tool call iterations reached",
+    }
 
 
 def _extract_vendor_from_model(model: str) -> str | None:
@@ -172,7 +349,7 @@ def llm_provider(
                 )
 
         # Generate the LLM handler function
-        def process_chat(request: MeshLlmRequest) -> dict[str, Any]:
+        async def process_chat(request: MeshLlmRequest) -> dict[str, Any]:
             """
             Auto-generated LLM handler.
 
@@ -237,9 +414,22 @@ def llm_provider(
                     f"{output_type_name}"
                 )
 
-            # Use vendor handler to format system prompt when tools are present
-            messages = request.messages
+            # Check if tools have mesh endpoints for provider-side execution
+            tool_endpoints: dict[str, str] = {}
+            clean_tools: list[dict[str, Any]] | None = None
             if request.tools:
+                clean_tools = []
+                for req_tool in request.tools:
+                    func_def = req_tool.get("function", {})
+                    endpoint = func_def.pop("_mesh_endpoint", None)
+                    if endpoint:
+                        tool_endpoints[func_def.get("name", "")] = endpoint
+                    clean_tools.append(req_tool)
+
+            # Use vendor handler to format system prompt when tools are present
+            effective_tools = clean_tools if clean_tools is not None else request.tools
+            messages = request.messages
+            if effective_tools:
 
                 # Find and format system message
                 formatted_messages = []
@@ -249,7 +439,7 @@ def llm_provider(
                         base_prompt = msg.get("content", "")
                         formatted_content = handler.format_system_prompt(
                             base_prompt=base_prompt,
-                            tool_schemas=request.tools,
+                            tool_schemas=effective_tools,
                             output_type=str,  # Provider returns raw string
                         )
                         formatted_messages.append(
@@ -259,55 +449,71 @@ def llm_provider(
                         formatted_messages.append(msg)
                 messages = formatted_messages
 
-            # Build litellm.completion arguments
+            if tool_endpoints:
+                # Provider-managed agentic loop: execute tools internally
+                logger.info(
+                    f"Provider-managed loop: {len(tool_endpoints)} tools with endpoints"
+                )
+                message_dict = await _provider_agentic_loop(
+                    effective_model=effective_model,
+                    messages=messages,
+                    tools=clean_tools or [],
+                    tool_endpoints=tool_endpoints,
+                    model_params=model_params_copy,
+                    litellm_kwargs=litellm_kwargs,
+                    max_iterations=10,
+                    loop_logger=logger,
+                )
+
+                logger.info(
+                    f"LLM provider {func.__name__} processed request via provider loop "
+                    f"(model={effective_model}, messages={len(request.messages)})"
+                )
+
+                return message_dict
+
+            # Legacy path: single LLM call, return tool_calls to consumer
             completion_args: dict[str, Any] = {
                 "model": effective_model,
                 "messages": messages,
                 **litellm_kwargs,
             }
 
-            # Add optional request parameters
-            if request.tools:
-                completion_args["tools"] = request.tools
+            if effective_tools:
+                completion_args["tools"] = effective_tools
 
             if model_params_copy:
                 completion_args.update(model_params_copy)
 
-            # Call LiteLLM
             try:
-                # Log full request
                 logger.debug(
                     f"📤 LLM provider request: {format_log_value(completion_args)}"
                 )
 
-                response = litellm.completion(**completion_args)
+                response = await asyncio.to_thread(
+                    litellm.completion, **completion_args
+                )
 
-                # Log full response
                 logger.debug(f"📥 LLM provider response: {format_log_value(response)}")
 
                 message = response.choices[0].message
 
-                # Build message dict with all necessary fields for agentic loop
                 # Handle content - it can be a string or list of content blocks
                 content = message.content
                 if isinstance(content, list):
-                    # Extract text from content blocks (robust handling)
                     text_parts = []
                     for block in content:
                         if block is None:
-                            continue  # Skip None blocks
+                            continue
                         elif isinstance(block, dict):
-                            # Extract text field, ensure it's a string
                             text_value = block.get("text", "")
                             text_parts.append(
                                 str(text_value) if text_value is not None else ""
                             )
                         else:
-                            # Convert any other type to string
                             try:
                                 text_parts.append(str(block))
                             except Exception:
-                                # If str() fails, skip this block
                                 logger.warning(
                                     f"Unable to convert content block to string: {type(block)}"
                                 )

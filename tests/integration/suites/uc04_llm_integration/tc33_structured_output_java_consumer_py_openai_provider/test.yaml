@@ -1,0 +1,162 @@
+name: "Cross-Runtime Structured Output - Java Consumer -> Py OpenAI"
+description: "Verify Java analyst agent receives structured JSON from Python OpenAI provider"
+tags:
+  - llm
+  - openai
+  - structured-output
+  - cross-runtime
+  - java
+  - python
+timeout: 420
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+test:
+  - name: "Copy Python OpenAI provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/openai-provider /workspace/"
+    capture: copy_provider
+  - name: "Copy employee service to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-employee-service /workspace/"
+    capture: copy_employee
+  - name: "Copy analyst to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-analyst-agent /workspace/"
+    capture: copy_analyst
+  - name: "Create env file for provider"
+    handler: secrets
+    target: /workspace/.env
+  - name: "Create env file for analyst"
+    handler: secrets
+    target: /workspace/java-analyst-agent/.env
+  - name: "Install Maven dependencies for employee service"
+    handler: maven-install
+    path: /workspace/java-employee-service
+    timeout: 600
+  - name: "Install Maven dependencies for analyst agent"
+    handler: maven-install
+    path: /workspace/java-analyst-agent
+    timeout: 600
+  - name: "Start Python OpenAI provider"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start openai-provider/main.py --env-file .env -d"
+    capture: start_provider
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 10
+  - name: "Verify provider is running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: provider_list
+  - name: "Start employee service"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-employee-service --env MCP_MESH_HTTP_PORT=0 -d
+    capture: start_employee
+  - name: "Wait for employee service"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for employee-service agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "employee-service"; then
+          echo "Employee service registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+          echo "$AGENTS"
+        fi
+        sleep 2
+      done
+      echo "WARNING: Employee service not registered within 90s"
+      meshctl list 2>/dev/null || true
+      meshctl logs employee-service 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_employee
+    timeout: 120
+  - name: "Start analyst agent"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-analyst-agent --env-file /workspace/java-analyst-agent/.env -d
+    capture: start_analyst
+  - name: "Wait for analyst"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for analyst agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "analyst"; then
+          echo "Analyst registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+          echo "$AGENTS"
+        fi
+        sleep 2
+      done
+      echo "WARNING: Analyst not registered within 90s"
+      meshctl list 2>/dev/null || true
+      meshctl logs analyst 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_analyst
+    timeout: 120
+  - name: "Wait for dependency resolution"
+    handler: wait
+    seconds: 8
+  - name: "Verify all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_all
+  - name: "List all tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+  - name: "Call analyze (agentic loop)"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call analyze ''{"ctx": {"query": "How many employees are in the Engineering department?"}}'''
+    capture: call_analyze
+    timeout: 120
+assertions:
+  - expr: "${captured.provider_list} contains 'openai-provider'"
+    message: "Python OpenAI provider should be registered"
+  - expr: "${captured.list_all} contains 'openai-provider'"
+    message: "OpenAI provider should be registered"
+  - expr: "${captured.list_all} contains 'employee-service'"
+    message: "Employee service should be registered"
+  - expr: "${captured.list_all} contains 'analyst'"
+    message: "Analyst should be registered"
+  - expr: "${captured.list_tools} contains 'getEmployee'"
+    message: "getEmployee tool should be available"
+  - expr: "${captured.list_tools} contains 'listEmployees'"
+    message: "listEmployees tool should be available"
+  - expr: "${captured.list_tools} contains 'analyze'"
+    message: "analyze tool should be available"
+  - expr: "${jq:captured.call_analyze:.content[0].text | fromjson | .summary} != ''"
+    message: "Analysis should return a non-empty summary"
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*employee" 2>/dev/null || true
+      pkill -f "java.*analyst" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

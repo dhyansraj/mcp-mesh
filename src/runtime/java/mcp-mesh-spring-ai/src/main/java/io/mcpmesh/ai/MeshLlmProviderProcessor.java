@@ -9,6 +9,7 @@ import io.mcpmesh.ai.handlers.LlmProviderHandler.OutputSchema;
 import io.mcpmesh.ai.handlers.LlmProviderHandler.ToolDefinition;
 import io.mcpmesh.ai.handlers.LlmProviderHandlerRegistry;
 import io.mcpmesh.core.AgentSpec;
+import io.mcpmesh.spring.McpHttpClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
@@ -370,24 +371,40 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                 response.put("content", content);
                 response.put("tool_calls", List.of());
             } else {
-                // Tools present - use native tool calling without auto-execution
-                log.debug("Using tool-aware generation with {} tools (no auto-execution)", tools.size());
+                // Tools present - extract _mesh_endpoint for provider-side execution
+                Map<String, String> toolEndpoints = new HashMap<>();
+                List<Map<String, Object>> cleanTools = extractToolEndpoints(tools, toolEndpoints);
 
-                // Convert tool definitions to handler format
-                List<ToolDefinition> toolDefs = parseToolDefinitions(tools);
+                // Convert tool definitions to handler format (using cleaned tools)
+                List<ToolDefinition> toolDefs = parseToolDefinitions(cleanTools);
 
                 // Parse output schema if present
                 OutputSchema outputSchema = outputSchemaData != null ?
                     parseOutputSchema(outputSchemaData, outputTypeName) : null;
 
-                // Generate with tools - provider does NOT execute tools
-                // Tool execution happens on the consumer (caller) side
-                LlmProviderHandler.LlmResponse llmResponse = generateWithToolsNoExecution(
-                    handler, model, messages, toolDefs, outputSchema
-                );
+                if (!toolEndpoints.isEmpty()) {
+                    // Provider-managed agentic loop: execute tools internally via MCP
+                    log.info("Provider-managed loop: {} tools with endpoints", toolEndpoints.size());
 
-                response.put("content", llmResponse.content());
-                response.put("tool_calls", convertToolCalls(llmResponse.toolCalls()));
+                    LlmProviderHandler.ToolExecutorCallback executorCallback = createMcpToolExecutor(toolEndpoints);
+
+                    LlmProviderHandler.LlmResponse llmResponse = handler.generateWithTools(
+                        model, messages, toolDefs, executorCallback, outputSchema, Map.of()
+                    );
+
+                    response.put("content", llmResponse.content());
+                    response.put("tool_calls", List.of()); // No tool_calls — all executed provider-side
+                } else {
+                    // Legacy path: no endpoints — return tool_calls to consumer
+                    log.debug("Using tool-aware generation with {} tools (no auto-execution)", cleanTools.size());
+
+                    LlmProviderHandler.LlmResponse llmResponse = generateWithToolsNoExecution(
+                        handler, model, messages, toolDefs, outputSchema
+                    );
+
+                    response.put("content", llmResponse.content());
+                    response.put("tool_calls", convertToolCalls(llmResponse.toolCalls()));
+                }
             }
         } catch (Exception e) {
             log.error("LLM generation failed: {}", e.getMessage(), e);
@@ -504,6 +521,86 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
 
         return handler.generateWithTools(model, messages, toolDefs, null, outputSchema, Map.of());
     }
+    /**
+     * Extract _mesh_endpoint from tool definitions and build endpoint map.
+     *
+     * <p>Mutates the tool definitions in-place by removing _mesh_endpoint
+     * from function definitions (the LLM should not see this metadata).
+     *
+     * @param tools Raw tool definitions from consumer (may contain _mesh_endpoint)
+     * @param toolEndpoints Output map populated with toolName -> endpoint URL
+     * @return Cleaned tool definitions (same objects, _mesh_endpoint removed)
+     */
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> extractToolEndpoints(
+            List<Map<String, Object>> tools,
+            Map<String, String> toolEndpoints) {
+
+        for (Map<String, Object> tool : tools) {
+            String type = (String) tool.get("type");
+            Map<String, Object> function = null;
+
+            if ("function".equals(type)) {
+                function = (Map<String, Object>) tool.get("function");
+            } else if (tool.containsKey("name")) {
+                // Direct format
+                function = tool;
+            }
+
+            if (function != null) {
+                Object endpoint = function.remove("_mesh_endpoint");
+                if (endpoint instanceof String ep && !ep.isEmpty()) {
+                    String name = (String) function.get("name");
+                    if (name != null) {
+                        toolEndpoints.put(name, ep);
+                    }
+                }
+            }
+        }
+
+        return tools;
+    }
+
+    /**
+     * Create a ToolExecutorCallback that executes tools via MCP HTTP calls.
+     *
+     * <p>Each tool call is dispatched to the agent endpoint that owns the tool,
+     * using the standard MCP tools/call JSON-RPC protocol.
+     *
+     * @param toolEndpoints Map of toolName -> MCP endpoint URL
+     * @return Callback that executes tools remotely via MCP
+     */
+    @SuppressWarnings("unchecked")
+    private LlmProviderHandler.ToolExecutorCallback createMcpToolExecutor(
+            Map<String, String> toolEndpoints) {
+
+        McpHttpClient mcpClient = new McpHttpClient(objectMapper);
+
+        return (toolName, argsJson) -> {
+            String endpoint = toolEndpoints.get(toolName);
+            if (endpoint == null) {
+                log.warn("No endpoint for tool {}, returning error", toolName);
+                return "{\"error\": \"Tool " + toolName + " not available\"}";
+            }
+
+            try {
+                Map<String, Object> args = (argsJson != null && !argsJson.isEmpty()) ?
+                    objectMapper.readValue(argsJson, Map.class) : Map.of();
+
+                log.debug("Executing tool {} at endpoint {} with args: {}", toolName, endpoint, argsJson);
+
+                Object result = mcpClient.callTool(endpoint, toolName, args, String.class);
+                String resultStr = result != null ? result.toString() : "";
+
+                log.debug("Tool {} result: {}", toolName, resultStr.length() > 200 ? resultStr.substring(0, 200) + "..." : resultStr);
+                return resultStr;
+            } catch (Exception e) {
+                log.error("Tool {} execution failed at {}: {}", toolName, endpoint, e.getMessage());
+                return "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
+            }
+        };
+    }
+
     /**
      * Convert tool calls to response format (OpenAI style).
      */

@@ -1,0 +1,220 @@
+# Test Case: Structured Output Multi-Turn Cross-Runtime - Java Provider + Python Consumer
+# Verifies native response_format structured output durability across 5 turns
+# with a cross-runtime scenario (Python consumer -> Java Claude provider)
+
+name: "Structured Multi-Turn Cross-Runtime - Java+Py"
+description: "Verify native response_format structured output across 5 turns with Java Claude provider and Python consumer"
+tags:
+  - llm
+  - claude
+  - structured
+  - python
+  - java
+  - multi-turn
+  - cross-runtime
+timeout: 420
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC-level Java Claude provider artifacts
+  - name: "Copy Java Claude provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-claude-provider /workspace/"
+    capture: copy_provider_output
+
+  # Copy TC-level chat-cross-runtime-agent artifacts
+  - name: "Copy chat-cross-runtime-agent to workspace"
+    handler: shell
+    command: "cp -r /artifacts/chat-cross-runtime-agent /workspace/"
+    capture: copy_agent_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/java-claude-provider/.env
+
+  # Install Maven dependencies for Java provider
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-claude-provider
+    timeout: 600
+
+  # Start Java Claude provider
+  - name: "Start Java Claude provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-claude-provider --env MCP_MESH_HTTP_PORT=0 --env-file /workspace/java-claude-provider/.env -d
+      echo "Java Claude provider starting via meshctl"
+    capture: start_provider_output
+
+  # Wait for Java provider to register (Java is slow to start)
+  - name: "Wait for Java provider registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java claude-provider agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "claude-provider"; then
+          echo "Provider registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+        fi
+        sleep 2
+      done
+      echo "ERROR: Provider did not register within 90s"
+      meshctl logs java-claude-provider 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 120
+
+  # Verify provider is running
+  - name: "Verify provider is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: provider_list_output
+
+  # Start Python consumer agent
+  - name: "Start chat-cross-runtime-agent"
+    handler: shell
+    command: "meshctl start chat-cross-runtime-agent/main.py -d"
+    workdir: /workspace
+    capture: start_agent_output
+
+  # Wait for consumer to register and resolve provider
+  - name: "Wait for agent to register"
+    handler: wait
+    seconds: 15
+
+  # Verify all agents running
+  - name: "Verify all agents running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: all_list_output
+
+  # === 5 SEQUENTIAL CHAT TURNS ===
+  - name: "Turn 1 - Ocean question"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "What makes the ocean blue?"}}'
+    workdir: /workspace
+    capture: turn_1
+
+  - name: "Turn 2 - Follow-up about sky"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "How does that relate to the sky color?"}}'
+    workdir: /workspace
+    capture: turn_2
+
+  - name: "Turn 3 - Rainbows"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "Tell me about rainbows then"}}'
+    workdir: /workspace
+    capture: turn_3
+
+  - name: "Turn 4 - Favorite color"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "What'\''s your favorite color and why?"}}'
+    workdir: /workspace
+    capture: turn_4
+
+  - name: "Turn 5 - Summary"
+    handler: shell
+    command: |
+      meshctl call chat '{"ctx": {"message": "Summarize what we discussed"}}'
+    workdir: /workspace
+    capture: turn_5
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Provider and agent started successfully
+  - expr: ${captured.provider_list_output} contains 'claude-provider'
+    message: "claude-provider should appear in meshctl list"
+  - expr: ${captured.all_list_output} contains 'chat-cross-runtime-agent'
+    message: "chat-cross-runtime-agent should appear in meshctl list"
+
+  # === ALL 5 TURNS: structured output should contain reply field ===
+  - expr: ${captured.turn_1} contains '"reply"'
+    message: "Turn 1 should contain reply field (valid structured output)"
+  - expr: ${captured.turn_1} not contains 'ValidationError'
+    message: "Turn 1 should not have ValidationError"
+  - expr: ${captured.turn_1} not contains 'Expecting value'
+    message: "Turn 1 should not have JSON parse error"
+
+  - expr: ${captured.turn_2} contains '"reply"'
+    message: "Turn 2 should contain reply field"
+  - expr: ${captured.turn_2} not contains 'ValidationError'
+    message: "Turn 2 should not have ValidationError"
+  - expr: ${captured.turn_2} not contains 'Expecting value'
+    message: "Turn 2 should not have JSON parse error"
+
+  - expr: ${captured.turn_3} contains '"reply"'
+    message: "Turn 3 should contain reply field"
+  - expr: ${captured.turn_3} not contains 'ValidationError'
+    message: "Turn 3 should not have ValidationError"
+  - expr: ${captured.turn_3} not contains 'Expecting value'
+    message: "Turn 3 should not have JSON parse error"
+
+  - expr: ${captured.turn_4} contains '"reply"'
+    message: "Turn 4 should contain reply field"
+  - expr: ${captured.turn_4} not contains 'ValidationError'
+    message: "Turn 4 should not have ValidationError"
+  - expr: ${captured.turn_4} not contains 'Expecting value'
+    message: "Turn 4 should not have JSON parse error"
+
+  - expr: ${captured.turn_5} contains '"reply"'
+    message: "Turn 5 should contain reply field"
+  - expr: ${captured.turn_5} not contains 'ValidationError'
+    message: "Turn 5 should not have ValidationError"
+  - expr: ${captured.turn_5} not contains 'Expecting value'
+    message: "Turn 5 should not have JSON parse error"
+
+  # === STRUCTURAL CHECKS: sentiment and topic fields ===
+  - expr: ${captured.turn_1} contains '"sentiment"'
+    message: "Turn 1 should contain sentiment field"
+  - expr: ${captured.turn_3} contains '"sentiment"'
+    message: "Turn 3 should contain sentiment field"
+  - expr: ${captured.turn_5} contains '"sentiment"'
+    message: "Turn 5 should contain sentiment field"
+  - expr: ${captured.turn_1} contains '"topic"'
+    message: "Turn 1 should contain topic field"
+  - expr: ${captured.turn_3} contains '"topic"'
+    message: "Turn 3 should contain topic field"
+  - expr: ${captured.turn_5} contains '"topic"'
+    message: "Turn 5 should contain topic field"
+
+  # === ERROR CHECKS ===
+  - expr: ${captured.turn_1} not contains 'Mesh provider not resolved'
+    message: "Turn 1 should not have provider error"
+  - expr: ${captured.turn_5} not contains 'Mesh provider not resolved'
+    message: "Turn 5 should not have provider error"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*claude-provider" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

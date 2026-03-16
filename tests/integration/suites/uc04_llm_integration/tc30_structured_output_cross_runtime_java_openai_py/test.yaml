@@ -1,0 +1,134 @@
+name: "Cross-Runtime Structured Output - Py Consumer -> Java OpenAI"
+description: "Verify Python consumer receives structured JSON from Java OpenAI/GPT provider"
+tags:
+  - llm
+  - openai
+  - structured-output
+  - cross-runtime
+  - java
+  - python
+timeout: 420
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+test:
+  - name: "Copy Java GPT provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-gpt-provider /workspace/"
+    capture: copy_provider_output
+  - name: "Copy Python OpenAI consumer to workspace"
+    handler: shell
+    command: "cp -r /artifacts/structured-consumer-openai-py /workspace/"
+    capture: copy_consumer_output
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+  - name: "Install Maven dependencies for Java GPT provider"
+    handler: maven-install
+    path: /workspace/java-gpt-provider
+    timeout: 600
+  - name: "Start Java GPT provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-gpt-provider --env MCP_MESH_HTTP_PORT=0 --env-file /workspace/.env -d
+    capture: start_provider_output
+  - name: "Wait for Java provider registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "gpt-provider"; then
+          echo "Java GPT provider registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+        fi
+        sleep 2
+      done
+      echo "WARNING: Provider not registered within 90s"
+      meshctl list 2>/dev/null || true
+    capture: wait_provider
+    timeout: 120
+  - name: "Verify provider is running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: provider_list_output
+  - name: "List provider tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: provider_tools_output
+  - name: "Start Python OpenAI consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start structured-consumer-openai-py/main.py --env-file .env -d"
+    capture: start_consumer_output
+  - name: "Wait for consumer to register"
+    handler: wait
+    seconds: 15
+  - name: "Verify all agents running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: all_list_output
+  - name: "List all tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: all_tools_output
+  - name: "Call get_country_info - France"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call get_country_info '{"ctx": {"country": "France"}}'
+    capture: france_response
+  - name: "Call get_country_info - Japan"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call get_country_info '{"ctx": {"country": "Japan"}}'
+    capture: japan_response
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+assertions:
+  - expr: ${captured.provider_list_output} contains 'gpt-provider'
+    message: "Java GPT provider should appear in meshctl list"
+  - expr: ${captured.provider_tools_output} contains 'llm_generate'
+    message: "llm_generate tool should be listed"
+  - expr: ${captured.all_list_output} contains 'structured-consumer-openai'
+    message: "Python OpenAI consumer should appear in meshctl list"
+  - expr: ${captured.all_tools_output} contains 'get_country_info'
+    message: "get_country_info tool should be listed"
+  - expr: "${jq:captured.france_response:.structuredContent.name} icontains 'france'"
+    message: "France response name should contain France"
+  - expr: "${jq:captured.france_response:.structuredContent.capital} icontains 'paris'"
+    message: "France response capital should be Paris"
+  - expr: "${jq:captured.france_response:.structuredContent.continent} != ''"
+    message: "France response should have a continent"
+  - expr: "${jq:captured.japan_response:.structuredContent.name} icontains 'japan'"
+    message: "Japan response name should contain Japan"
+  - expr: "${jq:captured.japan_response:.structuredContent.capital} icontains 'tokyo'"
+    message: "Japan response capital should be Tokyo"
+  - expr: ${captured.france_response} not contains 'Expecting value'
+    message: "France response should not have JSON parse error"
+  - expr: ${captured.japan_response} not contains 'Expecting value'
+    message: "Japan response should not have JSON parse error"
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*gpt-provider" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

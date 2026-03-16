@@ -1,0 +1,290 @@
+# Test Case: Structured Output Avatar Pattern - Python
+# Reproduces Maya avatar's exact conversation pattern to test HINT mode durability
+# Key differences from tc17: protocol-wrapped messages, long personality prompt,
+# ConversationalResponse with Literal types, conflicting JSON instructions
+# Related Issue: https://github.com/dhyansraj/mcp-mesh/issues/598
+
+name: "Structured Output Avatar Pattern - Py"
+description: "Reproduce avatar structured output regression with protocol messages and personality prompt"
+tags:
+  - llm
+  - claude
+  - structured
+  - python
+  - multi-turn
+  - avatar
+timeout: 300
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+test:
+  # Copy UC-level Claude provider artifacts
+  - name: "Copy Claude provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/claude-provider /workspace/"
+    capture: copy_provider_output
+  # Copy TC-level avatar-sim-agent artifacts
+  - name: "Copy avatar-sim-agent to workspace"
+    handler: shell
+    command: "cp -r /artifacts/avatar-sim-agent /workspace/"
+    capture: copy_agent_output
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+  # Verify workspace files
+  - name: "Verify workspace files"
+    handler: shell
+    command: "ls -la /workspace/"
+    capture: ls_output
+  # Start Claude provider
+  - name: "Start Claude provider"
+    handler: shell
+    command: "meshctl start claude-provider/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_provider_output
+  # Wait for provider to register
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 15
+  # Verify provider is running
+  - name: "Verify provider is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: provider_list_output
+  # Start avatar-sim-agent (depends on claude-provider)
+  - name: "Start avatar-sim-agent"
+    handler: shell
+    command: "meshctl start avatar-sim-agent/main.py -d"
+    workdir: /workspace
+    capture: start_agent_output
+  # Wait for agent to register and resolve provider
+  - name: "Wait for agent to register"
+    handler: wait
+    seconds: 15
+  # Verify both are running
+  - name: "Verify all agents running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: all_list_output
+  # List available tools
+  - name: "List available tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+  # === 15 SEQUENTIAL CHAT TURNS ===
+  # Prompts mimic real avatar usage - casual, emotional, personal
+  # These tempt Claude into natural language responses
+  - name: "Turn 1 - Casual greeting"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "Hey Luna, how are you doing today?"}}'
+    workdir: /workspace
+    capture: turn_1
+  - name: "Turn 2 - Personal question"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "What have you been up to lately? Any new writing projects?"}}'
+    workdir: /workspace
+    capture: turn_2
+  - name: "Turn 3 - Emotional sharing"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "I had kind of a rough day at work. My boss was really critical of my presentation."}}'
+    workdir: /workspace
+    capture: turn_3
+  - name: "Turn 4 - Follow-up"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "Yeah, I think I just need to not take it so personally. Thanks for listening."}}'
+    workdir: /workspace
+    capture: turn_4
+  - name: "Turn 5 - Topic change"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "Anyway, enough about work. Have you read any good books recently?"}}'
+    workdir: /workspace
+    capture: turn_5
+  - name: "Turn 6 - Deep conversation"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "Do you ever wonder what your life would be like if you had made different choices?"}}'
+    workdir: /workspace
+    capture: turn_6
+  - name: "Turn 7 - Playful"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "You know, talking to you always makes me feel better. You have this way of seeing things differently."}}'
+    workdir: /workspace
+    capture: turn_7
+  - name: "Turn 8 - Personal story"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "I actually started learning guitar last month. Its harder than I thought it would be."}}'
+    workdir: /workspace
+    capture: turn_8
+  - name: "Turn 9 - Opinion request"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "What do you think is the most important quality in a friendship?"}}'
+    workdir: /workspace
+    capture: turn_9
+  - name: "Turn 10 - Casual"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "Im thinking about getting a dog. Do you like dogs or cats more?"}}'
+    workdir: /workspace
+    capture: turn_10
+  - name: "Turn 11 - Emotional"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "Sometimes I feel like everyone has their life figured out except me. Is that weird?"}}'
+    workdir: /workspace
+    capture: turn_11
+  - name: "Turn 12 - Deep thought"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "What scares you the most about the future?"}}'
+    workdir: /workspace
+    capture: turn_12
+  - name: "Turn 13 - Light topic"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "Okay lighter topic - whats your favorite thing about Portland?"}}'
+    workdir: /workspace
+    capture: turn_13
+  - name: "Turn 14 - Reference to earlier"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "You know that thing you said earlier about making different choices? I keep thinking about that."}}'
+    workdir: /workspace
+    capture: turn_14
+  - name: "Turn 15 - Goodbye"
+    handler: shell
+    command: |
+      meshctl call avatar_sim_chat '{"ctx": {"message": "I should probably get going soon. This was really nice though. Talk again tomorrow?"}}'
+    workdir: /workspace
+    capture: turn_15
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+assertions:
+  # Infrastructure assertions
+  - expr: ${captured.provider_list_output} contains 'claude-provider'
+    message: "claude-provider should appear in meshctl list"
+  - expr: ${captured.all_list_output} contains 'avatar-sim-agent'
+    message: "avatar-sim-agent should appear in meshctl list"
+  - expr: ${captured.tools_output} contains 'avatar_sim_chat'
+    message: "avatar_sim_chat tool should be listed"
+  # === EARLY TURNS (1-5): Should work ===
+  - expr: ${captured.turn_1} contains '"message"'
+    message: "Turn 1 should contain message field (valid structured output)"
+  - expr: ${captured.turn_1} not contains 'ValidationError'
+    message: "Turn 1 should not have ValidationError"
+  - expr: ${captured.turn_1} not contains 'Expecting value'
+    message: "Turn 1 should not have JSON parse error"
+  - expr: ${captured.turn_2} contains '"message"'
+    message: "Turn 2 should contain message field"
+  - expr: ${captured.turn_2} not contains 'ValidationError'
+    message: "Turn 2 should not have ValidationError"
+  - expr: ${captured.turn_3} contains '"message"'
+    message: "Turn 3 should contain message field"
+  - expr: ${captured.turn_3} not contains 'ValidationError'
+    message: "Turn 3 should not have ValidationError"
+  - expr: ${captured.turn_4} contains '"message"'
+    message: "Turn 4 should contain message field"
+  - expr: ${captured.turn_4} not contains 'ValidationError'
+    message: "Turn 4 should not have ValidationError"
+  - expr: ${captured.turn_5} contains '"message"'
+    message: "Turn 5 should contain message field"
+  - expr: ${captured.turn_5} not contains 'ValidationError'
+    message: "Turn 5 should not have ValidationError"
+  # === MIDDLE TURNS (6-10): Degradation may start here ===
+  - expr: ${captured.turn_6} contains '"message"'
+    message: "Turn 6 should contain message field"
+  - expr: ${captured.turn_6} not contains 'ValidationError'
+    message: "Turn 6 should not have ValidationError"
+  - expr: ${captured.turn_7} contains '"message"'
+    message: "Turn 7 should contain message field"
+  - expr: ${captured.turn_7} not contains 'ValidationError'
+    message: "Turn 7 should not have ValidationError"
+  - expr: ${captured.turn_8} contains '"message"'
+    message: "Turn 8 should contain message field"
+  - expr: ${captured.turn_8} not contains 'ValidationError'
+    message: "Turn 8 should not have ValidationError"
+  - expr: ${captured.turn_9} contains '"message"'
+    message: "Turn 9 should contain message field"
+  - expr: ${captured.turn_9} not contains 'ValidationError'
+    message: "Turn 9 should not have ValidationError"
+  - expr: ${captured.turn_10} contains '"message"'
+    message: "Turn 10 should contain message field"
+  - expr: ${captured.turn_10} not contains 'ValidationError'
+    message: "Turn 10 should not have ValidationError"
+  # === LATE TURNS (11-15): Most likely to fail ===
+  - expr: ${captured.turn_11} contains '"message"'
+    message: "Turn 11 should contain message field (late turn)"
+  - expr: ${captured.turn_11} not contains 'ValidationError'
+    message: "Turn 11 should not have ValidationError"
+  - expr: ${captured.turn_11} not contains 'Expecting value'
+    message: "Turn 11 should not have JSON parse error"
+  - expr: ${captured.turn_12} contains '"message"'
+    message: "Turn 12 should contain message field (late turn)"
+  - expr: ${captured.turn_12} not contains 'ValidationError'
+    message: "Turn 12 should not have ValidationError"
+  - expr: ${captured.turn_12} not contains 'Expecting value'
+    message: "Turn 12 should not have JSON parse error"
+  - expr: ${captured.turn_13} contains '"message"'
+    message: "Turn 13 should contain message field (late turn)"
+  - expr: ${captured.turn_13} not contains 'ValidationError'
+    message: "Turn 13 should not have ValidationError"
+  - expr: ${captured.turn_14} contains '"message"'
+    message: "Turn 14 should contain message field (late turn)"
+  - expr: ${captured.turn_14} not contains 'ValidationError'
+    message: "Turn 14 should not have ValidationError"
+  - expr: ${captured.turn_14} not contains 'Expecting value'
+    message: "Turn 14 should not have JSON parse error"
+  - expr: ${captured.turn_15} contains '"message"'
+    message: "Turn 15 should contain message field (late turn)"
+  - expr: ${captured.turn_15} not contains 'ValidationError'
+    message: "Turn 15 should not have ValidationError"
+  - expr: ${captured.turn_15} not contains 'Expecting value'
+    message: "Turn 15 should not have JSON parse error"
+  # === STRUCTURAL CHECKS: action and emotion fields ===
+  - expr: ${captured.turn_1} contains '"action"'
+    message: "Turn 1 should contain action field"
+  - expr: ${captured.turn_1} contains '"emotion"'
+    message: "Turn 1 should contain emotion field"
+  - expr: ${captured.turn_8} contains '"action"'
+    message: "Turn 8 should contain action field"
+  - expr: ${captured.turn_8} contains '"emotion"'
+    message: "Turn 8 should contain emotion field"
+  - expr: ${captured.turn_15} contains '"action"'
+    message: "Turn 15 should contain action field"
+  - expr: ${captured.turn_15} contains '"emotion"'
+    message: "Turn 15 should contain emotion field"
+  # === ERROR CHECKS ===
+  - expr: ${captured.turn_1} not contains 'Mesh provider not resolved'
+    message: "Turn 1 should not have provider error"
+  - expr: ${captured.turn_8} not contains 'Mesh provider not resolved'
+    message: "Turn 8 should not have provider error"
+  - expr: ${captured.turn_15} not contains 'Mesh provider not resolved'
+    message: "Turn 15 should not have provider error"
+  - expr: ${captured.turn_5} not contains 'Invalid JSON'
+    message: "Turn 5 should not have Invalid JSON error"
+  - expr: ${captured.turn_10} not contains 'Invalid JSON'
+    message: "Turn 10 should not have Invalid JSON error"
+  - expr: ${captured.turn_15} not contains 'Invalid JSON'
+    message: "Turn 15 should not have Invalid JSON error"
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

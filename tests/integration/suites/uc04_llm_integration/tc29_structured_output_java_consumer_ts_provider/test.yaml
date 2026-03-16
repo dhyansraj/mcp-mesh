@@ -1,0 +1,213 @@
+# Test Case: Cross-Runtime Structured Output - Java Consumer -> TS Claude Provider
+# Validates that Java analyst agent with structured output (AnalysisResult record)
+# receives proper structured JSON from a TypeScript Claude provider.
+#
+# Scenario:
+#   - Start TypeScript claude-provider-ts (provides 'llm' capability)
+#   - Start java-employee-service (provides employee data tools)
+#   - Start java-analyst-agent (uses agentic loop with structured output)
+#   - Call analyst's analyze tool asking about employees
+#   - Verify it returns structured analysis via TypeScript Claude provider
+#
+# Difference from tc24: tc24 uses Python Claude provider, tc29 uses TypeScript Claude provider.
+# This validates cross-runtime structured output between Java and TypeScript.
+
+name: "Cross-Runtime Structured Output - Java Consumer -> TS Claude"
+description: "Verify Java analyst agent receives structured JSON from TypeScript Claude provider"
+tags:
+  - llm
+  - claude
+  - structured-output
+  - cross-runtime
+  - java
+  - typescript
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+  - routine: global.setup_environment
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC-level TypeScript Claude provider
+  - name: "Copy TS Claude provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/claude-provider-ts /workspace/"
+    capture: copy_provider
+
+  # Copy UC-level Java employee service
+  - name: "Copy employee service to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-employee-service /workspace/"
+    capture: copy_employee
+
+  # Copy UC-level Java analyst agent
+  - name: "Copy analyst to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-analyst-agent /workspace/"
+    capture: copy_analyst
+
+  # Create env file with secrets
+  - name: "Create env file for provider"
+    handler: secrets
+    target: /workspace/.env
+
+  # Create env file for analyst agent
+  - name: "Create env file for analyst"
+    handler: secrets
+    target: /workspace/java-analyst-agent/.env
+
+  # Install npm dependencies for TS provider
+  - name: "Install npm dependencies for TS provider"
+    handler: npm-install
+    path: /workspace/claude-provider-ts
+
+  # Install Maven dependencies for employee service
+  - name: "Install Maven dependencies for employee service"
+    handler: maven-install
+    path: /workspace/java-employee-service
+    timeout: 600
+
+  # Install Maven dependencies for analyst agent
+  - name: "Install Maven dependencies for analyst agent"
+    handler: maven-install
+    path: /workspace/java-analyst-agent
+    timeout: 600
+
+  # Start TypeScript Claude provider
+  - name: "Start TS Claude provider"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start claude-provider-ts/src/index.ts --env-file .env --env MCP_MESH_HTTP_PORT=3020 -d"
+    capture: start_provider
+
+  # Wait for TS provider to register
+  - name: "Wait for TS provider to register"
+    handler: wait
+    seconds: 10
+
+  # Verify provider is running
+  - name: "Verify provider is running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: provider_list
+
+  # Start Java employee service
+  - name: "Start employee service"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-employee-service -d
+    capture: start_employee
+
+  # Wait for employee service registration
+  - name: "Wait for employee service"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "employee-service"; then
+          echo "Employee service registered"
+          exit 0
+        fi
+        sleep 2
+      done
+      exit 1
+    capture: wait_employee
+    timeout: 120
+
+  # Start Java analyst agent
+  - name: "Start analyst agent"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-analyst-agent --env-file /workspace/java-analyst-agent/.env -d
+    capture: start_analyst
+
+  # Wait for analyst registration
+  - name: "Wait for analyst"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "analyst"; then
+          echo "Analyst registered"
+          exit 0
+        fi
+        sleep 2
+      done
+      exit 1
+    capture: wait_analyst
+    timeout: 120
+
+  # Wait for dependency resolution
+  - name: "Wait for dependency resolution"
+    handler: wait
+    seconds: 8
+
+  # Verify all agents running
+  - name: "Verify all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_all
+
+  # List all tools
+  - name: "List all tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  # Call analyze with a query about employees
+  - name: "Call analyze (agentic loop)"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call analyze ''{"ctx": {"query": "How many employees are in the Engineering department?"}}'''
+    capture: call_analyze
+    timeout: 120
+
+assertions:
+  # TS provider registered
+  - expr: "${captured.provider_list} contains 'claude-provider-ts'"
+    message: "TS Claude provider should be registered"
+
+  # All agents registered
+  - expr: "${captured.list_all} contains 'claude-provider-ts'"
+    message: "Claude provider should be registered"
+
+  - expr: "${captured.list_all} contains 'employee-service'"
+    message: "Employee service should be registered"
+
+  - expr: "${captured.list_all} contains 'analyst'"
+    message: "Analyst should be registered"
+
+  # Employee tools available
+  - expr: "${captured.list_tools} contains 'getEmployee'"
+    message: "getEmployee tool should be available"
+
+  - expr: "${captured.list_tools} contains 'listEmployees'"
+    message: "listEmployees tool should be available"
+
+  # Analyze tool available
+  - expr: "${captured.list_tools} contains 'analyze'"
+    message: "analyze tool should be available"
+
+  # Analyze returned a structured response with summary field
+  - expr: "${jq:captured.call_analyze:.content[0].text | fromjson | .summary} != ''"
+    message: "Analysis should return a non-empty summary"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*employee" 2>/dev/null || true
+      pkill -f "java.*analyst" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

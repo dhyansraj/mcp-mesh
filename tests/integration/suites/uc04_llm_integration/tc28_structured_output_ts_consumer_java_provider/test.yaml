@@ -1,0 +1,191 @@
+# Test Case: Cross-Runtime Structured Output - TS Consumer -> Java Claude Provider
+# Validates that TypeScript consumer with Zod structured output receives
+# proper structured JSON from a Java Claude provider.
+#
+# Difference from tc23: tc23 uses Python Claude provider, tc28 uses Java Claude provider.
+# This validates cross-runtime structured output between TypeScript and Java.
+
+name: "Cross-Runtime Structured Output - TS Consumer -> Java Claude"
+description: "Verify TypeScript consumer receives structured JSON from Java Claude provider"
+tags:
+  - llm
+  - claude
+  - structured-output
+  - cross-runtime
+  - typescript
+  - java
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+  - routine: global.setup_environment
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC-level Java Claude provider artifacts
+  - name: "Copy Java Claude provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-claude-provider /workspace/"
+    capture: copy_provider_output
+
+  # Copy TC-level TypeScript consumer
+  - name: "Copy TS structured consumer to workspace"
+    handler: shell
+    command: "cp -r /artifacts/structured-consumer-ts /workspace/"
+    capture: copy_consumer_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # Install Maven dependencies for Java provider
+  - name: "Install Maven dependencies for Java Claude provider"
+    handler: maven-install
+    path: /workspace/java-claude-provider
+    timeout: 600
+
+  # Install npm dependencies for TS consumer
+  - name: "Install npm dependencies for TS consumer"
+    handler: npm-install
+    path: /workspace/structured-consumer-ts
+
+  # Start Java Claude provider
+  - name: "Start Java Claude provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-claude-provider --env MCP_MESH_HTTP_PORT=0 --env-file /workspace/.env -d
+    capture: start_provider_output
+
+  # Wait for Java provider registration (Java is slow to start)
+  - name: "Wait for Java provider registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "claude-provider"; then
+          echo "Java Claude provider registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+        fi
+        sleep 2
+      done
+      echo "WARNING: Provider not registered within 90s"
+      meshctl list 2>/dev/null || true
+    capture: wait_provider
+    timeout: 120
+
+  # Verify provider is running
+  - name: "Verify provider is running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: provider_list_output
+
+  # List provider tools
+  - name: "List provider tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: provider_tools_output
+
+  # Start TypeScript consumer
+  - name: "Start TS structured consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start structured-consumer-ts/src/index.ts --env-file .env --env MCP_MESH_HTTP_PORT=9041 -d"
+    capture: start_consumer_output
+
+  # Wait for consumer to register and resolve dependencies
+  - name: "Wait for consumer to register"
+    handler: wait
+    seconds: 15
+
+  # Verify all agents running
+  - name: "Verify all agents running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: all_list_output
+
+  # List all tools
+  - name: "List all tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: all_tools_output
+
+  # Call get_country_info with France
+  - name: "Call get_country_info - France"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call get_country_info '{"ctx": {"country": "France"}}'
+    capture: france_response
+
+  # Call get_country_info with Japan
+  - name: "Call get_country_info - Japan"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call get_country_info '{"ctx": {"country": "Japan"}}'
+    capture: japan_response
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+
+assertions:
+  # Provider started successfully
+  - expr: ${captured.provider_list_output} contains 'claude-provider'
+    message: "Java Claude provider should appear in meshctl list"
+
+  # Provider tool registered
+  - expr: ${captured.provider_tools_output} contains 'llm_generate'
+    message: "llm_generate tool should be listed"
+
+  # Consumer started successfully
+  - expr: ${captured.all_list_output} contains 'structured-consumer-ts'
+    message: "TypeScript structured consumer should appear in meshctl list"
+
+  # Consumer tool registered
+  - expr: ${captured.all_tools_output} contains 'get_country_info'
+    message: "get_country_info tool should be listed"
+
+  # France response - structured data validation via jq
+  - expr: "${jq:captured.france_response:.content[0].text | fromjson | .name} icontains 'france'"
+    message: "France response name should contain France"
+  - expr: "${jq:captured.france_response:.content[0].text | fromjson | .capital} icontains 'paris'"
+    message: "France response capital should be Paris"
+  - expr: "${jq:captured.france_response:.content[0].text | fromjson | .continent} != ''"
+    message: "France response should have a continent"
+
+  # Japan response - structured data validation via jq
+  - expr: "${jq:captured.japan_response:.content[0].text | fromjson | .name} icontains 'japan'"
+    message: "Japan response name should contain Japan"
+  - expr: "${jq:captured.japan_response:.content[0].text | fromjson | .capital} icontains 'tokyo'"
+    message: "Japan response capital should be Tokyo"
+
+  # No JSON parse errors
+  - expr: ${captured.france_response} not contains 'Expecting value'
+    message: "France response should not have JSON parse error"
+  - expr: ${captured.japan_response} not contains 'Expecting value'
+    message: "Japan response should not have JSON parse error"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*claude-provider" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

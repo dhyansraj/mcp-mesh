@@ -4,17 +4,19 @@ Claude/Anthropic provider handler.
 Optimized for Claude API (Claude 3.x, Sonnet, Opus, Haiku)
 using Anthropic's best practices for tool calling and JSON responses.
 
-Supports two output modes:
-- hint: Use prompt-based JSON instructions with DECISION GUIDE (~95% reliable)
-- text: Plain text output for str return types (fastest)
-
-Native response_format (strict mode) is NOT used due to cross-runtime
-incompatibilities when tools are present, and grammar compilation overhead.
+Output strategy:
+- format_system_prompt (direct calls): Uses HINT mode — prompt-based JSON
+  instructions with DECISION GUIDE (~95% reliable). This avoids cross-runtime
+  incompatibilities when the caller is a non-Python SDK.
+- apply_structured_output (mesh delegation): Uses native response_format with
+  json_schema type and strict: True (inherited from base class). The Python
+  provider controls the full API call, so cross-runtime concerns don't apply.
+  This gives 100% JSON schema enforcement.
 
 Features:
 - Automatic prompt caching for system messages (up to 90% cost reduction)
 - Anti-XML tool calling instructions
-- DECISION GUIDE for tool vs. direct JSON response decisions
+- DECISION GUIDE for tool vs. direct JSON response decisions (direct calls)
 """
 
 import json
@@ -49,14 +51,11 @@ class ClaudeHandler(BaseProviderHandler):
     - Performs best with anti-XML tool calling instructions
     - Automatic prompt caching for cost optimization
 
-    Output Modes (TEXT + HINT only):
-    - hint: JSON schema in prompt with DECISION GUIDE (~95% reliable)
-    - text: Plain text output for str return types (fastest)
-
-    Native response_format (strict mode) is not used. HINT mode with
-    detailed prompt instructions provides sufficient reliability (~95%)
-    without the cross-runtime incompatibilities and grammar compilation
-    overhead of native structured output.
+    Output Modes:
+    - format_system_prompt (direct calls): TEXT + HINT only.
+      HINT adds JSON schema instructions with DECISION GUIDE in prompt (~95%).
+    - apply_structured_output (mesh delegation): Uses native response_format
+      with json_schema strict mode (100% enforcement, inherited from base class).
 
     Best Practices (from Anthropic docs):
     - Add anti-XML instructions to prevent <invoke> style tool calls
@@ -320,84 +319,3 @@ CRITICAL: Your response must be ONLY the raw JSON object.
             "json_mode": False,  # No native JSON mode used
             "prompt_caching": True,  # Automatic system prompt caching for cost savings
         }
-
-    def apply_structured_output(
-        self,
-        output_schema: dict[str, Any],
-        output_type_name: Optional[str],
-        model_params: dict[str, Any],
-    ) -> dict[str, Any]:
-        """
-        Apply Claude-specific structured output for mesh delegation using HINT mode.
-
-        Instead of using response_format (strict mode), injects detailed JSON schema
-        instructions into the system message. This is consistent with the TEXT + HINT
-        only strategy and avoids cross-runtime incompatibilities.
-
-        Args:
-            output_schema: JSON schema dict from consumer
-            output_type_name: Name of the output type (e.g., "AnalysisResult")
-            model_params: Current model parameters dict (will be modified)
-
-        Returns:
-            Modified model_params with HINT-mode instructions in system prompt
-        """
-        # Build HINT mode instructions from the schema
-        properties = output_schema.get("properties", {})
-        required = output_schema.get("required", [])
-
-        field_descriptions = []
-        for field_name, field_schema in properties.items():
-            field_type = field_schema.get("type", "any")
-            is_required = field_name in required
-            req_marker = " (required)" if is_required else " (optional)"
-            desc = field_schema.get("description", "")
-            desc_text = f" - {desc}" if desc else ""
-            field_descriptions.append(
-                f"  - {field_name}: {field_type}{req_marker}{desc_text}"
-            )
-
-        fields_text = "\n".join(field_descriptions)
-        type_name = output_type_name or "Response"
-
-        hint_instructions = f"""
-
-DECISION GUIDE:
-- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
-- If your answer is general knowledge, directly return your response as JSON WITHOUT calling tools.
-- After calling a tool and receiving results, STOP calling tools and return your final JSON response.
-
-RESPONSE FORMAT:
-You MUST respond with valid JSON matching this schema:
-{{
-{fields_text}
-}}
-
-Example format:
-{json.dumps({k: f"<{v.get('type', 'value')}>" for k, v in properties.items()}, indent=2)}
-
-CRITICAL: Your response must be ONLY the raw JSON object.
-- DO NOT wrap in markdown code fences (```json or ```)
-- DO NOT include any text before or after the JSON
-- Start directly with {{ and end with }}"""
-
-        # Inject into system message
-        messages = model_params.get("messages", [])
-        for msg in messages:
-            if msg.get("role") == "system":
-                content = msg.get("content", "")
-                if isinstance(content, str):
-                    msg["content"] = content + hint_instructions
-                elif isinstance(content, list):
-                    # Content block format -- append to last text block
-                    for block in reversed(content):
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            block["text"] = block["text"] + hint_instructions
-                            break
-                break
-
-        logger.info(
-            f"Claude hint mode for '{type_name}' "
-            f"(mesh delegation, schema in prompt)"
-        )
-        return model_params

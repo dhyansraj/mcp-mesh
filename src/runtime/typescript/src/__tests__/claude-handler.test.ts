@@ -27,7 +27,7 @@ describe("ClaudeHandler", () => {
       const capabilities = handler.getCapabilities();
 
       expect(capabilities.nativeToolCalling).toBe(true);
-      expect(capabilities.structuredOutput).toBe(false); // Uses HINT mode, not native response_format
+      expect(capabilities.structuredOutput).toBe(true); // Native response_format in mesh delegation
       expect(capabilities.streaming).toBe(true);
       expect(capabilities.vision).toBe(true);
       expect(capabilities.jsonMode).toBe(false); // No native JSON mode used
@@ -52,9 +52,7 @@ describe("ClaudeHandler", () => {
       expect(handler.determineOutputMode(schema, "text")).toBe("text");
     });
 
-    it("should always return 'hint' for any schema (Claude strategy)", () => {
-      // Claude always uses "hint" mode because generateObject() has issues with Anthropic
-      // and native structured output is slow. Prompt-based JSON is fast and reliable.
+    it("should return 'strict' for schemas (native response_format)", () => {
       const simpleSchema: OutputSchema = {
         name: "SimpleSchema",
         schema: {
@@ -67,10 +65,10 @@ describe("ClaudeHandler", () => {
       };
 
       const mode = handler.determineOutputMode(simpleSchema);
-      expect(mode).toBe("hint");
+      expect(mode).toBe("strict");
     });
 
-    it("should return 'hint' for complex schemas (Claude always uses hint)", () => {
+    it("should return 'strict' for complex schemas", () => {
       const complexSchema: OutputSchema = {
         name: "ComplexSchema",
         schema: {
@@ -85,12 +83,11 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      // Claude always uses hint mode regardless of complexity
       const mode = handler.determineOutputMode(complexSchema);
-      expect(mode).toBe("hint");
+      expect(mode).toBe("strict");
     });
 
-    it("should return 'hint' for schemas with nested objects (Claude always uses hint)", () => {
+    it("should return 'strict' for schemas with nested objects", () => {
       const nestedSchema: OutputSchema = {
         name: "NestedSchema",
         schema: {
@@ -108,12 +105,11 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      // Claude always uses hint mode regardless of nesting
       const mode = handler.determineOutputMode(nestedSchema);
-      expect(mode).toBe("hint");
+      expect(mode).toBe("strict");
     });
 
-    it("should return 'hint' for schemas with $defs (Claude always uses hint)", () => {
+    it("should return 'strict' for schemas with $defs", () => {
       const schemaWithDefs: OutputSchema = {
         name: "SchemaWithDefs",
         schema: {
@@ -127,12 +123,11 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      // Claude always uses hint mode regardless of $defs
       const mode = handler.determineOutputMode(schemaWithDefs);
-      expect(mode).toBe("hint");
+      expect(mode).toBe("strict");
     });
 
-    it("should return 'hint' for schemas with $ref (Claude always uses hint)", () => {
+    it("should return 'strict' for schemas with $ref", () => {
       const schemaWithRef: OutputSchema = {
         name: "SchemaWithRef",
         schema: {
@@ -143,24 +138,22 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      // Claude always uses hint mode regardless of $ref
       const mode = handler.determineOutputMode(schemaWithRef);
-      expect(mode).toBe("hint");
+      expect(mode).toBe("strict");
     });
 
-    it("should return 'hint' regardless of pre-computed fieldCount", () => {
+    it("should return 'strict' regardless of pre-computed fieldCount", () => {
       const schemaWithFieldCount: OutputSchema = {
         name: "SchemaWithFieldCount",
         schema: { type: "object" },
         fieldCount: 10,
       };
 
-      // Claude always uses hint mode regardless of field count
       const mode = handler.determineOutputMode(schemaWithFieldCount);
-      expect(mode).toBe("hint");
+      expect(mode).toBe("strict");
     });
 
-    it("should return 'hint' regardless of pre-computed hasNestedObjects", () => {
+    it("should return 'strict' regardless of pre-computed hasNestedObjects", () => {
       const schemaWithFlag: OutputSchema = {
         name: "SchemaWithFlag",
         schema: { type: "object", properties: { a: { type: "string" } } },
@@ -168,9 +161,8 @@ describe("ClaudeHandler", () => {
         hasNestedObjects: false,
       };
 
-      // Claude always uses hint mode regardless of flags
       const mode = handler.determineOutputMode(schemaWithFlag);
-      expect(mode).toBe("hint");
+      expect(mode).toBe("strict");
     });
   });
 
@@ -217,7 +209,7 @@ describe("ClaudeHandler", () => {
       expect(request.tools).toEqual(tools);
     });
 
-    it("should not include response_format by default (Claude uses hint mode)", () => {
+    it("should set responseFormat with strict schema by default for schemas", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
       const outputSchema: OutputSchema = {
         name: "Response",
@@ -226,20 +218,20 @@ describe("ClaudeHandler", () => {
           properties: {
             field1: { type: "string" },
             field2: { type: "string" },
-            field3: { type: "string" },
-            field4: { type: "string" },
-            field5: { type: "string" },
           },
         },
       };
 
-      // Claude always uses hint mode by default, so no responseFormat
+      // Default mode is strict, so responseFormat should be set
       const request = handler.prepareRequest(messages, null, outputSchema);
 
-      expect(request.responseFormat).toBeUndefined();
+      expect(request.responseFormat).toBeDefined();
+      expect(request.responseFormat?.type).toBe("json_schema");
+      expect(request.responseFormat?.jsonSchema.name).toBe("Response");
+      expect(request.responseFormat?.jsonSchema.strict).toBe(true);
     });
 
-    it("should not include response_format even when outputMode: strict is explicitly set (STRICT removed)", () => {
+    it("should set responseFormat with strict schema when outputMode: strict is explicitly set", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
       const outputSchema: OutputSchema = {
         name: "Response",
@@ -251,13 +243,18 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      // STRICT mode was removed from Claude handler - always uses HINT
       const request = handler.prepareRequest(messages, null, outputSchema, { outputMode: "strict" });
 
-      expect(request.responseFormat).toBeUndefined();
+      expect(request.responseFormat).toBeDefined();
+      expect(request.responseFormat?.type).toBe("json_schema");
+      expect(request.responseFormat?.jsonSchema.name).toBe("Response");
+      expect(request.responseFormat?.jsonSchema.strict).toBe(true);
+      // Strict schema should have additionalProperties: false and all required
+      expect(request.responseFormat?.jsonSchema.schema.additionalProperties).toBe(false);
+      expect(request.responseFormat?.jsonSchema.schema.required).toEqual(["field1"]);
     });
 
-    it("should not include response_format in hint mode (any schema)", () => {
+    it("should not include response_format in hint mode", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
       const simpleSchema: OutputSchema = {
         name: "Simple",
@@ -267,9 +264,9 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      const request = handler.prepareRequest(messages, null, simpleSchema);
+      // Explicitly force hint mode
+      const request = handler.prepareRequest(messages, null, simpleSchema, { outputMode: "hint" });
 
-      // Claude always uses hint mode, no response_format
       expect(request.responseFormat).toBeUndefined();
     });
 
@@ -277,24 +274,6 @@ describe("ClaudeHandler", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
 
       const request = handler.prepareRequest(messages, null, null, { outputMode: "text" });
-
-      expect(request.responseFormat).toBeUndefined();
-    });
-
-    it("should not set responseFormat even with explicit strict mode (STRICT removed)", () => {
-      const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
-      const outputSchema: OutputSchema = {
-        name: "Test",
-        schema: {
-          type: "object",
-          properties: {
-            field1: { type: "string" },
-          },
-        },
-      };
-
-      // STRICT mode was removed - no responseFormat for Claude
-      const request = handler.prepareRequest(messages, null, outputSchema, { outputMode: "strict" });
 
       expect(request.responseFormat).toBeUndefined();
     });
@@ -344,7 +323,7 @@ describe("ClaudeHandler", () => {
       const messages: LlmMessage[] = [
         {
           role: "tool",
-          content: "Sunny, 75°F",
+          content: "Sunny, 75\u00b0F",
           tool_call_id: "call_123",
           name: "get_weather",
         } as LlmMessage,
@@ -361,7 +340,7 @@ describe("ClaudeHandler", () => {
       expect(content[0].toolName).toBe("get_weather");
       // AI SDK v6 expects output as { type: 'text' | 'json', value: ... }
       expect(content[0].output.type).toBe("text");
-      expect(content[0].output.value).toBe("Sunny, 75°F");
+      expect(content[0].output.value).toBe("Sunny, 75\u00b0F");
     });
 
     it("should handle malformed tool_call arguments gracefully", () => {
@@ -410,30 +389,28 @@ describe("ClaudeHandler", () => {
       expect(result).toContain("NEVER use XML-style syntax");
     });
 
-    it("should add detailed JSON schema for any schema (Claude uses hint mode by default)", () => {
+    it("should add brief JSON note in strict mode (default for schemas)", () => {
       const basePrompt = "You are a helpful assistant.";
-      const complexSchema: OutputSchema = {
+      const schema: OutputSchema = {
         name: "ComplexOutput",
         schema: {
           type: "object",
           properties: {
             a: { type: "string" },
             b: { type: "string" },
-            c: { type: "string" },
-            d: { type: "string" },
-            e: { type: "string" },
           },
         },
       };
 
-      // Claude always uses hint mode, so detailed JSON instructions are added
-      const result = handler.formatSystemPrompt(basePrompt, null, complexSchema);
+      // Default mode is strict, so brief note should be added
+      const result = handler.formatSystemPrompt(basePrompt, null, schema);
 
-      expect(result).toContain("RESPONSE FORMAT:");
-      expect(result).toContain("CRITICAL: Your response must be ONLY the raw JSON object");
+      expect(result).toContain("structured as JSON matching the ComplexOutput format");
+      expect(result).not.toContain("RESPONSE FORMAT:");
+      expect(result).not.toContain("CRITICAL:");
     });
 
-    it("should not add JSON instructions when strict is specified (STRICT removed, no hint fallback)", () => {
+    it("should add brief JSON note in explicit strict mode", () => {
       const basePrompt = "You are a helpful assistant.";
       const schema: OutputSchema = {
         name: "StrictOutput",
@@ -445,12 +422,9 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      // STRICT mode was removed - determineOutputMode returns "strict" but
-      // formatSystemPrompt has no branch for it, so no JSON instructions added
       const result = handler.formatSystemPrompt(basePrompt, null, schema, "strict");
 
-      // No JSON instructions since there is no strict branch in formatSystemPrompt
-      expect(result).toBe(basePrompt);
+      expect(result).toContain("structured as JSON matching the StrictOutput format");
       expect(result).not.toContain("RESPONSE FORMAT:");
     });
 
@@ -468,7 +442,7 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      const result = handler.formatSystemPrompt(basePrompt, null, simpleSchema);
+      const result = handler.formatSystemPrompt(basePrompt, null, simpleSchema, "hint");
 
       expect(result).toContain("RESPONSE FORMAT:");
       expect(result).toContain("name: string (required)");
@@ -484,10 +458,64 @@ describe("ClaudeHandler", () => {
       expect(result).toBe(basePrompt);
       expect(result).not.toContain("JSON");
     });
+
+    it("should add DECISION GUIDE in hint mode with tools", () => {
+      const basePrompt = "You are a helpful assistant.";
+      const tools: ToolSchema[] = [
+        { type: "function", function: { name: "get_weather" } },
+      ];
+      const schema: OutputSchema = {
+        name: "Output",
+        schema: {
+          type: "object",
+          properties: { result: { type: "string" } },
+        },
+      };
+
+      const result = handler.formatSystemPrompt(basePrompt, tools, schema, "hint");
+
+      expect(result).toContain("DECISION GUIDE:");
+      expect(result).toContain("RESPONSE FORMAT:");
+    });
+
+    it("should add DECISION GUIDE in strict mode with tools", () => {
+      const basePrompt = "You are a helpful assistant.";
+      const tools: ToolSchema[] = [
+        { type: "function", function: { name: "get_weather" } },
+      ];
+      const schema: OutputSchema = {
+        name: "Output",
+        schema: {
+          type: "object",
+          properties: { result: { type: "string" } },
+        },
+      };
+
+      const result = handler.formatSystemPrompt(basePrompt, tools, schema, "strict");
+
+      expect(result).toContain("DECISION GUIDE:");
+      expect(result).toContain("structured as JSON matching the Output format");
+    });
+
+    it("should NOT add DECISION GUIDE in strict mode without tools", () => {
+      const basePrompt = "You are a helpful assistant.";
+      const schema: OutputSchema = {
+        name: "Output",
+        schema: {
+          type: "object",
+          properties: { result: { type: "string" } },
+        },
+      };
+
+      const result = handler.formatSystemPrompt(basePrompt, null, schema, "strict");
+
+      expect(result).not.toContain("DECISION GUIDE:");
+      expect(result).toContain("structured as JSON matching the Output format");
+    });
   });
 
-  describe("schema strictness - STRICT mode removed for Claude", () => {
-    it("should not apply makeSchemaStrict since STRICT mode was removed", () => {
+  describe("schema strictness in prepareRequest", () => {
+    it("should apply makeSchemaStrict with additionalProperties and required in strict mode", () => {
       const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
       const nestedSchema: OutputSchema = {
         name: "Nested",
@@ -505,9 +533,39 @@ describe("ClaudeHandler", () => {
         },
       };
 
-      // Even with explicit strict mode, Claude no longer sets responseFormat
       const request = handler.prepareRequest(messages, null, nestedSchema, { outputMode: "strict" });
-      expect(request.responseFormat).toBeUndefined();
+
+      expect(request.responseFormat).toBeDefined();
+      expect(request.responseFormat?.jsonSchema.schema.additionalProperties).toBe(false);
+      expect(request.responseFormat?.jsonSchema.schema.required).toEqual(["user", "a"]);
+      // Nested objects should also have strict constraints
+      const userSchema = (request.responseFormat?.jsonSchema.schema.properties as Record<string, Record<string, unknown>>)?.user;
+      expect(userSchema?.additionalProperties).toBe(false);
+      expect(userSchema?.required).toEqual(["name"]);
+    });
+
+    it("should sanitize validation keywords from schema", () => {
+      const messages: LlmMessage[] = [{ role: "user", content: "Hello" }];
+      const schemaWithValidation: OutputSchema = {
+        name: "Validated",
+        schema: {
+          type: "object",
+          properties: {
+            age: { type: "number", minimum: 0, maximum: 150 },
+            name: { type: "string", minLength: 1, maxLength: 100 },
+          },
+        },
+      };
+
+      const request = handler.prepareRequest(messages, null, schemaWithValidation);
+
+      expect(request.responseFormat).toBeDefined();
+      // Validation keywords should be stripped
+      const props = request.responseFormat?.jsonSchema.schema.properties as Record<string, Record<string, unknown>>;
+      expect(props.age.minimum).toBeUndefined();
+      expect(props.age.maximum).toBeUndefined();
+      expect(props.name.minLength).toBeUndefined();
+      expect(props.name.maxLength).toBeUndefined();
     });
   });
 });

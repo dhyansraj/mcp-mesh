@@ -45,9 +45,9 @@ class AnthropicHandlerTest {
         }
 
         @Test
-        @DisplayName("structured_output is false (uses HINT, not native response_format)")
-        void structuredOutputIsFalse() {
-            assertFalse(handler.getCapabilities().get("structured_output"));
+        @DisplayName("structured_output is true (native output_format with json_schema)")
+        void structuredOutputIsTrue() {
+            assertTrue(handler.getCapabilities().get("structured_output"));
         }
 
         @Test
@@ -63,9 +63,9 @@ class AnthropicHandlerTest {
         }
 
         @Test
-        @DisplayName("json_mode is false")
-        void jsonModeIsFalse() {
-            assertFalse(handler.getCapabilities().get("json_mode"));
+        @DisplayName("json_mode is true (via output_format json_schema)")
+        void jsonModeIsTrue() {
+            assertTrue(handler.getCapabilities().get("json_mode"));
         }
 
         @Test
@@ -86,18 +86,18 @@ class AnthropicHandlerTest {
         }
 
         @Test
-        @DisplayName("non-null schema returns OUTPUT_MODE_HINT")
-        void nonNullSchemaReturnsHint() {
+        @DisplayName("non-null schema returns OUTPUT_MODE_STRICT")
+        void nonNullSchemaReturnsStrict() {
             OutputSchema schema = OutputSchema.fromSchema("Test", Map.of(
                 "type", "object",
                 "properties", Map.of("name", Map.of("type", "string"))
             ));
-            assertEquals(LlmProviderHandler.OUTPUT_MODE_HINT, handler.determineOutputMode(schema));
+            assertEquals(LlmProviderHandler.OUTPUT_MODE_STRICT, handler.determineOutputMode(schema));
         }
 
         @Test
-        @DisplayName("any schema always returns hint, never strict")
-        void anySchemaAlwaysReturnsHint() {
+        @DisplayName("any schema always returns strict (native output_format)")
+        void anySchemaAlwaysReturnsStrict() {
             OutputSchema simpleSchema = new OutputSchema("Simple", Map.of(
                 "type", "object",
                 "properties", Map.of("x", Map.of("type", "string"))
@@ -114,10 +114,8 @@ class AnthropicHandlerTest {
                 )
             ), false);
 
-            assertEquals(LlmProviderHandler.OUTPUT_MODE_HINT, handler.determineOutputMode(simpleSchema));
-            assertEquals(LlmProviderHandler.OUTPUT_MODE_HINT, handler.determineOutputMode(complexSchema));
-            assertNotEquals(LlmProviderHandler.OUTPUT_MODE_STRICT, handler.determineOutputMode(simpleSchema));
-            assertNotEquals(LlmProviderHandler.OUTPUT_MODE_STRICT, handler.determineOutputMode(complexSchema));
+            assertEquals(LlmProviderHandler.OUTPUT_MODE_STRICT, handler.determineOutputMode(simpleSchema));
+            assertEquals(LlmProviderHandler.OUTPUT_MODE_STRICT, handler.determineOutputMode(complexSchema));
         }
     }
 
@@ -148,8 +146,8 @@ class AnthropicHandlerTest {
         }
 
         @Test
-        @DisplayName("with schema and no tools contains RESPONSE FORMAT and field descriptions")
-        void withSchemaNoToolsContainsResponseFormat() {
+        @DisplayName("with schema and no tools contains brief JSON note (strict mode)")
+        void withSchemaNoToolsContainsBriefNote() {
             Map<String, Object> schema = new LinkedHashMap<>();
             schema.put("type", "object");
             Map<String, Object> props = new LinkedHashMap<>();
@@ -160,14 +158,16 @@ class AnthropicHandlerTest {
             OutputSchema outputSchema = OutputSchema.fromSchema("PersonInfo", schema);
 
             String result = handler.formatSystemPrompt("You are helpful.", null, outputSchema);
-            assertTrue(result.contains("RESPONSE FORMAT:"), "Should contain RESPONSE FORMAT");
-            assertTrue(result.contains("name: string (required)"), "Should contain field description");
-            assertTrue(result.contains("CRITICAL: Your response must be ONLY the raw JSON object"),
-                "Should contain critical JSON instruction");
+            assertTrue(result.contains("structured as JSON matching the PersonInfo format"),
+                "Should contain brief schema note");
+            assertFalse(result.contains("RESPONSE FORMAT:"),
+                "Strict mode should NOT contain detailed RESPONSE FORMAT");
+            assertFalse(result.contains("CRITICAL:"),
+                "Strict mode should NOT contain CRITICAL instruction (output_format enforces)");
         }
 
         @Test
-        @DisplayName("with both tools and schema contains DECISION GUIDE and TOOL CALLING INSTRUCTIONS and RESPONSE FORMAT")
+        @DisplayName("with both tools and schema contains DECISION GUIDE and brief JSON note (strict mode)")
         void withToolsAndSchemaContainsDecisionGuide() {
             List<ToolDefinition> tools = List.of(
                 new ToolDefinition("search", "Search the web", Map.of())
@@ -182,7 +182,10 @@ class AnthropicHandlerTest {
             String result = handler.formatSystemPrompt("Base prompt.", tools, outputSchema);
             assertTrue(result.contains("DECISION GUIDE:"), "Should contain DECISION GUIDE");
             assertTrue(result.contains("TOOL CALLING INSTRUCTIONS"), "Should contain tool instructions");
-            assertTrue(result.contains("RESPONSE FORMAT:"), "Should contain RESPONSE FORMAT");
+            assertTrue(result.contains("structured as JSON matching the SearchResult format"),
+                "Should contain brief schema note");
+            assertFalse(result.contains("RESPONSE FORMAT:"),
+                "Strict mode should NOT contain detailed RESPONSE FORMAT");
         }
 
         @Test
@@ -207,8 +210,8 @@ class AnthropicHandlerTest {
         }
 
         @Test
-        @DisplayName("schema with empty properties returns generic JSON instruction")
-        void schemaWithEmptyPropertiesReturnsGenericJson() {
+        @DisplayName("schema with empty properties returns brief JSON note (strict mode)")
+        void schemaWithEmptyPropertiesReturnsBriefNote() {
             Map<String, Object> schema = new LinkedHashMap<>();
             schema.put("type", "object");
             schema.put("properties", Map.of());
@@ -216,12 +219,13 @@ class AnthropicHandlerTest {
             OutputSchema outputSchema = OutputSchema.fromSchema("Empty", schema);
 
             String result = handler.formatSystemPrompt("Base.", null, outputSchema);
-            assertTrue(result.contains("Respond with valid JSON"), "Should contain generic JSON instruction");
+            assertTrue(result.contains("structured as JSON matching the Empty format"),
+                "Should contain brief schema note");
         }
 
         @Test
-        @DisplayName("field descriptions format: required vs optional with description")
-        void fieldDescriptionsFormat() {
+        @DisplayName("strict mode uses brief note, no field-level descriptions in prompt")
+        void strictModeNoBriefFieldDescriptions() {
             Map<String, Object> schema = new LinkedHashMap<>();
             schema.put("type", "object");
             Map<String, Object> props = new LinkedHashMap<>();
@@ -233,10 +237,10 @@ class AnthropicHandlerTest {
             OutputSchema outputSchema = OutputSchema.fromSchema("Person", schema);
 
             String result = handler.formatSystemPrompt("Base.", null, outputSchema);
-            assertTrue(result.contains("name: string (required) - The name"),
-                "Should format required field with description");
-            assertTrue(result.contains("age: number (optional)"),
-                "Should format optional field without description");
+            assertTrue(result.contains("structured as JSON matching the Person format"),
+                "Should contain brief schema note");
+            assertFalse(result.contains("name: string (required)"),
+                "Strict mode should not contain field descriptions (output_format enforces)");
         }
 
         @Test
@@ -266,8 +270,8 @@ class AnthropicHandlerTest {
         }
 
         @Test
-        @DisplayName("schema without required field treats all fields as optional")
-        void schemaWithoutRequiredFieldAllOptional() {
+        @DisplayName("strict mode with schema references schema name in brief note")
+        void strictModeReferencesSchemaName() {
             Map<String, Object> schema = new LinkedHashMap<>();
             schema.put("type", "object");
             schema.put("properties", Map.of("foo", Map.of("type", "string")));
@@ -275,8 +279,8 @@ class AnthropicHandlerTest {
             OutputSchema outputSchema = OutputSchema.fromSchema("NoReq", schema);
 
             String result = handler.formatSystemPrompt("Base.", null, outputSchema);
-            assertTrue(result.contains("foo: string (optional)"),
-                "Should mark field as optional when required list is absent");
+            assertTrue(result.contains("NoReq format"),
+                "Brief note should reference the schema name");
         }
     }
 }

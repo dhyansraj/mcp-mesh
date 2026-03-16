@@ -552,6 +552,17 @@ class UnifiedMCPProxy:
         Handles complex responses, structured content, and maintains compatibility.
         """
         try:
+            # Check for MCP error responses FIRST
+            if hasattr(mcp_result, "isError") and mcp_result.isError:
+                error_text = ""
+                if mcp_result.content:
+                    for item in mcp_result.content:
+                        if hasattr(item, "text"):
+                            error_text = item.text
+                            break
+                self.logger.error(f"Remote tool returned error: {error_text}")
+                raise RuntimeError(f"Remote tool call failed: {error_text}")
+
             # Handle CallToolResult objects
             if hasattr(mcp_result, "content"):
                 self.logger.debug("🔄 Converting CallToolResult to Python dict")
@@ -594,6 +605,8 @@ class UnifiedMCPProxy:
                 else:
                     return str(mcp_result)
 
+        except RuntimeError:
+            raise
         except Exception as e:
             self.logger.warning(f"⚠️ Failed to convert MCP result, returning as-is: {e}")
             return mcp_result

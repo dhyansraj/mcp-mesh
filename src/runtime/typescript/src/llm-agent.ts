@@ -696,7 +696,10 @@ export class MeshLlmAgent<T = string> {
     const messages: LlmMessage[] = [];
 
     // Build tool definitions first (needed for schema injection)
-    const toolDefs = this.buildToolDefinitions(context.tools);
+    // When using mesh delegation, enrich tools with endpoint URLs
+    // so the provider can execute tools directly via MCP proxies
+    const isMeshDelegated = !!context.meshProvider;
+    const toolDefs = this.buildToolDefinitions(context.tools, isMeshDelegated);
 
     // Add system prompt if configured
     const systemPromptTemplate = this.getSystemPrompt();
@@ -971,16 +974,24 @@ export class MeshLlmAgent<T = string> {
 
   /**
    * Build tool definitions from proxies.
+   * When isMeshDelegated is true, enriches each tool with _mesh_endpoint
+   * so the provider can execute tools directly via MCP proxies.
    */
-  private buildToolDefinitions(tools: LlmToolProxy[]): LlmToolDefinition[] {
-    return tools.map((tool) => ({
-      type: "function" as const,
-      function: {
+  private buildToolDefinitions(tools: LlmToolProxy[], isMeshDelegated = false): LlmToolDefinition[] {
+    return tools.map((tool) => {
+      const funcDef: Record<string, unknown> = {
         name: tool.name,
         description: tool.description,
         parameters: tool.inputSchema ?? { type: "object", properties: {} },
-      },
-    }));
+      };
+      if (isMeshDelegated && tool.endpoint) {
+        funcDef._mesh_endpoint = tool.endpoint;
+      }
+      return {
+        type: "function" as const,
+        function: funcDef as LlmToolDefinition["function"],
+      };
+    });
   }
 
   /**
