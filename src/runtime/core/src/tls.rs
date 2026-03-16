@@ -24,6 +24,7 @@ use pyo3::prelude::*;
 
 // Global resolved TLS config -- written by prepare_tls(), read by get_tls_config and AgentRuntime
 static RESOLVED_CONFIG: OnceLock<TlsConfig> = OnceLock::new();
+static RESOLVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Errors that can occur during TLS configuration.
 #[derive(Debug, Error)]
@@ -205,16 +206,28 @@ fn write_credentials_to_files(
         std::env::temp_dir().to_string_lossy().to_string()
     };
 
-    let dir = format!("{}/mcp-mesh-tls-{}-{}", base, agent_name, std::process::id());
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        TlsError::ProviderError(format!("Failed to create TLS temp dir: {}", e))
-    })?;
+    // Sanitize agent_name to prevent path traversal
+    let safe_name: String = agent_name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
 
+    let dir = format!("{}/mcp-mesh-tls-{}-{}", base, safe_name, std::process::id());
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| {
-            TlsError::ProviderError(format!("Failed to set dir permissions: {}", e))
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir)
+            .map_err(|e| {
+                TlsError::ProviderError(format!("Failed to create TLS temp dir: {}", e))
+            })?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            TlsError::ProviderError(format!("Failed to create TLS temp dir: {}", e))
         })?;
     }
 
@@ -237,15 +250,25 @@ fn write_credentials_to_files(
 }
 
 fn write_secure_file(path: &str, content: &[u8]) -> Result<(), TlsError> {
-    std::fs::write(path, content).map_err(|e| {
-        TlsError::ProviderError(format!("Failed to write {}: {}", path, e))
-    })?;
+    use std::io::Write;
+
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
-            TlsError::ProviderError(format!("Failed to set permissions on {}: {}", path, e))
-        })?;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| TlsError::ProviderError(format!("Failed to create {}: {}", path, e)))?;
+        file.write_all(content)
+            .map_err(|e| TlsError::ProviderError(format!("Failed to write {}: {}", path, e)))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, content)
+            .map_err(|e| TlsError::ProviderError(format!("Failed to write {}: {}", path, e)))?;
     }
     Ok(())
 }
@@ -314,7 +337,7 @@ impl TlsConfig {
     /// temp files so language runtimes (uvicorn, httpx) can reference them by path.
     /// Results are cached globally via RESOLVED_CONFIG.
     pub async fn resolve(agent_name: &str) -> Result<Self, TlsError> {
-        // Return cached config if already resolved
+        // Return cached config if already resolved (e.g., by prepare_blocking at startup)
         if let Some(config) = RESOLVED_CONFIG.get() {
             return Ok(config.clone());
         }
@@ -421,8 +444,14 @@ impl TlsConfig {
     /// Called early in agent startup (before HTTP server) to ensure
     /// credentials are fetched and temp files are written.
     /// Results are cached globally via RESOLVED_CONFIG.
+    ///
+    /// Uses RESOLVE_LOCK to prevent duplicate calls from concurrent threads.
+    /// Does NOT call resolve() to avoid deadlock (mutex + block_on + async mutex).
     pub fn prepare_blocking(agent_name: &str) -> Result<Self, TlsError> {
-        // If already resolved, return cached
+        // Serialize concurrent sync callers (e.g., multiple Python threads)
+        let _guard = RESOLVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Already resolved by another thread
         if let Some(config) = RESOLVED_CONFIG.get() {
             return Ok(config.clone());
         }
@@ -437,11 +466,68 @@ impl TlsConfig {
             return Ok(config);
         }
 
-        // Need async runtime for provider (e.g., Vault HTTP call)
+        // Check if we're already inside a Tokio runtime (would panic on block_on)
+        if tokio::runtime::Handle::try_current().is_ok() {
+            warn!("prepare_blocking called from within Tokio runtime; falling back to from_env()");
+            return Ok(Self::from_env());
+        }
+
+        let provider_name = env::var("MCP_MESH_TLS_PROVIDER")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "file".to_string());
+
+        info!(
+            "TLS mode: {:?} | provider: {} | resolving credentials for '{}'",
+            mode, provider_name, agent_name
+        );
+
+        let provider = match create_provider(&provider_name) {
+            Ok(p) => p,
+            Err(e) => {
+                if provider_name == "file" {
+                    warn!("File provider init failed ({}), continuing without credentials", e);
+                    let config = Self::from_env();
+                    let _ = RESOLVED_CONFIG.set(config.clone());
+                    return Ok(config);
+                }
+                return Err(e);
+            }
+        };
+
+        let advertised_host = env::var("MCP_MESH_HTTP_HOST")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| crate::config::auto_detect_external_ip());
+
+        // Create a Tokio runtime for the async provider call
         let rt = tokio::runtime::Runtime::new().map_err(|e| {
             TlsError::ProviderError(format!("Failed to create tokio runtime: {}", e))
         })?;
-        let config = rt.block_on(Self::resolve(agent_name))?;
+        let credentials = rt.block_on(provider.get_credentials(agent_name, &advertised_host))?;
+
+        // Write credentials to secure temp files for non-file providers
+        let (cert_path, key_path, ca_path) = if provider_name != "file" {
+            let (c, k, ca) = write_credentials_to_files(&credentials, agent_name)?;
+            (Some(c), Some(k), ca)
+        } else {
+            (
+                env::var("MCP_MESH_TLS_CERT").ok().filter(|s| !s.is_empty()),
+                env::var("MCP_MESH_TLS_KEY").ok().filter(|s| !s.is_empty()),
+                env::var("MCP_MESH_TLS_CA").ok().filter(|s| !s.is_empty()),
+            )
+        };
+
+        let config = Self {
+            mode,
+            cert_path,
+            key_path,
+            ca_path,
+            provider: provider_name,
+            credentials: Some(credentials),
+        };
+
+        let _ = RESOLVED_CONFIG.set(config.clone());
         Ok(config)
     }
 
