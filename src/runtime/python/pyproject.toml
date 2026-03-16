@@ -163,9 +163,6 @@ ignore = [
 "**/registry_client_generated/**" = ["ALL"]  # Ignore all linting for generated files
 "tests/**" = ["E712", "F841", "B007", "C401", "F401"]  # Relax style requirements for test files
 
-[tool.isort]
-profile = "black"
-
 [tool.mypy]
 python_version = "3.11"
 check_untyped_defs = false  # Temporarily relaxed
