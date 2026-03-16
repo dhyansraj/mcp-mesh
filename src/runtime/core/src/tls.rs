@@ -467,6 +467,16 @@ impl TlsConfig {
 
         // Check if we're already inside a Tokio runtime (would panic on block_on)
         if tokio::runtime::Handle::try_current().is_ok() {
+            let provider_name = env::var("MCP_MESH_TLS_PROVIDER")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "file".to_string());
+            if provider_name != "file" {
+                return Err(TlsError::ProviderError(format!(
+                    "prepare_blocking called from within Tokio runtime but provider '{}' requires async I/O; use resolve() instead",
+                    provider_name
+                )));
+            }
             warn!("prepare_blocking called from within Tokio runtime; falling back to from_env()");
             return Ok(Self::from_env());
         }

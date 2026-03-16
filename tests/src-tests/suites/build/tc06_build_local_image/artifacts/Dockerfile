@@ -57,7 +57,7 @@ RUN ARCH=$(dpkg --print-architecture) && \
       arm64) VAULT_ARCH="arm64" ;; \
       *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
     esac && \
-    curl -fsSL "https://releases.hashicorp.com/vault/1.19.0/vault_1.19.0_linux_${VAULT_ARCH}.zip" -o /tmp/vault.zip && \
+    curl -fsSL "https://releases.hashicorp.com/vault/1.19.8/vault_1.19.8_linux_${VAULT_ARCH}.zip" -o /tmp/vault.zip && \
     apt-get update && apt-get install -y --no-install-recommends unzip && \
     unzip /tmp/vault.zip -d /usr/local/bin/ && \
     rm /tmp/vault.zip && \

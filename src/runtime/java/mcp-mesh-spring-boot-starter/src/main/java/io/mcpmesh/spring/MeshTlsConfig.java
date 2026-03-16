@@ -45,16 +45,16 @@ public class MeshTlsConfig {
             MeshCore core = NativeLoader.load();
             Pointer ptr = core.mesh_prepare_tls(agentName);
             if (ptr == null) {
+                String errMsg = "unknown error";
                 Pointer errPtr = core.mesh_last_error();
                 if (errPtr != null) {
                     try {
-                        String errMsg = errPtr.getString(0);
-                        log.warn("mesh_prepare_tls failed: {}", errMsg);
+                        errMsg = errPtr.getString(0);
                     } finally {
                         core.mesh_free_string(errPtr);
                     }
                 }
-                return;
+                throw new RuntimeException("mesh_prepare_tls failed: " + errMsg);
             }
             try {
                 String json = ptr.getString(0);
@@ -74,7 +74,7 @@ public class MeshTlsConfig {
                 core.mesh_free_string(ptr);
             }
         } catch (Exception e) {
-            log.error("Failed to prepare TLS: {}", e.getMessage());
+            throw new RuntimeException("Failed to prepare TLS: " + e.getMessage(), e);
         }
     }
 
