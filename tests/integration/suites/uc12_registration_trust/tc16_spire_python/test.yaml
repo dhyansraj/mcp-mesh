@@ -1,0 +1,182 @@
+name: "SPIRE - Python Agent Registration and Tool Call"
+description: "Verify Python agents can register using SPIRE-issued X.509-SVIDs via MCP_MESH_TLS_PROVIDER=spire"
+tags:
+  - registration-trust
+  - spire
+  - python
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy Python agent to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent /workspace/system_agent.py
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Start SPIRE infrastructure"
+    routine: global.start_spire
+
+  - name: "Register workloads and verify SPIRE entries"
+    handler: shell
+    command: |
+      echo "Current UID: $(id -u) ($(whoami))"
+
+      # Ensure workload entries exist (routine may have created them)
+      echo "=== Creating/verifying workload entries ==="
+      spire-server entry create \
+        -socketPath /tmp/spire-server/private/api.sock \
+        -parentID spiffe://mcp-mesh.local/agent \
+        -spiffeID spiffe://mcp-mesh.local/mesh-registry \
+        -selector unix:uid:0 \
+        -x509SVIDTTL 3600 2>&1 || echo "(entry may already exist)"
+
+      spire-server entry create \
+        -socketPath /tmp/spire-server/private/api.sock \
+        -parentID spiffe://mcp-mesh.local/agent \
+        -spiffeID spiffe://mcp-mesh.local/mesh-agent \
+        -selector unix:uid:0 \
+        -x509SVIDTTL 3600 2>&1 || echo "(entry may already exist)"
+
+      echo "=== All entries ==="
+      spire-server entry show -socketPath /tmp/spire-server/private/api.sock 2>&1
+
+      # Give agent time to sync new entries
+      sleep 3
+      echo "ENTRIES_REGISTERED=true"
+    capture: entries_output
+
+  - name: "Export SPIRE trust bundle for registry filestore"
+    handler: shell
+    command: |
+      # Export the SPIRE trust bundle as PEM for registry filestore backend
+      # Retry: agent needs time to sync entries from server after startup
+      mkdir -p /tmp/spire-trust
+      for i in $(seq 1 10); do
+        rm -rf /tmp/spire-certs && mkdir -p /tmp/spire-certs
+        spire-agent api fetch x509 -socketPath /var/run/spire/agent.sock -write /tmp/spire-certs 2>&1
+        if [ -f /tmp/spire-certs/bundle.0.pem ]; then
+          echo "SVID fetched after ${i} attempt(s)"
+          break
+        fi
+        echo "Attempt $i: SVID not ready, retrying..."
+        sleep 2
+      done
+      if [ -f /tmp/spire-certs/bundle.0.pem ]; then
+        cp /tmp/spire-certs/bundle.0.pem /tmp/spire-trust/spire-ca.pem
+        echo "TRUST_BUNDLE_READY=true"
+      else
+        echo "ERROR: Could not export trust bundle"
+        ls -la /tmp/spire-certs/ 2>/dev/null
+        exit 1
+      fi
+
+      # Issue a registry cert from SPIRE (use the SVID)
+      if [ -f /tmp/spire-certs/svid.0.pem ] && [ -f /tmp/spire-certs/svid.0.key ]; then
+        cp /tmp/spire-certs/svid.0.pem /tmp/spire-registry-cert.pem
+        # Append CA bundle to registry cert for full chain
+        cat /tmp/spire-certs/bundle.0.pem >> /tmp/spire-registry-cert.pem
+        cp /tmp/spire-certs/svid.0.key /tmp/spire-registry-key.pem
+        echo "REGISTRY_CERT_READY=true"
+      else
+        echo "ERROR: Could not get SVID for registry"
+        exit 1
+      fi
+    capture: trust_setup
+    timeout: 30
+
+  - name: "Start registry with SPIRE trust"
+    handler: shell
+    command: |
+      meshctl start --registry-only -d \
+        --env MCP_MESH_TLS_MODE=auto \
+        --env MCP_MESH_TRUST_BACKEND=filestore \
+        --env MCP_MESH_TRUST_DIR=/tmp/spire-trust \
+        --env MCP_MESH_TLS_CERT=/tmp/spire-registry-cert.pem \
+        --env MCP_MESH_TLS_KEY=/tmp/spire-registry-key.pem \
+        --env MCP_MESH_TLS_CA=/tmp/spire-trust/spire-ca.pem
+      sleep 3
+      HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost:8000/health)
+      echo "REGISTRY_HEALTH=$HTTP_CODE"
+    workdir: /workspace
+    capture: registry_start
+
+  - name: "Start Python agent with SPIRE credential provider"
+    handler: shell
+    command: |
+      meshctl start system_agent.py -d \
+        --registry-url https://localhost:8000 \
+        --env MCP_MESH_TLS_MODE=auto \
+        --env MCP_MESH_TLS_PROVIDER=spire \
+        --env MCP_MESH_SPIRE_SOCKET=/var/run/spire/agent.sock \
+        --env MCP_MESH_TLS_CA=/tmp/spire-trust/spire-ca.pem
+    workdir: /workspace
+    capture: agent_start
+
+  - name: "Wait for agent registration"
+    handler: wait
+    seconds: 15
+
+  - name: "Check agent registered"
+    handler: shell
+    command: |
+      curl -sk https://localhost:8000/agents 2>&1
+    capture: agents_json
+
+  - name: "Check agent logs for SPIRE flow"
+    handler: shell
+    command: |
+      echo "=== Agent log (full) ==="
+      cat $HOME/.mcp-mesh/logs/system-agent.log 2>/dev/null | tail -40
+      echo "=== SPIRE-related lines ==="
+      cat $HOME/.mcp-mesh/logs/system-agent.log 2>/dev/null | grep -i "spire\|SVID\|spiffe\|mTLS\|Heartbeat\|TLS.*provider\|error\|failed\|prepare" | head -20
+    capture: spire_logs
+
+  - name: "Call get_current_time tool over SPIRE mTLS"
+    handler: shell
+    command: |
+      meshctl call system:get_current_time '{}' --registry-url https://localhost:8000 --insecure 2>&1
+    workdir: /workspace
+    capture: call_output
+
+  - name: "Stop all"
+    handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.spire_start} contains 'SPIRE_READY=true'"
+    message: "SPIRE infrastructure should be ready"
+
+  - expr: "${captured.trust_setup} contains 'TRUST_BUNDLE_READY=true'"
+    message: "SPIRE trust bundle should be exported"
+
+  - expr: "${captured.registry_start} contains 'REGISTRY_HEALTH=200'"
+    message: "Registry should be healthy"
+
+  - expr: "${captured.agents_json} contains 'system-agent'"
+    message: "Python agent should register with SPIRE-issued credentials"
+
+  - expr: "${captured.agents_json} contains 'https://'"
+    message: "Agent endpoint should be HTTPS"
+
+  - expr: "${captured.call_output} not contains 'Error:'"
+    message: "Tool call should succeed over SPIRE mTLS"
+
+  - expr: "${captured.spire_logs} contains 'Heartbeat successful'"
+    message: "Agent should heartbeat over mTLS"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.stop_spire
+  - routine: global.cleanup_workspace

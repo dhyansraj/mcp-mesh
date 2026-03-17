@@ -494,3 +494,172 @@ routines:
           echo "Vault stopped and cleaned up"
         capture: vault_stop
         ignore_errors: true
+
+  #############################################################################
+  # SPIRE WORKLOAD IDENTITY
+  # SPIRE server + agent for X.509-SVID workload identity tests
+  #############################################################################
+
+  # Start SPIRE server + agent for workload identity tests
+  start_spire:
+    description: "Start SPIRE server and agent, register mesh workloads"
+    steps:
+      - handler: shell
+        command: |
+          echo "=== Starting SPIRE infrastructure ==="
+
+          # Create config directories
+          mkdir -p /tmp/spire/server /tmp/spire/agent /var/run/spire
+
+          # Write SPIRE server config
+          cat > /tmp/spire/server/server.conf << 'SERVERCONF'
+          server {
+              bind_address = "127.0.0.1"
+              bind_port = "8081"
+              trust_domain = "mcp-mesh.local"
+              data_dir = "/tmp/spire/server/data"
+              log_level = "WARN"
+              ca_ttl = "24h"
+              default_x509_svid_ttl = "1h"
+          }
+          plugins {
+              DataStore "sql" {
+                  plugin_data {
+                      database_type = "sqlite3"
+                      connection_string = "/tmp/spire/server/data/datastore.sqlite3"
+                  }
+              }
+              NodeAttestor "join_token" {
+                  plugin_data {}
+              }
+              KeyManager "memory" {
+                  plugin_data {}
+              }
+          }
+          SERVERCONF
+
+          # Write SPIRE agent config
+          cat > /tmp/spire/agent/agent.conf << 'AGENTCONF'
+          agent {
+              data_dir = "/tmp/spire/agent/data"
+              log_level = "WARN"
+              server_address = "127.0.0.1"
+              server_port = "8081"
+              trust_domain = "mcp-mesh.local"
+              socket_path = "/var/run/spire/agent.sock"
+              insecure_bootstrap = true
+          }
+          plugins {
+              NodeAttestor "join_token" {
+                  plugin_data {}
+              }
+              KeyManager "memory" {
+                  plugin_data {}
+              }
+              WorkloadAttestor "unix" {
+                  plugin_data {}
+              }
+          }
+          AGENTCONF
+
+          mkdir -p /tmp/spire/server/data /tmp/spire/agent/data
+
+          # Start SPIRE server
+          echo "Starting SPIRE server..."
+          spire-server run -config /tmp/spire/server/server.conf > /tmp/spire/server.log 2>&1 &
+          echo $! > /tmp/spire/server.pid
+
+          # Wait for server to be ready
+          for i in $(seq 1 15); do
+            if spire-server healthcheck -socketPath /tmp/spire-server/private/api.sock 2>/dev/null; then
+              echo "SPIRE server ready after ${i}s"
+              break
+            fi
+            if [ $i -eq 15 ]; then
+              echo "ERROR: SPIRE server not ready after 15s"
+              cat /tmp/spire/server.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Generate join token for agent
+          JOIN_TOKEN=$(spire-server token generate \
+            -socketPath /tmp/spire-server/private/api.sock \
+            -spiffeID spiffe://mcp-mesh.local/agent \
+            -ttl 3600 | awk '{print $2}')
+          echo "Join token generated (${#JOIN_TOKEN} chars)"
+
+          # Register mesh workloads BEFORE starting agent
+          echo "Registering mesh workloads..."
+          spire-server entry create \
+            -socketPath /tmp/spire-server/private/api.sock \
+            -parentID spiffe://mcp-mesh.local/agent \
+            -spiffeID spiffe://mcp-mesh.local/mesh-registry \
+            -selector unix:uid:0 \
+            -x509SVIDTTL 3600 2>&1 || echo "Registry entry create failed"
+
+          spire-server entry create \
+            -socketPath /tmp/spire-server/private/api.sock \
+            -parentID spiffe://mcp-mesh.local/agent \
+            -spiffeID spiffe://mcp-mesh.local/mesh-agent \
+            -selector unix:uid:0 \
+            -x509SVIDTTL 3600 2>&1 || echo "Agent entry create failed"
+
+          echo "Verifying entries..."
+          spire-server entry show -socketPath /tmp/spire-server/private/api.sock 2>&1
+
+          # Start SPIRE agent with join token
+          echo "Starting SPIRE agent..."
+          spire-agent run \
+            -config /tmp/spire/agent/agent.conf \
+            -joinToken "$JOIN_TOKEN" > /tmp/spire/agent.log 2>&1 &
+          echo $! > /tmp/spire/agent.pid
+
+          # Wait for agent socket to appear
+          echo "Waiting for SPIRE agent socket..."
+          for i in $(seq 1 20); do
+            if [ -S /var/run/spire/agent.sock ]; then
+              echo "SPIRE agent ready after ${i}s"
+              break
+            fi
+            if [ $i -eq 20 ]; then
+              echo "ERROR: SPIRE agent socket not ready after 20s"
+              cat /tmp/spire/agent.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Verify we can fetch an SVID
+          echo "Verifying SVID fetch..."
+          spire-agent api fetch x509 -socketPath /var/run/spire/agent.sock -write /tmp/spire/test-svid 2>&1 || true
+          if [ -f /tmp/spire/test-svid/svid.0.pem ]; then
+            echo "SVID fetch verified"
+            rm -rf /tmp/spire/test-svid
+          else
+            echo "WARNING: Could not verify SVID fetch (may work for actual workloads)"
+          fi
+
+          echo "SPIRE_READY=true"
+          echo "  Server PID: $(cat /tmp/spire/server.pid)"
+          echo "  Agent PID: $(cat /tmp/spire/agent.pid)"
+          echo "  Socket: /var/run/spire/agent.sock"
+          echo "  Trust domain: mcp-mesh.local"
+        capture: spire_start
+        timeout: 60
+
+  # Stop SPIRE server and agent
+  stop_spire:
+    description: "Stop SPIRE server and agent, clean up"
+    steps:
+      - handler: shell
+        command: |
+          kill $(cat /tmp/spire/agent.pid 2>/dev/null) 2>/dev/null || true
+          kill $(cat /tmp/spire/server.pid 2>/dev/null) 2>/dev/null || true
+          pkill -f "spire-server" 2>/dev/null || true
+          pkill -f "spire-agent" 2>/dev/null || true
+          rm -rf /tmp/spire /var/run/spire
+          echo "SPIRE stopped and cleaned up"
+        capture: spire_stop
+        ignore_errors: true

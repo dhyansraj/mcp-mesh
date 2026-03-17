@@ -39,7 +39,7 @@ serde_json = "1"
 # Utilities
 async-trait = "0.1"
 base64 = "0.22"
-spiffe = { version = "0.12", optional = true }
+spiffe = { version = "0.12", features = ["workload-api-x509"], optional = true }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

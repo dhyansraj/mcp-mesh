@@ -59,7 +59,7 @@ test:
           cp /src-host/go.mod /src-host/go.sum /src/mcp-mesh/ && \
           cp -r /src-host/cmd/mcp-mesh-registry /src/mcp-mesh/cmd/ && \
           cp -r /src-host/src/core /src/mcp-mesh/src/ && \
-          cd /src/mcp-mesh && go build -o /out/bin/mcp-mesh-registry ./cmd/mcp-mesh-registry/
+          cd /src/mcp-mesh && go build -tags spire -o /out/bin/mcp-mesh-registry ./cmd/mcp-mesh-registry/
         "
 
       echo "Build complete"

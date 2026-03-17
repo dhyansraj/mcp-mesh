@@ -1,0 +1,193 @@
+name: "SPIRE - Java Agent Registration and Tool Call"
+description: "Verify Java agents can register using SPIRE-issued certificates (pre-provisioned via SPIRE CLI)"
+tags:
+  - registration-trust
+  - spire
+  - java
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy Java greeter to workspace"
+    handler: shell
+    command: |
+      cp -rL /uc-artifacts/java-greeter /workspace/java-greeter
+      ls -la /workspace/java-greeter/
+    capture: copy_output
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-greeter
+    timeout: 600
+
+  - name: "Start SPIRE infrastructure"
+    routine: global.start_spire
+
+  - name: "Add DNS SANs to SPIRE entries (needed for file-provider hostname verification)"
+    handler: shell
+    command: |
+      # Java uses file provider with pre-exported SPIRE certs.
+      # File provider path does normal hostname verification, so SVIDs need DNS SANs.
+      # Delete only mesh workload entries (not the node entry) and re-create with -dns flag.
+      # Parse entry show output to find mesh-registry and mesh-agent entry IDs
+      ENTRIES=$(spire-server entry show -socketPath /tmp/spire-server/private/api.sock 2>&1)
+      echo "$ENTRIES" | awk '/Entry ID/{id=$4} /SPIFFE ID.*mesh-registry|SPIFFE ID.*mesh-agent/{print id}' | while read eid; do
+        spire-server entry delete -socketPath /tmp/spire-server/private/api.sock -entryID "$eid" 2>&1
+      done
+
+      spire-server entry create \
+        -socketPath /tmp/spire-server/private/api.sock \
+        -parentID spiffe://mcp-mesh.local/agent \
+        -spiffeID spiffe://mcp-mesh.local/mesh-registry \
+        -selector unix:uid:0 \
+        -dns localhost \
+        -x509SVIDTTL 3600 2>&1
+
+      spire-server entry create \
+        -socketPath /tmp/spire-server/private/api.sock \
+        -parentID spiffe://mcp-mesh.local/agent \
+        -spiffeID spiffe://mcp-mesh.local/mesh-agent \
+        -selector unix:uid:0 \
+        -dns localhost \
+        -x509SVIDTTL 3600 2>&1
+
+      # Wait for agent to sync new entries
+      sleep 5
+      echo "DNS_ENTRIES_READY=true"
+    capture: dns_entries
+
+  - name: "Export SPIRE certs for registry and agent"
+    handler: shell
+    command: |
+      mkdir -p /tmp/spire-trust
+      for i in $(seq 1 10); do
+        rm -rf /tmp/spire-certs && mkdir -p /tmp/spire-certs
+        spire-agent api fetch x509 -socketPath /var/run/spire/agent.sock -write /tmp/spire-certs 2>&1
+        if [ -f /tmp/spire-certs/bundle.0.pem ]; then
+          echo "SVID fetched after ${i} attempt(s)"
+          break
+        fi
+        echo "Attempt $i: SVID not ready, retrying..."
+        sleep 2
+      done
+
+      if [ -f /tmp/spire-certs/bundle.0.pem ] && [ -f /tmp/spire-certs/svid.0.pem ]; then
+        # Trust bundle
+        cp /tmp/spire-certs/bundle.0.pem /tmp/spire-trust/spire-ca.pem
+
+        # Registry cert
+        cp /tmp/spire-certs/svid.0.pem /tmp/spire-registry-cert.pem
+        cat /tmp/spire-certs/bundle.0.pem >> /tmp/spire-registry-cert.pem
+        cp /tmp/spire-certs/svid.0.key /tmp/spire-registry-key.pem
+
+        # Agent cert (pre-provisioned for Java)
+        cp /tmp/spire-certs/svid.0.pem /tmp/spire-agent-cert.pem
+        cat /tmp/spire-certs/bundle.0.pem >> /tmp/spire-agent-cert.pem
+        cp /tmp/spire-certs/svid.0.key /tmp/spire-agent-key.pem
+
+        echo "SPIRE_CERTS_READY=true"
+      else
+        echo "ERROR: Could not export SPIRE certs"
+        exit 1
+      fi
+    capture: trust_setup
+    timeout: 30
+
+  - name: "Start registry with SPIRE trust"
+    handler: shell
+    command: |
+      meshctl start --registry-only -d \
+        --env MCP_MESH_TLS_MODE=auto \
+        --env MCP_MESH_TRUST_BACKEND=filestore \
+        --env MCP_MESH_TRUST_DIR=/tmp/spire-trust \
+        --env MCP_MESH_TLS_CERT=/tmp/spire-registry-cert.pem \
+        --env MCP_MESH_TLS_KEY=/tmp/spire-registry-key.pem \
+        --env MCP_MESH_TLS_CA=/tmp/spire-trust/spire-ca.pem
+      sleep 3
+      HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost:8000/health)
+      echo "REGISTRY_HEALTH=$HTTP_CODE"
+    workdir: /workspace
+    capture: registry_start
+
+  - name: "Start Java agent with pre-issued SPIRE certs"
+    handler: shell
+    command: |
+      meshctl start java-greeter -d \
+        --registry-url https://localhost:8000 \
+        --env MCP_MESH_TLS_MODE=auto \
+        --env MCP_MESH_TLS_CERT=/tmp/spire-agent-cert.pem \
+        --env MCP_MESH_TLS_KEY=/tmp/spire-agent-key.pem \
+        --env MCP_MESH_TLS_CA=/tmp/spire-trust/spire-ca.pem
+    workdir: /workspace
+    capture: java_start
+
+  - name: "Wait for Java agent to register (up to 90s)"
+    handler: shell
+    command: |
+      for i in $(seq 1 45); do
+        if curl -sk https://localhost:8000/agents 2>/dev/null | grep -q "greeter"; then
+          echo "REGISTERED after $((i*2)) seconds"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "TIMEOUT: agent did not register within 90s"
+      exit 1
+    capture: wait_output
+    timeout: 120
+
+  - name: "Check agent registered"
+    handler: shell
+    command: |
+      curl -sk https://localhost:8000/agents 2>&1
+    capture: agents_json
+
+  - name: "Call greet tool over SPIRE mTLS"
+    handler: shell
+    command: |
+      meshctl call greeter:greet '{"name":"SPIRETest"}' --registry-url https://localhost:8000 --insecure 2>&1
+    workdir: /workspace
+    capture: call_output
+
+  - name: "Stop all"
+    handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.spire_start} contains 'SPIRE_READY=true'"
+    message: "SPIRE infrastructure should be ready"
+
+  - expr: "${captured.trust_setup} contains 'SPIRE_CERTS_READY=true'"
+    message: "SPIRE certs should be exported"
+
+  - expr: "${captured.registry_start} contains 'REGISTRY_HEALTH=200'"
+    message: "Registry should be healthy"
+
+  - expr: "${captured.wait_output} contains 'REGISTERED'"
+    message: "Java agent should register within timeout"
+
+  - expr: "${captured.agents_json} contains 'greeter'"
+    message: "Java greeter should be registered"
+
+  - expr: "${captured.call_output} contains 'Hello'"
+    message: "Tool call should succeed over SPIRE mTLS"
+
+  - expr: "${captured.call_output} contains 'SPIRETest'"
+    message: "Response should contain the greeted name"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*greeter" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.stop_spire
+  - routine: global.cleanup_workspace

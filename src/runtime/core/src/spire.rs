@@ -32,14 +32,6 @@ impl SPIREProvider {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "mcp-mesh.local".to_string());
 
-        // Validate socket path exists (early sanity check)
-        if !std::path::Path::new(&socket_path).exists() {
-            return Err(TlsError::SpireError(format!(
-                "SPIRE agent socket not found at '{}'. Ensure the SPIRE agent is running and the socket is mounted.",
-                socket_path
-            )));
-        }
-
         info!("SPIRE provider configured: socket={}, trust_domain={}", socket_path, trust_domain);
 
         Ok(Self {
@@ -56,7 +48,7 @@ fn der_to_pem(der: &[u8], label: &str) -> String {
     let b64 = base64::engine::general_purpose::STANDARD.encode(der);
     let mut pem = format!("-----BEGIN {}-----\n", label);
     for chunk in b64.as_bytes().chunks(64) {
-        pem.push_str(std::str::from_utf8(chunk).unwrap());
+        pem.push_str(std::str::from_utf8(chunk).expect("base64 output is always valid ASCII/UTF-8"));
         pem.push('\n');
     }
     pem.push_str(&format!("-----END {}-----\n", label));
@@ -72,7 +64,7 @@ impl CredentialProvider for SPIREProvider {
         info!("Fetching X.509-SVID from SPIRE agent at {}", endpoint);
 
         // Connect to SPIRE Workload API
-        let mut client = WorkloadApiClient::new_from_path(&self.socket_path)
+        let client = WorkloadApiClient::connect_to(&endpoint)
             .await
             .map_err(|e| TlsError::SpireError(format!("Failed to connect to SPIRE agent: {}", e)))?;
 
@@ -86,15 +78,13 @@ impl CredentialProvider for SPIREProvider {
         info!("Obtained X.509-SVID: {}", spiffe_id);
 
         // Convert cert chain (DER) to PEM
-        let cert_chain = svid.cert_chain();
         let mut cert_pem = String::new();
-        for cert_der in cert_chain {
-            cert_pem.push_str(&der_to_pem(cert_der.as_ref(), "CERTIFICATE"));
+        for cert in svid.cert_chain() {
+            cert_pem.push_str(&der_to_pem(cert.as_bytes(), "CERTIFICATE"));
         }
 
         // Convert private key (DER) to PEM
-        let key_der = svid.private_key().as_ref();
-        let key_pem = der_to_pem(key_der, "PRIVATE KEY");
+        let key_pem = der_to_pem(svid.private_key().as_bytes(), "PRIVATE KEY");
 
         // Fetch trust bundles for CA
         let bundles = client
@@ -104,11 +94,10 @@ impl CredentialProvider for SPIREProvider {
 
         // Build CA PEM from trust bundles
         let mut ca_pem = String::new();
-        for bundle in bundles.iter() {
-            let domain = bundle.trust_domain().to_string();
-            debug!("Trust bundle for domain: {}", domain);
+        for (_domain, bundle) in bundles.iter() {
+            debug!("Trust bundle for domain: {}", _domain);
             for authority in bundle.authorities() {
-                ca_pem.push_str(&der_to_pem(authority.as_ref(), "CERTIFICATE"));
+                ca_pem.push_str(&der_to_pem(authority.as_bytes(), "CERTIFICATE"));
             }
         }
 
@@ -136,45 +125,24 @@ mod tests {
         std::env::remove_var("MCP_MESH_SPIRE_SOCKET");
         std::env::remove_var("MCP_MESH_TRUST_DOMAIN");
 
-        // Will fail because default socket doesn't exist in test env
-        let result = SPIREProvider::from_env();
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("SPIRE agent socket not found"));
+        // from_env() succeeds even if socket doesn't exist yet
+        // (socket availability is checked at connect time, not init time)
+        let provider = SPIREProvider::from_env().unwrap();
+        assert_eq!(provider.socket_path, "/run/spire/agent/sockets/agent.sock");
+        assert_eq!(provider.trust_domain, "mcp-mesh.local");
     }
 
     #[test]
     fn test_spire_provider_custom_socket_path() {
         let _lock = TEST_ENV_LOCK.lock().unwrap();
 
-        // Use a path that doesn't exist
-        std::env::set_var("MCP_MESH_SPIRE_SOCKET", "/nonexistent/spire.sock");
+        std::env::set_var("MCP_MESH_SPIRE_SOCKET", "/custom/spire.sock");
         std::env::remove_var("MCP_MESH_TRUST_DOMAIN");
-
-        let result = SPIREProvider::from_env();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("/nonexistent/spire.sock"));
-
-        std::env::remove_var("MCP_MESH_SPIRE_SOCKET");
-    }
-
-    #[test]
-    fn test_spire_provider_with_existing_socket() {
-        let _lock = TEST_ENV_LOCK.lock().unwrap();
-
-        // Create a temp file to act as a "socket" for the existence check
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let path = tmp.path().to_str().unwrap().to_string();
-
-        std::env::set_var("MCP_MESH_SPIRE_SOCKET", &path);
-        std::env::set_var("MCP_MESH_TRUST_DOMAIN", "test.local");
 
         let provider = SPIREProvider::from_env().unwrap();
-        assert_eq!(provider.socket_path, path);
-        assert_eq!(provider.trust_domain, "test.local");
+        assert_eq!(provider.socket_path, "/custom/spire.sock");
 
         std::env::remove_var("MCP_MESH_SPIRE_SOCKET");
-        std::env::remove_var("MCP_MESH_TRUST_DOMAIN");
     }
 
     #[test]

@@ -63,7 +63,7 @@ test:
           cp /src-host/src/runtime/core/build.rs /src/mcp-mesh/src/runtime/core/ && \
           cp -r /src-host/src/runtime/core/src /src/mcp-mesh/src/runtime/core/ && \
           cp -r /src-host/src/runtime/core/python /src/mcp-mesh/src/runtime/core/ && \
-          cd /src/mcp-mesh/src/runtime/core && maturin build --release --out /out/wheels
+          cd /src/mcp-mesh/src/runtime/core && maturin build --release --features spire --out /out/wheels
         "
 
       echo "Maturin build complete"
