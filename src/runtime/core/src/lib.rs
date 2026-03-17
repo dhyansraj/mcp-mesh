@@ -41,6 +41,8 @@ pub mod spec;
 pub mod tls;
 pub mod tracing_publish;
 pub mod vault;
+#[cfg(feature = "spire")]
+pub mod spire;
 
 // C FFI bindings module
 pub mod ffi;

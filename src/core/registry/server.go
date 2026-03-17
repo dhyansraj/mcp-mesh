@@ -510,8 +510,13 @@ func initTrustChain(config *RegistryConfig, l *logger.Logger) *trust.TrustChain 
 			if socketPath == "" {
 				socketPath = "/run/spire/agent/sockets/agent.sock"
 			}
-			l.Warning("spire backend requires spire_connect.go (build with -tags spire); socket: %s", socketPath)
-			continue
+			sb, err := trust.NewSPIRE(context.Background(), socketPath)
+			if err != nil {
+				l.Warning("Failed to initialize spire backend: %v", err)
+				continue
+			}
+			chain.Add(sb)
+			l.Info("🔒 Trust backend '%s' initialized (socket: %s)", name, socketPath)
 		default:
 			l.Warning("Unknown trust backend: %s", name)
 		}
