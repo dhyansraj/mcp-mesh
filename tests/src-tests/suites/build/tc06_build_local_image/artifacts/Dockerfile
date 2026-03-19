@@ -57,7 +57,7 @@ RUN ARCH=$(dpkg --print-architecture) && \
       arm64) VAULT_ARCH="arm64" ;; \
       *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
     esac && \
-    curl -fsSL "https://releases.hashicorp.com/vault/1.19.8/vault_1.19.8_linux_${VAULT_ARCH}.zip" -o /tmp/vault.zip && \
+    curl -fsSL "https://releases.hashicorp.com/vault/1.19.0/vault_1.19.0_linux_${VAULT_ARCH}.zip" -o /tmp/vault.zip && \
     apt-get update && apt-get install -y --no-install-recommends unzip && \
     unzip /tmp/vault.zip -d /usr/local/bin/ && \
     rm /tmp/vault.zip && \
@@ -65,8 +65,22 @@ RUN ARCH=$(dpkg --print-architecture) && \
     rm -rf /var/lib/apt/lists/* && \
     chmod +x /usr/local/bin/vault
 
+# Install SPIRE server and agent for workload identity tests (architecture-aware)
+RUN ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+      amd64) SPIRE_ARCH="linux-amd64-musl" ;; \
+      arm64) SPIRE_ARCH="linux-arm64-musl" ;; \
+      *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/spiffe/spire/releases/download/v1.12.1/spire-1.12.1-${SPIRE_ARCH}.tar.gz" -o /tmp/spire.tar.gz && \
+    tar -xzf /tmp/spire.tar.gz -C /tmp && \
+    cp /tmp/spire-1.12.1/bin/spire-server /usr/local/bin/ && \
+    cp /tmp/spire-1.12.1/bin/spire-agent /usr/local/bin/ && \
+    rm -rf /tmp/spire.tar.gz /tmp/spire-1.12.1 && \
+    chmod +x /usr/local/bin/spire-server /usr/local/bin/spire-agent
+
 # Verify Node.js and Java installation
-RUN node --version && npm --version && java -version && mvn --version | head -1 && vault --version
+RUN node --version && npm --version && java -version && mvn --version | head -1 && vault --version && spire-server --version && spire-agent --version
 
 # Create directories for local packages
 RUN mkdir -p /wheels /packages /java-jars /native-libs /workspace

@@ -20,8 +20,8 @@
   },
   "scripts": {
     "artifacts": "napi artifacts",
-    "build": "napi build --platform --release --manifest-path ../Cargo.toml --features typescript --no-default-features -o .",
-    "build:debug": "napi build --platform --manifest-path ../Cargo.toml --features typescript --no-default-features -o .",
+    "build": "napi build --platform --release --manifest-path ../Cargo.toml --features typescript,spire --no-default-features -o .",
+    "build:debug": "napi build --platform --manifest-path ../Cargo.toml --features typescript,spire --no-default-features -o .",
     "prepublishOnly": "napi prepublish -t npm",
     "universal": "napi universal",
     "version": "napi version"

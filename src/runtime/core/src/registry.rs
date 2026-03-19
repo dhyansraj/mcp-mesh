@@ -328,12 +328,21 @@ impl RegistryClient {
             {
                 builder = builder.add_root_certificate(ca);
             }
+
+            // SPIFFE/SPIRE certs use URI SANs (spiffe://...), not DNS/IP SANs.
+            // Skip hostname verification but keep cert chain validation against
+            // the trust bundle. This matches the Go registry proxy's behavior
+            // (InsecureSkipVerify + VerifyConnection chain check).
+            if tls_config.provider == "spire" {
+                builder = builder.danger_accept_invalid_hostnames(true);
+                info!("SPIFFE TLS: hostname verification disabled (URI SAN-based identity)");
+            }
         }
 
         let client = builder.build()?;
 
         if tls_config.is_enabled() {
-            info!("Registry client configured with mTLS");
+            info!("Registry client configured with mTLS (provider: {})", tls_config.provider);
         } else {
             debug!("Registry client using plain HTTP");
         }

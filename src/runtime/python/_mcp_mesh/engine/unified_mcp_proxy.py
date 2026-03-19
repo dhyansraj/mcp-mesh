@@ -186,6 +186,11 @@ class UnifiedMCPProxy:
                         if tls.get("ca_path"):
                             ssl_ctx.load_verify_locations(tls["ca_path"])
                         ssl_ctx.load_cert_chain(tls["cert_path"], tls["key_path"])
+                        # SPIFFE/SPIRE certs use URI SANs, not DNS/IP SANs.
+                        # Disable hostname check but keep cert chain validation
+                        # (create_default_context sets verify_mode=CERT_REQUIRED).
+                        if tls.get("provider") == "spire":
+                            ssl_ctx.check_hostname = False
                         kwargs["verify"] = ssl_ctx
 
                 return httpx.AsyncClient(**kwargs)
@@ -767,6 +772,11 @@ class UnifiedMCPProxy:
                     if tls.get("ca_path"):
                         ssl_ctx.load_verify_locations(tls["ca_path"])
                     ssl_ctx.load_cert_chain(tls["cert_path"], tls["key_path"])
+                    # SPIFFE/SPIRE certs use URI SANs, not DNS/IP SANs.
+                    # Disable hostname check but keep cert chain validation
+                    # (create_default_context sets verify_mode=CERT_REQUIRED).
+                    if tls.get("provider") == "spire":
+                        ssl_ctx.check_hostname = False
                     tls_kwargs["verify"] = ssl_ctx
 
             async with httpx.AsyncClient(

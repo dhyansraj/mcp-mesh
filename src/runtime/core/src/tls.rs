@@ -10,7 +10,7 @@
 //! - `MCP_MESH_TLS_CERT` - Path to client certificate PEM file
 //! - `MCP_MESH_TLS_KEY` - Path to client private key PEM file
 //! - `MCP_MESH_TLS_CA` - Path to CA certificate PEM file
-//! - `MCP_MESH_TLS_PROVIDER` - Credential provider: "file" (default) or "vault"
+//! - `MCP_MESH_TLS_PROVIDER` - Credential provider: "file" (default), "vault", or "spire"
 
 use std::env;
 use std::sync::OnceLock;
@@ -46,6 +46,9 @@ pub enum TlsError {
 
     #[error("Vault error: {0}")]
     VaultError(String),
+
+    #[error("SPIRE error: {0}")]
+    SpireError(String),
 
     #[error("Provider error: {0}")]
     ProviderError(String),
@@ -173,6 +176,14 @@ pub fn create_provider(name: &str) -> Result<Box<dyn CredentialProvider>, TlsErr
     match name {
         "file" => Ok(Box::new(FileProvider::from_env()?)),
         "vault" => Ok(Box::new(crate::vault::VaultProvider::from_env()?)),
+        "spire" => {
+            #[cfg(feature = "spire")]
+            { Ok(Box::new(crate::spire::SPIREProvider::from_env()?)) }
+            #[cfg(not(feature = "spire"))]
+            { Err(TlsError::ProviderError(
+                "SPIRE provider requires build with --features spire".into()
+            )) }
+        }
         other => Err(TlsError::ProviderError(format!(
             "Unknown TLS provider: {}",
             other
@@ -1058,10 +1069,21 @@ bUWvUN+ZGbSn
 
     #[test]
     fn test_create_provider_unknown() {
-        let result = create_provider("spire");
+        let result = create_provider("kubernetes");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("Unknown TLS provider: spire"));
+        assert!(err.to_string().contains("Unknown TLS provider: kubernetes"));
+    }
+
+    #[test]
+    fn test_create_provider_spire_feature_gated() {
+        // When built without the spire feature, should return a clear error
+        #[cfg(not(feature = "spire"))]
+        {
+            let result = create_provider("spire");
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("--features spire"));
+        }
     }
 
     // =========================================================================
