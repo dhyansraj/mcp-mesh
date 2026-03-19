@@ -65,6 +65,9 @@ data:
   MCP_MESH_TLS_CERT: "/etc/tls/{{ .Values.registry.security.tls.certKey }}"
   MCP_MESH_TLS_KEY: "/etc/tls/{{ .Values.registry.security.tls.keyKey }}"
   {{- end }}
+  {{- if .Values.registry.security.trust.caSecret }}
+  MCP_MESH_TLS_CA: "{{ .Values.registry.security.trust.dir }}/{{ .Values.registry.security.trust.caKey | default "ca.crt" }}"
+  {{- end }}
   {{- if .Values.registry.security.trust.k8sSecrets.namespace }}
   MCP_MESH_K8S_NAMESPACE: {{ .Values.registry.security.trust.k8sSecrets.namespace | quote }}
   {{- end }}

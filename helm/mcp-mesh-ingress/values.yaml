@@ -91,6 +91,9 @@ agents:
 # TLS configuration
 tls:
   enabled: false
+  # mTLS passthrough (for agent-to-agent mTLS, don't terminate TLS at ingress)
+  mtls:
+    passthrough: false
   # TLS certificate configuration
   certificates:
     - secretName: "mcp-mesh-tls"

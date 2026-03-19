@@ -1,0 +1,13 @@
+{{- if contains "k8s-secrets" (.Values.registry.security.trust.backend | default "") }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "mcp-mesh-registry.fullname" . }}-trust-reader
+  namespace: {{ .Values.registry.security.trust.k8sSecrets.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "mcp-mesh-registry.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+{{- end }}

@@ -83,6 +83,9 @@ Generate common annotations for ingress
 {{- with .Values.commonAnnotations }}
 {{- toYaml . }}
 {{- end }}
+{{- if and .Values.tls.mtls .Values.tls.mtls.passthrough }}
+nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+{{- end }}
 {{- end }}
 
 {{/*

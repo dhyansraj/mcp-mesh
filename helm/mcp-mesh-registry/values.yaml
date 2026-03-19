@@ -158,6 +158,7 @@ registry:
       dir: "/etc/mcp-mesh/trust"
       # Existing secret containing CA certificates for filestore
       caSecret: ""
+      caKey: "ca.crt"
       # K8s-secrets backend
       k8sSecrets:
         namespace: "" # defaults to release namespace
