@@ -87,7 +87,7 @@ Vault-issued certs include both DNS SANs (agent name) and IP SANs (advertised ho
         environment:
           MCP_MESH_TLS_MODE: "auto"
           MCP_MESH_TLS_PROVIDER: "vault"
-          MCP_MESH_VAULT_ADDR: "http://vault:8200"
+          MCP_MESH_VAULT_ADDR: "https://vault:8200"  # use http:// for local dev only
           MCP_MESH_VAULT_PKI_PATH: "pki_int/issue/mesh-agent"
           VAULT_TOKEN: "${VAULT_TOKEN}"
           MCP_MESH_TLS_CA: "/etc/certs/ca.pem"
@@ -163,7 +163,7 @@ meshctl entity list
 # Revoke an entity (evicts agents in strict mode)
 meshctl entity revoke "partner-corp" --force
 
-# Rotate certificates (triggers re-registration via heartbeat 203)
+# Rotate certificates (triggers re-registration via heartbeat protocol)
 meshctl entity rotate
 ```
 

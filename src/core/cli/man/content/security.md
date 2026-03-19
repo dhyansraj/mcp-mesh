@@ -140,7 +140,7 @@ meshctl entity rotate
 meshctl entity rotate "partner-corp"
 ```
 
-Rotation triggers re-registration via the heartbeat 203 protocol. Agents pick up new certificates without downtime.
+Rotation triggers re-registration via the heartbeat protocol. The registry responds with 410 (Gone) to force agents to re-register with updated certificates, or 202 (Accepted) when topology changes are detected. Agents pick up new certificates without downtime.
 
 ## Trust Backends
 
