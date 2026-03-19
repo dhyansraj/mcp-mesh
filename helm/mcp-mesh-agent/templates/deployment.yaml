@@ -141,6 +141,13 @@ spec:
             - name: PYTHONUNBUFFERED
               value: "1"
             {{- end }}
+            {{- if .Values.mesh.tls.vault.tokenSecret }}
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mesh.tls.vault.tokenSecret }}
+                  key: {{ .Values.mesh.tls.vault.tokenKey | default "token" }}
+            {{- end }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

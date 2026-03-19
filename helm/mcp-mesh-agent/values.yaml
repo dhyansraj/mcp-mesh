@@ -129,6 +129,9 @@ mesh:
       enabled: false
       addr: ""
       pkiPath: ""
+      # K8s secret containing Vault token
+      tokenSecret: ""
+      tokenKey: "token"
 
 # Agent-specific configuration
 agent:
