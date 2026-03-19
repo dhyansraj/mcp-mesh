@@ -187,8 +187,8 @@ Backends can be chained: `MCP_MESH_TRUST_BACKEND=spire,k8s-secrets` (first match
 
 | Variable                      | Description                                 | Default          |
 | ----------------------------- | ------------------------------------------- | ---------------- |
-| `MCP_MESH_TRUST_BACKEND`      | Trust backend(s), comma-separated           | `localca`        |
-| `MCP_MESH_TRUST_DIR`          | Directory for filestore/localca backends    | `~/.mcp_mesh/tls`|
+| `MCP_MESH_TRUST_BACKEND`      | Trust backend(s), comma-separated           | (none; `localca` with `--tls-auto`) |
+| `MCP_MESH_TRUST_DIR`          | Directory for filestore/localca backends    | `~/.mcp_mesh/tls` (local), `/etc/mcp-mesh/trust` (Helm) |
 | `MCP_MESH_ADMIN_PORT`         | Separate admin API port                     | (disabled)       |
 | `MCP_MESH_K8S_NAMESPACE`      | Namespace for k8s-secrets backend           | release namespace|
 | `MCP_MESH_K8S_LABEL_SELECTOR` | Label selector for k8s-secrets backend      | `mcp-mesh.io/trust=entity-ca` |
