@@ -69,7 +69,7 @@ Vault-issued certs include both DNS SANs (agent name) and IP SANs (advertised ho
     ```yaml
     mesh:
       tls:
-        mode: "strict"
+        mode: "auto"
         vault:
           enabled: true
           addr: "https://vault.vault-system:8200"
@@ -89,7 +89,7 @@ Vault-issued certs include both DNS SANs (agent name) and IP SANs (advertised ho
           MCP_MESH_TLS_PROVIDER: "vault"
           MCP_MESH_VAULT_ADDR: "http://vault:8200"
           MCP_MESH_VAULT_PKI_PATH: "pki_int/issue/mesh-agent"
-          VAULT_TOKEN: "root"
+          VAULT_TOKEN: "${VAULT_TOKEN}"
           MCP_MESH_TLS_CA: "/etc/certs/ca.pem"
     ```
 
@@ -115,7 +115,7 @@ export MCP_MESH_SPIRE_SOCKET=/run/spire/agent/sockets/agent.sock
     ```yaml
     mesh:
       tls:
-        mode: "strict"
+        mode: "auto"
         spire:
           enabled: true
           socketPath: "/run/spire/agent/sockets/agent.sock"

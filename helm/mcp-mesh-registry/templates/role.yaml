@@ -1,4 +1,4 @@
-{{- if eq .Values.registry.security.trust.backend "k8s-secrets" }}
+{{- if contains "k8s-secrets" (.Values.registry.security.trust.backend | default "") }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

@@ -69,9 +69,9 @@ data:
   {{- end }}
   {{- if .Values.mesh.tls.provider }}
   MCP_MESH_TLS_PROVIDER: {{ .Values.mesh.tls.provider | quote }}
-  {{- else if .Values.mesh.tls.spire.enabled }}
+  {{- else if and .Values.mesh.tls.spire .Values.mesh.tls.spire.enabled }}
   MCP_MESH_TLS_PROVIDER: "spire"
-  {{- else if .Values.mesh.tls.vault.enabled }}
+  {{- else if and .Values.mesh.tls.vault .Values.mesh.tls.vault.enabled }}
   MCP_MESH_TLS_PROVIDER: "vault"
   {{- end }}
   {{- if .Values.mesh.tls.certSecret }}
