@@ -243,6 +243,12 @@ nav:
 
   - Observability: 07-observability.md
 
+  - Security:
+      - security/index.md
+      - Registration Trust: security/registration-trust.md
+      - Agent-to-Agent mTLS: security/agent-to-agent-mtls.md
+      - Authorization: security/authorization.md
+
   - CLI Reference:
       - meshctl Overview: cli/index.md
       - Environment Variables: environment-variables.md
