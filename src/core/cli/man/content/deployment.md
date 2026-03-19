@@ -365,6 +365,21 @@ export MCP_MESH_LOG_LEVEL=INFO
 export MCP_MESH_DEBUG_MODE=false
 ```
 
+## Security & TLS
+
+MCP Mesh supports mutual TLS for all communication — agent-to-registry and agent-to-agent. For local development, use `--tls-auto` for zero-config TLS. For production, configure Vault or SPIRE credential providers.
+
+```bash
+# Local development (auto-generated certs)
+meshctl start --registry-only --tls-auto -d
+meshctl start my_agent.py --tls-auto
+
+# Production (Vault-issued certs)
+meshctl start my_agent.py --env MCP_MESH_TLS_PROVIDER=vault --env MCP_MESH_VAULT_ADDR=https://vault:8200
+```
+
+See `meshctl man security` for full TLS configuration, trust backends, and credential providers.
+
 ## See Also
 
 - `meshctl scaffold --help` - Generate agents with deployment files

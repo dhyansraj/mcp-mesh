@@ -126,6 +126,59 @@ meshctl start agent.py --env MESH_LLM_PROVIDER=claude --env MESH_LLM_MODEL=claud
 export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
 ```
 
+## Security & TLS
+
+### TLS Configuration
+
+```bash
+# TLS mode
+export MCP_MESH_TLS_MODE=auto           # off, auto, strict
+
+# Certificate files (file provider)
+export MCP_MESH_TLS_CERT=/etc/certs/agent.pem
+export MCP_MESH_TLS_KEY=/etc/certs/agent-key.pem
+export MCP_MESH_TLS_CA=/etc/certs/ca.pem
+
+# Credential provider selection
+export MCP_MESH_TLS_PROVIDER=file       # file, vault, spire
+export MCP_MESH_TRUST_DOMAIN=mcp-mesh.local
+```
+
+### Vault Provider
+
+```bash
+export MCP_MESH_TLS_PROVIDER=vault
+export MCP_MESH_VAULT_ADDR=https://vault.example.com:8200
+export MCP_MESH_VAULT_PKI_PATH=pki_int/issue/mesh-agent
+export VAULT_TOKEN=s.xxxxx
+export MCP_MESH_VAULT_TTL=24h           # Certificate TTL (default: 24h)
+```
+
+### SPIRE Provider
+
+```bash
+export MCP_MESH_TLS_PROVIDER=spire
+export MCP_MESH_SPIRE_SOCKET=/run/spire/agent/sockets/agent.sock
+```
+
+### Registry Trust Backends
+
+```bash
+# Trust backend selection (comma-separated for chaining)
+export MCP_MESH_TRUST_BACKEND=filestore        # localca, filestore, k8s-secrets, spire
+export MCP_MESH_TRUST_DIR=/etc/mcp-mesh/trust
+
+# K8s secrets backend
+export MCP_MESH_K8S_NAMESPACE=mcp-mesh
+export MCP_MESH_K8S_LABEL_SELECTOR="mcp-mesh.io/trust=entity-ca"
+
+# SPIRE backend
+export MCP_MESH_SPIRE_SOCKET=/run/spire/agent/sockets/agent.sock
+
+# Admin port isolation
+export MCP_MESH_ADMIN_PORT=9443
+```
+
 ## Registry Configuration
 
 ```bash
@@ -181,6 +234,12 @@ MCP_MESH_NAMESPACE=production
 MCP_MESH_AUTO_RUN_INTERVAL=30
 MCP_MESH_HEALTH_INTERVAL=30
 HOST=0.0.0.0
+
+# TLS (choose one provider)
+MCP_MESH_TLS_MODE=strict
+MCP_MESH_TLS_PROVIDER=vault
+MCP_MESH_VAULT_ADDR=https://vault.company.com:8200
+MCP_MESH_VAULT_PKI_PATH=pki_int/issue/mesh-agent
 ```
 
 ### Testing
@@ -240,7 +299,7 @@ services:
 # deployment.yaml
 env:
   - name: MCP_MESH_REGISTRY_URL
-    value: "http://registry.mcp-mesh:8000"
+    value: "https://registry.mcp-mesh:8000"
   - name: MCP_MESH_NAMESPACE
     valueFrom:
       fieldRef:
@@ -249,6 +308,20 @@ env:
     valueFrom:
       fieldRef:
         fieldPath: metadata.name
+  # TLS (Vault provider example)
+  - name: MCP_MESH_TLS_MODE
+    value: "strict"
+  - name: MCP_MESH_TLS_PROVIDER
+    value: "vault"
+  - name: MCP_MESH_VAULT_ADDR
+    value: "https://vault.vault-system:8200"
+  - name: MCP_MESH_VAULT_PKI_PATH
+    value: "pki_int/issue/mesh-agent"
+  - name: VAULT_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: vault-agent-token
+        key: token
 ```
 
 ## Debugging
