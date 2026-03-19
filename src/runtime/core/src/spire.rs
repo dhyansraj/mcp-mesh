@@ -92,7 +92,10 @@ impl CredentialProvider for SPIREProvider {
             .await
             .map_err(|e| TlsError::SpireError(format!("Failed to fetch X.509 bundles: {}", e)))?;
 
-        // Build CA PEM from trust bundles
+        // Build CA PEM from all trust bundles.
+        // We include all federated bundles (not just our trust_domain) to support
+        // cross-domain mTLS where agents from different SPIFFE trust domains
+        // need to verify each other's certificates.
         let mut ca_pem = String::new();
         for (_domain, bundle) in bundles.iter() {
             debug!("Trust bundle for domain: {}", _domain);
@@ -101,12 +104,20 @@ impl CredentialProvider for SPIREProvider {
             }
         }
 
+        if ca_pem.is_empty() {
+            return Err(TlsError::SpireError(format!(
+                "SPIRE returned empty trust bundles for SVID '{}' (trust_domain: {}). \
+                 Cannot establish TLS without CA certificates.",
+                spiffe_id, self.trust_domain
+            )));
+        }
+
         info!("X.509-SVID obtained from SPIRE: id={}, trust_domain={}", spiffe_id, self.trust_domain);
 
         Ok(TlsCredentials {
             cert_pem: cert_pem.into_bytes(),
             key_pem: key_pem.into_bytes(),
-            ca_pem: if ca_pem.is_empty() { None } else { Some(ca_pem.into_bytes()) },
+            ca_pem: Some(ca_pem.into_bytes()),
         })
     }
 }
