@@ -5,6 +5,7 @@ Provides a pluggable backend for storing and retrieving binary media
 (images, audio, files) that can be referenced via resource_link content items.
 """
 
+import asyncio
 import logging
 import mimetypes
 from abc import ABC, abstractmethod
@@ -140,7 +141,8 @@ class S3MediaStore(MediaStore):
 
     async def upload(self, data: bytes, filename: str, mime_type: str) -> str:
         key = self._key(filename)
-        self._client.put_object(
+        await asyncio.to_thread(
+            self._client.put_object,
             Bucket=self._bucket,
             Key=key,
             Body=data,
@@ -153,19 +155,23 @@ class S3MediaStore(MediaStore):
         # Parse s3://bucket/key
         without_scheme = uri.removeprefix("s3://")
         bucket, _, key = without_scheme.partition("/")
-        resp = self._client.get_object(Bucket=bucket, Key=key)
-        data = resp["Body"].read()
+        resp = await asyncio.to_thread(self._client.get_object, Bucket=bucket, Key=key)
+        data = await asyncio.to_thread(resp["Body"].read)
         mime_type = resp.get("ContentType", "application/octet-stream")
         return data, mime_type
 
     async def exists(self, uri: str) -> bool:
+        from botocore.exceptions import ClientError
+
         without_scheme = uri.removeprefix("s3://")
         bucket, _, key = without_scheme.partition("/")
         try:
-            self._client.head_object(Bucket=bucket, Key=key)
+            await asyncio.to_thread(self._client.head_object, Bucket=bucket, Key=key)
             return True
-        except Exception:
-            return False
+        except ClientError as e:
+            if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
+                return False
+            raise
 
 
 # ── singleton factory ──────────────────────────────────────────────

@@ -4,6 +4,7 @@ import io.mcpmesh.spring.MeshProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -30,6 +31,15 @@ public class MediaStoreAutoConfiguration {
         log.info("Configuring local MediaStore: path={}, prefix={}",
             media.getStoragePath(), media.getStoragePrefix());
         return new LocalMediaStore(media.getStoragePath(), media.getStoragePrefix());
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "mesh.media.storage", havingValue = "s3")
+    @ConditionalOnMissingClass("software.amazon.awssdk.services.s3.S3Client")
+    public MediaStore s3MediaStoreMissingSdk() {
+        throw new IllegalStateException(
+            "mesh.media.storage=s3 but software.amazon.awssdk:s3 is not on the classpath. " +
+            "Add the S3 SDK dependency or set mesh.media.storage=local.");
     }
 
     @Bean

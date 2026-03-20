@@ -97,7 +97,7 @@ public class S3MediaStore implements MediaStore {
         } catch (NoSuchKeyException e) {
             return false;
         } catch (Exception e) {
-            return false;
+            throw new MediaStoreException("Failed to check existence in S3: " + uri, e);
         }
     }
 

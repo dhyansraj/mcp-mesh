@@ -115,7 +115,7 @@ class ContentExtractor:
                     text_parts.append(extracted.get("text", ""))
                 elif extracted.get("type") == "resource_link":
                     res = extracted.get("resource", {})
-                    link_name = res.get("name", res.get("uri", "unknown"))
+                    link_name = res.get("name") or res.get("uri") or "unknown"
                     text_parts.append(f"[resource: {link_name}]")
                 else:
                     text_parts.append(f"[{extracted.get('type', 'content')}]")

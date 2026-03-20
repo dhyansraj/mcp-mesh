@@ -39,6 +39,7 @@ const MIME_MAP: Record<string, string> = {
   ".html": "text/html",
   ".css": "text/css",
   ".csv": "text/csv",
+  ".md": "text/markdown",
 };
 
 /** Guess MIME type from a filename extension. Falls back to application/octet-stream. */
@@ -199,8 +200,16 @@ export class S3MediaStore implements MediaStore {
     try {
       await client.send(new s3Module.HeadObjectCommand({ Bucket: bucket, Key: key }));
       return true;
-    } catch {
-      return false;
+    } catch (err: unknown) {
+      // Only treat "not found" as false; re-throw real errors
+      if (
+        err instanceof Error &&
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (err.name === "NotFound" || (err as any).$metadata?.httpStatusCode === 404)
+      ) {
+        return false;
+      }
+      throw err;
     }
   }
 

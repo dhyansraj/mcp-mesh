@@ -187,10 +187,10 @@ public class MediaProducerAgentApplication {
                 x, y, barWidth, barHeight, color));
             barsSvg.append(String.format(
                 "  <text x=\"%d\" y=\"%d\" text-anchor=\"middle\" font-size=\"12\" font-family=\"sans-serif\" fill=\"#333\">%s</text>\n",
-                x + barWidth / 2, marginTop + chartHeight + 16, label));
+                x + barWidth / 2, marginTop + chartHeight + 16, escapeXml(label)));
             barsSvg.append(String.format(
                 "  <text x=\"%d\" y=\"%.0f\" text-anchor=\"middle\" font-size=\"11\" font-family=\"sans-serif\" fill=\"#555\">%s</text>\n",
-                x + barWidth / 2, y - 5, formatNumber(value)));
+                x + barWidth / 2, y - 5, escapeXml(formatNumber(value))));
         }
 
         String svg = String.format("""
@@ -327,6 +327,11 @@ public class MediaProducerAgentApplication {
         buf[offset + 1] = (byte) (value >> 16);
         buf[offset + 2] = (byte) (value >> 8);
         buf[offset + 3] = (byte) value;
+    }
+
+    private static String escapeXml(String s) {
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                .replace("\"", "&quot;").replace("'", "&apos;");
     }
 
     private static String formatNumber(double value) {
