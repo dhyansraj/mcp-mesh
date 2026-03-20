@@ -90,11 +90,16 @@ export function createProxy(
 
   // The proxy function that calls the bound tool
   // Returns parsed object (like Python) or raw string if not JSON
+  // Multi-content results (resource_link, image, etc.) are returned as-is
   const proxyFn = async (
     args?: Record<string, unknown>,
     options?: { headers?: Record<string, string> }
   ): Promise<unknown> => {
     const result = await callMcpTool(endpoint, functionName, args, timeout, maxAttempts, capability, options?.headers);
+    // Multi-content results are returned as structured objects
+    if (typeof result === "object") {
+      return result;
+    }
     // Parse JSON if possible, otherwise return raw string (matches Python behavior)
     try {
       return JSON.parse(result);
@@ -116,6 +121,9 @@ export function createProxy(
         options?: { headers?: Record<string, string> }
       ): Promise<unknown> => {
         const result = await callMcpTool(endpoint, toolName, args, timeout, maxAttempts, capability, options?.headers);
+        if (typeof result === "object") {
+          return result;
+        }
         try {
           return JSON.parse(result);
         } catch {
@@ -144,7 +152,7 @@ export async function callMcpTool(
   maxAttempts: number,
   capability: string,
   extraHeaders?: Record<string, string>
-): Promise<string> {
+): Promise<string | MultiContentResult> {
   // Ensure endpoint ends with /mcp
   const mcpEndpoint = endpoint.endsWith("/mcp")
     ? endpoint
@@ -338,7 +346,7 @@ function publishProxySpan(
 /**
  * Parse SSE response from MCP HTTP Streamable transport.
  */
-async function parseSSEResponse(response: Response): Promise<string> {
+async function parseSSEResponse(response: Response): Promise<string | MultiContentResult> {
   const reader = response.body?.getReader();
   if (!reader) {
     throw new Error("No response body");
@@ -346,7 +354,7 @@ async function parseSSEResponse(response: Response): Promise<string> {
 
   const decoder = new TextDecoder();
   let buffer = "";
-  let result = "";
+  let result: string | MultiContentResult = "";
 
   while (true) {
     const { done, value } = await reader.read();
@@ -387,14 +395,27 @@ async function parseSSEResponse(response: Response): Promise<string> {
 }
 
 /**
+ * Multi-content result returned when MCP response contains non-text content
+ * items (resource_link, image, embedded_resource, etc.).
+ */
+export interface MultiContentResult {
+  type: "multi_content";
+  content: Record<string, unknown>[];
+}
+
+/**
  * Extract content from MCP CallToolResult.
  *
  * Handles various content formats:
  * - { content: [{ type: "text", text: "..." }] }
  * - { content: "..." }
  * - Direct string
+ *
+ * If ALL content items are text, returns a joined string (backward compat).
+ * If mixed content (resource_link, image, embedded_resource, etc.), returns
+ * a structured MultiContentResult preserving all content items.
  */
-function extractContent(result: unknown): string {
+export function extractContent(result: unknown): string | MultiContentResult {
   if (typeof result === "string") {
     return result;
   }
@@ -404,25 +425,46 @@ function extractContent(result: unknown): string {
 
     // Handle { content: [...] } format
     if (Array.isArray(obj.content)) {
-      const textParts: string[] = [];
-      for (const item of obj.content) {
-        if (item && typeof item === "object" && "text" in item) {
-          textParts.push(String((item as { text: unknown }).text));
-        } else if (typeof item === "string") {
-          textParts.push(item);
-        }
-      }
-      const text = textParts.join("");
+      // Check if all items are text-only (type "text" or plain strings)
+      const allText = obj.content.every(
+        (item: unknown) =>
+          typeof item === "string" ||
+          (item && typeof item === "object" && (item as Record<string, unknown>).type === "text")
+      );
 
-      // Try to parse as JSON if it looks like JSON
-      if (text.startsWith("{") || text.startsWith("[")) {
-        try {
-          return JSON.stringify(JSON.parse(text));
-        } catch {
-          return text;
+      if (allText) {
+        // Backward compatible: join text items into a single string
+        const textParts: string[] = [];
+        for (const item of obj.content) {
+          if (item && typeof item === "object" && "text" in item) {
+            textParts.push(String((item as { text: unknown }).text));
+          } else if (typeof item === "string") {
+            textParts.push(item);
+          }
         }
+        const text = textParts.join("");
+
+        // Try to parse as JSON if it looks like JSON
+        if (text.startsWith("{") || text.startsWith("[")) {
+          try {
+            return JSON.stringify(JSON.parse(text));
+          } catch {
+            return text;
+          }
+        }
+        return text;
       }
-      return text;
+
+      // Mixed content: preserve all items as structured data
+      return {
+        type: "multi_content",
+        content: obj.content.map((item: unknown) => {
+          if (typeof item === "string") {
+            return { type: "text", text: item };
+          }
+          return item as Record<string, unknown>;
+        }),
+      };
     }
 
     // Handle { content: "..." } format

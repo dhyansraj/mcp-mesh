@@ -39,6 +39,11 @@ _ENV_TO_RUST_KEY: dict[str, str] = {
     "MCP_MESH_HEALTH_INTERVAL": "health_interval",
     "MCP_MESH_DISTRIBUTED_TRACING_ENABLED": "distributed_tracing_enabled",
     "REDIS_URL": "redis_url",
+    "MCP_MESH_MEDIA_STORAGE": "media_storage",
+    "MCP_MESH_MEDIA_STORAGE_PATH": "media_storage_path",
+    "MCP_MESH_MEDIA_STORAGE_BUCKET": "media_storage_bucket",
+    "MCP_MESH_MEDIA_STORAGE_ENDPOINT": "media_storage_endpoint",
+    "MCP_MESH_MEDIA_STORAGE_PREFIX": "media_storage_prefix",
 }
 
 

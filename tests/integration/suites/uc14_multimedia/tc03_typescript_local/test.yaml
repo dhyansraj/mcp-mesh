@@ -1,0 +1,211 @@
+# Test Case: TypeScript Media Agents with Local File Storage
+# Verifies resource_link flow between TypeScript media-producer and media-consumer
+# using local file storage (default).
+#
+# Agent Setup:
+#   - media-producer (port 9210): provides generate_report, generate_chart, get_sample_image
+#   - media-consumer (port 9211): provides summarize_report (depends on report_generator),
+#                                  describe_media (depends on chart_generator)
+#
+# Note: Both producer and consumer are in the same npm package (multimedia)
+# Producer: src/media-producer.ts, Consumer: src/media-consumer.ts
+
+name: "TypeScript Multimedia - Local Storage"
+description: "Verify resource_link flow between TypeScript media-producer and media-consumer with local file storage"
+tags:
+  - multimedia
+  - resource-link
+  - typescript
+  - local-storage
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy TypeScript multimedia artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -rL /uc-artifacts/ts-media-producer /workspace/ts-multimedia
+      echo "Artifacts copied"
+      ls -la /workspace/ts-multimedia/
+      ls -la /workspace/ts-multimedia/src/
+    capture: copy_output
+
+  # Install npm dependencies
+  - name: "Install npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-multimedia
+
+  # Start media-producer (src/media-producer.ts)
+  - name: "Start media-producer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start ts-multimedia/src/media-producer.ts -d"
+    capture: start_producer
+
+  # Wait for producer to register
+  - name: "Wait for producer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-producer to register..."
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "media-producer"; then
+          echo "media-producer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-producer did not register within 40s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_producer
+    timeout: 60
+
+  # Start media-consumer (src/media-consumer.ts)
+  - name: "Start media-consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start ts-multimedia/src/media-consumer.ts -d"
+    capture: start_consumer
+
+  # Wait for consumer to register and resolve dependencies
+  - name: "Wait for consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-consumer to register..."
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "media-consumer"; then
+          echo "media-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-consumer did not register within 40s"
+      meshctl list 2>/dev/null || true
+      meshctl logs media-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_consumer
+    timeout: 60
+
+  # Verify both agents are registered
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List tools
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # Call generate_report (producer tool)
+  - name: "Call generate_report"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call generate_report '{\"topic\": \"TypeScript\"}'"
+    capture: report_output
+    timeout: 60
+
+  # Call generate_chart (producer tool)
+  - name: "Call generate_chart"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call generate_chart '{\"data\": \"Frontend:50,Backend:35,DevOps:15\"}'"
+    capture: chart_output
+    timeout: 60
+
+  # Call summarize_report (consumer tool - calls producer via dependency)
+  - name: "Call summarize_report"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call summarize_report '{\"topic\": \"TypeScript\"}'"
+    capture: summarize_output
+    timeout: 60
+
+  # Call describe_media (consumer tool - calls producer via dependency)
+  - name: "Call describe_media"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call describe_media '{\"data\": \"Q1:30,Q2:45,Q3:60\"}'"
+    capture: describe_output
+    timeout: 60
+
+  # Call get_sample_image (producer tool)
+  - name: "Call get_sample_image"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call get_sample_image '{}'"
+    capture: image_output
+    timeout: 60
+
+assertions:
+  # Agents registered
+  - expr: "${captured.list_output} contains 'media-producer'"
+    message: "media-producer should be registered"
+
+  - expr: "${captured.list_output} contains 'media-consumer'"
+    message: "media-consumer should be registered"
+
+  # Tools available
+  - expr: "${captured.tools_output} contains 'generate_report'"
+    message: "generate_report tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'generate_chart'"
+    message: "generate_chart tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'summarize_report'"
+    message: "summarize_report tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'describe_media'"
+    message: "describe_media tool should be listed"
+
+  # Producer returns resource_link for report
+  - expr: "${captured.report_output} contains 'resource_link'"
+    message: "generate_report should return a resource_link type"
+
+  - expr: "${captured.report_output} contains 'text/markdown'"
+    message: "Report resource_link should have text/markdown mime type"
+
+  # Producer returns resource_link for chart
+  - expr: "${captured.chart_output} contains 'resource_link'"
+    message: "generate_chart should return a resource_link type"
+
+  - expr: "${captured.chart_output} contains 'image/svg+xml'"
+    message: "Chart resource_link should have image/svg+xml mime type"
+
+  # Consumer received resource_link from producer
+  - expr: "${captured.summarize_output} contains 'resource_link'"
+    message: "Consumer summarize_report should receive a resource_link"
+
+  - expr: "${captured.summarize_output} contains 'text/markdown'"
+    message: "Consumer should see text/markdown mime type from producer"
+
+  # Consumer received chart media from producer
+  - expr: "${captured.describe_output} contains 'chart media'"
+    message: "Consumer describe_media should receive chart media"
+
+  - expr: "${captured.describe_output} contains 'image/svg+xml'"
+    message: "Consumer should see image/svg+xml mime type from producer"
+
+  # Producer returns resource_link for image
+  - expr: "${captured.image_output} contains 'resource_link'"
+    message: "get_sample_image should return a resource_link type"
+
+  - expr: "${captured.image_output} contains 'image/png'"
+    message: "Image resource_link should have image/png mime type"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -1,0 +1,191 @@
+# Test Case: Python Media Agents with MinIO S3 Storage
+# Verifies resource_link flow between Python media-producer and media-consumer
+# using MinIO S3-compatible object storage.
+#
+# Agent Setup:
+#   - MinIO server on port 9000 (bucket: test-media)
+#   - media-producer (port 9200): generates media, uploads to S3
+#   - media-consumer (port 9201): consumes resource_links from producer
+#
+# Flow: consumer -> producer -> upload to S3 -> return resource_link -> consumer describes it
+
+name: "Python Multimedia - MinIO S3 Storage"
+description: "Verify resource_link flow between Python media agents with MinIO S3 backend"
+tags:
+  - multimedia
+  - resource-link
+  - python
+  - minio
+  - s3
+timeout: 240
+
+pre_run:
+  # Start MinIO server and create test bucket
+  - routine: global.start_minio
+
+  # Setup Python environment
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy Python artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      mkdir -p /workspace/media-producer /workspace/media-consumer
+      cp -rL /uc-artifacts/py-media-producer.py /workspace/media-producer/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/media-producer/requirements.txt
+      cp -rL /uc-artifacts/py-media-consumer.py /workspace/media-consumer/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/media-consumer/requirements.txt
+      cp -rL /uc-artifacts/minio.env /workspace/.env
+      echo "Artifacts copied"
+    capture: copy_output
+
+  # Install Python dependencies for producer
+  - name: "Install producer dependencies"
+    handler: pip-install
+    path: /workspace/media-producer
+
+  # Install Python dependencies for consumer
+  - name: "Install consumer dependencies"
+    handler: pip-install
+    path: /workspace/media-consumer
+
+  # Start media-producer with S3 config
+  - name: "Start media-producer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start media-producer/main.py --env-file .env -d"
+    capture: start_producer
+
+  # Wait for producer to register
+  - name: "Wait for producer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-producer to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-producer"; then
+          echo "media-producer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-producer did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_producer
+    timeout: 60
+
+  # Start media-consumer with S3 config
+  - name: "Start media-consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start media-consumer/main.py --env-file .env -d"
+    capture: start_consumer
+
+  # Wait for consumer to register
+  - name: "Wait for consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-consumer to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-consumer"; then
+          echo "media-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-consumer did not register within 30s"
+      meshctl list 2>/dev/null || true
+      meshctl logs media-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_consumer
+    timeout: 60
+
+  # Verify both agents are registered
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # Call generate_report (uploads to S3)
+  - name: "Call generate_report"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call generate_report '{\"topic\": \"Cloud\"}'"
+    capture: report_output
+    timeout: 60
+
+  # Call generate_chart (uploads to S3)
+  - name: "Call generate_chart"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call generate_chart '{\"data\": \"Sales:40,Marketing:25\"}'"
+    capture: chart_output
+    timeout: 60
+
+  # Call summarize_report via consumer (cross-agent with S3)
+  - name: "Call summarize_report"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call summarize_report '{\"topic\": \"Cloud\"}'"
+    capture: summarize_output
+    timeout: 60
+
+  # Verify files exist in MinIO bucket
+  - name: "Check MinIO bucket contents"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mc ls local/test-media/media/ --recursive 2>&1 || echo "mc ls failed"
+    capture: minio_contents
+    timeout: 30
+
+assertions:
+  # Agents registered
+  - expr: "${captured.list_output} contains 'media-producer'"
+    message: "media-producer should be registered"
+
+  - expr: "${captured.list_output} contains 'media-consumer'"
+    message: "media-consumer should be registered"
+
+  # Producer returns resource_link for report
+  - expr: "${captured.report_output} contains 'resource_link'"
+    message: "generate_report should return a resource_link type"
+
+  - expr: "${captured.report_output} contains 'text/markdown'"
+    message: "Report should have text/markdown mime type"
+
+  # Producer returns resource_link for chart
+  - expr: "${captured.chart_output} contains 'resource_link'"
+    message: "generate_chart should return a resource_link type"
+
+  - expr: "${captured.chart_output} contains 'image/svg+xml'"
+    message: "Chart should have image/svg+xml mime type"
+
+  # Consumer received resource_link from producer
+  - expr: "${captured.summarize_output} contains 'resource_link'"
+    message: "Consumer should receive resource_link from producer"
+
+  - expr: "${captured.summarize_output} contains 'text/markdown'"
+    message: "Consumer should see text/markdown mime type"
+
+  # Files exist in MinIO bucket
+  - expr: "${captured.minio_contents} contains 'report_'"
+    message: "Report file should exist in MinIO bucket"
+
+  - expr: "${captured.minio_contents} contains 'chart'"
+    message: "Chart file should exist in MinIO bucket"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.stop_minio
+  - routine: global.cleanup_workspace

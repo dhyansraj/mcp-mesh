@@ -121,6 +121,14 @@ def __getattr__(name):
         return LlmMeta
     elif name == "create_server":
         return create_server
+    elif name == "upload_media":
+        from .media import upload_media
+
+        return upload_media
+    elif name == "media_result":
+        from .media import media_result
+
+        return media_result
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 

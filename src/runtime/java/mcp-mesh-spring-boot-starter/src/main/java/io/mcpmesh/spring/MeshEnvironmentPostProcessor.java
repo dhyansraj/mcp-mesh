@@ -12,15 +12,21 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Maps MCP_MESH_HTTP_PORT environment variable to Spring Boot's server.port.
+ * Maps MCP_MESH environment variables to Spring Boot properties.
  *
- * <p>This ensures Java agents behave consistently with Python/TypeScript agents
- * where MCP_MESH_HTTP_PORT controls both the HTTP server port and mesh registration.
+ * <p>Handles mappings where Spring Boot's relaxed binding would otherwise resolve
+ * env vars incorrectly (e.g., MCP_MESH_MEDIA_STORAGE_BUCKET becomes
+ * {@code mcp.mesh.media.storage.bucket} instead of {@code mcp.mesh.media.storage-bucket}).
+ *
+ * <p>Mappings include:
+ * <ul>
+ *   <li>MCP_MESH_HTTP_PORT &rarr; server.port</li>
+ *   <li>MCP_MESH_MEDIA_STORAGE* &rarr; mcp.mesh.media.storage-*</li>
+ *   <li>MCP_MESH_TLS_* &rarr; server.ssl.*</li>
+ * </ul>
  *
  * <p>Only applies to applications whose main class is annotated with {@link MeshAgent}.
  * Non-mesh Spring Boot apps sharing the starter dependency are not affected.
- *
- * <p>Priority: MCP_MESH_HTTP_PORT takes precedence over application.properties server.port.
  */
 public class MeshEnvironmentPostProcessor implements EnvironmentPostProcessor {
 
@@ -41,6 +47,28 @@ public class MeshEnvironmentPostProcessor implements EnvironmentPostProcessor {
             props.put("server.port", meshPort);
             // addFirst gives highest priority, overriding application.properties
             environment.getPropertySources().addFirst(new MapPropertySource("meshPortOverride", props));
+        }
+
+        // Map media config env vars to Spring properties.
+        // Spring's relaxed binding splits MCP_MESH_MEDIA_STORAGE_BUCKET into
+        // mcp.mesh.media.storage.bucket (5 levels), but the actual property is
+        // mcp.mesh.media.storage-bucket (4 levels, kebab-case). Explicit mapping fixes this.
+        Map<String, Object> mediaProps = new LinkedHashMap<>();
+        Map.of(
+            "MCP_MESH_MEDIA_STORAGE",          "mesh.media.storage",
+            "MCP_MESH_MEDIA_STORAGE_PATH",     "mesh.media.storage-path",
+            "MCP_MESH_MEDIA_STORAGE_BUCKET",   "mesh.media.storage-bucket",
+            "MCP_MESH_MEDIA_STORAGE_ENDPOINT", "mesh.media.storage-endpoint",
+            "MCP_MESH_MEDIA_STORAGE_PREFIX",   "mesh.media.storage-prefix"
+        ).forEach((envVar, prop) -> {
+            String val = System.getenv(envVar);
+            if (val != null && !val.isBlank()) {
+                mediaProps.put(prop, val);
+            }
+        });
+        if (!mediaProps.isEmpty()) {
+            environment.getPropertySources().addFirst(
+                new MapPropertySource("meshMediaProperties", mediaProps));
         }
 
         // Map TLS env vars to Spring Boot SSL properties (PEM-based, Spring Boot 3.1+)

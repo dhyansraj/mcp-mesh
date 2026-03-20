@@ -1,0 +1,199 @@
+# Test Case: Java Media Agents with MinIO S3 Storage
+# Verifies resource_link flow between Java media-producer and media-consumer
+# using MinIO S3-compatible object storage.
+#
+# Agent Setup:
+#   - MinIO server on port 9000 (bucket: test-media)
+#   - media-producer (port 9220): generates media, uploads to S3
+#   - media-consumer (port 9221): consumes resource_links from producer
+#
+# Note: Java agents register as {name}-{8char_uuid} so we grep for base name.
+# Tool names follow Java method naming: generateReport, generateChart, summarizeReport, etc.
+
+name: "Java Multimedia - MinIO S3 Storage"
+description: "Verify resource_link flow between Java media agents with MinIO S3 backend"
+tags:
+  - multimedia
+  - resource-link
+  - java
+  - minio
+  - s3
+  - slow
+timeout: 300
+
+pre_run:
+  # Start MinIO server and create test bucket
+  - routine: global.start_minio
+
+  # Setup Java environment
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy Java artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -rL /uc-artifacts/java-media-producer-agent /workspace/
+      cp -rL /uc-artifacts/java-media-consumer-agent /workspace/
+      cp -rL /uc-artifacts/minio.env /workspace/.env
+      echo "Artifacts copied"
+    capture: copy_output
+
+  # Install Maven dependencies for producer
+  - name: "Install producer Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-media-producer-agent
+    timeout: 600
+
+  # Install Maven dependencies for consumer
+  - name: "Install consumer Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-media-consumer-agent
+    timeout: 600
+
+  # Start media-producer with S3 config
+  - name: "Start Java media-producer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-media-producer-agent --env-file .env -d
+      echo "Java media-producer starting via meshctl"
+    capture: start_producer
+
+  # Wait for producer to register (Java is slow to start)
+  - name: "Wait for producer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java media-producer to register..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "media-producer"; then
+          echo "media-producer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-producer did not register within 90s"
+      meshctl list 2>/dev/null || true
+      meshctl logs media-producer 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_producer
+    timeout: 120
+
+  # Start media-consumer with S3 config
+  - name: "Start Java media-consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-media-consumer-agent --env-file .env -d
+      echo "Java media-consumer starting via meshctl"
+    capture: start_consumer
+
+  # Wait for consumer to register
+  - name: "Wait for consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java media-consumer to register..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "media-consumer"; then
+          echo "media-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-consumer did not register within 90s"
+      meshctl list 2>/dev/null || true
+      meshctl logs media-consumer 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_consumer
+    timeout: 120
+
+  # Verify both agents are registered
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # Call generateReport (uploads to S3)
+  - name: "Call generateReport"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call generateReport '{\"topic\": \"Cloud\"}'"
+    capture: report_output
+    timeout: 60
+
+  # Call generateChart (uploads to S3)
+  - name: "Call generateChart"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call generateChart '{\"data\": \"Kafka:45,RabbitMQ:30,Redis:25\"}'"
+    capture: chart_output
+    timeout: 60
+
+  # Call summarizeReport via consumer (cross-agent with S3)
+  - name: "Call summarizeReport"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call summarizeReport '{\"topic\": \"Cloud\"}'"
+    capture: summarize_output
+    timeout: 60
+
+  # Verify files exist in MinIO bucket
+  - name: "Check MinIO bucket contents"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mc ls local/test-media/media/ --recursive 2>&1 || echo "mc ls failed"
+    capture: minio_contents
+    timeout: 30
+
+assertions:
+  # Agents registered (grep for base name - Java appends UUID)
+  - expr: "${captured.list_output} contains 'media-producer'"
+    message: "Java media-producer should be registered"
+
+  - expr: "${captured.list_output} contains 'media-consumer'"
+    message: "Java media-consumer should be registered"
+
+  # Producer returns resource_link for report
+  - expr: "${captured.report_output} contains 'resource_link'"
+    message: "generateReport should return a resource_link type"
+
+  - expr: "${captured.report_output} contains 'text/markdown'"
+    message: "Report should have text/markdown mime type"
+
+  # Producer returns resource_link for chart
+  - expr: "${captured.chart_output} contains 'resource_link'"
+    message: "generateChart should return a resource_link type"
+
+  - expr: "${captured.chart_output} contains 'image/svg+xml'"
+    message: "Chart should have image/svg+xml mime type"
+
+  # Consumer received resource_link from producer
+  - expr: "${captured.summarize_output} contains 'resource_link'"
+    message: "Consumer should receive resource_link from producer"
+
+  - expr: "${captured.summarize_output} contains 'text/markdown'"
+    message: "Consumer should see text/markdown mime type"
+
+  # Files exist in MinIO bucket
+  - expr: "${captured.minio_contents} contains 'report_'"
+    message: "Report file should exist in MinIO bucket"
+
+  - expr: "${captured.minio_contents} contains 'chart'"
+    message: "Chart file should exist in MinIO bucket"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*media" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.stop_minio
+  - routine: global.cleanup_workspace

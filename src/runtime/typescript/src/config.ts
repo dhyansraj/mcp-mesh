@@ -94,3 +94,29 @@ export function resolveConfig(config: AgentConfig): ResolvedAgentConfig {
     heartbeatInterval: resolvedHeartbeatInterval,
   };
 }
+
+/**
+ * Resolve all media-related configuration keys at once.
+ *
+ * Environment variables (via Rust core):
+ * - MCP_MESH_MEDIA_STORAGE: "local" (default) or "s3"
+ * - MCP_MESH_MEDIA_STORAGE_PATH: local base path (default: /tmp/mcp-mesh-media)
+ * - MCP_MESH_MEDIA_STORAGE_BUCKET: S3 bucket name
+ * - MCP_MESH_MEDIA_STORAGE_ENDPOINT: S3-compatible endpoint URL
+ * - MCP_MESH_MEDIA_STORAGE_PREFIX: key prefix inside the store (default: "media/")
+ */
+export function resolveMediaConfig(): {
+  storage: string;
+  storagePath: string;
+  storageBucket: string | undefined;
+  storageEndpoint: string | undefined;
+  storagePrefix: string;
+} {
+  return {
+    storage: rustResolveConfig("media_storage", null) || "local",
+    storagePath: rustResolveConfig("media_storage_path", null) || "/tmp/mcp-mesh-media",
+    storageBucket: rustResolveConfig("media_storage_bucket", null) || undefined,
+    storageEndpoint: rustResolveConfig("media_storage_endpoint", null) || undefined,
+    storagePrefix: rustResolveConfig("media_storage_prefix", null) || "media/",
+  };
+}

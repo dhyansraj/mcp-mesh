@@ -79,8 +79,18 @@ RUN ARCH=$(dpkg --print-architecture) && \
     rm -rf /tmp/spire.tar.gz /tmp/spire-1.12.1 && \
     chmod +x /usr/local/bin/spire-server /usr/local/bin/spire-agent
 
+# MinIO server for S3-compatible media storage tests
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -fsSL "https://dl.min.io/server/minio/release/linux-${ARCH}/minio" -o /usr/local/bin/minio && \
+    chmod +x /usr/local/bin/minio
+
+# MinIO client (mc) for bucket management
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -fsSL "https://dl.min.io/client/mc/release/linux-${ARCH}/mc" -o /usr/local/bin/mc && \
+    chmod +x /usr/local/bin/mc
+
 # Verify Node.js and Java installation
-RUN node --version && npm --version && java -version && mvn --version | head -1 && vault --version && spire-server --version && spire-agent --version
+RUN node --version && npm --version && java -version && mvn --version | head -1 && vault --version && spire-server --version && spire-agent --version && minio --version && mc --version
 
 # Create directories for local packages
 RUN mkdir -p /wheels /packages /java-jars /native-libs /workspace
@@ -142,7 +152,7 @@ RUN if [ -d "/root/.m2/repository/io/mcp-mesh" ]; then \
 ENV MESH_NATIVE_LIB_PATH=/native-libs
 
 # Install tsuite dependencies for running tests inside container
-RUN pip install --no-cache-dir click rich pyyaml jsonpath-ng requests flask docker
+RUN pip install --no-cache-dir click rich pyyaml jsonpath-ng requests flask docker boto3
 
 # Create mcp-mesh user for security (matching official runtime images)
 RUN groupadd -r mcp-mesh && useradd -r -g mcp-mesh mcp-mesh

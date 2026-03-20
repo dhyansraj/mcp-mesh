@@ -1,0 +1,229 @@
+# Test Case: Java Media Agents with Local File Storage
+# Verifies resource_link flow between Java media-producer and media-consumer
+# using local file storage (default).
+#
+# Agent Setup:
+#   - media-producer (port 9220): provides generateReport, generateChart, getSampleImage
+#   - media-consumer (port 9221): provides summarizeReport (depends on report_generator),
+#                                  describeMedia (depends on chart_generator)
+#
+# Note: Java agents register as {name}-{8char_uuid} so we grep for base name.
+# Java @MeshTool methods register with the method name as tool name.
+# Tool names: generateReport, generateChart, getSampleImage, summarizeReport, describeMedia
+
+name: "Java Multimedia - Local Storage"
+description: "Verify resource_link flow between Java media-producer and media-consumer with local file storage"
+tags:
+  - multimedia
+  - resource-link
+  - java
+  - local-storage
+  - slow
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy Java artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -rL /uc-artifacts/java-media-producer-agent /workspace/
+      cp -rL /uc-artifacts/java-media-consumer-agent /workspace/
+      echo "Artifacts copied"
+      ls -la /workspace/java-media-producer-agent/
+      ls -la /workspace/java-media-consumer-agent/
+    capture: copy_output
+
+  # Install Maven dependencies for producer
+  - name: "Install producer Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-media-producer-agent
+    timeout: 600
+
+  # Install Maven dependencies for consumer
+  - name: "Install consumer Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-media-consumer-agent
+    timeout: 600
+
+  # Start media-producer
+  - name: "Start Java media-producer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-media-producer-agent -d
+      echo "Java media-producer starting via meshctl"
+    capture: start_producer
+
+  # Wait for producer to register (Java is slow to start)
+  - name: "Wait for producer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java media-producer to register..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "media-producer"; then
+          echo "media-producer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-producer did not register within 90s"
+      meshctl list 2>/dev/null || true
+      meshctl logs media-producer 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_producer
+    timeout: 120
+
+  # Start media-consumer (depends on producer capabilities)
+  - name: "Start Java media-consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-media-consumer-agent -d
+      echo "Java media-consumer starting via meshctl"
+    capture: start_consumer
+
+  # Wait for consumer to register
+  - name: "Wait for consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java media-consumer to register..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "media-consumer"; then
+          echo "media-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-consumer did not register within 90s"
+      meshctl list 2>/dev/null || true
+      meshctl logs media-consumer 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_consumer
+    timeout: 120
+
+  # Verify both agents are registered
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List tools
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # Call generateReport (producer tool - Java method name)
+  - name: "Call generateReport"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call generateReport '{\"topic\": \"Java\"}'"
+    capture: report_output
+    timeout: 60
+
+  # Call generateChart (producer tool)
+  - name: "Call generateChart"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call generateChart '{\"data\": \"Spring:50,Quarkus:30,Micronaut:20\"}'"
+    capture: chart_output
+    timeout: 60
+
+  # Call summarizeReport (consumer tool - calls producer via dependency)
+  - name: "Call summarizeReport"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call summarizeReport '{\"topic\": \"Java\"}'"
+    capture: summarize_output
+    timeout: 60
+
+  # Call describeMedia (consumer tool - calls producer via dependency)
+  - name: "Call describeMedia"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call describeMedia '{\"data\": \"Q1:30,Q2:45,Q3:60\"}'"
+    capture: describe_output
+    timeout: 60
+
+  # Call getSampleImage (producer tool)
+  - name: "Call getSampleImage"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call getSampleImage '{}'"
+    capture: image_output
+    timeout: 60
+
+assertions:
+  # Agents registered (grep for base name - Java appends UUID)
+  - expr: "${captured.list_output} contains 'media-producer'"
+    message: "Java media-producer should be registered"
+
+  - expr: "${captured.list_output} contains 'media-consumer'"
+    message: "Java media-consumer should be registered"
+
+  # Tools available
+  - expr: "${captured.tools_output} contains 'generateReport'"
+    message: "generateReport tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'generateChart'"
+    message: "generateChart tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'summarizeReport'"
+    message: "summarizeReport tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'describeMedia'"
+    message: "describeMedia tool should be listed"
+
+  # Producer returns resource_link for report
+  - expr: "${captured.report_output} contains 'resource_link'"
+    message: "generateReport should return a resource_link type"
+
+  - expr: "${captured.report_output} contains 'text/markdown'"
+    message: "Report resource_link should have text/markdown mime type"
+
+  # Producer returns resource_link for chart
+  - expr: "${captured.chart_output} contains 'resource_link'"
+    message: "generateChart should return a resource_link type"
+
+  - expr: "${captured.chart_output} contains 'image/svg+xml'"
+    message: "Chart resource_link should have image/svg+xml mime type"
+
+  # Consumer received resource_link from producer
+  - expr: "${captured.summarize_output} contains 'resource_link'"
+    message: "Consumer summarizeReport should receive a resource_link"
+
+  - expr: "${captured.summarize_output} contains 'text/markdown'"
+    message: "Consumer should see text/markdown mime type from producer"
+
+  # Consumer received resource_link for chart
+  - expr: "${captured.describe_output} contains 'resource_link'"
+    message: "Consumer describeMedia should receive a resource_link"
+
+  - expr: "${captured.describe_output} contains 'image/svg+xml'"
+    message: "Consumer should see image/svg+xml mime type from producer"
+
+  # Producer returns resource_link for image
+  - expr: "${captured.image_output} contains 'resource_link'"
+    message: "getSampleImage should return a resource_link type"
+
+  - expr: "${captured.image_output} contains 'image/png'"
+    message: "Image resource_link should have image/png mime type"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*media" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

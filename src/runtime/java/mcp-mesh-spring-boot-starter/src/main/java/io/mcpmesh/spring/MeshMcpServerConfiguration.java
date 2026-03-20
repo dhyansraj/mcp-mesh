@@ -7,6 +7,8 @@ import io.modelcontextprotocol.server.McpStatelessServerFeatures;
 import io.modelcontextprotocol.server.McpStatelessSyncServer;
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
+import io.modelcontextprotocol.spec.McpSchema.Content;
+import io.modelcontextprotocol.spec.McpSchema.ResourceLink;
 import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities;
 import io.modelcontextprotocol.spec.McpSchema.TextContent;
 import io.modelcontextprotocol.spec.McpSchema.Tool;
@@ -178,6 +180,13 @@ public class MeshMcpServerConfiguration {
 
     /**
      * Handle an MCP tool call by invoking the handler.
+     *
+     * <p>Supports three return types from tool handlers:
+     * <ul>
+     *   <li>{@link CallToolResult} — passed through directly</li>
+     *   <li>{@link Content} (e.g., ResourceLink, TextContent) — wrapped in a single-item CallToolResult</li>
+     *   <li>Any other object — serialized to JSON and wrapped in TextContent</li>
+     * </ul>
      */
     private CallToolResult handleToolCall(McpToolHandler handler, Map<String, Object> args) {
         try {
@@ -185,6 +194,21 @@ public class MeshMcpServerConfiguration {
 
             // Invoke the handler
             Object result = handler.invoke(args);
+
+            // Pass through CallToolResult directly
+            if (result instanceof CallToolResult callToolResult) {
+                return callToolResult;
+            }
+
+            // Wrap Content subtypes (ResourceLink, TextContent, ImageContent, etc.)
+            if (result instanceof Content contentItem) {
+                return new CallToolResult(
+                    List.of(contentItem),
+                    false,  // isError
+                    null,   // structuredContent
+                    null    // meta
+                );
+            }
 
             // Serialize result to JSON
             String resultJson;

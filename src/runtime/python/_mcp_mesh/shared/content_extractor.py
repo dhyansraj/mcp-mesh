@@ -70,6 +70,25 @@ class ContentExtractor:
                     "text": content_item.get("text", ""),
                 }
 
+            elif content_type == "resource_link":
+                resource = content_item.get("resource", {})
+                result = {
+                    "type": "resource_link",
+                    "resource": {
+                        "uri": resource.get("uri", ""),
+                        "name": resource.get("name", ""),
+                    },
+                }
+                if resource.get("mimeType") is not None:
+                    result["resource"]["mimeType"] = resource["mimeType"]
+                if resource.get("description") is not None:
+                    result["resource"]["description"] = resource["description"]
+                if resource.get("size") is not None:
+                    result["resource"]["size"] = resource["size"]
+                if resource.get("annotations") is not None:
+                    result["resource"]["annotations"] = resource["annotations"]
+                return result
+
             elif "object" in content_item:
                 # FastMCP object format
                 return content_item["object"]
@@ -94,6 +113,10 @@ class ContentExtractor:
                     text_parts.append(str(extracted))
                 elif extracted.get("type") == "resource":
                     text_parts.append(extracted.get("text", ""))
+                elif extracted.get("type") == "resource_link":
+                    res = extracted.get("resource", {})
+                    link_name = res.get("name", res.get("uri", "unknown"))
+                    text_parts.append(f"[resource: {link_name}]")
                 else:
                     text_parts.append(f"[{extracted.get('type', 'content')}]")
             else:

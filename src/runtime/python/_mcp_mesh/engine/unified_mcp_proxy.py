@@ -623,8 +623,37 @@ class UnifiedMCPProxy:
     def _convert_content_item_to_python(self, content_item: Any) -> Any:
         """Convert individual content items to Python structures."""
         try:
+            # Handle ResourceLink content (resource_link type)
+            if getattr(content_item, "type", None) == "resource_link":
+                resource_data = {
+                    "type": "resource_link",
+                    "resource": {
+                        "uri": str(getattr(content_item, "uri", "")),
+                        "name": getattr(content_item, "name", ""),
+                    },
+                }
+                if getattr(content_item, "mimeType", None) is not None:
+                    resource_data["resource"]["mimeType"] = content_item.mimeType
+                if getattr(content_item, "description", None) is not None:
+                    resource_data["resource"]["description"] = content_item.description
+                if getattr(content_item, "size", None) is not None:
+                    resource_data["resource"]["size"] = content_item.size
+                if getattr(content_item, "annotations", None) is not None:
+                    annotations = content_item.annotations
+                    if hasattr(annotations, "model_dump"):
+                        resource_data["resource"]["annotations"] = (
+                            annotations.model_dump(exclude_none=True)
+                        )
+                    else:
+                        resource_data["resource"]["annotations"] = annotations
+                self.logger.debug(
+                    "🔗 Converted resource_link content: %s",
+                    resource_data["resource"].get("name"),
+                )
+                return resource_data
+
             # Handle TextContent objects
-            if hasattr(content_item, "text"):
+            elif hasattr(content_item, "text"):
                 text_content = content_item.text
 
                 # Try to parse as JSON first (for structured responses)
