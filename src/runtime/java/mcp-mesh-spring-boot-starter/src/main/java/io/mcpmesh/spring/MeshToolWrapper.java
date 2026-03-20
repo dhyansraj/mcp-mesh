@@ -1,13 +1,13 @@
 package io.mcpmesh.spring;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 import com.github.victools.jsonschema.generator.Option;
 import com.github.victools.jsonschema.generator.OptionPreset;
 import com.github.victools.jsonschema.generator.SchemaGenerator;
 import com.github.victools.jsonschema.generator.SchemaGeneratorConfig;
 import com.github.victools.jsonschema.generator.SchemaGeneratorConfigBuilder;
 import com.github.victools.jsonschema.generator.SchemaVersion;
-import com.github.victools.jsonschema.module.jackson.JacksonModule;
+import com.github.victools.jsonschema.module.jackson.JacksonSchemaModule;
 import com.github.victools.jsonschema.module.jackson.JacksonOption;
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.Param;
@@ -59,7 +59,7 @@ public class MeshToolWrapper implements McpToolHandler {
     private static final SchemaGenerator SCHEMA_GENERATOR;
 
     static {
-        JacksonModule jacksonModule = new JacksonModule(
+        JacksonSchemaModule jacksonModule = new JacksonSchemaModule(
             JacksonOption.RESPECT_JSONPROPERTY_REQUIRED,
             JacksonOption.FLATTENED_ENUMS_FROM_JSONVALUE
         );
@@ -261,8 +261,7 @@ public class MeshToolWrapper implements McpToolHandler {
     @SuppressWarnings("unchecked")
     private Map<String, Object> convertJsonNodeToMap(JsonNode node) {
         try {
-            com.fasterxml.jackson.databind.ObjectMapper fasterXmlMapper = new com.fasterxml.jackson.databind.ObjectMapper();
-            return fasterXmlMapper.convertValue(node, Map.class);
+            return objectMapper.convertValue(node, Map.class);
         } catch (Exception e) {
             log.warn("Failed to convert JsonNode to Map: {}", e.getMessage());
             Map<String, Object> fallback = new LinkedHashMap<>();

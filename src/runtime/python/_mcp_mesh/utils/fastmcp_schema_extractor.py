@@ -11,7 +11,7 @@ Part of Phase 0: Enhanced Schema Extraction - MeshContextModel support
 
 import inspect
 import logging
-from typing import Any, Dict, Optional, get_args, get_origin, get_type_hints
+from typing import Any, Optional, get_args, get_origin, get_type_hints
 
 logger = logging.getLogger(__name__)
 
@@ -274,8 +274,7 @@ class FastMCPSchemaExtractor:
             return schema
 
         # Get McpMeshTool parameter names from signature analysis
-        from _mcp_mesh.engine.signature_analyzer import \
-            get_mesh_agent_parameter_names
+        from _mcp_mesh.engine.signature_analyzer import get_mesh_agent_parameter_names
 
         mesh_param_names = get_mesh_agent_parameter_names(function)
 
@@ -323,49 +322,43 @@ class FastMCPSchemaExtractor:
 
         Returns:
             inputSchema dict if FastMCP tool found, None otherwise
-
-        The inputSchema format follows JSON Schema specification:
-        {
-            "type": "object",
-            "properties": {
-                "param_name": {"type": "string", "description": "..."},
-                ...
-            },
-            "required": ["param1", "param2"]
-        }
         """
-        # Check if function has FastMCP tool reference
-        if not hasattr(function, "_fastmcp_tool"):
-            logger.debug(
-                f"Function {getattr(function, '__name__', '<unknown>')} has no FastMCP tool"
-            )
-            return None
+        # v2: Try _fastmcp_tool attribute (v2 compat)
+        if hasattr(function, "_fastmcp_tool"):
+            fastmcp_tool = function._fastmcp_tool
+            if hasattr(fastmcp_tool, "parameters"):
+                schema = fastmcp_tool.parameters
+                logger.debug(
+                    f"Extracted schema from {getattr(function, '__name__', '<unknown>')} via _fastmcp_tool: "
+                    f"{list(schema.get('properties', {}).keys()) if isinstance(schema, dict) else 'invalid'}"
+                )
+                filtered_schema = FastMCPSchemaExtractor.filter_dependency_parameters(
+                    schema, function
+                )
+                enhanced_schema = (
+                    FastMCPSchemaExtractor.enhance_schema_with_context_models(
+                        filtered_schema, function
+                    )
+                )
+                return enhanced_schema
 
-        fastmcp_tool = function._fastmcp_tool
+        # v3: Decorators return original function, no _fastmcp_tool attribute.
+        # Try to find this function in DecoratorRegistry's stored FastMCP server info.
+        try:
+            from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
-        # Extract inputSchema from FastMCP tool
-        # FastMCP uses 'parameters' attribute, not 'inputSchema'
-        if hasattr(fastmcp_tool, "parameters"):
-            schema = fastmcp_tool.parameters
-            logger.debug(
-                f"Extracted schema from {getattr(function, '__name__', '<unknown>')}: "
-                f"{list(schema.get('properties', {}).keys()) if isinstance(schema, dict) else 'invalid'}"
-            )
-            # Phase 2.5: Filter out dependency injection parameters
-            filtered_schema = FastMCPSchemaExtractor.filter_dependency_parameters(
-                schema, function
-            )
-
-            # Phase 0: Enhance schema with MeshContextModel Field descriptions
-            enhanced_schema = FastMCPSchemaExtractor.enhance_schema_with_context_models(
-                filtered_schema, function
-            )
-
-            return enhanced_schema
+            server_info_dict = DecoratorRegistry.get_fastmcp_server_info()
+            if server_info_dict:
+                schema = FastMCPSchemaExtractor.extract_from_fastmcp_servers(
+                    function, server_info_dict
+                )
+                if schema is not None:
+                    return schema
+        except Exception as e:
+            logger.debug(f"Could not look up function in FastMCP servers: {e}")
 
         logger.debug(
-            f"FastMCP tool for {getattr(function, '__name__', '<unknown>')} "
-            f"has no parameters attribute"
+            f"Function {getattr(function, '__name__', '<unknown>')} has no FastMCP tool (v2 or v3)"
         )
         return None
 

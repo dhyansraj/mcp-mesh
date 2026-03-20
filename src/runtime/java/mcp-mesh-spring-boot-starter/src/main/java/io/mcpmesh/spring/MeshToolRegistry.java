@@ -6,6 +6,7 @@ import io.mcpmesh.Selector;
 import io.mcpmesh.core.AgentSpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
@@ -56,7 +57,7 @@ public class MeshToolRegistry {
      */
     public List<AgentSpec.ToolSpec> getToolSpecs() {
         List<AgentSpec.ToolSpec> specs = new ArrayList<>();
-        var objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var jsonMapper = JsonMapper.builder().build();
 
         for (ToolMetadata meta : tools.values()) {
             AgentSpec.ToolSpec spec = new AgentSpec.ToolSpec();
@@ -68,7 +69,7 @@ public class MeshToolRegistry {
 
             // Convert input schema Map to JSON string
             try {
-                spec.setInputSchema(objectMapper.writeValueAsString(meta.inputSchema()));
+                spec.setInputSchema(jsonMapper.writeValueAsString(meta.inputSchema()));
             } catch (Exception e) {
                 spec.setInputSchema("{}");
             }
@@ -78,7 +79,7 @@ public class MeshToolRegistry {
                 AgentSpec.DependencySpec depSpec = new AgentSpec.DependencySpec();
                 depSpec.setCapability(dep.capability());
                 try {
-                    depSpec.setTags(objectMapper.writeValueAsString(dep.tags()));
+                    depSpec.setTags(jsonMapper.writeValueAsString(dep.tags()));
                 } catch (Exception e) {
                     depSpec.setTags("[]");
                 }
@@ -125,7 +126,7 @@ public class MeshToolRegistry {
                 spec.setCapability(dep.capability());
                 // Convert List<String> to JSON array string
                 try {
-                    spec.setTags(new com.fasterxml.jackson.databind.ObjectMapper()
+                    spec.setTags(JsonMapper.builder().build()
                         .writeValueAsString(dep.tags()));
                 } catch (Exception e) {
                     spec.setTags("[]");

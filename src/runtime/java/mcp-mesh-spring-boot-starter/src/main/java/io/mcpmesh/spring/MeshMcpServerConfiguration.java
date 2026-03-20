@@ -1,7 +1,7 @@
 package io.mcpmesh.spring;
 
 import io.modelcontextprotocol.common.McpTransportContext;
-import io.modelcontextprotocol.json.jackson.JacksonMcpJsonMapper;
+import io.modelcontextprotocol.json.jackson3.JacksonMcpJsonMapper;
 import io.modelcontextprotocol.server.McpServer;
 import io.modelcontextprotocol.server.McpStatelessServerFeatures;
 import io.modelcontextprotocol.server.McpStatelessSyncServer;
@@ -52,16 +52,13 @@ public class MeshMcpServerConfiguration {
 
     private static final String MCP_ENDPOINT = "/mcp";
 
-    // MCP SDK uses Jackson 2 (com.fasterxml.jackson), not Jackson 3 (tools.jackson)
-    private final com.fasterxml.jackson.databind.ObjectMapper mcpObjectMapper;
+    // MCP SDK 1.1.0 uses Jackson 3 (tools.jackson)
+    private final tools.jackson.databind.json.JsonMapper mcpJsonMapper;
 
     public MeshMcpServerConfiguration() {
-        // Create Jackson 2 ObjectMapper for MCP SDK compatibility
-        // Register JavaTimeModule for java.time serialization (LocalDate, LocalDateTime, etc.)
-        this.mcpObjectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
-        this.mcpObjectMapper.registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
-        this.mcpObjectMapper.configure(
-            com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
+        // Create Jackson 3 JsonMapper for MCP SDK 1.1.0
+        // Jackson 3 has built-in java.time support and writes dates as ISO-8601 by default
+        this.mcpJsonMapper = tools.jackson.databind.json.JsonMapper.builder().build();
     }
 
     /**
@@ -73,7 +70,7 @@ public class MeshMcpServerConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public HttpServletStatelessServerTransport mcpStatelessTransport() {
-        JacksonMcpJsonMapper jsonMapper = new JacksonMcpJsonMapper(mcpObjectMapper);
+        JacksonMcpJsonMapper jsonMapper = new JacksonMcpJsonMapper(mcpJsonMapper);
         return HttpServletStatelessServerTransport.builder()
             .jsonMapper(jsonMapper)
             .messageEndpoint(MCP_ENDPOINT)
@@ -196,13 +193,15 @@ public class MeshMcpServerConfiguration {
             } else if (result instanceof String) {
                 resultJson = (String) result;
             } else {
-                resultJson = mcpObjectMapper.writeValueAsString(result);
+                resultJson = mcpJsonMapper.writeValueAsString(result);
             }
 
             // Return as text content
             return new CallToolResult(
                 List.of(new TextContent(resultJson)),
-                false  // isError
+                false,  // isError
+                null,   // structuredContent
+                null    // meta
             );
 
         } catch (Exception e) {
@@ -211,7 +210,9 @@ public class MeshMcpServerConfiguration {
             // Return error result
             return new CallToolResult(
                 List.of(new TextContent("Error: " + e.getMessage())),
-                true  // isError
+                true,   // isError
+                null,    // structuredContent
+                null     // meta
             );
         }
     }

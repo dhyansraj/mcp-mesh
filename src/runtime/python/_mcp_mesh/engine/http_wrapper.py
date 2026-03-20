@@ -170,7 +170,7 @@ class HttpMcpWrapper:
     async def setup(self):
         """Set up FastMCP app for integration (no separate wrapper app)."""
 
-        # Using FastMCP library (fastmcp>=2.8.0)
+        # Using FastMCP library (fastmcp>=3.0.0)
         logger.info(
             "🆕 HTTP Wrapper: Server instance is from FastMCP library (fastmcp)"
         )
@@ -196,12 +196,16 @@ class HttpMcpWrapper:
         """Extract capabilities from registered tools."""
         capabilities = set()
 
-        # Look for mesh metadata on tools
-        if hasattr(self.mcp_server, "_tool_manager"):
-            for _, tool in self.mcp_server._tool_manager._tools.items():
-                # Check for mesh metadata
-                if hasattr(tool.fn, "_mesh_agent_metadata"):
-                    metadata = tool.fn._mesh_agent_metadata
+        # v3: Look for mesh metadata on tools via local_provider
+        local_provider = getattr(self.mcp_server, "local_provider", None)
+        if local_provider is not None:
+            components = getattr(local_provider, "_components", {})
+            for comp_key, comp_obj in components.items():
+                if not comp_key.startswith("tool:"):
+                    continue
+                fn = getattr(comp_obj, "fn", None)
+                if fn and hasattr(fn, "_mesh_agent_metadata"):
+                    metadata = fn._mesh_agent_metadata
                     if "capability" in metadata:
                         capabilities.add(metadata["capability"])
 
@@ -211,12 +215,16 @@ class HttpMcpWrapper:
         """Extract dependencies from registered tools."""
         dependencies = set()
 
-        # Look for mesh metadata on tools
-        if hasattr(self.mcp_server, "_tool_manager"):
-            for _, tool in self.mcp_server._tool_manager._tools.items():
-                # Check for mesh dependencies
-                if hasattr(tool.fn, "_mesh_agent_dependencies"):
-                    deps = tool.fn._mesh_agent_dependencies
+        # v3: Look for mesh metadata on tools via local_provider
+        local_provider = getattr(self.mcp_server, "local_provider", None)
+        if local_provider is not None:
+            components = getattr(local_provider, "_components", {})
+            for comp_key, comp_obj in components.items():
+                if not comp_key.startswith("tool:"):
+                    continue
+                fn = getattr(comp_obj, "fn", None)
+                if fn and hasattr(fn, "_mesh_agent_dependencies"):
+                    deps = fn._mesh_agent_dependencies
                     dependencies.update(deps)
 
         return list(dependencies)
