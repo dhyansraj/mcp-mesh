@@ -9,7 +9,7 @@
   "dependencies": {
     "@mcpmesh/core": "file:../../../src/runtime/core/typescript",
     "@mcpmesh/sdk": "file:../../../src/runtime/typescript",
-    "fastmcp": "^3.26.8",
+    "fastmcp": "^3.34.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
