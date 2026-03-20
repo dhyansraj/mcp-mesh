@@ -647,11 +647,12 @@ class TestCriticalFailureDetection:
         mock_instance.name = "canary-tool-test"
 
         # Create local_provider with expected v3 _components structure
+        # Use strict Mock(spec_set=...) so hasattr checks actually detect SDK drift
         mock_lp = MagicMock()
-        mock_tool = MagicMock()
-        mock_tool.fn = MagicMock()
+        mock_tool = Mock(spec_set=["fn", "name", "parameters"])
+        mock_tool.fn = lambda: None
         mock_tool.name = "canary_tool"
-        mock_tool.parameters = MagicMock()
+        mock_tool.parameters = {"type": "object", "properties": {}}
         mock_lp._components = {"tool:canary_tool@": mock_tool}  # EXACT v3 structure
         mock_instance.local_provider = mock_lp
 

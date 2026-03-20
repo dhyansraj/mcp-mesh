@@ -170,7 +170,7 @@ class HttpMcpWrapper:
     async def setup(self):
         """Set up FastMCP app for integration (no separate wrapper app)."""
 
-        # Using FastMCP library (fastmcp>=2.8.0)
+        # Using FastMCP library (fastmcp>=3.0.0)
         logger.info(
             "🆕 HTTP Wrapper: Server instance is from FastMCP library (fastmcp)"
         )
