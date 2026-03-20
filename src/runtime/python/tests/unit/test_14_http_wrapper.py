@@ -8,6 +8,7 @@ into the main FastAPI application.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 # Import the class under test
 from _mcp_mesh.engine.http_wrapper import HttpMcpWrapper
 
@@ -206,8 +207,8 @@ class TestHttpMcpWrapperUtilityMethods:
         """Test _get_capabilities returns empty list when no tools."""
         mock_fastmcp_server = MagicMock()
 
-        # Mock server without _tool_manager
-        del mock_fastmcp_server._tool_manager
+        # Mock server without local_provider
+        mock_fastmcp_server.local_provider = None
 
         wrapper = HttpMcpWrapper(mock_fastmcp_server)
 
@@ -230,11 +231,13 @@ class TestHttpMcpWrapperUtilityMethods:
         # Tool without mesh metadata
         del mock_tool3.fn._mesh_agent_metadata
 
-        mock_fastmcp_server._tool_manager._tools = {
-            "tool1": mock_tool1,
-            "tool2": mock_tool2,
-            "tool3": mock_tool3,
+        mock_lp = MagicMock()
+        mock_lp._components = {
+            "tool:tool1@": mock_tool1,
+            "tool:tool2@": mock_tool2,
+            "tool:tool3@": mock_tool3,
         }
+        mock_fastmcp_server.local_provider = mock_lp
 
         wrapper = HttpMcpWrapper(mock_fastmcp_server)
 
@@ -247,8 +250,8 @@ class TestHttpMcpWrapperUtilityMethods:
         """Test _get_dependencies returns empty list when no tools."""
         mock_fastmcp_server = MagicMock()
 
-        # Mock server without _tool_manager
-        del mock_fastmcp_server._tool_manager
+        # Mock server without local_provider
+        mock_fastmcp_server.local_provider = None
 
         wrapper = HttpMcpWrapper(mock_fastmcp_server)
 
@@ -271,11 +274,13 @@ class TestHttpMcpWrapperUtilityMethods:
         # Tool without dependencies
         del mock_tool3.fn._mesh_agent_dependencies
 
-        mock_fastmcp_server._tool_manager._tools = {
-            "tool1": mock_tool1,
-            "tool2": mock_tool2,
-            "tool3": mock_tool3,
+        mock_lp = MagicMock()
+        mock_lp._components = {
+            "tool:tool1@": mock_tool1,
+            "tool:tool2@": mock_tool2,
+            "tool:tool3@": mock_tool3,
         }
+        mock_fastmcp_server.local_provider = mock_lp
 
         wrapper = HttpMcpWrapper(mock_fastmcp_server)
 
@@ -335,7 +340,9 @@ class TestHttpMcpWrapperEdgeCases:
         mock_tool = MagicMock()
         mock_tool.fn._mesh_agent_metadata = {"not_capability": "value"}  # Wrong key
 
-        mock_fastmcp_server._tool_manager._tools = {"tool1": mock_tool}
+        mock_lp = MagicMock()
+        mock_lp._components = {"tool:tool1@": mock_tool}
+        mock_fastmcp_server.local_provider = mock_lp
 
         wrapper = HttpMcpWrapper(mock_fastmcp_server)
 
@@ -365,12 +372,14 @@ class TestHttpMcpWrapperIntegration:
 
         mock_fastmcp_server.http_app.return_value = mock_fastmcp_app
 
-        # Mock tool manager with realistic tools
+        # Mock local_provider with realistic tools
         mock_tool = MagicMock()
         mock_tool.fn._mesh_agent_metadata = {"capability": "test_service"}
         mock_tool.fn._mesh_agent_dependencies = ["time_service"]
 
-        mock_fastmcp_server._tool_manager._tools = {"test_tool": mock_tool}
+        mock_lp = MagicMock()
+        mock_lp._components = {"tool:test_tool@": mock_tool}
+        mock_fastmcp_server.local_provider = mock_lp
 
         with patch(
             "_mcp_mesh.shared.host_resolver.HostResolver.get_external_host",
@@ -403,7 +412,7 @@ class TestHttpMcpWrapperIntegration:
 
         # Remove all expected attributes
         del mock_fastmcp_server.http_app
-        del mock_fastmcp_server._tool_manager
+        mock_fastmcp_server.local_provider = None
 
         # Should initialize without error
         wrapper = HttpMcpWrapper(mock_fastmcp_server)

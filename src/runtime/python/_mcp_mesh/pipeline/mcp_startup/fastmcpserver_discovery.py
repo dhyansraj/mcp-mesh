@@ -1,7 +1,7 @@
 import gc
 import inspect
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
@@ -202,7 +202,7 @@ class FastMCPServerDiscoveryStep(PipelineStep):
                     # Verify it has the expected FastMCP attributes
                     return (
                         hasattr(obj, "name")
-                        and hasattr(obj, "_tool_manager")
+                        and hasattr(obj, "local_provider")
                         and hasattr(obj, "tool")  # The decorator method
                     )
             return False
@@ -225,45 +225,48 @@ class FastMCPServerDiscoveryStep(PipelineStep):
         }
 
         try:
-            # Extract tool manager
-            if hasattr(server_instance, "_tool_manager"):
-                tool_manager = server_instance._tool_manager
-                info["tool_manager"] = tool_manager
+            local_provider = getattr(server_instance, "local_provider", None)
+            if local_provider is None:
+                self.logger.warning(f"Server '{server_name}' has no local_provider")
+                return info
 
-                # Extract registered tools
-                if hasattr(tool_manager, "_tools"):
-                    tools = tool_manager._tools
-                    info["tools"] = tools
-                    info["function_count"] += len(tools)
+            # v3: Components stored in local_provider._components dict
+            # Keys format: "tool:name@", "prompt:name@", "resource:uri@"
+            components = getattr(local_provider, "_components", {})
 
-                    self.logger.debug(f"Server '{server_name}' has {len(tools)} tools:")
-                    for tool_name, tool in list(tools.items()):
-                        function_ptr = getattr(tool, "fn", None)
-                        self.logger.debug(f"  - {tool_name}: {function_ptr}")
+            tools = {}
+            prompts = {}
+            resources = {}
 
-            # Extract prompts if available
-            if hasattr(server_instance, "_prompt_manager"):
-                prompt_manager = server_instance._prompt_manager
-                if hasattr(prompt_manager, "_prompts"):
-                    prompts = prompt_manager._prompts
-                    info["prompts"] = prompts
-                    info["function_count"] += len(prompts)
+            for comp_key, comp_obj in components.items():
+                if comp_key.startswith("tool:"):
+                    tool_name = getattr(comp_obj, "name", comp_key)
+                    tools[tool_name] = comp_obj
+                elif comp_key.startswith("prompt:"):
+                    prompt_name = getattr(comp_obj, "name", comp_key)
+                    prompts[prompt_name] = comp_obj
+                elif comp_key.startswith("resource:"):
+                    resource_name = getattr(comp_obj, "name", comp_key)
+                    resources[resource_name] = comp_obj
 
-                    self.logger.debug(
-                        f"Server '{server_name}' has {len(prompts)} prompts"
-                    )
+            info["tools"] = tools
+            info["prompts"] = prompts
+            info["resources"] = resources
+            info["function_count"] = len(tools) + len(prompts) + len(resources)
 
-            # Extract resources if available
-            if hasattr(server_instance, "_resource_manager"):
-                resource_manager = server_instance._resource_manager
-                if hasattr(resource_manager, "_resources"):
-                    resources = resource_manager._resources
-                    info["resources"] = resources
-                    info["function_count"] += len(resources)
+            # Log tools
+            self.logger.debug(f"Server '{server_name}' has {len(tools)} tools:")
+            for tool_name, tool in tools.items():
+                function_ptr = getattr(tool, "fn", None)
+                self.logger.debug(f"  - {tool_name}: {function_ptr}")
 
-                    self.logger.debug(
-                        f"Server '{server_name}' has {len(resources)} resources"
-                    )
+            if prompts:
+                self.logger.debug(f"Server '{server_name}' has {len(prompts)} prompts")
+
+            if resources:
+                self.logger.debug(
+                    f"Server '{server_name}' has {len(resources)} resources"
+                )
 
         except Exception as e:
             self.logger.error(f"Error extracting server info for '{server_name}': {e}")

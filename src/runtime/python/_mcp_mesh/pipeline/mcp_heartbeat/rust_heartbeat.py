@@ -140,13 +140,13 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
                     f"📋 Extracted inputSchema for {tool_name} from FastMCP servers: {list(input_schema.get('properties', {}).keys())}"
                 )
             else:
-                # Fallback: Try direct _fastmcp_tool attribute
+                # Fallback: Try direct schema extraction (v2 _fastmcp_tool or v3 registry lookup)
                 input_schema = FastMCPSchemaExtractor.extract_input_schema(
                     current_function
                 )
                 if input_schema:
                     logger.debug(
-                        f"📋 Extracted inputSchema for {tool_name} from _fastmcp_tool: {list(input_schema.get('properties', {}).keys())}"
+                        f"📋 Extracted inputSchema for {tool_name} via fallback: {list(input_schema.get('properties', {}).keys())}"
                     )
                 else:
                     logger.warning(f"⚠️ No inputSchema found for {tool_name}")

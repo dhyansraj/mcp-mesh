@@ -7,13 +7,15 @@ Includes canary tests designed to fail when FastMCP internals change.
 """
 
 import sys
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
+
 # Import the classes under test
-from _mcp_mesh.pipeline.mcp_startup.fastmcpserver_discovery import \
-    FastMCPServerDiscoveryStep
+from _mcp_mesh.pipeline.mcp_startup.fastmcpserver_discovery import (
+    FastMCPServerDiscoveryStep,
+)
 from _mcp_mesh.pipeline.shared import PipelineResult, PipelineStatus
 
 
@@ -68,30 +70,37 @@ class TestFastMCPDetectionLogic:
 
     @pytest.fixture
     def mock_fastmcp_instance(self):
-        """Create a realistic FastMCP instance mock."""
+        """Create a realistic FastMCP instance mock (v3 structure)."""
         mock_instance = MagicMock()
         mock_instance.__class__.__name__ = "FastMCP"
         mock_instance.name = "test-server"
-        mock_instance._tool_manager = MagicMock()
+        mock_lp = MagicMock()
+        mock_lp._components = {}
+        mock_instance.local_provider = mock_lp
         mock_instance.tool = MagicMock()  # The decorator method
         return mock_instance
 
     @pytest.fixture
-    def mock_tool_manager(self):
-        """Create a mock tool manager with tools."""
-        tool_manager = MagicMock()
+    def mock_local_provider(self):
+        """Create a mock local_provider with components (v3 structure)."""
+        mock_lp = MagicMock()
 
-        # Mock tools dictionary
+        # Mock tool components
         mock_tool1 = MagicMock()
         mock_tool1.fn = MagicMock()
         mock_tool1.fn.__name__ = "test_function_1"
+        mock_tool1.name = "test_tool_1"
 
         mock_tool2 = MagicMock()
         mock_tool2.fn = MagicMock()
         mock_tool2.fn.__name__ = "test_function_2"
+        mock_tool2.name = "test_tool_2"
 
-        tool_manager._tools = {"test_tool_1": mock_tool1, "test_tool_2": mock_tool2}
-        return tool_manager
+        mock_lp._components = {
+            "tool:test_tool_1@": mock_tool1,
+            "tool:test_tool_2@": mock_tool2,
+        }
+        return mock_lp
 
     def test_fastmcp_detection_success(self, step, mock_fastmcp_instance):
         """Test successful FastMCP instance detection."""
@@ -103,7 +112,9 @@ class TestFastMCPDetectionLogic:
         mock_obj = MagicMock()
         mock_obj.__class__.__name__ = "FastMCPServer"  # Different name
         mock_obj.name = "test"
-        mock_obj._tool_manager = MagicMock()
+        mock_lp = MagicMock()
+        mock_lp._components = {}
+        mock_obj.local_provider = mock_lp
         mock_obj.tool = MagicMock()
 
         result = step._is_fastmcp_instance(mock_obj)
@@ -115,19 +126,21 @@ class TestFastMCPDetectionLogic:
         mock_obj.__class__.__name__ = "FastMCP"
         # Remove the name attribute explicitly
         del mock_obj.name
-        mock_obj._tool_manager = MagicMock()
+        mock_lp = MagicMock()
+        mock_lp._components = {}
+        mock_obj.local_provider = mock_lp
         mock_obj.tool = MagicMock()
 
         result = step._is_fastmcp_instance(mock_obj)
         assert result is False
 
-    def test_fastmcp_detection_missing_tool_manager(self, step):
-        """Test rejection when '_tool_manager' attribute is missing."""
+    def test_fastmcp_detection_missing_local_provider(self, step):
+        """Test rejection when 'local_provider' attribute is missing."""
         mock_obj = MagicMock()
         mock_obj.__class__.__name__ = "FastMCP"
         mock_obj.name = "test"
-        # Remove the _tool_manager attribute explicitly
-        del mock_obj._tool_manager
+        # Remove the local_provider attribute explicitly
+        del mock_obj.local_provider
         mock_obj.tool = MagicMock()
 
         result = step._is_fastmcp_instance(mock_obj)
@@ -138,7 +151,9 @@ class TestFastMCPDetectionLogic:
         mock_obj = MagicMock()
         mock_obj.__class__.__name__ = "FastMCP"
         mock_obj.name = "test"
-        mock_obj._tool_manager = MagicMock()
+        mock_lp = MagicMock()
+        mock_lp._components = {}
+        mock_obj.local_provider = mock_lp
         # Remove the tool attribute explicitly
         del mock_obj.tool
 
@@ -182,26 +197,29 @@ class TestInformationExtraction:
 
     @pytest.fixture
     def complete_fastmcp_instance(self):
-        """Create a complete FastMCP instance with all managers."""
+        """Create a complete FastMCP instance with all component types (v3 structure)."""
         mock_instance = MagicMock()
         mock_instance.name = "complete-server"
 
-        # Tool manager with tools
-        tool_manager = MagicMock()
+        # Create local_provider with _components dict
+        mock_lp = MagicMock()
+
         mock_tool = MagicMock()
         mock_tool.fn = MagicMock()
-        tool_manager._tools = {"test_tool": mock_tool}
-        mock_instance._tool_manager = tool_manager
+        mock_tool.name = "test_tool"
 
-        # Prompt manager with prompts
-        prompt_manager = MagicMock()
-        prompt_manager._prompts = {"test_prompt": MagicMock()}
-        mock_instance._prompt_manager = prompt_manager
+        mock_prompt = MagicMock()
+        mock_prompt.name = "test_prompt"
 
-        # Resource manager with resources
-        resource_manager = MagicMock()
-        resource_manager._resources = {"test_resource": MagicMock()}
-        mock_instance._resource_manager = resource_manager
+        mock_resource = MagicMock()
+        mock_resource.name = "test_resource"
+
+        mock_lp._components = {
+            "tool:test_tool@": mock_tool,
+            "prompt:test_prompt@": mock_prompt,
+            "resource:test_resource@": mock_resource,
+        }
+        mock_instance.local_provider = mock_lp
 
         return mock_instance
 
@@ -216,24 +234,24 @@ class TestInformationExtraction:
         assert len(info["tools"]) == 1
         assert len(info["prompts"]) == 1
         assert len(info["resources"]) == 1
-        assert info["tool_manager"] is not None
 
     def test_extract_server_info_tools_only(self, step):
         """Test extraction from FastMCP instance with only tools."""
         mock_instance = MagicMock()
         mock_instance.name = "tools-only-server"
 
-        tool_manager = MagicMock()
+        mock_lp = MagicMock()
         mock_tool1 = MagicMock()
         mock_tool1.fn = MagicMock()
+        mock_tool1.name = "tool1"
         mock_tool2 = MagicMock()
         mock_tool2.fn = MagicMock()
-        tool_manager._tools = {"tool1": mock_tool1, "tool2": mock_tool2}
-        mock_instance._tool_manager = tool_manager
-
-        # No prompt or resource managers
-        mock_instance._prompt_manager = None
-        mock_instance._resource_manager = None
+        mock_tool2.name = "tool2"
+        mock_lp._components = {
+            "tool:tool1@": mock_tool1,
+            "tool:tool2@": mock_tool2,
+        }
+        mock_instance.local_provider = mock_lp
 
         info = step._extract_server_info("tools_server", mock_instance)
 
@@ -263,64 +281,78 @@ class TestInformationExtraction:
         assert info["tool_manager"] is None
 
     def test_extract_server_info_exception_handling(self, step):
-        """Test extraction handles exceptions gracefully in manager access."""
+        """Test extraction handles exceptions gracefully in local_provider access."""
 
-        # Create an instance that raises exceptions when accessing managers
+        # Create an instance that raises exceptions when accessing local_provider
         class ErrorInstance:
             @property
             def name(self):
                 return "error-server"
 
             @property
-            def _tool_manager(self):
-                raise Exception("Tool manager access failed")
+            def local_provider(self):
+                raise Exception("local_provider access failed")
 
         mock_instance = ErrorInstance()
 
         info = step._extract_server_info("error_server", mock_instance)
 
-        # Should still return basic structure despite manager errors
+        # Should still return basic structure despite errors
         assert info["server_name"] == "error_server"
         assert info["fastmcp_name"] == "error-server"
         assert info["function_count"] == 0
         assert info["tools"] == {}
         assert info["tool_manager"] is None
 
-    def test_extract_server_info_missing_tools_dict(self, step):
-        """Test extraction when tool manager exists but _tools is missing."""
+    def test_extract_server_info_missing_components_dict(self, step):
+        """Test extraction when local_provider exists but _components is missing."""
         mock_instance = MagicMock()
         mock_instance.name = "partial-server"
 
-        tool_manager = MagicMock()
-        # tool_manager._tools doesn't exist
-        del tool_manager._tools
-        mock_instance._tool_manager = tool_manager
+        mock_lp = MagicMock()
+        # _components doesn't exist
+        del mock_lp._components
+        mock_instance.local_provider = mock_lp
 
         info = step._extract_server_info("partial_server", mock_instance)
 
         assert info["function_count"] == 0
         assert info["tools"] == {}
-        assert info["tool_manager"] == tool_manager
 
     def test_function_count_accuracy(self, step):
-        """Test function count calculation across all manager types."""
+        """Test function count calculation across all component types."""
         mock_instance = MagicMock()
         mock_instance.name = "count-test-server"
 
+        mock_lp = MagicMock()
+
         # 3 tools
-        tool_manager = MagicMock()
-        tool_manager._tools = {"t1": MagicMock(), "t2": MagicMock(), "t3": MagicMock()}
-        mock_instance._tool_manager = tool_manager
+        mock_t1 = MagicMock()
+        mock_t1.name = "t1"
+        mock_t2 = MagicMock()
+        mock_t2.name = "t2"
+        mock_t3 = MagicMock()
+        mock_t3.name = "t3"
 
         # 2 prompts
-        prompt_manager = MagicMock()
-        prompt_manager._prompts = {"p1": MagicMock(), "p2": MagicMock()}
-        mock_instance._prompt_manager = prompt_manager
+        mock_p1 = MagicMock()
+        mock_p1.name = "p1"
+        mock_p2 = MagicMock()
+        mock_p2.name = "p2"
 
         # 1 resource
-        resource_manager = MagicMock()
-        resource_manager._resources = {"r1": MagicMock()}
-        mock_instance._resource_manager = resource_manager
+        mock_r1 = MagicMock()
+        mock_r1.name = "r1"
+
+        mock_lp._components = {
+            "tool:t1@": mock_t1,
+            "tool:t2@": mock_t2,
+            "tool:t3@": mock_t3,
+            "prompt:p1@": mock_p1,
+            "prompt:p2@": mock_p2,
+            "resource:r1@": mock_r1,
+        }
+        mock_instance.local_provider = mock_lp
 
         info = step._extract_server_info("count_server", mock_instance)
 
@@ -337,11 +369,13 @@ class TestModuleDiscovery:
 
     @pytest.fixture
     def mock_fastmcp_instance(self):
-        """Create a mock FastMCP instance."""
+        """Create a mock FastMCP instance (v3 structure)."""
         mock_instance = MagicMock()
         mock_instance.__class__.__name__ = "FastMCP"
         mock_instance.name = "test-server"
-        mock_instance._tool_manager = MagicMock()
+        mock_lp = MagicMock()
+        mock_lp._components = {}
+        mock_instance.local_provider = mock_lp
         mock_instance.tool = MagicMock()
         return mock_instance
 
@@ -483,8 +517,11 @@ class TestExecuteMethod:
         """Test execute when FastMCP instances are found."""
         mock_server = MagicMock()
         mock_server.name = "found-server"
-        mock_server._tool_manager = MagicMock()
-        mock_server._tool_manager._tools = {"tool1": MagicMock()}
+        mock_lp = MagicMock()
+        mock_tool = MagicMock()
+        mock_tool.name = "tool1"
+        mock_lp._components = {"tool:tool1@": mock_tool}
+        mock_server.local_provider = mock_lp
 
         discovered = {"test_module.server": mock_server}
 
@@ -503,13 +540,24 @@ class TestExecuteMethod:
         """Test execute with multiple FastMCP servers."""
         mock_server1 = MagicMock()
         mock_server1.name = "server1"
-        mock_server1._tool_manager = MagicMock()
-        mock_server1._tool_manager._tools = {"tool1": MagicMock(), "tool2": MagicMock()}
+        mock_lp1 = MagicMock()
+        mock_tool1 = MagicMock()
+        mock_tool1.name = "tool1"
+        mock_tool2 = MagicMock()
+        mock_tool2.name = "tool2"
+        mock_lp1._components = {
+            "tool:tool1@": mock_tool1,
+            "tool:tool2@": mock_tool2,
+        }
+        mock_server1.local_provider = mock_lp1
 
         mock_server2 = MagicMock()
         mock_server2.name = "server2"
-        mock_server2._tool_manager = MagicMock()
-        mock_server2._tool_manager._tools = {"tool3": MagicMock()}
+        mock_lp2 = MagicMock()
+        mock_tool3 = MagicMock()
+        mock_tool3.name = "tool3"
+        mock_lp2._components = {"tool:tool3@": mock_tool3}
+        mock_server2.local_provider = mock_lp2
 
         discovered = {"module1.server1": mock_server1, "module2.server2": mock_server2}
 
@@ -539,8 +587,9 @@ class TestExecuteMethod:
         """Test that all expected context keys are populated."""
         mock_server = MagicMock()
         mock_server.name = "context-test-server"
-        mock_server._tool_manager = MagicMock()
-        mock_server._tool_manager._tools = {}
+        mock_lp = MagicMock()
+        mock_lp._components = {}
+        mock_server.local_provider = mock_lp
 
         discovered = {"test.server": mock_server}
 
@@ -574,7 +623,9 @@ class TestCriticalFailureDetection:
         mock_obj = MagicMock()
         mock_obj.__class__.__name__ = "FastMCP"  # EXACT class name expected
         mock_obj.name = "canary-server"
-        mock_obj._tool_manager = MagicMock()
+        mock_lp = MagicMock()
+        mock_lp._components = {}
+        mock_obj.local_provider = mock_lp
         mock_obj.tool = MagicMock()
 
         result = step._is_fastmcp_instance(mock_obj)
@@ -586,30 +637,41 @@ class TestCriticalFailureDetection:
             "Update _is_fastmcp_instance() method if FastMCP changed its class name."
         )
 
-    def test_canary_tool_manager_structure(self, step):
+    def test_canary_local_provider_components_structure(self, step):
         """
-        CANARY TEST: This test should FAIL if FastMCP changes _tool_manager structure.
+        CANARY TEST: This test should FAIL if FastMCP changes local_provider._components structure.
 
-        If this test fails, update the tool extraction logic in _extract_server_info().
+        If this test fails, update the component extraction logic in _extract_server_info().
         """
         mock_instance = MagicMock()
         mock_instance.name = "canary-tool-test"
 
-        # Create tool manager with expected structure
-        tool_manager = MagicMock()
+        # Create local_provider with expected v3 _components structure
+        mock_lp = MagicMock()
         mock_tool = MagicMock()
         mock_tool.fn = MagicMock()
-        tool_manager._tools = {"canary_tool": mock_tool}  # EXACT structure expected
-        mock_instance._tool_manager = tool_manager
+        mock_tool.name = "canary_tool"
+        mock_tool.parameters = MagicMock()
+        mock_lp._components = {"tool:canary_tool@": mock_tool}  # EXACT v3 structure
+        mock_instance.local_provider = mock_lp
 
         info = step._extract_server_info("canary", mock_instance)
 
-        # This assertion protects against tool manager structure changes
+        # This assertion protects against local_provider._components structure changes
         assert len(info["tools"]) == 1, (
-            "BREAKING CHANGE DETECTED: FastMCP tool manager structure may have changed. "
-            "Expected '_tool_manager._tools' structure, but tool extraction failed. "
+            "BREAKING CHANGE DETECTED: FastMCP local_provider._components structure may have changed. "
+            "Expected 'local_provider._components' with 'tool:name@' keys, but tool extraction failed. "
             "Update _extract_server_info() method if FastMCP changed its internal structure."
         )
+
+        # Verify tool objects still have .fn and .parameters
+        extracted_tool = list(info["tools"].values())[0]
+        assert hasattr(
+            extracted_tool, "fn"
+        ), "BREAKING CHANGE DETECTED: FastMCP tool objects no longer have '.fn' attribute."
+        assert hasattr(
+            extracted_tool, "parameters"
+        ), "BREAKING CHANGE DETECTED: FastMCP tool objects no longer have '.parameters' attribute."
 
     def test_canary_required_attributes(self, step):
         """
@@ -621,7 +683,7 @@ class TestCriticalFailureDetection:
         mock_obj.__class__.__name__ = "FastMCP"
 
         # These are the EXACT attributes currently required
-        required_attrs = ["name", "_tool_manager", "tool"]
+        required_attrs = ["name", "local_provider", "tool"]
 
         for attr in required_attrs:
             setattr(mock_obj, attr, MagicMock())
@@ -643,20 +705,23 @@ class TestCriticalFailureDetection:
         mock_instance = MagicMock()
         mock_instance.name = "canary-access-test"
 
-        # Create the EXACT access pattern currently expected
-        tool_manager = MagicMock()
+        # Create the EXACT access pattern currently expected (v3 structure)
+        mock_lp = MagicMock()
         mock_tool = MagicMock()
         mock_tool.fn = MagicMock()  # EXACT tool structure expected
         mock_tool.fn.__name__ = "canary_function"
+        mock_tool.name = "canary_tool"
 
-        tool_manager._tools = {"canary_tool": mock_tool}  # EXACT tools dict structure
-        mock_instance._tool_manager = tool_manager
+        mock_lp._components = {
+            "tool:canary_tool@": mock_tool
+        }  # EXACT v3 components dict
+        mock_instance.local_provider = mock_lp
 
         info = step._extract_server_info("canary_access", mock_instance)
 
         # This assertion protects against tool access pattern changes
         assert info["function_count"] >= 1, (
             "BREAKING CHANGE DETECTED: FastMCP tool access pattern may have changed. "
-            "Expected 'tool_manager._tools[name].fn' pattern, but tool counting failed. "
+            "Expected 'local_provider._components[\"tool:name@\"].fn' pattern, but tool counting failed. "
             "Update tool extraction logic in _extract_server_info() if FastMCP changed how tools are structured."
         )
