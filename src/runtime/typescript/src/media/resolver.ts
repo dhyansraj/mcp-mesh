@@ -177,7 +177,7 @@ export async function resolveResourceLinks(
 }
 
 /** Vendors that do NOT support images in tool/function result messages. */
-const TOOL_IMAGE_UNSUPPORTED_VENDORS = new Set(["openai", "gemini"]);
+const TOOL_IMAGE_UNSUPPORTED_VENDORS = new Set(["openai", "gemini", "google"]);
 
 /**
  * Resolve resource_links for inclusion in a tool result message.

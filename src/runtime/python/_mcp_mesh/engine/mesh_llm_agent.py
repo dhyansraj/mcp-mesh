@@ -945,7 +945,11 @@ IMPORTANT TOOL CALLING RULES:
                     continue
 
                 if _has_resource_link(parsed):
-                    parts = await resolve_resource_links(parsed, vendor)
+                    try:
+                        parts = await resolve_resource_links(parsed, vendor)
+                    except Exception as e:
+                        logger.error(f"Media resolution failed for tool result: {e}")
+                        parts = [{"type": "text", "text": json.dumps(parsed) if isinstance(parsed, dict) else str(parsed)}]
                     has_image = any(
                         p.get("type") in ("image", "image_url") for p in parts
                     )

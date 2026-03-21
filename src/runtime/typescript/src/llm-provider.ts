@@ -890,12 +890,22 @@ export function llmProvider(config: LlmProviderConfig): {
 
               // Build tool result message with text-only content for OpenAI/Gemini,
               // or full multimodal content for Claude.
+              const unsupportedVendors = new Set(["openai", "gemini", "google"]);
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              let toolResultOutput: any;
+              if (unsupportedVendors.has(vendor)) {
+                // OpenAI/Gemini: text-only in tool message, images accumulated separately
+                toolResultOutput = { type: "text", value: toolParts.map(p => (p.text as string) || "[image]").join("\n") };
+              } else {
+                // Claude/Anthropic: preserve full multimodal content in tool message
+                toolResultOutput = { type: "json", value: toolParts };
+              }
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const toolResultContent: any[] = [{
                 type: "tool-result",
                 toolCallId: tc.toolCallId,
                 toolName,
-                output: { type: "text", value: toolParts.map(p => (p.text as string) || "[image]").join("\n") },
+                output: toolResultOutput,
               }];
               currentMessages.push({
                 role: "tool",

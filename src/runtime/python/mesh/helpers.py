@@ -55,7 +55,7 @@ async def _provider_agentic_loop(
     # OpenAI strictly rejects images in role:tool messages.
     # For these vendors, images are accumulated and sent as one user message
     # after ALL tool results for the iteration.
-    _tool_image_unsupported = {"openai", "gemini"}
+    _tool_image_unsupported = {"openai", "gemini", "google"}
 
     iteration = 0
     current_messages = list(messages)
@@ -201,6 +201,21 @@ async def _provider_agentic_loop(
                                             f"multimodal parts inline (vendor={vendor})"
                                         )
                                 continue
+                            else:
+                                # Non-image resource_links resolved to text — use resolved text
+                                text_content = "\n".join(
+                                    p.get("text", "") for p in resolved_parts if p.get("type") == "text"
+                                )
+                                if text_content:
+                                    tool_result = text_content
+                                else:
+                                    tool_result = json.dumps(result)
+                                if loop_logger:
+                                    loop_logger.debug(
+                                        f"Tool {tool_name} result: resolved non-image resource_link to text "
+                                        f"({len(text_content)} chars, vendor={vendor})"
+                                    )
+                                # Fall through to normal message append
 
                         if isinstance(result, (dict, list)):
                             tool_result = json.dumps(result)
