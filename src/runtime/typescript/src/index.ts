@@ -117,7 +117,7 @@ export {
 } from "./route.js";
 
 // Proxy utilities (for advanced use)
-export { createProxy, normalizeDependency, getCurrentPropagatedHeaders } from "./proxy.js";
+export { createProxy, normalizeDependency, getCurrentPropagatedHeaders, extractContent, type MultiContentResult } from "./proxy.js";
 
 // Tracing utilities (for advanced use)
 export {
@@ -184,6 +184,17 @@ export {
   type PreparedRequest,
   type OutputMode,
 } from "./provider-handlers/index.js";
+
+// Media utilities (multimodal content)
+export {
+  uploadMedia,
+  mediaResult,
+  getMediaStore,
+  guessMimeType,
+  LocalMediaStore,
+  S3MediaStore,
+  type MediaStore,
+} from "./media/index.js";
 
 // Error classes
 export {

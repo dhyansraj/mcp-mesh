@@ -23,9 +23,11 @@ import java.security.cert.Certificate;
 import java.security.cert.CertificateFactory;
 import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -232,14 +234,42 @@ public class McpHttpClient {
                 if (responseNode.has("result")) {
                     JsonNode result = responseNode.get("result");
 
-                    // Handle MCP content array response - extract the text content
+                    // Handle MCP content array response
+                    // Detect whether all content items are text-only or mixed (resource_link, image, etc.)
                     String textContent = null;
+                    List<Map<String, Object>> mixedContent = null;
                     if (result.has("content") && result.get("content").isArray()) {
                         JsonNode content = result.get("content");
                         if (content.size() > 0) {
-                            JsonNode firstContent = content.get(0);
-                            if (firstContent.has("text")) {
-                                textContent = firstContent.get("text").asText();
+                            boolean allText = true;
+                            for (int i = 0; i < content.size(); i++) {
+                                JsonNode item = content.get(i);
+                                String itemType = item.has("type") ? item.get("type").asText() : "text";
+                                if (!"text".equals(itemType)) {
+                                    allText = false;
+                                    break;
+                                }
+                            }
+
+                            if (allText) {
+                                // Backward compatible: extract first text content as string
+                                JsonNode firstContent = content.get(0);
+                                if (firstContent.has("text")) {
+                                    textContent = firstContent.get("text").asText();
+                                }
+                            } else {
+                                // Mixed content: preserve full content array
+                                mixedContent = new ArrayList<>();
+                                for (int i = 0; i < content.size(); i++) {
+                                    mixedContent.add(objectMapper.treeToValue(content.get(i),
+                                        objectMapper.getTypeFactory().constructMapType(
+                                            LinkedHashMap.class, String.class, Object.class)));
+                                }
+                                // Also extract text from first item for error reporting
+                                JsonNode firstContent = content.get(0);
+                                if (firstContent.has("text")) {
+                                    textContent = firstContent.get("text").asText();
+                                }
                             }
                         }
                     }
@@ -248,6 +278,13 @@ public class McpHttpClient {
                     if (result.has("isError") && result.get("isError").asBoolean()) {
                         String errorText = textContent != null ? textContent : "Unknown tool error";
                         throw new MeshToolCallException(functionName, functionName, errorText);
+                    }
+
+                    // If mixed content, return as-is (List<Map<String, Object>>)
+                    if (mixedContent != null) {
+                        @SuppressWarnings("unchecked")
+                        T mixed = (T) mixedContent;
+                        return mixed;
                     }
 
                     // Deserialize based on return type

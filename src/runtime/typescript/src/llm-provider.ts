@@ -593,6 +593,10 @@ export function llmProvider(config: LlmProviderConfig): {
               debug(`Provider executing tool '${toolName}' at ${toolEndpoint}`);
               try {
                 const result = await callMcpTool(toolEndpoint, toolName, toolArgs, 30000, 1, "tool");
+                if (typeof result === "object") {
+                  debug(`Tool '${toolName}' result: [multi_content]`);
+                  return result;
+                }
                 debug(`Tool '${toolName}' result: ${result.substring(0, 200)}`);
                 try { return JSON.parse(result); } catch { return result; }
               } catch (err) {
@@ -839,7 +843,7 @@ export function llmProvider(config: LlmProviderConfig): {
               try {
                 const toolArgs = (tc.input ?? {}) as Record<string, unknown>;
                 debug(`Provider executing tool '${toolName}' at ${toolEndpoint}`);
-                toolResultStr = await callMcpTool(
+                const rawResult = await callMcpTool(
                   toolEndpoint,
                   toolName,
                   toolArgs,
@@ -847,6 +851,9 @@ export function llmProvider(config: LlmProviderConfig): {
                   1,     // 1 attempt
                   "tool",
                 );
+                toolResultStr = typeof rawResult === "object"
+                  ? JSON.stringify(rawResult)
+                  : rawResult;
                 debug(`Tool '${toolName}' result: ${toolResultStr.substring(0, 200)}`);
               } catch (err) {
                 const errorMsg = err instanceof Error ? err.message : String(err);

@@ -27,6 +27,7 @@ public class MeshProperties {
 
     private final Registry registry = new Registry();
     private final Agent agent = new Agent();
+    private Media media = new Media();
 
     public Registry getRegistry() {
         return registry;
@@ -34,6 +35,14 @@ public class MeshProperties {
 
     public Agent getAgent() {
         return agent;
+    }
+
+    public Media getMedia() {
+        return media;
+    }
+
+    public void setMedia(Media media) {
+        this.media = media;
     }
 
     public static class Registry {
@@ -102,6 +111,54 @@ public class MeshProperties {
 
         public void setHeartbeatInterval(int heartbeatInterval) {
             this.heartbeatInterval = heartbeatInterval;
+        }
+    }
+
+    public static class Media {
+        private String storage = "local";
+        private String storagePath = "/tmp/mcp-mesh-media";
+        private String storageBucket;
+        private String storageEndpoint;
+        private String storagePrefix = "media/";
+
+        public String getStorage() {
+            return storage;
+        }
+
+        public void setStorage(String storage) {
+            this.storage = storage;
+        }
+
+        public String getStoragePath() {
+            return storagePath;
+        }
+
+        public void setStoragePath(String storagePath) {
+            this.storagePath = storagePath;
+        }
+
+        public String getStorageBucket() {
+            return storageBucket;
+        }
+
+        public void setStorageBucket(String storageBucket) {
+            this.storageBucket = storageBucket;
+        }
+
+        public String getStorageEndpoint() {
+            return storageEndpoint;
+        }
+
+        public void setStorageEndpoint(String storageEndpoint) {
+            this.storageEndpoint = storageEndpoint;
+        }
+
+        public String getStoragePrefix() {
+            return storagePrefix;
+        }
+
+        public void setStoragePrefix(String storagePrefix) {
+            this.storagePrefix = storagePrefix;
         }
     }
 }

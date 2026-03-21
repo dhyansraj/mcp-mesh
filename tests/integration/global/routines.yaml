@@ -663,3 +663,59 @@ routines:
           echo "SPIRE stopped and cleaned up"
         capture: spire_stop
         ignore_errors: true
+
+  #############################################################################
+  # MINIO OBJECT STORAGE
+  # MinIO server for S3-compatible media storage tests
+  #############################################################################
+
+  start_minio:
+    description: "Start MinIO server and create test bucket"
+    steps:
+      - handler: shell
+        command: |
+          echo "Starting MinIO server..."
+          mkdir -p /var/minio/data
+          MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin \
+          minio server /var/minio/data \
+            --address ":9000" \
+            --console-address ":9001" \
+            > /var/log/minio.log 2>&1 &
+          echo $! > /tmp/minio.pid
+
+          # Wait for MinIO to become ready
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:9000/minio/health/live > /dev/null 2>&1; then
+              echo "MinIO ready after ${i}s"
+              break
+            fi
+            if [ $i -eq 20 ]; then
+              echo "ERROR: MinIO not ready after 20s"
+              cat /var/log/minio.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Create test bucket using mc (MinIO client)
+          mc alias set local http://localhost:9000 minioadmin minioadmin 2>/dev/null
+          mc mb local/test-media --ignore-existing
+          echo "MinIO started: endpoint=http://localhost:9000 bucket=test-media"
+          echo "MINIO_READY=true"
+        capture: minio_start
+        timeout: 60
+
+  stop_minio:
+    description: "Stop MinIO server and clean up data"
+    steps:
+      - handler: shell
+        command: |
+          if [ -f /tmp/minio.pid ]; then
+            kill $(cat /tmp/minio.pid) 2>/dev/null || true
+            rm -f /tmp/minio.pid
+          fi
+          pkill -f "minio server" 2>/dev/null || true
+          rm -rf /var/minio
+          echo "MinIO stopped and cleaned up"
+        capture: minio_stop
+        ignore_errors: true

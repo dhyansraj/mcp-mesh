@@ -1,0 +1,219 @@
+# Test Case: Cross-Runtime Multimedia (Python Producer -> TypeScript Consumer)
+# Verifies resource_link passthrough across different runtimes.
+#
+# Agent Setup:
+#   - Python media-producer (port 9200): provides generate_report, generate_chart, get_sample_image
+#   - TypeScript media-consumer (port 9211): provides summarize_report (depends on report_generator),
+#                                             describe_media (depends on chart_generator)
+#
+# Flow: TS consumer -> Python producer -> upload media -> return resource_link -> TS consumer describes it
+# This tests that resource_link serialization/deserialization works across runtime boundaries.
+
+name: "Cross-Runtime Multimedia - Python Producer / TypeScript Consumer"
+description: "Verify resource_link flows correctly from Python producer to TypeScript consumer across runtime boundary"
+tags:
+  - multimedia
+  - resource-link
+  - python
+  - typescript
+  - cross-runtime
+  - local-storage
+timeout: 300
+
+pre_run:
+  # Setup Python environment (for producer)
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+  # Setup TypeScript environment (for consumer)
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy Python producer artifacts to workspace
+  - name: "Copy Python producer artifacts"
+    handler: shell
+    command: |
+      mkdir -p /workspace/py-media-producer
+      cp -rL /uc-artifacts/py-media-producer.py /workspace/py-media-producer/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/py-media-producer/requirements.txt
+      echo "Python producer copied"
+      ls -la /workspace/py-media-producer/
+    capture: copy_python
+
+  # Copy TypeScript consumer artifacts to workspace
+  - name: "Copy TypeScript consumer artifacts"
+    handler: shell
+    command: |
+      cp -rL /uc-artifacts/ts-media-producer /workspace/ts-multimedia
+      echo "TypeScript multimedia copied"
+      ls -la /workspace/ts-multimedia/src/
+    capture: copy_typescript
+
+  # Install Python dependencies for producer
+  - name: "Install Python producer dependencies"
+    handler: pip-install
+    path: /workspace/py-media-producer
+
+  # Install npm dependencies for consumer
+  - name: "Install TypeScript consumer dependencies"
+    handler: npm-install
+    path: /workspace/ts-multimedia
+
+  # Start Python media-producer first
+  - name: "Start Python media-producer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start py-media-producer/main.py -d"
+    capture: start_producer
+
+  # Wait for Python producer to register
+  - name: "Wait for Python producer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Python media-producer to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-producer"; then
+          echo "media-producer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-producer did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_producer
+    timeout: 60
+
+  # Start TypeScript media-consumer (depends on Python producer's capabilities)
+  - name: "Start TypeScript media-consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start ts-multimedia/src/media-consumer.ts -d"
+    capture: start_consumer
+
+  # Wait for TypeScript consumer to register and resolve dependencies
+  - name: "Wait for TypeScript consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for TypeScript media-consumer to register..."
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "media-consumer"; then
+          echo "media-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-consumer did not register within 40s"
+      meshctl list 2>/dev/null || true
+      meshctl logs media-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_consumer
+    timeout: 60
+
+  # Verify both agents are registered
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List tools to verify capabilities from both runtimes
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # Call generate_report directly (Python producer tool)
+  - name: "Call generate_report directly"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call generate_report '{\"topic\": \"Cross-Runtime\"}'"
+    capture: direct_report_output
+    timeout: 60
+
+  # Call summarize_report (TS consumer -> Python producer via dependency)
+  - name: "Call summarize_report (cross-runtime)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call summarize_report '{\"topic\": \"Cross-Runtime\"}'"
+    capture: summarize_output
+    timeout: 60
+
+  # Call describe_media (TS consumer -> Python producer via dependency)
+  - name: "Call describe_media (cross-runtime)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call describe_media '{\"data\": \"Python:60,TypeScript:40\"}'"
+    capture: describe_output
+    timeout: 60
+
+  # Call get_sample_image directly (Python producer tool)
+  - name: "Call get_sample_image directly"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call get_sample_image '{}'"
+    capture: image_output
+    timeout: 60
+
+assertions:
+  # Both agents registered
+  - expr: "${captured.list_output} contains 'media-producer'"
+    message: "Python media-producer should be registered"
+
+  - expr: "${captured.list_output} contains 'media-consumer'"
+    message: "TypeScript media-consumer should be registered"
+
+  # Tools from both runtimes are available
+  - expr: "${captured.tools_output} contains 'generate_report'"
+    message: "Python generate_report tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'generate_chart'"
+    message: "Python generate_chart tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'summarize_report'"
+    message: "TypeScript summarize_report tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'describe_media'"
+    message: "TypeScript describe_media tool should be listed"
+
+  # Direct call to Python producer returns resource_link
+  - expr: "${captured.direct_report_output} contains 'resource_link'"
+    message: "Direct generate_report call should return a resource_link"
+
+  - expr: "${captured.direct_report_output} contains 'text/markdown'"
+    message: "Direct report should have text/markdown mime type"
+
+  # Cross-runtime: TS consumer received resource_link from Python producer
+  - expr: "${captured.summarize_output} contains 'resource_link'"
+    message: "Cross-runtime summarize_report should receive resource_link from Python producer"
+
+  - expr: "${captured.summarize_output} contains 'text/markdown'"
+    message: "Cross-runtime consumer should see text/markdown mime type"
+
+  # Cross-runtime: TS consumer received chart media from Python producer
+  - expr: "${captured.describe_output} contains 'chart media'"
+    message: "Cross-runtime describe_media should receive chart media"
+
+  - expr: "${captured.describe_output} contains 'image/svg+xml'"
+    message: "Cross-runtime consumer should see image/svg+xml mime type"
+
+  # Image tool works
+  - expr: "${captured.image_output} contains 'resource_link'"
+    message: "get_sample_image should return a resource_link type"
+
+  - expr: "${captured.image_output} contains 'image/png'"
+    message: "Image resource_link should have image/png mime type"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

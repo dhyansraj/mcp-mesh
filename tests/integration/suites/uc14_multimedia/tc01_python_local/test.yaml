@@ -1,0 +1,220 @@
+# Test Case: Python Media Agents with Local File Storage
+# Verifies resource_link flow between Python media-producer and media-consumer
+# using local file storage (default).
+#
+# Agent Setup:
+#   - media-producer (port 9200): provides generate_report, generate_chart, get_sample_image
+#   - media-consumer (port 9201): provides summarize_report (depends on report_generator),
+#                                  describe_media (depends on chart_generator)
+#
+# Flow: consumer -> producer -> upload media -> return resource_link -> consumer describes it
+
+name: "Python Multimedia - Local Storage"
+description: "Verify resource_link flow between Python media-producer and media-consumer with local file storage"
+tags:
+  - multimedia
+  - resource-link
+  - python
+  - local-storage
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy Python artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      mkdir -p /workspace/media-producer /workspace/media-consumer
+      cp -rL /uc-artifacts/py-media-producer.py /workspace/media-producer/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/media-producer/requirements.txt
+      cp -rL /uc-artifacts/py-media-consumer.py /workspace/media-consumer/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/media-consumer/requirements.txt
+      echo "Artifacts copied"
+      ls -la /workspace/media-producer/
+      ls -la /workspace/media-consumer/
+    capture: copy_output
+
+  # Install Python dependencies for producer
+  - name: "Install producer dependencies"
+    handler: pip-install
+    path: /workspace/media-producer
+
+  # Install Python dependencies for consumer
+  - name: "Install consumer dependencies"
+    handler: pip-install
+    path: /workspace/media-consumer
+
+  # Start media-producer
+  - name: "Start media-producer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start media-producer/main.py -d"
+    capture: start_producer
+
+  # Wait for producer to register
+  - name: "Wait for producer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-producer to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-producer"; then
+          echo "media-producer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-producer did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_producer
+    timeout: 60
+
+  # Start media-consumer (depends on producer capabilities)
+  - name: "Start media-consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start media-consumer/main.py -d"
+    capture: start_consumer
+
+  # Wait for consumer to register and resolve dependencies
+  - name: "Wait for consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-consumer to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-consumer"; then
+          echo "media-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-consumer did not register within 30s"
+      meshctl list 2>/dev/null || true
+      meshctl logs media-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_consumer
+    timeout: 60
+
+  # Verify both agents are registered
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List tools
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # Call generate_report (producer tool)
+  - name: "Call generate_report"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call generate_report '{\"topic\": \"AI\"}'"
+    capture: report_output
+    timeout: 60
+
+  # Call generate_chart (producer tool)
+  - name: "Call generate_chart"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call generate_chart '{\"data\": \"Sales:40,Marketing:25,Engineering:60\"}'"
+    capture: chart_output
+    timeout: 60
+
+  # Call summarize_report (consumer tool - calls producer via dependency)
+  - name: "Call summarize_report"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call summarize_report '{\"topic\": \"AI\"}'"
+    capture: summarize_output
+    timeout: 60
+
+  # Call describe_media (consumer tool - calls producer via dependency)
+  - name: "Call describe_media"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call describe_media '{\"data\": \"Q1:30,Q2:45,Q3:60\"}'"
+    capture: describe_output
+    timeout: 60
+
+  # Call get_sample_image (producer tool)
+  - name: "Call get_sample_image"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call get_sample_image '{}'"
+    capture: image_output
+    timeout: 60
+
+assertions:
+  # Agents registered
+  - expr: "${captured.list_output} contains 'media-producer'"
+    message: "media-producer should be registered"
+
+  - expr: "${captured.list_output} contains 'media-consumer'"
+    message: "media-consumer should be registered"
+
+  # Tools available
+  - expr: "${captured.tools_output} contains 'generate_report'"
+    message: "generate_report tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'generate_chart'"
+    message: "generate_chart tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'summarize_report'"
+    message: "summarize_report tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'describe_media'"
+    message: "describe_media tool should be listed"
+
+  # Producer returns resource_link for report
+  - expr: "${captured.report_output} contains 'resource_link'"
+    message: "generate_report should return a resource_link type"
+
+  - expr: "${captured.report_output} contains 'text/markdown'"
+    message: "Report resource_link should have text/markdown mime type"
+
+  # Producer returns resource_link for chart
+  - expr: "${captured.chart_output} contains 'resource_link'"
+    message: "generate_chart should return a resource_link type"
+
+  - expr: "${captured.chart_output} contains 'image/svg+xml'"
+    message: "Chart resource_link should have image/svg+xml mime type"
+
+  # Consumer received resource_link from producer (summarize_report)
+  - expr: "${captured.summarize_output} contains 'resource_link'"
+    message: "Consumer summarize_report should receive a resource_link"
+
+  - expr: "${captured.summarize_output} contains 'text/markdown'"
+    message: "Consumer should see text/markdown mime type from producer"
+
+  # Consumer received chart media from producer (describe_media)
+  - expr: "${captured.describe_output} contains 'chart media'"
+    message: "Consumer describe_media should receive chart media"
+
+  - expr: "${captured.describe_output} contains 'image/svg+xml'"
+    message: "Consumer should see image/svg+xml mime type from producer"
+
+  # Producer returns resource_link for image
+  - expr: "${captured.image_output} contains 'resource_link'"
+    message: "get_sample_image should return a resource_link type"
+
+  - expr: "${captured.image_output} contains 'image/png'"
+    message: "Image resource_link should have image/png mime type"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

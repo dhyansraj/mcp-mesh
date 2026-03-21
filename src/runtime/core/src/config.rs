@@ -31,6 +31,16 @@ pub enum ConfigKey {
     DistributedTracingEnabled,
     /// Redis URL (REDIS_URL)
     RedisUrl,
+    /// Media storage backend: "local" or "s3" (MCP_MESH_MEDIA_STORAGE)
+    MediaStorage,
+    /// Local filesystem path for media storage (MCP_MESH_MEDIA_STORAGE_PATH)
+    MediaStoragePath,
+    /// S3 bucket name for media storage (MCP_MESH_MEDIA_STORAGE_BUCKET)
+    MediaStorageBucket,
+    /// S3-compatible endpoint URL (MCP_MESH_MEDIA_STORAGE_ENDPOINT)
+    MediaStorageEndpoint,
+    /// Key prefix for media objects (MCP_MESH_MEDIA_STORAGE_PREFIX)
+    MediaStoragePrefix,
 }
 
 impl ConfigKey {
@@ -46,6 +56,11 @@ impl ConfigKey {
             ConfigKey::HealthInterval => "MCP_MESH_HEALTH_INTERVAL",
             ConfigKey::DistributedTracingEnabled => "MCP_MESH_DISTRIBUTED_TRACING_ENABLED",
             ConfigKey::RedisUrl => "REDIS_URL",
+            ConfigKey::MediaStorage => "MCP_MESH_MEDIA_STORAGE",
+            ConfigKey::MediaStoragePath => "MCP_MESH_MEDIA_STORAGE_PATH",
+            ConfigKey::MediaStorageBucket => "MCP_MESH_MEDIA_STORAGE_BUCKET",
+            ConfigKey::MediaStorageEndpoint => "MCP_MESH_MEDIA_STORAGE_ENDPOINT",
+            ConfigKey::MediaStoragePrefix => "MCP_MESH_MEDIA_STORAGE_PREFIX",
         }
     }
 
@@ -62,6 +77,11 @@ impl ConfigKey {
             ConfigKey::HealthInterval => Some("5"),
             ConfigKey::DistributedTracingEnabled => Some("false"),
             ConfigKey::RedisUrl => Some("redis://localhost:6379"),
+            ConfigKey::MediaStorage => Some("local"),
+            ConfigKey::MediaStoragePath => Some("/tmp/mcp-mesh-media"),
+            ConfigKey::MediaStorageBucket => None,
+            ConfigKey::MediaStorageEndpoint => None,
+            ConfigKey::MediaStoragePrefix => Some("media/"),
         }
     }
 
@@ -77,6 +97,11 @@ impl ConfigKey {
             "health_interval" => Some(ConfigKey::HealthInterval),
             "distributed_tracing_enabled" => Some(ConfigKey::DistributedTracingEnabled),
             "redis_url" => Some(ConfigKey::RedisUrl),
+            "media_storage" => Some(ConfigKey::MediaStorage),
+            "media_storage_path" => Some(ConfigKey::MediaStoragePath),
+            "media_storage_bucket" => Some(ConfigKey::MediaStorageBucket),
+            "media_storage_endpoint" => Some(ConfigKey::MediaStorageEndpoint),
+            "media_storage_prefix" => Some(ConfigKey::MediaStoragePrefix),
             _ => None,
         }
     }
@@ -651,5 +676,121 @@ mod tests {
             );
         }
         env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
+    }
+
+    // =========================================================================
+    // Media storage config key tests
+    // =========================================================================
+
+    #[test]
+    fn test_media_storage_env_vars() {
+        assert_eq!(
+            ConfigKey::MediaStorage.env_var(),
+            "MCP_MESH_MEDIA_STORAGE"
+        );
+        assert_eq!(
+            ConfigKey::MediaStoragePath.env_var(),
+            "MCP_MESH_MEDIA_STORAGE_PATH"
+        );
+        assert_eq!(
+            ConfigKey::MediaStorageBucket.env_var(),
+            "MCP_MESH_MEDIA_STORAGE_BUCKET"
+        );
+        assert_eq!(
+            ConfigKey::MediaStorageEndpoint.env_var(),
+            "MCP_MESH_MEDIA_STORAGE_ENDPOINT"
+        );
+        assert_eq!(
+            ConfigKey::MediaStoragePrefix.env_var(),
+            "MCP_MESH_MEDIA_STORAGE_PREFIX"
+        );
+    }
+
+    #[test]
+    fn test_media_storage_default_values() {
+        assert_eq!(ConfigKey::MediaStorage.default_value(), Some("local"));
+        assert_eq!(
+            ConfigKey::MediaStoragePath.default_value(),
+            Some("/tmp/mcp-mesh-media")
+        );
+        assert_eq!(ConfigKey::MediaStorageBucket.default_value(), None);
+        assert_eq!(ConfigKey::MediaStorageEndpoint.default_value(), None);
+        assert_eq!(ConfigKey::MediaStoragePrefix.default_value(), Some("media/"));
+    }
+
+    #[test]
+    fn test_media_storage_from_name() {
+        assert_eq!(
+            ConfigKey::from_name("media_storage"),
+            Some(ConfigKey::MediaStorage)
+        );
+        assert_eq!(
+            ConfigKey::from_name("media_storage_path"),
+            Some(ConfigKey::MediaStoragePath)
+        );
+        assert_eq!(
+            ConfigKey::from_name("media_storage_bucket"),
+            Some(ConfigKey::MediaStorageBucket)
+        );
+        assert_eq!(
+            ConfigKey::from_name("media_storage_endpoint"),
+            Some(ConfigKey::MediaStorageEndpoint)
+        );
+        assert_eq!(
+            ConfigKey::from_name("media_storage_prefix"),
+            Some(ConfigKey::MediaStoragePrefix)
+        );
+        // Case-insensitive
+        assert_eq!(
+            ConfigKey::from_name("MEDIA_STORAGE"),
+            Some(ConfigKey::MediaStorage)
+        );
+    }
+
+    #[test]
+    fn test_media_storage_not_sensitive() {
+        assert!(!ConfigKey::MediaStorage.is_sensitive());
+        assert!(!ConfigKey::MediaStoragePath.is_sensitive());
+        assert!(!ConfigKey::MediaStorageBucket.is_sensitive());
+        assert!(!ConfigKey::MediaStorageEndpoint.is_sensitive());
+        assert!(!ConfigKey::MediaStoragePrefix.is_sensitive());
+    }
+
+    #[test]
+    fn test_media_storage_resolve_defaults() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+
+        env::remove_var("MCP_MESH_MEDIA_STORAGE");
+        env::remove_var("MCP_MESH_MEDIA_STORAGE_PATH");
+        env::remove_var("MCP_MESH_MEDIA_STORAGE_BUCKET");
+        env::remove_var("MCP_MESH_MEDIA_STORAGE_ENDPOINT");
+        env::remove_var("MCP_MESH_MEDIA_STORAGE_PREFIX");
+
+        assert_eq!(
+            resolve_config(ConfigKey::MediaStorage, None),
+            Some("local".to_string())
+        );
+        assert_eq!(
+            resolve_config(ConfigKey::MediaStoragePath, None),
+            Some("/tmp/mcp-mesh-media".to_string())
+        );
+        assert_eq!(resolve_config(ConfigKey::MediaStorageBucket, None), None);
+        assert_eq!(resolve_config(ConfigKey::MediaStorageEndpoint, None), None);
+        assert_eq!(
+            resolve_config(ConfigKey::MediaStoragePrefix, None),
+            Some("media/".to_string())
+        );
+    }
+
+    #[test]
+    fn test_media_storage_resolve_env_over_param() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap();
+
+        env::set_var("MCP_MESH_MEDIA_STORAGE", "s3");
+
+        let value = resolve_config(ConfigKey::MediaStorage, Some("local"));
+        assert_eq!(value, Some("s3".to_string()));
+
+        env::remove_var("MCP_MESH_MEDIA_STORAGE");
     }
 }
