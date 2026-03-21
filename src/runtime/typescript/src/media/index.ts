@@ -16,6 +16,7 @@ export {
   resolveResourceLinksForToolMessage,
   resolveMediaAsUserMessage,
   hasResourceLink,
+  TOOL_IMAGE_UNSUPPORTED_VENDORS,
   type ResolvedContent,
 } from "./resolver.js";
 

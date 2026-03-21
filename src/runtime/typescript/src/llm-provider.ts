@@ -34,7 +34,7 @@ import { ProviderHandlerRegistry, makeSchemaStrict } from "./provider-handlers/i
 import { generateTraceId, generateSpanId, publishTraceSpan, matchesPropagateHeader } from "./tracing.js";
 import type { TraceContext } from "./tracing.js";
 import { runWithTraceContext, runWithPropagatedHeaders, callMcpTool } from "./proxy.js";
-import { resolveResourceLinks, resolveResourceLinksForToolMessage, hasResourceLink, type ResolvedContent } from "./media/index.js";
+import { resolveResourceLinks, resolveResourceLinksForToolMessage, hasResourceLink, TOOL_IMAGE_UNSUPPORTED_VENDORS, type ResolvedContent } from "./media/index.js";
 
 const debug = createDebug("llm-provider");
 
@@ -597,7 +597,7 @@ export function llmProvider(config: LlmProviderConfig): {
                 // Resolve resource_links to provider-native media content
                 if (hasResourceLink(result)) {
                   debug(`Tool '${toolName}' result contains resource_link, resolving for ${vendor}`);
-                  const resolved = await resolveResourceLinks(result, vendor);
+                  const resolved = await resolveResourceLinksForToolMessage(result, vendor);
                   // Return resolved content as structured result for AI SDK
                   return resolved.length === 1 ? resolved[0] : resolved;
                 }
@@ -886,19 +886,20 @@ export function llmProvider(config: LlmProviderConfig): {
             // OpenAI/Gemini: text-only in tool message, images accumulated for user message.
             if (hasResourceLink(rawToolResult)) {
               debug(`Tool '${toolName}' result contains resource_link, resolving for ${vendor}`);
-              const toolParts = await resolveResourceLinksForToolMessage(rawToolResult, vendor);
+              const allParts = await resolveResourceLinks(rawToolResult, vendor);
 
               // Build tool result message with text-only content for OpenAI/Gemini,
               // or full multimodal content for Claude.
-              const unsupportedVendors = new Set(["openai", "gemini", "google"]);
+              const imageTypes = new Set(["image", "image_url"]);
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               let toolResultOutput: any;
-              if (unsupportedVendors.has(vendor)) {
+              if (TOOL_IMAGE_UNSUPPORTED_VENDORS.has(vendor)) {
                 // OpenAI/Gemini: text-only in tool message, images accumulated separately
-                toolResultOutput = { type: "text", value: toolParts.map(p => (p.text as string) || "[image]").join("\n") };
+                const textParts = allParts.filter(p => !imageTypes.has(p.type));
+                toolResultOutput = { type: "text", value: textParts.map(p => (p.text as string) || "[image]").join("\n") };
               } else {
                 // Claude/Anthropic: preserve full multimodal content in tool message
-                toolResultOutput = { type: "json", value: toolParts };
+                toolResultOutput = { type: "json", value: allParts };
               }
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               const toolResultContent: any[] = [{
@@ -913,18 +914,15 @@ export function llmProvider(config: LlmProviderConfig): {
               });
 
               // Accumulate images for a single user message after ALL tool results.
-              // resolveResourceLinks returns full image parts; we filter for images only.
-              // For Claude (Anthropic), resolveMediaAsUserMessage returns null, so no
-              // images are accumulated and no user message is injected.
-              const allParts = await resolveResourceLinks(rawToolResult, vendor);
-              const imageParts = allParts.filter(
-                (p) => p.type === "image" || p.type === "image_url"
-              );
-              // Only accumulate if this vendor doesn't support images in tool messages
-              if (vendor === "openai" || vendor === "gemini" || vendor === "google") {
+              // For vendors that don't support images in tool messages, extract image
+              // parts from the already-resolved content (no second fetch needed).
+              if (TOOL_IMAGE_UNSUPPORTED_VENDORS.has(vendor)) {
+                const imageParts = allParts.filter(p => imageTypes.has(p.type));
                 accumulatedImageParts.push(...imageParts);
+                debug(`Tool '${toolName}' resolved multimodal (vendor=${vendor}, images_accumulated=${imageParts.length})`);
+              } else {
+                debug(`Tool '${toolName}' resolved multimodal (vendor=${vendor}, inline in tool message)`);
               }
-              debug(`Tool '${toolName}' resolved multimodal (vendor=${vendor}, images_accumulated=${imageParts.length})`);
             } else {
               // No resource_links — standard tool result
               let toolOutput: { type: string; value: unknown };

@@ -186,6 +186,7 @@ async def _provider_agentic_loop(
                                             f"Tool {tool_name} result: {len(text_parts)} text parts in tool msg, "
                                             f"{len(image_parts)} images accumulated (vendor={vendor})"
                                         )
+                                    continue
                                 else:
                                     # Claude/Anthropic via LiteLLM: inline images in tool message.
                                     # LiteLLM converts image_url data URIs to the provider's native
@@ -216,8 +217,7 @@ async def _provider_agentic_loop(
                                         f"({len(text_content)} chars, vendor={vendor})"
                                     )
                                 # Fall through to normal message append
-
-                        if isinstance(result, (dict, list)):
+                        elif isinstance(result, (dict, list)):
                             tool_result = json.dumps(result)
                         elif result is None:
                             tool_result = ""
