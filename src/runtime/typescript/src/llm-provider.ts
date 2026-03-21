@@ -480,7 +480,7 @@ export function llmProvider(config: LlmProviderConfig): {
     // JSON schema, field descriptions, example format) when tools + structured output
     // are both present. Without this, LLMs return wrong data.
     const formattedMessages = request.messages.map(msg => {
-      if (msg.role === "system" && msg.content) {
+      if (msg.role === "system" && typeof msg.content === "string" && msg.content) {
         const formattedContent = handler.formatSystemPrompt(
           msg.content,
           request.tools ?? null,  // ToolSchema[] format (OpenAI function calling)

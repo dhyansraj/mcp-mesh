@@ -1,0 +1,151 @@
+# Test Case: save_upload and save_upload_result utilities
+# Verifies Phase 3.2 features: save_upload stores file and returns URI,
+# save_upload_result stores file and returns full metadata.
+#
+# Agent Setup:
+#   - phase3-tool (port 9210): provides test_save_upload, test_save_upload_result
+#
+# Flow: meshctl call -> phase3-tool -> save_upload / save_upload_result -> URI / metadata
+
+name: "save_upload Utility"
+description: "Verify save_upload stores file and returns URI, save_upload_result returns full metadata"
+tags:
+  - multimedia
+  - save-upload
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy phase3-tool artifact to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      mkdir -p /workspace/phase3-tool
+      cp -rL /uc-artifacts/py-phase3-tool.py /workspace/phase3-tool/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/phase3-tool/requirements.txt
+      echo "Artifacts copied"
+      ls -la /workspace/phase3-tool/
+    capture: copy_output
+
+  # Copy test images for save_upload tests
+  # phase3-tool resolves PROJECT_ROOT as 4 parents up from script -> /
+  - name: "Copy test images"
+    handler: shell
+    command: |
+      cp /uc-artifacts/test-image-1.jpg /1.jpg
+      cp /uc-artifacts/test-image-2.jpg /2.jpg
+      echo "Copied test images to / for phase3-tool"
+    capture: copy_images
+
+  # Install Python dependencies
+  - name: "Install phase3-tool dependencies"
+    handler: pip-install
+    path: /workspace/phase3-tool
+
+  # Start phase3-tool
+  - name: "Start phase3-tool"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start phase3-tool/main.py -d"
+    capture: start_output
+
+  # Wait for phase3-tool to register
+  - name: "Wait for phase3-tool registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for phase3-tool to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "phase3-tool"; then
+          echo "phase3-tool registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: phase3-tool did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_output
+    timeout: 60
+
+  # List registered agents
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List available tools
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # Call test_save_upload - returns URI from save_upload
+  - name: "Call test_save_upload"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call test_save_upload '{\"image_number\": 1}'"
+    capture: upload_result
+    timeout: 60
+
+  # Call test_save_upload_result - returns full metadata
+  - name: "Call test_save_upload_result"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call test_save_upload_result '{\"image_number\": 2}'"
+    capture: upload_result_meta
+    timeout: 60
+
+  # Stop agents
+  - name: "Stop agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+    capture: stop_output
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_output} contains 'phase3-tool'"
+    message: "phase3-tool should be registered"
+
+  # Tools listed
+  - expr: "${captured.tools_output} contains 'test_save_upload'"
+    message: "test_save_upload tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'test_save_upload_result'"
+    message: "test_save_upload_result tool should be listed"
+
+  # save_upload returns a URI
+  - expr: "${captured.upload_result} contains 'file://'"
+    message: "save_upload should return a file:// URI"
+
+  - expr: "${captured.upload_result} contains 'URI'"
+    message: "save_upload response should contain URI reference"
+
+  # save_upload_result returns full metadata
+  - expr: "${captured.upload_result_meta} contains 'URI'"
+    message: "save_upload_result should return URI in metadata"
+
+  - expr: "${captured.upload_result_meta} contains 'MIME'"
+    message: "save_upload_result should return MIME type in metadata"
+
+  - expr: "${captured.upload_result_meta} contains 'image/jpeg'"
+    message: "save_upload_result should report image/jpeg mime type"
+
+  - expr: "${captured.upload_result_meta} contains 'Size'"
+    message: "save_upload_result should return file size in metadata"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

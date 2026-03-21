@@ -163,10 +163,11 @@ export function convertMessagesToVercelFormat(messages: LlmMessage[]): LlmMessag
 
   return messages.map((msg) => {
     // System and user messages pass through
+    // Preserve array content (multipart: text + images) for user messages
     if (msg.role === "system" || msg.role === "user") {
       return {
         role: msg.role,
-        content: msg.content ?? "",
+        content: Array.isArray(msg.content) ? msg.content : (msg.content ?? ""),
       };
     }
 
@@ -186,8 +187,8 @@ export function convertMessagesToVercelFormat(messages: LlmMessage[]): LlmMessag
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const contentParts: any[] = [];
 
-      // Add text content if present
-      if (msg.content) {
+      // Add text content if present (assistant content is always a string)
+      if (typeof msg.content === "string" && msg.content) {
         contentParts.push({ type: "text", text: msg.content });
       }
 
@@ -235,7 +236,7 @@ export function convertMessagesToVercelFormat(messages: LlmMessage[]): LlmMessag
           type: "tool-result",
           toolCallId,
           toolName,
-          output: wrapToolResultOutput(msg.content),
+          output: wrapToolResultOutput(typeof msg.content === "string" ? msg.content : null),
         }],
       } as unknown as LlmMessage;
     }

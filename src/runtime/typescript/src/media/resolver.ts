@@ -32,7 +32,7 @@ function formatForClaude(b64: string, mimeType: string): ResolvedContent {
   };
 }
 
-function formatForOpenai(b64: string, mimeType: string): ResolvedContent {
+export function formatForOpenai(b64: string, mimeType: string): ResolvedContent {
   return {
     type: "image_url",
     image_url: {

@@ -189,13 +189,20 @@ export {
 export {
   uploadMedia,
   mediaResult,
+  MediaResult,
+  createMediaResult,
+  saveUpload,
+  saveUploadResult,
   getMediaStore,
   guessMimeType,
+  formatForOpenai,
+  resolveMediaInputs,
   LocalMediaStore,
   S3MediaStore,
   resolveResourceLinks,
   hasResourceLink,
   type MediaStore,
+  type MediaUploadResult,
   type ResolvedContent,
 } from "./media/index.js";
 
@@ -262,6 +269,7 @@ export type {
   LlmFilterMode,
   LlmMeta,
   LlmToolCall,
+  LlmContentPart,
   LlmMessage,
   LlmToolCallRequest,
   LlmToolDefinition,

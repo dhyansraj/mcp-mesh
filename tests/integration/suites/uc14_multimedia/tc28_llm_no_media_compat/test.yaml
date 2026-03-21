@@ -1,0 +1,160 @@
+# Test Case: Backward compatibility - LLM without media= still works
+# Verifies that the Phase 3.3 media= additions don't break existing LLM
+# calls that don't use media. Plain text LLM call should work as before.
+#
+# Agent Setup:
+#   - media-llm-provider (port 9202): Claude LLM provider
+#   - phase3-consumer (port 9211): calls test_no_media (plain text, no media=)
+#
+# Flow: consumer.test_no_media -> llm("What is 2+2?") -> Claude answers -> "4"
+
+name: "LLM Backward Compatibility - No Media"
+description: "Verify LLM calls without media= parameter still work correctly after Phase 3.3 changes"
+tags:
+  - multimedia
+  - llm
+  - claude
+  - backward-compat
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      mkdir -p /workspace/llm-provider /workspace/phase3-consumer
+      cp -rL /uc-artifacts/py-llm-provider.py /workspace/llm-provider/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/llm-provider/requirements.txt
+      cp -rL /uc-artifacts/py-phase3-consumer.py /workspace/phase3-consumer/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/phase3-consumer/requirements.txt
+      echo "Artifacts copied"
+    capture: copy_output
+
+  # Create env file with secrets (API keys for LLM providers)
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # Install Python dependencies
+  - name: "Install llm-provider dependencies"
+    handler: pip-install
+    path: /workspace/llm-provider
+
+  - name: "Install phase3-consumer dependencies"
+    handler: pip-install
+    path: /workspace/phase3-consumer
+
+  # Start media-llm-provider (port 9202)
+  - name: "Start media-llm-provider"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start llm-provider/main.py --env-file .env -d"
+    capture: start_llm_provider
+
+  # Wait for media-llm-provider to register
+  - name: "Wait for media-llm-provider registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-llm-provider to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-llm-provider"; then
+          echo "media-llm-provider registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-llm-provider did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_llm_provider
+    timeout: 60
+
+  # Start phase3-consumer (port 9211)
+  - name: "Start phase3-consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start phase3-consumer/main.py --env-file .env -d"
+    capture: start_consumer
+
+  # Wait for phase3-consumer to register
+  - name: "Wait for phase3-consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for phase3-consumer to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "phase3-consumer"; then
+          echo "phase3-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: phase3-consumer did not register within 30s"
+      meshctl list 2>/dev/null || true
+      meshctl logs phase3-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_consumer
+    timeout: 60
+
+  # List registered agents
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List available tools
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # Call test_no_media - plain text LLM call without media= parameter
+  - name: "Call test_no_media"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call test_no_media '{\"question\": \"What is 2+2?\"}'"
+    capture: no_media_result
+    timeout: 120
+
+  # Stop agents
+  - name: "Stop agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+    capture: stop_output
+
+assertions:
+  # All agents registered
+  - expr: "${captured.list_output} contains 'media-llm-provider'"
+    message: "media-llm-provider should be registered"
+
+  - expr: "${captured.list_output} contains 'phase3-consumer'"
+    message: "phase3-consumer should be registered"
+
+  # Tools available
+  - expr: "${captured.tools_output} contains 'test_no_media'"
+    message: "test_no_media tool should be listed"
+
+  # LLM responded correctly without media
+  - expr: "${captured.no_media_result} contains 'No Media Test'"
+    message: "Response should contain No Media Test prefix from consumer"
+
+  - expr: "${captured.no_media_result} contains '4'"
+    message: "LLM should correctly answer that 2+2 = 4"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace
