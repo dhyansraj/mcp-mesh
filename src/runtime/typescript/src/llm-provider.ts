@@ -34,6 +34,7 @@ import { ProviderHandlerRegistry, makeSchemaStrict } from "./provider-handlers/i
 import { generateTraceId, generateSpanId, publishTraceSpan, matchesPropagateHeader } from "./tracing.js";
 import type { TraceContext } from "./tracing.js";
 import { runWithTraceContext, runWithPropagatedHeaders, callMcpTool } from "./proxy.js";
+import { resolveResourceLinks, resolveResourceLinksForToolMessage, hasResourceLink, type ResolvedContent } from "./media/index.js";
 
 const debug = createDebug("llm-provider");
 
@@ -593,6 +594,13 @@ export function llmProvider(config: LlmProviderConfig): {
               debug(`Provider executing tool '${toolName}' at ${toolEndpoint}`);
               try {
                 const result = await callMcpTool(toolEndpoint, toolName, toolArgs, 30000, 1, "tool");
+                // Resolve resource_links to provider-native media content
+                if (hasResourceLink(result)) {
+                  debug(`Tool '${toolName}' result contains resource_link, resolving for ${vendor}`);
+                  const resolved = await resolveResourceLinks(result, vendor);
+                  // Return resolved content as structured result for AI SDK
+                  return resolved.length === 1 ? resolved[0] : resolved;
+                }
                 if (typeof result === "object") {
                   debug(`Tool '${toolName}' result: [multi_content]`);
                   return result;
@@ -833,11 +841,19 @@ export function llmProvider(config: LlmProviderConfig): {
             content: assistantContentParts,
           });
 
+          // Collect images that cannot go in tool messages (OpenAI/Gemini).
+          // After ALL tool results, we inject ONE user message with all images.
+          // This keeps the message sequence valid:
+          // assistant(tool_calls) -> tool -> tool -> ... -> user(images)
+          const accumulatedImageParts: ResolvedContent[] = [];
+
           // Execute each tool call and add results as tool messages
           for (const tc of result.toolCalls) {
             const toolName = tc.toolName;
             const toolEndpoint = toolEndpoints[toolName];
             let toolResultStr: string;
+            // Track raw result for resource_link resolution
+            let rawToolResult: unknown = null;
 
             if (toolEndpoint) {
               try {
@@ -851,6 +867,7 @@ export function llmProvider(config: LlmProviderConfig): {
                   1,     // 1 attempt
                   "tool",
                 );
+                rawToolResult = rawResult;
                 toolResultStr = typeof rawResult === "object"
                   ? JSON.stringify(rawResult)
                   : rawResult;
@@ -864,24 +881,75 @@ export function llmProvider(config: LlmProviderConfig): {
               toolResultStr = JSON.stringify({ error: `No endpoint for tool ${toolName}` });
             }
 
-            // Parse JSON result if possible for structured output
-            let toolOutput: { type: string; value: unknown };
-            try {
-              toolOutput = { type: "json", value: JSON.parse(toolResultStr) };
-            } catch {
-              toolOutput = { type: "text", value: toolResultStr };
-            }
+            // Resolve resource_links to provider-native multimodal content.
+            // Claude supports images in tool messages directly.
+            // OpenAI/Gemini: text-only in tool message, images accumulated for user message.
+            if (hasResourceLink(rawToolResult)) {
+              debug(`Tool '${toolName}' result contains resource_link, resolving for ${vendor}`);
+              const toolParts = await resolveResourceLinksForToolMessage(rawToolResult, vendor);
 
-            // Add tool result message in Vercel AI SDK format
-            currentMessages.push({
-              role: "tool",
-              content: [{
+              // Build tool result message with text-only content for OpenAI/Gemini,
+              // or full multimodal content for Claude.
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const toolResultContent: any[] = [{
                 type: "tool-result",
                 toolCallId: tc.toolCallId,
                 toolName,
-                output: toolOutput,
-              }],
+                output: { type: "text", value: toolParts.map(p => (p.text as string) || "[image]").join("\n") },
+              }];
+              currentMessages.push({
+                role: "tool",
+                content: toolResultContent,
+              });
+
+              // Accumulate images for a single user message after ALL tool results.
+              // resolveResourceLinks returns full image parts; we filter for images only.
+              // For Claude (Anthropic), resolveMediaAsUserMessage returns null, so no
+              // images are accumulated and no user message is injected.
+              const allParts = await resolveResourceLinks(rawToolResult, vendor);
+              const imageParts = allParts.filter(
+                (p) => p.type === "image" || p.type === "image_url"
+              );
+              // Only accumulate if this vendor doesn't support images in tool messages
+              if (vendor === "openai" || vendor === "gemini" || vendor === "google") {
+                accumulatedImageParts.push(...imageParts);
+              }
+              debug(`Tool '${toolName}' resolved multimodal (vendor=${vendor}, images_accumulated=${imageParts.length})`);
+            } else {
+              // No resource_links — standard tool result
+              let toolOutput: { type: string; value: unknown };
+              try {
+                toolOutput = { type: "json", value: JSON.parse(toolResultStr) };
+              } catch {
+                toolOutput = { type: "text", value: toolResultStr };
+              }
+
+              // Add tool result message in Vercel AI SDK format
+              currentMessages.push({
+                role: "tool",
+                content: [{
+                  type: "tool-result",
+                  toolCallId: tc.toolCallId,
+                  toolName,
+                  output: toolOutput,
+                }],
+              });
+            }
+          }
+
+          // After ALL tool results: inject accumulated images as one user message.
+          // Sequence: assistant(tool_calls) -> tool -> tool -> ... -> user(images)
+          // This is valid because it comes after all tool results and before the
+          // next LLM call.
+          if (accumulatedImageParts.length > 0) {
+            currentMessages.push({
+              role: "user",
+              content: [
+                { type: "text", text: "Here are the images from the tool results above:" },
+                ...accumulatedImageParts,
+              ],
             });
+            debug(`Injected user message with ${accumulatedImageParts.length} accumulated images (vendor=${vendor})`);
           }
         } else {
           // No tool calls — final response

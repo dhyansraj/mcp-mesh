@@ -1,0 +1,1 @@
+../../../../../examples/python/multimedia/image_tool.py

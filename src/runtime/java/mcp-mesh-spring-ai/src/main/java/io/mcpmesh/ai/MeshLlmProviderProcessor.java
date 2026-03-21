@@ -10,6 +10,8 @@ import io.mcpmesh.ai.handlers.LlmProviderHandler.ToolDefinition;
 import io.mcpmesh.ai.handlers.LlmProviderHandlerRegistry;
 import io.mcpmesh.core.AgentSpec;
 import io.mcpmesh.spring.McpHttpClient;
+import io.mcpmesh.spring.media.MediaResolver;
+import io.mcpmesh.spring.media.MediaStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
@@ -386,7 +388,11 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                     // Provider-managed agentic loop: execute tools internally via MCP
                     log.info("Provider-managed loop: {} tools with endpoints", toolEndpoints.size());
 
-                    LlmProviderHandler.ToolExecutorCallback executorCallback = createMcpToolExecutor(toolEndpoints);
+                    // Get MediaStore for resolving resource_link URIs in tool results
+                    MediaStore mediaStore = getMediaStore();
+
+                    LlmProviderHandler.ToolExecutorCallback executorCallback = createMcpToolExecutor(
+                        toolEndpoints, config.provider(), mediaStore);
 
                     LlmProviderHandler.LlmResponse llmResponse = handler.generateWithTools(
                         model, messages, toolDefs, executorCallback, outputSchema, Map.of()
@@ -567,12 +573,20 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
      * <p>Each tool call is dispatched to the agent endpoint that owns the tool,
      * using the standard MCP tools/call JSON-RPC protocol.
      *
+     * <p>When a tool returns mixed content with {@code resource_link} items (e.g., images),
+     * the callback resolves the URIs via MediaStore and returns provider-native multimodal
+     * content so the LLM can "see" the image data.
+     *
      * @param toolEndpoints Map of toolName -> MCP endpoint URL
+     * @param vendor        LLM vendor name (e.g., "anthropic", "openai", "gemini")
+     * @param mediaStore    MediaStore for resolving resource_link URIs (may be null)
      * @return Callback that executes tools remotely via MCP
      */
     @SuppressWarnings("unchecked")
     private LlmProviderHandler.ToolExecutorCallback createMcpToolExecutor(
-            Map<String, String> toolEndpoints) {
+            Map<String, String> toolEndpoints,
+            String vendor,
+            MediaStore mediaStore) {
 
         McpHttpClient mcpClient = new McpHttpClient(objectMapper);
 
@@ -589,7 +603,22 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
 
                 log.debug("Executing tool {} at endpoint {} with args: {}", toolName, endpoint, argsJson);
 
-                Object result = mcpClient.callTool(endpoint, toolName, args, String.class);
+                // callTool returns List<Map> for mixed content (text + resource_link),
+                // String for text-only results
+                Object result = mcpClient.callTool(endpoint, toolName, args);
+
+                // Resolve resource_links to provider-native multimodal content
+                if (result != null && mediaStore != null) {
+                    List<Map<String, Object>> resolved = MediaResolver.resolveResourceLinks(
+                        result, vendor, mediaStore);
+                    if (resolved != null) {
+                        String serialized = MediaResolver.serializeForToolResult(resolved);
+                        log.debug("Resolved {} resource_link(s) in tool {} result for vendor {}",
+                            resolved.size(), toolName, vendor);
+                        return serialized;
+                    }
+                }
+
                 String resultStr = result != null ? result.toString() : "";
 
                 log.debug("Tool {} result: {}", toolName, resultStr.length() > 200 ? resultStr.substring(0, 200) + "..." : resultStr);
@@ -599,6 +628,20 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                 return "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
             }
         };
+    }
+
+    /**
+     * Get the MediaStore bean from the application context.
+     *
+     * @return MediaStore if available, null otherwise
+     */
+    private MediaStore getMediaStore() {
+        try {
+            return applicationContext.getBean(MediaStore.class);
+        } catch (BeansException e) {
+            log.debug("MediaStore not available — resource_link resolution disabled");
+            return null;
+        }
     }
 
     /**

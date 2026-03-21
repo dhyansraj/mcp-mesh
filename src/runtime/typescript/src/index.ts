@@ -193,7 +193,10 @@ export {
   guessMimeType,
   LocalMediaStore,
   S3MediaStore,
+  resolveResourceLinks,
+  hasResourceLink,
   type MediaStore,
+  type ResolvedContent,
 } from "./media/index.js";
 
 // Error classes

@@ -1,0 +1,202 @@
+# Test Case: Non-image resource_link passes through as text (not inlined)
+# Verifies that when a tool returns a resource_link with a non-image mime type
+# (e.g., text/markdown), the LLM provider does NOT attempt to inline it as
+# base64 image data. Instead, the LLM receives a text description of the
+# resource_link and can describe the document content.
+#
+# Agent Setup:
+#   - image-tool (port 9206): provides get_document (document_provider) - returns markdown
+#   - media-llm-provider (port 9202): Claude LLM provider with media resolution
+#   - media-llm-consumer (port 9203): calls analyze_document
+#
+# Flow: consumer.analyze_document -> Claude LLM -> get_document
+#       -> resource_link (text/markdown) -> NOT inlined as image -> LLM sees text description
+
+name: "LLM Non-Image Passthrough - Claude"
+description: "Verify non-image resource_links pass through as text and are not inlined as base64 images"
+tags:
+  - multimedia
+  - resource-link
+  - llm
+  - claude
+  - passthrough
+  - python
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      mkdir -p /workspace/image-tool /workspace/llm-provider /workspace/llm-consumer
+      cp -rL /uc-artifacts/py-image-tool.py /workspace/image-tool/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/image-tool/requirements.txt
+      cp -rL /uc-artifacts/py-llm-provider.py /workspace/llm-provider/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/llm-provider/requirements.txt
+      cp -rL /uc-artifacts/py-llm-consumer.py /workspace/llm-consumer/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/llm-consumer/requirements.txt
+      echo "Artifacts copied"
+    capture: copy_output
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # Install Python dependencies
+  - name: "Install image-tool dependencies"
+    handler: pip-install
+    path: /workspace/image-tool
+
+  - name: "Install llm-provider dependencies"
+    handler: pip-install
+    path: /workspace/llm-provider
+
+  - name: "Install llm-consumer dependencies"
+    handler: pip-install
+    path: /workspace/llm-consumer
+
+  # Start image-tool (port 9206) - provides document_provider
+  # Note: get_document creates markdown in-memory, no disk files needed
+  - name: "Start image-tool"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start image-tool/main.py --env-file .env -d"
+    capture: start_image_tool
+
+  # Wait for image-tool
+  - name: "Wait for image-tool registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for image-tool to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "image-tool"; then
+          echo "image-tool registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: image-tool did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_image_tool
+    timeout: 60
+
+  # Start media-llm-provider (port 9202)
+  - name: "Start media-llm-provider"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start llm-provider/main.py --env-file .env -d"
+    capture: start_llm_provider
+
+  # Wait for media-llm-provider
+  - name: "Wait for media-llm-provider registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-llm-provider to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-llm-provider"; then
+          echo "media-llm-provider registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-llm-provider did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_llm_provider
+    timeout: 60
+
+  # Start media-llm-consumer (port 9203)
+  - name: "Start media-llm-consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start llm-consumer/main.py --env-file .env -d"
+    capture: start_llm_consumer
+
+  # Wait for media-llm-consumer
+  - name: "Wait for media-llm-consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-llm-consumer to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-llm-consumer"; then
+          echo "media-llm-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-llm-consumer did not register within 30s"
+      meshctl list 2>/dev/null || true
+      meshctl logs media-llm-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_llm_consumer
+    timeout: 60
+
+  # List registered agents
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List available tools
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # Call analyze_document - get a markdown document (non-image resource_link)
+  - name: "Call analyze_document"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call analyze_document '{}'"
+    capture: analyze_result
+    timeout: 120
+
+  # Stop agents
+  - name: "Stop agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+    capture: stop_output
+
+assertions:
+  # All agents registered
+  - expr: "${captured.list_output} contains 'image-tool'"
+    message: "image-tool should be registered"
+
+  - expr: "${captured.list_output} contains 'media-llm-provider'"
+    message: "media-llm-provider should be registered"
+
+  - expr: "${captured.list_output} contains 'media-llm-consumer'"
+    message: "media-llm-consumer should be registered"
+
+  # analyze_document tool is available
+  - expr: "${captured.tools_output} contains 'analyze_document'"
+    message: "analyze_document tool should be listed"
+
+  # LLM response mentions document/markdown/text content
+  - expr: "${captured.analyze_result} contains 'document'"
+    message: "Response should mention document (LLM saw text description, not inlined media)"
+
+  # Response contains meaningful LLM analysis
+  - expr: "${captured.analyze_result} contains 'Analysis'"
+    message: "Response should not indicate LLM was unavailable"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -1,0 +1,212 @@
+# Test Case: OpenAI LLM sees mixed text + image content
+# Verifies that when a tool returns a mix of TextContent and resource_link items,
+# the OpenAI LLM provider resolves the image resource_links to inline base64 while
+# preserving the text content, so OpenAI can see both.
+#
+# Agent Setup:
+#   - image-tool (port 9206): provides get_mixed_content (mixed_content_provider)
+#   - media-llm-provider-openai (port 9204): OpenAI GPT-4o provider with media resolution
+#   - media-llm-consumer (port 9203): calls analyze_mixed_content_openai
+#
+# Flow: consumer.analyze_mixed_content_openai -> OpenAI LLM -> get_mixed_content
+#       -> [TextContent, resource_link, TextContent] -> resolve image -> OpenAI sees both
+
+name: "LLM Mixed Content Resolution - OpenAI"
+description: "Verify OpenAI GPT-4o can see both text and image when a tool returns mixed content types"
+tags:
+  - multimedia
+  - resource-link
+  - llm
+  - openai
+  - mixed-content
+  - python
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      mkdir -p /workspace/image-tool /workspace/llm-provider-openai /workspace/llm-consumer
+      cp -rL /uc-artifacts/py-image-tool.py /workspace/image-tool/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/image-tool/requirements.txt
+      cp -rL /uc-artifacts/py-llm-provider-openai.py /workspace/llm-provider-openai/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/llm-provider-openai/requirements.txt
+      cp -rL /uc-artifacts/py-llm-consumer.py /workspace/llm-consumer/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/llm-consumer/requirements.txt
+      echo "Artifacts copied"
+    capture: copy_output
+
+  # Copy real test images for image-tool
+  # image-tool resolves PROJECT_ROOT as 4 parents up from the script.
+  # Script at /workspace/image-tool/main.py -> PROJECT_ROOT = /
+  - name: "Copy test images for image-tool"
+    handler: shell
+    command: |
+      cp /uc-artifacts/test-image-1.jpg /1.jpg
+      cp /uc-artifacts/test-image-2.jpg /2.jpg
+      cp /uc-artifacts/test-image-3.jpg /3.jpg
+      echo "Copied real test images to /"
+    capture: copy_images
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # Install Python dependencies
+  - name: "Install image-tool dependencies"
+    handler: pip-install
+    path: /workspace/image-tool
+
+  - name: "Install llm-provider-openai dependencies"
+    handler: pip-install
+    path: /workspace/llm-provider-openai
+
+  - name: "Install llm-consumer dependencies"
+    handler: pip-install
+    path: /workspace/llm-consumer
+
+  # Start image-tool (port 9206) - provides mixed_content_provider
+  - name: "Start image-tool"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start image-tool/main.py --env-file .env -d"
+    capture: start_image_tool
+
+  # Wait for image-tool
+  - name: "Wait for image-tool registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for image-tool to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "image-tool"; then
+          echo "image-tool registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: image-tool did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_image_tool
+    timeout: 60
+
+  # Start media-llm-provider-openai (port 9204)
+  - name: "Start media-llm-provider-openai"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start llm-provider-openai/main.py --env-file .env -d"
+    capture: start_llm_provider
+
+  # Wait for media-llm-provider-openai
+  - name: "Wait for media-llm-provider-openai registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-llm-provider-openai to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-llm-provider-openai"; then
+          echo "media-llm-provider-openai registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-llm-provider-openai did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_llm_provider
+    timeout: 60
+
+  # Start media-llm-consumer (port 9203)
+  - name: "Start media-llm-consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start llm-consumer/main.py --env-file .env -d"
+    capture: start_llm_consumer
+
+  # Wait for media-llm-consumer
+  - name: "Wait for media-llm-consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-llm-consumer to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-llm-consumer"; then
+          echo "media-llm-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-llm-consumer did not register within 30s"
+      meshctl list 2>/dev/null || true
+      meshctl logs media-llm-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_llm_consumer
+    timeout: 60
+
+  # List registered agents
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List available tools
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # Call analyze_mixed_content_openai - get text + image and have OpenAI describe both
+  - name: "Call analyze_mixed_content_openai"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call analyze_mixed_content_openai '{\"image_number\": 1}'"
+    capture: analyze_result
+    timeout: 120
+
+  # Stop agents
+  - name: "Stop agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+    capture: stop_output
+
+assertions:
+  # All agents registered
+  - expr: "${captured.list_output} contains 'image-tool'"
+    message: "image-tool should be registered"
+
+  - expr: "${captured.list_output} contains 'media-llm-provider-openai'"
+    message: "media-llm-provider-openai should be registered"
+
+  - expr: "${captured.list_output} contains 'media-llm-consumer'"
+    message: "media-llm-consumer should be registered"
+
+  # analyze_mixed_content_openai tool is available
+  - expr: "${captured.tools_output} contains 'analyze_mixed_content_openai'"
+    message: "analyze_mixed_content_openai tool should be listed"
+
+  # LLM response acknowledges both text and image content
+  - expr: "${captured.analyze_result} contains 'image'"
+    message: "Response should mention image content"
+
+  # Response contains meaningful LLM analysis
+  - expr: "${captured.analyze_result} contains 'Analysis'"
+    message: "Response should contain analysis from the LLM"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

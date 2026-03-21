@@ -1,0 +1,202 @@
+# Test Case: OpenAI LLM describes a generated SVG chart
+# Verifies Phase 2 media resolution with OpenAI: when a tool returns a resource_link
+# (generated SVG chart), the LLM provider resolves it to inline base64 so OpenAI can
+# see and describe the chart.
+#
+# Agent Setup:
+#   - media-producer (port 9200): generates charts/images (generate_chart, get_sample_image)
+#   - media-llm-provider-openai (port 9204): OpenAI GPT-4o provider with media resolution
+#   - media-llm-consumer (port 9203): calls analyze_image_openai which triggers the full pipeline
+#
+# Flow: consumer.analyze_image_openai -> OpenAI LLM -> generate_chart -> resource_link
+#       -> resolve to base64 -> OpenAI describes chart
+
+name: "LLM Chart Resolution - OpenAI"
+description: "Verify OpenAI GPT-4o can see and describe a generated SVG chart via resource_link resolution"
+tags:
+  - multimedia
+  - resource-link
+  - llm
+  - openai
+  - python
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      mkdir -p /workspace/media-producer /workspace/llm-provider-openai /workspace/llm-consumer
+      cp -rL /uc-artifacts/py-media-producer.py /workspace/media-producer/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/media-producer/requirements.txt
+      cp -rL /uc-artifacts/py-llm-provider-openai.py /workspace/llm-provider-openai/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/llm-provider-openai/requirements.txt
+      cp -rL /uc-artifacts/py-llm-consumer.py /workspace/llm-consumer/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/llm-consumer/requirements.txt
+      echo "Artifacts copied"
+    capture: copy_output
+
+  # Create env file with secrets (API keys for LLM providers)
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # Install Python dependencies for media-producer
+  - name: "Install media-producer dependencies"
+    handler: pip-install
+    path: /workspace/media-producer
+
+  # Install Python dependencies for llm-provider-openai
+  - name: "Install llm-provider-openai dependencies"
+    handler: pip-install
+    path: /workspace/llm-provider-openai
+
+  # Install Python dependencies for llm-consumer
+  - name: "Install llm-consumer dependencies"
+    handler: pip-install
+    path: /workspace/llm-consumer
+
+  # Start media-producer (port 9200)
+  - name: "Start media-producer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start media-producer/main.py --env-file .env -d"
+    capture: start_producer
+
+  # Wait for media-producer to register
+  - name: "Wait for media-producer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-producer to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-producer"; then
+          echo "media-producer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-producer did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_producer
+    timeout: 60
+
+  # Start media-llm-provider-openai (port 9204)
+  - name: "Start media-llm-provider-openai"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start llm-provider-openai/main.py --env-file .env -d"
+    capture: start_llm_provider
+
+  # Wait for media-llm-provider-openai to register
+  - name: "Wait for media-llm-provider-openai registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-llm-provider-openai to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-llm-provider-openai"; then
+          echo "media-llm-provider-openai registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-llm-provider-openai did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_llm_provider
+    timeout: 60
+
+  # Start media-llm-consumer (port 9203)
+  - name: "Start media-llm-consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start llm-consumer/main.py --env-file .env -d"
+    capture: start_llm_consumer
+
+  # Wait for media-llm-consumer to register
+  - name: "Wait for media-llm-consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-llm-consumer to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-llm-consumer"; then
+          echo "media-llm-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-llm-consumer did not register within 30s"
+      meshctl list 2>/dev/null || true
+      meshctl logs media-llm-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_llm_consumer
+    timeout: 60
+
+  # List registered agents
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List available tools
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # Call analyze_image_openai - triggers the full multimodal pipeline with OpenAI
+  # Consumer -> OpenAI LLM -> generate_chart -> resource_link -> resolve to base64 -> OpenAI describes
+  - name: "Call analyze_image_openai"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call analyze_image_openai '{\"topic\": \"Revenue\"}'"
+    capture: analyze_result
+    timeout: 120
+
+  # Stop agents
+  - name: "Stop agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+    capture: stop_output
+
+assertions:
+  # All agents registered
+  - expr: "${captured.list_output} contains 'media-producer'"
+    message: "media-producer should be registered"
+
+  - expr: "${captured.list_output} contains 'media-llm-provider-openai'"
+    message: "media-llm-provider-openai should be registered"
+
+  - expr: "${captured.list_output} contains 'media-llm-consumer'"
+    message: "media-llm-consumer should be registered"
+
+  # analyze_image_openai tool is available
+  - expr: "${captured.tools_output} contains 'analyze_image_openai'"
+    message: "analyze_image_openai tool should be listed"
+
+  # LLM response contains descriptive words about a chart
+  - expr: "${captured.analyze_result} contains 'chart'"
+    message: "LLM response should mention chart (it described the generated image)"
+
+  # Response contains meaningful LLM analysis
+  - expr: "${captured.analyze_result} contains 'Analysis'"
+    message: "Response should contain analysis from the LLM"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace
