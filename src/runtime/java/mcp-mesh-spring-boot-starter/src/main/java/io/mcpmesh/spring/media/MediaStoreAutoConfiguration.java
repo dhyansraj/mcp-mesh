@@ -3,6 +3,7 @@ package io.mcpmesh.spring.media;
 import io.mcpmesh.spring.MeshProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -16,8 +17,12 @@ import org.springframework.context.annotation.Configuration;
  *   <li>{@code local} (default) — stores files on local filesystem</li>
  *   <li>{@code s3} — stores files in an AWS S3 bucket (requires {@code software.amazon.awssdk:s3} on classpath)</li>
  * </ul>
+ *
+ * <p>Only activates when {@link MeshProperties} is available (i.e., in actual mesh agents,
+ * not in plain Spring Boot apps that happen to have the starter on the classpath).
  */
 @Configuration
+@ConditionalOnBean(MeshProperties.class)
 @ConditionalOnProperty(name = "mesh.media.storage", matchIfMissing = true)
 public class MediaStoreAutoConfiguration {
 
