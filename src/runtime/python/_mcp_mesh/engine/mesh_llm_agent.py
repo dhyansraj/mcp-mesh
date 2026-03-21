@@ -844,6 +844,12 @@ IMPORTANT TOOL CALLING RULES:
                     # Execute all tool calls
                     tool_results = await self._execute_tool_calls(tool_calls)
 
+                    # Resolve resource_link items in tool results to
+                    # provider-native multimodal content (e.g., base64 images)
+                    tool_results = await self._resolve_media_in_tool_results(
+                        tool_results
+                    )
+
                     # Add tool results to messages
                     for tool_result in tool_results:
                         messages.append(tool_result)
@@ -905,6 +911,67 @@ IMPORTANT TOOL CALLING RULES:
             ToolExecutionError: If tool execution fails
         """
         return await ToolExecutor.execute_calls(tool_calls, self.tool_proxies)
+
+    async def _resolve_media_in_tool_results(
+        self, tool_results: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Resolve resource_link items in tool results to multimodal content.
+
+        Scans each tool result message for resource_link content. When found,
+        fetches the media from MediaStore and formats it as provider-native
+        multimodal content (e.g., base64 image blocks).
+
+        Args:
+            tool_results: List of tool result message dicts (role=tool).
+
+        Returns:
+            Updated list with resource_links resolved to multimodal content
+            where applicable. Non-resource_link results pass through unchanged.
+        """
+        from _mcp_mesh.media.resolver import _has_resource_link, resolve_resource_links
+
+        vendor = self._provider_handler.vendor
+        resolved = []
+
+        for msg in tool_results:
+            content = msg.get("content", "")
+
+            # Content is a JSON string from ToolExecutor._format_tool_result
+            if isinstance(content, str):
+                try:
+                    parsed = json.loads(content)
+                except (json.JSONDecodeError, TypeError):
+                    resolved.append(msg)
+                    continue
+
+                if _has_resource_link(parsed):
+                    try:
+                        parts = await resolve_resource_links(parsed, vendor)
+                    except Exception as e:
+                        logger.error(f"Media resolution failed for tool result: {e}")
+                        parts = [{"type": "text", "text": json.dumps(parsed) if isinstance(parsed, dict) else str(parsed)}]
+                    has_image = any(
+                        p.get("type") in ("image", "image_url") for p in parts
+                    )
+                    if has_image:
+                        resolved.append(
+                            {
+                                "role": msg["role"],
+                                "tool_call_id": msg.get("tool_call_id", ""),
+                                "content": parts,
+                            }
+                        )
+                        logger.debug(
+                            "Resolved resource_link in tool result to "
+                            "%d multimodal parts (vendor=%s)",
+                            len(parts),
+                            vendor,
+                        )
+                        continue
+
+            resolved.append(msg)
+
+        return resolved
 
     def _parse_response(self, content: str) -> Any:
         """

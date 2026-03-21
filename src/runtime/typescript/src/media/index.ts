@@ -11,6 +11,15 @@ export {
   _resetMediaStore,
 } from "./media-store.js";
 
+export {
+  resolveResourceLinks,
+  resolveResourceLinksForToolMessage,
+  resolveMediaAsUserMessage,
+  hasResourceLink,
+  TOOL_IMAGE_UNSUPPORTED_VENDORS,
+  type ResolvedContent,
+} from "./resolver.js";
+
 import { getMediaStore } from "./media-store.js";
 import type { ResourceLink } from "fastmcp";
 

@@ -15,7 +15,7 @@
  * ```
  */
 
-type DebugCategory = "llm" | "llm-provider" | "sse" | "template" | "agent" | "registry" | "provider-handler-registry" | "provider-handler" | "claude-handler" | "openai-handler" | "gemini-handler";
+type DebugCategory = "llm" | "llm-provider" | "sse" | "template" | "agent" | "registry" | "provider-handler-registry" | "provider-handler" | "claude-handler" | "openai-handler" | "gemini-handler" | "media-resolver";
 
 /** Log levels in order of severity */
 const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] as const;
