@@ -167,6 +167,22 @@ var guideRegistry = map[string]*Guide{
 		HasTypeScriptVariant: true,
 		HasJavaVariant:       true,
 	},
+	"media": {
+		Name:                 "media",
+		Aliases:              []string{"media-storage", "mediastore", "upload"},
+		Title:                "Media Storage",
+		Description:          "Store, retrieve, and return binary media (images, PDFs, files) from mesh tools",
+		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
+	},
+	"multimodal": {
+		Name:                 "multimodal",
+		Aliases:              []string{"media-param", "mediaparam"},
+		Title:                "Multimodal LLM",
+		Description:          "Pass images, PDFs, and files to LLM agents with media= parameter",
+		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
+	},
 }
 
 // aliasMap maps aliases to canonical guide names.
@@ -277,7 +293,7 @@ func ListGuides() []*Guide {
 	// Return in a consistent order
 	order := []string{
 		"quickstart", "prerequisites", "overview", "capabilities", "tags", "decorators",
-		"dependency-injection", "health", "registry", "llm",
+		"dependency-injection", "health", "registry", "llm", "media", "multimodal",
 		"proxies", "api", "environment", "deployment", "observability", "headers",
 		"testing", "scaffold", "cli", "security",
 	}
