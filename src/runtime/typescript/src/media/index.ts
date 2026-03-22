@@ -176,20 +176,25 @@ export async function resolveMediaInputs(
   const parts: ResolvedContent[] = [];
 
   for (const item of media) {
-    let data: Buffer;
-    let mimeType: string;
+    try {
+      let data: Buffer;
+      let mimeType: string;
 
-    if (typeof item === "string") {
-      const result = await store.fetch(item);
-      data = result.data;
-      mimeType = result.mimeType;
-    } else {
-      data = item.data;
-      mimeType = item.mimeType;
+      if (typeof item === "string") {
+        const result = await store.fetch(item);
+        data = result.data;
+        mimeType = result.mimeType;
+      } else {
+        data = item.data;
+        mimeType = item.mimeType;
+      }
+
+      const b64 = data.toString("base64");
+      parts.push(formatForOpenai(b64, mimeType));
+    } catch (err) {
+      const label = typeof item === "string" ? item : "(inline media)";
+      console.error(`[media] Failed to resolve ${label}, skipping:`, err);
     }
-
-    const b64 = data.toString("base64");
-    parts.push(formatForOpenai(b64, mimeType));
   }
 
   return parts;

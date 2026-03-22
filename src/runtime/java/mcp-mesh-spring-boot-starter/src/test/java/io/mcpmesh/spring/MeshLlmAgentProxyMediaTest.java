@@ -148,8 +148,7 @@ class MeshLlmAgentProxyMediaTest {
          * to test message construction without needing a real LLM provider.
          */
         @SuppressWarnings("unchecked")
-        private List<Map<String, Object>> buildAndAttachMedia(
-                List<Map<String, Object>> messages, String... uris) throws Exception {
+        private List<Map<String, Object>> buildAndAttachMedia(String... uris) throws Exception {
 
             // Create builder via request()
             MeshLlmAgent.GenerateBuilder builder = proxy.request();
@@ -182,8 +181,7 @@ class MeshLlmAgentProxyMediaTest {
         @Test
         @DisplayName("single image URI resolves to OpenAI image_url block")
         void singleImageResolves() throws Exception {
-            List<Map<String, Object>> parts = buildAndAttachMedia(
-                new ArrayList<>(), "media://photo.png");
+            List<Map<String, Object>> parts = buildAndAttachMedia("media://photo.png");
 
             assertEquals(1, parts.size());
             Map<String, Object> imageBlock = parts.get(0);
@@ -200,7 +198,7 @@ class MeshLlmAgentProxyMediaTest {
         @DisplayName("multiple image URIs resolve to multiple blocks")
         void multipleImagesResolve() throws Exception {
             List<Map<String, Object>> parts = buildAndAttachMedia(
-                new ArrayList<>(), "media://photo.png", "media://banner.jpg");
+                "media://photo.png", "media://banner.jpg");
 
             assertEquals(2, parts.size());
 
@@ -219,8 +217,7 @@ class MeshLlmAgentProxyMediaTest {
         @DisplayName("failed fetch is gracefully skipped")
         void failedFetchSkipped() throws Exception {
             mediaStore.setFailOnFetch(true);
-            List<Map<String, Object>> parts = buildAndAttachMedia(
-                new ArrayList<>(), "media://photo.png");
+            List<Map<String, Object>> parts = buildAndAttachMedia("media://photo.png");
 
             assertTrue(parts.isEmpty());
         }
@@ -228,8 +225,7 @@ class MeshLlmAgentProxyMediaTest {
         @Test
         @DisplayName("unknown URI produces empty result (not exception)")
         void unknownUriSkipped() throws Exception {
-            List<Map<String, Object>> parts = buildAndAttachMedia(
-                new ArrayList<>(), "media://nonexistent.png");
+            List<Map<String, Object>> parts = buildAndAttachMedia("media://nonexistent.png");
 
             assertTrue(parts.isEmpty());
         }

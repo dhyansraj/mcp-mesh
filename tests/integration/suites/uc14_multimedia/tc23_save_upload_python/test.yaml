@@ -146,6 +146,6 @@ assertions:
 post_run:
   - handler: shell
     workdir: /workspace
-    command: "meshctl stop 2>/dev/null || true"
+    command: "meshctl stop 2>/dev/null || true; rm -f /1.jpg /2.jpg"
     ignore_errors: true
   - routine: global.cleanup_workspace

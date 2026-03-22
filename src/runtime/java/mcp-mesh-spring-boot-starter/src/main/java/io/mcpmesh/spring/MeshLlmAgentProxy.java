@@ -682,7 +682,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 try {
                     MediaFetchResult fetchResult = mediaStore.fetch(uri);
                     String base64Data = Base64.getEncoder().encodeToString(fetchResult.data());
-                    String mimeType = fetchResult.mimeType() != null ? fetchResult.mimeType() : "image/png";
+                    String mimeType = fetchResult.mimeType() != null ? fetchResult.mimeType() : "application/octet-stream";
 
                     Map<String, Object> imageBlock = MediaResolver.formatForVendor(base64Data, mimeType, vendor);
                     parts.add(imageBlock);

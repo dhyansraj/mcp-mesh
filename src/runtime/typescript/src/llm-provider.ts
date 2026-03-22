@@ -242,7 +242,12 @@ const MeshLlmRequestSchema = z.object({
     messages: z.array(
       z.object({
         role: z.enum(["system", "user", "assistant", "tool"]),
-        content: z.string().nullable(),
+        content: z.union([
+          z.string(),
+          z.array(z.object({
+            type: z.string(),
+          }).passthrough()),
+        ]).nullable(),
         tool_calls: z
           .array(
             z.object({
