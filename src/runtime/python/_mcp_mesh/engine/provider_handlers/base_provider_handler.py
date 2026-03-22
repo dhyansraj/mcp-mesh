@@ -33,6 +33,40 @@ CLAUDE_ANTI_XML_INSTRUCTION = (
     '- NEVER use XML-style syntax like <invoke name="tool_name"/>'
 )
 
+# Media parameter instructions appended when tools have x-media-type properties.
+MEDIA_PARAM_INSTRUCTIONS = (
+    "\n\nMEDIA PARAMETERS: Some tools accept media URIs (file://, s3://) "
+    "in parameters marked with x-media-type. If you received images or media "
+    "in this conversation, pass the media URI to the appropriate tool parameter."
+)
+
+
+# ============================================================================
+# Shared Media Detection
+# ============================================================================
+
+
+def has_media_params(tool_schemas: Optional[list[dict[str, Any]]]) -> bool:
+    """
+    Check if any tool schema contains x-media-type properties.
+
+    Args:
+        tool_schemas: List of OpenAI-format tool schemas
+
+    Returns:
+        True if at least one tool has a parameter with x-media-type
+    """
+    if not tool_schemas:
+        return False
+    for tool_schema in tool_schemas:
+        params = (
+            tool_schema.get("function", {}).get("parameters", {}).get("properties", {})
+        )
+        for prop in params.values():
+            if isinstance(prop, dict) and "x-media-type" in prop:
+                return True
+    return False
+
 
 # ============================================================================
 # Shared Schema Utilities

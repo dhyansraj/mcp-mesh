@@ -121,6 +121,10 @@ def __getattr__(name):
         return LlmMeta
     elif name == "create_server":
         return create_server
+    elif name == "MediaParam":
+        from .types import MediaParam
+
+        return MediaParam
     elif name == "upload_media":
         from .media import upload_media
 

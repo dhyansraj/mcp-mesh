@@ -31,6 +31,7 @@ import type {
   LlmProviderConfig,
 } from "./types.js";
 import { resolveConfig, generateAgentIdSuffix, findAvailablePort } from "./config.js";
+import { enrichSchemaWithMediaTypes } from "./media-param.js";
 import { createProxy, normalizeDependency, runWithTraceContext, runWithPropagatedHeaders } from "./proxy.js";
 import {
   initTracing,
@@ -260,6 +261,7 @@ export class MeshAgent {
 
     // Store mesh metadata with JSON Schema for LLM tool resolution
     const inputSchema = this.convertZodToJsonSchema(def.parameters);
+    enrichSchemaWithMediaTypes(inputSchema as Record<string, unknown>);
     this.tools.set(toolName, {
       capability: def.capability ?? toolName,
       version: def.version ?? "1.0.0",

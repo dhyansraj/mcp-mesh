@@ -9,7 +9,11 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
-from .base_provider_handler import BaseProviderHandler
+from .base_provider_handler import (
+    MEDIA_PARAM_INSTRUCTIONS,
+    BaseProviderHandler,
+    has_media_params,
+)
 
 
 class GenericHandler(BaseProviderHandler):
@@ -120,6 +124,10 @@ TOOL CALLING RULES:
 - Use standard JSON function calling format
 - Provide your final response after gathering needed information
 """
+
+        # Add media parameter instructions if any tools have x-media-type
+        if has_media_params(tool_schemas):
+            system_content += MEDIA_PARAM_INSTRUCTIONS
 
         # Skip JSON schema for str return type (text mode)
         if output_type is str:

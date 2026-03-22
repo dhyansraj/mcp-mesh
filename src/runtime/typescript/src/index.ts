@@ -206,6 +206,10 @@ export {
   type ResolvedContent,
 } from "./media/index.js";
 
+// Media parameter helper (schema annotation for media-typed params)
+export { mediaParam } from "./types.js";
+export { enrichSchemaWithMediaTypes } from "./media-param.js";
+
 // Error classes
 export {
   MaxIterationsError,
@@ -288,6 +292,8 @@ export type {
   MeshLlmUsage,
   MeshLlmResponse,
   LlmProviderConfig,
+  // Media parameter types
+  MediaParamMeta,
 } from "./types.js";
 
 // Default export for convenience

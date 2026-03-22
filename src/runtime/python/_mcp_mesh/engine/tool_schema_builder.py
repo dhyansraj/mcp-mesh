@@ -83,17 +83,34 @@ class ToolSchemaBuilder:
                 f"Tool metadata missing required 'name' field (OpenAPI contract): {tool}"
             )
 
-        tool_schema = {
-            "type": "function",
-            "function": {
-                "name": function_name,
-                "description": tool.get("description", ""),
-            },
-        }
+        description = tool.get("description", "")
 
         # Registry returns "input_schema" (snake_case) in JSON
         # Note: Pydantic model has alias="inputSchema" but we receive raw dicts
         input_schema = tool.get("input_schema")
+
+        # Enrich description with media parameter info
+        if input_schema and "properties" in input_schema:
+            media_params = []
+            for prop_name, prop_schema in input_schema["properties"].items():
+                if "x-media-type" in prop_schema:
+                    media_params.append(
+                        f"'{prop_name}' accepts {prop_schema['x-media-type']} URIs"
+                    )
+            if media_params:
+                media_note = "Accepts media: " + ", ".join(media_params) + "."
+                description = (
+                    description + " " + media_note if description else media_note
+                )
+
+        tool_schema = {
+            "type": "function",
+            "function": {
+                "name": function_name,
+                "description": description,
+            },
+        }
+
         if input_schema:
             tool_schema["function"]["parameters"] = input_schema
 
@@ -111,16 +128,33 @@ class ToolSchemaBuilder:
         Returns:
             Tool schema in OpenAI format
         """
+        description = getattr(tool, "description", "")
+        input_schema = getattr(tool, "input_schema", None)
+
+        # Enrich description with media parameter info
+        if input_schema and isinstance(input_schema, dict) and "properties" in input_schema:
+            media_params = []
+            for prop_name, prop_schema in input_schema["properties"].items():
+                if isinstance(prop_schema, dict) and "x-media-type" in prop_schema:
+                    media_params.append(
+                        f"'{prop_name}' accepts {prop_schema['x-media-type']} URIs"
+                    )
+            if media_params:
+                media_note = "Accepts media: " + ", ".join(media_params) + "."
+                description = (
+                    description + " " + media_note if description else media_note
+                )
+
         tool_schema = {
             "type": "function",
             "function": {
                 "name": getattr(tool, "name", "unknown"),
-                "description": getattr(tool, "description", ""),
+                "description": description,
             },
         }
 
         # Add input_schema if available
-        if hasattr(tool, "input_schema"):
-            tool_schema["function"]["parameters"] = tool.input_schema
+        if input_schema is not None:
+            tool_schema["function"]["parameters"] = input_schema
 
         return tool_schema

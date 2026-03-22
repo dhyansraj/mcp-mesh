@@ -5,7 +5,7 @@ MCP Mesh type definitions for dependency injection.
 import warnings
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Optional, Protocol
+from typing import Annotated, Any, Optional, Protocol
 
 try:
     from pydantic_core import core_schema
@@ -13,6 +13,40 @@ try:
     PYDANTIC_AVAILABLE = True
 except ImportError:
     PYDANTIC_AVAILABLE = False
+
+
+@dataclass(frozen=True)
+class _MediaParamInfo:
+    """Metadata marker for media-typed tool parameters."""
+
+    media_type: str = "*/*"
+
+
+def MediaParam(media_type: str = "*/*"):
+    """Create a type annotation for tool parameters that accept media URIs.
+
+    When used as a type hint on a @mesh.tool parameter, the framework adds
+    'x-media-type' to the JSON schema, enabling LLMs to pass media URIs
+    through multi-agent call chains.
+
+    Usage:
+        @mesh.tool(capability="analyzer")
+        async def analyze(
+            question: str,
+            image: mesh.MediaParam("image/*") = None,
+            llm: mesh.MeshLlmAgent = None,
+        ) -> str:
+            if image:
+                return await llm(question, media=[image])
+            return await llm(question)
+
+    Args:
+        media_type: MIME type pattern (e.g., "image/*", "application/pdf", "*/*")
+
+    Returns:
+        Annotated type that Pydantic treats as Optional[str] with media metadata.
+    """
+    return Annotated[Optional[str], _MediaParamInfo(media_type)]
 
 
 class McpMeshTool(Protocol):
