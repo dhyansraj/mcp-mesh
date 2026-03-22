@@ -107,6 +107,9 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                 This middleware ALWAYS runs to strip _trace_id, _parent_span, and
                 _mesh_headers from MCP tool arguments, preventing Pydantic validation
                 errors. Also captures _mesh_headers into propagated headers context.
+
+                Buffers all body chunks before parsing to handle chunked transfers
+                (uvicorn splits large payloads >~64KB across multiple receive calls).
                 """
 
                 def __init__(self, app):
@@ -117,87 +120,113 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                         await self.app(scope, receive, send)
                         return
 
-                    async def receive_with_trace_stripping():
+                    # Read entire body upfront before calling the inner app
+                    body_chunks = []
+                    while True:
                         message = await receive()
-                        if message["type"] == "http.request":
-                            body = message.get("body", b"")
-                            if body:
-                                try:
-                                    payload = json_module.loads(body.decode("utf-8"))
-                                    if payload.get("method") == "tools/call":
-                                        arguments = payload.get("params", {}).get(
-                                            "arguments", {}
-                                        )
-                                        modified = False
+                        body = message.get("body", b"")
+                        if body:
+                            body_chunks.append(body)
+                        if message.get("type") == "http.disconnect":
+                            break
+                        if not message.get("more_body", False):
+                            break
 
-                                        # Strip trace context fields from arguments
-                                        if (
-                                            "_trace_id" in arguments
-                                            or "_parent_span" in arguments
-                                        ):
-                                            arguments.pop("_trace_id", None)
-                                            arguments.pop("_parent_span", None)
-                                            modified = True
+                    full_body = b"".join(body_chunks)
+                    modified_body = full_body
 
-                                        # Strip and capture _mesh_headers from arguments
-                                        mesh_headers = arguments.pop(
-                                            "_mesh_headers", None
-                                        )
-                                        if mesh_headers is not None:
-                                            modified = True
-                                            if isinstance(mesh_headers, dict):
-                                                try:
+                    # Try to strip trace arguments from the complete body
+                    if full_body:
+                        try:
+                            payload = json_module.loads(full_body.decode("utf-8"))
+                            if isinstance(payload, dict) and payload.get("method") == "tools/call":
+                                arguments = payload.get("params", {}).get(
+                                    "arguments", {}
+                                )
+                                if isinstance(arguments, dict):
+                                    changed = False
+
+                                    # Strip trace context fields from arguments
+                                    if (
+                                        "_trace_id" in arguments
+                                        or "_parent_span" in arguments
+                                    ):
+                                        arguments.pop("_trace_id", None)
+                                        arguments.pop("_parent_span", None)
+                                        changed = True
+
+                                    # Strip and capture _mesh_headers from arguments
+                                    mesh_headers = arguments.pop(
+                                        "_mesh_headers", None
+                                    )
+                                    if mesh_headers is not None:
+                                        changed = True
+                                        if isinstance(mesh_headers, dict):
+                                            try:
+                                                from _mcp_mesh.tracing.context import (
+                                                    PROPAGATE_HEADERS,
+                                                    TraceContext,
+                                                )
+
+                                                if PROPAGATE_HEADERS:
                                                     from _mcp_mesh.tracing.context import (
-                                                        PROPAGATE_HEADERS,
-                                                        TraceContext,
+                                                        matches_propagate_header,
                                                     )
 
-                                                    if PROPAGATE_HEADERS:
-                                                        from _mcp_mesh.tracing.context import (
-                                                            matches_propagate_header,
+                                                    filtered = {
+                                                        k.lower(): v
+                                                        for k, v in mesh_headers.items()
+                                                        if isinstance(v, str)
+                                                        and matches_propagate_header(
+                                                            k
                                                         )
+                                                    }
+                                                    if filtered:
+                                                        # Merge with HTTP-captured headers (HTTP takes precedence)
+                                                        existing = (
+                                                            TraceContext.get_propagated_headers()
+                                                        )
+                                                        if existing:
+                                                            merged = dict(filtered)
+                                                            merged.update(existing)
+                                                            filtered = merged
+                                                        TraceContext.set_propagated_headers(
+                                                            filtered
+                                                        )
+                                            except Exception:
+                                                pass
 
-                                                        filtered = {
-                                                            k.lower(): v
-                                                            for k, v in mesh_headers.items()
-                                                            if isinstance(v, str)
-                                                            and matches_propagate_header(
-                                                                k
-                                                            )
-                                                        }
-                                                        if filtered:
-                                                            # Merge with HTTP-captured headers (HTTP takes precedence)
-                                                            existing = (
-                                                                TraceContext.get_propagated_headers()
-                                                            )
-                                                            if existing:
-                                                                merged = dict(filtered)
-                                                                merged.update(existing)
-                                                                filtered = merged
-                                                            TraceContext.set_propagated_headers(
-                                                                filtered
-                                                            )
-                                                except Exception:
-                                                    pass
+                                    if changed:
+                                        modified_body = json_module.dumps(
+                                            payload
+                                        ).encode("utf-8")
+                                        logger.debug(
+                                            "[TRACE] Stripped trace/mesh fields from arguments"
+                                        )
+                        except Exception as e:
+                            logger.debug(
+                                f"[TRACE] Failed to process body for stripping: {e}"
+                            )
 
-                                        if modified:
-                                            modified_body = json_module.dumps(
-                                                payload
-                                            ).encode("utf-8")
-                                            logger.debug(
-                                                "[TRACE] Stripped trace/mesh fields from arguments"
-                                            )
-                                            return {
-                                                **message,
-                                                "body": modified_body,
-                                            }
-                                except Exception as e:
-                                    logger.debug(
-                                        f"[TRACE] Failed to process body for stripping: {e}"
-                                    )
-                        return message
+                    # Create a simple receive that returns the (modified) body once,
+                    # then delegates back to original receive for lifecycle events
+                    body_sent = False
 
-                    await self.app(scope, receive_with_trace_stripping, send)
+                    async def modified_receive():
+                        nonlocal body_sent
+                        if not body_sent:
+                            body_sent = True
+                            return {
+                                "type": "http.request",
+                                "body": modified_body,
+                                "more_body": False,
+                            }
+                        # After body is delivered, delegate to original receive
+                        # for disconnect and other lifecycle events — do NOT
+                        # return disconnect immediately as that breaks ASGI
+                        return await receive()
+
+                    await self.app(scope, modified_receive, send)
 
             app.add_middleware(TraceArgumentStripperMiddleware)
             logger.debug(

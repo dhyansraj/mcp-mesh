@@ -28,7 +28,9 @@ from pydantic import BaseModel
 from .base_provider_handler import (
     BASE_TOOL_INSTRUCTIONS,
     CLAUDE_ANTI_XML_INSTRUCTION,
+    MEDIA_PARAM_INSTRUCTIONS,
     BaseProviderHandler,
+    has_media_params,
 )
 
 logger = logging.getLogger(__name__)
@@ -249,6 +251,10 @@ class ClaudeHandler(BaseProviderHandler):
                 f"- Make ONE tool call at a time\n{CLAUDE_ANTI_XML_INSTRUCTION}",
             )
             system_content += instructions
+
+        # Add media parameter instructions if any tools have x-media-type
+        if has_media_params(tool_schemas):
+            system_content += MEDIA_PARAM_INSTRUCTIONS
 
         # Add output format instructions based on mode
         if determined_mode == OUTPUT_MODE_TEXT:

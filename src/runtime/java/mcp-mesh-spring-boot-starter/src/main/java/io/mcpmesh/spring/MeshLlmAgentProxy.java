@@ -4,6 +4,9 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.core.MeshEvent;
+import io.mcpmesh.spring.media.MediaFetchResult;
+import io.mcpmesh.spring.media.MediaResolver;
+import io.mcpmesh.spring.media.MediaStore;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshLlmAgent;
 import io.mcpmesh.types.MeshToolCallException;
@@ -68,6 +71,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     private ToolInvoker toolInvoker;
     private MeshDependencyInjector dependencyInjector;
     private PromptTemplateRenderer templateRenderer;
+    private MediaStore mediaStore;
 
     // Thread-local context for per-invocation template rendering (from MeshToolWrapper)
     private final ThreadLocal<Map<String, Object>> invocationContext = new ThreadLocal<>();
@@ -113,6 +117,15 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         this.systemPromptTemplate = systemPrompt != null ? systemPrompt : "";
         this.contextParamName = contextParamName != null ? contextParamName : "ctx";
         this.defaultMaxIterations = maxIterations > 0 ? maxIterations : 1;
+    }
+
+    /**
+     * Set the MediaStore for resolving media URIs in multimodal requests.
+     *
+     * @param mediaStore The MediaStore bean (may be null if not configured)
+     */
+    public void setMediaStore(MediaStore mediaStore) {
+        this.mediaStore = mediaStore;
     }
 
     public String getContextParamName() {
@@ -218,6 +231,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
         private final List<Message> messages = new ArrayList<>();
         private final Map<String, Object> runtimeContext = new LinkedHashMap<>();
+        private final List<String> mediaUris = new ArrayList<>();
         private ContextMode contextMode = ContextMode.APPEND;
 
         // Override options (null = use defaults)
@@ -244,6 +258,24 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         @Override
         public GenerateBuilder user(String content) {
             messages.add(Message.user(content));
+            return this;
+        }
+
+        // --- Media ---
+
+        @Override
+        public GenerateBuilder media(String... uris) {
+            if (uris != null) {
+                mediaUris.addAll(Arrays.asList(uris));
+            }
+            return this;
+        }
+
+        @Override
+        public GenerateBuilder media(List<String> uris) {
+            if (uris != null) {
+                mediaUris.addAll(uris);
+            }
             return this;
         }
 
@@ -402,6 +434,11 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             // 2. Convert builder messages to LLM format
             for (Message msg : messages) {
                 llmMessages.add(Map.of("role", msg.role(), "content", msg.content()));
+            }
+
+            // 2.5. Resolve media URIs and attach to the last user message
+            if (!mediaUris.isEmpty()) {
+                attachMediaToLastUserMessage(llmMessages, provider);
             }
 
             // 3. Build tool definitions
@@ -574,6 +611,90 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                     yield merged;
                 }
             };
+        }
+
+        /**
+         * Resolve media URIs and attach as multipart content to the last user message.
+         *
+         * <p>Finds the last user message in the list and converts it from a plain
+         * text message to a multipart message with text + image content blocks.
+         * Uses MediaStore to fetch media data and MediaResolver to format for the
+         * provider's vendor format (OpenAI-compatible by default for mesh delegation).
+         *
+         * @param llmMessages The mutable list of LLM messages
+         * @param provider    The LLM provider endpoint info
+         */
+        private void attachMediaToLastUserMessage(
+                List<Map<String, Object>> llmMessages,
+                ProviderEndpoint provider) {
+
+            if (mediaStore == null) {
+                log.warn("Media URIs provided but MediaStore is not configured — ignoring {} media item(s)",
+                    mediaUris.size());
+                return;
+            }
+
+            // Resolve each URI to an image content block
+            String vendor = provider.provider() != null ? provider.provider() : "openai";
+            List<Map<String, Object>> mediaParts = resolveMediaUris(vendor);
+            if (mediaParts.isEmpty()) {
+                return;
+            }
+
+            log.info("Resolved {} media item(s) for user message", mediaParts.size());
+
+            // Find the last user message and convert to multipart
+            for (int i = llmMessages.size() - 1; i >= 0; i--) {
+                Map<String, Object> msg = llmMessages.get(i);
+                if ("user".equals(msg.get("role"))) {
+                    Object existingContent = msg.get("content");
+
+                    List<Object> multipartContent = new ArrayList<>();
+                    if (existingContent instanceof String text) {
+                        multipartContent.add(Map.of("type", "text", "text", text));
+                    } else if (existingContent instanceof List<?> existingList) {
+                        @SuppressWarnings("unchecked")
+                        List<Object> typedList = (List<Object>) existingList;
+                        multipartContent.addAll(typedList);
+                    }
+                    multipartContent.addAll(mediaParts);
+
+                    // Replace with mutable map (Map.of() returns immutable)
+                    Map<String, Object> updatedMsg = new LinkedHashMap<>();
+                    updatedMsg.put("role", "user");
+                    updatedMsg.put("content", multipartContent);
+                    llmMessages.set(i, updatedMsg);
+                    break;
+                }
+            }
+        }
+
+        /**
+         * Resolve media URIs to provider-native image content blocks.
+         *
+         * @param vendor The LLM vendor name for formatting
+         * @return List of image content blocks (empty if all resolutions fail)
+         */
+        private List<Map<String, Object>> resolveMediaUris(String vendor) {
+            List<Map<String, Object>> parts = new ArrayList<>();
+
+            for (String uri : mediaUris) {
+                try {
+                    MediaFetchResult fetchResult = mediaStore.fetch(uri);
+                    String base64Data = Base64.getEncoder().encodeToString(fetchResult.data());
+                    String mimeType = fetchResult.mimeType() != null ? fetchResult.mimeType() : "application/octet-stream";
+
+                    Map<String, Object> imageBlock = MediaResolver.formatForVendor(base64Data, mimeType, vendor);
+                    parts.add(imageBlock);
+
+                    log.debug("Resolved media URI: uri={}, mimeType={}, size={}",
+                        uri, mimeType, fetchResult.data().length);
+                } catch (Exception e) {
+                    log.error("Failed to resolve media URI {}: {}", uri, e.getMessage());
+                }
+            }
+
+            return parts;
         }
 
         /**

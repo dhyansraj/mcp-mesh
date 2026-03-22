@@ -29,7 +29,9 @@ from pydantic import BaseModel
 
 from .base_provider_handler import (
     BASE_TOOL_INSTRUCTIONS,
+    MEDIA_PARAM_INSTRUCTIONS,
     BaseProviderHandler,
+    has_media_params,
     make_schema_strict,
     sanitize_schema_for_structured_output,
 )
@@ -195,6 +197,10 @@ class GeminiHandler(BaseProviderHandler):
         # Add tool calling instructions if tools available
         if tool_schemas:
             system_content += BASE_TOOL_INSTRUCTIONS
+
+        # Add media parameter instructions if any tools have x-media-type
+        if has_media_params(tool_schemas):
+            system_content += MEDIA_PARAM_INSTRUCTIONS
 
         # Get the output schema (may have been set by apply_structured_output or prepare_request)
         # Check pending schema FIRST - it may be set even when output_type is str (delegate path)

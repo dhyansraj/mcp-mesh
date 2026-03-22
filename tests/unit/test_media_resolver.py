@@ -15,6 +15,8 @@ sys.path.insert(
 
 from _mcp_mesh.media.resolver import (
     IMAGE_MIME_TYPES,
+    PDF_MIME_TYPES,
+    TEXT_MIME_TYPES,
     _has_resource_link,
     resolve_media_as_user_message,
     resolve_resource_links,
@@ -110,39 +112,66 @@ class TestResolveImageResourceLinkOpenAI:
 
 
 # ---------------------------------------------------------------------------
-# test: non-image resource_link -> text passthrough
+# test: non-image resource_link — text files now resolved, unknown falls back
 # ---------------------------------------------------------------------------
 class TestResolveNonImagePassthrough:
     @pytest.mark.asyncio
-    async def test_text_markdown_becomes_text_description(self):
+    async def test_text_markdown_resolved_as_text_content(self):
+        """text/markdown resource_links are now fetched and included as text."""
         resource_link = _make_resource_link(
             uri="file:///tmp/readme.md",
             name="readme.md",
             mime_type="text/markdown",
         )
+        mock_store = _mock_media_store(data=b"# Hello World", mime="text/markdown")
 
-        # No need to mock MediaStore — should not be called for non-image
-        parts = await resolve_resource_links(resource_link, "anthropic")
+        with patch(
+            "_mcp_mesh.media.resolver.get_media_store", return_value=mock_store
+        ):
+            parts = await resolve_resource_links(resource_link, "anthropic")
 
         assert len(parts) == 1
         part = parts[0]
         assert part["type"] == "text"
+        assert "# Hello World" in part["text"]
         assert "readme.md" in part["text"]
         assert "text/markdown" in part["text"]
 
     @pytest.mark.asyncio
-    async def test_application_pdf_becomes_text_description(self):
+    async def test_application_pdf_openai_becomes_text_description(self):
+        """PDF for OpenAI vendor -> text description (unsupported)."""
         resource_link = _make_resource_link(
             uri="s3://bucket/report.pdf",
             name="report.pdf",
             mime_type="application/pdf",
         )
+        mock_store = _mock_media_store(data=b"%PDF-1.4 fake", mime="application/pdf")
 
-        parts = await resolve_resource_links(resource_link, "openai")
+        with patch(
+            "_mcp_mesh.media.resolver.get_media_store", return_value=mock_store
+        ):
+            parts = await resolve_resource_links(resource_link, "openai")
 
         assert len(parts) == 1
         assert parts[0]["type"] == "text"
         assert "report.pdf" in parts[0]["text"]
+        assert "OpenAI does not support PDF" in parts[0]["text"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_mime_becomes_text_description(self):
+        """Completely unknown MIME types fall back to text description."""
+        resource_link = _make_resource_link(
+            uri="file:///tmp/data.bin",
+            name="data.bin",
+            mime_type="application/octet-stream",
+        )
+
+        parts = await resolve_resource_links(resource_link, "anthropic")
+
+        assert len(parts) == 1
+        assert parts[0]["type"] == "text"
+        assert "data.bin" in parts[0]["text"]
+        assert "application/octet-stream" in parts[0]["text"]
 
 
 # ---------------------------------------------------------------------------
@@ -460,14 +489,18 @@ class TestResolveMediaAsUserMessage:
 
     @pytest.mark.asyncio
     async def test_no_image_returns_none(self):
-        """Non-image resource_links should not produce a user message."""
+        """Text resource_links should not produce a user message (text only)."""
         resource_link = _make_resource_link(
             uri="file:///tmp/readme.md",
             name="readme.md",
             mime_type="text/markdown",
         )
+        mock_store = _mock_media_store(data=b"# Readme", mime="text/markdown")
 
-        msg = await resolve_media_as_user_message(resource_link, "openai")
+        with patch(
+            "_mcp_mesh.media.resolver.get_media_store", return_value=mock_store
+        ):
+            msg = await resolve_media_as_user_message(resource_link, "openai")
         assert msg is None
 
     @pytest.mark.asyncio
@@ -502,3 +535,239 @@ class TestResolveMediaAsUserMessage:
         content = msg["content"]
         assert content[0]["type"] == "text"
         assert content[1]["type"] == "image_url"
+
+
+# ---------------------------------------------------------------------------
+# test: PDF resource_link -> Claude document format
+# ---------------------------------------------------------------------------
+FAKE_PDF_BYTES = b"%PDF-1.4 fake-pdf-data"
+FAKE_PDF_B64 = base64.b64encode(FAKE_PDF_BYTES).decode("ascii")
+
+
+class TestResolvePdfClaude:
+    @pytest.mark.asyncio
+    async def test_returns_claude_document_block(self):
+        resource_link = _make_resource_link(
+            uri="file:///tmp/report.pdf",
+            name="report.pdf",
+            mime_type="application/pdf",
+        )
+        mock_store = _mock_media_store(data=FAKE_PDF_BYTES, mime="application/pdf")
+
+        with patch(
+            "_mcp_mesh.media.resolver.get_media_store", return_value=mock_store
+        ):
+            parts = await resolve_resource_links(resource_link, "anthropic")
+
+        assert len(parts) == 1
+        part = parts[0]
+        assert part["type"] == "document"
+        assert part["source"]["type"] == "base64"
+        assert part["source"]["media_type"] == "application/pdf"
+        assert part["source"]["data"] == FAKE_PDF_B64
+        mock_store.fetch.assert_awaited_once_with("file:///tmp/report.pdf")
+
+    @pytest.mark.asyncio
+    async def test_fetch_failure_falls_back_to_text(self):
+        resource_link = _make_resource_link(
+            uri="file:///tmp/missing.pdf",
+            name="missing.pdf",
+            mime_type="application/pdf",
+        )
+        mock_store = MagicMock()
+        mock_store.fetch = AsyncMock(side_effect=FileNotFoundError("not found"))
+
+        with patch(
+            "_mcp_mesh.media.resolver.get_media_store", return_value=mock_store
+        ):
+            parts = await resolve_resource_links(resource_link, "anthropic")
+
+        assert len(parts) == 1
+        assert parts[0]["type"] == "text"
+        assert "missing.pdf" in parts[0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# test: PDF resource_link -> OpenAI text description (unsupported)
+# ---------------------------------------------------------------------------
+class TestResolvePdfOpenai:
+    @pytest.mark.asyncio
+    async def test_returns_text_description(self):
+        resource_link = _make_resource_link(
+            uri="file:///tmp/report.pdf",
+            name="report.pdf",
+            mime_type="application/pdf",
+        )
+        mock_store = _mock_media_store(data=FAKE_PDF_BYTES, mime="application/pdf")
+
+        with patch(
+            "_mcp_mesh.media.resolver.get_media_store", return_value=mock_store
+        ):
+            parts = await resolve_resource_links(resource_link, "openai")
+
+        assert len(parts) == 1
+        assert parts[0]["type"] == "text"
+        assert "report.pdf" in parts[0]["text"]
+        assert "OpenAI does not support PDF" in parts[0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# test: PDF resource_link -> Gemini text description
+# ---------------------------------------------------------------------------
+class TestResolvePdfGemini:
+    @pytest.mark.asyncio
+    async def test_returns_gemini_text_description(self):
+        resource_link = _make_resource_link(
+            uri="file:///tmp/report.pdf",
+            name="report.pdf",
+            mime_type="application/pdf",
+        )
+        mock_store = _mock_media_store(data=FAKE_PDF_BYTES, mime="application/pdf")
+
+        with patch(
+            "_mcp_mesh.media.resolver.get_media_store", return_value=mock_store
+        ):
+            parts = await resolve_resource_links(resource_link, "gemini")
+
+        assert len(parts) == 1
+        assert parts[0]["type"] == "text"
+        assert "report.pdf" in parts[0]["text"]
+        assert "Gemini PDF support" in parts[0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# test: CSV resource_link -> text content (all providers)
+# ---------------------------------------------------------------------------
+FAKE_CSV_BYTES = b"name,age,city\nAlice,30,NYC\nBob,25,LA"
+
+
+class TestResolveCsvAllProviders:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("vendor", ["anthropic", "openai", "gemini"])
+    async def test_csv_resolved_as_text_content(self, vendor):
+        resource_link = _make_resource_link(
+            uri="file:///tmp/data.csv",
+            name="data.csv",
+            mime_type="text/csv",
+        )
+        mock_store = _mock_media_store(data=FAKE_CSV_BYTES, mime="text/csv")
+
+        with patch(
+            "_mcp_mesh.media.resolver.get_media_store", return_value=mock_store
+        ):
+            parts = await resolve_resource_links(resource_link, vendor)
+
+        assert len(parts) == 1
+        part = parts[0]
+        assert part["type"] == "text"
+        assert "name,age,city" in part["text"]
+        assert "Alice,30,NYC" in part["text"]
+        assert "data.csv" in part["text"]
+        assert "text/csv" in part["text"]
+
+    @pytest.mark.asyncio
+    async def test_application_json_resolved_as_text(self):
+        json_bytes = b'{"key": "value", "count": 42}'
+        resource_link = _make_resource_link(
+            uri="file:///tmp/config.json",
+            name="config.json",
+            mime_type="application/json",
+        )
+        mock_store = _mock_media_store(data=json_bytes, mime="application/json")
+
+        with patch(
+            "_mcp_mesh.media.resolver.get_media_store", return_value=mock_store
+        ):
+            parts = await resolve_resource_links(resource_link, "anthropic")
+
+        assert len(parts) == 1
+        assert parts[0]["type"] == "text"
+        assert '"key": "value"' in parts[0]["text"]
+        assert "config.json" in parts[0]["text"]
+
+    @pytest.mark.asyncio
+    async def test_text_fetch_failure_falls_back(self):
+        resource_link = _make_resource_link(
+            uri="file:///tmp/missing.csv",
+            name="missing.csv",
+            mime_type="text/csv",
+        )
+        mock_store = MagicMock()
+        mock_store.fetch = AsyncMock(side_effect=FileNotFoundError("not found"))
+
+        with patch(
+            "_mcp_mesh.media.resolver.get_media_store", return_value=mock_store
+        ):
+            parts = await resolve_resource_links(resource_link, "openai")
+
+        assert len(parts) == 1
+        assert parts[0]["type"] == "text"
+        assert "missing.csv" in parts[0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# test: text file truncation at 50K chars
+# ---------------------------------------------------------------------------
+class TestResolveTextTruncation:
+    @pytest.mark.asyncio
+    async def test_large_text_file_truncated(self):
+        large_text = "x" * 60_000
+        resource_link = _make_resource_link(
+            uri="file:///tmp/huge.txt",
+            name="huge.txt",
+            mime_type="text/plain",
+        )
+        mock_store = _mock_media_store(
+            data=large_text.encode("utf-8"), mime="text/plain"
+        )
+
+        with patch(
+            "_mcp_mesh.media.resolver.get_media_store", return_value=mock_store
+        ):
+            parts = await resolve_resource_links(resource_link, "anthropic")
+
+        assert len(parts) == 1
+        part = parts[0]
+        assert part["type"] == "text"
+        assert "truncated" in part["text"]
+        assert "60000 total characters" in part["text"]
+        # Content should be capped — the wrapper adds header/footer around the 50K
+        assert len(part["text"]) < 60_000
+
+    @pytest.mark.asyncio
+    async def test_small_text_file_not_truncated(self):
+        small_text = "hello world"
+        resource_link = _make_resource_link(
+            uri="file:///tmp/small.txt",
+            name="small.txt",
+            mime_type="text/plain",
+        )
+        mock_store = _mock_media_store(
+            data=small_text.encode("utf-8"), mime="text/plain"
+        )
+
+        with patch(
+            "_mcp_mesh.media.resolver.get_media_store", return_value=mock_store
+        ):
+            parts = await resolve_resource_links(resource_link, "anthropic")
+
+        assert len(parts) == 1
+        assert "hello world" in parts[0]["text"]
+        assert "truncated" not in parts[0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# test: MIME type constants
+# ---------------------------------------------------------------------------
+class TestMimeTypeConstants:
+    def test_pdf_mime_types(self):
+        assert "application/pdf" in PDF_MIME_TYPES
+
+    def test_text_mime_types_include_common_types(self):
+        expected = {"text/plain", "text/csv", "text/markdown", "application/json"}
+        assert expected.issubset(TEXT_MIME_TYPES)
+
+    def test_no_overlap_between_categories(self):
+        assert IMAGE_MIME_TYPES.isdisjoint(PDF_MIME_TYPES)
+        assert IMAGE_MIME_TYPES.isdisjoint(TEXT_MIME_TYPES)
+        assert PDF_MIME_TYPES.isdisjoint(TEXT_MIME_TYPES)

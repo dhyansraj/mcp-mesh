@@ -1,5 +1,7 @@
 """Public media helpers for mesh agents."""
 
+from __future__ import annotations
+
 from mcp.types import ResourceLink
 
 from _mcp_mesh.media import get_media_store
@@ -15,8 +17,8 @@ def media_result(
     uri: str,
     name: str,
     mime_type: str,
-    description: str = None,
-    size: int = None,
+    description: str | None = None,
+    size: int | None = None,
 ) -> ResourceLink:
     """Create a resource_link content item for tool results.
 
@@ -34,3 +36,45 @@ def media_result(
     if size is not None:
         kwargs["size"] = size
     return ResourceLink(**kwargs)
+
+
+class MediaResult:
+    """Convenience class: upload bytes and return a ResourceLink in one step.
+
+    Usage::
+
+        return await mesh.MediaResult(
+            data=png_bytes,
+            filename="chart.png",
+            mime_type="image/png",
+            name="Sales Chart",
+            description="Quarterly revenue chart",
+        )
+    """
+
+    def __init__(
+        self,
+        data: bytes,
+        filename: str,
+        mime_type: str,
+        name: str | None = None,
+        description: str | None = None,
+    ):
+        self.data = data
+        self.filename = filename
+        self.mime_type = mime_type
+        self.name = name or filename
+        self.description = description
+
+    def __await__(self):
+        return self._upload().__await__()
+
+    async def _upload(self) -> ResourceLink:
+        uri = await upload_media(self.data, self.filename, self.mime_type)
+        return media_result(
+            uri=uri,
+            name=self.name,
+            mime_type=self.mime_type,
+            description=self.description,
+            size=len(self.data),
+        )

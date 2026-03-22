@@ -37,6 +37,7 @@ import type {
   LlmProviderSpec,
   LlmMeta,
   LlmToolCall,
+  LlmContentPart,
   LlmMessage,
   LlmToolDefinition,
   LlmToolCallRequest,
@@ -61,6 +62,7 @@ import {
   extractModelName,
 } from "./llm-provider.js";
 import { ProviderHandlerRegistry } from "./provider-handlers/index.js";
+import { resolveMediaInputs } from "./media/index.js";
 import { getCurrentTraceContext, getCurrentPropagatedHeaders } from "./proxy.js";
 import {
   generateSpanId,
@@ -728,14 +730,49 @@ export class MeshLlmAgent<T = string> {
       messages.push({ role: "system", content: systemContent });
     }
 
+    // Resolve media inputs if provided (URIs and/or inline buffers -> image_url parts)
+    const mediaItems = context.options?.media;
+    let mediaParts: Array<{ type: string; [key: string]: unknown }> | null = null;
+    if (mediaItems && mediaItems.length > 0) {
+      mediaParts = await resolveMediaInputs(mediaItems);
+    }
+
     // Handle multi-turn conversation input
     if (typeof messageInput === "string") {
-      // Simple string - add as user message
-      messages.push({ role: "user", content: messageInput });
+      if (mediaParts && mediaParts.length > 0) {
+        // Multipart user message: text + image(s)
+        messages.push({
+          role: "user",
+          content: [
+            { type: "text", text: messageInput },
+            ...mediaParts,
+          ] as LlmContentPart[],
+        });
+      } else {
+        // Simple string - add as user message
+        messages.push({ role: "user", content: messageInput });
+      }
     } else {
-      // Array of messages - add all
-      for (const msg of messageInput) {
-        messages.push({ role: msg.role, content: msg.content });
+      // Array of messages - add all; attach media to the last user message
+      for (let i = 0; i < messageInput.length; i++) {
+        const msg = messageInput[i];
+        const isLastUser =
+          mediaParts &&
+          mediaParts.length > 0 &&
+          msg.role === "user" &&
+          i === messageInput.length - 1;
+
+        if (isLastUser) {
+          messages.push({
+            role: "user",
+            content: [
+              { type: "text", text: msg.content },
+              ...mediaParts!,
+            ] as LlmContentPart[],
+          });
+        } else {
+          messages.push({ role: msg.role, content: msg.content });
+        }
       }
     }
 
@@ -819,7 +856,10 @@ export class MeshLlmAgent<T = string> {
       }
 
       // No tool calls - this is the final response
-      finalContent = assistantMessage.content ?? "";
+      // Assistant content is always a string (multipart arrays are only for user messages)
+      finalContent = typeof assistantMessage.content === "string"
+        ? assistantMessage.content
+        : "";
       break;
     }
 

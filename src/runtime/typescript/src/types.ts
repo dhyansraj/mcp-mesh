@@ -2,7 +2,47 @@
  * Type definitions for @mcpmesh/sdk
  */
 
-import type { z } from "zod";
+import { z } from "zod";
+
+/**
+ * Metadata for media-typed tool parameters.
+ */
+export interface MediaParamMeta {
+    mediaType: string;
+}
+
+/**
+ * Create a Zod schema for a tool parameter that accepts media URIs.
+ *
+ * The generated JSON schema will include x-media-type for LLM tool discovery.
+ * The framework detects the "[media:TYPE]" prefix in descriptions during
+ * schema post-processing.
+ *
+ * @param mediaType - MIME type pattern (e.g., "image/*", "audio/wav", "*\/*")
+ * @returns An optional string Zod schema with media type convention in description
+ *
+ * @example
+ * ```typescript
+ * import { mediaParam } from "@mcpmesh/sdk";
+ *
+ * agent.addTool({
+ *   name: "analyze",
+ *   parameters: z.object({
+ *     question: z.string(),
+ *     image: mediaParam("image/*"),
+ *   }),
+ *   execute: async ({ question, image }) => {
+ *     if (image) return await llm("analyze", { media: [image] });
+ *     return await llm("analyze");
+ *   },
+ * });
+ * ```
+ */
+export function mediaParam(mediaType: string = "*/*"): z.ZodOptional<z.ZodString> {
+    return z.string()
+        .optional()
+        .describe(`[media:${mediaType}] Media URI for this parameter`);
+}
 
 // Re-export types from core
 export type {
@@ -362,11 +402,19 @@ export interface LlmToolCall {
 }
 
 /**
+ * Content part for multipart messages (text + images).
+ * Uses OpenAI-compatible format which Vercel AI SDK converts per-vendor.
+ */
+export type LlmContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string; detail?: string } };
+
+/**
  * LiteLLM-style message format.
  */
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  content: string | LlmContentPart[] | null;
   /** Tool calls requested by the assistant */
   tool_calls?: LlmToolCallRequest[];
   /** Tool call ID (for tool responses) */
@@ -590,6 +638,16 @@ export interface LlmCallOptions {
   temperature?: number;
   /** Override max iterations */
   maxIterations?: number;
+  /**
+   * Media items to include alongside the user prompt.
+   *
+   * Each item is either a URI string (resolved via MediaStore.fetch()) or
+   * an inline `{ data: Buffer; mimeType: string }` object.
+   *
+   * When provided, the user message is converted to multipart content
+   * with text + image_url blocks (OpenAI-compatible format).
+   */
+  media?: Array<string | { data: Buffer; mimeType: string }>;
 }
 
 /**

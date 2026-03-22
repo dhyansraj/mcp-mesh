@@ -6,6 +6,9 @@ import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshLlm;
 import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.Selector;
+import io.mcpmesh.spring.media.MediaFetchResult;
+import io.mcpmesh.spring.media.MediaResolver;
+import io.mcpmesh.spring.media.MediaStore;
 import io.mcpmesh.spring.tracing.TraceContext;
 import io.mcpmesh.ai.handlers.LlmProviderHandler;
 import io.mcpmesh.ai.handlers.LlmProviderHandler.OutputSchema;
@@ -71,6 +74,9 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
 
     // Tool executor for agentic loop
     private ToolExecutor toolExecutor;
+
+    // MediaStore for resolving media URIs in multimodal requests
+    private MediaStore mediaStore;
 
     // Last generation metadata (for builder API)
     private volatile GenerationMeta lastMeta;
@@ -193,6 +199,15 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
      */
     public void setAvailable(boolean available) {
         this.available = available;
+    }
+
+    /**
+     * Set the MediaStore for resolving media URIs in multimodal requests.
+     *
+     * @param mediaStore The MediaStore bean (may be null if not configured)
+     */
+    public void setMediaStore(MediaStore mediaStore) {
+        this.mediaStore = mediaStore;
     }
 
     // =========================================================================
@@ -920,6 +935,7 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
     private class GenerateBuilderImpl implements GenerateBuilder {
 
         private final List<Message> messages = new ArrayList<>();
+        private final List<String> mediaUris = new ArrayList<>();
         private final Map<String, Object> runtimeContext = new LinkedHashMap<>();
         private ContextMode contextMode = ContextMode.APPEND;
         private Integer runtimeMaxTokens = null;
@@ -942,6 +958,24 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
         public GenerateBuilder user(String content) {
             if (content != null && !content.isEmpty()) {
                 messages.add(Message.user(content));
+            }
+            return this;
+        }
+
+        // --- Media ---
+
+        @Override
+        public GenerateBuilder media(String... uris) {
+            if (uris != null) {
+                mediaUris.addAll(Arrays.asList(uris));
+            }
+            return this;
+        }
+
+        @Override
+        public GenerateBuilder media(List<String> uris) {
+            if (uris != null) {
+                mediaUris.addAll(uris);
             }
             return this;
         }
@@ -1079,7 +1113,82 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
                 result.add(Map.of("role", msg.role(), "content", msg.content()));
             }
 
+            // Resolve media URIs and attach to the last user message
+            if (!mediaUris.isEmpty()) {
+                attachMediaToLastUserMessage(result);
+            }
+
             return result;
+        }
+
+        /**
+         * Resolve media URIs and attach as multipart content to the last user message.
+         */
+        private void attachMediaToLastUserMessage(List<Map<String, Object>> llmMessages) {
+            if (mediaStore == null) {
+                log.warn("Media URIs provided but MediaStore is not configured — ignoring {} media item(s)",
+                    mediaUris.size());
+                return;
+            }
+
+            // Determine vendor from provider name
+            String vendor = directProvider != null ? directProvider : "openai";
+            List<Map<String, Object>> mediaParts = resolveMediaUris(vendor);
+            if (mediaParts.isEmpty()) {
+                return;
+            }
+
+            log.info("Resolved {} media item(s) for user message", mediaParts.size());
+
+            // Find the last user message and convert to multipart
+            for (int i = llmMessages.size() - 1; i >= 0; i--) {
+                Map<String, Object> msg = llmMessages.get(i);
+                if ("user".equals(msg.get("role"))) {
+                    Object existingContent = msg.get("content");
+
+                    List<Object> multipartContent = new ArrayList<>();
+                    if (existingContent instanceof String text) {
+                        multipartContent.add(Map.of("type", "text", "text", text));
+                    } else if (existingContent instanceof List<?> existingList) {
+                        @SuppressWarnings("unchecked")
+                        List<Object> typedList = (List<Object>) existingList;
+                        multipartContent.addAll(typedList);
+                    }
+                    multipartContent.addAll(mediaParts);
+
+                    // Replace with mutable map (Map.of() returns immutable)
+                    Map<String, Object> updatedMsg = new LinkedHashMap<>();
+                    updatedMsg.put("role", "user");
+                    updatedMsg.put("content", multipartContent);
+                    llmMessages.set(i, updatedMsg);
+                    break;
+                }
+            }
+        }
+
+        /**
+         * Resolve media URIs to provider-native image content blocks.
+         */
+        private List<Map<String, Object>> resolveMediaUris(String vendor) {
+            List<Map<String, Object>> parts = new ArrayList<>();
+
+            for (String uri : mediaUris) {
+                try {
+                    MediaFetchResult fetchResult = mediaStore.fetch(uri);
+                    String base64Data = Base64.getEncoder().encodeToString(fetchResult.data());
+                    String mimeType = fetchResult.mimeType() != null ? fetchResult.mimeType() : "image/png";
+
+                    Map<String, Object> imageBlock = MediaResolver.formatForVendor(base64Data, mimeType, vendor);
+                    parts.add(imageBlock);
+
+                    log.debug("Resolved media URI: uri={}, mimeType={}, size={}",
+                        uri, mimeType, fetchResult.data().length);
+                } catch (Exception e) {
+                    log.error("Failed to resolve media URI {}: {}", uri, e.getMessage());
+                }
+            }
+
+            return parts;
         }
     }
 

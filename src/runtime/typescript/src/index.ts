@@ -189,15 +189,26 @@ export {
 export {
   uploadMedia,
   mediaResult,
+  MediaResult,
+  createMediaResult,
+  saveUpload,
+  saveUploadResult,
   getMediaStore,
   guessMimeType,
+  formatForOpenai,
+  resolveMediaInputs,
   LocalMediaStore,
   S3MediaStore,
   resolveResourceLinks,
   hasResourceLink,
   type MediaStore,
+  type MediaUploadResult,
   type ResolvedContent,
 } from "./media/index.js";
+
+// Media parameter helper (schema annotation for media-typed params)
+export { mediaParam } from "./types.js";
+export { enrichSchemaWithMediaTypes } from "./media-param.js";
 
 // Error classes
 export {
@@ -262,6 +273,7 @@ export type {
   LlmFilterMode,
   LlmMeta,
   LlmToolCall,
+  LlmContentPart,
   LlmMessage,
   LlmToolCallRequest,
   LlmToolDefinition,
@@ -280,6 +292,8 @@ export type {
   MeshLlmUsage,
   MeshLlmResponse,
   LlmProviderConfig,
+  // Media parameter types
+  MediaParamMeta,
 } from "./types.js";
 
 // Default export for convenience

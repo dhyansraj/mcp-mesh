@@ -2,9 +2,11 @@ package io.mcpmesh.spring;
 
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.core.MeshEvent;
+import io.mcpmesh.spring.media.MediaStore;
 import io.mcpmesh.types.MeshLlmAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.SmartLifecycle;
 
@@ -267,6 +269,17 @@ public class MeshEventProcessor implements SmartLifecycle {
                     objectMapper
                 );
 
+                // Wire MediaStore for multimodal support (via reflection)
+                try {
+                    MediaStore store = applicationContext.getBean(MediaStore.class);
+                    Method setMediaStore = agentImplClass.getMethod("setMediaStore", MediaStore.class);
+                    setMediaStore.invoke(agent, store);
+                } catch (BeansException e) {
+                    log.debug("MediaStore not available — multimodal media support disabled for direct LLM agent");
+                } catch (NoSuchMethodException e) {
+                    log.debug("setMediaStore not found on agent class — media support not available");
+                }
+
                 // Inject into each LLM agent parameter position in the wrapper
                 for (int llmIndex = 0; llmIndex < wrapper.getLlmAgentCount(); llmIndex++) {
                     String compositeKey = MeshToolWrapperRegistry.buildLlmKey(funcId, llmIndex);
@@ -437,6 +450,9 @@ public class MeshEventProcessor implements SmartLifecycle {
 
             proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations);
 
+            // Wire MediaStore for multimodal support
+            wireMediaStore(proxy);
+
             // Apply tools immediately
             proxy.updateTools(tools);
 
@@ -454,6 +470,21 @@ public class MeshEventProcessor implements SmartLifecycle {
         }
 
         return proxy;
+    }
+
+    /**
+     * Wire MediaStore into a proxy for multimodal media support.
+     *
+     * <p>Looks up the MediaStore Spring bean. If not configured (no media storage),
+     * the proxy will log a warning if media URIs are used.
+     */
+    private void wireMediaStore(MeshLlmAgentProxy proxy) {
+        try {
+            MediaStore store = applicationContext.getBean(MediaStore.class);
+            proxy.setMediaStore(store);
+        } catch (BeansException e) {
+            log.debug("MediaStore not available — multimodal media support disabled for LLM proxy");
+        }
     }
 
     private void handleDependencyChanged(MeshEvent event) {
@@ -583,6 +614,9 @@ public class MeshEventProcessor implements SmartLifecycle {
             int maxIterations = config != null ? config.maxIterations() : 1;
 
             proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations);
+
+            // Wire MediaStore for multimodal support
+            wireMediaStore(proxy);
 
             // Set the provider endpoint
             proxy.updateProvider(endpoint, functionName, model);

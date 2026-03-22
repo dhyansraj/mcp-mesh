@@ -144,8 +144,8 @@ describe("resolveResourceLinks", () => {
       expect(result).toHaveLength(1);
       expect(result[0].type).toBe("text");
       expect(result[0].text).toContain("data.csv");
-      expect(result[0].text).toContain("text/csv");
-      expect(mockFetch).not.toHaveBeenCalled();
+      // Text files are now fetched and content included inline
+      expect(mockFetch).toHaveBeenCalledWith("file:///tmp/data.csv");
     });
 
     it("passes through PDF resource_links as text", async () => {
@@ -258,8 +258,9 @@ describe("resolveResourceLinks", () => {
 
       expect(result).toHaveLength(2);
       expect(result[0]).toEqual({ type: "text", text: "Generated files:" });
-      expect(result[1].type).toBe("text");
-      expect(result[1].text).toContain("a.pdf");
+      // Claude gets native document type for PDFs
+      expect(result[1].type).toBe("document");
+      expect(mockFetch).toHaveBeenCalledWith("file:///tmp/a.pdf");
     });
 
     it("handles multi_content with plain string items", async () => {

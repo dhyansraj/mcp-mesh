@@ -248,6 +248,46 @@ public interface MeshLlmAgent {
          */
         GenerateBuilder stop(String... sequences);
 
+        // --- Media ---
+
+        /**
+         * Attach media items to the initial user message.
+         *
+         * <p>Each URI is resolved via {@code MediaStore.fetch()} at generation time
+         * and converted to provider-native multipart content (e.g., base64 image blocks).
+         *
+         * <p>Supported URI schemes depend on the configured MediaStore:
+         * <ul>
+         *   <li>{@code file:///tmp/media/photo.png} - Local filesystem</li>
+         *   <li>{@code media://filename.jpg} - MediaStore-managed URI</li>
+         *   <li>{@code s3://bucket/key.png} - S3 (if configured)</li>
+         * </ul>
+         *
+         * <p>Example:
+         * <pre>{@code
+         * String response = llm.request()
+         *     .user("Describe this image")
+         *     .media("file:///tmp/media/photo.jpg")
+         *     .generate();
+         * }</pre>
+         *
+         * @param uris One or more media URIs to attach
+         * @return This builder for chaining
+         */
+        GenerateBuilder media(String... uris);
+
+        /**
+         * Attach media items to the initial user message.
+         *
+         * <p>Each URI in the list is resolved via {@code MediaStore.fetch()} at
+         * generation time.
+         *
+         * @param uris List of media URIs to attach
+         * @return This builder for chaining
+         * @see #media(String...)
+         */
+        GenerateBuilder media(List<String> uris);
+
         // --- Template Context ---
 
         /**

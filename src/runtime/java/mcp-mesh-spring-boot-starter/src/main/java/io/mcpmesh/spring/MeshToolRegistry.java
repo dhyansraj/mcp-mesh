@@ -1,5 +1,6 @@
 package io.mcpmesh.spring;
 
+import io.mcpmesh.MediaParam;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
 import io.mcpmesh.Selector;
@@ -168,6 +169,16 @@ public class MeshToolRegistry {
 
                 if (!paramAnn.description().isEmpty()) {
                     propSchema.put("description", paramAnn.description());
+                }
+
+                MediaParam mediaParamAnn = param.getAnnotation(MediaParam.class);
+                if (mediaParamAnn != null) {
+                    propSchema.put("x-media-type", mediaParamAnn.value());
+                    String existingDesc = (String) propSchema.getOrDefault("description", "");
+                    String mediaNote = "(accepts media URI: " + mediaParamAnn.value() + ")";
+                    if (!existingDesc.contains(mediaNote)) {
+                        propSchema.put("description", (existingDesc + " " + mediaNote).trim());
+                    }
                 }
 
                 properties.put(paramAnn.value(), propSchema);

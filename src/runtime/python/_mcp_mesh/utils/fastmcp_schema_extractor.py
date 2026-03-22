@@ -11,7 +11,7 @@ Part of Phase 0: Enhanced Schema Extraction - MeshContextModel support
 
 import inspect
 import logging
-from typing import Any, Optional, get_args, get_origin, get_type_hints
+from typing import Annotated, Any, Optional, Union, get_args, get_origin, get_type_hints
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +235,97 @@ class FastMCPSchemaExtractor:
         return enhanced_schema
 
     @staticmethod
+    def enhance_schema_with_media_params(
+        schema: dict[str, Any], function: Any
+    ) -> dict[str, Any]:
+        """
+        Add x-media-type to parameters annotated with MediaParam.
+
+        When a parameter uses mesh.MediaParam("image/*"), this adds:
+        - "x-media-type": "image/*" to the property schema
+        - Appends "(accepts media URI: image/*)" to the description
+
+        Args:
+            schema: The inputSchema dict to enhance
+            function: The function whose parameters to analyze
+
+        Returns:
+            Enhanced schema with x-media-type on MediaParam properties
+        """
+        if not schema or not isinstance(schema, dict):
+            return schema
+
+        try:
+            hints = get_type_hints(function, include_extras=True)
+        except Exception:
+            return schema
+
+        properties = schema.get("properties", {})
+        if not properties:
+            return schema
+
+        from mesh.types import _MediaParamInfo
+
+        for param_name, hint in hints.items():
+            if param_name not in properties:
+                continue
+
+            media_info = FastMCPSchemaExtractor._find_media_param_info(hint)
+            if media_info is not None:
+                prop = properties[param_name]
+                prop["x-media-type"] = media_info.media_type
+                existing_desc = prop.get("description", "")
+                media_note = f"(accepts media URI: {media_info.media_type})"
+                if media_note not in existing_desc:
+                    prop["description"] = (
+                        f"{existing_desc} {media_note}".strip()
+                    )
+
+        return schema
+
+    @staticmethod
+    def _find_media_param_info(hint: Any) -> Any:
+        """
+        Extract _MediaParamInfo from a type hint, if present.
+
+        Handles:
+        - Annotated[Optional[str], _MediaParamInfo(...)]
+        - Optional[Annotated[str, _MediaParamInfo(...)]]
+        - Union[Annotated[str, _MediaParamInfo(...)], None]
+
+        Returns:
+            _MediaParamInfo instance or None
+        """
+        from mesh.types import _MediaParamInfo
+
+        origin = get_origin(hint)
+
+        # Check Annotated[..., _MediaParamInfo]
+        if origin is Annotated:
+            for arg in get_args(hint):
+                if isinstance(arg, _MediaParamInfo):
+                    return arg
+            # Also check nested: Annotated[Optional[str], _MediaParamInfo]
+            # get_args on Annotated returns (type, *metadata)
+            inner_type = get_args(hint)[0] if get_args(hint) else None
+            if inner_type is not None:
+                result = FastMCPSchemaExtractor._find_media_param_info(inner_type)
+                if result is not None:
+                    return result
+            return None
+
+        # Check Union[Annotated[...], None] (which is what Optional[Annotated[...]] becomes)
+        if origin is Union:
+            for union_arg in get_args(hint):
+                if union_arg is type(None):
+                    continue
+                result = FastMCPSchemaExtractor._find_media_param_info(union_arg)
+                if result is not None:
+                    return result
+
+        return None
+
+    @staticmethod
     def filter_dependency_parameters(
         schema: dict[str, Any], function: Any
     ) -> dict[str, Any]:
@@ -340,6 +431,11 @@ class FastMCPSchemaExtractor:
                         filtered_schema, function
                     )
                 )
+                enhanced_schema = (
+                    FastMCPSchemaExtractor.enhance_schema_with_media_params(
+                        enhanced_schema, function
+                    )
+                )
                 return enhanced_schema
 
         # v3: Decorators return original function, no _fastmcp_tool attribute.
@@ -415,6 +511,13 @@ class FastMCPSchemaExtractor:
                         enhanced_schema = (
                             FastMCPSchemaExtractor.enhance_schema_with_context_models(
                                 filtered_schema, function
+                            )
+                        )
+
+                        # Enhance schema with MediaParam x-media-type markers
+                        enhanced_schema = (
+                            FastMCPSchemaExtractor.enhance_schema_with_media_params(
+                                enhanced_schema, function
                             )
                         )
 

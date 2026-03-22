@@ -1,0 +1,207 @@
+# Test Case: LLM media= parameter with Claude - multiple images
+# Verifies Phase 3.3 feature: user passes multiple image URIs to LLM via
+# media= parameter. The consumer uploads two images and passes both URIs.
+#
+# Agent Setup:
+#   - phase3-tool (port 9210): provides upload_media for image storage
+#   - media-llm-provider (port 9202): Claude LLM provider with media resolution
+#   - phase3-consumer (port 9211): calls test_multi_media which uses media=[uri1, uri2]
+#
+# Flow: consumer.test_multi_media -> upload 2 images -> llm(media=[uri1, uri2]) -> Claude describes both
+
+name: "LLM media= Input - Claude Multiple Images"
+description: "Verify Claude LLM can receive and describe multiple images passed via media= parameter"
+tags:
+  - multimedia
+  - resource-link
+  - llm
+  - claude
+  - media-input
+  - multi-image
+  - python
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      mkdir -p /workspace/phase3-tool /workspace/llm-provider /workspace/phase3-consumer
+      cp -rL /uc-artifacts/py-phase3-tool.py /workspace/phase3-tool/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/phase3-tool/requirements.txt
+      cp -rL /uc-artifacts/py-llm-provider.py /workspace/llm-provider/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/llm-provider/requirements.txt
+      cp -rL /uc-artifacts/py-phase3-consumer.py /workspace/phase3-consumer/main.py
+      cp -rL /uc-artifacts/py-requirements.txt /workspace/phase3-consumer/requirements.txt
+      echo "Artifacts copied"
+    capture: copy_output
+
+  # Copy multiple test images for multi-image test (PROJECT_ROOT = /)
+  - name: "Copy test images"
+    handler: shell
+    command: |
+      cp /uc-artifacts/test-image-1.jpg /1.jpg
+      cp /uc-artifacts/test-image-2.jpg /2.jpg
+      echo "Copied test images 1 and 2 to /"
+    capture: copy_images
+
+  # Create env file with secrets
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # Install Python dependencies
+  - name: "Install phase3-tool dependencies"
+    handler: pip-install
+    path: /workspace/phase3-tool
+
+  - name: "Install llm-provider dependencies"
+    handler: pip-install
+    path: /workspace/llm-provider
+
+  - name: "Install phase3-consumer dependencies"
+    handler: pip-install
+    path: /workspace/phase3-consumer
+
+  # Start phase3-tool (port 9210)
+  - name: "Start phase3-tool"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start phase3-tool/main.py --env-file .env -d"
+    capture: start_tool
+
+  # Wait for phase3-tool to register
+  - name: "Wait for phase3-tool registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for phase3-tool to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "phase3-tool"; then
+          echo "phase3-tool registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: phase3-tool did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_tool
+    timeout: 60
+
+  # Start media-llm-provider (port 9202)
+  - name: "Start media-llm-provider"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start llm-provider/main.py --env-file .env -d"
+    capture: start_llm_provider
+
+  # Wait for media-llm-provider to register
+  - name: "Wait for media-llm-provider registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for media-llm-provider to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "media-llm-provider"; then
+          echo "media-llm-provider registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: media-llm-provider did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_llm_provider
+    timeout: 60
+
+  # Start phase3-consumer (port 9211)
+  - name: "Start phase3-consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start phase3-consumer/main.py --env-file .env -d"
+    capture: start_consumer
+
+  # Wait for phase3-consumer to register
+  - name: "Wait for phase3-consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for phase3-consumer to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "phase3-consumer"; then
+          echo "phase3-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: phase3-consumer did not register within 30s"
+      meshctl list 2>/dev/null || true
+      meshctl logs phase3-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_consumer
+    timeout: 60
+
+  # List registered agents
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List available tools
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # Call test_multi_media - uploads 2 images, passes both URIs to LLM via media=
+  - name: "Call test_multi_media"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call test_multi_media '{}'"
+    capture: multi_media_result
+    timeout: 120
+
+  # Stop agents
+  - name: "Stop agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+    capture: stop_output
+
+assertions:
+  # All agents registered
+  - expr: "${captured.list_output} contains 'phase3-tool'"
+    message: "phase3-tool should be registered"
+
+  - expr: "${captured.list_output} contains 'media-llm-provider'"
+    message: "media-llm-provider should be registered"
+
+  - expr: "${captured.list_output} contains 'phase3-consumer'"
+    message: "phase3-consumer should be registered"
+
+  # Tools available
+  - expr: "${captured.tools_output} contains 'test_multi_media'"
+    message: "test_multi_media tool should be listed"
+
+  # LLM received multiple images and described them
+  - expr: "${captured.multi_media_result} contains 'Multi-URI Test'"
+    message: "Response should contain Multi-URI Test prefix from consumer"
+
+  - expr: "${captured.multi_media_result} contains '2 images'"
+    message: "Response should indicate 2 images were processed"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

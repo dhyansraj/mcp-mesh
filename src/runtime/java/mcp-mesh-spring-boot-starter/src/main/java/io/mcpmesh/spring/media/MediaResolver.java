@@ -203,7 +203,7 @@ public class MediaResolver {
     // Vendor-specific formatters
     // =========================================================================
 
-    static Map<String, Object> formatForVendor(String base64Data, String mimeType, String vendor) {
+    public static Map<String, Object> formatForVendor(String base64Data, String mimeType, String vendor) {
         return switch (vendor) {
             case "openai" -> formatForOpenai(base64Data, mimeType);
             default -> formatForClaude(base64Data, mimeType); // Claude + Gemini use same format

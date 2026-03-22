@@ -11,7 +11,9 @@ from pydantic import BaseModel
 
 from .base_provider_handler import (
     BASE_TOOL_INSTRUCTIONS,
+    MEDIA_PARAM_INSTRUCTIONS,
     BaseProviderHandler,
+    has_media_params,
     make_schema_strict,
     sanitize_schema_for_structured_output,
 )
@@ -151,6 +153,10 @@ class OpenAIHandler(BaseProviderHandler):
         # Add tool calling instructions if tools available
         if tool_schemas:
             system_content += BASE_TOOL_INSTRUCTIONS
+
+        # Add media parameter instructions if any tools have x-media-type
+        if has_media_params(tool_schemas):
+            system_content += MEDIA_PARAM_INSTRUCTIONS
 
         # Skip JSON note for str return type (text mode)
         if output_type is str:
