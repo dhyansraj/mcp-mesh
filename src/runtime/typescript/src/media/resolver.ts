@@ -16,6 +16,19 @@ const debug = createDebug("media-resolver");
 
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 
+const PDF_MIME_TYPES = new Set(["application/pdf"]);
+
+const TEXT_MIME_TYPES = new Set([
+  "text/plain",
+  "text/csv",
+  "text/markdown",
+  "text/html",
+  "text/xml",
+  "application/json",
+  "application/xml",
+  "application/csv",
+]);
+
 export interface ResolvedContent {
   type: string;
   [key: string]: unknown;
@@ -54,6 +67,50 @@ const VENDOR_FORMATTERS: Record<string, (b64: string, mimeType: string) => Resol
   google: formatForGemini,
 };
 
+function formatPdfForClaude(b64: string): ResolvedContent {
+  return {
+    type: "document",
+    source: {
+      type: "base64",
+      media_type: "application/pdf",
+      data: b64,
+    },
+  };
+}
+
+function formatPdfForOpenai(_b64: string, filename: string): ResolvedContent {
+  return {
+    type: "text",
+    text: `[Attached PDF document: ${filename}. OpenAI does not support PDF analysis. Please use Claude for PDF processing.]`,
+  };
+}
+
+function formatPdfForGemini(_b64: string, filename: string): ResolvedContent {
+  return {
+    type: "text",
+    text: `[Attached PDF document: ${filename}. Gemini PDF support via LiteLLM may vary.]`,
+  };
+}
+
+function formatTextContent(data: Buffer, mimeType: string, filename: string): ResolvedContent {
+  let text: string;
+  try {
+    text = data.toString("utf-8");
+  } catch {
+    text = data.toString("latin1");
+  }
+
+  const maxChars = 50_000;
+  if (text.length > maxChars) {
+    text = text.slice(0, maxChars) + `\n\n[... truncated, ${text.length} total characters]`;
+  }
+
+  return {
+    type: "text",
+    text: `--- Content of ${filename} (${mimeType}) ---\n${text}\n--- End of ${filename} ---`,
+  };
+}
+
 /**
  * Resolve a single resource_link dict to a provider-native content part.
  *
@@ -71,30 +128,65 @@ async function resolveSingleResourceLink(
   const mimeType = (resource.mimeType ?? resourceLink.mimeType ?? "") as string;
   const name = (resource.name ?? resourceLink.name ?? uri) as string;
 
-  if (!IMAGE_MIME_TYPES.has(mimeType)) {
-    return {
-      type: "text",
-      text: `[resource_link: ${name} (${mimeType || "unknown"}) at ${uri}]`,
-    };
+  // --- Images: existing behaviour ---
+  if (IMAGE_MIME_TYPES.has(mimeType)) {
+    try {
+      const store = getMediaStore();
+      const { data, mimeType: fetchedMime } = await store.fetch(uri);
+      const b64 = data.toString("base64");
+
+      const formatter = VENDOR_FORMATTERS[vendor] ?? formatForOpenai;
+      const result = formatter(b64, mimeType || fetchedMime);
+      debug(`Resolved resource_link ${name} to ${vendor} image block (${data.length} bytes)`);
+      return result;
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      debug(`Failed to fetch resource_link ${uri}: ${errMsg}`);
+      return {
+        type: "text",
+        text: `[resource_link: ${name} (${mimeType || "unknown"}) at ${uri} (fetch failed)]`,
+      };
+    }
   }
 
-  try {
-    const store = getMediaStore();
-    const { data, mimeType: fetchedMime } = await store.fetch(uri);
-    const b64 = data.toString("base64");
-
-    const formatter = VENDOR_FORMATTERS[vendor] ?? formatForOpenai;
-    const result = formatter(b64, mimeType || fetchedMime);
-    debug(`Resolved resource_link ${name} to ${vendor} image block (${data.length} bytes)`);
-    return result;
-  } catch (err) {
-    const errMsg = err instanceof Error ? err.message : String(err);
-    debug(`Failed to fetch resource_link ${uri}: ${errMsg}`);
-    return {
-      type: "text",
-      text: `[resource_link: ${name} (${mimeType || "unknown"}) at ${uri} (fetch failed)]`,
-    };
+  // --- PDFs: provider-specific ---
+  if (PDF_MIME_TYPES.has(mimeType)) {
+    try {
+      const store = getMediaStore();
+      const { data } = await store.fetch(uri);
+      const b64 = data.toString("base64");
+      if (vendor === "anthropic" || vendor === "claude") {
+        return formatPdfForClaude(b64);
+      } else if (vendor === "gemini" || vendor === "google") {
+        return formatPdfForGemini(b64, name);
+      } else {
+        return formatPdfForOpenai(b64, name);
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      debug(`Failed to fetch PDF ${uri}: ${errMsg}`);
+      return { type: "text", text: `[PDF document: ${name} at ${uri}]` };
+    }
   }
+
+  // --- Text files: read content and include as text (all providers) ---
+  if (TEXT_MIME_TYPES.has(mimeType) || mimeType.startsWith("text/")) {
+    try {
+      const store = getMediaStore();
+      const { data } = await store.fetch(uri);
+      return formatTextContent(data, mimeType, name);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      debug(`Failed to fetch text file ${uri}: ${errMsg}`);
+      return { type: "text", text: `[Text document: ${name} at ${uri}]` };
+    }
+  }
+
+  // --- Unknown / unsupported MIME type ---
+  return {
+    type: "text",
+    text: `[resource_link: ${name} (${mimeType || "unknown"}) at ${uri}]`,
+  };
 }
 
 /**

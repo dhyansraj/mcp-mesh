@@ -596,25 +596,35 @@ IMPORTANT TOOL CALLING RULES:
             raise RuntimeError(f"Mesh LLM provider invocation failed: {e}") from e
 
     async def _resolve_media_inputs(self, media: list) -> list[dict]:
-        """Resolve media items to OpenAI-compatible image content blocks.
+        """Resolve media items to provider-native content blocks.
 
         Each item can be:
         - str: A media URI (file://, s3://, etc.) resolved via MediaStore.fetch()
         - tuple[bytes, str]: Raw (bytes_data, mime_type) pair
 
-        Returns a list of image_url content blocks in OpenAI-compatible format
-        (data URI with base64). LiteLLM handles conversion to provider-native
-        format (e.g., Claude base64 blocks).
+        Returns a list of content blocks formatted per media type:
+        - Images: OpenAI-compatible image_url (LiteLLM converts for other providers)
+        - PDFs: vendor-specific (Claude document block, text fallback for others)
+        - Text files: text content block (all providers)
 
         Items that fail to resolve are logged and skipped.
         """
         import base64
 
         from _mcp_mesh.media.media_store import get_media_store
-        from _mcp_mesh.media.resolver import _format_for_openai
+        from _mcp_mesh.media.resolver import (
+            IMAGE_MIME_TYPES,
+            PDF_MIME_TYPES,
+            TEXT_MIME_TYPES,
+            _format_for_openai,
+            _format_pdf_for_claude,
+            _format_pdf_for_openai,
+            _format_text_content,
+        )
 
         parts: list[dict] = []
         store = get_media_store()
+        vendor_name = self._provider_handler.vendor
 
         for item in media:
             try:
@@ -628,8 +638,23 @@ IMPORTANT TOOL CALLING RULES:
                     )
                     continue
 
-                b64 = base64.b64encode(data).decode("ascii")
-                parts.append(_format_for_openai(b64, mime_type))
+                if mime_type in IMAGE_MIME_TYPES:
+                    b64 = base64.b64encode(data).decode("ascii")
+                    parts.append(_format_for_openai(b64, mime_type))
+                elif mime_type in PDF_MIME_TYPES:
+                    b64 = base64.b64encode(data).decode("ascii")
+                    if vendor_name in ("anthropic", "claude"):
+                        parts.append(_format_pdf_for_claude(b64))
+                    else:
+                        parts.append(_format_pdf_for_openai(b64, "document.pdf"))
+                elif mime_type in TEXT_MIME_TYPES or mime_type.startswith("text/"):
+                    parts.append(_format_text_content(data, mime_type, "document"))
+                else:
+                    try:
+                        text = data.decode("utf-8")
+                        parts.append({"type": "text", "text": f"[File content ({mime_type})]\n{text[:50000]}"})
+                    except (UnicodeDecodeError, AttributeError):
+                        parts.append({"type": "text", "text": f"[Unsupported media type: {mime_type}]"})
             except Exception as exc:
                 logger.error("Failed to resolve media item %s: %s", item if isinstance(item, str) else "(bytes)", exc)
 
@@ -1041,10 +1066,10 @@ IMPORTANT TOOL CALLING RULES:
                     except Exception as e:
                         logger.error(f"Media resolution failed for tool result: {e}")
                         parts = [{"type": "text", "text": json.dumps(parsed) if isinstance(parsed, dict) else str(parsed)}]
-                    has_image = any(
-                        p.get("type") in ("image", "image_url") for p in parts
+                    has_media = any(
+                        p.get("type") in ("image", "image_url", "document") for p in parts
                     )
-                    if has_image:
+                    if has_media:
                         resolved.append(
                             {
                                 "role": msg["role"],

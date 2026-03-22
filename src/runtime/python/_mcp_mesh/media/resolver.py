@@ -12,6 +12,21 @@ logger = logging.getLogger(__name__)
 # MIME types we can inline as images
 IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 
+# MIME types for PDF documents
+PDF_MIME_TYPES = {"application/pdf"}
+
+# MIME types for text-based files (read content as text)
+TEXT_MIME_TYPES = {
+    "text/plain",
+    "text/csv",
+    "text/markdown",
+    "text/html",
+    "text/xml",
+    "application/json",
+    "application/xml",
+    "application/csv",
+}
+
 
 def _format_for_claude(b64_data: str, mime_type: str) -> dict:
     """Format base64 image data for Claude/Anthropic API."""
@@ -49,6 +64,59 @@ _VENDOR_FORMATTERS = {
 }
 
 
+def _format_pdf_for_claude(b64_data: str) -> dict:
+    """Format PDF for Claude/Anthropic API (native document support)."""
+    return {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": b64_data,
+        },
+    }
+
+
+def _format_pdf_for_openai(b64_data: str, filename: str) -> dict:
+    """OpenAI doesn't support PDF natively — return text description."""
+    return {
+        "type": "text",
+        "text": (
+            f"[Attached PDF document: {filename}. "
+            "OpenAI does not support PDF analysis. "
+            "Please use Claude for PDF processing.]"
+        ),
+    }
+
+
+def _format_pdf_for_gemini(b64_data: str, filename: str) -> dict:
+    """Gemini PDF support via LiteLLM may vary — return text description."""
+    return {
+        "type": "text",
+        "text": f"[Attached PDF document: {filename}. Gemini PDF support via LiteLLM may vary.]",
+    }
+
+
+def _format_text_content(data: bytes, mime_type: str, filename: str) -> dict:
+    """Format text file content as a text block.
+
+    Reads the raw bytes as UTF-8 (falling back to latin-1) and returns
+    a text content dict suitable for any LLM provider.
+    """
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        text = data.decode("latin-1", errors="replace")
+
+    max_chars = 50_000
+    if len(text) > max_chars:
+        text = text[:max_chars] + f"\n\n[... truncated, {len(text)} total characters]"
+
+    return {
+        "type": "text",
+        "text": f"--- Content of {filename} ({mime_type}) ---\n{text}\n--- End of {filename} ---",
+    }
+
+
 async def _resolve_single_resource_link(resource_link: dict, vendor: str) -> dict:
     """Resolve a single resource_link dict to a provider-native content part.
 
@@ -57,39 +125,68 @@ async def _resolve_single_resource_link(resource_link: dict, vendor: str) -> dic
         vendor: One of "anthropic", "openai", "gemini".
 
     Returns:
-        Provider-native content dict (image block or text fallback).
+        Provider-native content dict (image block, document block, text block,
+        or text fallback).
     """
     resource = resource_link.get("resource", {})
     uri = resource.get("uri", "")
     mime_type = resource.get("mimeType", "")
     name = resource.get("name", uri)
 
-    if mime_type not in IMAGE_MIME_TYPES:
-        return {
-            "type": "text",
-            "text": f"[resource_link: {name} ({mime_type or 'unknown'}) at {uri}]",
-        }
+    # --- Images: existing behaviour ---
+    if mime_type in IMAGE_MIME_TYPES:
+        try:
+            store = get_media_store()
+            data, fetched_mime = await store.fetch(uri)
+            b64_data = base64.b64encode(data).decode("ascii")
 
-    try:
-        store = get_media_store()
-        data, fetched_mime = await store.fetch(uri)
-        b64_data = base64.b64encode(data).decode("ascii")
+            formatter = _VENDOR_FORMATTERS.get(vendor, _format_for_openai)
+            result = formatter(b64_data, mime_type or fetched_mime)
+            logger.debug(
+                "Resolved resource_link %s to %s image block (%d bytes)",
+                name,
+                vendor,
+                len(data),
+            )
+            return result
+        except Exception as exc:
+            logger.warning("Failed to fetch resource_link %s: %s", uri, exc)
+            return {
+                "type": "text",
+                "text": f"[resource_link: {name} ({mime_type or 'unknown'}) at {uri} (fetch failed)]",
+            }
 
-        formatter = _VENDOR_FORMATTERS.get(vendor, _format_for_openai)
-        result = formatter(b64_data, mime_type or fetched_mime)
-        logger.debug(
-            "Resolved resource_link %s to %s image block (%d bytes)",
-            name,
-            vendor,
-            len(data),
-        )
-        return result
-    except Exception as exc:
-        logger.warning("Failed to fetch resource_link %s: %s", uri, exc)
-        return {
-            "type": "text",
-            "text": f"[resource_link: {name} ({mime_type or 'unknown'}) at {uri} (fetch failed)]",
-        }
+    # --- PDFs: provider-specific ---
+    if mime_type in PDF_MIME_TYPES:
+        try:
+            store = get_media_store()
+            data, _fetched_mime = await store.fetch(uri)
+            b64_data = base64.b64encode(data).decode("ascii")
+            if vendor in ("anthropic", "claude"):
+                return _format_pdf_for_claude(b64_data)
+            elif vendor in ("gemini", "google"):
+                return _format_pdf_for_gemini(b64_data, name)
+            else:
+                return _format_pdf_for_openai(b64_data, name)
+        except Exception as exc:
+            logger.warning("Failed to fetch PDF %s: %s", uri, exc)
+            return {"type": "text", "text": f"[PDF document: {name} at {uri}]"}
+
+    # --- Text files: read content and include as text (all providers) ---
+    if mime_type in TEXT_MIME_TYPES or mime_type.startswith("text/"):
+        try:
+            store = get_media_store()
+            data, _fetched_mime = await store.fetch(uri)
+            return _format_text_content(data, mime_type, name)
+        except Exception as exc:
+            logger.warning("Failed to fetch text file %s: %s", uri, exc)
+            return {"type": "text", "text": f"[Text document: {name} at {uri}]"}
+
+    # --- Unknown / unsupported MIME type ---
+    return {
+        "type": "text",
+        "text": f"[resource_link: {name} ({mime_type or 'unknown'}) at {uri}]",
+    }
 
 
 async def resolve_resource_links(tool_result: Any, vendor: str) -> list[dict]:
