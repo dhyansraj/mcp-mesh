@@ -253,7 +253,7 @@ type agentMetadata struct {
 func extractAgentMetadata(agentID string, metadata map[string]interface{}) agentMetadata {
 	m := agentMetadata{
 		agentType: "mcp_agent",
-		runtime:   "unknown",
+		runtime:   "python", // Must match Ent enum: python, typescript, java
 		name:      agentID,
 		namespace: "default",
 	}
