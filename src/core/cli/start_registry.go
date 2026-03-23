@@ -14,7 +14,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// isLocalhostRegistry checks if the registry host is localhost/local
+// isLocalhostRegistry checks if the registry host is localhost/local.
+// "0.0.0.0" is treated as localhost because it means "bind to all interfaces"
+// — for deciding whether to start a local registry, this counts as local.
 func isLocalhostRegistry(host string) bool {
 	switch strings.ToLower(host) {
 	case "localhost", "127.0.0.1", "::1", "0.0.0.0":
@@ -139,6 +141,8 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 			logFile.Close()
 			return fmt.Errorf("failed to start registry in detach: %w", err)
 		}
+		// Close parent's copy of log file — child process has its own file descriptor
+		logFile.Close()
 
 		// Write PID file for registry
 		pm, err := NewPIDManager()

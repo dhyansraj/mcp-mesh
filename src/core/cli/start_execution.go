@@ -177,25 +177,26 @@ func startAgents(agentPaths []string, config *CLIConfig, detach bool) error {
 			if err := cmd.Start(); err != nil {
 				return fmt.Errorf("failed to start agent %s: %w", agentPath, err)
 			}
+
+			// Record agent process (only after Start so cmd.Process is available)
+			agentProc := ProcessInfo{
+				PID:       cmd.Process.Pid,
+				Name:      filepath.Base(agentPath),
+				Type:      "agent",
+				Command:   cmd.String(),
+				StartTime: time.Now(),
+				Status:    "running",
+				FilePath:  absPath,
+			}
+			if err := AddRunningProcess(agentProc); err != nil {
+				fmt.Printf("Warning: failed to record agent process: %v\n", err)
+			}
+
+			fmt.Printf("Agent %s started (PID: %d)\n", filepath.Base(agentPath), cmd.Process.Pid)
 		} else {
 			agentCmds = append(agentCmds, cmd)
+			fmt.Printf("Agent %s prepared for foreground\n", filepath.Base(agentPath))
 		}
-
-		// Record agent process
-		agentProc := ProcessInfo{
-			PID:       cmd.Process.Pid,
-			Name:      filepath.Base(agentPath),
-			Type:      "agent",
-			Command:   cmd.String(),
-			StartTime: time.Now(),
-			Status:    "running",
-			FilePath:  absPath,
-		}
-		if err := AddRunningProcess(agentProc); err != nil {
-			fmt.Printf("Warning: failed to record agent process: %v\n", err)
-		}
-
-		fmt.Printf("Agent %s started (PID: %d)\n", filepath.Base(agentPath), cmd.Process.Pid)
 	}
 
 	if detach {

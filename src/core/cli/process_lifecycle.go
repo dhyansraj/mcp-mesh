@@ -33,6 +33,9 @@ func (pm *ProcessManager) terminateAndWait(info *ProcessInfo, name string, fallb
 	case err := <-done:
 		return err
 	case <-time.After(timeout):
+		// Kill process to ensure the Wait() goroutine can complete
+		info.Process.Kill()
+		<-done // drain the goroutine
 		return fmt.Errorf("process %s did not exit within %v", name, timeout)
 	}
 }

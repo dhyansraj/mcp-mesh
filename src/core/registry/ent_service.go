@@ -1022,15 +1022,26 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				// Extract agent metadata for updates
 				meta := extractAgentMetadata(req.AgentID, req.Metadata)
 
-				// Update existing agent metadata and status using transaction client
+				// Update status and timestamp unconditionally
 				updateBuilder := tx.Agent.UpdateOneID(existingAgent.ID).
-					SetAgentType(agent.AgentType(meta.agentType)).
-					SetRuntime(agent.Runtime(meta.runtime)).
-					SetName(meta.name).
-					SetNamespace(meta.namespace).
 					SetStatus(agent.StatusHealthy).
 					SetUpdatedAt(now).
 					SetLastFullRefresh(now)
+
+				// Only update metadata fields when the heartbeat provides non-default values,
+				// to avoid overwriting existing agent metadata with extraction defaults.
+				if meta.agentType != "mcp_agent" {
+					updateBuilder = updateBuilder.SetAgentType(agent.AgentType(meta.agentType))
+				}
+				if meta.runtime != "python" {
+					updateBuilder = updateBuilder.SetRuntime(agent.Runtime(meta.runtime))
+				}
+				if meta.name != "" && meta.name != req.AgentID {
+					updateBuilder = updateBuilder.SetName(meta.name)
+				}
+				if meta.namespace != "default" {
+					updateBuilder = updateBuilder.SetNamespace(meta.namespace)
+				}
 
 				if meta.version != "" {
 					updateBuilder = updateBuilder.SetVersion(meta.version)

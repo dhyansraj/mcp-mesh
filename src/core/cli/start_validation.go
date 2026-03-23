@@ -45,6 +45,33 @@ func validateAgentPrerequisites(agentPaths []string, quiet bool) error {
 		fmt.Println("Validating prerequisites...")
 	}
 
+	// Validate agent file/directory paths exist first
+	for _, agentPath := range agentPaths {
+		absPath, err := AbsolutePath(agentPath)
+		if err != nil {
+			return &PrerequisiteError{
+				Check:   "Agent path",
+				Message: fmt.Sprintf("Invalid agent path: %s", agentPath),
+				Remediation: `To fix this issue:
+  1. Verify the agent file/directory exists at the specified path
+  2. Use an absolute path or ensure the relative path is correct from your current directory
+  3. Check file permissions`,
+			}
+		}
+
+		// Check if path exists (file or directory - Java agents use directories)
+		if _, err := os.Stat(absPath); os.IsNotExist(err) {
+			return &PrerequisiteError{
+				Check:   "Agent path",
+				Message: fmt.Sprintf("Agent path not found: %s", absPath),
+				Remediation: fmt.Sprintf(`To fix this issue:
+  1. Verify the path exists: ls -la %s
+  2. Check if you're in the correct directory
+  3. Create the agent or use 'meshctl scaffold' to generate one`, absPath),
+			}
+		}
+	}
+
 	// Group agents by language using handlers package
 	var pythonAgents []string
 	var tsAgents []string
@@ -120,33 +147,6 @@ Run 'meshctl man prerequisite' for detailed setup instructions.`, pythonEnv.Pyth
 	if len(javaAgents) > 0 {
 		if err := validateJavaPrerequisites(javaAgents, quiet); err != nil {
 			return err
-		}
-	}
-
-	// Validate agent file/directory paths exist
-	for _, agentPath := range agentPaths {
-		absPath, err := AbsolutePath(agentPath)
-		if err != nil {
-			return &PrerequisiteError{
-				Check:   "Agent path",
-				Message: fmt.Sprintf("Invalid agent path: %s", agentPath),
-				Remediation: `To fix this issue:
-  1. Verify the agent file/directory exists at the specified path
-  2. Use an absolute path or ensure the relative path is correct from your current directory
-  3. Check file permissions`,
-			}
-		}
-
-		// Check if path exists (file or directory - Java agents use directories)
-		if _, err := os.Stat(absPath); os.IsNotExist(err) {
-			return &PrerequisiteError{
-				Check:   "Agent path",
-				Message: fmt.Sprintf("Agent path not found: %s", absPath),
-				Remediation: fmt.Sprintf(`To fix this issue:
-  1. Verify the path exists: ls -la %s
-  2. Check if you're in the correct directory
-  3. Create the agent or use 'meshctl scaffold' to generate one`, absPath),
-			}
 		}
 	}
 
