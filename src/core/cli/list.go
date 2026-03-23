@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1378,29 +1377,19 @@ func determineRegistryURL(config *CLIConfig, registryURL, registryHost string, r
 	return fmt.Sprintf("http://%s:%d", host, port)
 }
 
-// Global HTTP client for registry connections
-var registryHTTPClient = &http.Client{
-	Timeout: 10 * time.Second,
-}
+// Global HTTP client for registry connections — uses shared CLI client
+var registryHTTPClient = getCLIClient()
 
-// configureHTTPClient sets up the HTTP client with the specified timeout
+// configureHTTPClient sets up the registry HTTP client.
+// Uses the shared CLI client; parameter kept for API compatibility.
 func configureHTTPClient(timeoutSeconds int) {
-	registryHTTPClient = &http.Client{
-		Timeout: time.Duration(timeoutSeconds) * time.Second,
-	}
+	registryHTTPClient = getCLIClient()
 }
 
-// configureHTTPClientWithTLS sets up the HTTP client with timeout and optional TLS skip
+// configureHTTPClientWithTLS sets up the registry HTTP client with TLS.
+// Uses the shared CLI client; parameters kept for API compatibility.
 func configureHTTPClientWithTLS(timeoutSeconds int, insecure bool) {
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-		},
-	}
-	registryHTTPClient = &http.Client{
-		Timeout:   time.Duration(timeoutSeconds) * time.Second,
-		Transport: transport,
-	}
+	registryHTTPClient = getCLIClient()
 }
 
 // filterAgentsSince filters agents by last activity time
