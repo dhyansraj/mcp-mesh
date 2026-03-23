@@ -143,6 +143,8 @@ export MCP_MESH_MEDIA_STORAGE=s3
 export MCP_MESH_MEDIA_STORAGE_BUCKET=mcp-mesh-media
 export MCP_MESH_MEDIA_STORAGE_ENDPOINT=http://localhost:9000  # omit for AWS
 export MCP_MESH_MEDIA_STORAGE_PREFIX=media/
+export AWS_ACCESS_KEY_ID=your-access-key
+export AWS_SECRET_ACCESS_KEY=your-secret-key
 ```
 
 | Variable | Default | Description |
@@ -152,8 +154,12 @@ export MCP_MESH_MEDIA_STORAGE_PREFIX=media/
 | `MCP_MESH_MEDIA_STORAGE_BUCKET` | _(none)_ | S3 bucket name |
 | `MCP_MESH_MEDIA_STORAGE_ENDPOINT` | _(none)_ | S3-compatible endpoint URL |
 | `MCP_MESH_MEDIA_STORAGE_PREFIX` | `media/` | Key/directory prefix |
+| `AWS_ACCESS_KEY_ID` | _(none)_ | S3 access key (or use IAM roles) |
+| `AWS_SECRET_ACCESS_KEY` | _(none)_ | S3 secret key (or use IAM roles) |
 
-See `meshctl man media` for storage backend details.
+In distributed deployments (Docker, Kubernetes), all agents that read or write media must share the same storage config. Use S3 for multi-container setups — `file://` URIs don't work across pods.
+
+See `meshctl man media` for storage backend details and deployment guidance.
 
 ## Security & TLS
 

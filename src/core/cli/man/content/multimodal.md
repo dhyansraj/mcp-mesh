@@ -77,7 +77,32 @@ async def analyze(
 
 ## Resource Link Resolution
 
-When an LLM agent calls a tool that returns a `resource_link`, the media is automatically fetched and converted to the LLM's native format:
+When an LLM agent calls a tool that returns a `resource_link`, the media is automatically fetched and converted to the LLM's native format. **This resolution happens on the LLM provider agent**, not the consumer or router.
+
+### Where Resolution Happens
+
+```
+Consumer/Router          LLM Provider               Tool Agent
+     |                       |                          |
+     |-- llm("analyze") ---> |                          |
+     |                       |-- call generate_chart --> |
+     |                       |<-- resource_link -------- |
+     |                       |
+     |                       | SDK fetches URI from MediaStore
+     |                       | Converts to base64 for LLM
+     |                       | LLM sees actual image
+     |                       |
+     |<-- "chart shows..." --|
+```
+
+**Key points:**
+
+- The **consumer/router just passes URI strings** — it never reads media bytes
+- The **LLM provider does the fetch** from MediaStore (local or S3) during its agentic loop
+- The **producer uploaded** the media and returned a `resource_link` with the URI
+- Only the **producer** (write) and **provider** (read) need MediaStore access
+
+This means in distributed deployments, the LLM provider agent must have the same `MCP_MESH_MEDIA_STORAGE` config as the producer. See `meshctl man media` for setup.
 
 ```
 Tool returns resource_link(uri="file:///chart.png", mimeType="image/png")
@@ -134,6 +159,9 @@ async def analyze_chart(question: str, llm: mesh.MeshLlmAgent = None) -> str:
 ```
 
 The LLM calls `chart_gen`, receives the `resource_link`, and the SDK automatically resolves it to a native image before the next LLM turn.
+
+!!! warning "Distributed Deployments"
+    In Docker/Kubernetes, use S3 storage — `file://` URIs don't work across pods. The LLM provider must have the same S3 config as the media producer. See `meshctl man media` for configuration.
 
 ## Passing Media from External Sources
 
