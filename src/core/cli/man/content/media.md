@@ -40,6 +40,8 @@ Requires `boto3` package. Uses standard AWS credentials (`AWS_ACCESS_KEY_ID`, `A
 | `MCP_MESH_MEDIA_STORAGE_BUCKET`   | `mcp-mesh-media`      | S3 bucket name             |
 | `MCP_MESH_MEDIA_STORAGE_ENDPOINT` | (none)                | S3-compatible endpoint URL |
 | `MCP_MESH_MEDIA_STORAGE_PREFIX`   | `media/`              | Key/directory prefix       |
+| `AWS_ACCESS_KEY_ID`               | _(none)_              | S3 access key (or IAM)     |
+| `AWS_SECRET_ACCESS_KEY`           | _(none)_              | S3 secret key (or IAM)     |
 
 ## Uploading Media
 
@@ -131,7 +133,8 @@ from mcp_mesh import mesh
 @app.post("/upload")
 async def upload(file: UploadFile):
     uri = await mesh.save_upload(file)
-    # uri = "file:///tmp/mcp-mesh-media/media/photo.jpg"
+    # Local: "file:///tmp/mcp-mesh-media/media/photo.jpg"
+    # S3:    "s3://mcp-mesh-media/media/photo.jpg"
 ```
 
 | Parameter   | Type          | Description                                         |
@@ -170,6 +173,80 @@ Tools return media as MCP `resource_link` content:
 ```
 
 When an LLM agent calls a tool that returns a `resource_link`, the media is automatically fetched and resolved to provider-native format. See `meshctl man multimodal` for details.
+
+## Distributed Deployment
+
+!!! warning "All agents that read or write media must share the same storage config"
+
+In multi-agent deployments (Docker, Kubernetes), **local filesystem storage does not work across containers**. A `file:///tmp/...` URI from one pod is inaccessible to another.
+
+Use S3/MinIO for any deployment where agents run in separate processes or containers:
+
+```bash
+# Set on ALL agents that produce or consume media
+export MCP_MESH_MEDIA_STORAGE=s3
+export MCP_MESH_MEDIA_STORAGE_BUCKET=mcp-mesh-media
+export MCP_MESH_MEDIA_STORAGE_ENDPOINT=http://minio:9000
+export AWS_ACCESS_KEY_ID=minioadmin
+export AWS_SECRET_ACCESS_KEY=minioadmin
+```
+
+### Which Agents Need S3 Config?
+
+| Agent Role | Needs S3? | Why |
+| --- | --- | --- |
+| **Producer** (uploads media) | Yes — WRITE | Calls `upload_media()` / `MediaResult` |
+| **LLM Provider** (resolves media) | Yes — READ | Fetches `resource_link` URIs to show LLM the image |
+| **Router / Consumer** (passes URIs) | Optional | Just passes URI strings through — no MediaStore access needed |
+| **Expert** (receives URI params) | Only if using `media=` | Needs READ access if it passes media to its own LLM call |
+
+### MinIO for Local Development
+
+```yaml
+# docker-compose.yml
+services:
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"  # Console UI
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+
+  createbucket:
+    image: minio/mc
+    depends_on: [minio]
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb local/mcp-mesh-media --ignore-existing;
+      "
+```
+
+### Kubernetes
+
+```yaml
+# Add to every agent deployment that needs media access
+env:
+  - name: MCP_MESH_MEDIA_STORAGE
+    value: "s3"
+  - name: MCP_MESH_MEDIA_STORAGE_BUCKET
+    value: "mcp-mesh-media"
+  - name: MCP_MESH_MEDIA_STORAGE_ENDPOINT
+    value: "http://minio:9000"
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: minio-credentials
+        key: access-key
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: minio-credentials
+        key: secret-key
+```
 
 ## Security
 
