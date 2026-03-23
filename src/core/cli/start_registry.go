@@ -28,7 +28,9 @@ func isLocalhostRegistry(host string) bool {
 func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 	pm := GetGlobalProcessManager()
 	// Update ProcessManager config with current config (including command-line flags)
+	pm.mutex.Lock()
 	pm.config = config
+	pm.mutex.Unlock()
 	quiet, _ := cmd.Flags().GetBool("quiet")
 
 	if !quiet {
@@ -352,25 +354,20 @@ func determineStartRegistryURL(cmd *cobra.Command, config *CLIConfig) string {
 
 // getRegistryHostFromURL extracts the host from a registry URL, fallback to config host
 func getRegistryHostFromURL(registryURL, fallbackHost string) string {
-	if parsed, err := url.Parse(registryURL); err == nil && parsed.Host != "" {
-		// Extract just the hostname (without port)
-		if colonIndex := strings.Index(parsed.Host, ":"); colonIndex != -1 {
-			return parsed.Host[:colonIndex]
+	if parsed, err := url.Parse(registryURL); err == nil {
+		if host := parsed.Hostname(); host != "" {
+			return host
 		}
-		return parsed.Host
 	}
 	return fallbackHost
 }
 
 // getRegistryPortFromURL extracts the port from a registry URL, fallback to config port
 func getRegistryPortFromURL(registryURL string, fallbackPort int) int {
-	if parsed, err := url.Parse(registryURL); err == nil && parsed.Host != "" {
-		// Extract port if present
-		if colonIndex := strings.Index(parsed.Host, ":"); colonIndex != -1 {
-			if portStr := parsed.Host[colonIndex+1:]; portStr != "" {
-				if port, err := strconv.Atoi(portStr); err == nil {
-					return port
-				}
+	if parsed, err := url.Parse(registryURL); err == nil {
+		if portStr := parsed.Port(); portStr != "" {
+			if port, err := strconv.Atoi(portStr); err == nil {
+				return port
 			}
 		}
 	}

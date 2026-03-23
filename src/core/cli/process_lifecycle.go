@@ -57,11 +57,13 @@ func (pm *ProcessManager) StopProcess(name string, timeout time.Duration) error 
 	if err != nil {
 		// Timeout — force kill
 		pm.logger.Printf("Process %s timeout, forcing kill", name)
-		info.Process.Kill()
+		if killErr := info.Process.Kill(); killErr != nil {
+			pm.logger.Printf("Failed to kill process %s: %v", name, killErr)
+		}
 		info.Status = "killed"
 		info.HealthCheck = "killed"
 		pm.saveState()
-		return nil
+		return err
 	}
 
 	info.Status = "stopped"
@@ -95,7 +97,9 @@ func (pm *ProcessManager) RestartProcess(name string, newCommand string, newMeta
 	if info.Process != nil && pm.isProcessRunning(info) {
 		if err := pm.terminateAndWait(info, name, os.Interrupt, timeout); err != nil {
 			pm.logger.Printf("Process %s timeout during restart, forcing kill", name)
-			info.Process.Kill()
+			if killErr := info.Process.Kill(); killErr != nil {
+				return nil, fmt.Errorf("failed to kill process %s during restart: %w", name, killErr)
+			}
 		} else {
 			pm.logger.Printf("Process %s stopped gracefully for restart", name)
 		}

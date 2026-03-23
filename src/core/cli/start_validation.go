@@ -46,9 +46,9 @@ func validateAgentPrerequisites(agentPaths []string, quiet bool) error {
 	}
 
 	// Group agents by language using handlers package
-	pythonAgents := []string{}
-	tsAgents := []string{}
-	javaAgents := []string{}
+	var pythonAgents []string
+	var tsAgents []string
+	var javaAgents []string
 	for _, agentPath := range agentPaths {
 		handler := handlers.DetectLanguage(agentPath)
 		lang := handler.Language()

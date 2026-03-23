@@ -14,8 +14,18 @@ import (
 func isAgentFile(path string) bool {
 	ext := filepath.Ext(path)
 	switch ext {
-	case ".py", ".ts", ".js", ".yaml", ".yml", ".jar", ".java":
+	case ".py", ".ts", ".js", ".yaml", ".yml", ".jar":
 		return true
+	case ".java":
+		// Only accept .java if it's inside a Maven project (has pom.xml)
+		dir := filepath.Dir(path)
+		if _, err := os.Stat(filepath.Join(dir, "pom.xml")); err == nil {
+			return true
+		}
+		// Check parent directories for pom.xml
+		javaHandler := &handlers.JavaHandler{}
+		_, err := javaHandler.FindProjectRoot(dir)
+		return err == nil
 	}
 
 	info, err := os.Stat(path)

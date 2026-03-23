@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/xml"
 	"fmt"
 	"io/fs"
 	"os"
@@ -922,7 +923,7 @@ func extractJavaAgentName(projectPath string) string {
 	if _, err := os.Stat(srcDir); err == nil {
 		var foundName string
 		filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
-			if err != nil || foundName != "" {
+			if err != nil {
 				return filepath.SkipDir
 			}
 			if d.IsDir() || !strings.HasSuffix(path, ".java") {
@@ -943,14 +944,19 @@ func extractJavaAgentName(projectPath string) string {
 		}
 	}
 
-	// Try to extract from pom.xml artifactId
+	// Try to extract project artifactId from pom.xml (not parent's)
 	pomPath := filepath.Join(projectDir, "pom.xml")
 	if content, err := os.ReadFile(pomPath); err == nil {
-		// Extract artifactId as name (simple regex, not full XML parsing)
-		// Look for <artifactId> that's not inside a <parent> block
-		artifactIdRe := regexp.MustCompile(`(?s)<project[^>]*>.*?<artifactId>([^<]+)</artifactId>`)
-		if matches := artifactIdRe.FindSubmatch(content); len(matches) > 1 {
-			return string(matches[1])
+		type pomParent struct {
+			ArtifactId string `xml:"artifactId"`
+		}
+		type pomProject struct {
+			ArtifactId string    `xml:"artifactId"`
+			Parent     pomParent `xml:"parent"`
+		}
+		var pom pomProject
+		if err := xml.Unmarshal(content, &pom); err == nil && pom.ArtifactId != "" {
+			return pom.ArtifactId
 		}
 	}
 

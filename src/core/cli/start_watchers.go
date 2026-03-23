@@ -56,7 +56,9 @@ func createJavaWatcher(agentPath string, env []string, workingDir, user, group s
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		// Set user/group if specified
 		if user != "" || group != "" {
-			_ = setProcessCredentials(cmd, user, group)
+			if err := setProcessCredentials(cmd, user, group); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to set process credentials for watcher: %v\n", err)
+			}
 		}
 		return cmd
 	}
@@ -121,7 +123,9 @@ func createPythonWatcher(agentPath string, env []string, workingDir, user, group
 		cmd.Stdin = os.Stdin
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if user != "" || group != "" {
-			_ = setProcessCredentials(cmd, user, group)
+			if err := setProcessCredentials(cmd, user, group); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to set process credentials for watcher: %v\n", err)
+			}
 		}
 		return cmd
 	}

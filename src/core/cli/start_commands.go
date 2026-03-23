@@ -128,8 +128,12 @@ func createPythonAgentCommand(agentPath string, env []string, workingDir, userNa
 			pythonExec = pythonEnv.PythonExecutable
 		}
 
-		// Convert script path to absolute path
-		absScriptPath, err := filepath.Abs(config.Script)
+		// Resolve script path relative to YAML file's directory (not CWD)
+		scriptRef := config.Script
+		if !filepath.IsAbs(scriptRef) {
+			scriptRef = filepath.Join(filepath.Dir(agentPath), scriptRef)
+		}
+		absScriptPath, err := filepath.Abs(scriptRef)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get absolute path for %s: %w", config.Script, err)
 		}
@@ -321,7 +325,8 @@ func setProcessCredentials(cmd *exec.Cmd, username, groupname string) error {
 	}
 
 	// Parse user ID
-	var uid, gid uint32
+	uid := uint32(os.Getuid())
+	gid := uint32(os.Getgid())
 	if username != "" {
 		u, err := user.Lookup(username)
 		if err != nil {
@@ -356,12 +361,13 @@ func setProcessCredentials(cmd *exec.Cmd, username, groupname string) error {
 		gid = uint32(parsedGID)
 	}
 
-	// Set credentials (Unix only)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Credential: &syscall.Credential{
-			Uid: uid,
-			Gid: gid,
-		},
+	// Set credentials while preserving existing SysProcAttr (e.g., Setpgid)
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Credential = &syscall.Credential{
+		Uid: uid,
+		Gid: gid,
 	}
 
 	return nil

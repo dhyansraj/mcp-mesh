@@ -77,7 +77,9 @@ func (h *AgentHealthMonitor) Stop() {
 	}
 
 	h.running = false
-	h.cancel()
+	if h.cancel != nil {
+		h.cancel()
+	}
 	h.wg.Wait()
 	h.logger.Info("✅ Agent health monitor stopped successfully")
 }

@@ -253,7 +253,7 @@ type agentMetadata struct {
 func extractAgentMetadata(agentID string, metadata map[string]interface{}) agentMetadata {
 	m := agentMetadata{
 		agentType: "mcp_agent",
-		runtime:   "python",
+		runtime:   "unknown",
 		name:      agentID,
 		namespace: "default",
 	}
