@@ -640,7 +640,7 @@ pub extern "C" fn mesh_version() -> *const c_char {
     // Use a static CString to ensure the pointer remains valid
     static VERSION_CSTR: std::sync::OnceLock<CString> = std::sync::OnceLock::new();
     VERSION_CSTR
-        .get_or_init(|| CString::new(VERSION).unwrap())
+        .get_or_init(|| CString::new(VERSION).expect("VERSION constant must not contain null bytes"))
         .as_ptr()
 }
 
