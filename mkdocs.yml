@@ -203,6 +203,21 @@ nav:
       - Health & Discovery: concepts/health-discovery.md
       - Tag Matching: concepts/tag-matching.md
 
+  - Multimodal:
+      - Getting Started: multimodal/getting-started.md
+      - MediaStore: multimodal/media-store.md
+      - Returning Media: multimodal/returning-media.md
+      - LLM Media Input: multimodal/llm-media-input.md
+      - Web Uploads: multimodal/web-uploads.md
+      - MediaParam: multimodal/media-param.md
+      - Provider Support: multimodal/provider-support.md
+
+  - API Reference:
+      - MediaResult: api/media-result.md
+      - MediaParam: api/media-param.md
+      - save_upload: api/save-upload.md
+      - MediaStore: api/media-store.md
+
   - Local Development:
       - Overview: 02-local-development.md
       - Python:

@@ -286,6 +286,31 @@ if (window.GOOGLE_ANALYTICS_KEY) {
 }
 
 // =============================================================================
+// Staggered Nav Tabs — indent wrapped (second row) items
+// =============================================================================
+
+(function() {
+  function staggerTabs() {
+    var list = document.querySelector('.md-tabs__list');
+    if (!list) return;
+    var items = list.querySelectorAll('.md-tabs__item');
+    if (!items.length) return;
+    var firstTop = items[0].getBoundingClientRect().top;
+    items.forEach(function(item) {
+      if (item.getBoundingClientRect().top > firstTop + 2) {
+        item.style.marginLeft = item.previousElementSibling &&
+          item.previousElementSibling.getBoundingClientRect().top <= firstTop + 2
+          ? '25ch' : '';
+      } else {
+        item.style.marginLeft = '';
+      }
+    });
+  }
+  window.addEventListener('load', staggerTabs);
+  window.addEventListener('resize', staggerTabs);
+})();
+
+// =============================================================================
 // Smooth scroll for anchor links
 // =============================================================================
 

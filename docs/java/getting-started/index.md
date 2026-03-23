@@ -167,6 +167,22 @@ meshctl call assistant smart_greeting --params '{"name": "Developer"}'
 # Output: {"message": "Hello, Developer! Welcome to MCP Mesh!"}
 ```
 
+## Multimodal Support
+
+Tools can return images, PDFs, and files — LLMs see them natively:
+
+```java
+@MeshTool(capability = "chart_gen")
+public ResourceLink generateChart(
+    @Param("query") String query, MediaStore mediaStore
+) {
+    byte[] png = renderChart(query);
+    return MeshMedia.mediaResult(png, "chart.png", "image/png", mediaStore);
+}
+```
+
+See the [Multimodal Guide](../../multimodal/getting-started.md) for full documentation.
+
 ## Next Steps
 
 - `meshctl man decorators --java` - Learn all mesh annotations
