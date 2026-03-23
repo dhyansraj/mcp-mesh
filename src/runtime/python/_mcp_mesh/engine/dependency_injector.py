@@ -283,7 +283,7 @@ class DependencyInjector:
             for tool_name, decorated_func in mesh_tools.items():
                 if hasattr(decorated_func.function, "__name__"):
                     available_functions.append(decorated_func.function.__name__)
-        except:
+        except (AttributeError, KeyError, TypeError):
             pass
 
         logger.warning(

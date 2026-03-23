@@ -238,40 +238,9 @@ class GeminiHandler(BaseProviderHandler):
                 system_content += "- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.\n\n"
 
             system_content += "Your FINAL response must be ONLY valid JSON (no markdown, no code blocks) with this exact structure:\n"
-            system_content += "{\n"
 
-            # Build example showing expected structure with descriptions
             properties = output_schema.get("properties", {})
-            prop_items = list(properties.items())
-            for i, (prop_name, prop_schema) in enumerate(prop_items):
-                prop_type = prop_schema.get("type", "string")
-                prop_desc = prop_schema.get("description", "")
-
-                # Show example value based on type
-                if prop_type == "string":
-                    example_value = f'"<your {prop_name} here>"'
-                elif prop_type in ("number", "integer"):
-                    example_value = "0"
-                elif prop_type == "array":
-                    example_value = '["item1", "item2"]'
-                elif prop_type == "boolean":
-                    example_value = "true"
-                elif prop_type == "object":
-                    example_value = "{}"
-                else:
-                    example_value = "..."
-
-                # Add comma for all but last property
-                comma = "," if i < len(prop_items) - 1 else ""
-                # Include description as comment if available
-                if prop_desc:
-                    system_content += (
-                        f'  "{prop_name}": {example_value}{comma}  // {prop_desc}\n'
-                    )
-                else:
-                    system_content += f'  "{prop_name}": {example_value}{comma}\n'
-
-            system_content += "}\n\n"
+            system_content += self.build_json_example(properties) + "\n\n"
             system_content += "Return ONLY the JSON object with actual values. Do not include the schema definition, markdown formatting, or code blocks."
 
         return system_content
@@ -319,32 +288,8 @@ class GeminiHandler(BaseProviderHandler):
                 # Build hint instructions
                 hint_text = "\n\nOUTPUT FORMAT:\n"
                 hint_text += "Your FINAL response must be ONLY valid JSON (no markdown, no code blocks) with this exact structure:\n"
-                hint_text += "{\n"
                 properties = sanitized_schema.get("properties", {})
-                prop_items = list(properties.items())
-                for i, (prop_name, prop_schema) in enumerate(prop_items):
-                    prop_type = prop_schema.get("type", "string")
-                    if prop_type == "string":
-                        example_value = f'"<your {prop_name} here>"'
-                    elif prop_type in ("number", "integer"):
-                        example_value = "0"
-                    elif prop_type == "array":
-                        example_value = '["item1", "item2"]'
-                    elif prop_type == "boolean":
-                        example_value = "true"
-                    elif prop_type == "object":
-                        example_value = "{}"
-                    else:
-                        example_value = "..."
-                    comma = "," if i < len(prop_items) - 1 else ""
-                    prop_desc = prop_schema.get("description", "")
-                    if prop_desc:
-                        hint_text += (
-                            f'  "{prop_name}": {example_value}{comma}  // {prop_desc}\n'
-                        )
-                    else:
-                        hint_text += f'  "{prop_name}": {example_value}{comma}\n'
-                hint_text += "}\n\n"
+                hint_text += self.build_json_example(properties) + "\n\n"
                 hint_text += "Return ONLY the JSON object with actual values. Do not include the schema definition, markdown formatting, or code blocks."
 
                 msg["content"] = base_content + hint_text

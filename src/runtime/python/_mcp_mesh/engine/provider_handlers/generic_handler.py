@@ -5,9 +5,12 @@ Provides sensible defaults using prompt-based approach similar to Claude.
 """
 
 import json
+import logging
 from typing import Any, Optional
 
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from .base_provider_handler import (
     MEDIA_PARAM_INSTRUCTIONS,
@@ -191,9 +194,6 @@ TOOL CALLING RULES:
         """
         # Don't add response_format - generic vendors may not support it
         # The consumer's system prompt should include JSON instructions
-        import logging
-
-        logger = logging.getLogger(__name__)
         logger.debug(
             f"⚠️ Generic handler: skipping response_format for '{output_type_name}' "
             f"(vendor '{self.vendor}' may not support structured output)"

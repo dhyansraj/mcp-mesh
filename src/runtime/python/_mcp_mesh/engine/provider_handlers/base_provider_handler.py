@@ -191,6 +191,54 @@ _UNSUPPORTED_SCHEMA_KEYWORDS = {
 }
 
 
+def _traverse_schema(obj: Any, visitor_fn) -> None:
+    """
+    Recursively traverse a JSON schema, applying visitor_fn to every schema node.
+
+    Handles all standard schema composition patterns: $defs, properties, items,
+    prefixItems, and anyOf/oneOf/allOf.
+
+    Args:
+        obj: Schema object to traverse
+        visitor_fn: Callable applied to each dict node before recursing
+    """
+    if not isinstance(obj, dict):
+        return
+
+    visitor_fn(obj)
+
+    # Process $defs (Pydantic uses this for nested models)
+    if "$defs" in obj:
+        for def_schema in obj["$defs"].values():
+            _traverse_schema(def_schema, visitor_fn)
+
+    # Process properties
+    if "properties" in obj:
+        for prop_schema in obj["properties"].values():
+            _traverse_schema(prop_schema, visitor_fn)
+
+    # Process items (for arrays)
+    # items can be an object (single schema) or a list (tuple validation in older drafts)
+    if "items" in obj:
+        items = obj["items"]
+        if isinstance(items, dict):
+            _traverse_schema(items, visitor_fn)
+        elif isinstance(items, list):
+            for item in items:
+                _traverse_schema(item, visitor_fn)
+
+    # Process prefixItems (tuple validation in JSON Schema draft 2020-12)
+    if "prefixItems" in obj:
+        for item in obj["prefixItems"]:
+            _traverse_schema(item, visitor_fn)
+
+    # Process anyOf, oneOf, allOf
+    for key in ("anyOf", "oneOf", "allOf"):
+        if key in obj:
+            for item in obj[key]:
+                _traverse_schema(item, visitor_fn)
+
+
 def _strip_unsupported_keywords_recursive(obj: Any) -> None:
     """
     Recursively strip unsupported validation keywords from a schema object.
@@ -198,42 +246,12 @@ def _strip_unsupported_keywords_recursive(obj: Any) -> None:
     Args:
         obj: Schema object to process (mutated in place)
     """
-    if not isinstance(obj, dict):
-        return
 
-    # Remove unsupported keywords at this level
-    for keyword in _UNSUPPORTED_SCHEMA_KEYWORDS:
-        obj.pop(keyword, None)
+    def _strip_visitor(node: dict) -> None:
+        for keyword in _UNSUPPORTED_SCHEMA_KEYWORDS:
+            node.pop(keyword, None)
 
-    # Process $defs (Pydantic uses this for nested models)
-    if "$defs" in obj:
-        for def_schema in obj["$defs"].values():
-            _strip_unsupported_keywords_recursive(def_schema)
-
-    # Process properties
-    if "properties" in obj:
-        for prop_schema in obj["properties"].values():
-            _strip_unsupported_keywords_recursive(prop_schema)
-
-    # Process items (for arrays)
-    if "items" in obj:
-        items = obj["items"]
-        if isinstance(items, dict):
-            _strip_unsupported_keywords_recursive(items)
-        elif isinstance(items, list):
-            for item in items:
-                _strip_unsupported_keywords_recursive(item)
-
-    # Process prefixItems (tuple validation)
-    if "prefixItems" in obj:
-        for item in obj["prefixItems"]:
-            _strip_unsupported_keywords_recursive(item)
-
-    # Process anyOf, oneOf, allOf
-    for key in ("anyOf", "oneOf", "allOf"):
-        if key in obj:
-            for item in obj[key]:
-                _strip_unsupported_keywords_recursive(item)
+    _traverse_schema(obj, _strip_visitor)
 
 
 def _add_strict_constraints_recursive(obj: Any, add_all_required: bool) -> None:
@@ -244,47 +262,14 @@ def _add_strict_constraints_recursive(obj: Any, add_all_required: bool) -> None:
         obj: Schema object to process (mutated in place)
         add_all_required: Whether to set required to all property keys
     """
-    if not isinstance(obj, dict):
-        return
 
-    # If this is an object type, add additionalProperties: false
-    if obj.get("type") == "object":
-        obj["additionalProperties"] = False
+    def _strict_visitor(node: dict) -> None:
+        if node.get("type") == "object":
+            node["additionalProperties"] = False
+            if add_all_required and "properties" in node:
+                node["required"] = list(node["properties"].keys())
 
-        # Optionally set required to include all property keys
-        if add_all_required and "properties" in obj:
-            obj["required"] = list(obj["properties"].keys())
-
-    # Process $defs (Pydantic uses this for nested models)
-    if "$defs" in obj:
-        for def_schema in obj["$defs"].values():
-            _add_strict_constraints_recursive(def_schema, add_all_required)
-
-    # Process properties
-    if "properties" in obj:
-        for prop_schema in obj["properties"].values():
-            _add_strict_constraints_recursive(prop_schema, add_all_required)
-
-    # Process items (for arrays)
-    # items can be an object (single schema) or a list (tuple validation in older drafts)
-    if "items" in obj:
-        items = obj["items"]
-        if isinstance(items, dict):
-            _add_strict_constraints_recursive(items, add_all_required)
-        elif isinstance(items, list):
-            for item in items:
-                _add_strict_constraints_recursive(item, add_all_required)
-
-    # Process prefixItems (tuple validation in JSON Schema draft 2020-12)
-    if "prefixItems" in obj:
-        for item in obj["prefixItems"]:
-            _add_strict_constraints_recursive(item, add_all_required)
-
-    # Process anyOf, oneOf, allOf
-    for key in ("anyOf", "oneOf", "allOf"):
-        if key in obj:
-            for item in obj[key]:
-                _add_strict_constraints_recursive(item, add_all_required)
+    _traverse_schema(obj, _strict_visitor)
 
 
 # ============================================================================
@@ -433,6 +418,52 @@ class BaseProviderHandler(ABC):
             },
         }
         return model_params
+
+    @staticmethod
+    def build_json_example(properties: dict) -> str:
+        """Build a human-readable JSON example string from schema properties.
+
+        Generates a JSON-like block with example values based on property types
+        and optional description comments. Used by handlers that inject schema
+        hints into the system prompt (e.g., Gemini HINT mode).
+
+        Args:
+            properties: Schema properties dict (prop_name -> prop_schema)
+
+        Returns:
+            Multi-line string resembling a JSON object with example values
+        """
+        if not properties:
+            return "{}"
+
+        parts = []
+        prop_items = list(properties.items())
+        for i, (prop_name, prop_schema) in enumerate(prop_items):
+            prop_type = prop_schema.get("type", "string")
+            prop_desc = prop_schema.get("description", "")
+
+            if prop_type == "string":
+                example_value = f'"<your {prop_name} here>"'
+            elif prop_type in ("number", "integer"):
+                example_value = "0"
+            elif prop_type == "array":
+                example_value = '["item1", "item2"]'
+            elif prop_type == "boolean":
+                example_value = "true"
+            elif prop_type == "object":
+                example_value = "{}"
+            else:
+                example_value = "..."
+
+            comma = "," if i < len(prop_items) - 1 else ""
+            if prop_desc:
+                parts.append(
+                    f'  "{prop_name}": {example_value}{comma}  // {prop_desc}'
+                )
+            else:
+                parts.append(f'  "{prop_name}": {example_value}{comma}')
+
+        return "{\n" + "\n".join(parts) + "\n}"
 
     def __repr__(self) -> str:
         """String representation of handler."""
