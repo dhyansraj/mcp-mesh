@@ -10,6 +10,9 @@ You write the logic. The mesh discovers, connects, heals, and traces — across 
 !!! tip "Complete Platform for AI Agents"
 MCP Mesh is a complete platform for **building and deploying AI agents to production scale**. [See how MCP Mesh compares →](00-why-mcp-mesh/index.md)
 
+!!! info "What is DDDI?"
+    **Distributed Dynamic Dependency Injection** — dependencies are discovered, injected, and updated at runtime across machines, languages, and clouds. No configuration files, no restart required. [Learn more →](concepts/dddi.md)
+
 ---
 
 ## :rocket: Quick Start
@@ -125,8 +128,8 @@ Tag-based service resolution with version constraints. Agents automatically find
 Helm charts with horizontal scaling, health checks, and observability.
 </div>
 <div class="feature-card" markdown>
-### :arrows_counterclockwise: Dynamic Updates
-Hot dependency injection without restarts. Add, remove, or upgrade services seamlessly.
+### :arrows_counterclockwise: DDDI — Dynamic Injection
+Distributed Dynamic Dependency Injection without restarts. Add, remove, or upgrade services seamlessly across the mesh.
 </div>
 <div class="feature-card" markdown>
 ### :bar_chart: Built-in Observability
@@ -136,7 +139,43 @@ Grafana dashboards, distributed tracing with Tempo, and Redis-backed session man
 ### :shield: Enterprise Ready
 Graceful failure handling, auto-reconnection, RBAC support, and real-time monitoring.
 </div>
+<div class="feature-card" markdown>
+### :camera: Multimodal Support
+Return images, PDFs, and files from tools — LLMs see them natively. [Learn more →](multimodal/getting-started.md)
 </div>
+</div>
+
+---
+
+### :camera: Multimodal Support
+
+Return images, PDFs, and files from tools — LLMs see them natively.
+
+=== "Python"
+
+    ```python
+    @mesh.tool(capability="chart_gen")
+    async def generate_chart(query: str):
+        png = render_chart(query)
+        return await mesh.MediaResult(
+            data=png, filename="chart.png", mime_type="image/png",
+        )
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    const uri = await uploadMedia(png, "chart.png", "image/png");
+    return mediaResult(uri, "Chart", "image/png");
+    ```
+
+=== "Java"
+
+    ```java
+    return MeshMedia.mediaResult(png, "chart.png", "image/png", mediaStore);
+    ```
+
+[Learn more →](multimodal/getting-started.md)
 
 ---
 

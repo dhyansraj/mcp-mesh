@@ -144,13 +144,14 @@ async def create_trip(trip_data: dict, plan_trip=None):
 
 ## Key Features
 
-### **Dynamic Dependency Injection & Service Discovery**
+### **Distributed Dynamic Dependency Injection (DDDI)**
 
-- **Pull-based discovery** with runtime function injection - no networking code required
-- **Automatic agent discovery** without configuration
-- **Smart dependency resolution** with version constraints and tags
-- **Load balancing** across multiple service providers
-- **LLM dependency injection** - treat LLMs as first-class dependencies with automatic tool discovery and dynamic prompts
+- **Distributed** — dependencies span machines, clouds, and runtimes (Python/TypeScript/Java)
+- **Dynamic** — services discovered and injected at runtime, not compile time
+- **Hot-swappable** — dependencies update without restarts via heartbeat-driven re-resolution
+- **Pull-based discovery** with runtime function injection — no networking code required
+- **Smart resolution** with version constraints, capability matching, and tag scoring
+- **LLM as a dependency** — treat LLMs as first-class injectable services with automatic tool discovery
 
 ### **Resilience**
 

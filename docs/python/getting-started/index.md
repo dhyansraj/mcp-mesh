@@ -130,6 +130,27 @@ meshctl call assistant smart_greeting --params '{"name": "Developer"}'
 # Output: Hello, Developer! Welcome to MCP Mesh!
 ```
 
+## Multimodal Support
+
+Tools can return images, PDFs, and files — LLMs see them natively:
+
+```python
+@mesh.tool(capability="chart_gen")
+async def generate_chart(query: str):
+    png = render_chart(query)
+    return await mesh.MediaResult(
+        data=png, filename="chart.png", mime_type="image/png",
+    )
+```
+
+Pass media directly to LLM agents:
+
+```python
+result = await llm("Analyze this image", media=["file:///tmp/photo.png"])
+```
+
+See the [Multimodal Guide](../../multimodal/getting-started.md) for full documentation.
+
 ## Next Steps
 
 - `meshctl man decorators` - Learn all mesh decorators

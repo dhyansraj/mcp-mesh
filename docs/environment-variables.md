@@ -189,6 +189,37 @@ export ENABLE_PROMETHEUS=true
 export ENABLE_EVENTS=true
 ```
 
+## Media Storage
+
+Configure the media storage backend for multimodal features.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MCP_MESH_MEDIA_STORAGE` | `local` | Storage backend: `local` or `s3` |
+| `MCP_MESH_MEDIA_STORAGE_PATH` | `/tmp/mcp-mesh-media` | Local filesystem base path |
+| `MCP_MESH_MEDIA_STORAGE_BUCKET` | `mcp-mesh-media` | S3 bucket name |
+| `MCP_MESH_MEDIA_STORAGE_ENDPOINT` | _(none)_ | S3-compatible endpoint URL (for MinIO etc.) |
+| `MCP_MESH_MEDIA_STORAGE_PREFIX` | `media/` | Key/directory prefix in storage |
+
+### Example: Local Development
+
+```bash
+# Default — no configuration needed
+export MCP_MESH_MEDIA_STORAGE=local
+```
+
+### Example: S3 with MinIO
+
+```bash
+export MCP_MESH_MEDIA_STORAGE=s3
+export MCP_MESH_MEDIA_STORAGE_BUCKET=mcp-mesh-media
+export MCP_MESH_MEDIA_STORAGE_ENDPOINT=http://localhost:9000
+export AWS_ACCESS_KEY_ID=minioadmin
+export AWS_SECRET_ACCESS_KEY=minioadmin
+```
+
+See [MediaStore Configuration](multimodal/media-store.md) for full details.
+
 ## Configuration Patterns
 
 ### Registry Server Configurations

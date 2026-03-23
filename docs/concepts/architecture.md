@@ -6,6 +6,7 @@
 
 MCP Mesh is a distributed service mesh for MCP (Model Context Protocol) agents. It provides:
 
+- **DDDI (Distributed Dynamic Dependency Injection)**: The core innovation of MCP Mesh — dependencies between agents are discovered, resolved, and injected at runtime across distributed systems, without compile-time configuration or restarts.
 - **Zero-boilerplate dependency injection** between agents
 - **Automatic service discovery** via a central registry
 - **Smart routing** with tag-based selection
@@ -197,6 +198,39 @@ Built on MCP, works with any MCP-compatible client.
 ### 4. Cloud Native
 
 Designed for containers and Kubernetes.
+
+## Multimodal Pipeline
+
+MCP Mesh v1.0.0 adds a media pipeline that lets tools produce and LLMs consume binary content:
+
+```
+Tool produces media
+    → upload to MediaStore (local/S3)
+    → return resource_link in tool result
+
+LLM receives tool result
+    → SDK detects resource_link
+    → fetches bytes from MediaStore
+    → converts to provider-native format
+    → LLM sees actual image/PDF/text
+```
+
+### Components
+
+- **MediaStore** — Pluggable storage abstraction (local filesystem or S3). Configured via `MCP_MESH_MEDIA_STORAGE` env var.
+- **MediaResult** — Convenience class that uploads bytes and returns a `resource_link` in one step.
+- **MediaParam** — Type hint that adds `x-media-type` to JSON schema, enabling LLMs to route media URIs in multi-agent chains.
+- **Media Resolver** — Per-provider conversion layer in LLM handlers. Converts fetched bytes to Claude image blocks, OpenAI image_url, or Gemini format.
+
+### Provider-Native Formats
+
+| Content | Claude | OpenAI | Gemini |
+| --- | --- | --- | --- |
+| Images | Native image blocks | image_url (base64) | image_url (base64) |
+| PDF | Native document blocks | Text fallback | Text fallback |
+| Text files | Text content | Text content | Text content |
+
+See [Multimodal documentation](../multimodal/getting-started.md) for usage guides.
 
 ## See Also
 

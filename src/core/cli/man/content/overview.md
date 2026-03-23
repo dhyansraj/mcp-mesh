@@ -10,6 +10,8 @@ Traditional frameworks treat AI agents like dumb microservices—central orchest
 
 MCP Mesh takes a different view: agents are intelligent. Let them behave that way.
 
+At its core, MCP Mesh implements **Distributed Dynamic Dependency Injection (DDDI)** — dependencies between agents are discovered, resolved, and injected at runtime across machines, languages, and clouds. No compile-time wiring, no configuration files, no restarts.
+
 Agents self-organize—discovering collaborators, adapting to failures, forming dynamic partnerships. The mesh provides the environment; the intelligence does the rest.
 
 ## Core Principles

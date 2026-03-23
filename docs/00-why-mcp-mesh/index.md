@@ -82,7 +82,11 @@ That's a complete agent with:
 
 ## What Makes MCP Mesh Different
 
-### 1. Decorators That Do Everything
+### 1. True DDDI (Distributed Dynamic Dependency Injection)
+
+MCP Mesh is the only framework with **Distributed Dynamic Dependency Injection**. Dependencies are discovered, injected, and hot-swapped at runtime across machines and languages — no config files, no restarts. [What is DDDI? -->](../concepts/dddi.md)
+
+### 2. Decorators That Do Everything
 
 ```python
 @mesh.agent(name="my-agent", port=8080)      # Register with mesh
@@ -91,7 +95,7 @@ That's a complete agent with:
 @mesh.route("/api/endpoint")                  # REST API endpoint
 ```
 
-### 2. Automatic Dependency Injection
+### 3. Automatic Dependency Injection
 
 ```python
 @mesh.tool(
@@ -105,7 +109,7 @@ async def analyze(data, db_service: mesh.McpMeshTool = None, ml_service: mesh.Mc
     return await ml_service(data=records) if ml_service else {}
 ```
 
-### 3. One Command to Production
+### 4. One Command to Production
 
 ```bash
 # Generate Docker Compose with observability
@@ -116,7 +120,7 @@ helm install my-mesh oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --version 1.0.0-beta.1 -n mcp-mesh --create-namespace
 ```
 
-### 4. Built-in Observability
+### 5. Built-in Observability
 
 - **Grafana dashboards** - Pre-configured for agent metrics
 - **Distributed tracing** - See request flow across agents

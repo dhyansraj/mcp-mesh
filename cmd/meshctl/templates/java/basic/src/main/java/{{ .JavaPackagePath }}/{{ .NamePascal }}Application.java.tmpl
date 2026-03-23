@@ -4,6 +4,10 @@ import io.mcpmesh.MeshAgent;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.Param;
+import io.mcpmesh.MediaParam;
+import io.mcpmesh.spring.media.MeshMedia;
+import io.mcpmesh.spring.media.MediaStore;
+import io.modelcontextprotocol.spec.McpSchema.ResourceLink;
 import io.mcpmesh.Selector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -99,5 +103,29 @@ public class {{ .NamePascal }}Application {
     // @MeshTool(capability = "analyze", description = "Analyze text", tags = {"tools"})
     // public ProcessResult analyze(@Param(value = "text", description = "Text") String text) {
     //     return new ProcessResult("analyzed: " + text, text.length());
+    // }
+
+    // ===== MULTIMODAL EXAMPLE (uncomment and adapt) =====
+    //
+    // Return media (images, PDFs, files) from tools using MeshMedia.
+    // LLMs automatically resolve resource_link objects to native image blocks.
+    //
+    // @MeshTool(capability = "chart_gen", description = "Generate a chart", tags = {"tools"})
+    // public ResourceLink generateChart(
+    //     @Param(value = "query", description = "Chart query") String query,
+    //     MediaStore mediaStore
+    // ) {
+    //     byte[] png = renderChart(query);
+    //     return MeshMedia.mediaResult(png, "chart.png", "image/png", mediaStore);
+    // }
+    //
+    // Accept media URIs with @MediaParam:
+    //
+    // @MeshTool(capability = "image_analyzer", description = "Analyze an image", tags = {"tools"})
+    // public String analyzeImage(
+    //     @Param(value = "question", description = "Question about the image") String question,
+    //     @MediaParam("image/*") @Param(value = "image", description = "Image URI") String imageUri
+    // ) {
+    //     return "Received image: " + imageUri;
     // }
 }

@@ -63,7 +63,7 @@ def replace_in_file(
 
 def bump_python_packages(old: str, new_pep440: str, dry_run: bool) -> list[str]:
     """Category 1: Python package version fields."""
-    changed = []
+    changed: list[str] = []
     files = [
         PROJECT_ROOT / "packaging" / "pypi" / "pyproject.toml",
         PROJECT_ROOT / "src" / "runtime" / "python" / "pyproject.toml",
@@ -89,7 +89,7 @@ def bump_python_packages(old: str, new_pep440: str, dry_run: bool) -> list[str]:
 
 def bump_python_dependencies(old: str, new_pep440: str, dry_run: bool) -> list[str]:
     """Category 2: Python OUR dependencies (mcp-mesh-core only)."""
-    changed = []
+    changed: list[str] = []
     f = PROJECT_ROOT / "packaging" / "pypi" / "pyproject.toml"
     old_pep440 = to_pep440(old)
     pattern = rf'("mcp-mesh-core>={re.escape(old_pep440)}")'
@@ -101,7 +101,7 @@ def bump_python_dependencies(old: str, new_pep440: str, dry_run: bool) -> list[s
 
 def bump_typescript_packages(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 3: TypeScript/Node.js core package versions."""
-    changed = []
+    changed: list[str] = []
     files = [
         PROJECT_ROOT / "src" / "runtime" / "typescript" / "package.json",
         PROJECT_ROOT / "src" / "runtime" / "core" / "typescript" / "package.json",
@@ -117,7 +117,7 @@ def bump_typescript_packages(old: str, new: str, dry_run: bool) -> list[str]:
 
 def bump_typescript_dependencies(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 4: @mcpmesh/* dependency versions in package.json files."""
-    changed = []
+    changed: list[str] = []
     files = [
         PROJECT_ROOT / "npm" / "cli" / "package.json",
         PROJECT_ROOT / "src" / "runtime" / "typescript" / "package.json",
@@ -133,7 +133,7 @@ def bump_typescript_dependencies(old: str, new: str, dry_run: bool) -> list[str]
 
 def bump_java_parent_poms(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 5: Java parent/module POM versions."""
-    changed = []
+    changed: list[str] = []
     files = [
         PROJECT_ROOT / "src" / "runtime" / "java" / "pom.xml",
         PROJECT_ROOT / "src" / "runtime" / "java" / "mcp-mesh-bom" / "pom.xml",
@@ -158,7 +158,7 @@ def bump_java_parent_poms(old: str, new: str, dry_run: bool) -> list[str]:
 
 def bump_java_example_poms(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 6: Java example POM mcp-mesh.version property."""
-    changed = []
+    changed: list[str] = []
     # Find all example pom.xml files
     patterns = [
         PROJECT_ROOT / "examples" / "java",
@@ -180,7 +180,7 @@ def bump_java_example_poms(old: str, new: str, dry_run: bool) -> list[str]:
 
 def bump_rust_cargo(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 7: Rust Cargo.toml version."""
-    changed = []
+    changed: list[str] = []
     f = PROJECT_ROOT / "src" / "runtime" / "core" / "Cargo.toml"
     pattern = rf'(version\s*=\s*"){re.escape(old)}(")'
     replacement = rf"\g<1>{new}\2"
@@ -191,7 +191,7 @@ def bump_rust_cargo(old: str, new: str, dry_run: bool) -> list[str]:
 
 def bump_helm_charts(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 8: Helm Chart.yaml and Chart.lock files."""
-    changed = []
+    changed: list[str] = []
     helm_dir = PROJECT_ROOT / "helm"
     if not helm_dir.exists():
         return changed
@@ -227,7 +227,7 @@ def bump_helm_charts(old: str, new: str, dry_run: bool) -> list[str]:
 
 def bump_package_managers(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 9: Homebrew and Scoop package manager files."""
-    changed = []
+    changed: list[str] = []
 
     # Homebrew
     homebrew = PROJECT_ROOT / "packaging" / "homebrew" / "mcp-mesh.rb"
@@ -250,7 +250,7 @@ def bump_go_handler_templates(
     old: str, new: str, new_pep440: str, dry_run: bool
 ) -> list[str]:
     """Category 10: Go handler template files."""
-    changed = []
+    changed: list[str] = []
     handlers_dir = PROJECT_ROOT / "src" / "core" / "cli" / "handlers"
 
     # python_handler.go: mcp-mesh>=OLD
@@ -287,7 +287,7 @@ def bump_go_handler_templates(
 
 def bump_scaffold_templates(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 11: Scaffold template files (meshctl scaffold)."""
-    changed = []
+    changed: list[str] = []
     templates_dir = PROJECT_ROOT / "cmd" / "meshctl" / "templates"
 
     # Java templates: <mcp-mesh.version>OLD</mcp-mesh.version>
@@ -331,7 +331,7 @@ def _bump_version_in_md(md_file: Path, old: str, new: str, dry_run: bool) -> boo
 
 def bump_documentation(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 12: Documentation markdown files."""
-    changed = []
+    changed: list[str] = []
 
     md_dirs = [
         PROJECT_ROOT / "docs",
@@ -350,7 +350,7 @@ def bump_documentation(old: str, new: str, dry_run: bool) -> list[str]:
 
 def bump_test_config(old: str, new: str, new_pep440: str, dry_run: bool) -> list[str]:
     """Category 13: Test configuration file."""
-    changed = []
+    changed: list[str] = []
     f = PROJECT_ROOT / "tests" / "lib-tests" / "config.yaml"
     if not f.exists():
         return changed
@@ -383,7 +383,7 @@ def bump_test_config(old: str, new: str, new_pep440: str, dry_run: bool) -> list
 
 def bump_example_requirements(old: str, new_pep440: str, dry_run: bool) -> list[str]:
     """Category 14: Example agent requirements.txt files."""
-    changed = []
+    changed: list[str] = []
     agents_dir = PROJECT_ROOT / "examples" / "docker-examples" / "agents"
     if not agents_dir.exists():
         return changed
@@ -399,7 +399,7 @@ def bump_example_requirements(old: str, new_pep440: str, dry_run: bool) -> list[
 
 def bump_ts_toolcall_examples(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 16: TypeScript toolcall example package.json files."""
-    changed = []
+    changed: list[str] = []
     toolcalls_dir = PROJECT_ROOT / "examples" / "toolcalls"
     if not toolcalls_dir.exists():
         return changed
@@ -415,7 +415,7 @@ def bump_ts_toolcall_examples(old: str, new: str, dry_run: bool) -> list[str]:
 
 def bump_docker_example_helm(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 17: Docker example Helm values files."""
-    changed = []
+    changed: list[str] = []
     agents_dir = PROJECT_ROOT / "examples" / "docker-examples" / "agents"
     if not agents_dir.exists():
         return changed
@@ -430,7 +430,7 @@ def bump_docker_example_helm(old: str, new: str, dry_run: bool) -> list[str]:
 
 def bump_integration_test_artifacts(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 18: Integration test artifact package.json and pom.xml files."""
-    changed = []
+    changed: list[str] = []
     suites_dir = PROJECT_ROOT / "tests" / "integration" / "suites"
     if not suites_dir.exists():
         return changed
@@ -453,7 +453,7 @@ def bump_integration_test_artifacts(old: str, new: str, dry_run: bool) -> list[s
 
 def bump_test_documentation(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 19: Test documentation README files."""
-    changed = []
+    changed: list[str] = []
     files = [
         PROJECT_ROOT / "tests" / "integration" / "README.md",
         PROJECT_ROOT / "tests" / "integration" / "suites" / "README.md",
@@ -472,28 +472,39 @@ def bump_test_documentation(old: str, new: str, dry_run: bool) -> list[str]:
 
 
 def bump_scaffold_docker_tags(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 20: Docker image tags in scaffold compose.go."""
-    changed = []
+    """Category 20: Docker image tags in scaffold Dockerfiles and compose.go."""
+    changed: list[str] = []
+
+    # compose.go uses minor version tags (e.g., mcpmesh/python-runtime:0.9)
     old_parts = old.split(".")
     new_parts = new.split(".")
     old_minor = f"{old_parts[0]}.{old_parts[1]}"
     new_minor = f"{new_parts[0]}.{new_parts[1]}"
 
-    if old_minor == new_minor:
-        return changed
+    if old_minor != new_minor:
+        f = PROJECT_ROOT / "src" / "core" / "cli" / "scaffold" / "compose.go"
+        pattern = rf"(mcpmesh/(?:python-runtime|typescript-runtime|java-runtime|registry):){re.escape(old_minor)}"
+        replacement = rf"\g<1>{new_minor}"
+        if replace_in_file(f, pattern, replacement, dry_run):
+            changed.append(str(f.relative_to(PROJECT_ROOT)))
 
-    f = PROJECT_ROOT / "src" / "core" / "cli" / "scaffold" / "compose.go"
-    pattern = rf"(mcpmesh/(?:python-runtime|typescript-runtime|java-runtime|registry):){re.escape(old_minor)}"
-    replacement = rf"\g<1>{new_minor}"
-    if replace_in_file(f, pattern, replacement, dry_run):
-        changed.append(str(f.relative_to(PROJECT_ROOT)))
+    # Dockerfile templates use full version tags (e.g., mcpmesh/python-runtime:1.0.0-beta.1)
+    templates_dir = PROJECT_ROOT / "cmd" / "meshctl" / "templates"
+    if templates_dir.exists():
+        for dockerfile in sorted(templates_dir.glob("*/*/Dockerfile.tmpl")):
+            pattern = (
+                r"(mcpmesh/(?:python-runtime|typescript-runtime|java-runtime):)[^\s]+"
+            )
+            replacement = rf"\g<1>{new}"
+            if replace_in_file(dockerfile, pattern, replacement, dry_run):
+                changed.append(str(dockerfile.relative_to(PROJECT_ROOT)))
 
     return changed
 
 
 def bump_ci_workflows(old: str, new: str, dry_run: bool) -> list[str]:
     """Category 15: CI/CD workflow files."""
-    changed = []
+    changed: list[str] = []
     workflows = [
         PROJECT_ROOT / ".github" / "workflows" / "release.yml",
         PROJECT_ROOT / ".github" / "workflows" / "helm-release.yml",

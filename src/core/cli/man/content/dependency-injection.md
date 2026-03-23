@@ -1,10 +1,12 @@
-# Dependency Injection
+# Dependency Injection (DDDI)
 
-> Automatic wiring of capabilities between agents
+> Distributed Dynamic Dependency Injection — runtime discovery, proxy creation, and automatic wiring across the mesh
 
 ## Overview
 
 MCP Mesh provides automatic dependency injection (DI) that connects agents based on their declared capabilities and dependencies. When a function declares a dependency, the mesh automatically creates a callable proxy that routes to the providing agent.
+
+MCP Mesh implements **Distributed Dynamic Dependency Injection (DDDI)** — unlike traditional DI frameworks that wire dependencies at compile time on a single machine, DDDI discovers and injects dependencies at runtime across distributed agents, languages, and clouds.
 
 ## How It Works
 

@@ -73,6 +73,9 @@ def {{ toSnakeCase .Name }}(
     Returns:
         {{ if eq .ResponseFormat "json" }}Structured response with processing results{{ else }}Processing result as text{{ end }}
     """
+    # To pass media (images, PDFs) to the LLM:
+    # return llm("Analyze this image", media=["file:///tmp/photo.png"])
+    # return llm("What is this?", media=[(png_bytes, "image/png")])
     return llm("Process the input based on the context provided")
 
 

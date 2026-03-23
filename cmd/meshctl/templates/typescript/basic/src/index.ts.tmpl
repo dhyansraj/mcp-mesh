@@ -5,7 +5,7 @@
  * {{ if .Description }}{{ .Description }}{{ else }}A MCP Mesh agent generated using meshctl scaffold.{{ end }}
  */
 
-import { FastMCP, mesh, McpMeshTool } from "@mcpmesh/sdk";
+import { FastMCP, mesh, McpMeshTool, uploadMedia, mediaResult, mediaParam } from "@mcpmesh/sdk";
 import { z } from "zod";
 
 // FastMCP server instance
@@ -63,6 +63,41 @@ agent.addTool({
 //     }
 //     const result = await calculator({ expression: args.expression });
 //     return `Calculator says: ${result}`;
+//   },
+// });
+
+// ===== MULTIMODAL EXAMPLE (uncomment and adapt) =====
+//
+// Return media (images, PDFs, files) from tools using mediaResult.
+// LLMs automatically resolve resource_link objects to native image blocks.
+//
+// agent.addTool({
+//   name: "generate_chart",
+//   capability: "chart_gen",
+//   description: "Generate a chart",
+//   tags: ["tools"],
+//   parameters: z.object({ query: z.string() }),
+//   execute: async ({ query }) => {
+//     const png = renderChart(query);
+//     const uri = await uploadMedia(png, "chart.png", "image/png");
+//     return mediaResult(uri, "Chart", "image/png", query, png.length);
+//   },
+// });
+//
+// Accept media URIs with mediaParam() type hints:
+//
+// agent.addTool({
+//   name: "analyze_image",
+//   capability: "image_analyzer",
+//   description: "Analyze an image",
+//   tags: ["tools"],
+//   parameters: z.object({
+//     question: z.string(),
+//     image: mediaParam("image/*"),
+//   }),
+//   execute: async ({ question, image }) => {
+//     // Pass media URI to LLM for analysis
+//     return `Received image: ${image}`;
 //   },
 // });
 
