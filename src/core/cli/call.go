@@ -285,10 +285,17 @@ func parseToolSpecifier(spec string) (agentName, toolName string) {
 	return "", parts[0]
 }
 
-// createHTTPClient returns the shared CLI HTTP client.
-// Parameters are kept for API compatibility; the shared client handles TLS and timeout.
+// createHTTPClient returns an HTTP client with the specified timeout.
+// Uses the shared TLS config from getCLIClient but with a custom timeout.
 func createHTTPClient(timeoutSeconds int, insecure bool) *http.Client {
-	return getCLIClient()
+	base := getCLIClient()
+	if timeoutSeconds > 0 && time.Duration(timeoutSeconds)*time.Second != base.Timeout {
+		return &http.Client{
+			Timeout:   time.Duration(timeoutSeconds) * time.Second,
+			Transport: base.Transport,
+		}
+	}
+	return base
 }
 
 // AgentWithCapabilities represents an agent from the registry with capabilities

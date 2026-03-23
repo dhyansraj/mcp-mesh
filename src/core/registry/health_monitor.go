@@ -105,24 +105,25 @@ func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 		return
 	}
 
-	// Batch update: collect IDs and update in one query
-	ids := make([]string, len(agentsToUpdate))
-	for i, a := range agentsToUpdate {
-		ids[i] = a.ID
+	// Update each agent while preserving their original updated_at timestamp.
+	// Individual updates needed because Ent's UpdateDefault(time.Now) would
+	// auto-bump updated_at in a batch update, making agents appear recently seen.
+	var agentsUpdated int
+	for _, a := range agentsToUpdate {
+		_, err := h.entService.entDB.Client.Agent.
+			Update().
+			Where(agent.IDEQ(a.ID)).
+			SetStatus(agent.StatusUnhealthy).
+			SetUpdatedAt(a.UpdatedAt).
+			Save(ctx)
+		if err != nil {
+			h.logger.Error("Failed to mark agent %s as unhealthy: %v", a.ID, err)
+			continue
+		}
+		agentsUpdated++
 	}
 
-	affected, err := h.entService.entDB.Client.Agent.
-		Update().
-		Where(agent.IDIn(ids...)).
-		SetStatus(agent.StatusUnhealthy).
-		Save(ctx)
-
-	if err != nil {
-		h.logger.Error("Failed to batch update %d agents as unhealthy: %v", len(ids), err)
-		return
-	}
-
-	h.logger.Info("Health monitor: marked %d agents as unhealthy", affected)
+	h.logger.Info("Health monitor: marked %d agents as unhealthy", agentsUpdated)
 }
 
 // IsRunning returns whether the health monitor is currently running

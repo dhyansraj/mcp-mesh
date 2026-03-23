@@ -1380,16 +1380,22 @@ func determineRegistryURL(config *CLIConfig, registryURL, registryHost string, r
 // Global HTTP client for registry connections — uses shared CLI client
 var registryHTTPClient = getCLIClient()
 
-// configureHTTPClient sets up the registry HTTP client.
-// Uses the shared CLI client; parameter kept for API compatibility.
+// configureHTTPClient sets up the registry HTTP client with the specified timeout.
 func configureHTTPClient(timeoutSeconds int) {
-	registryHTTPClient = getCLIClient()
+	base := getCLIClient()
+	registryHTTPClient = &http.Client{
+		Timeout:   time.Duration(timeoutSeconds) * time.Second,
+		Transport: base.Transport,
+	}
 }
 
-// configureHTTPClientWithTLS sets up the registry HTTP client with TLS.
-// Uses the shared CLI client; parameters kept for API compatibility.
+// configureHTTPClientWithTLS sets up the registry HTTP client with TLS and timeout.
 func configureHTTPClientWithTLS(timeoutSeconds int, insecure bool) {
-	registryHTTPClient = getCLIClient()
+	base := getCLIClient()
+	registryHTTPClient = &http.Client{
+		Timeout:   time.Duration(timeoutSeconds) * time.Second,
+		Transport: base.Transport,
+	}
 }
 
 // filterAgentsSince filters agents by last activity time

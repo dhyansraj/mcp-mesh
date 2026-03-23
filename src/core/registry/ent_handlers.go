@@ -301,7 +301,7 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 		result["version"] = *reg.Version
 	}
 	if reg.Runtime != nil {
-		result["runtime"] = derefStringType(reg.Runtime, "")
+		result["runtime"] = string(*reg.Runtime)
 	}
 	if reg.HttpHost != nil {
 		result["http_host"] = *reg.HttpHost
