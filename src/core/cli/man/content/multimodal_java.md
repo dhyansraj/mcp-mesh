@@ -65,7 +65,7 @@ Converts to vendor format:
 | Type                              | Claude             | OpenAI             | Gemini             |
 | --------------------------------- | ------------------ | ------------------ | ------------------ |
 | Images (png, jpeg, gif, webp)     | Native image block | image_url (base64) | Native image block |
-| PDF                               | Text fallback      | Text fallback      | Text fallback      |
+| PDF                               | Native document block | Text fallback      | Text fallback      |
 | Text (plain, csv, md, html, json) | Text block         | Text block         | Text block         |
 
 ## Multi-Agent Media Chain
