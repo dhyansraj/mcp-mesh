@@ -1,0 +1,966 @@
+package cli
+
+import (
+	"encoding/xml"
+	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"mcp-mesh/src/core/cli/handlers"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+)
+
+// agentNameCache caches extracted agent names to avoid repeated parsing
+// Uses sync.Map for thread-safe concurrent access when starting multiple agents
+var agentNameCache sync.Map
+
+// Standard mode
+func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) error {
+	quiet, _ := cmd.Flags().GetBool("quiet")
+
+	// Note: Prerequisites are validated in runStartCommand before reaching here
+
+	// Determine registry URL from flags or config
+	registryURL := determineStartRegistryURL(cmd, config)
+
+	// Check if registry is running
+	if !IsRegistryRunning(registryURL) {
+		// Only attempt to start registry if connecting to localhost
+		registryHost := getRegistryHostFromURL(registryURL, config.RegistryHost)
+		if isLocalhostRegistry(registryHost) {
+			if !quiet {
+				fmt.Printf("Registry not found at %s, starting embedded registry...\n", registryURL)
+			}
+
+			// Check if we can start a registry (port available)
+			registryPort := getRegistryPortFromURL(registryURL, config.RegistryPort)
+			if !IsPortAvailable(registryHost, registryPort) {
+				return fmt.Errorf("cannot start registry: port %d is already in use on %s", registryPort, registryHost)
+			}
+
+			// Start registry in detach
+			go func() {
+				if err := startRegistryWithOptions(config, true, cmd); err != nil {
+					fmt.Printf("Registry startup failed: %v\n", err)
+				}
+			}()
+
+			// Wait for registry to be ready
+			startupTimeout, _ := cmd.Flags().GetInt("startup-timeout")
+			if startupTimeout == 0 {
+				startupTimeout = config.StartupTimeout
+			}
+			if err := WaitForRegistry(registryURL, time.Duration(startupTimeout)*time.Second); err != nil {
+				return fmt.Errorf("registry startup timeout: %w", err)
+			}
+		} else {
+			// Remote registry - cannot start, must connect to existing
+			return fmt.Errorf("cannot connect to remote registry at %s - please ensure the registry is running", registryURL)
+		}
+	}
+
+	// Build environment for agents
+	agentEnv := buildAgentEnvironment(cmd, registryURL, config)
+
+	return startAgentsWithEnv(args, agentEnv, cmd, config)
+}
+
+// Connect-only mode
+func startConnectOnlyMode(cmd *cobra.Command, args []string, registryURL string, config *CLIConfig) error {
+	if len(args) == 0 {
+		return fmt.Errorf("agent file required in connect-only mode")
+	}
+
+	quiet, _ := cmd.Flags().GetBool("quiet")
+
+	// Note: Prerequisites are validated in runStartCommand before reaching here
+
+	// Validate registry connection
+	if !IsRegistryRunning(registryURL) {
+		return fmt.Errorf("cannot connect to registry at %s", registryURL)
+	}
+
+	if !quiet {
+		fmt.Printf("Connecting to external registry at %s\n", registryURL)
+	}
+
+	// Build environment for agents
+	agentEnv := buildAgentEnvironment(cmd, registryURL, config)
+
+	// Start agents with external registry
+	return startAgentsWithEnv(args, agentEnv, cmd, config)
+}
+
+// Background mode
+func startBackgroundMode(cmd *cobra.Command, args []string, config *CLIConfig) error {
+	// Note: We no longer check a single global PID file here.
+	// Per-agent PID files are written by startAgentsWithEnv when agents start.
+	// This allows running multiple 'meshctl start --detach' commands for different agents.
+
+	// Fork to detach
+	return forkToBackground(cmd, args, config)
+}
+
+func startAgents(agentPaths []string, config *CLIConfig, detach bool) error {
+	// Ensure registry is running
+	if !IsRegistryRunning(config.GetRegistryURL()) {
+		fmt.Printf("Registry not found, starting local registry on %s:%d\n", config.RegistryHost, config.RegistryPort)
+
+		// Find available port if needed
+		if !IsPortAvailable(config.RegistryHost, config.RegistryPort) {
+			availablePort, err := FindAvailablePort(config.RegistryHost, config.RegistryPort)
+			if err != nil {
+				return fmt.Errorf("no available port found: %w", err)
+			}
+			fmt.Printf("Port %d in use, using port %d instead\n", config.RegistryPort, availablePort)
+			config.RegistryPort = availablePort
+		}
+
+		// Start registry in detach
+		registryCmd, err := startRegistryService(config)
+		if err != nil {
+			return fmt.Errorf("failed to start registry: %w", err)
+		}
+
+		if err := registryCmd.Start(); err != nil {
+			return fmt.Errorf("failed to start registry: %w", err)
+		}
+
+		// Record registry process
+		registryProc := ProcessInfo{
+			PID:       registryCmd.Process.Pid,
+			Name:      "mcp-mesh-registry",
+			Type:      "registry",
+			Command:   registryCmd.String(),
+			StartTime: time.Now(),
+			Status:    "running",
+		}
+		if err := AddRunningProcess(registryProc); err != nil {
+			fmt.Printf("Warning: failed to record registry process: %v\n", err)
+		}
+
+		// Wait for registry to be ready
+		fmt.Print("Waiting for registry to be ready...")
+		if err := WaitForRegistry(config.GetRegistryURL(), time.Duration(config.StartupTimeout)*time.Second); err != nil {
+			return fmt.Errorf("registry failed to start: %w", err)
+		}
+		fmt.Println(" ✓")
+	}
+
+	// Start all agents
+	var agentCmds []*exec.Cmd
+	for _, agentPath := range agentPaths {
+		// Convert to absolute path
+		absPath, err := AbsolutePath(agentPath)
+		if err != nil {
+			return fmt.Errorf("invalid agent path %s: %w", agentPath, err)
+		}
+
+		fmt.Printf("Starting agent: %s\n", absPath)
+
+		cmd, err := StartPythonAgent(absPath, config)
+		if err != nil {
+			return fmt.Errorf("failed to prepare agent %s: %w", agentPath, err)
+		}
+
+		if detach {
+			if err := cmd.Start(); err != nil {
+				return fmt.Errorf("failed to start agent %s: %w", agentPath, err)
+			}
+
+			// Record agent process (only after Start so cmd.Process is available)
+			agentProc := ProcessInfo{
+				PID:       cmd.Process.Pid,
+				Name:      filepath.Base(agentPath),
+				Type:      "agent",
+				Command:   cmd.String(),
+				StartTime: time.Now(),
+				Status:    "running",
+				FilePath:  absPath,
+			}
+			if err := AddRunningProcess(agentProc); err != nil {
+				fmt.Printf("Warning: failed to record agent process: %v\n", err)
+			}
+
+			fmt.Printf("Agent %s started (PID: %d)\n", filepath.Base(agentPath), cmd.Process.Pid)
+		} else {
+			agentCmds = append(agentCmds, cmd)
+			fmt.Printf("Agent %s prepared for foreground\n", filepath.Base(agentPath))
+		}
+	}
+
+	if detach {
+		fmt.Printf("All agents started in detach\n")
+		fmt.Printf("Registry URL: %s\n", config.GetRegistryURL())
+		return nil
+	}
+
+	// If running in foreground, start agents and wait
+	if len(agentCmds) > 0 {
+		// Setup signal handling
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+		fmt.Println("Agents are running. Press Ctrl+C to stop all services.")
+
+		// Start all agents
+		for _, cmd := range agentCmds {
+			go func(c *exec.Cmd) {
+				if err := c.Run(); err != nil {
+					fmt.Printf("Agent exited with error: %v\n", err)
+				}
+			}(cmd)
+		}
+
+		// Wait for signal
+		<-sigChan
+		fmt.Println("\nShutting down all services...")
+
+		// Stop all processes
+		processes, err := GetRunningProcesses()
+		if err == nil {
+			for _, proc := range processes {
+				fmt.Printf("Stopping %s (PID: %d)\n", proc.Name, proc.PID)
+				if err := KillProcess(proc.PID, time.Duration(config.ShutdownTimeout)*time.Second); err != nil {
+					fmt.Printf("Failed to stop %s: %v\n", proc.Name, err)
+				}
+				RemoveRunningProcess(proc.PID)
+			}
+		}
+	}
+
+	return nil
+}
+
+// Build agent environment with all flag support
+func buildAgentEnvironment(cmd *cobra.Command, registryURL string, config *CLIConfig) []string {
+	env := os.Environ()
+
+	// Add registry configuration
+	env = append(env, fmt.Sprintf("MCP_MESH_REGISTRY_URL=%s", registryURL))
+	env = append(env, fmt.Sprintf("MCP_MESH_REGISTRY_HOST=%s", config.RegistryHost))
+	env = append(env, fmt.Sprintf("MCP_MESH_REGISTRY_PORT=%d", config.RegistryPort))
+
+	// Add database path
+	env = append(env, fmt.Sprintf("MCP_MESH_DATABASE_URL=sqlite:///%s", config.DBPath))
+
+	// Add logging configuration
+	env = append(env, fmt.Sprintf("MCP_MESH_LOG_LEVEL=%s", config.LogLevel))
+	env = append(env, fmt.Sprintf("MCP_MESH_DEBUG_MODE=%t", config.DebugMode))
+
+	// Also set MCP_MESH_DEBUG for Python decorator compatibility
+	if config.DebugMode {
+		env = append(env, "MCP_MESH_DEBUG=true")
+	}
+
+	// Add custom environment variables from --env flag
+	customEnv, _ := cmd.Flags().GetStringArray("env")
+	env = append(env, customEnv...)
+
+	// Add agent-specific overrides
+	if agentName, _ := cmd.Flags().GetString("agent-name"); agentName != "" {
+		env = append(env, fmt.Sprintf("MCP_MESH_AGENT_NAME=%s", agentName))
+	}
+
+	if agentVersion, _ := cmd.Flags().GetString("agent-version"); agentVersion != "" {
+		env = append(env, fmt.Sprintf("MCP_MESH_AGENT_VERSION=%s", agentVersion))
+	}
+
+	capabilities, _ := cmd.Flags().GetStringArray("capabilities")
+	if len(capabilities) > 0 {
+		env = append(env, fmt.Sprintf("MCP_MESH_AGENT_CAPABILITIES=%s", strings.Join(capabilities, ",")))
+	}
+
+	return env
+}
+
+// Start agents with environment
+func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, config *CLIConfig) error {
+	var agentCmds []*exec.Cmd
+	var watchers []*AgentWatcher
+	workingDir, _ := cmd.Flags().GetString("working-dir")
+	user, _ := cmd.Flags().GetString("user")
+	group, _ := cmd.Flags().GetString("group")
+	detach, _ := cmd.Flags().GetBool("detach")
+	quiet, _ := cmd.Flags().GetBool("quiet")
+	watch, _ := cmd.Flags().GetBool("watch")
+
+	// Check if stdout is redirected (not a terminal) - indicates background/forked mode
+	// In this case, we create per-agent log files even though detach=false
+	isBackgroundMode := !isTerminal(os.Stdout)
+
+	// Initialize log manager once if we'll need it (avoid creating per-agent)
+	var lm *LogManager
+	if detach || isBackgroundMode {
+		var err error
+		lm, err = NewLogManager()
+		if err != nil {
+			return fmt.Errorf("failed to initialize log manager: %w", err)
+		}
+	}
+
+	if watch && !quiet {
+		fmt.Println("🔄 Watch mode enabled - agents will restart on file changes")
+	}
+
+	for _, agentPath := range agentPaths {
+		// Convert to absolute path
+		absPath, err := AbsolutePath(agentPath)
+		if err != nil {
+			return fmt.Errorf("invalid agent path %s: %w", agentPath, err)
+		}
+
+		if !quiet {
+			fmt.Printf("Starting agent: %s\n", absPath)
+		}
+
+		// Generate per-agent TLS cert and augment env if --tls-auto is enabled
+		agentEnv := env
+		if config.TLSAuto && config.TLSAutoConfigRef != nil {
+			agentName := extractAgentName(absPath)
+			certPath, keyPath, err := config.TLSAutoConfigRef.GenerateAgentCert(agentName)
+			if err != nil {
+				return fmt.Errorf("failed to generate TLS cert for agent %s: %w", agentName, err)
+			}
+			agentEnv = append(append([]string{}, env...), config.TLSAutoConfigRef.GetAgentTLSEnv(certPath, keyPath)...)
+		}
+
+		// For Java agents with watch mode, use AgentWatcher instead of bash wrapper
+		if watch && isJavaProject(absPath) {
+			watcher, err := createJavaWatcher(absPath, agentEnv, workingDir, user, group, quiet)
+			if err != nil {
+				return fmt.Errorf("failed to create watcher for %s: %w", agentPath, err)
+			}
+
+			if lm != nil {
+				agentName := watcher.config.AgentName
+				watcher.config.LogFileFactory = func() (*os.File, error) {
+					lm.RotateLogs(agentName)
+					return lm.CreateLogFile(agentName)
+				}
+			}
+
+			watchers = append(watchers, watcher)
+			continue
+		}
+
+		// For Python agents with watch mode, use AgentWatcher instead of reload_runner
+		if watch && isPythonProject(absPath) {
+			watcher, err := createPythonWatcher(absPath, agentEnv, workingDir, user, group, quiet)
+			if err != nil {
+				return fmt.Errorf("failed to create watcher for %s: %w", agentPath, err)
+			}
+
+			if lm != nil {
+				agentName := watcher.config.AgentName
+				watcher.config.LogFileFactory = func() (*os.File, error) {
+					lm.RotateLogs(agentName)
+					return lm.CreateLogFile(agentName)
+				}
+			}
+
+			watchers = append(watchers, watcher)
+			continue
+		}
+
+		// Create agent command with enhanced environment
+		agentCmd, err := createAgentCommand(absPath, agentEnv, workingDir, user, group, watch)
+		if err != nil {
+			return fmt.Errorf("failed to prepare agent %s: %w", agentPath, err)
+		}
+
+		// Create per-agent log files if:
+		// 1. Running in direct detach mode (-d flag), OR
+		// 2. Running in background mode (stdout redirected, not a terminal)
+		if detach || isBackgroundMode {
+			// Extract agent name from @mesh.agent decorator, fall back to filename
+			agentName := extractAgentName(absPath)
+
+			// Rotate existing logs
+			if err := lm.RotateLogs(agentName); err != nil && !quiet {
+				fmt.Printf("Warning: failed to rotate logs for %s: %v\n", agentName, err)
+			}
+
+			// Create log file and redirect output
+			logFile, err := lm.CreateLogFile(agentName)
+			if err != nil {
+				return fmt.Errorf("failed to create log file for %s: %w", agentName, err)
+			}
+			agentCmd.Stdout = logFile
+			agentCmd.Stderr = logFile
+
+			if err := agentCmd.Start(); err != nil {
+				logFile.Close()
+				return fmt.Errorf("failed to start agent %s: %w", agentPath, err)
+			}
+
+			// Write PID file for this agent
+			pm, err := NewPIDManager()
+			if err == nil {
+				if err := pm.WritePID(agentName, agentCmd.Process.Pid); err != nil && !quiet {
+					fmt.Printf("Warning: failed to write PID file for %s: %v\n", agentName, err)
+				}
+			}
+
+			// Record agent process
+			agentProc := ProcessInfo{
+				PID:       agentCmd.Process.Pid,
+				Name:      agentName,
+				Type:      "agent",
+				Command:   agentCmd.String(),
+				StartTime: time.Now(),
+				Status:    "running",
+				FilePath:  absPath,
+			}
+			if err := AddRunningProcess(agentProc); err != nil && !quiet {
+				fmt.Printf("Warning: failed to record agent process: %v\n", err)
+			}
+
+			if !quiet {
+				fmt.Printf("Agent %s started (PID: %d)\n", agentName, agentCmd.Process.Pid)
+			}
+		} else {
+			// For foreground mode, we'll start the process later
+			agentCmds = append(agentCmds, agentCmd)
+		}
+	}
+
+	if (detach || isBackgroundMode) && len(watchers) == 0 {
+		// In detach or background mode, agents are already started with their own log files
+		// Just return (the parent forkToBackground will handle user messages)
+		// But if we have watchers, fall through to runAgentsInForeground to keep process alive
+		return nil
+	}
+
+	// If running in foreground, start agents and wait
+	if len(agentCmds) > 0 || len(watchers) > 0 {
+		return runAgentsInForeground(agentCmds, watchers, cmd, config)
+	}
+
+	return nil
+}
+
+func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd *cobra.Command, config *CLIConfig) error {
+	// Setup signal handling
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	quiet, _ := cmd.Flags().GetBool("quiet")
+	if !quiet {
+		fmt.Println("Agents are running. Press Ctrl+C to stop all services.")
+	}
+
+	// Initialize PID manager for tracking
+	pm, pmErr := NewPIDManager()
+
+	// Track agent names for cleanup
+	var agentNames []string
+
+	// Start all agents
+	for i, agentCmd := range agentCmds {
+		// Start the command
+		if err := agentCmd.Start(); err != nil {
+			return fmt.Errorf("failed to start agent: %w", err)
+		}
+
+		// Extract agent name from command args (look for .py file)
+		agentName := fmt.Sprintf("agent-%d", i)
+		for _, arg := range agentCmd.Args {
+			if strings.HasSuffix(arg, ".py") {
+				agentName = filepath.Base(arg)
+				agentName = strings.TrimSuffix(agentName, ".py")
+				break
+			}
+		}
+		agentNames = append(agentNames, agentName)
+
+		// Write PID file for this agent
+		if pmErr == nil {
+			if err := pm.WritePID(agentName, agentCmd.Process.Pid); err != nil && !quiet {
+				fmt.Printf("Warning: failed to write PID file for %s: %v\n", agentName, err)
+			}
+		}
+
+		// Record the process
+		agentProc := ProcessInfo{
+			PID:       agentCmd.Process.Pid,
+			Name:      agentName,
+			Type:      "agent",
+			Command:   agentCmd.String(),
+			StartTime: time.Now(),
+			Status:    "running",
+		}
+		if err := AddRunningProcess(agentProc); err != nil && !quiet {
+			fmt.Printf("Warning: failed to record agent process: %v\n", err)
+		}
+
+		// Run in goroutine to wait for completion
+		go func(c *exec.Cmd, name string) {
+			if err := c.Wait(); err != nil && !quiet {
+				fmt.Printf("Agent exited with error: %v\n", err)
+			}
+			RemoveRunningProcess(c.Process.Pid)
+			// Clean up PID file when agent exits
+			if pmErr == nil {
+				pm.RemovePID(name)
+			}
+		}(agentCmd, agentName)
+	}
+
+	// Start all watchers (each blocks in its own goroutine)
+	for _, w := range watchers {
+		go func(watcher *AgentWatcher) {
+			if err := watcher.Start(); err != nil && !quiet {
+				fmt.Printf("Watcher error: %v\n", err)
+			}
+		}(w)
+	}
+
+	// Write PID files for watcher-managed agents
+	// Use meshctl's own PID — when meshctl stop sends SIGTERM, signal handler cleans up watchers
+	for _, w := range watchers {
+		agentName := w.config.AgentName
+		agentNames = append(agentNames, agentName)
+
+		if pmErr == nil {
+			if err := pm.WritePID(agentName, os.Getpid()); err != nil && !quiet {
+				fmt.Printf("Warning: failed to write PID file for %s: %v\n", agentName, err)
+			}
+		}
+
+		// Record the process for tracking
+		agentProc := ProcessInfo{
+			PID:       os.Getpid(),
+			Name:      agentName,
+			Type:      "agent",
+			Command:   "watcher:" + agentName,
+			StartTime: time.Now(),
+			Status:    "running",
+		}
+		if err := AddRunningProcess(agentProc); err != nil && !quiet {
+			fmt.Printf("Warning: failed to record watcher process: %v\n", err)
+		}
+	}
+
+	// Wait for signal
+	<-sigChan
+	if !quiet {
+		fmt.Println("\nShutting down all services...")
+	}
+
+	// Stop all watchers
+	for _, w := range watchers {
+		w.Stop()
+	}
+	for _, w := range watchers {
+		w.Wait()
+	}
+
+	// Clean up watcher PID files
+	if pmErr == nil {
+		for _, w := range watchers {
+			pm.RemovePID(w.config.AgentName)
+		}
+	}
+
+	// Stop all processes - agents first, registry last (issue #442)
+	processes, err := GetRunningProcesses()
+	if err == nil {
+		shutdownTimeout, _ := cmd.Flags().GetInt("shutdown-timeout")
+		if shutdownTimeout == 0 {
+			shutdownTimeout = config.ShutdownTimeout
+		}
+
+		// Separate agents from registry
+		var agents []ProcessInfo
+		var registry *ProcessInfo
+		for i := range processes {
+			if processes[i].Type == "registry" {
+				registry = &processes[i]
+			} else {
+				agents = append(agents, processes[i])
+			}
+		}
+
+		// Stop agents first (in parallel)
+		if len(agents) > 0 {
+			var wg sync.WaitGroup
+			for _, proc := range agents {
+				wg.Add(1)
+				go func(p ProcessInfo) {
+					defer wg.Done()
+					if !quiet {
+						fmt.Printf("Stopping %s (PID: %d)\n", p.Name, p.PID)
+					}
+					if err := KillProcess(p.PID, time.Duration(shutdownTimeout)*time.Second); err != nil && !quiet {
+						fmt.Printf("Failed to stop %s: %v\n", p.Name, err)
+					}
+					RemoveRunningProcess(p.PID)
+				}(proc)
+			}
+			wg.Wait()
+
+			// Grace period for agents to complete unregister HTTP calls
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		// Stop registry last
+		if registry != nil {
+			if !quiet {
+				fmt.Printf("Stopping %s (PID: %d)\n", registry.Name, registry.PID)
+			}
+			if err := KillProcess(registry.PID, time.Duration(shutdownTimeout)*time.Second); err != nil && !quiet {
+				fmt.Printf("Failed to stop %s: %v\n", registry.Name, err)
+			}
+			RemoveRunningProcess(registry.PID)
+		}
+	}
+
+	// Clean up all PID files for tracked agents
+	if pmErr == nil {
+		for _, name := range agentNames {
+			pm.RemovePID(name)
+		}
+	}
+
+	return nil
+}
+
+func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig) error {
+	// Create a new command to run in detach
+	cmdArgs := []string{os.Args[0], "start"}
+	cmdArgs = append(cmdArgs, args...)
+
+	// Add all the flags to the detach command
+	cobraCmd.Flags().Visit(func(flag *pflag.Flag) {
+		// Don't pass detach flag to avoid infinite loop
+		// Don't pass deprecated pid-file flag
+		if flag.Name != "detach" && flag.Name != "pid-file" {
+			// Handle boolean flags differently - don't pass "true" as a value
+			// as it gets interpreted as a positional argument
+			if flag.Value.Type() == "bool" {
+				if flag.Value.String() == "true" {
+					cmdArgs = append(cmdArgs, "--"+flag.Name)
+				}
+				// If false, don't pass the flag at all
+			} else {
+				cmdArgs = append(cmdArgs, "--"+flag.Name, flag.Value.String())
+			}
+		}
+	})
+
+	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	cmd.Env = os.Environ()
+
+	// Determine log name (agent name or "registry")
+	registryOnly, _ := cobraCmd.Flags().GetBool("registry-only")
+	var logName string
+	if registryOnly || len(args) == 0 {
+		logName = "registry"
+	} else if len(args) == 1 && isAgentFile(args[0]) {
+		logName = getAgentNameFallback(args[0])
+	} else {
+		// Multiple agents - use first agent name for primary log
+		logName = "meshctl"
+	}
+
+	// Set up log file for detached process
+	lm, err := NewLogManager()
+	if err != nil {
+		return fmt.Errorf("failed to initialize log manager: %w", err)
+	}
+
+	// Rotate existing logs
+	quiet, _ := cobraCmd.Flags().GetBool("quiet")
+	if err := lm.RotateLogs(logName); err != nil && !quiet {
+		fmt.Printf("Warning: failed to rotate logs for %s: %v\n", logName, err)
+	}
+
+	// Create log file and redirect output
+	logFile, err := lm.CreateLogFile(logName)
+	if err != nil {
+		return fmt.Errorf("failed to create log file for %s: %w", logName, err)
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
+	// Start the process
+	if err := cmd.Start(); err != nil {
+		logFile.Close()
+		return fmt.Errorf("failed to start detach process: %w", err)
+	}
+
+	if !quiet {
+		// Extract agent names from args for display (use decorator name if available)
+		var agentNames []string
+		for _, arg := range args {
+			if isAgentFile(arg) {
+				absPath, _ := filepath.Abs(arg)
+				name := extractAgentName(absPath)
+				agentNames = append(agentNames, name)
+			}
+		}
+
+		if len(agentNames) == 1 {
+			fmt.Printf("Started '%s' in detach\n", agentNames[0])
+			fmt.Printf("Logs: ~/.mcp-mesh/logs/%s.log\n", agentNames[0])
+			fmt.Printf("Use 'meshctl logs %s' to view or 'meshctl stop %s' to stop\n", agentNames[0], agentNames[0])
+		} else if len(agentNames) > 1 {
+			fmt.Printf("Starting %d agents in detach: %s\n", len(agentNames), strings.Join(agentNames, ", "))
+			fmt.Printf("Logs: ~/.mcp-mesh/logs/<agent>.log\n")
+			fmt.Printf("Use 'meshctl logs <agent>' to view or 'meshctl stop' to stop all\n")
+		} else {
+			fmt.Printf("Started in detach\n")
+			fmt.Printf("Use 'meshctl logs <agent>' to view logs or 'meshctl stop' to stop\n")
+		}
+	}
+
+	return nil
+}
+
+// isTerminal checks if the given file is a terminal (TTY)
+func isTerminal(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	stat, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	// Check if the file mode indicates it's a character device (terminal)
+	return (stat.Mode() & os.ModeCharDevice) != 0
+}
+
+// extractAgentName extracts the agent name from agent configuration.
+// For Python: extracts from @mesh.agent(name="...") decorator
+// For TypeScript: extracts from mesh(server, { name: "..." }) call
+// For Java: extracts from @MeshAgent(name="...") annotation or pom.xml artifactId
+// Falls back to the script filename if extraction fails.
+// Results are cached to avoid repeated file parsing.
+func extractAgentName(scriptPath string) string {
+	// Check cache first (thread-safe)
+	if cached, ok := agentNameCache.Load(scriptPath); ok {
+		return cached.(string)
+	}
+
+	handler := handlers.DetectLanguage(scriptPath)
+	lang := handler.Language()
+
+	var agentName string
+	switch lang {
+	case langTypeScript:
+		agentName = extractTypeScriptAgentName(scriptPath)
+	case langPython:
+		agentName = extractPythonAgentName(scriptPath)
+	case langJava:
+		agentName = extractJavaAgentName(scriptPath)
+	}
+
+	if agentName != "" {
+		agentNameCache.Store(scriptPath, agentName)
+		return agentName
+	}
+
+	// Fallback: use filename without extension
+	fallback := getAgentNameFallback(scriptPath)
+	agentNameCache.Store(scriptPath, fallback)
+	return fallback
+}
+
+// getAgentNameFallback returns a fallback name based on the file path
+func getAgentNameFallback(scriptPath string) string {
+	fallback := filepath.Base(scriptPath)
+	// Remove common extensions
+	fallback = strings.TrimSuffix(fallback, ".py")
+	fallback = strings.TrimSuffix(fallback, ".ts")
+	fallback = strings.TrimSuffix(fallback, ".js")
+	fallback = strings.TrimSuffix(fallback, ".java")
+	fallback = strings.TrimSuffix(fallback, ".jar")
+
+	// If filename is "main" or "index", use parent directory name instead (#382)
+	if fallback == "main" || fallback == "index" {
+		dir := filepath.Dir(scriptPath)
+		parentName := filepath.Base(dir)
+		// Handle edge case: if dir is "." use actual current directory name
+		if parentName == "." {
+			if cwd, err := os.Getwd(); err == nil {
+				parentName = filepath.Base(cwd)
+			}
+		}
+		// For TypeScript, check if we're in a src directory
+		if parentName == "src" {
+			grandparentDir := filepath.Dir(dir)
+			grandparentName := filepath.Base(grandparentDir)
+			if grandparentName != "" && grandparentName != "." {
+				parentName = grandparentName
+			}
+		}
+		// Only use parentName if it's meaningful
+		if parentName != "" && parentName != "." {
+			fallback = parentName
+		}
+	}
+
+	return fallback
+}
+
+// extractTypeScriptAgentName extracts the agent name from mesh(server, { name: "..." })
+func extractTypeScriptAgentName(scriptPath string) string {
+	content, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return ""
+	}
+
+	// Match mesh(server, { name: "..." }) or mesh(server, { name: '...' })
+	// This regex handles multi-line mesh() calls
+	meshPattern := regexp.MustCompile(`mesh\s*\(\s*\w+\s*,\s*\{[\s\S]*?name\s*:\s*["']([^"']+)["'][\s\S]*?\}\s*\)`)
+	matches := meshPattern.FindSubmatch(content)
+	if len(matches) >= 2 {
+		return string(matches[1])
+	}
+
+	return ""
+}
+
+// extractPythonAgentName extracts the agent name from @mesh.agent(name="...") decorator
+func extractPythonAgentName(scriptPath string) string {
+	// Python script to extract agent name using AST
+	// Handles all valid Python decorator syntaxes:
+	//   @mesh.agent(name="hello")
+	//   @mesh.agent(name='hello')
+	//   @mesh.agent(\n    name="hello"\n)
+	//   @mesh.agent(auto_run=True, name="hello")
+	// Specifically matches mesh.agent (not other .agent decorators)
+	pythonScript := `
+import ast,sys
+try:
+    with open(sys.argv[1]) as f:
+        for n in ast.walk(ast.parse(f.read())):
+            if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute):
+                # Check for mesh.agent specifically
+                if n.func.attr=='agent' and isinstance(n.func.value,ast.Name) and n.func.value.id=='mesh':
+                    for k in n.keywords:
+                        if k.arg=='name' and isinstance(k.value,ast.Constant):
+                            print(k.value.value)
+                            sys.exit(0)
+except:
+    pass
+`
+	// Find a Python executable - try .venv first, then system Python
+	pythonExec := findPythonForAST()
+	if pythonExec == "" {
+		return ""
+	}
+
+	// Run Python script to extract agent name
+	cmd := exec.Command(pythonExec, "-c", pythonScript, scriptPath)
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	return strings.TrimSpace(string(output))
+}
+
+// findPythonForAST finds a Python executable for AST parsing.
+// Tries .venv first, then falls back to system Python.
+func findPythonForAST() string {
+	// Try .venv in current directory first (cross-platform)
+	venvPython := filepath.Join(".venv", "bin", "python")
+	if runtime.GOOS == "windows" {
+		venvPython = filepath.Join(".venv", "Scripts", "python.exe")
+	}
+	if _, err := os.Stat(venvPython); err == nil {
+		return venvPython
+	}
+
+	// Fall back to system Python
+	candidates := []string{"python3", "python"}
+	for _, candidate := range candidates {
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path
+		}
+	}
+
+	return ""
+}
+
+// extractJavaAgentName extracts the agent name from @MeshAgent annotation or pom.xml
+func extractJavaAgentName(projectPath string) string {
+	// If it's a JAR file, use the JAR filename
+	if strings.HasSuffix(strings.ToLower(projectPath), ".jar") {
+		name := filepath.Base(projectPath)
+		name = strings.TrimSuffix(name, ".jar")
+		// Remove version suffix if present (e.g., "agent-1.0.0" -> "agent")
+		if idx := strings.LastIndex(name, "-"); idx != -1 {
+			// Check if what follows is a version number
+			suffix := name[idx+1:]
+			if len(suffix) > 0 && (suffix[0] >= '0' && suffix[0] <= '9') {
+				name = name[:idx]
+			}
+		}
+		return name
+	}
+
+	// Find the project root (directory with pom.xml)
+	projectDir := projectPath
+	if info, err := os.Stat(projectPath); err == nil && !info.IsDir() {
+		projectDir = filepath.Dir(projectPath)
+	}
+
+	// Try to extract from @MeshAgent(name = "...") annotation in .java files
+	meshAgentRe := regexp.MustCompile(`@MeshAgent\s*\([\s\S]*?name\s*=\s*"([^"]+)"`)
+	srcDir := filepath.Join(projectDir, "src")
+	if _, err := os.Stat(srcDir); err == nil {
+		var foundName string
+		filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return filepath.SkipDir
+			}
+			if d.IsDir() || !strings.HasSuffix(path, ".java") {
+				return nil
+			}
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return nil
+			}
+			if matches := meshAgentRe.FindSubmatch(content); len(matches) > 1 {
+				foundName = string(matches[1])
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if foundName != "" {
+			return foundName
+		}
+	}
+
+	// Try to extract project artifactId from pom.xml (not parent's)
+	pomPath := filepath.Join(projectDir, "pom.xml")
+	if content, err := os.ReadFile(pomPath); err == nil {
+		type pomParent struct {
+			ArtifactId string `xml:"artifactId"`
+		}
+		type pomProject struct {
+			ArtifactId string    `xml:"artifactId"`
+			Parent     pomParent `xml:"parent"`
+		}
+		var pom pomProject
+		if err := xml.Unmarshal(content, &pom); err == nil && pom.ArtifactId != "" {
+			return pom.ArtifactId
+		}
+	}
+
+	// Fallback to directory name
+	return filepath.Base(projectDir)
+}

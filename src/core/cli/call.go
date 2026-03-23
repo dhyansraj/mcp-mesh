@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -286,17 +285,17 @@ func parseToolSpecifier(spec string) (agentName, toolName string) {
 	return "", parts[0]
 }
 
-// createHTTPClient creates an HTTP client with optional TLS skip
+// createHTTPClient returns an HTTP client with the specified timeout.
+// Uses the shared TLS config from getCLIClient but with a custom timeout.
 func createHTTPClient(timeoutSeconds int, insecure bool) *http.Client {
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-		},
+	base := getCLIClient()
+	if timeoutSeconds > 0 && time.Duration(timeoutSeconds)*time.Second != base.Timeout {
+		return &http.Client{
+			Timeout:   time.Duration(timeoutSeconds) * time.Second,
+			Transport: base.Transport,
+		}
 	}
-	return &http.Client{
-		Timeout:   time.Duration(timeoutSeconds) * time.Second,
-		Transport: transport,
-	}
+	return base
 }
 
 // AgentWithCapabilities represents an agent from the registry with capabilities

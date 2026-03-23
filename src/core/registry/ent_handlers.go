@@ -20,6 +20,16 @@ import (
 	"mcp-mesh/src/core/registry/tracing"
 )
 
+// resolvedDependency is a type alias for the anonymous struct used in heartbeat dependency responses.
+// Using an alias (=) ensures type identity with the generated MeshRegistrationResponse field.
+type resolvedDependency = struct {
+	AgentId      string                                                       `json:"agent_id"`
+	Capability   string                                                       `json:"capability"`
+	Endpoint     string                                                       `json:"endpoint"`
+	FunctionName string                                                       `json:"function_name"`
+	Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
+}
+
 // EntBusinessLogicHandlers implements the generated server interface using EntService
 type EntBusinessLogicHandlers struct {
 	entService  *EntService
@@ -168,32 +178,13 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 
 	// Include dependency resolution if available (heartbeat with tools should return dependencies)
 	if serviceResp.DependenciesResolved != nil {
-		depsMap := make(map[string][]struct {
-			AgentId      string                                                       `json:"agent_id"`
-			Capability   string                                                       `json:"capability"`
-			Endpoint     string                                                       `json:"endpoint"`
-			FunctionName string                                                       `json:"function_name"`
-			Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
-		})
+		depsMap := make(map[string][]resolvedDependency)
 
 		for functionName, deps := range serviceResp.DependenciesResolved {
 			if len(deps) > 0 {
-				depsList := make([]struct {
-					AgentId      string                                                       `json:"agent_id"`
-					Capability   string                                                       `json:"capability"`
-					Endpoint     string                                                       `json:"endpoint"`
-					FunctionName string                                                       `json:"function_name"`
-					Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
-				}, len(deps))
-
+				depsList := make([]resolvedDependency, len(deps))
 				for i, dep := range deps {
-					depsList[i] = struct {
-						AgentId      string                                                       `json:"agent_id"`
-						Capability   string                                                       `json:"capability"`
-						Endpoint     string                                                       `json:"endpoint"`
-						FunctionName string                                                       `json:"function_name"`
-						Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
-					}{
+					depsList[i] = resolvedDependency{
 						AgentId:      dep.AgentID,
 						Capability:   dep.Capability,
 						Endpoint:     dep.Endpoint,
@@ -278,42 +269,43 @@ func (h *EntBusinessLogicHandlers) ListAgents(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+// derefStringOr returns the dereferenced string pointer value, or the fallback if nil.
+func derefStringOr(p *string, fallback string) string {
+	if p != nil {
+		return *p
+	}
+	return fallback
+}
+
+// derefStringType returns the string value of a typed pointer, or the fallback if nil.
+// Used for generated enum types that have an underlying string type.
+func derefStringType[T ~string](p *T, fallback string) string {
+	if p != nil {
+		return string(*p)
+	}
+	return fallback
+}
+
 // ConvertMeshAgentRegistrationToMap converts generated.MeshAgentRegistration to map[string]interface{}
 // for compatibility with the service layer
 func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[string]interface{} {
 	result := make(map[string]interface{})
 
 	// Basic agent information
-	if reg.Name != nil {
-		result["name"] = *reg.Name
-	} else {
-		result["name"] = reg.AgentId // Default to agent_id if name not provided
-	}
-
-	if reg.AgentType != nil {
-		result["agent_type"] = string(*reg.AgentType)
-	} else {
-		result["agent_type"] = "mcp_agent" // Default type
-	}
-
+	result["name"] = derefStringOr(reg.Name, reg.AgentId)
+	result["agent_type"] = derefStringType(reg.AgentType, "mcp_agent")
 	if reg.Namespace != nil {
 		result["namespace"] = *reg.Namespace
 	}
-
 	if reg.Version != nil {
 		result["version"] = *reg.Version
 	}
-
-	// Include runtime if provided
 	if reg.Runtime != nil {
 		result["runtime"] = string(*reg.Runtime)
 	}
-
-	// Include HTTP host and port as separate fields for the service layer
 	if reg.HttpHost != nil {
 		result["http_host"] = *reg.HttpHost
 	}
-
 	if reg.HttpPort != nil {
 		result["http_port"] = *reg.HttpPort
 	}

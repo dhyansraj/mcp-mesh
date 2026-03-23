@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -32,42 +33,52 @@ type RegistryResponse struct {
 	Count  int             `json:"count"`
 }
 
-// newTLSSkipVerifyClient returns an HTTP client that skips TLS certificate verification.
-// This is used for meshctl connecting to registries with self-signed certs from the built-in mini-CA.
-func newTLSSkipVerifyClient() *http.Client {
-	return &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
+// defaultCLIClient is a shared HTTP client for CLI-to-registry communication.
+// Reusing a single client enables connection pooling across commands.
+var defaultCLIClient *http.Client
+var cliClientOnce sync.Once
+
+// getCLIClient returns a shared HTTP client that skips TLS cert verification.
+// Uses sync.Once to create the client lazily and cache it.
+func getCLIClient() *http.Client {
+	cliClientOnce.Do(func() {
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: true,
+		}
+
+		// Load client certs if configured (for strict TLS mode)
+		certFile := os.Getenv("MCP_MESH_TLS_CERT")
+		keyFile := os.Getenv("MCP_MESH_TLS_KEY")
+		if certFile != "" && keyFile != "" {
+			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+			if err == nil {
+				tlsConfig.Certificates = []tls.Certificate{cert}
+			}
+		}
+
+		defaultCLIClient = &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig:     tlsConfig,
+				MaxIdleConns:        20,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
 			},
-		},
-	}
+		}
+	})
+	return defaultCLIClient
 }
 
-// newTLSClientWithOptionalCert creates an HTTP client that skips server cert
-// verification and loads client certs from MCP_MESH_TLS_CERT/KEY env vars if set.
-// This allows CLI commands to work with registries running in strict TLS mode.
+// newTLSSkipVerifyClient returns the shared CLI HTTP client.
+// Kept as alias for backward compatibility with existing callers.
+func newTLSSkipVerifyClient() *http.Client {
+	return getCLIClient()
+}
+
+// newTLSClientWithOptionalCert returns the shared CLI HTTP client.
+// Client certs are loaded from env vars during initialization.
 func newTLSClientWithOptionalCert() *http.Client {
-	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true,
-	}
-
-	certFile := os.Getenv("MCP_MESH_TLS_CERT")
-	keyFile := os.Getenv("MCP_MESH_TLS_KEY")
-	if certFile != "" && keyFile != "" {
-		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-		if err == nil {
-			tlsConfig.Certificates = []tls.Certificate{cert}
-		}
-	}
-
-	return &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
-		},
-	}
+	return getCLIClient()
 }
 
 // IsPortAvailable checks if a port is available for use

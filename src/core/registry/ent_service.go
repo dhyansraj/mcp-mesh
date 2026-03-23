@@ -238,6 +238,56 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 	return service
 }
 
+// agentMetadata holds extracted metadata fields from a registration or heartbeat request.
+type agentMetadata struct {
+	agentType string
+	runtime   string
+	name      string
+	version   string
+	namespace string
+	httpHost  string
+	httpPort  int
+}
+
+// extractAgentMetadata extracts common metadata fields from the request metadata map.
+func extractAgentMetadata(agentID string, metadata map[string]interface{}) agentMetadata {
+	m := agentMetadata{
+		agentType: "mcp_agent",
+		runtime:   "python", // Must match Ent enum: python, typescript, java
+		name:      agentID,
+		namespace: "default",
+	}
+
+	if v, ok := metadata["agent_type"].(string); ok {
+		m.agentType = v
+	}
+	if v, ok := metadata["runtime"].(string); ok {
+		m.runtime = v
+	}
+	if v, ok := metadata["name"].(string); ok {
+		m.name = v
+	}
+	if v, ok := metadata["version"].(string); ok {
+		m.version = v
+	}
+	if v, ok := metadata["namespace"].(string); ok {
+		m.namespace = v
+	}
+	if v, ok := metadata["http_host"].(string); ok {
+		m.httpHost = v
+	}
+	if port, ok := metadata["http_port"]; ok {
+		switch p := port.(type) {
+		case float64:
+			m.httpPort = int(p)
+		case int:
+			m.httpPort = p
+		}
+	}
+
+	return m
+}
+
 // RegisterAgent handles agent registration using Ent queries
 func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrationResponse, error) {
 	ctx := context.Background()
@@ -254,77 +304,28 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 	}
 
 	// Extract agent metadata
-	agentType := "mcp_agent" // default
-	if aType, ok := req.Metadata["agent_type"]; ok {
-		if aTypeStr, ok := aType.(string); ok {
-			agentType = aTypeStr
-		}
-	}
-
-	runtime := "python" // default
-	if rt, ok := req.Metadata["runtime"]; ok {
-		if rtStr, ok := rt.(string); ok {
-			runtime = rtStr
-		}
-	}
-
-	name := req.AgentID // default to agent_id
-	if n, ok := req.Metadata["name"]; ok {
-		if nameStr, ok := n.(string); ok {
-			name = nameStr
-		}
-	}
-
-	version := ""
-	if v, ok := req.Metadata["version"]; ok {
-		if vStr, ok := v.(string); ok {
-			version = vStr
-		}
-	}
-
-	namespace := "default"
-	if ns, ok := req.Metadata["namespace"]; ok {
-		if nsStr, ok := ns.(string); ok {
-			namespace = nsStr
-		}
-	}
-
-	var httpHost string
-	var httpPort int
-	if host, ok := req.Metadata["http_host"]; ok {
-		if hostStr, ok := host.(string); ok {
-			httpHost = hostStr
-		}
-	}
-	if port, ok := req.Metadata["http_port"]; ok {
-		switch p := port.(type) {
-		case float64:
-			httpPort = int(p)
-		case int:
-			httpPort = p
-		}
-	}
+	meta := extractAgentMetadata(req.AgentID, req.Metadata)
 
 	// Start a transaction for atomicity
 	err := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
 		// Upsert the agent
 		agentCreate := tx.Agent.Create().
 			SetID(req.AgentID).
-			SetAgentType(agent.AgentType(agentType)).
-			SetRuntime(agent.Runtime(runtime)).
-			SetName(name).
-			SetNamespace(namespace).
+			SetAgentType(agent.AgentType(meta.agentType)).
+			SetRuntime(agent.Runtime(meta.runtime)).
+			SetName(meta.name).
+			SetNamespace(meta.namespace).
 			SetStatus(agent.StatusHealthy).
 			SetUpdatedAt(now)
 
-		if version != "" {
-			agentCreate = agentCreate.SetVersion(version)
+		if meta.version != "" {
+			agentCreate = agentCreate.SetVersion(meta.version)
 		}
-		if httpHost != "" {
-			agentCreate = agentCreate.SetHTTPHost(httpHost)
+		if meta.httpHost != "" {
+			agentCreate = agentCreate.SetHTTPHost(meta.httpHost)
 		}
-		if httpPort > 0 {
-			agentCreate = agentCreate.SetHTTPPort(httpPort)
+		if meta.httpPort > 0 {
+			agentCreate = agentCreate.SetHTTPPort(meta.httpPort)
 		}
 		if req.EntityID != "" {
 			agentCreate = agentCreate.SetEntityID(req.EntityID)
@@ -347,21 +348,21 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		} else {
 			// Update existing agent
 			updateBuilder := existingAgent.Update().
-				SetAgentType(agent.AgentType(agentType)).
-				SetRuntime(agent.Runtime(runtime)).
-				SetName(name).
-				SetNamespace(namespace).
+				SetAgentType(agent.AgentType(meta.agentType)).
+				SetRuntime(agent.Runtime(meta.runtime)).
+				SetName(meta.name).
+				SetNamespace(meta.namespace).
 				SetStatus(agent.StatusHealthy).
 				SetUpdatedAt(now)
 
-			if version != "" {
-				updateBuilder = updateBuilder.SetVersion(version)
+			if meta.version != "" {
+				updateBuilder = updateBuilder.SetVersion(meta.version)
 			}
-			if httpHost != "" {
-				updateBuilder = updateBuilder.SetHTTPHost(httpHost)
+			if meta.httpHost != "" {
+				updateBuilder = updateBuilder.SetHTTPHost(meta.httpHost)
 			}
-			if httpPort > 0 {
-				updateBuilder = updateBuilder.SetHTTPPort(httpPort)
+			if meta.httpPort > 0 {
+				updateBuilder = updateBuilder.SetHTTPPort(meta.httpPort)
 			}
 			if req.EntityID != "" {
 				updateBuilder = updateBuilder.SetEntityID(req.EntityID)
@@ -481,11 +482,11 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		// Dependencies will be calculated after transaction commits
 
 		// Create registry event only for new agents (skip for API services)
-		if isNewAgent && agentType != "api" {
+		if isNewAgent && meta.agentType != "api" {
 			eventData := map[string]interface{}{
-				"agent_type": agentType,
-				"name":       name,
-				"version":    version,
+				"agent_type": meta.agentType,
+				"name":       meta.name,
+				"version":    meta.version,
 			}
 
 			_, err = tx.RegistryEvent.Create().
@@ -1019,75 +1020,37 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 			// Update agent metadata and capabilities within transaction
 			err := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
 				// Extract agent metadata for updates
-				agentType := "mcp_agent" // default
-				if aType, ok := req.Metadata["agent_type"]; ok {
-					if aTypeStr, ok := aType.(string); ok {
-						agentType = aTypeStr
-					}
-				}
+				meta := extractAgentMetadata(req.AgentID, req.Metadata)
 
-				runtime := "python" // default
-				if rt, ok := req.Metadata["runtime"]; ok {
-					if rtStr, ok := rt.(string); ok {
-						runtime = rtStr
-					}
-				}
-
-				name := req.AgentID // default to agent_id
-				if n, ok := req.Metadata["name"]; ok {
-					if nameStr, ok := n.(string); ok {
-						name = nameStr
-					}
-				}
-
-				version := ""
-				if v, ok := req.Metadata["version"]; ok {
-					if vStr, ok := v.(string); ok {
-						version = vStr
-					}
-				}
-
-				namespace := "default"
-				if ns, ok := req.Metadata["namespace"]; ok {
-					if nsStr, ok := ns.(string); ok {
-						namespace = nsStr
-					}
-				}
-
-				var httpHost string
-				var httpPort int
-				if host, ok := req.Metadata["http_host"]; ok {
-					if hostStr, ok := host.(string); ok {
-						httpHost = hostStr
-					}
-				}
-				if port, ok := req.Metadata["http_port"]; ok {
-					switch p := port.(type) {
-					case float64:
-						httpPort = int(p)
-					case int:
-						httpPort = p
-					}
-				}
-
-				// Update existing agent metadata and status using transaction client
+				// Update status and timestamp unconditionally
 				updateBuilder := tx.Agent.UpdateOneID(existingAgent.ID).
-					SetAgentType(agent.AgentType(agentType)).
-					SetRuntime(agent.Runtime(runtime)).
-					SetName(name).
-					SetNamespace(namespace).
 					SetStatus(agent.StatusHealthy).
 					SetUpdatedAt(now).
 					SetLastFullRefresh(now)
 
-				if version != "" {
-					updateBuilder = updateBuilder.SetVersion(version)
+				// Only update metadata fields when the heartbeat provides non-default values,
+				// to avoid overwriting existing agent metadata with extraction defaults.
+				if meta.agentType != "mcp_agent" {
+					updateBuilder = updateBuilder.SetAgentType(agent.AgentType(meta.agentType))
 				}
-				if httpHost != "" {
-					updateBuilder = updateBuilder.SetHTTPHost(httpHost)
+				if meta.runtime != "python" {
+					updateBuilder = updateBuilder.SetRuntime(agent.Runtime(meta.runtime))
 				}
-				if httpPort > 0 {
-					updateBuilder = updateBuilder.SetHTTPPort(httpPort)
+				if meta.name != "" && meta.name != req.AgentID {
+					updateBuilder = updateBuilder.SetName(meta.name)
+				}
+				if meta.namespace != "default" {
+					updateBuilder = updateBuilder.SetNamespace(meta.namespace)
+				}
+
+				if meta.version != "" {
+					updateBuilder = updateBuilder.SetVersion(meta.version)
+				}
+				if meta.httpHost != "" {
+					updateBuilder = updateBuilder.SetHTTPHost(meta.httpHost)
+				}
+				if meta.httpPort > 0 {
+					updateBuilder = updateBuilder.SetHTTPPort(meta.httpPort)
 				}
 				if req.EntityID != "" {
 					updateBuilder = updateBuilder.SetEntityID(req.EntityID)
