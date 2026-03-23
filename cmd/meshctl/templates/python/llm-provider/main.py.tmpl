@@ -225,6 +225,7 @@ def {{ toSnakeCase .Name }}():
     - Creates process_chat(request: MeshLlmRequest) -> str function
     - Wraps LiteLLM with error handling
     - Registers with mesh network for dependency injection
+    - Resolves resource_link media in tool results (images, PDFs)
     """
     pass  # Implementation is in the decorator
 

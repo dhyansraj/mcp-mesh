@@ -72,6 +72,10 @@ const llmTool = mesh.llm({
   // Handler receives injected LLM agent
   execute: async ({ {{ .ContextParam }} }, { llm }) => {
     return await llm("Process the input based on the context provided");
+
+    // To pass media (images, PDFs) to the LLM:
+    // return await llm("Analyze this image", { media: ["file:///tmp/photo.png"] });
+    // return await llm("What is this?", { media: [{ data: pngBuffer, mimeType: "image/png" }] });
   },
 });
 

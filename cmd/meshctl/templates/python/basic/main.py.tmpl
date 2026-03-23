@@ -71,6 +71,33 @@ async def {{ .ToolName | default "hello" }}() -> str:
 #     return f"Calculator says: {result}"
 
 
+# ===== MULTIMODAL EXAMPLE (uncomment and adapt) =====
+#
+# Return media (images, PDFs, files) from tools using MediaResult.
+# The LLM automatically resolves resource_link objects to native image blocks.
+#
+# @app.tool()
+# @mesh.tool(capability="chart_gen", description="Generate a chart", tags=["tools"])
+# async def generate_chart(query: str) -> ResourceLink:
+#     png_bytes = render_chart(query)
+#     return await mesh.MediaResult(
+#         data=png_bytes, filename="chart.png", mime_type="image/png",
+#         name="Chart", description=query,
+#     )
+#
+# Accept media URIs with MediaParam type hints:
+#
+# @app.tool()
+# @mesh.tool(capability="image_analyzer", description="Analyze an image", tags=["tools"])
+# async def analyze_image(
+#     question: str,
+#     image: mesh.MediaParam("image/*") = None,
+#     llm: mesh.MeshLlmAgent = None,
+# ) -> str:
+#     media = [image] if image else []
+#     return await llm(question, media=media)
+
+
 @mesh.agent(
     name="{{ .Name }}",
     version="1.0.0",

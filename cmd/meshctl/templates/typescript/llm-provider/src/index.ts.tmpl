@@ -41,6 +41,7 @@ const agent = mesh(server, {
  * - Creates process_chat(request: MeshLlmRequest) handler
  * - Wraps Vercel AI SDK with error handling
  * - Registers with mesh network for dependency injection
+ * - Resolves resource_link media in tool results (images, PDFs)
  */
 agent.addLlmProvider({
   model: "{{ .Model }}",

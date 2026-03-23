@@ -6,6 +6,7 @@ import io.mcpmesh.MeshLlm;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
 import io.mcpmesh.Selector;
+import io.mcpmesh.MediaParam;
 import io.mcpmesh.types.MeshLlmAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -109,7 +110,10 @@ public class {{ .NamePascal }}Application {
                 .maxTokens(4096)
                 .temperature(0.7)
                 .generate();
-{{ end }}        } catch (Exception e) {
+{{ end }}
+            // To pass media (images, PDFs) to the LLM:
+            // return llm.request().user("Analyze this image").media(imageUri).generate();
+        } catch (Exception e) {
             log.error("Processing failed: {}", e.getMessage(), e);
 {{ if eq .ResponseFormat "json" }}            return new {{ .NamePascal }}Response(
                 "Processing failed: " + e.getMessage(),
