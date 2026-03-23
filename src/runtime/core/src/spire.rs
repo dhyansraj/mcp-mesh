@@ -22,14 +22,10 @@ pub struct SPIREProvider {
 
 impl SPIREProvider {
     pub fn from_env() -> Result<Self, TlsError> {
-        let socket_path = std::env::var("MCP_MESH_SPIRE_SOCKET")
-            .ok()
-            .filter(|s| !s.is_empty())
+        let socket_path = crate::tls::get_env_string("MCP_MESH_SPIRE_SOCKET")
             .unwrap_or_else(|| DEFAULT_SOCKET_PATH.to_string());
 
-        let trust_domain = std::env::var("MCP_MESH_TRUST_DOMAIN")
-            .ok()
-            .filter(|s| !s.is_empty())
+        let trust_domain = crate::tls::get_env_string("MCP_MESH_TRUST_DOMAIN")
             .unwrap_or_else(|| "mcp-mesh.local".to_string());
 
         info!("SPIRE provider configured: socket={}, trust_domain={}", socket_path, trust_domain);

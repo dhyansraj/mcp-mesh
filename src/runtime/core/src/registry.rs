@@ -38,6 +38,12 @@ pub enum RegistryError {
     TlsError(String),
 }
 
+impl From<crate::tls::TlsError> for RegistryError {
+    fn from(e: crate::tls::TlsError) -> Self {
+        RegistryError::TlsError(e.to_string())
+    }
+}
+
 /// Result of a fast heartbeat check (HEAD request).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FastHeartbeatStatus {
@@ -315,16 +321,14 @@ impl RegistryClient {
         if tls_config.is_enabled() {
             // Add client identity (cert + key) for mTLS
             if let Some(identity) = tls_config
-                .build_identity()
-                .map_err(|e| RegistryError::TlsError(e.to_string()))?
+                .build_identity()?
             {
                 builder = builder.identity(identity);
             }
 
             // Add custom CA for verifying registry's cert
             if let Some(ca) = tls_config
-                .build_ca_cert()
-                .map_err(|e| RegistryError::TlsError(e.to_string()))?
+                .build_ca_cert()?
             {
                 builder = builder.add_root_certificate(ca);
             }

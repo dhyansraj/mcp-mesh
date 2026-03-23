@@ -122,8 +122,7 @@ impl AgentRuntime {
         // Reuse cached config from prepare_tls() if available, otherwise resolve fresh
         let tls_config = match TlsConfig::get_resolved_config() {
             Some(config) => config,
-            None => TlsConfig::resolve(&spec.name).await
-                .map_err(|e| crate::registry::RegistryError::TlsError(e.to_string()))?,
+            None => TlsConfig::resolve(&spec.name).await?,
         };
         let registry_client = RegistryClient::new(&spec.registry_url, &tls_config)?;
         let heartbeat_config = HeartbeatConfig {

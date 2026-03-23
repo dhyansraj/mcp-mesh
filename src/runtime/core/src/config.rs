@@ -3,6 +3,7 @@
 //! Provides centralized config resolution with priority: ENV > param > default.
 //! This ensures consistent behavior across all language SDKs.
 
+use std::borrow::Cow;
 use std::env;
 use std::net::UdpSocket;
 use tracing::{debug, warn};
@@ -116,9 +117,9 @@ impl ConfigKey {
 ///
 /// For URLs, preserves the scheme and host but redacts credentials and path.
 /// Example: "redis://user:pass@host:6379/db" -> "redis://***@host:6379/***"
-fn redact_for_logging(key: ConfigKey, value: &str) -> String {
+fn redact_for_logging<'a>(key: ConfigKey, value: &'a str) -> Cow<'a, str> {
     if !key.is_sensitive() {
-        return value.to_string();
+        return Cow::Borrowed(value);
     }
 
     // Try to parse as URL and redact credentials
@@ -137,10 +138,10 @@ fn redact_for_logging(key: ConfigKey, value: &str) -> String {
             url.set_path("/***");
         }
 
-        url.to_string()
+        Cow::Owned(url.to_string())
     } else {
         // Not a valid URL, fully redact
-        "[REDACTED]".to_string()
+        Cow::Borrowed("[REDACTED]")
     }
 }
 
@@ -183,15 +184,13 @@ pub fn auto_detect_external_ip() -> String {
 pub fn resolve_config(key: ConfigKey, param_value: Option<&str>) -> Option<String> {
     // Priority 1: Environment variable
     let env_var = key.env_var();
-    if let Ok(value) = env::var(env_var) {
-        if !value.is_empty() {
-            debug!(
-                "Config '{}' resolved from ENV: {}",
-                env_var,
-                redact_for_logging(key, &value)
-            );
-            return Some(value);
-        }
+    if let Some(value) = crate::tls::get_env_string(env_var) {
+        debug!(
+            "Config '{}' resolved from ENV: {}",
+            env_var,
+            redact_for_logging(key, &value)
+        );
+        return Some(value);
     }
 
     // Priority 2: Parameter value (from decorator/script)

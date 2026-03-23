@@ -73,7 +73,7 @@ pub fn init_logging() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::from_default_env()
-                .add_directive("mcp_mesh_core=info".parse().unwrap()),
+                .add_directive("mcp_mesh_core=info".parse().expect("hardcoded tracing directive must be valid")),
         )
         .try_init();
 }

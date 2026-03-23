@@ -39,29 +39,19 @@ struct VaultCertData {
 
 impl VaultProvider {
     pub fn from_env() -> Result<Self, TlsError> {
-        let vault_addr = std::env::var("MCP_MESH_VAULT_ADDR")
-            .ok()
-            .filter(|s| !s.is_empty())
+        let vault_addr = crate::tls::get_env_string("MCP_MESH_VAULT_ADDR")
             .ok_or_else(|| {
                 TlsError::MissingConfig("vault".into(), "MCP_MESH_VAULT_ADDR".into())
             })?;
-        let pki_path = std::env::var("MCP_MESH_VAULT_PKI_PATH")
-            .ok()
-            .filter(|s| !s.is_empty())
+        let pki_path = crate::tls::get_env_string("MCP_MESH_VAULT_PKI_PATH")
             .ok_or_else(|| {
                 TlsError::MissingConfig("vault".into(), "MCP_MESH_VAULT_PKI_PATH".into())
             })?;
-        let token = std::env::var("VAULT_TOKEN")
-            .ok()
-            .filter(|s| !s.is_empty())
+        let token = crate::tls::get_env_string("VAULT_TOKEN")
             .ok_or_else(|| TlsError::MissingConfig("vault".into(), "VAULT_TOKEN".into()))?;
-        let trust_domain = std::env::var("MCP_MESH_TRUST_DOMAIN")
-            .ok()
-            .filter(|s| !s.is_empty())
+        let trust_domain = crate::tls::get_env_string("MCP_MESH_TRUST_DOMAIN")
             .unwrap_or_else(|| "mcp-mesh.local".to_string());
-        let ttl = std::env::var("MCP_MESH_VAULT_TTL")
-            .ok()
-            .filter(|s| !s.is_empty())
+        let ttl = crate::tls::get_env_string("MCP_MESH_VAULT_TTL")
             .unwrap_or_else(|| "24h".to_string());
 
         Ok(Self {
