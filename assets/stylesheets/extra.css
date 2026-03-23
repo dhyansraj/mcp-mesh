@@ -293,3 +293,55 @@ table {
 .runtime-crossref a:hover {
   text-decoration: underline;
 }
+
+/* =============================================================================
+   Two-Row Navigation Tabs
+   ============================================================================= */
+
+/* Allow nav tabs to wrap to multiple rows — [dir] prefix matches Material's specificity */
+[dir] .md-tabs__list {
+  flex-wrap: wrap !important;
+  white-space: normal !important;
+  overflow: visible !important;
+  row-gap: 0;
+}
+
+/* Tighten tab spacing for compact two-row layout */
+.md-tabs__item {
+  padding: 0 0.3rem;
+  height: auto;
+  min-height: 0;
+}
+
+.md-tabs__link {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.3rem;
+  white-space: nowrap;
+  opacity: 0.85;
+  line-height: 1.2;
+  min-height: 0;
+}
+
+.md-tabs__link--active,
+.md-tabs__link:hover {
+  opacity: 1;
+}
+
+/* Ensure tabs container and grid don't clip wrapped rows */
+.md-tabs {
+  overflow: visible !important;
+  height: auto !important;
+}
+
+.md-tabs .md-grid {
+  overflow: visible !important;
+}
+
+/* =============================================================================
+   Sky Chatbot Widget
+   ============================================================================= */
+
+/* Ensure widget floats above all MkDocs content */
+#sky-widget {
+  z-index: 9999;
+}
