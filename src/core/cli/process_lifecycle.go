@@ -9,6 +9,34 @@ import (
 	"time"
 )
 
+// terminateAndWait sends a termination signal to the process group and waits for exit.
+// fallbackSignal is sent to the main process if group termination fails.
+// Returns nil if the process exits within timeout, or an error on timeout.
+// The caller must hold pm.mutex.
+func (pm *ProcessManager) terminateAndWait(info *ProcessInfo, name string, fallbackSignal os.Signal, timeout time.Duration) error {
+	platformManager := NewPlatformProcessManager()
+	if err := platformManager.terminateProcessGroup(info.PID, timeout); err != nil {
+		pm.logger.Printf("Process group termination failed for %s, falling back to signal: %v", name, err)
+		if err := info.Process.Signal(fallbackSignal); err != nil {
+			// If signal fails too, try kill as last resort
+			info.Process.Kill()
+		}
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := info.Process.Wait()
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("process %s did not exit within %v", name, timeout)
+	}
+}
+
 // StopProcess gracefully stops a managed process
 func (pm *ProcessManager) StopProcess(name string, timeout time.Duration) error {
 	pm.mutex.Lock()
@@ -25,41 +53,22 @@ func (pm *ProcessManager) StopProcess(name string, timeout time.Duration) error 
 
 	pm.logger.Printf("Stopping process group: %s (PID: %d)", name, info.PID)
 
-	// Use platform-specific graceful process group termination
-	platformManager := NewPlatformProcessManager()
-	if err := platformManager.terminateProcessGroup(info.PID, timeout); err != nil {
-		pm.logger.Printf("Process group termination failed for %s, falling back to single process signal: %v", name, err)
-		// Fallback to signaling just the main process
-		if err := info.Process.Signal(os.Interrupt); err != nil {
-			return fmt.Errorf("failed to send SIGTERM to process %s: %w", name, err)
-		}
-	}
-
-	// Wait for graceful shutdown
-	done := make(chan error, 1)
-	go func() {
-		_, err := info.Process.Wait()
-		done <- err
-	}()
-
-	select {
-	case err := <-done:
-		info.Status = "stopped"
-		info.HealthCheck = "stopped"
-		pm.logger.Printf("Process %s stopped gracefully", name)
-		pm.saveState()
-		return err
-	case <-time.After(timeout):
-		// Force kill if timeout exceeded
+	err := pm.terminateAndWait(info, name, os.Interrupt, timeout)
+	if err != nil {
+		// Timeout — force kill
 		pm.logger.Printf("Process %s timeout, forcing kill", name)
-		if err := info.Process.Kill(); err != nil {
-			return fmt.Errorf("failed to kill process %s: %w", name, err)
-		}
+		info.Process.Kill()
 		info.Status = "killed"
 		info.HealthCheck = "killed"
 		pm.saveState()
 		return nil
 	}
+
+	info.Status = "stopped"
+	info.HealthCheck = "stopped"
+	pm.logger.Printf("Process %s stopped gracefully", name)
+	pm.saveState()
+	return nil
 }
 
 // RestartProcess restarts a managed process with optional new configuration
@@ -84,21 +93,11 @@ func (pm *ProcessManager) RestartProcess(name string, newCommand string, newMeta
 
 	// Stop existing process if running
 	if info.Process != nil && pm.isProcessRunning(info) {
-		if err := info.Process.Signal(os.Interrupt); err == nil {
-			// Wait for graceful shutdown with timeout
-			done := make(chan bool, 1)
-			go func() {
-				info.Process.Wait()
-				done <- true
-			}()
-
-			select {
-			case <-done:
-				pm.logger.Printf("Process %s stopped gracefully for restart", name)
-			case <-time.After(timeout):
-				pm.logger.Printf("Process %s timeout during restart, forcing kill", name)
-				info.Process.Kill()
-			}
+		if err := pm.terminateAndWait(info, name, os.Interrupt, timeout); err != nil {
+			pm.logger.Printf("Process %s timeout during restart, forcing kill", name)
+			info.Process.Kill()
+		} else {
+			pm.logger.Printf("Process %s stopped gracefully for restart", name)
 		}
 	}
 
@@ -134,33 +133,16 @@ func (pm *ProcessManager) TerminateProcess(name string, timeout time.Duration) e
 
 	pm.logger.Printf("Terminating process group: %s (PID: %d)", name, info.PID)
 
-	// Use platform-specific process group termination
-	platformManager := NewPlatformProcessManager()
-	if err := platformManager.terminateProcessGroup(info.PID, timeout); err != nil {
-		pm.logger.Printf("Process group termination failed for %s, falling back to single process kill: %v", name, err)
-		// Fallback to killing just the main process
-		if err := info.Process.Kill(); err != nil {
-			return fmt.Errorf("failed to kill process %s: %w", name, err)
-		}
-	}
-
-	// Wait for process to die
-	done := make(chan error, 1)
-	go func() {
-		_, err := info.Process.Wait()
-		done <- err
-	}()
-
-	select {
-	case err := <-done:
-		info.Status = "killed"
-		info.HealthCheck = "killed"
-		pm.logger.Printf("Process %s terminated", name)
-		pm.saveState()
+	err := pm.terminateAndWait(info, name, os.Kill, timeout)
+	if err != nil {
 		return err
-	case <-time.After(timeout):
-		return fmt.Errorf("process %s did not terminate within timeout", name)
 	}
+
+	info.Status = "killed"
+	info.HealthCheck = "killed"
+	pm.logger.Printf("Process %s terminated", name)
+	pm.saveState()
+	return nil
 }
 
 // StartAgentProcess starts a new agent process
