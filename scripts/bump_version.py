@@ -76,13 +76,16 @@ def bump_python_packages(old: str, new_pep440: str, dry_run: bool) -> list[str]:
         if replace_in_file(f, pattern, replacement, dry_run):
             changed.append(str(f.relative_to(PROJECT_ROOT)))
 
-    init_file = (
-        PROJECT_ROOT / "src" / "runtime" / "python" / "_mcp_mesh" / "__init__.py"
-    )
-    pattern = rf'(__version__\s*=\s*"){re.escape(old_pep440)}(")'
-    replacement = rf"\g<1>{new_pep440}\2"
-    if replace_in_file(init_file, pattern, replacement, dry_run):
-        changed.append(str(init_file.relative_to(PROJECT_ROOT)))
+    init_files = [
+        PROJECT_ROOT / "src" / "runtime" / "python" / "_mcp_mesh" / "__init__.py",
+        PROJECT_ROOT / "src" / "runtime" / "python" / "mesh" / "__init__.py",
+    ]
+    old_pep440 = to_pep440(old)
+    for init_file in init_files:
+        pattern = rf'(__version__\s*=\s*"){re.escape(old_pep440)}(")'
+        replacement = rf"\g<1>{new_pep440}\2"
+        if replace_in_file(init_file, pattern, replacement, dry_run):
+            changed.append(str(init_file.relative_to(PROJECT_ROOT)))
 
     return changed
 
