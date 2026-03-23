@@ -25,7 +25,7 @@ How does MCP Mesh compare to other popular AI agent frameworks? This detailed co
 | Feature                          | LangChain        | AutoGen          | CrewAI           | MCP Mesh                                 |
 | -------------------------------- | ---------------- | ---------------- | ---------------- | ---------------------------------------- |
 | Zero-config Dependency Injection | :x:              | :x:              | :x:              | :white_check_mark:                       |
-| Dynamic Distributed DI           | :x:              | :x:              | :x:              | :white_check_mark:                       |
+| Distributed Dynamic DI ([DDDI](concepts/dddi.md)) | :x:              | :x:              | :x:              | :white_check_mark:                       |
 | Capability-based discovery       | :x:              | :x:              | :x:              | :white_check_mark:                       |
 | Tag-based filtering              | :x:              | :x:              | :x:              | :white_check_mark:                       |
 | Cross-language support           | :x:              | :x:              | :x:              | :white_check_mark: Python + Java + TypeScript |

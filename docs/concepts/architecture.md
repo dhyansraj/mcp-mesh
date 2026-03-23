@@ -6,6 +6,7 @@
 
 MCP Mesh is a distributed service mesh for MCP (Model Context Protocol) agents. It provides:
 
+- **DDDI (Distributed Dynamic Dependency Injection)**: The core innovation of MCP Mesh — dependencies between agents are discovered, resolved, and injected at runtime across distributed systems, without compile-time configuration or restarts.
 - **Zero-boilerplate dependency injection** between agents
 - **Automatic service discovery** via a central registry
 - **Smart routing** with tag-based selection

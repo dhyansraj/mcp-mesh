@@ -10,6 +10,8 @@
 
 > Automatic wiring of capabilities between agents
 
+MCP Mesh implements **[Distributed Dynamic Dependency Injection (DDDI)](../concepts/dddi.md)** — dependencies are discovered and injected at runtime across the mesh, not at compile time.
+
 ## Overview
 
 MCP Mesh provides automatic dependency injection (DI) that connects agents based on their declared capabilities and dependencies. When a tool declares a dependency via `@Selector`, the mesh automatically injects a `McpMeshTool<T>` proxy that routes to the providing agent.

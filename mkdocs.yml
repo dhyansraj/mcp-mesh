@@ -3,7 +3,8 @@ site_url: https://mcp-mesh.ai/
 site_author: MCP Mesh Contributors
 site_description: >-
   Enterprise-grade distributed service mesh for MCP agents.
-  Kubernetes-native platform with zero-boilerplate dependency injection.
+  Distributed Dynamic Dependency Injection (DDDI) with zero-boilerplate,
+  Kubernetes-native deployment across Python, TypeScript, and Java.
 
 repo_name: dhyansraj/mcp-mesh
 repo_url: https://github.com/dhyansraj/mcp-mesh
@@ -199,6 +200,7 @@ nav:
   # Shared sections (language-agnostic)
   - Concepts:
       - Architecture & Design: concepts/architecture.md
+      - "DDDI: Distributed Dynamic Dependency Injection": concepts/dddi.md
       - Registry: concepts/registry.md
       - Health & Discovery: concepts/health-discovery.md
       - Tag Matching: concepts/tag-matching.md
