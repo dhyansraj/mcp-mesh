@@ -16,7 +16,7 @@ type AgentHealthMonitor struct {
 	logger           *logger.Logger
 	heartbeatTimeout time.Duration
 	checkInterval    time.Duration
-	stopChan         chan struct{}
+	cancel           context.CancelFunc
 	wg               sync.WaitGroup
 	mu               sync.RWMutex
 	running          bool
@@ -29,7 +29,6 @@ func NewAgentHealthMonitor(entService *EntService, logger *logger.Logger, heartb
 		logger:           logger,
 		heartbeatTimeout: heartbeatTimeout,
 		checkInterval:    checkInterval,
-		stopChan:         make(chan struct{}),
 		running:          false,
 	}
 }
@@ -45,6 +44,8 @@ func (h *AgentHealthMonitor) Start() {
 	}
 
 	h.running = true
+	ctx, cancel := context.WithCancel(context.Background())
+	h.cancel = cancel
 	h.wg.Add(1)
 
 	go func() {
@@ -57,9 +58,8 @@ func (h *AgentHealthMonitor) Start() {
 		for {
 			select {
 			case <-ticker.C:
-				h.logger.Trace("🔍 Health monitor timer triggered - checking agent health")
 				h.checkUnhealthyAgents()
-			case <-h.stopChan:
+			case <-ctx.Done():
 				h.logger.Info("🛑 Agent health monitor stopped")
 				return
 			}
@@ -77,43 +77,23 @@ func (h *AgentHealthMonitor) Stop() {
 	}
 
 	h.running = false
-	close(h.stopChan)
+	h.cancel()
 	h.wg.Wait()
 	h.logger.Info("✅ Agent health monitor stopped successfully")
 }
 
-// checkUnhealthyAgents scans all agents and marks unhealthy ones
+// checkUnhealthyAgents marks stale agents as unhealthy using a single batch query
 func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 	ctx := context.Background()
-	startTime := time.Now().UTC()
-	now := time.Now().UTC()
-	threshold := now.Add(-h.heartbeatTimeout)
+	threshold := time.Now().UTC().Add(-h.heartbeatTimeout)
 
-	h.logger.Trace("Health monitor check started (threshold: %v)", h.heartbeatTimeout)
-
-	// First, get all agents to see what we're working with
-	allAgents, err := h.entService.entDB.Client.Agent.Query().All(ctx)
-	if err != nil {
-		h.logger.Error("Failed to query all agents: %v", err)
-		return
-	}
-
-	h.logger.Trace("Health monitor: checking %d total agents (now: %v, threshold: %v, heartbeat_timeout: %v)", len(allAgents), now, threshold, h.heartbeatTimeout)
-	for _, agent := range allAgents {
-		timeSinceUpdate := now.Sub(agent.UpdatedAt)
-		isStale := agent.UpdatedAt.Before(threshold)
-		h.logger.Trace("Agent %s: last_update=%v (%v ago), status=%s, is_stale=%v, threshold_comparison=%v", agent.ID, agent.UpdatedAt, timeSinceUpdate, agent.Status, isStale, agent.UpdatedAt.Unix() < threshold.Unix())
-	}
-
-	// Use efficient batch update to mark stale agents as unhealthy
-	// This will trigger status change hooks for each agent that actually changes status
-	h.logger.Trace("Health monitor: batch updating agents with UpdatedAt < %v AND Status != %s", threshold, agent.StatusUnhealthy)
-
-	// Get agents that need to be marked unhealthy first, to preserve their timestamps
+	// Single query: get agents that need status change (for logging + preserving timestamps)
 	agentsToUpdate, err := h.entService.entDB.Client.Agent.
 		Query().
-		Where(agent.UpdatedAtLT(threshold)).
-		Where(agent.StatusNEQ(agent.StatusUnhealthy)).
+		Where(
+			agent.UpdatedAtLT(threshold),
+			agent.StatusNEQ(agent.StatusUnhealthy),
+		).
 		All(ctx)
 
 	if err != nil {
@@ -125,29 +105,25 @@ func (h *AgentHealthMonitor) checkUnhealthyAgents() {
 		return
 	}
 
-	// Update each agent's status while preserving their original updated_at timestamp
-	var agentsUpdated int
-	for _, agentToUpdate := range agentsToUpdate {
-		affected, err := h.entService.entDB.Client.Agent.
-			Update().
-			Where(agent.IDEQ(agentToUpdate.ID)).
-			SetStatus(agent.StatusUnhealthy).
-			SetUpdatedAt(agentToUpdate.UpdatedAt). // Preserve original timestamp
-			Save(ctx)
-
-		if err != nil {
-			h.logger.Error("Failed to mark agent %s as unhealthy: %v", agentToUpdate.ID, err)
-			continue
-		}
-		agentsUpdated += affected
+	// Batch update: collect IDs and update in one query
+	ids := make([]string, len(agentsToUpdate))
+	for i, a := range agentsToUpdate {
+		ids[i] = a.ID
 	}
 
-	h.logger.Info("Health monitor: marked %d agents as unhealthy", agentsUpdated)
+	affected, err := h.entService.entDB.Client.Agent.
+		Update().
+		Where(agent.IDIn(ids...)).
+		SetStatus(agent.StatusUnhealthy).
+		Save(ctx)
 
-	duration := time.Since(startTime)
-	h.logger.Trace("Health monitor check completed - processed %d unhealthy agents (took %v)", agentsUpdated, duration)
+	if err != nil {
+		h.logger.Error("Failed to batch update %d agents as unhealthy: %v", len(ids), err)
+		return
+	}
+
+	h.logger.Info("Health monitor: marked %d agents as unhealthy", affected)
 }
-
 
 // IsRunning returns whether the health monitor is currently running
 func (h *AgentHealthMonitor) IsRunning() bool {

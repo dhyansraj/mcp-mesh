@@ -20,6 +20,16 @@ import (
 	"mcp-mesh/src/core/registry/tracing"
 )
 
+// resolvedDependency is a type alias for the anonymous struct used in heartbeat dependency responses.
+// Using an alias (=) ensures type identity with the generated MeshRegistrationResponse field.
+type resolvedDependency = struct {
+	AgentId      string                                                       `json:"agent_id"`
+	Capability   string                                                       `json:"capability"`
+	Endpoint     string                                                       `json:"endpoint"`
+	FunctionName string                                                       `json:"function_name"`
+	Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
+}
+
 // EntBusinessLogicHandlers implements the generated server interface using EntService
 type EntBusinessLogicHandlers struct {
 	entService  *EntService
@@ -168,32 +178,13 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 
 	// Include dependency resolution if available (heartbeat with tools should return dependencies)
 	if serviceResp.DependenciesResolved != nil {
-		depsMap := make(map[string][]struct {
-			AgentId      string                                                       `json:"agent_id"`
-			Capability   string                                                       `json:"capability"`
-			Endpoint     string                                                       `json:"endpoint"`
-			FunctionName string                                                       `json:"function_name"`
-			Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
-		})
+		depsMap := make(map[string][]resolvedDependency)
 
 		for functionName, deps := range serviceResp.DependenciesResolved {
 			if len(deps) > 0 {
-				depsList := make([]struct {
-					AgentId      string                                                       `json:"agent_id"`
-					Capability   string                                                       `json:"capability"`
-					Endpoint     string                                                       `json:"endpoint"`
-					FunctionName string                                                       `json:"function_name"`
-					Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
-				}, len(deps))
-
+				depsList := make([]resolvedDependency, len(deps))
 				for i, dep := range deps {
-					depsList[i] = struct {
-						AgentId      string                                                       `json:"agent_id"`
-						Capability   string                                                       `json:"capability"`
-						Endpoint     string                                                       `json:"endpoint"`
-						FunctionName string                                                       `json:"function_name"`
-						Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
-					}{
+					depsList[i] = resolvedDependency{
 						AgentId:      dep.AgentID,
 						Capability:   dep.Capability,
 						Endpoint:     dep.Endpoint,
