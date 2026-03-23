@@ -3,6 +3,7 @@
 //! Provides centralized config resolution with priority: ENV > param > default.
 //! This ensures consistent behavior across all language SDKs.
 
+use std::borrow::Cow;
 use std::env;
 use std::net::UdpSocket;
 use tracing::{debug, warn};
@@ -116,9 +117,9 @@ impl ConfigKey {
 ///
 /// For URLs, preserves the scheme and host but redacts credentials and path.
 /// Example: "redis://user:pass@host:6379/db" -> "redis://***@host:6379/***"
-fn redact_for_logging(key: ConfigKey, value: &str) -> String {
+fn redact_for_logging<'a>(key: ConfigKey, value: &'a str) -> Cow<'a, str> {
     if !key.is_sensitive() {
-        return value.to_string();
+        return Cow::Borrowed(value);
     }
 
     // Try to parse as URL and redact credentials
@@ -137,10 +138,10 @@ fn redact_for_logging(key: ConfigKey, value: &str) -> String {
             url.set_path("/***");
         }
 
-        url.to_string()
+        Cow::Owned(url.to_string())
     } else {
         // Not a valid URL, fully redact
-        "[REDACTED]".to_string()
+        Cow::Borrowed("[REDACTED]")
     }
 }
 
