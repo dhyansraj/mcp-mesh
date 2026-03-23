@@ -126,6 +126,35 @@ meshctl start agent.py --env MESH_LLM_PROVIDER=claude --env MESH_LLM_MODEL=claud
 export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
 ```
 
+## Media Storage
+
+Configure the storage backend for multimodal features (images, PDFs, files):
+
+```bash
+# Storage backend: "local" (default) or "s3"
+export MCP_MESH_MEDIA_STORAGE=local
+
+# Local filesystem settings
+export MCP_MESH_MEDIA_STORAGE_PATH=/tmp/mcp-mesh-media
+export MCP_MESH_MEDIA_STORAGE_PREFIX=media/
+
+# S3 / S3-compatible settings (MinIO, AWS S3)
+export MCP_MESH_MEDIA_STORAGE=s3
+export MCP_MESH_MEDIA_STORAGE_BUCKET=mcp-mesh-media
+export MCP_MESH_MEDIA_STORAGE_ENDPOINT=http://localhost:9000  # omit for AWS
+export MCP_MESH_MEDIA_STORAGE_PREFIX=media/
+```
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MCP_MESH_MEDIA_STORAGE` | `local` | Backend: `local` or `s3` |
+| `MCP_MESH_MEDIA_STORAGE_PATH` | `/tmp/mcp-mesh-media` | Local filesystem base path |
+| `MCP_MESH_MEDIA_STORAGE_BUCKET` | _(none)_ | S3 bucket name |
+| `MCP_MESH_MEDIA_STORAGE_ENDPOINT` | _(none)_ | S3-compatible endpoint URL |
+| `MCP_MESH_MEDIA_STORAGE_PREFIX` | `media/` | Key/directory prefix |
+
+See `meshctl man media` for storage backend details.
+
 ## Security & TLS
 
 ### TLS Configuration
