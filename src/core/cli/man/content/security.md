@@ -201,6 +201,33 @@ MCP_MESH_ADMIN_PORT=9443 meshctl start --registry-only --tls-auto -d
 
 Admin endpoints (`/admin/rotate`, `/admin/entities`) are served only on the admin port when set.
 
+## Docker Compose TLS
+
+```yaml
+services:
+  registry:
+    image: mcpmesh/registry:1.0
+    command: ["--tls-auto"]
+    ports: ["8000:8000"]
+    volumes:
+      - tls-data:/root/.mcp_mesh/tls
+
+  my-agent:
+    environment:
+      - MCP_MESH_TLS_MODE=auto
+      - MCP_MESH_TLS_CERT=/tls/agent.pem
+      - MCP_MESH_TLS_KEY=/tls/agent-key.pem
+      - MCP_MESH_TLS_CA=/tls/ca.pem
+      - MCP_MESH_REGISTRY_URL=https://registry:8000
+    volumes:
+      - tls-data:/tls:ro
+
+volumes:
+  tls-data:
+```
+
+**Gotcha**: The registry's `--tls-auto` generates certs into its volume. Mount the same volume read-only into agents so they share the CA.
+
 ## Kubernetes Deployment
 
 ### Helm Values for Vault
@@ -247,6 +274,83 @@ registry:
         namespace: "mcp-mesh"
         labelSelector: "mcp-mesh.io/trust=entity-ca"
 ```
+
+## Migration Path: off → auto → strict
+
+1. **Start with `off`** — Default. Everything works over HTTP. Use for local development.
+
+2. **Enable `auto`** — Registry accepts both TLS and plain connections. Roll out `--tls-auto` on the registry first, then agents one by one. Agents without TLS still work.
+
+   ```bash
+   # Registry first
+   meshctl start --registry-only --tls-auto -d
+
+   # Then agents (one at a time, verify each)
+   meshctl start agent1.py --tls-auto
+   ```
+
+3. **Switch to `strict`** — Only after ALL agents have TLS. Registry rejects plain HTTP.
+
+   ```bash
+   export MCP_MESH_TLS_MODE=strict
+   ```
+
+**Gotcha**: Don't jump to `strict` before all agents have certs — they'll be rejected and evicted on the next heartbeat.
+
+## Auth Token
+
+For environments where TLS is impractical, use a shared auth token as a lightweight alternative:
+
+```bash
+# Set same token on registry and all agents
+export MCP_MESH_AUTH_TOKEN=my-secret-token
+```
+
+The registry rejects registration from agents with a mismatched token. This is **not a replacement for TLS** — tokens are sent in plain text over HTTP. Use TLS in production.
+
+## Troubleshooting
+
+### Certificate Errors
+
+```bash
+# Check if certs exist and are valid
+openssl x509 -in /path/to/agent.pem -noout -dates -subject
+
+# Verify cert was signed by the CA
+openssl verify -CAfile /path/to/ca.pem /path/to/agent.pem
+
+# Test TLS connection to registry
+openssl s_client -connect localhost:8000 -CAfile /path/to/ca.pem
+```
+
+### Common Issues
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `certificate signed by unknown authority` | Agent's CA doesn't match registry's | Use same CA — share via volume or secret |
+| `connection refused` on port 8000 | Registry not listening on TLS | Add `--tls-auto` or set `MCP_MESH_TLS_MODE` |
+| Agent evicted immediately | `strict` mode + invalid/expired cert | Check cert dates with `openssl x509 -dates` |
+| `SPIRE provider requires build with --features spire` | Binary built without SPIRE feature | Use official release binaries (include SPIRE) |
+| Agent registers then disappears | Cert CN doesn't match trust domain | Check `MCP_MESH_TRUST_DOMAIN` matches cert |
+
+### Debug TLS Handshake
+
+```bash
+# Enable debug logging to see TLS details
+export MCP_MESH_LOG_LEVEL=DEBUG
+meshctl start my_agent.py --tls-auto
+# Look for "TLS handshake", "certificate verified", "trust domain" in logs
+```
+
+## Production Checklist
+
+- [ ] `MCP_MESH_TLS_MODE=strict` on registry and all agents
+- [ ] Credential provider configured (file, vault, or spire) — not `--tls-auto`
+- [ ] CA certs distributed to all agents (volume, secret, or SPIRE)
+- [ ] `MCP_MESH_ADMIN_PORT` set on registry (isolates admin API)
+- [ ] Certificate rotation tested (`meshctl entity rotate`)
+- [ ] Vault TTL or SPIRE SVID TTL configured for auto-renewal
+- [ ] `--tls-auto` NOT used in production (generates self-signed certs)
 
 ## See Also
 
