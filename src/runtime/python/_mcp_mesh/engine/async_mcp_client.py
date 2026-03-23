@@ -148,45 +148,45 @@ class AsyncMCPClient:
             return await self._make_request_sync(payload)
 
     async def _make_request_sync(self, payload: dict) -> dict:
-        """Fallback sync HTTP request using urllib."""
+        """Fallback sync HTTP request wrapped in thread for async compatibility."""
         url = f"{self.endpoint}/mcp"
-        data = json.dumps(payload).encode("utf-8")
+        timeout = self.timeout
 
-        # Create request
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json, text/event-stream",
-            },
-        )
+        def _do_sync_request():
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+            )
 
-        try:
-            # Make synchronous request (will run in thread pool)
-            with urllib.request.urlopen(req, timeout=self.timeout) as response:
-                response_data = response.read().decode("utf-8")
-                data = json.loads(response_data)
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as response:
+                    response_data = response.read().decode("utf-8")
+                    parsed = json.loads(response_data)
 
-            # Check for JSON-RPC error
-            if "error" in data:
-                error = data["error"]
-                error_msg = error.get("message", "Unknown error")
-                raise RuntimeError(f"Tool call error: {error_msg}")
+                if "error" in parsed:
+                    error = parsed["error"]
+                    error_msg = error.get("message", "Unknown error")
+                    raise RuntimeError(f"Tool call error: {error_msg}")
 
-            # Return the result
-            if "result" in data:
-                return data["result"]
-            return data
+                if "result" in parsed:
+                    return parsed["result"]
+                return parsed
 
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                raise RuntimeError(f"MCP endpoint not found at {url}")
-            raise RuntimeError(f"HTTP error {e.code}: {e.reason}")
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"Connection error to {url}: {e.reason}")
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Invalid JSON response: {e}")
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    raise RuntimeError(f"MCP endpoint not found at {url}")
+                raise RuntimeError(f"HTTP error {e.code}: {e.reason}")
+            except urllib.error.URLError as e:
+                raise RuntimeError(f"Connection error to {url}: {e.reason}")
+            except json.JSONDecodeError as e:
+                raise RuntimeError(f"Invalid JSON response: {e}")
+
+        return await asyncio.to_thread(_do_sync_request)
 
     async def list_tools(self) -> list:
         """List available tools."""

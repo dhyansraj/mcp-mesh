@@ -203,108 +203,6 @@ class TestHttpMcpWrapperUtilityMethods:
         assert result == "http://my-service.cluster.local:8080"
         mock_get_external_host.assert_called_once()
 
-    def test_get_capabilities_empty(self):
-        """Test _get_capabilities returns empty list when no tools."""
-        mock_fastmcp_server = MagicMock()
-
-        # Mock server without local_provider
-        mock_fastmcp_server.local_provider = None
-
-        wrapper = HttpMcpWrapper(mock_fastmcp_server)
-
-        result = wrapper._get_capabilities()
-
-        assert result == []
-
-    def test_get_capabilities_with_tools(self):
-        """Test _get_capabilities extracts capabilities from tools."""
-        mock_fastmcp_server = MagicMock()
-
-        # Mock tools with mesh metadata
-        mock_tool1 = MagicMock()
-        mock_tool1.fn._mesh_agent_metadata = {"capability": "time_service"}
-
-        mock_tool2 = MagicMock()
-        mock_tool2.fn._mesh_agent_metadata = {"capability": "math_service"}
-
-        mock_tool3 = MagicMock()
-        # Tool without mesh metadata
-        del mock_tool3.fn._mesh_agent_metadata
-
-        mock_lp = MagicMock()
-        mock_lp._components = {
-            "tool:tool1@": mock_tool1,
-            "tool:tool2@": mock_tool2,
-            "tool:tool3@": mock_tool3,
-        }
-        mock_fastmcp_server.local_provider = mock_lp
-
-        wrapper = HttpMcpWrapper(mock_fastmcp_server)
-
-        result = wrapper._get_capabilities()
-
-        # Should extract capabilities from tools with metadata
-        assert set(result) == {"time_service", "math_service"}
-
-    def test_get_dependencies_empty(self):
-        """Test _get_dependencies returns empty list when no tools."""
-        mock_fastmcp_server = MagicMock()
-
-        # Mock server without local_provider
-        mock_fastmcp_server.local_provider = None
-
-        wrapper = HttpMcpWrapper(mock_fastmcp_server)
-
-        result = wrapper._get_dependencies()
-
-        assert result == []
-
-    def test_get_dependencies_with_tools(self):
-        """Test _get_dependencies extracts dependencies from tools."""
-        mock_fastmcp_server = MagicMock()
-
-        # Mock tools with mesh dependencies
-        mock_tool1 = MagicMock()
-        mock_tool1.fn._mesh_agent_dependencies = ["time_service", "config_service"]
-
-        mock_tool2 = MagicMock()
-        mock_tool2.fn._mesh_agent_dependencies = ["data_service"]
-
-        mock_tool3 = MagicMock()
-        # Tool without dependencies
-        del mock_tool3.fn._mesh_agent_dependencies
-
-        mock_lp = MagicMock()
-        mock_lp._components = {
-            "tool:tool1@": mock_tool1,
-            "tool:tool2@": mock_tool2,
-            "tool:tool3@": mock_tool3,
-        }
-        mock_fastmcp_server.local_provider = mock_lp
-
-        wrapper = HttpMcpWrapper(mock_fastmcp_server)
-
-        result = wrapper._get_dependencies()
-
-        # Should extract all dependencies (deduplicated)
-        assert set(result) == {"time_service", "config_service", "data_service"}
-
-    def test_extract_tool_params(self):
-        """Test _extract_tool_params returns basic schema."""
-        mock_fastmcp_server = MagicMock()
-        wrapper = HttpMcpWrapper(mock_fastmcp_server)
-
-        mock_tool = MagicMock()
-
-        result = wrapper._extract_tool_params(mock_tool)
-
-        # Basic schema structure
-        assert result == {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        }
-
 
 class TestHttpMcpWrapperEdgeCases:
     """Test edge cases and error conditions."""
@@ -331,25 +229,6 @@ class TestHttpMcpWrapperEdgeCases:
         # _mcp_app should be None, setup should detect this
         with pytest.raises(AttributeError, match="No supported HTTP app method"):
             await wrapper.setup()
-
-    def test_get_capabilities_with_malformed_metadata(self):
-        """Test _get_capabilities handles malformed tool metadata."""
-        mock_fastmcp_server = MagicMock()
-
-        # Mock tool with malformed metadata
-        mock_tool = MagicMock()
-        mock_tool.fn._mesh_agent_metadata = {"not_capability": "value"}  # Wrong key
-
-        mock_lp = MagicMock()
-        mock_lp._components = {"tool:tool1@": mock_tool}
-        mock_fastmcp_server.local_provider = mock_lp
-
-        wrapper = HttpMcpWrapper(mock_fastmcp_server)
-
-        result = wrapper._get_capabilities()
-
-        # Should handle gracefully, return empty list
-        assert result == []
 
 
 class TestHttpMcpWrapperIntegration:

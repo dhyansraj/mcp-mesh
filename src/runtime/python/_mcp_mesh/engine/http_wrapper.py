@@ -23,6 +23,9 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 
+SESSION_TTL = int(os.environ.get("MCP_MESH_SESSION_TTL", "3600"))
+
+
 class SessionStorage:
     """Session storage with Redis backend and in-memory fallback."""
 
@@ -49,14 +52,13 @@ class SessionStorage:
             logger.warning(f"⚠️ Redis unavailable, using in-memory sessions: {e}")
             self.redis_available = False
 
+    def _session_key(self, session_id: str, capability: str = None) -> str:
+        """Build a session storage key."""
+        return f"session:{session_id}:{capability}" if capability else f"session:{session_id}"
+
     async def get_session_pod(self, session_id: str, capability: str = None) -> str:
         """Get assigned pod for session."""
-        # Use capability-specific key if provided, otherwise simple session key
-        session_key = (
-            f"session:{session_id}:{capability}"
-            if capability
-            else f"session:{session_id}"
-        )
+        session_key = self._session_key(session_id, capability)
 
         if self.redis_available:
             try:
@@ -77,13 +79,8 @@ class SessionStorage:
         self, session_id: str, pod_ip: str, capability: str = None
     ) -> str:
         """Assign pod to session with TTL."""
-        # Use capability-specific key if provided, otherwise simple session key
-        session_key = (
-            f"session:{session_id}:{capability}"
-            if capability
-            else f"session:{session_id}"
-        )
-        ttl = 3600  # 1 hour TTL
+        session_key = self._session_key(session_id, capability)
+        ttl = SESSION_TTL
 
         if self.redis_available:
             try:
@@ -191,53 +188,6 @@ class HttpMcpWrapper:
         from _mcp_mesh.shared.host_resolver import HostResolver
 
         return HostResolver.get_external_host()
-
-    def _get_capabilities(self) -> list[str]:
-        """Extract capabilities from registered tools."""
-        capabilities = set()
-
-        # v3: Look for mesh metadata on tools via local_provider
-        local_provider = getattr(self.mcp_server, "local_provider", None)
-        if local_provider is not None:
-            components = getattr(local_provider, "_components", {})
-            for comp_key, comp_obj in components.items():
-                if not comp_key.startswith("tool:"):
-                    continue
-                fn = getattr(comp_obj, "fn", None)
-                if fn and hasattr(fn, "_mesh_agent_metadata"):
-                    metadata = fn._mesh_agent_metadata
-                    if "capability" in metadata:
-                        capabilities.add(metadata["capability"])
-
-        return list(capabilities)
-
-    def _get_dependencies(self) -> list[str]:
-        """Extract dependencies from registered tools."""
-        dependencies = set()
-
-        # v3: Look for mesh metadata on tools via local_provider
-        local_provider = getattr(self.mcp_server, "local_provider", None)
-        if local_provider is not None:
-            components = getattr(local_provider, "_components", {})
-            for comp_key, comp_obj in components.items():
-                if not comp_key.startswith("tool:"):
-                    continue
-                fn = getattr(comp_obj, "fn", None)
-                if fn and hasattr(fn, "_mesh_agent_dependencies"):
-                    deps = fn._mesh_agent_dependencies
-                    dependencies.update(deps)
-
-        return list(dependencies)
-
-    def _extract_tool_params(self, tool: Any) -> dict:
-        """Extract parameter schema from tool."""
-        # This is a simplified version - real implementation would
-        # introspect function signature and type hints
-        return {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        }
 
     def get_endpoint(self, port: int) -> str:
         """Get the full HTTP endpoint URL using the main FastAPI app's port."""

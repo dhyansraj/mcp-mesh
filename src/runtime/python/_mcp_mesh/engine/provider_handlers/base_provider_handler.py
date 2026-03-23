@@ -306,6 +306,14 @@ class BaseProviderHandler(ABC):
         """
         self.vendor = vendor
 
+    @classmethod
+    def prepare_strict_schema(cls, output_type) -> dict:
+        """Prepare a strict JSON schema from a Pydantic output type."""
+        schema = output_type.model_json_schema()
+        schema = sanitize_schema_for_structured_output(schema)
+        schema = make_schema_strict(schema, add_all_required=True)
+        return schema
+
     @abstractmethod
     def prepare_request(
         self,

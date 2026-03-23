@@ -14,8 +14,6 @@ from .base_provider_handler import (
     MEDIA_PARAM_INSTRUCTIONS,
     BaseProviderHandler,
     has_media_params,
-    make_schema_strict,
-    sanitize_schema_for_structured_output,
 )
 
 
@@ -97,14 +95,7 @@ class OpenAIHandler(BaseProviderHandler):
             # CRITICAL: Add response_format for structured output
             # This is what makes OpenAI construct responses according to schema
             # rather than relying on prompt instructions alone
-            schema = output_type.model_json_schema()
-
-            # Sanitize schema first to remove unsupported validation keywords (minimum, maximum, etc.)
-            schema = sanitize_schema_for_structured_output(schema)
-
-            # Transform schema for OpenAI strict mode
-            # OpenAI requires additionalProperties: false and all properties in required
-            schema = make_schema_strict(schema, add_all_required=True)
+            schema = self.prepare_strict_schema(output_type)
 
             # OpenAI structured output format
             # See: https://platform.openai.com/docs/guides/structured-outputs
