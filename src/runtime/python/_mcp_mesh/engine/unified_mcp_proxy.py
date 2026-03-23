@@ -22,6 +22,48 @@ from ..tracing.utils import generate_span_id
 
 logger = logging.getLogger(__name__)
 
+
+def _create_ssl_context_for_endpoint(endpoint: str):
+    """Create SSL context for HTTPS endpoints, or None for HTTP.
+
+    Centralises mTLS / SPIRE configuration so that every transport
+    (FastMCP httpx factory, HTTP fallback, etc.) behaves identically.
+
+    Returns:
+        ssl.SSLContext configured for mTLS, or *None* when the endpoint
+        is plain HTTP or TLS is not enabled.
+
+    Raises:
+        RuntimeError: When HTTPS is requested but cert/key env vars are missing.
+    """
+    if not endpoint.startswith("https://"):
+        return None
+
+    from ..shared.tls_config import get_tls_config
+
+    tls = get_tls_config()
+    if not tls["enabled"]:
+        return None
+
+    if not tls.get("cert_path") or not tls.get("key_path"):
+        raise RuntimeError(
+            "HTTPS endpoint requires MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY"
+        )
+
+    import ssl
+
+    ssl_ctx = ssl.create_default_context()
+    if tls.get("ca_path"):
+        ssl_ctx.load_verify_locations(tls["ca_path"])
+    ssl_ctx.load_cert_chain(tls["cert_path"], tls["key_path"])
+    # SPIFFE/SPIRE certs use URI SANs, not DNS/IP SANs.
+    # Disable hostname check but keep cert chain validation
+    # (create_default_context sets verify_mode=CERT_REQUIRED).
+    if tls.get("provider") == "spire":
+        ssl_ctx.check_hostname = False
+    return ssl_ctx
+
+
 # ContextVar for passing merged outbound headers into httpx event_hooks closure
 _outbound_headers_var: contextvars.ContextVar[dict[str, str] | None] = (
     contextvars.ContextVar("_outbound_headers", default=None)
@@ -171,27 +213,11 @@ class UnifiedMCPProxy:
                 kwargs["event_hooks"] = existing_hooks
 
                 # Apply mTLS config for https endpoints
-                if proxy_instance.endpoint.startswith("https://"):
-                    from ..shared.tls_config import get_tls_config
-
-                    tls = get_tls_config()
-                    if tls["enabled"]:
-                        if not tls.get("cert_path") or not tls.get("key_path"):
-                            raise RuntimeError(
-                                "HTTPS endpoint requires MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY"
-                            )
-                        import ssl
-
-                        ssl_ctx = ssl.create_default_context()
-                        if tls.get("ca_path"):
-                            ssl_ctx.load_verify_locations(tls["ca_path"])
-                        ssl_ctx.load_cert_chain(tls["cert_path"], tls["key_path"])
-                        # SPIFFE/SPIRE certs use URI SANs, not DNS/IP SANs.
-                        # Disable hostname check but keep cert chain validation
-                        # (create_default_context sets verify_mode=CERT_REQUIRED).
-                        if tls.get("provider") == "spire":
-                            ssl_ctx.check_hostname = False
-                        kwargs["verify"] = ssl_ctx
+                ssl_ctx = _create_ssl_context_for_endpoint(
+                    proxy_instance.endpoint
+                )
+                if ssl_ctx is not None:
+                    kwargs["verify"] = ssl_ctx
 
                 return httpx.AsyncClient(**kwargs)
 
@@ -786,27 +812,9 @@ class UnifiedMCPProxy:
 
             # Apply mTLS config for https endpoints
             tls_kwargs = {}
-            if url.startswith("https://"):
-                from ..shared.tls_config import get_tls_config
-
-                tls = get_tls_config()
-                if tls["enabled"]:
-                    if not tls.get("cert_path") or not tls.get("key_path"):
-                        raise RuntimeError(
-                            "HTTPS endpoint requires MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY"
-                        )
-                    import ssl
-
-                    ssl_ctx = ssl.create_default_context()
-                    if tls.get("ca_path"):
-                        ssl_ctx.load_verify_locations(tls["ca_path"])
-                    ssl_ctx.load_cert_chain(tls["cert_path"], tls["key_path"])
-                    # SPIFFE/SPIRE certs use URI SANs, not DNS/IP SANs.
-                    # Disable hostname check but keep cert chain validation
-                    # (create_default_context sets verify_mode=CERT_REQUIRED).
-                    if tls.get("provider") == "spire":
-                        ssl_ctx.check_hostname = False
-                    tls_kwargs["verify"] = ssl_ctx
+            ssl_ctx = _create_ssl_context_for_endpoint(url)
+            if ssl_ctx is not None:
+                tls_kwargs["verify"] = ssl_ctx
 
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(enhanced_timeout, read=enhanced_timeout),
@@ -896,17 +904,23 @@ class UnifiedMCPProxy:
         if not self.streaming_capable:
             raise ValueError(f"Tool {name} not configured for streaming")
 
-        client = await self._get_client()
+        mcp_endpoint = f"{self.endpoint}/mcp"
 
         try:
-            # Use FastMCP's streaming capabilities
-            # Note: FastMCP client may have different streaming API
-            # For now, fall back to regular call_tool and yield result
-            self.logger.debug(f"🌊 Streaming call to tool '{name}'")
+            client_instance = self._create_fastmcp_client(mcp_endpoint)
 
-            result = await client.call_tool(name, arguments or {})
+            async with client_instance as client:
+                self.logger.debug(f"🌊 Streaming call to tool '{name}'")
+
+                result = await client.call_tool(name, arguments or {})
+                yield self._convert_mcp_result_to_python(result)
+
+        except ImportError as e:
+            self.logger.warning(
+                f"FastMCP Client not available for streaming: {e}, falling back to HTTP"
+            )
+            result = await self._fallback_http_call(name, arguments or {})
             yield result
-
         except Exception as e:
             self.logger.error(f"❌ Streaming call to '{name}' failed: {e}")
             raise RuntimeError(f"Streaming call to '{name}' failed: {e}")
@@ -1071,10 +1085,3 @@ class EnhancedUnifiedMCPProxy(UnifiedMCPProxy):
                     )
 
         raise last_exception
-
-    def call_tool_auto(self, name: str, arguments: dict = None) -> Any:
-        """Automatically choose streaming vs non-streaming based on configuration."""
-        if self.streaming_capable:
-            return self.call_tool_streaming(name, arguments)
-        else:
-            return self.call_tool_enhanced(name, arguments)
