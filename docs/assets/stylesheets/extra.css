@@ -336,3 +336,12 @@ table {
 .md-tabs .md-grid {
   overflow: visible !important;
 }
+
+/* =============================================================================
+   Sky Chatbot Widget
+   ============================================================================= */
+
+/* Ensure widget floats above all MkDocs content */
+#sky-widget {
+  z-index: 9999;
+}
