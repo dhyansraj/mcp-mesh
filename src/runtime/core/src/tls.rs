@@ -26,6 +26,11 @@ use pyo3::prelude::*;
 static RESOLVED_CONFIG: OnceLock<TlsConfig> = OnceLock::new();
 static RESOLVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Read an environment variable, returning None if unset or empty.
+pub(crate) fn get_env_string(key: &str) -> Option<String> {
+    env::var(key).ok().filter(|s| !s.is_empty())
+}
+
 /// Errors that can occur during TLS configuration.
 #[derive(Debug, Error)]
 pub enum TlsError {
@@ -111,9 +116,9 @@ pub struct FileProvider {
 
 impl FileProvider {
     pub fn from_env() -> Result<Self, TlsError> {
-        let cert_path = env::var("MCP_MESH_TLS_CERT").ok().filter(|s| !s.is_empty());
-        let key_path = env::var("MCP_MESH_TLS_KEY").ok().filter(|s| !s.is_empty());
-        let ca_path = env::var("MCP_MESH_TLS_CA").ok().filter(|s| !s.is_empty());
+        let cert_path = get_env_string("MCP_MESH_TLS_CERT");
+        let key_path = get_env_string("MCP_MESH_TLS_KEY");
+        let ca_path = get_env_string("MCP_MESH_TLS_CA");
 
         match (&cert_path, &key_path) {
             (Some(_), None) => {
@@ -223,40 +228,42 @@ fn write_credentials_to_files(
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect();
 
-    let dir = format!("{}/mcp-mesh-tls-{}-{}", base, safe_name, std::process::id());
+    let dir_name = format!("mcp-mesh-tls-{}-{}", safe_name, std::process::id());
+    let dir = std::path::Path::new(&base).join(&dir_name);
+    let dir_str = dir.to_string_lossy().to_string();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
         std::fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
-            .create(&dir)
+            .create(&dir_str)
             .map_err(|e| {
                 TlsError::ProviderError(format!("Failed to create TLS temp dir: {}", e))
             })?;
     }
     #[cfg(not(unix))]
     {
-        std::fs::create_dir_all(&dir).map_err(|e| {
+        std::fs::create_dir_all(&dir_str).map_err(|e| {
             TlsError::ProviderError(format!("Failed to create TLS temp dir: {}", e))
         })?;
     }
 
-    let cert_path = format!("{}/cert.pem", dir);
-    let key_path = format!("{}/key.pem", dir);
+    let cert_path = dir.join("cert.pem").to_string_lossy().to_string();
+    let key_path = dir.join("key.pem").to_string_lossy().to_string();
 
     write_secure_file(&cert_path, &creds.cert_pem)?;
     write_secure_file(&key_path, &creds.key_pem)?;
 
     let ca_path = if let Some(ref ca) = creds.ca_pem {
-        let p = format!("{}/ca.pem", dir);
+        let p = dir.join("ca.pem").to_string_lossy().to_string();
         write_secure_file(&p, ca)?;
         Some(p)
     } else {
         None
     };
 
-    info!("TLS credentials written to secure temp files in {}", dir);
+    info!("TLS credentials written to secure temp files in {}", dir.display());
     Ok((cert_path, key_path, ca_path))
 }
 
@@ -308,13 +315,11 @@ impl TlsConfig {
             .map(|v| TlsMode::from_str_value(&v))
             .unwrap_or(TlsMode::Off);
 
-        let cert_path = env::var("MCP_MESH_TLS_CERT").ok().filter(|s| !s.is_empty());
-        let key_path = env::var("MCP_MESH_TLS_KEY").ok().filter(|s| !s.is_empty());
-        let ca_path = env::var("MCP_MESH_TLS_CA").ok().filter(|s| !s.is_empty());
+        let cert_path = get_env_string("MCP_MESH_TLS_CERT");
+        let key_path = get_env_string("MCP_MESH_TLS_KEY");
+        let ca_path = get_env_string("MCP_MESH_TLS_CA");
 
-        let provider = env::var("MCP_MESH_TLS_PROVIDER")
-            .ok()
-            .filter(|s| !s.is_empty())
+        let provider = get_env_string("MCP_MESH_TLS_PROVIDER")
             .unwrap_or_else(|| "file".to_string());
 
         if mode != TlsMode::Off {
@@ -370,9 +375,7 @@ impl TlsConfig {
             return Ok(config);
         }
 
-        let provider_name = env::var("MCP_MESH_TLS_PROVIDER")
-            .ok()
-            .filter(|s| !s.is_empty())
+        let provider_name = get_env_string("MCP_MESH_TLS_PROVIDER")
             .unwrap_or_else(|| "file".to_string());
 
         info!(
@@ -395,37 +398,11 @@ impl TlsConfig {
                 return Err(e);
             }
         };
-        let advertised_host = env::var("MCP_MESH_HTTP_HOST")
-            .ok()
-            .filter(|s| !s.is_empty())
+        let advertised_host = get_env_string("MCP_MESH_HTTP_HOST")
             .unwrap_or_else(|| crate::config::auto_detect_external_ip());
         let credentials = provider.get_credentials(agent_name, &advertised_host).await?;
 
-        // For non-file providers, write credentials to secure temp files
-        // so language runtimes (uvicorn, httpx, etc.) can use them by path
-        let (cert_path, key_path, ca_path) = if provider_name != "file" {
-            let (c, k, ca) = write_credentials_to_files(&credentials, agent_name)?;
-            (Some(c), Some(k), ca)
-        } else {
-            // File provider: use the original paths from env vars
-            (
-                env::var("MCP_MESH_TLS_CERT").ok().filter(|s| !s.is_empty()),
-                env::var("MCP_MESH_TLS_KEY").ok().filter(|s| !s.is_empty()),
-                env::var("MCP_MESH_TLS_CA").ok().filter(|s| !s.is_empty()),
-            )
-        };
-
-        let config = Self {
-            mode,
-            cert_path,
-            key_path,
-            ca_path,
-            provider: provider_name,
-            credentials: Some(credentials),
-        };
-
-        let _ = RESOLVED_CONFIG.set(config.clone());
-        Ok(config)
+        Self::finalize_config(mode, &provider_name, credentials, agent_name)
     }
 
     /// Check if TLS is enabled (mode != Off).
@@ -447,6 +424,37 @@ impl TlsConfig {
     /// Get the cached resolved config, if any.
     pub fn get_resolved_config() -> Option<Self> {
         RESOLVED_CONFIG.get().cloned()
+    }
+
+    /// Internal: write credentials, build config, and cache it.
+    fn finalize_config(
+        mode: TlsMode,
+        provider_name: &str,
+        credentials: TlsCredentials,
+        agent_name: &str,
+    ) -> Result<Self, TlsError> {
+        let (cert_path, key_path, ca_path) = if provider_name != "file" {
+            let (c, k, ca) = write_credentials_to_files(&credentials, agent_name)?;
+            (Some(c), Some(k), ca)
+        } else {
+            (
+                get_env_string("MCP_MESH_TLS_CERT"),
+                get_env_string("MCP_MESH_TLS_KEY"),
+                get_env_string("MCP_MESH_TLS_CA"),
+            )
+        };
+
+        let config = Self {
+            mode,
+            cert_path,
+            key_path,
+            ca_path,
+            provider: provider_name.to_string(),
+            credentials: Some(credentials),
+        };
+
+        let _ = RESOLVED_CONFIG.set(config.clone());
+        Ok(config)
     }
 
     /// Resolve TLS config synchronously (blocks on async).
@@ -478,9 +486,7 @@ impl TlsConfig {
 
         // Check if we're already inside a Tokio runtime (would panic on block_on)
         if tokio::runtime::Handle::try_current().is_ok() {
-            let provider_name = env::var("MCP_MESH_TLS_PROVIDER")
-                .ok()
-                .filter(|s| !s.is_empty())
+            let provider_name = get_env_string("MCP_MESH_TLS_PROVIDER")
                 .unwrap_or_else(|| "file".to_string());
             if provider_name != "file" {
                 return Err(TlsError::ProviderError(format!(
@@ -492,9 +498,7 @@ impl TlsConfig {
             return Ok(Self::from_env());
         }
 
-        let provider_name = env::var("MCP_MESH_TLS_PROVIDER")
-            .ok()
-            .filter(|s| !s.is_empty())
+        let provider_name = get_env_string("MCP_MESH_TLS_PROVIDER")
             .unwrap_or_else(|| "file".to_string());
 
         info!(
@@ -515,9 +519,7 @@ impl TlsConfig {
             }
         };
 
-        let advertised_host = env::var("MCP_MESH_HTTP_HOST")
-            .ok()
-            .filter(|s| !s.is_empty())
+        let advertised_host = get_env_string("MCP_MESH_HTTP_HOST")
             .unwrap_or_else(|| crate::config::auto_detect_external_ip());
 
         // Create a Tokio runtime for the async provider call
@@ -526,29 +528,7 @@ impl TlsConfig {
         })?;
         let credentials = rt.block_on(provider.get_credentials(agent_name, &advertised_host))?;
 
-        // Write credentials to secure temp files for non-file providers
-        let (cert_path, key_path, ca_path) = if provider_name != "file" {
-            let (c, k, ca) = write_credentials_to_files(&credentials, agent_name)?;
-            (Some(c), Some(k), ca)
-        } else {
-            (
-                env::var("MCP_MESH_TLS_CERT").ok().filter(|s| !s.is_empty()),
-                env::var("MCP_MESH_TLS_KEY").ok().filter(|s| !s.is_empty()),
-                env::var("MCP_MESH_TLS_CA").ok().filter(|s| !s.is_empty()),
-            )
-        };
-
-        let config = Self {
-            mode,
-            cert_path,
-            key_path,
-            ca_path,
-            provider: provider_name,
-            credentials: Some(credentials),
-        };
-
-        let _ = RESOLVED_CONFIG.set(config.clone());
-        Ok(config)
+        Self::finalize_config(mode, &provider_name, credentials, agent_name)
     }
 
     /// Clean up temporary TLS credential files.

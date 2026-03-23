@@ -183,15 +183,13 @@ pub fn auto_detect_external_ip() -> String {
 pub fn resolve_config(key: ConfigKey, param_value: Option<&str>) -> Option<String> {
     // Priority 1: Environment variable
     let env_var = key.env_var();
-    if let Ok(value) = env::var(env_var) {
-        if !value.is_empty() {
-            debug!(
-                "Config '{}' resolved from ENV: {}",
-                env_var,
-                redact_for_logging(key, &value)
-            );
-            return Some(value);
-        }
+    if let Some(value) = crate::tls::get_env_string(env_var) {
+        debug!(
+            "Config '{}' resolved from ENV: {}",
+            env_var,
+            redact_for_logging(key, &value)
+        );
+        return Some(value);
     }
 
     // Priority 2: Parameter value (from decorator/script)
