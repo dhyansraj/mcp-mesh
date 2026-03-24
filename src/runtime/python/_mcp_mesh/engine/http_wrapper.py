@@ -23,7 +23,16 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 
-SESSION_TTL = int(os.environ.get("MCP_MESH_SESSION_TTL", "3600"))
+def _parse_session_ttl() -> int:
+    """Parse and validate session TTL from environment."""
+    raw = os.environ.get("MCP_MESH_SESSION_TTL", "3600")
+    try:
+        ttl = int(raw)
+    except (ValueError, TypeError):
+        ttl = 3600
+    return max(1, min(ttl, 86400))
+
+SESSION_TTL = _parse_session_ttl()
 
 
 class SessionStorage:

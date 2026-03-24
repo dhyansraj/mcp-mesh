@@ -91,7 +91,7 @@ class HeartbeatPreparationStep(PipelineStep):
         # Build reverse lookup ONCE before loop (avoid calling get_mesh_llm_agents per tool)
         llm_agents = DecoratorRegistry.get_mesh_llm_agents()
         llm_agent_by_func = {
-            meta.function.__name__: (agent_id, meta)
+            f"{meta.function.__module__}.{meta.function.__name__}": (agent_id, meta)
             for agent_id, meta in llm_agents.items()
         }
 
@@ -129,8 +129,9 @@ class HeartbeatPreparationStep(PipelineStep):
                 f"🤖 Checking for LLM filter: function={func_name}, total_llm_agents_registered={len(llm_agents)}"
             )
 
-            if func_name in llm_agent_by_func:
-                llm_agent_id, llm_metadata = llm_agent_by_func[func_name]
+            qualified_name = f"{decorated_func.function.__module__}.{decorated_func.function.__name__}"
+            if qualified_name in llm_agent_by_func:
+                llm_agent_id, llm_metadata = llm_agent_by_func[qualified_name]
                 # Found matching LLM agent - extract filter config
                 raw_filter = llm_metadata.config.get("filter")
                 filter_mode = llm_metadata.config.get("filter_mode", "all")

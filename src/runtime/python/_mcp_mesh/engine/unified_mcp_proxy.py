@@ -889,14 +889,13 @@ class UnifiedMCPProxy:
             raise RuntimeError(f"HTTP fallback failed: {e}")
 
     async def call_tool_streaming(
-        self, name: str, arguments: dict = None, progress_handler=None
+        self, name: str, arguments: dict = None,
     ) -> AsyncIterator[Any]:
         """Call a tool with streaming response using FastMCP's streaming support.
 
         Args:
             name: Tool name to call
             arguments: Tool arguments
-            progress_handler: Optional progress handler for streaming
 
         Yields:
             Streaming response chunks
