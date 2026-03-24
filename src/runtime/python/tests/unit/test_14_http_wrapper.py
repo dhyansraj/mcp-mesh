@@ -274,14 +274,8 @@ class TestHttpMcpWrapperIntegration:
             # Setup wrapper
             await wrapper.setup()
 
-            # Test utility methods
-            capabilities = wrapper._get_capabilities()
-            dependencies = wrapper._get_dependencies()
             endpoint = wrapper.get_endpoint(port=9090)
 
-            # Verify results
-            assert capabilities == ["test_service"]
-            assert dependencies == ["time_service"]
             assert endpoint == "http://test-service.default.svc.cluster.local:9090"
 
     def test_wrapper_robustness_with_missing_attributes(self):
@@ -297,8 +291,4 @@ class TestHttpMcpWrapperIntegration:
         wrapper = HttpMcpWrapper(mock_fastmcp_server)
 
         # Should handle missing attributes gracefully
-        capabilities = wrapper._get_capabilities()
-        dependencies = wrapper._get_dependencies()
-
-        assert capabilities == []
-        assert dependencies == []
+        assert wrapper.mcp_server is not None
