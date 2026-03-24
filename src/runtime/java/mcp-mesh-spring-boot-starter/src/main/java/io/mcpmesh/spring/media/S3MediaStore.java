@@ -102,21 +102,24 @@ public class S3MediaStore implements MediaStore {
     }
 
     private S3Client getClient() {
-        if (s3Client == null) {
+        S3Client client = this.s3Client;
+        if (client == null) {
             synchronized (this) {
-                if (s3Client == null) {
+                client = this.s3Client;
+                if (client == null) {
                     S3ClientBuilder builder = S3Client.builder();
                     if (endpoint != null && !endpoint.isBlank()) {
                         builder.endpointOverride(URI.create(endpoint))
                                .forcePathStyle(true);
                     }
-                    s3Client = builder.build();
+                    client = builder.build();
+                    this.s3Client = client;
                     log.info("Initialized S3 client for bucket '{}'{}", bucket,
                         endpoint != null ? " (endpoint: " + endpoint + ")" : "");
                 }
             }
         }
-        return s3Client;
+        return client;
     }
 
     private String toKey(String uri) {

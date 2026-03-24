@@ -1,8 +1,12 @@
 package io.mcpmesh.ai.handlers;
 
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.function.FunctionToolCallback;
 
 import java.util.*;
+import java.util.function.Function;
 
 /**
  * Interface for vendor-specific LLM provider handlers.
@@ -186,6 +190,99 @@ public interface LlmProviderHandler {
     }
 
     // =========================================================================
+    // Shared Tool Callback Creation
+    // =========================================================================
+
+    /** Shared ObjectMapper for tool callback serialization. */
+    static final tools.jackson.databind.ObjectMapper TOOL_CALLBACK_MAPPER = new tools.jackson.databind.ObjectMapper();
+
+    /**
+     * Create ToolCallbacks for schema only (no execution).
+     *
+     * <p>Shared across all handlers -- tool definitions are converted to Spring AI
+     * callbacks with a dummy function that should never be called. Vendor-specific
+     * handlers (e.g., Gemini) may override this to apply schema transformations.
+     */
+    default List<ToolCallback> createToolCallbacksForSchema(List<ToolDefinition> tools) {
+        List<ToolCallback> callbacks = new ArrayList<>();
+        if (tools == null) return callbacks;
+
+        for (ToolDefinition tool : tools) {
+            Function<Map<String, Object>, String> dummyFunction = args -> {
+                LoggerFactory.getLogger(getClass()).warn("Tool {} was unexpectedly called!", tool.name());
+                return "{\"error\": \"Tool execution not supported in provider mode\"}";
+            };
+
+            String inputSchemaJson = null;
+            if (tool.inputSchema() != null && !tool.inputSchema().isEmpty()) {
+                try {
+                    inputSchemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(tool.inputSchema());
+                } catch (Exception e) {
+                    LoggerFactory.getLogger(getClass()).warn("Failed to serialize inputSchema for {}: {}", tool.name(), e.getMessage());
+                }
+            }
+
+            @SuppressWarnings("unchecked")
+            var builder = FunctionToolCallback
+                .builder(tool.name(), dummyFunction)
+                .description(tool.description() != null ? tool.description() : "No description")
+                .inputType((Class<Map<String, Object>>) (Class<?>) Map.class);
+
+            if (inputSchemaJson != null) {
+                builder.inputSchema(inputSchemaJson);
+            }
+
+            callbacks.add(builder.build());
+        }
+
+        return callbacks;
+    }
+
+    /**
+     * Create a Spring AI ToolCallback from a ToolDefinition with an executor.
+     *
+     * <p>Shared across all handlers -- converts tool call arguments to JSON,
+     * invokes the executor, and returns the result. Vendor-specific handlers
+     * (e.g., Gemini) may override this to apply schema transformations.
+     */
+    default ToolCallback createToolCallback(ToolDefinition tool, ToolExecutorCallback toolExecutor) {
+        Function<Map<String, Object>, String> toolFunction = args -> {
+            try {
+                String argsJson = args != null ? TOOL_CALLBACK_MAPPER.writeValueAsString(args) : "{}";
+                return toolExecutor.execute(tool.name(), argsJson);
+            } catch (Exception e) {
+                LoggerFactory.getLogger(getClass()).error("Tool execution failed: {}", tool.name(), e);
+                try {
+                    return TOOL_CALLBACK_MAPPER.writeValueAsString(Map.of("error", "Tool execution failed: " + tool.name()));
+                } catch (Exception ignored) {
+                    return "{\"error\": \"tool execution failed\"}";
+                }
+            }
+        };
+
+        String inputSchemaJson = null;
+        if (tool.inputSchema() != null && !tool.inputSchema().isEmpty()) {
+            try {
+                inputSchemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(tool.inputSchema());
+            } catch (Exception e) {
+                LoggerFactory.getLogger(getClass()).warn("Failed to serialize inputSchema for {}: {}", tool.name(), e.getMessage());
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        var builder = FunctionToolCallback
+            .builder(tool.name(), toolFunction)
+            .description(tool.description() != null ? tool.description() : "No description")
+            .inputType((Class<Map<String, Object>>) (Class<?>) Map.class);
+
+        if (inputSchemaJson != null) {
+            builder.inputSchema(inputSchemaJson);
+        }
+
+        return builder.build();
+    }
+
+    // =========================================================================
     // Data Types
     // =========================================================================
 
@@ -203,16 +300,24 @@ public interface LlmProviderHandler {
      *
      * <p>Used to configure response_format or add JSON instructions to prompt.
      */
-    record OutputSchema(
-        /** Schema name (usually the class name) */
-        String name,
+    final class OutputSchema {
+        private final String name;
+        private final Map<String, Object> schema;
+        private final boolean simple;
 
-        /** JSON Schema for the output */
-        Map<String, Object> schema,
+        // Cached sanitized schema (computed lazily, immutable once set)
+        private volatile Map<String, Object> cachedSanitized;
 
-        /** Whether this is a simple schema (for Claude hint mode detection) */
-        boolean simple
-    ) {
+        public OutputSchema(String name, Map<String, Object> schema, boolean simple) {
+            this.name = name;
+            this.schema = schema;
+            this.simple = simple;
+        }
+
+        public String name() { return name; }
+        public Map<String, Object> schema() { return schema; }
+        public boolean simple() { return simple; }
+
         /**
          * Create from a JSON schema map.
          */
@@ -300,7 +405,12 @@ public interface LlmProviderHandler {
          * @return New schema with unsupported validation keywords removed
          */
         public Map<String, Object> sanitize() {
-            return sanitizeSchema(new LinkedHashMap<>(schema));
+            Map<String, Object> result = cachedSanitized;
+            if (result == null) {
+                result = sanitizeSchema(new LinkedHashMap<>(schema));
+                cachedSanitized = result;
+            }
+            return result;
         }
 
         /**
