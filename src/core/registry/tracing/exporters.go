@@ -960,29 +960,33 @@ func (oe *OTLPExporter) attemptConnection() {
 		}
 	}
 
-	// Connection successful - update state
+	// Connection successful - swap state under lock, then cleanup old resources outside lock
+	// to avoid blocking concurrent RLock callers with slow shutdown operations.
 	oe.connMu.Lock()
-	// Close old connections if any (reconnection case)
-	if oe.directConn != nil {
-		oe.directConn.Close()
-	}
-	if oe.exporter != nil {
-		oe.exporter.Shutdown(oe.ctx)
-	}
-	// Clear old tracer providers since they reference the old exporter
-	for _, tp := range oe.tracerProviders {
-		tp.Shutdown(context.Background())
-	}
-	oe.tracerProviders = make(map[string]*sdktrace.TracerProvider)
-	oe.tracers = make(map[string]oteltrace.Tracer)
+	oldDirectConn := oe.directConn
+	oldExporter := oe.exporter
+	oldProviders := oe.tracerProviders
 
 	oe.exporter = exporter
 	oe.directClient = directClient
 	oe.directConn = directConn
+	oe.tracerProviders = make(map[string]*sdktrace.TracerProvider)
+	oe.tracers = make(map[string]oteltrace.Tracer)
 	oe.connectionState = otlpStateConnected
 	oe.lastError = nil
 	oe.retryCount = 0
 	oe.connMu.Unlock()
+
+	// Cleanup old resources outside the lock to avoid blocking readers
+	if oldDirectConn != nil {
+		oldDirectConn.Close()
+	}
+	if oldExporter != nil {
+		oldExporter.Shutdown(oe.ctx)
+	}
+	for _, tp := range oldProviders {
+		tp.Shutdown(context.Background())
+	}
 
 	oe.logger.Println("Successfully connected to OTLP endpoint")
 }
@@ -999,28 +1003,34 @@ func (oe *OTLPExporter) handleConnectionError(err error) {
 	oe.logger.Printf("OTLP connection failed: %v (will retry, attempt %d)", err, oe.retryCount)
 }
 
-// handleConnectionLoss cleans up after losing connection to the OTLP endpoint
+// handleConnectionLoss cleans up after losing connection to the OTLP endpoint.
+// Collects old resources under lock, then cleans them up outside the lock
+// to avoid blocking concurrent RLock callers.
 func (oe *OTLPExporter) handleConnectionLoss() {
 	oe.connMu.Lock()
-	defer oe.connMu.Unlock()
-
 	oe.connectionState = otlpStateDisconnected
 
-	if oe.directConn != nil {
-		oe.directConn.Close()
-		oe.directConn = nil
-		oe.directClient = nil
-	}
-	if oe.exporter != nil {
-		oe.exporter.Shutdown(oe.ctx)
-		oe.exporter = nil
-	}
-	// Clear tracer providers referencing dead exporter
-	for _, tp := range oe.tracerProviders {
-		tp.Shutdown(context.Background())
-	}
+	oldDirectConn := oe.directConn
+	oldExporter := oe.exporter
+	oldProviders := oe.tracerProviders
+
+	oe.directConn = nil
+	oe.directClient = nil
+	oe.exporter = nil
 	oe.tracerProviders = make(map[string]*sdktrace.TracerProvider)
 	oe.tracers = make(map[string]oteltrace.Tracer)
+	oe.connMu.Unlock()
+
+	// Cleanup old resources outside the lock to avoid blocking readers
+	if oldDirectConn != nil {
+		oldDirectConn.Close()
+	}
+	if oldExporter != nil {
+		oldExporter.Shutdown(oe.ctx)
+	}
+	for _, tp := range oldProviders {
+		tp.Shutdown(context.Background())
+	}
 
 	oe.logger.Println("OTLP connection lost, will attempt to reconnect")
 }
@@ -1055,8 +1065,13 @@ func (oe *OTLPExporter) isConnected() bool {
 	return oe.connectionState == otlpStateConnected
 }
 
-// getTracerForAgent gets or creates a tracer for a specific agent
+// getTracerForAgent gets or creates a tracer for a specific agent.
+// Caller must NOT already hold connMu — this method acquires connMu.Lock()
+// to prevent data races with connectionManager/handleConnectionLoss.
 func (oe *OTLPExporter) getTracerForAgent(agentName string) (oteltrace.Tracer, error) {
+	oe.connMu.Lock()
+	defer oe.connMu.Unlock()
+
 	if oe.exporter == nil {
 		return nil, fmt.Errorf("OTLP exporter not initialized")
 	}
@@ -1079,10 +1094,13 @@ func (oe *OTLPExporter) getTracerForAgent(agentName string) (oteltrace.Tracer, e
 		return nil, fmt.Errorf("failed to create resource for agent %s: %w", agentName, err)
 	}
 
+	// Capture exporter reference while under lock to avoid stale reference
+	exporter := oe.exporter
+
 	// Create tracer provider for this agent with proper resource
 	// Each agent needs its own TracerProvider with distinct service.name resource attribute
 	tracerProvider := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(oe.exporter), // Use shared exporter for batching
+		sdktrace.WithBatcher(exporter),    // Use shared exporter for batching
 		sdktrace.WithResource(res),        // Agent-specific resource with service.name
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
@@ -1097,15 +1115,19 @@ func (oe *OTLPExporter) getTracerForAgent(agentName string) (oteltrace.Tracer, e
 	oe.tracerProviders[agentName] = tracerProvider
 	oe.tracers[agentName] = tracer
 
-
 	return tracer, nil
 }
 
 // ExportSpan exports a single span immediately (stream-through mode) with preserved trace correlation
 // EstablishSpanContext creates span contexts for span_start events to enable proper parent-child relationships
 func (oe *OTLPExporter) EstablishSpanContext(event *TraceEvent) error {
-	if !oe.isConnected() {
-		return fmt.Errorf("OTLP exporter not connected")
+	// Read connection state in a single lock acquisition to avoid TOCTOU race.
+	oe.connMu.RLock()
+	state := oe.connectionState
+	oe.connMu.RUnlock()
+
+	if state != otlpStateConnected {
+		return fmt.Errorf("OTLP exporter not connected (state: %s)", state)
 	}
 
 	// Parse the start time
@@ -1150,18 +1172,18 @@ func (oe *OTLPExporter) EstablishSpanContext(event *TraceEvent) error {
 }
 
 func (oe *OTLPExporter) ExportSpan(event *TraceEvent) error {
-	if !oe.isConnected() {
-		oe.connMu.RLock()
-		state := oe.connectionState
-		oe.connMu.RUnlock()
+	// Read connection state and directClient in a single lock acquisition
+	// to avoid TOCTOU race between isConnected check and directClient read.
+	oe.connMu.RLock()
+	state := oe.connectionState
+	directClient := oe.directClient
+	oe.connMu.RUnlock()
+
+	if state != otlpStateConnected {
 		return fmt.Errorf("OTLP exporter not connected (state: %s)", state)
 	}
 
 	// Use direct OTLP protobuf generation for exact span ID preservation
-	oe.connMu.RLock()
-	directClient := oe.directClient
-	oe.connMu.RUnlock()
-
 	if directClient != nil {
 		return oe.exportDirectOTLP(event)
 	}
@@ -1424,13 +1446,16 @@ func (oe *OTLPExporter) exportSDKSpan(event *TraceEvent) error {
 	span.End(oteltrace.WithTimestamp(endTime))
 
 	// Force flush to ensure immediate export
-	if tracerProvider, exists := oe.tracerProviders[event.AgentName]; exists {
+	oe.connMu.RLock()
+	tracerProvider := oe.tracerProviders[event.AgentName]
+	oe.connMu.RUnlock()
+	if tracerProvider != nil {
 		if err := tracerProvider.ForceFlush(ctx); err != nil {
 			return fmt.Errorf("failed to flush span: %w", err)
 		}
 	}
 
-	oe.logger.Printf("🎯 SDK span export completed: %s/%s", traceID.String()[:16], spanID.String()[:16])
+	oe.logger.Printf("SDK span export completed: %s/%s", traceID.String()[:16], spanID.String()[:16])
 	return nil
 }
 
@@ -1546,20 +1571,25 @@ func (oe *OTLPExporter) Close() error {
 	// Wait for connection manager goroutine to finish
 	oe.wg.Wait()
 
-	// Close direct gRPC connection if exists
+	// Collect all resources under lock, then clean up outside the lock
 	oe.connMu.Lock()
-	if oe.directConn != nil {
-		oe.directConn.Close()
-	}
+	directConn := oe.directConn
+	oe.directConn = nil
+	providers := oe.tracerProviders
+	oe.tracerProviders = nil
 	oe.connMu.Unlock()
+
+	if directConn != nil {
+		directConn.Close()
+	}
 
 	// Shutdown all tracer providers with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	var errors []string
-	for agentName, tracerProvider := range oe.tracerProviders {
-		if err := tracerProvider.Shutdown(shutdownCtx); err != nil {
+	for agentName, tp := range providers {
+		if err := tp.Shutdown(shutdownCtx); err != nil {
 			errors = append(errors, fmt.Sprintf("agent %s: %v", agentName, err))
 		}
 	}
@@ -1700,6 +1730,9 @@ func (oe *OTLPExporter) sortSpansByHierarchy(spans []*PendingSpan) []*PendingSpa
 
 // ExportCompleteSpan buffers spans and exports them in correct order
 func (oe *OTLPExporter) ExportCompleteSpan(event *TraceEvent) error {
+	if !oe.isConnected() {
+		return fmt.Errorf("OTLP exporter not connected")
+	}
 
 	// Add span to buffer
 	oe.bufferMutex.Lock()
@@ -1736,6 +1769,9 @@ func (oe *OTLPExporter) ExportCompleteSpan(event *TraceEvent) error {
 
 // exportSingleSpan exports a single span using predetermined trace/span IDs
 func (oe *OTLPExporter) exportSingleSpan(event *TraceEvent) error {
+	if !oe.isConnected() {
+		return fmt.Errorf("OTLP exporter not connected")
+	}
 
 	// Parse the existing trace and span IDs from Python
 	traceID, err := parseTraceID(event.TraceID)
@@ -1773,6 +1809,9 @@ func (oe *OTLPExporter) exportSingleSpan(event *TraceEvent) error {
 
 // exportSpanDirectlyToOTLP creates OTLP span data with exact IDs and parent relationships
 func (oe *OTLPExporter) exportSpanDirectlyToOTLP(event *TraceEvent, traceID oteltrace.TraceID, spanID oteltrace.SpanID, parentSpanID oteltrace.SpanID, startTime, endTime time.Time) error {
+	if !oe.isConnected() {
+		return fmt.Errorf("OTLP exporter not connected")
+	}
 
 	// Build span attributes
 	attributes := oe.buildSpanAttributes(event)
