@@ -368,9 +368,8 @@ public class MeshToolWrapper implements McpToolHandler {
             return new LinkedHashMap<>();
         }
 
-        // Only copy if trace fields are present — avoid allocation on the hot path
-        boolean hasTraceFields = mcpArgs.containsKey("_trace_id") || mcpArgs.containsKey("_parent_span") || mcpArgs.containsKey("_mesh_headers");
-        Map<String, Object> cleanArgs = hasTraceFields ? new LinkedHashMap<>(mcpArgs) : mcpArgs;
+        // Always copy to avoid mutating the original map via remove() calls below
+        Map<String, Object> cleanArgs = new LinkedHashMap<>(mcpArgs);
 
         // Extract trace context from arguments
         String traceId = null;

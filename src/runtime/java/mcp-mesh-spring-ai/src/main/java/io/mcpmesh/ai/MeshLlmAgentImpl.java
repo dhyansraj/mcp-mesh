@@ -69,9 +69,12 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
     // Spring AI provider for direct mode (optional)
     private final SpringAiLlmProvider springAiProvider;
 
-    // Available tools for agentic loop
-    private final List<ToolInfo> availableTools = new ArrayList<>();
-    private volatile Map<String, ToolInfo> toolsByName = Map.of();
+    // Available tools for agentic loop — immutable snapshot for thread safety
+    private record ToolsSnapshot(List<ToolInfo> tools, Map<String, ToolInfo> byName) {
+        static final ToolsSnapshot EMPTY = new ToolsSnapshot(List.of(), Map.of());
+    }
+
+    private volatile ToolsSnapshot toolsSnapshot = ToolsSnapshot.EMPTY;
 
     // Tool executor for agentic loop
     private ToolExecutor toolExecutor;
@@ -188,15 +191,17 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
      * Update the list of available tools for agentic loops.
      */
     public void updateTools(List<ToolInfo> tools) {
-        this.availableTools.clear();
-        if (tools != null) {
-            this.availableTools.addAll(tools);
+        if (tools == null || tools.isEmpty()) {
+            this.toolsSnapshot = ToolsSnapshot.EMPTY;
+        } else {
+            List<ToolInfo> immutableList = List.copyOf(tools);
+            Map<String, ToolInfo> byName = new HashMap<>();
+            for (ToolInfo t : immutableList) {
+                byName.put(t.name(), t);
+            }
+            this.toolsSnapshot = new ToolsSnapshot(immutableList, Map.copyOf(byName));
         }
-        this.toolsByName = new HashMap<>();
-        for (ToolInfo t : this.availableTools) {
-            this.toolsByName.put(t.name(), t);
-        }
-        log.debug("Updated available tools: {} tools", availableTools.size());
+        log.debug("Updated available tools: {} tools", toolsSnapshot.tools.size());
     }
 
     /**
@@ -297,7 +302,7 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
 
     @Override
     public List<ToolInfo> getAvailableTools() {
-        return new ArrayList<>(availableTools);
+        return new ArrayList<>(toolsSnapshot.tools());
     }
 
     @Override
@@ -448,7 +453,8 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
     private Map<String, Object> callLlmDirect(List<Map<String, Object>> messages, OutputSchema outputSchema) {
         // Convert our ToolInfo to handler's ToolDefinition
         List<ToolDefinition> toolDefs = new ArrayList<>();
-        for (ToolInfo tool : availableTools) {
+        ToolsSnapshot snapshot = this.toolsSnapshot;
+        for (ToolInfo tool : snapshot.tools()) {
             toolDefs.add(new ToolDefinition(
                 tool.name(),
                 tool.description(),
@@ -458,9 +464,9 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
 
         // Create tool executor callback that delegates to our tool executor
         LlmProviderHandler.ToolExecutorCallback executorCallback = null;
-        if (toolExecutor != null && !availableTools.isEmpty()) {
+        if (toolExecutor != null && !snapshot.tools().isEmpty()) {
             executorCallback = (toolName, argsJson) -> {
-                ToolInfo tool = toolsByName.get(toolName);
+                ToolInfo tool = snapshot.byName().get(toolName);
                 if (tool == null) {
                     throw new RuntimeException("Tool not found: " + toolName);
                 }
@@ -536,7 +542,7 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
         request.put("messages", messages);
 
         // Add tools if available (for agentic loop)
-        if (!availableTools.isEmpty()) {
+        if (!toolsSnapshot.tools().isEmpty()) {
             request.put("tools", formatToolsForLlm());
         }
 
@@ -672,7 +678,7 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
     private List<Map<String, Object>> formatToolsForLlm() {
         List<Map<String, Object>> tools = new ArrayList<>();
 
-        for (ToolInfo tool : availableTools) {
+        for (ToolInfo tool : toolsSnapshot.tools()) {
             Map<String, Object> toolDef = new LinkedHashMap<>();
             toolDef.put("type", "function");
 
@@ -699,7 +705,7 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
     @SuppressWarnings("unchecked")
     private String executeToolCall(String toolName, String argsJson) throws Exception {
         // Find the tool
-        ToolInfo tool = toolsByName.get(toolName);
+        ToolInfo tool = toolsSnapshot.byName().get(toolName);
         if (tool == null) {
             throw new RuntimeException("Tool not found: " + toolName);
         }

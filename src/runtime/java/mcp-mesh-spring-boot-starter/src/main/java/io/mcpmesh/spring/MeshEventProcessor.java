@@ -14,6 +14,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -56,9 +57,10 @@ public class MeshEventProcessor implements SmartLifecycle {
     // Key: funcId (full class path), Value: proxy (we only support one LLM agent per function currently)
     private final Map<String, MeshLlmAgentProxy> llmAgentProxies = new ConcurrentHashMap<>();
 
-    // Reverse lookup: short method name -> full funcId key in llmAgentProxies
+    // Reverse lookup: short method name -> set of full funcId keys in llmAgentProxies
     // Populated when proxies are stored, enabling O(1) lookup by method name
-    private final Map<String, String> methodNameToFuncId = new ConcurrentHashMap<>();
+    // Uses a set to handle collisions when multiple classes have methods with the same name
+    private final Map<String, Set<String>> methodNameToFuncIds = new ConcurrentHashMap<>();
 
     // Cache for tools when wrapper is not found (fallback only)
     // With the new flow, proxy is created immediately when tools arrive, so this
@@ -371,12 +373,18 @@ public class MeshEventProcessor implements SmartLifecycle {
 
             if (proxy == null) {
                 // O(1) reverse lookup by short method name
-                String mappedFuncId = methodNameToFuncId.get(funcId);
-                if (mappedFuncId != null) {
-                    proxy = llmAgentProxies.get(mappedFuncId);
-                    if (proxy != null) {
-                        log.info("Found LLM proxy by method name map: {} -> {} (proxy@{})",
-                            funcId, mappedFuncId, System.identityHashCode(proxy));
+                Set<String> mappedFuncIds = methodNameToFuncIds.get(funcId);
+                if (mappedFuncIds != null) {
+                    if (mappedFuncIds.size() == 1) {
+                        String mappedFuncId = mappedFuncIds.iterator().next();
+                        proxy = llmAgentProxies.get(mappedFuncId);
+                        if (proxy != null) {
+                            log.info("Found LLM proxy by method name map: {} -> {} (proxy@{})",
+                                funcId, mappedFuncId, System.identityHashCode(proxy));
+                        }
+                    } else {
+                        log.warn("Ambiguous method name '{}' maps to {} funcIds: {} — skipping reverse lookup",
+                            funcId, mappedFuncIds.size(), mappedFuncIds);
                     }
                 }
             }
@@ -497,7 +505,7 @@ public class MeshEventProcessor implements SmartLifecycle {
         String shortName = funcId.contains(".")
             ? funcId.substring(funcId.lastIndexOf('.') + 1)
             : funcId;
-        methodNameToFuncId.put(shortName, funcId);
+        methodNameToFuncIds.computeIfAbsent(shortName, k -> ConcurrentHashMap.newKeySet()).add(funcId);
     }
 
     private void handleDependencyChanged(MeshEvent event) {

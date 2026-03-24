@@ -458,9 +458,20 @@ public class GeminiHandler implements LlmProviderHandler {
         if (schema == null) return null;
         Map<String, Object> result = new LinkedHashMap<>(schema);
 
-        // Convert "type" to uppercase
-        if (result.containsKey("type") && result.get("type") instanceof String type) {
-            result.put("type", type.toUpperCase());
+        // Convert "type" to uppercase (string form or array form)
+        if (result.containsKey("type")) {
+            Object typeVal = result.get("type");
+            if (typeVal instanceof String type) {
+                result.put("type", type.toUpperCase());
+            } else if (typeVal instanceof List) {
+                @SuppressWarnings("unchecked")
+                List<Object> types = (List<Object>) typeVal;
+                List<Object> uppercased = new ArrayList<>();
+                for (Object t : types) {
+                    uppercased.add(t instanceof String ? ((String) t).toUpperCase() : t);
+                }
+                result.put("type", uppercased);
+            }
         }
 
         // Recurse into "properties"
@@ -481,6 +492,37 @@ public class GeminiHandler implements LlmProviderHandler {
         // Recurse into "items" (for array types)
         if (result.containsKey("items") && result.get("items") instanceof Map) {
             result.put("items", convertSchemaTypesToUpperCase((Map<String, Object>) result.get("items")));
+        }
+
+        // Recurse into "$defs"
+        if (result.containsKey("$defs") && result.get("$defs") instanceof Map) {
+            Map<String, Object> defs = (Map<String, Object>) result.get("$defs");
+            Map<String, Object> convertedDefs = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> entry : defs.entrySet()) {
+                if (entry.getValue() instanceof Map) {
+                    convertedDefs.put(entry.getKey(),
+                        convertSchemaTypesToUpperCase((Map<String, Object>) entry.getValue()));
+                } else {
+                    convertedDefs.put(entry.getKey(), entry.getValue());
+                }
+            }
+            result.put("$defs", convertedDefs);
+        }
+
+        // Recurse into "anyOf", "oneOf", "allOf"
+        for (String keyword : List.of("anyOf", "oneOf", "allOf")) {
+            if (result.containsKey(keyword) && result.get(keyword) instanceof List) {
+                List<Object> variants = (List<Object>) result.get(keyword);
+                List<Object> convertedVariants = new ArrayList<>();
+                for (Object variant : variants) {
+                    if (variant instanceof Map) {
+                        convertedVariants.add(convertSchemaTypesToUpperCase((Map<String, Object>) variant));
+                    } else {
+                        convertedVariants.add(variant);
+                    }
+                }
+                result.put(keyword, convertedVariants);
+            }
         }
 
         return result;
