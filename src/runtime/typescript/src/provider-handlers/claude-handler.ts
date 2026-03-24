@@ -23,12 +23,14 @@
 import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
 import {
-  convertMessagesToVercelFormat,
   sanitizeSchemaForStructuredOutput,
   makeSchemaStrict,
   defaultDetermineOutputMode,
+  prepareRequestBaseline,
+  buildSchemaPromptContent,
   BASE_TOOL_INSTRUCTIONS,
   CLAUDE_ANTI_XML_INSTRUCTION,
+  DECISION_GUIDE,
   type ProviderHandler,
   type VendorCapabilities,
   type ToolSchema,
@@ -91,33 +93,8 @@ export class ClaudeHandler implements ProviderHandler {
       [key: string]: unknown;
     }
   ): PreparedRequest {
-    const { outputMode, temperature, maxOutputTokens: maxTokens, topP, ...rest } = options ?? {};
-    const determinedMode = this.determineOutputMode(outputSchema, outputMode);
-
-    // Convert messages to Vercel AI SDK format (shared utility)
-    let convertedMessages = convertMessagesToVercelFormat(messages);
-
-    const request: PreparedRequest = {
-      messages: convertedMessages,
-      ...rest,
-    };
-
-    // Add tools if provided
-    // Vercel AI SDK will convert OpenAI tool format to Anthropic's format
-    if (tools && tools.length > 0) {
-      request.tools = tools;
-    }
-
-    // Add standard parameters if provided
-    if (temperature !== undefined) {
-      request.temperature = temperature;
-    }
-    if (maxTokens !== undefined) {
-      request.maxOutputTokens = maxTokens;
-    }
-    if (topP !== undefined) {
-      request.topP = topP;
-    }
+    const { request, outputMode: extractedMode } = prepareRequestBaseline(messages, tools, options);
+    const determinedMode = this.determineOutputMode(outputSchema, extractedMode as OutputMode);
 
     // Skip structured output for text mode or no schema
     if (determinedMode === "text" || !outputSchema) {
@@ -191,12 +168,7 @@ export class ClaudeHandler implements ProviderHandler {
     // call tools vs return JSON directly (matches Java handler behavior).
     if (determinedMode === "strict") {
       if (toolSchemas && toolSchemas.length > 0) {
-        systemContent += `
-DECISION GUIDE:
-- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
-- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
-- After calling a tool and receiving results, STOP calling tools and return your final JSON response.
-`;
+        systemContent += DECISION_GUIDE;
       }
       systemContent += `\n\nYour final response will be structured as JSON matching the ${outputSchema.name} format.`;
       return systemContent;
@@ -204,35 +176,10 @@ DECISION GUIDE:
 
     // Hint mode: Add detailed JSON schema instructions
     if (determinedMode === "hint" && outputSchema) {
-      const properties = (outputSchema.schema.properties ?? {}) as Record<string, { type?: string; description?: string }>;
-      const required = (outputSchema.schema.required ?? []) as string[];
-
-      // Build human-readable schema description
-      const fieldDescriptions: string[] = [];
-      for (const [fieldName, fieldSchema] of Object.entries(properties)) {
-        const fieldType = fieldSchema.type ?? "any";
-        const isRequired = required.includes(fieldName);
-        const reqMarker = isRequired ? " (required)" : " (optional)";
-        const desc = fieldSchema.description ?? "";
-        const descText = desc ? ` - ${desc}` : "";
-        fieldDescriptions.push(`  - ${fieldName}: ${fieldType}${reqMarker}${descText}`);
-      }
-
-      const fieldsText = fieldDescriptions.join("\n");
-      const exampleFormat = Object.fromEntries(
-        Object.entries(properties).map(([k, v]) => [k, `<${(v as { type?: string }).type ?? "value"}>`])
-      );
+      const { fieldsText, exampleJson } = buildSchemaPromptContent(outputSchema);
 
       // Add DECISION GUIDE when tools are present to help Claude know when NOT to use tools
-      let decisionGuide = "";
-      if (toolSchemas && toolSchemas.length > 0) {
-        decisionGuide = `
-DECISION GUIDE:
-- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
-- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
-- After calling a tool and receiving results, STOP calling tools and return your final JSON response.
-`;
-      }
+      const decisionGuide = (toolSchemas && toolSchemas.length > 0) ? DECISION_GUIDE + "\n" : "";
 
       systemContent += `
 ${decisionGuide}
@@ -243,7 +190,7 @@ ${fieldsText}
 }
 
 Example format:
-${JSON.stringify(exampleFormat, null, 2)}
+${exampleJson}
 
 CRITICAL: Your response must be ONLY the raw JSON object.
 - DO NOT wrap in markdown code fences (\`\`\`json or \`\`\`)
