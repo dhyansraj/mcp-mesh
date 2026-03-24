@@ -11,7 +11,7 @@ You write the logic. The mesh discovers, connects, heals, and traces — across 
 MCP Mesh is a complete platform for **building and deploying AI agents to production scale**. [See how MCP Mesh compares →](00-why-mcp-mesh/index.md)
 
 !!! info "What is DDDI?"
-    **Distributed Dynamic Dependency Injection** — dependencies are discovered, injected, and updated at runtime across machines, languages, and clouds. No configuration files, no restart required. [Learn more →](concepts/dddi.md)
+**Distributed Dynamic Dependency Injection** — dependencies are discovered, injected, and updated at runtime across machines, languages, and clouds. No configuration files, no restart required. [Learn more →](concepts/dddi.md)
 
 ---
 
@@ -45,7 +45,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>1.0.0-beta.2</version>
+        <version>1.0.0-beta.3</version>
     </dependency>
     ```
 
@@ -295,7 +295,7 @@ Return images, PDFs, and files from tools — LLMs see them natively.
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>1.0.0-beta.2</version>
+        <version>1.0.0-beta.3</version>
     </dependency>
     ```
 
@@ -343,7 +343,7 @@ Return images, PDFs, and files from tools — LLMs see them natively.
 
 ## :star: Project Status
 
-- **Latest Release**: v1.0.0-beta.2 (March 2026)
+- **Latest Release**: v1.0.0-beta.3 (March 2026)
 - **License**: MIT
 - **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed

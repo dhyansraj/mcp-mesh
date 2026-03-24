@@ -11,7 +11,7 @@
     "dev": "tsx watch index.ts"
   },
   "dependencies": {
-    "@mcpmesh/sdk": "^1.0.0-beta.2",
+    "@mcpmesh/sdk": "^1.0.0-beta.3",
     "express": "^4.21.2"
   },
   "devDependencies": {

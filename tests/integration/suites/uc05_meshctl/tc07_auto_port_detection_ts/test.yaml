@@ -31,9 +31,8 @@ test:
 
   # Install npm dependencies
   - name: "Install npm dependencies"
-    handler: shell
-    command: "cd /workspace/ts-auto-port-agent && npm install"
-    capture: npm_install
+    handler: npm-install
+    path: /workspace/ts-auto-port-agent
     timeout: 120
 
   # Verify artifact copied

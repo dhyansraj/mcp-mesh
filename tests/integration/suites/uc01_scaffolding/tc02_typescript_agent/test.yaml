@@ -55,13 +55,9 @@ test:
 
   # Install dependencies
   - name: "Install dependencies"
-    handler: shell
-    workdir: /workspace
-    command: "cd test-ts-agent && npm install"
+    handler: npm-install
+    path: /workspace/test-ts-agent
     timeout: 120
-    assertions:
-      - expr: ${last.exit_code} == 0
-        message: "npm install should succeed"
 
   # Verify TypeScript compiles
   - name: "Verify TypeScript compiles"
