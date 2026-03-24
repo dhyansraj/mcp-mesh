@@ -107,17 +107,7 @@ public class ToolInvoker {
      */
     public Object invokeRemote(String endpoint, String functionName,
                                Map<String, Object> args, Type returnType) {
-        if (endpoint == null || endpoint.isBlank()) {
-            throw new MeshToolUnavailableException(
-                "Tool endpoint is null or blank: " + functionName);
-        }
-
-        log.debug("Invoking remote tool: {} at {} (returnType={})",
-            functionName, endpoint, returnType);
-
-        McpMeshTool<?> proxy = proxyFactory.getOrCreateProxy(
-            endpoint, functionName, returnType != null ? returnType : Object.class);
-        return proxy.call(args);
+        return invokeRemote(endpoint, functionName, args, returnType, null);
     }
 
     /**
@@ -127,7 +117,7 @@ public class ToolInvoker {
      * @param functionName The function name to call
      * @param args         Arguments to pass to the tool
      * @param returnType   Expected return type for deserialization
-     * @param headers      Per-call headers to inject into the downstream request
+     * @param headers      Per-call headers to inject into the downstream request (may be null)
      * @return The result from the remote tool
      */
     public Object invokeRemote(String endpoint, String functionName,

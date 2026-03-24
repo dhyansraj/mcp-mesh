@@ -171,6 +171,36 @@ public class MeshToolWrapperRegistry {
     }
 
     /**
+     * Parse a composite key into its funcId and numeric index.
+     *
+     * @param compositeKey The composite key (e.g., "funcId:dep_0" or "funcId:llm_1")
+     * @param separator    The separator string (DEP_SEPARATOR or LLM_SEPARATOR)
+     * @return Two-element array [funcId, indexString], or null if the key is invalid
+     */
+    private static int parseKeyIndex(String compositeKey, String separator) {
+        int sepIdx = compositeKey.lastIndexOf(separator);
+        if (sepIdx < 0) return -1;
+        try {
+            return Integer.parseInt(compositeKey.substring(sepIdx + separator.length()));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private static String parseKeyFuncId(String compositeKey, String separator) {
+        int sepIdx = compositeKey.lastIndexOf(separator);
+        return sepIdx >= 0 ? compositeKey.substring(0, sepIdx) : null;
+    }
+
+    private MeshToolWrapper resolveWrapper(String funcId) {
+        MeshToolWrapper wrapper = wrappers.get(funcId);
+        if (wrapper == null) {
+            wrapper = wrappersByMethodName.get(funcId);
+        }
+        return wrapper;
+    }
+
+    /**
      * Update a McpMeshTool dependency using composite key.
      *
      * <p>Composite key format: "funcId:dep_N" where N is the dependency index.
@@ -181,26 +211,14 @@ public class MeshToolWrapperRegistry {
      * @param functionName The function name at the endpoint
      */
     public void updateDependency(String compositeKey, String endpoint, String functionName) {
-        int sepIndex = compositeKey.lastIndexOf(DEP_SEPARATOR);
-        if (sepIndex == -1) {
+        int depIndex = parseKeyIndex(compositeKey, DEP_SEPARATOR);
+        if (depIndex < 0) {
             log.warn("Invalid composite key format (missing {}): {}", DEP_SEPARATOR, compositeKey);
             return;
         }
 
-        String funcId = compositeKey.substring(0, sepIndex);
-        int depIndex;
-        try {
-            depIndex = Integer.parseInt(compositeKey.substring(sepIndex + DEP_SEPARATOR.length()));
-        } catch (NumberFormatException e) {
-            log.warn("Invalid dependency index in composite key: {}", compositeKey);
-            return;
-        }
-
-        MeshToolWrapper wrapper = wrappers.get(funcId);
-        if (wrapper == null) {
-            // Fallback: funcId might be just the method name from Rust core
-            wrapper = wrappersByMethodName.get(funcId);
-        }
+        String funcId = parseKeyFuncId(compositeKey, DEP_SEPARATOR);
+        MeshToolWrapper wrapper = resolveWrapper(funcId);
         if (wrapper == null) {
             log.warn("No wrapper found for funcId: {} (also checked method name)", funcId);
             return;
@@ -225,24 +243,13 @@ public class MeshToolWrapperRegistry {
      * @param compositeKey The composite key (funcId:dep_N)
      */
     public void markDependencyUnavailable(String compositeKey) {
-        int sepIndex = compositeKey.lastIndexOf(DEP_SEPARATOR);
-        if (sepIndex == -1) {
+        int depIndex = parseKeyIndex(compositeKey, DEP_SEPARATOR);
+        if (depIndex < 0) {
             return;
         }
 
-        String funcId = compositeKey.substring(0, sepIndex);
-        int depIndex;
-        try {
-            depIndex = Integer.parseInt(compositeKey.substring(sepIndex + DEP_SEPARATOR.length()));
-        } catch (NumberFormatException e) {
-            return;
-        }
-
-        MeshToolWrapper wrapper = wrappers.get(funcId);
-        if (wrapper == null) {
-            // Fallback: funcId might be just the method name from Rust core
-            wrapper = wrappersByMethodName.get(funcId);
-        }
+        String funcId = parseKeyFuncId(compositeKey, DEP_SEPARATOR);
+        MeshToolWrapper wrapper = resolveWrapper(funcId);
         if (wrapper != null) {
             wrapper.updateDependency(depIndex, null);
             log.debug("Marked dependency {} unavailable for {}", depIndex, funcId);
@@ -258,26 +265,14 @@ public class MeshToolWrapperRegistry {
      * @param agent        The configured LLM agent proxy
      */
     public void updateLlmAgent(String compositeKey, MeshLlmAgent agent) {
-        int sepIndex = compositeKey.lastIndexOf(LLM_SEPARATOR);
-        if (sepIndex == -1) {
+        int llmIndex = parseKeyIndex(compositeKey, LLM_SEPARATOR);
+        if (llmIndex < 0) {
             log.warn("Invalid LLM composite key format (missing {}): {}", LLM_SEPARATOR, compositeKey);
             return;
         }
 
-        String funcId = compositeKey.substring(0, sepIndex);
-        int llmIndex;
-        try {
-            llmIndex = Integer.parseInt(compositeKey.substring(sepIndex + LLM_SEPARATOR.length()));
-        } catch (NumberFormatException e) {
-            log.warn("Invalid LLM index in composite key: {}", compositeKey);
-            return;
-        }
-
-        MeshToolWrapper wrapper = wrappers.get(funcId);
-        if (wrapper == null) {
-            // Fallback: funcId might be just the method name from Rust core
-            wrapper = wrappersByMethodName.get(funcId);
-        }
+        String funcId = parseKeyFuncId(compositeKey, LLM_SEPARATOR);
+        MeshToolWrapper wrapper = resolveWrapper(funcId);
         if (wrapper == null) {
             log.warn("No wrapper found for funcId: {} (also checked method name)", funcId);
             return;

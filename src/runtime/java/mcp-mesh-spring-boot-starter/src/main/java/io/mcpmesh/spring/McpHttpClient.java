@@ -459,6 +459,19 @@ public class McpHttpClient {
         return json.isEmpty() ? sseContent : json;
     }
 
+    private static KeyStore loadCaTrustStore(String caPath) throws Exception {
+        CertificateFactory cf = CertificateFactory.getInstance("X.509");
+        KeyStore trustStore = KeyStore.getInstance("PKCS12");
+        trustStore.load(null, null);
+        try (FileInputStream caIs = new FileInputStream(caPath)) {
+            int i = 0;
+            for (Certificate cert : cf.generateCertificates(caIs)) {
+                trustStore.setCertificateEntry("mesh-ca-" + i++, cert);
+            }
+        }
+        return trustStore;
+    }
+
     private static SSLContext buildSslContext(MeshTlsConfig config) throws Exception {
         KeyStore keyStore = KeyStore.getInstance("PKCS12");
         keyStore.load(null, null);
@@ -494,14 +507,7 @@ public class McpHttpClient {
 
         TrustManager[] trustManagers = null;
         if (config.getCaPath() != null) {
-            KeyStore trustStore = KeyStore.getInstance("PKCS12");
-            trustStore.load(null, null);
-            try (FileInputStream caIs = new FileInputStream(config.getCaPath())) {
-                int i = 0;
-                for (Certificate cert : cf.generateCertificates(caIs)) {
-                    trustStore.setCertificateEntry("mesh-ca-" + i++, cert);
-                }
-            }
+            KeyStore trustStore = loadCaTrustStore(config.getCaPath());
             TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             tmf.init(trustStore);
             trustManagers = tmf.getTrustManagers();
@@ -514,15 +520,7 @@ public class McpHttpClient {
 
     private static X509TrustManager buildTrustManager(MeshTlsConfig config) throws Exception {
         if (config.getCaPath() != null) {
-            CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            KeyStore trustStore = KeyStore.getInstance("PKCS12");
-            trustStore.load(null, null);
-            try (FileInputStream caIs = new FileInputStream(config.getCaPath())) {
-                int i = 0;
-                for (Certificate cert : cf.generateCertificates(caIs)) {
-                    trustStore.setCertificateEntry("mesh-ca-" + i++, cert);
-                }
-            }
+            KeyStore trustStore = loadCaTrustStore(config.getCaPath());
             TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
             tmf.init(trustStore);
             for (TrustManager tm : tmf.getTrustManagers()) {

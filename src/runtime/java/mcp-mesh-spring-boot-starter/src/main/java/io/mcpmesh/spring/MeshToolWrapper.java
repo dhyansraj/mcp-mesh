@@ -368,8 +368,9 @@ public class MeshToolWrapper implements McpToolHandler {
             return new LinkedHashMap<>();
         }
 
-        // Make a mutable copy
-        Map<String, Object> cleanArgs = new LinkedHashMap<>(mcpArgs);
+        // Only copy if trace fields are present — avoid allocation on the hot path
+        boolean hasTraceFields = mcpArgs.containsKey("_trace_id") || mcpArgs.containsKey("_parent_span") || mcpArgs.containsKey("_mesh_headers");
+        Map<String, Object> cleanArgs = hasTraceFields ? new LinkedHashMap<>(mcpArgs) : mcpArgs;
 
         // Extract trace context from arguments
         String traceId = null;
@@ -588,6 +589,13 @@ public class MeshToolWrapper implements McpToolHandler {
         // Already correct type (skip for parameterized types so Jackson deserializes elements)
         if (!(targetType instanceof ParameterizedType) && rawType.isInstance(value)) {
             return value;
+        }
+
+        // Fast path for common type conversions — avoid Jackson round-trip
+        if (value instanceof Number n) {
+            if (rawType == Integer.class || rawType == int.class) return n.intValue();
+            if (rawType == Long.class || rawType == long.class) return n.longValue();
+            if (rawType == Double.class || rawType == double.class) return n.doubleValue();
         }
 
         // Use Jackson for complex conversions (with full generic type info)
