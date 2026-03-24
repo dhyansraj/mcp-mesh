@@ -13,6 +13,7 @@ import {
   createTraceHeaders,
   matchesPropagateHeader,
 } from "./tracing.js";
+import { isTimeoutError } from "./timeout-utils.js";
 
 /**
  * AsyncLocalStorage for trace context - provides async-safe context propagation.
@@ -284,7 +285,7 @@ export async function callMcpTool(
       lastError = err instanceof Error ? err : new Error(String(err));
 
       // Don't retry on abort (timeout)
-      if (lastError.name === "AbortError") {
+      if (isTimeoutError(lastError)) {
         publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, "timeout", "error");
         throw new Error(`MCP call timed out after ${timeout}ms`);
       }

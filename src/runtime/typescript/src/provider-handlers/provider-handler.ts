@@ -268,6 +268,18 @@ IMPORTANT TOOL CALLING RULES:
  */
 export const CLAUDE_ANTI_XML_INSTRUCTION = `- NEVER use XML-style syntax like <invoke name="tool_name"/>`;
 
+/**
+ * Decision guide shared across all providers.
+ *
+ * Helps LLMs decide when to call tools vs. return JSON directly.
+ * Used in both strict mode (with tools) and hint mode.
+ */
+export const DECISION_GUIDE = `
+DECISION GUIDE:
+- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
+- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
+- After calling a tool and receiving results, STOP calling tools and return your final JSON response.`;
+
 // ============================================================================
 // Shared Schema Utilities
 // ============================================================================
@@ -288,6 +300,65 @@ const UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "multipleOf",
 ]);
 
+// ---- Shared schema walker ------------------------------------------------
+
+type SchemaVisitor = (node: Record<string, unknown>) => void;
+
+/**
+ * Walk a JSON Schema tree, invoking `visitor` on every schema node.
+ *
+ * Recurses into $defs, properties, items, prefixItems, and anyOf/oneOf/allOf.
+ */
+function walkSchemaRecursive(obj: unknown, visitor: SchemaVisitor): void {
+  if (typeof obj !== "object" || obj === null) return;
+  const record = obj as Record<string, unknown>;
+
+  visitor(record);
+
+  // Recurse into $defs
+  if (record.$defs && typeof record.$defs === "object") {
+    for (const def of Object.values(record.$defs as Record<string, unknown>)) {
+      walkSchemaRecursive(def, visitor);
+    }
+  }
+
+  // Recurse into properties
+  if (record.properties && typeof record.properties === "object") {
+    for (const prop of Object.values(record.properties as Record<string, unknown>)) {
+      walkSchemaRecursive(prop, visitor);
+    }
+  }
+
+  // Recurse into items (single schema or legacy array form)
+  if (record.items) {
+    if (Array.isArray(record.items)) {
+      for (const item of record.items as unknown[]) {
+        walkSchemaRecursive(item, visitor);
+      }
+    } else {
+      walkSchemaRecursive(record.items, visitor);
+    }
+  }
+
+  // Recurse into prefixItems (tuple validation in JSON Schema draft 2020-12)
+  if (Array.isArray(record.prefixItems)) {
+    for (const item of record.prefixItems as unknown[]) {
+      walkSchemaRecursive(item, visitor);
+    }
+  }
+
+  // Recurse into anyOf/oneOf/allOf
+  for (const keyword of ["anyOf", "oneOf", "allOf"]) {
+    if (Array.isArray(record[keyword])) {
+      for (const variant of record[keyword] as unknown[]) {
+        walkSchemaRecursive(variant, visitor);
+      }
+    }
+  }
+}
+
+// ---- Public schema utilities ---------------------------------------------
+
 /**
  * Sanitize a JSON schema by removing validation keywords unsupported by LLM APIs.
  *
@@ -303,67 +374,12 @@ export function sanitizeSchemaForStructuredOutput(
 ): Record<string, unknown> {
   // Deep clone to avoid mutating original
   const result = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
-  stripUnsupportedKeywordsRecursive(result);
+  walkSchemaRecursive(result, (node) => {
+    for (const keyword of UNSUPPORTED_SCHEMA_KEYWORDS) {
+      delete node[keyword];
+    }
+  });
   return result;
-}
-
-/**
- * Recursively strip unsupported validation keywords from a schema object.
- *
- * @param obj - Schema object to process (mutated in place)
- */
-function stripUnsupportedKeywordsRecursive(obj: unknown): void {
-  if (typeof obj !== "object" || obj === null) {
-    return;
-  }
-
-  const record = obj as Record<string, unknown>;
-
-  // Remove unsupported keywords at this level
-  for (const keyword of UNSUPPORTED_SCHEMA_KEYWORDS) {
-    delete record[keyword];
-  }
-
-  // Process $defs (used for nested models)
-  if (record.$defs && typeof record.$defs === "object") {
-    for (const defSchema of Object.values(record.$defs as Record<string, unknown>)) {
-      stripUnsupportedKeywordsRecursive(defSchema);
-    }
-  }
-
-  // Process properties
-  if (record.properties && typeof record.properties === "object") {
-    for (const propSchema of Object.values(record.properties as Record<string, unknown>)) {
-      stripUnsupportedKeywordsRecursive(propSchema);
-    }
-  }
-
-  // Process items (for arrays)
-  if (record.items) {
-    if (Array.isArray(record.items)) {
-      for (const item of record.items as unknown[]) {
-        stripUnsupportedKeywordsRecursive(item);
-      }
-    } else {
-      stripUnsupportedKeywordsRecursive(record.items);
-    }
-  }
-
-  // Process prefixItems (tuple validation)
-  if (Array.isArray(record.prefixItems)) {
-    for (const item of record.prefixItems as unknown[]) {
-      stripUnsupportedKeywordsRecursive(item);
-    }
-  }
-
-  // Process anyOf, oneOf, allOf
-  for (const key of ["anyOf", "oneOf", "allOf"]) {
-    if (Array.isArray(record[key])) {
-      for (const item of record[key] as unknown[]) {
-        stripUnsupportedKeywordsRecursive(item);
-      }
-    }
-  }
 }
 
 /**
@@ -397,74 +413,86 @@ export function makeSchemaStrict(
 
   // Deep clone to avoid mutating original
   const result = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
-  addStrictConstraintsRecursive(result, addAllRequired);
+  walkSchemaRecursive(result, (node) => {
+    if (node.type === "object") {
+      node.additionalProperties = false;
+      if (addAllRequired && node.properties && typeof node.properties === "object") {
+        node.required = Object.keys(node.properties as Record<string, unknown>);
+      }
+    }
+  });
   return result;
 }
 
 /**
- * Recursively add strict constraints to a schema object.
+ * Build human-readable schema description and example JSON for prompt-based hints.
  *
- * @param obj - Schema object to process (mutated in place)
- * @param addAllRequired - Whether to set required to all property keys
+ * Extracts field names, types, required markers, and descriptions from an
+ * OutputSchema and returns formatted text suitable for embedding in a system prompt.
+ *
+ * @param outputSchema - The output schema to describe
+ * @returns fieldsText (multi-line field list) and exampleJson (pretty-printed example)
  */
-function addStrictConstraintsRecursive(obj: unknown, addAllRequired: boolean): void {
-  if (typeof obj !== "object" || obj === null) {
-    return;
+export function buildSchemaPromptContent(outputSchema: OutputSchema): {
+  fieldsText: string;
+  exampleJson: string;
+} {
+  const properties = (outputSchema.schema?.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const required = (outputSchema.schema?.required ?? []) as string[];
+
+  const fieldDescriptions: string[] = [];
+  const exampleObj: Record<string, string> = {};
+
+  for (const [fieldName, fieldSchema] of Object.entries(properties)) {
+    const fieldType = (fieldSchema.type as string) ?? "any";
+    const isRequired = required.includes(fieldName);
+    const reqMarker = isRequired ? " (required)" : " (optional)";
+    const desc = fieldSchema.description as string | undefined;
+    const descText = desc ? ` - ${desc}` : "";
+    fieldDescriptions.push(`  - ${fieldName}: ${fieldType}${reqMarker}${descText}`);
+    exampleObj[fieldName] = `<${fieldType}>`;
   }
 
-  const record = obj as Record<string, unknown>;
+  return {
+    fieldsText: fieldDescriptions.join("\n"),
+    exampleJson: JSON.stringify(exampleObj, null, 2),
+  };
+}
 
-  // If this is an object type, add additionalProperties: false
-  if (record.type === "object") {
-    record.additionalProperties = false;
+/**
+ * Build the common baseline for prepareRequest across all providers.
+ *
+ * Handles the boilerplate shared by all handlers:
+ * - Destructure standard options (outputMode, temperature, maxOutputTokens, topP)
+ * - Convert messages to Vercel AI SDK format
+ * - Attach tools and standard parameters when provided
+ *
+ * @param messages - Raw messages from mesh
+ * @param tools - Tool schemas (or null)
+ * @param options - Provider options bag
+ * @returns The partially-built request, extracted outputMode, and remaining options
+ */
+export function prepareRequestBaseline(
+  messages: LlmMessage[],
+  tools: ToolSchema[] | null,
+  options?: Record<string, unknown>,
+): { request: PreparedRequest; outputMode?: string; rest: Record<string, unknown> } {
+  const { outputMode, temperature, maxOutputTokens: maxTokens, topP, ...rest } = (options ?? {}) as {
+    outputMode?: string;
+    temperature?: number;
+    maxOutputTokens?: number;
+    topP?: number;
+    [key: string]: unknown;
+  };
+  const convertedMessages = convertMessagesToVercelFormat(messages);
+  const request: PreparedRequest = { messages: convertedMessages, ...rest };
 
-    // Optionally set required to include all property keys
-    if (addAllRequired && record.properties && typeof record.properties === "object") {
-      record.required = Object.keys(record.properties as Record<string, unknown>);
-    }
-  }
+  if (tools && tools.length > 0) { request.tools = tools; }
+  if (temperature !== undefined) { request.temperature = temperature; }
+  if (maxTokens !== undefined) { request.maxOutputTokens = maxTokens; }
+  if (topP !== undefined) { request.topP = topP; }
 
-  // Process $defs (used for nested models)
-  if (record.$defs && typeof record.$defs === "object") {
-    for (const defSchema of Object.values(record.$defs as Record<string, unknown>)) {
-      addStrictConstraintsRecursive(defSchema, addAllRequired);
-    }
-  }
-
-  // Process properties
-  if (record.properties && typeof record.properties === "object") {
-    for (const propSchema of Object.values(record.properties as Record<string, unknown>)) {
-      addStrictConstraintsRecursive(propSchema, addAllRequired);
-    }
-  }
-
-  // Process items (for arrays)
-  // items can be an object (single schema) or an array (tuple validation in older drafts)
-  if (record.items) {
-    if (Array.isArray(record.items)) {
-      for (const item of record.items as unknown[]) {
-        addStrictConstraintsRecursive(item, addAllRequired);
-      }
-    } else {
-      addStrictConstraintsRecursive(record.items, addAllRequired);
-    }
-  }
-
-  // Process prefixItems (tuple validation in JSON Schema draft 2020-12)
-  if (Array.isArray(record.prefixItems)) {
-    for (const item of record.prefixItems as unknown[]) {
-      addStrictConstraintsRecursive(item, addAllRequired);
-    }
-  }
-
-  // Process anyOf, oneOf, allOf
-  for (const key of ["anyOf", "oneOf", "allOf"] as const) {
-    if (Array.isArray(record[key])) {
-      for (const item of record[key] as unknown[]) {
-        addStrictConstraintsRecursive(item, addAllRequired);
-      }
-    }
-  }
+  return { request, outputMode: outputMode as string | undefined, rest };
 }
 
 /**

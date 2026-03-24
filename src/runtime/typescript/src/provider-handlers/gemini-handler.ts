@@ -20,11 +20,13 @@
 import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
 import {
-  convertMessagesToVercelFormat,
   makeSchemaStrict,
   sanitizeSchemaForStructuredOutput,
   defaultDetermineOutputMode,
+  prepareRequestBaseline,
+  buildSchemaPromptContent,
   BASE_TOOL_INSTRUCTIONS,
+  DECISION_GUIDE,
   type ProviderHandler,
   type VendorCapabilities,
   type ToolSchema,
@@ -82,33 +84,8 @@ export class GeminiHandler implements ProviderHandler {
       [key: string]: unknown;
     }
   ): PreparedRequest {
-    const { outputMode, temperature, maxOutputTokens: maxTokens, topP, ...rest } = options ?? {};
-    const determinedMode = this.determineOutputMode(outputSchema, outputMode);
-
-    // Convert messages to Vercel AI SDK format (shared utility)
-    const convertedMessages = convertMessagesToVercelFormat(messages);
-
-    const request: PreparedRequest = {
-      messages: convertedMessages,
-      ...rest,
-    };
-
-    // Add tools if provided
-    // Vercel AI SDK will convert to Gemini's function_declarations format
-    if (tools && tools.length > 0) {
-      request.tools = tools;
-    }
-
-    // Add standard parameters if provided
-    if (temperature !== undefined) {
-      request.temperature = temperature;
-    }
-    if (maxTokens !== undefined) {
-      request.maxOutputTokens = maxTokens;
-    }
-    if (topP !== undefined) {
-      request.topP = topP;
-    }
+    const { request, outputMode: extractedMode } = prepareRequestBaseline(messages, tools, options);
+    const determinedMode = this.determineOutputMode(outputSchema, extractedMode as OutputMode);
 
     // Skip structured output for text mode or no schema
     if (determinedMode === "text" || !outputSchema) {
@@ -178,36 +155,10 @@ Your final response will be structured as JSON matching the ${outputSchema.name}
 
     // Hint mode: Add detailed JSON schema instructions
     // This is used when tools are present (can't use generateObject)
-    const schema = outputSchema.schema;
-    const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
-    const required = (schema.required ?? []) as string[];
-
-    // Build human-readable schema description
-    const fieldDescriptions: string[] = [];
-    for (const [fieldName, fieldSchema] of Object.entries(properties)) {
-      const fieldType = fieldSchema.type ?? "any";
-      const isRequired = required.includes(fieldName);
-      const reqMarker = isRequired ? " (required)" : " (optional)";
-      const desc = fieldSchema.description as string | undefined;
-      const descText = desc ? ` - ${desc}` : "";
-      fieldDescriptions.push(`  - ${fieldName}: ${fieldType}${reqMarker}${descText}`);
-    }
-
-    const fieldsText = fieldDescriptions.join("\n");
-    const exampleObj: Record<string, string> = {};
-    for (const [k, v] of Object.entries(properties)) {
-      exampleObj[k] = `<${v.type ?? "value"}>`;
-    }
+    const { fieldsText, exampleJson } = buildSchemaPromptContent(outputSchema);
 
     // Add DECISION GUIDE when tools are present to help Gemini know when NOT to use tools
-    let decisionGuide = "";
-    if (toolSchemas && toolSchemas.length > 0) {
-      decisionGuide = `
-DECISION GUIDE:
-- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
-- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
-`;
-    }
+    const decisionGuide = (toolSchemas && toolSchemas.length > 0) ? DECISION_GUIDE + "\n" : "";
 
     systemContent += `
 ${decisionGuide}
@@ -218,7 +169,7 @@ ${fieldsText}
 }
 
 Example format:
-${JSON.stringify(exampleObj, null, 2)}
+${exampleJson}
 
 IMPORTANT:
 - First, use the available tools to gather information if needed
