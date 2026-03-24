@@ -8,7 +8,6 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -554,129 +553,9 @@ public class AnthropicHandler implements LlmProviderHandler {
 
     /**
      * Convert generic messages to Spring AI Message objects.
-     *
-     * <p>Properly handles multi-turn tool conversations:
-     * <ul>
-     *   <li>Assistant messages with tool_calls -> AssistantMessage with ToolCall list</li>
-     *   <li>Tool result messages -> ToolResponseMessage with proper tool_call_id</li>
-     * </ul>
+     * Delegates to shared {@link MessageConverter}.
      */
-    @SuppressWarnings("unchecked")
     private List<Message> convertMessages(List<Map<String, Object>> messages) {
-        List<Message> result = new ArrayList<>();
-        StringBuilder systemContent = new StringBuilder();
-
-        // Build a map of tool_call_id -> tool_name from assistant messages
-        Map<String, String> toolCallIdToName = new HashMap<>();
-        for (Map<String, Object> msg : messages) {
-            if ("assistant".equalsIgnoreCase((String) msg.get("role"))) {
-                List<Map<String, Object>> toolCalls = (List<Map<String, Object>>) msg.get("tool_calls");
-                if (toolCalls != null) {
-                    for (Map<String, Object> tc : toolCalls) {
-                        String tcId = (String) tc.get("id");
-                        Map<String, Object> function = (Map<String, Object>) tc.get("function");
-                        if (tcId != null && function != null) {
-                            String toolName = (String) function.get("name");
-                            if (toolName != null) {
-                                toolCallIdToName.put(tcId, toolName);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        for (Map<String, Object> msg : messages) {
-            String role = (String) msg.get("role");
-            String content = (String) msg.get("content");
-
-            if (role == null) {
-                continue;
-            }
-
-            switch (role.toLowerCase()) {
-                case "system" -> {
-                    if (content != null && !content.trim().isEmpty()) {
-                        if (systemContent.length() > 0) {
-                            systemContent.append("\n\n");
-                        }
-                        systemContent.append(content);
-                    }
-                }
-                case "user" -> {
-                    if (content != null && !content.trim().isEmpty()) {
-                        result.add(new UserMessage(content));
-                    }
-                }
-                case "assistant" -> {
-                    // Check for tool_calls in assistant message
-                    List<Map<String, Object>> toolCalls = (List<Map<String, Object>>) msg.get("tool_calls");
-                    if (toolCalls != null && !toolCalls.isEmpty()) {
-                        // Convert to Spring AI ToolCall format
-                        List<AssistantMessage.ToolCall> springToolCalls = new ArrayList<>();
-                        for (Map<String, Object> tc : toolCalls) {
-                            String tcId = (String) tc.get("id");
-                            String tcType = (String) tc.getOrDefault("type", "function");
-                            Map<String, Object> function = (Map<String, Object>) tc.get("function");
-                            if (function != null) {
-                                String tcName = (String) function.get("name");
-                                String tcArgs = (String) function.get("arguments");
-                                if (tcId != null && tcName != null) {
-                                    springToolCalls.add(new AssistantMessage.ToolCall(
-                                        tcId, tcType, tcName, tcArgs != null ? tcArgs : "{}"
-                                    ));
-                                }
-                            }
-                        }
-                        log.debug("Converted assistant message with {} tool calls", springToolCalls.size());
-                        result.add(AssistantMessage.builder()
-                            .content(content != null ? content : "")
-                            .toolCalls(springToolCalls)
-                            .build());
-                    } else if (content != null && !content.trim().isEmpty()) {
-                        result.add(new AssistantMessage(content));
-                    }
-                }
-                case "tool" -> {
-                    // Tool result message - must have tool_call_id
-                    String toolCallId = (String) msg.get("tool_call_id");
-                    if (toolCallId == null) {
-                        log.warn("Tool message missing tool_call_id, skipping");
-                        continue;
-                    }
-                    // Get tool name from message or from our map
-                    String toolName = (String) msg.get("name");
-                    if (toolName == null) {
-                        toolName = toolCallIdToName.get(toolCallId);
-                    }
-                    if (toolName == null) {
-                        toolName = "unknown_tool";
-                        log.warn("Could not determine tool name for tool_call_id: {}", toolCallId);
-                    }
-                    String responseData = content != null ? content : "";
-                    log.debug("Converted tool result: id={}, name={}, contentLength={}",
-                        toolCallId, toolName, responseData.length());
-
-                    // Create ToolResponseMessage with proper ToolResponse
-                    ToolResponseMessage.ToolResponse toolResponse =
-                        new ToolResponseMessage.ToolResponse(toolCallId, toolName, responseData);
-                    result.add(ToolResponseMessage.builder()
-                        .responses(List.of(toolResponse))
-                        .build());
-                }
-                default -> {
-                    log.warn("Unknown message role '{}', treating as user", role);
-                    if (content != null && !content.trim().isEmpty()) {
-                        result.add(new UserMessage(content));
-                    }
-                }
-            }
-        }
-
-        if (systemContent.length() > 0) {
-            result.add(0, new SystemMessage(systemContent.toString()));
-        }
-
-        return result;
+        return MessageConverter.convertMessages(messages).messages();
     }
 }

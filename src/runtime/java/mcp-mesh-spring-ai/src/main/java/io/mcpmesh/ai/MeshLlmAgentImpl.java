@@ -71,6 +71,7 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
 
     // Available tools for agentic loop
     private final List<ToolInfo> availableTools = new ArrayList<>();
+    private Map<String, ToolInfo> toolsByName = Map.of();
 
     // Tool executor for agentic loop
     private ToolExecutor toolExecutor;
@@ -190,6 +191,10 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
         this.availableTools.clear();
         if (tools != null) {
             this.availableTools.addAll(tools);
+        }
+        this.toolsByName = new HashMap<>();
+        for (ToolInfo t : this.availableTools) {
+            this.toolsByName.put(t.name(), t);
         }
         log.debug("Updated available tools: {} tools", availableTools.size());
     }
@@ -455,10 +460,10 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
         LlmProviderHandler.ToolExecutorCallback executorCallback = null;
         if (toolExecutor != null && !availableTools.isEmpty()) {
             executorCallback = (toolName, argsJson) -> {
-                ToolInfo tool = availableTools.stream()
-                    .filter(t -> t.name().equals(toolName))
-                    .findFirst()
-                    .orElseThrow(() -> new RuntimeException("Tool not found: " + toolName));
+                ToolInfo tool = toolsByName.get(toolName);
+                if (tool == null) {
+                    throw new RuntimeException("Tool not found: " + toolName);
+                }
 
                 @SuppressWarnings("unchecked")
                 Map<String, Object> args = argsJson != null && !argsJson.isEmpty() ?
@@ -694,10 +699,10 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
     @SuppressWarnings("unchecked")
     private String executeToolCall(String toolName, String argsJson) throws Exception {
         // Find the tool
-        ToolInfo tool = availableTools.stream()
-            .filter(t -> t.name().equals(toolName))
-            .findFirst()
-            .orElseThrow(() -> new RuntimeException("Tool not found: " + toolName));
+        ToolInfo tool = toolsByName.get(toolName);
+        if (tool == null) {
+            throw new RuntimeException("Tool not found: " + toolName);
+        }
 
         // Use tool executor if available
         if (toolExecutor != null) {

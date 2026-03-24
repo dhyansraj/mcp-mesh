@@ -6,7 +6,6 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -544,161 +543,15 @@ public class GeminiHandler implements LlmProviderHandler {
 
     /**
      * Convert generic messages to Spring AI Message objects.
+     * Delegates to shared {@link MessageConverter} with Gemini-specific bundling.
      *
-     * <p>Properly handles multi-turn tool conversations:
+     * <p>Gemini requires:
      * <ul>
-     *   <li>Assistant messages with tool_calls -> AssistantMessage with ToolCall list</li>
-     *   <li>Tool result messages -> ToolResponseMessage with proper tool_call_id</li>
+     *   <li>"model" as an alias for "assistant" role</li>
+     *   <li>Consecutive tool responses bundled into a single ToolResponseMessage</li>
      * </ul>
-     *
-     * <p>Note: Gemini requires tool name in function_response, so we build a map
-     * from tool_call_id to tool name from preceding assistant messages.
      */
-    @SuppressWarnings("unchecked")
     private List<Message> convertMessages(List<Map<String, Object>> messages) {
-        List<Message> result = new ArrayList<>();
-        StringBuilder systemContent = new StringBuilder();
-
-        // Build a map of tool_call_id -> tool_name from assistant messages
-        // Gemini requires function_response.name to be non-empty
-        Map<String, String> toolCallIdToName = new HashMap<>();
-        for (Map<String, Object> msg : messages) {
-            if ("assistant".equalsIgnoreCase((String) msg.get("role")) ||
-                "model".equalsIgnoreCase((String) msg.get("role"))) {
-                List<Map<String, Object>> toolCalls = (List<Map<String, Object>>) msg.get("tool_calls");
-                if (toolCalls != null) {
-                    for (Map<String, Object> tc : toolCalls) {
-                        String tcId = (String) tc.get("id");
-                        Map<String, Object> function = (Map<String, Object>) tc.get("function");
-                        if (tcId != null && function != null) {
-                            String toolName = (String) function.get("name");
-                            if (toolName != null) {
-                                toolCallIdToName.put(tcId, toolName);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Collect consecutive tool responses to bundle into a single ToolResponseMessage
-        // Gemini requires all tool results from a turn to be in one message
-        List<ToolResponseMessage.ToolResponse> pendingToolResponses = new ArrayList<>();
-
-        // Helper to flush pending tool responses into result
-        Runnable flushPendingToolResponses = () -> {
-            if (!pendingToolResponses.isEmpty()) {
-                log.debug("Bundling {} tool responses into single ToolResponseMessage", pendingToolResponses.size());
-                result.add(ToolResponseMessage.builder()
-                    .responses(new ArrayList<>(pendingToolResponses))
-                    .build());
-                pendingToolResponses.clear();
-            }
-        };
-
-        for (Map<String, Object> msg : messages) {
-            String role = (String) msg.get("role");
-            String content = (String) msg.get("content");
-
-            if (role == null) {
-                continue;
-            }
-
-            switch (role.toLowerCase()) {
-                case "system" -> {
-                    // Flush any pending tool responses before adding non-tool message
-                    flushPendingToolResponses.run();
-                    // Gemini uses system_instruction, collect all system messages
-                    if (content != null && !content.trim().isEmpty()) {
-                        if (systemContent.length() > 0) {
-                            systemContent.append("\n\n");
-                        }
-                        systemContent.append(content);
-                    }
-                }
-                case "user" -> {
-                    // Flush any pending tool responses before adding non-tool message
-                    flushPendingToolResponses.run();
-                    if (content != null && !content.trim().isEmpty()) {
-                        result.add(new UserMessage(content));
-                    }
-                }
-                case "assistant", "model" -> {
-                    // Flush any pending tool responses before adding non-tool message
-                    flushPendingToolResponses.run();
-                    // Check for tool_calls in assistant message
-                    List<Map<String, Object>> toolCalls = (List<Map<String, Object>>) msg.get("tool_calls");
-                    if (toolCalls != null && !toolCalls.isEmpty()) {
-                        // Convert to Spring AI ToolCall format
-                        List<AssistantMessage.ToolCall> springToolCalls = new ArrayList<>();
-                        for (Map<String, Object> tc : toolCalls) {
-                            String tcId = (String) tc.get("id");
-                            String tcType = (String) tc.getOrDefault("type", "function");
-                            Map<String, Object> function = (Map<String, Object>) tc.get("function");
-                            if (function != null) {
-                                String tcName = (String) function.get("name");
-                                String tcArgs = (String) function.get("arguments");
-                                if (tcId != null && tcName != null) {
-                                    springToolCalls.add(new AssistantMessage.ToolCall(
-                                        tcId, tcType, tcName, tcArgs != null ? tcArgs : "{}"
-                                    ));
-                                }
-                            }
-                        }
-                        log.debug("Converted assistant message with {} tool calls", springToolCalls.size());
-                        result.add(AssistantMessage.builder()
-                            .content(content != null ? content : "")
-                            .toolCalls(springToolCalls)
-                            .build());
-                    } else if (content != null && !content.trim().isEmpty()) {
-                        result.add(new AssistantMessage(content));
-                    }
-                }
-                case "tool" -> {
-                    // Tool result message - must have tool_call_id
-                    String toolCallId = (String) msg.get("tool_call_id");
-                    if (toolCallId == null) {
-                        log.warn("Tool message missing tool_call_id, skipping");
-                        continue;
-                    }
-                    // Get tool name from message or from our map
-                    // Gemini requires function_response.name to be non-empty
-                    String toolName = (String) msg.get("name");
-                    if (toolName == null) {
-                        toolName = toolCallIdToName.get(toolCallId);
-                    }
-                    if (toolName == null) {
-                        toolName = "unknown_tool";
-                        log.warn("Could not determine tool name for tool_call_id: {} - Gemini may reject this", toolCallId);
-                    }
-                    String responseData = content != null ? content : "";
-                    log.debug("Converted tool result: id={}, name={}, contentLength={}",
-                        toolCallId, toolName, responseData.length());
-
-                    // Add to pending list - will be bundled when we hit a non-tool message or end
-                    ToolResponseMessage.ToolResponse toolResponse =
-                        new ToolResponseMessage.ToolResponse(toolCallId, toolName, responseData);
-                    pendingToolResponses.add(toolResponse);
-                }
-                default -> {
-                    // Flush any pending tool responses before adding non-tool message
-                    flushPendingToolResponses.run();
-                    log.warn("Unknown message role '{}', treating as user", role);
-                    if (content != null && !content.trim().isEmpty()) {
-                        result.add(new UserMessage(content));
-                    }
-                }
-            }
-        }
-
-        // Flush any remaining pending tool responses at the end
-        flushPendingToolResponses.run();
-
-        // Insert system instruction at the beginning if present
-        if (systemContent.length() > 0) {
-            result.add(0, new SystemMessage(systemContent.toString()));
-        }
-
-        return result;
+        return MessageConverter.convertMessagesWithBundledToolResponses(messages).messages();
     }
 }
