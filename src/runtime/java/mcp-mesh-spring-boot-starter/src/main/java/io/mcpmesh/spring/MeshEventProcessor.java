@@ -53,8 +53,12 @@ public class MeshEventProcessor implements SmartLifecycle {
     private final ExecutorService executor;
 
     // Track created LLM agent proxies so we can update their tools later
-    // Key: funcId, Value: proxy (we only support one LLM agent per function currently)
+    // Key: funcId (full class path), Value: proxy (we only support one LLM agent per function currently)
     private final Map<String, MeshLlmAgentProxy> llmAgentProxies = new ConcurrentHashMap<>();
+
+    // Reverse lookup: short method name -> full funcId key in llmAgentProxies
+    // Populated when proxies are stored, enabling O(1) lookup by method name
+    private final Map<String, String> methodNameToFuncId = new ConcurrentHashMap<>();
 
     // Cache for tools when wrapper is not found (fallback only)
     // With the new flow, proxy is created immediately when tools arrive, so this
@@ -367,17 +371,14 @@ public class MeshEventProcessor implements SmartLifecycle {
             String wrapperFuncId = null;
 
             if (proxy == null) {
-                // Search by method name suffix (funcId might be just the method name)
-                log.debug("Searching llmAgentProxies by suffix '.{}' (keys: {})", funcId, llmAgentProxies.keySet());
-                for (Map.Entry<String, MeshLlmAgentProxy> entry : llmAgentProxies.entrySet()) {
-                    String key = entry.getKey();
-                    // Match if key ends with ".funcId" (full class path) or equals funcId
-                    if (key.endsWith("." + funcId) || key.equals(funcId)) {
-                        proxy = entry.getValue();
-                        wrapperFuncId = key;
-                        log.info("Found LLM proxy by method name: {} -> {} (proxy@{})",
-                            funcId, key, System.identityHashCode(proxy));
-                        break;
+                // O(1) reverse lookup by short method name
+                String mappedFuncId = methodNameToFuncId.get(funcId);
+                if (mappedFuncId != null) {
+                    proxy = llmAgentProxies.get(mappedFuncId);
+                    if (proxy != null) {
+                        wrapperFuncId = mappedFuncId;
+                        log.info("Found LLM proxy by method name map: {} -> {} (proxy@{})",
+                            funcId, mappedFuncId, System.identityHashCode(proxy));
                     }
                 }
             }
@@ -414,12 +415,15 @@ public class MeshEventProcessor implements SmartLifecycle {
      * @return The created proxy, or null if wrapper not found
      */
     private MeshLlmAgentProxy createLlmProxyForTools(String funcId, List<MeshEvent.LlmToolInfo> tools) {
-        // Find wrapper by method name or capability
-        MeshToolWrapper wrapper = null;
-        for (MeshToolWrapper w : wrapperRegistry.getAllWrappers()) {
-            if (w.getMethodName().equals(funcId) || w.getCapability().equals(funcId)) {
+        // Find wrapper by direct lookup, then by method name, then by capability
+        MeshToolWrapper wrapper = wrapperRegistry.getWrapper(funcId);
+        if (wrapper == null) {
+            wrapper = wrapperRegistry.getWrapperByMethodName(funcId);
+        }
+        if (wrapper == null) {
+            McpToolHandler handler = wrapperRegistry.getHandlerByCapability(funcId);
+            if (handler instanceof MeshToolWrapper w) {
                 wrapper = w;
-                break;
             }
         }
 
@@ -458,8 +462,13 @@ public class MeshEventProcessor implements SmartLifecycle {
 
             // Store proxy for later provider updates
             llmAgentProxies.put(wrapperFuncId, proxy);
-            log.info("Stored proxy@{} in llmAgentProxies with key '{}'",
-                System.identityHashCode(proxy), wrapperFuncId);
+            // Populate reverse lookup: extract short method name from full funcId
+            String shortName = wrapperFuncId.contains(".")
+                ? wrapperFuncId.substring(wrapperFuncId.lastIndexOf('.') + 1)
+                : wrapperFuncId;
+            methodNameToFuncId.put(shortName, wrapperFuncId);
+            log.info("Stored proxy@{} in llmAgentProxies with key '{}' (methodName='{}')",
+                System.identityHashCode(proxy), wrapperFuncId, shortName);
 
             // Update the wrapper's LLM agent array
             String compositeKey = MeshToolWrapperRegistry.buildLlmKey(wrapperFuncId, llmIndex);
@@ -557,16 +566,16 @@ public class MeshEventProcessor implements SmartLifecycle {
         MeshToolWrapper wrapper = wrapperRegistry.getWrapper(funcId);
         log.info("  Direct lookup by funcId '{}': {}", funcId, wrapper != null ? "FOUND" : "NOT FOUND");
 
-        // If not found by funcId, try by method name (funcId might be just the function name from registry)
+        // If not found by funcId, try by method name or capability (O(1) lookups)
         if (wrapper == null) {
-            // Search all wrappers for matching method name
-            for (MeshToolWrapper w : wrapperRegistry.getAllWrappers()) {
-                log.debug("  Checking wrapper: funcId='{}', methodName='{}', capability='{}'",
-                    w.getFuncId(), w.getMethodName(), w.getCapability());
-                if (w.getMethodName().equals(funcId) || w.getCapability().equals(funcId)) {
+            wrapper = wrapperRegistry.getWrapperByMethodName(funcId);
+            if (wrapper != null) {
+                log.info("  Found wrapper by method name: {} -> {}", funcId, wrapper.getFuncId());
+            } else {
+                McpToolHandler handler = wrapperRegistry.getHandlerByCapability(funcId);
+                if (handler instanceof MeshToolWrapper w) {
                     wrapper = w;
-                    log.info("  Found wrapper by method name/capability: {} -> {}", funcId, w.getFuncId());
-                    break;
+                    log.info("  Found wrapper by capability: {} -> {}", funcId, w.getFuncId());
                 }
             }
         }
@@ -623,6 +632,11 @@ public class MeshEventProcessor implements SmartLifecycle {
 
             // Store proxy for later tool updates (using wrapper's funcId)
             llmAgentProxies.put(wrapperFuncId, proxy);
+            // Populate reverse lookup: extract short method name from full funcId
+            String shortMethodName = wrapperFuncId.contains(".")
+                ? wrapperFuncId.substring(wrapperFuncId.lastIndexOf('.') + 1)
+                : wrapperFuncId;
+            methodNameToFuncId.put(shortMethodName, wrapperFuncId);
 
             // Update the wrapper's LLM agent array (using wrapper's funcId for composite key)
             String compositeKey = MeshToolWrapperRegistry.buildLlmKey(wrapperFuncId, llmIndex);

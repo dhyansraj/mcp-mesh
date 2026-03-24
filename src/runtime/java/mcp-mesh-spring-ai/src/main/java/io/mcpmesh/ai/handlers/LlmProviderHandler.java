@@ -296,16 +296,24 @@ public interface LlmProviderHandler {
      *
      * <p>Used to configure response_format or add JSON instructions to prompt.
      */
-    record OutputSchema(
-        /** Schema name (usually the class name) */
-        String name,
+    final class OutputSchema {
+        private final String name;
+        private final Map<String, Object> schema;
+        private final boolean simple;
 
-        /** JSON Schema for the output */
-        Map<String, Object> schema,
+        // Cached sanitized schema (computed lazily, immutable once set)
+        private volatile Map<String, Object> cachedSanitized;
 
-        /** Whether this is a simple schema (for Claude hint mode detection) */
-        boolean simple
-    ) {
+        public OutputSchema(String name, Map<String, Object> schema, boolean simple) {
+            this.name = name;
+            this.schema = schema;
+            this.simple = simple;
+        }
+
+        public String name() { return name; }
+        public Map<String, Object> schema() { return schema; }
+        public boolean simple() { return simple; }
+
         /**
          * Create from a JSON schema map.
          */
@@ -393,7 +401,12 @@ public interface LlmProviderHandler {
          * @return New schema with unsupported validation keywords removed
          */
         public Map<String, Object> sanitize() {
-            return sanitizeSchema(new LinkedHashMap<>(schema));
+            Map<String, Object> result = cachedSanitized;
+            if (result == null) {
+                result = sanitizeSchema(new LinkedHashMap<>(schema));
+                cachedSanitized = result;
+            }
+            return result;
         }
 
         /**

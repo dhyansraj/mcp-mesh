@@ -112,6 +112,16 @@ public class MeshToolWrapperRegistry {
     }
 
     /**
+     * Get a wrapper by method name.
+     *
+     * @param methodName The short method name (e.g., "analyze")
+     * @return The wrapper, or null if not found
+     */
+    public MeshToolWrapper getWrapperByMethodName(String methodName) {
+        return wrappersByMethodName.get(methodName);
+    }
+
+    /**
      * Get a handler by function ID.
      *
      * @param funcId The function ID
