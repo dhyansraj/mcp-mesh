@@ -15,10 +15,8 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.openai.api.ResponseFormat;
 import org.springframework.ai.openai.api.ResponseFormat.Type;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.function.FunctionToolCallback;
 
 import java.util.*;
-import java.util.function.Function;
 
 /**
  * LLM provider handler for OpenAI GPT models.
@@ -372,92 +370,6 @@ public class OpenAiHandler implements LlmProviderHandler {
             toolCalls.size());
 
         return new LlmResponse(content, toolCalls);
-    }
-
-    /**
-     * Create ToolCallbacks for schema only (no execution).
-     */
-    private List<ToolCallback> createToolCallbacksForSchema(List<ToolDefinition> tools) {
-        List<ToolCallback> callbacks = new ArrayList<>();
-        if (tools == null) return callbacks;
-
-        for (ToolDefinition tool : tools) {
-            // Create a dummy function that should never be called
-            Function<Map<String, Object>, String> dummyFunction = args -> {
-                log.warn("Tool {} was unexpectedly called - this shouldn't happen!", tool.name());
-                return "{\"error\": \"Tool execution not supported in provider mode\"}";
-            };
-
-            // Convert inputSchema Map to JSON string
-            String inputSchemaJson = null;
-            if (tool.inputSchema() != null && !tool.inputSchema().isEmpty()) {
-                try {
-                    inputSchemaJson = new tools.jackson.databind.ObjectMapper()
-                        .writeValueAsString(tool.inputSchema());
-                } catch (Exception e) {
-                    log.warn("Failed to serialize inputSchema for {}: {}", tool.name(), e.getMessage());
-                }
-            }
-
-            @SuppressWarnings("unchecked")
-            var builder = FunctionToolCallback
-                .builder(tool.name(), dummyFunction)
-                .description(tool.description() != null ? tool.description() : "No description")
-                .inputType((Class<Map<String, Object>>) (Class<?>) Map.class);
-
-            if (inputSchemaJson != null) {
-                builder.inputSchema(inputSchemaJson);
-            }
-
-            callbacks.add(builder.build());
-        }
-
-        return callbacks;
-    }
-
-    /**
-     * Create a Spring AI ToolCallback from our ToolDefinition.
-     *
-     * <p>OpenAI requires explicit JSON schema for function parameters.
-     * We pass the schema from ToolDefinition directly to avoid Spring AI
-     * generating an empty schema from Map.class.
-     */
-    private ToolCallback createToolCallback(ToolDefinition tool, ToolExecutorCallback toolExecutor) {
-        Function<Map<String, Object>, String> toolFunction = args -> {
-            try {
-                String argsJson = args != null ? new tools.jackson.databind.ObjectMapper()
-                    .writeValueAsString(args) : "{}";
-                return toolExecutor.execute(tool.name(), argsJson);
-            } catch (Exception e) {
-                log.error("Tool execution failed: {} - {}", tool.name(), e.getMessage());
-                return "{\"error\": \"" + e.getMessage() + "\"}";
-            }
-        };
-
-        // Convert inputSchema Map to JSON string for OpenAI
-        String inputSchemaJson = null;
-        if (tool.inputSchema() != null && !tool.inputSchema().isEmpty()) {
-            try {
-                inputSchemaJson = new tools.jackson.databind.ObjectMapper()
-                    .writeValueAsString(tool.inputSchema());
-                log.debug("Tool {} inputSchema: {}", tool.name(), inputSchemaJson);
-            } catch (Exception e) {
-                log.warn("Failed to serialize inputSchema for {}: {}", tool.name(), e.getMessage());
-            }
-        }
-
-        @SuppressWarnings("unchecked")
-        var builder = FunctionToolCallback
-            .builder(tool.name(), toolFunction)
-            .description(tool.description() != null ? tool.description() : "No description")
-            .inputType((Class<Map<String, Object>>) (Class<?>) Map.class);
-
-        // Pass the explicit JSON schema if available
-        if (inputSchemaJson != null) {
-            builder.inputSchema(inputSchemaJson);
-        }
-
-        return builder.build();
     }
 
     @Override

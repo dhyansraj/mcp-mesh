@@ -42,6 +42,7 @@ import java.util.function.Function;
 public class GeminiHandler implements LlmProviderHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GeminiHandler.class);
+    private static final tools.jackson.databind.ObjectMapper MAPPER = new tools.jackson.databind.ObjectMapper();
 
     /** Base tool instructions for Gemini */
     private static final String BASE_TOOL_INSTRUCTIONS = """
@@ -387,7 +388,7 @@ public class GeminiHandler implements LlmProviderHandler {
             Map<String, Object> strictSchema = outputSchema.makeStrict(true);
 
             // Convert schema to JSON string for Gemini
-            String schemaJson = new tools.jackson.databind.ObjectMapper()
+            String schemaJson = MAPPER
                 .writeValueAsString(strictSchema);
 
             GoogleGenAiChatOptions geminiOptions = GoogleGenAiChatOptions.builder()
@@ -404,8 +405,11 @@ public class GeminiHandler implements LlmProviderHandler {
 
     /**
      * Create ToolCallbacks for schema only (no execution).
+     *
+     * <p>Overrides the default to apply Gemini-specific uppercase type conversion.
      */
-    private List<ToolCallback> createToolCallbacksForSchema(List<ToolDefinition> tools) {
+    @Override
+    public List<ToolCallback> createToolCallbacksForSchema(List<ToolDefinition> tools) {
         List<ToolCallback> callbacks = new ArrayList<>();
         if (tools == null) return callbacks;
 
@@ -421,7 +425,7 @@ public class GeminiHandler implements LlmProviderHandler {
             if (tool.inputSchema() != null && !tool.inputSchema().isEmpty()) {
                 try {
                     Map<String, Object> convertedSchema = convertSchemaTypesToUpperCase(tool.inputSchema());
-                    inputSchemaJson = new tools.jackson.databind.ObjectMapper()
+                    inputSchemaJson = MAPPER
                         .writeValueAsString(convertedSchema);
                     log.debug("Converted tool schema for {}: {}", tool.name(), inputSchemaJson);
                 } catch (Exception e) {
@@ -485,11 +489,14 @@ public class GeminiHandler implements LlmProviderHandler {
 
     /**
      * Create a Spring AI ToolCallback from our ToolDefinition.
+     *
+     * <p>Overrides the default to apply Gemini-specific uppercase type conversion.
      */
-    private ToolCallback createToolCallback(ToolDefinition tool, ToolExecutorCallback toolExecutor) {
+    @Override
+    public ToolCallback createToolCallback(ToolDefinition tool, ToolExecutorCallback toolExecutor) {
         Function<Map<String, Object>, String> toolFunction = args -> {
             try {
-                String argsJson = args != null ? new tools.jackson.databind.ObjectMapper()
+                String argsJson = args != null ? MAPPER
                     .writeValueAsString(args) : "{}";
                 return toolExecutor.execute(tool.name(), argsJson);
             } catch (Exception e) {
@@ -503,7 +510,7 @@ public class GeminiHandler implements LlmProviderHandler {
         if (tool.inputSchema() != null && !tool.inputSchema().isEmpty()) {
             try {
                 Map<String, Object> convertedSchema = convertSchemaTypesToUpperCase(tool.inputSchema());
-                inputSchemaJson = new tools.jackson.databind.ObjectMapper()
+                inputSchemaJson = MAPPER
                     .writeValueAsString(convertedSchema);
             } catch (Exception e) {
                 log.warn("Failed to serialize inputSchema for {}: {}", tool.name(), e.getMessage());
