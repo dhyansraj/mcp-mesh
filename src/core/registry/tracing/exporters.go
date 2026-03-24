@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -918,7 +919,7 @@ func (oe *OTLPExporter) attemptConnection() {
 	switch strings.ToLower(oe.protocol) {
 	case "http", "http/protobuf":
 		exporter, err = otlptracehttp.New(oe.ctx,
-			otlptracehttp.WithEndpoint("http://"+oe.endpoint),
+			otlptracehttp.WithEndpointURL("http://"+oe.endpoint),
 			otlptracehttp.WithInsecure(),
 		)
 	case "grpc", "":
@@ -942,7 +943,9 @@ func (oe *OTLPExporter) attemptConnection() {
 			grpc.WithTransportCredentials(insecure.NewCredentials()),
 		)
 		if err != nil {
-			exporter.Shutdown(oe.ctx)
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			exporter.Shutdown(shutdownCtx)
+			shutdownCancel()
 			oe.handleConnectionError(fmt.Errorf("failed to create direct gRPC connection: %w", err))
 			return
 		}
@@ -954,7 +957,9 @@ func (oe *OTLPExporter) attemptConnection() {
 		testCancel()
 		if err != nil {
 			directConn.Close()
-			exporter.Shutdown(oe.ctx)
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			exporter.Shutdown(shutdownCtx)
+			shutdownCancel()
 			oe.handleConnectionError(fmt.Errorf("OTLP endpoint health check failed: %w", err))
 			return
 		}
@@ -982,10 +987,16 @@ func (oe *OTLPExporter) attemptConnection() {
 		oldDirectConn.Close()
 	}
 	if oldExporter != nil {
-		oldExporter.Shutdown(oe.ctx)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		oldExporter.Shutdown(shutdownCtx)
+		shutdownCancel()
 	}
-	for _, tp := range oldProviders {
-		tp.Shutdown(context.Background())
+	if len(oldProviders) > 0 {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		for _, tp := range oldProviders {
+			tp.Shutdown(shutdownCtx)
+		}
 	}
 
 	oe.logger.Println("Successfully connected to OTLP endpoint")
@@ -1026,10 +1037,16 @@ func (oe *OTLPExporter) handleConnectionLoss() {
 		oldDirectConn.Close()
 	}
 	if oldExporter != nil {
-		oldExporter.Shutdown(oe.ctx)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		oldExporter.Shutdown(shutdownCtx)
+		shutdownCancel()
 	}
-	for _, tp := range oldProviders {
-		tp.Shutdown(context.Background())
+	if len(oldProviders) > 0 {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		for _, tp := range oldProviders {
+			tp.Shutdown(shutdownCtx)
+		}
 	}
 
 	oe.logger.Println("OTLP connection lost, will attempt to reconnect")
@@ -1054,7 +1071,20 @@ func (oe *OTLPExporter) checkConnectionHealth() error {
 		return fmt.Errorf("exporter is nil")
 	}
 
-	// HTTP mode - we can't easily health check, so just check if exporter exists
+	// HTTP mode - probe the endpoint
+	ctx, cancel := context.WithTimeout(oe.ctx, 3*time.Second)
+	defer cancel()
+	url := fmt.Sprintf("http://%s/v1/traces", oe.endpoint)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create health check request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("HTTP health check failed: %w", err)
+	}
+	resp.Body.Close()
+	// Any response (even 405 Method Not Allowed) means the endpoint is reachable
 	return nil
 }
 
@@ -1315,7 +1345,9 @@ func (oe *OTLPExporter) exportDirectOTLP(event *TraceEvent) error {
 		ResourceSpans: []*tracepb.ResourceSpans{resourceSpans},
 	}
 
-	_, err = client.Export(oe.ctx, req)
+	exportCtx, exportCancel := context.WithTimeout(oe.ctx, 10*time.Second)
+	defer exportCancel()
+	_, err = client.Export(exportCtx, req)
 	if err != nil {
 		return fmt.Errorf("failed to export direct OTLP span: %w", err)
 	}
