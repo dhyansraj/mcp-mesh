@@ -251,8 +251,12 @@ public interface LlmProviderHandler {
                 String argsJson = args != null ? TOOL_CALLBACK_MAPPER.writeValueAsString(args) : "{}";
                 return toolExecutor.execute(tool.name(), argsJson);
             } catch (Exception e) {
-                LoggerFactory.getLogger(getClass()).error("Tool execution failed: {} - {}", tool.name(), e.getMessage());
-                return "{\"error\": \"" + e.getMessage() + "\"}";
+                LoggerFactory.getLogger(getClass()).error("Tool execution failed: {}", tool.name(), e);
+                try {
+                    return TOOL_CALLBACK_MAPPER.writeValueAsString(Map.of("error", "Tool execution failed: " + tool.name()));
+                } catch (Exception ignored) {
+                    return "{\"error\": \"tool execution failed\"}";
+                }
             }
         };
 

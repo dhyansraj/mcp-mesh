@@ -368,7 +368,6 @@ public class MeshEventProcessor implements SmartLifecycle {
             // Registry uses short function name (e.g., "analyze"), but proxy is stored
             // with full Java ID (e.g., "com.example.Class.analyze"). Try both.
             MeshLlmAgentProxy proxy = llmAgentProxies.get(funcId);
-            String wrapperFuncId = null;
 
             if (proxy == null) {
                 // O(1) reverse lookup by short method name
@@ -376,7 +375,6 @@ public class MeshEventProcessor implements SmartLifecycle {
                 if (mappedFuncId != null) {
                     proxy = llmAgentProxies.get(mappedFuncId);
                     if (proxy != null) {
-                        wrapperFuncId = mappedFuncId;
                         log.info("Found LLM proxy by method name map: {} -> {} (proxy@{})",
                             funcId, mappedFuncId, System.identityHashCode(proxy));
                     }
@@ -461,12 +459,10 @@ public class MeshEventProcessor implements SmartLifecycle {
             proxy.updateTools(tools);
 
             // Store proxy for later provider updates
-            llmAgentProxies.put(wrapperFuncId, proxy);
-            // Populate reverse lookup: extract short method name from full funcId
+            storeProxyWithReverseLookup(wrapperFuncId, proxy);
             String shortName = wrapperFuncId.contains(".")
                 ? wrapperFuncId.substring(wrapperFuncId.lastIndexOf('.') + 1)
                 : wrapperFuncId;
-            methodNameToFuncId.put(shortName, wrapperFuncId);
             log.info("Stored proxy@{} in llmAgentProxies with key '{}' (methodName='{}')",
                 System.identityHashCode(proxy), wrapperFuncId, shortName);
 
@@ -494,6 +490,14 @@ public class MeshEventProcessor implements SmartLifecycle {
         } catch (BeansException e) {
             log.debug("MediaStore not available — multimodal media support disabled for LLM proxy");
         }
+    }
+
+    private void storeProxyWithReverseLookup(String funcId, MeshLlmAgentProxy proxy) {
+        llmAgentProxies.put(funcId, proxy);
+        String shortName = funcId.contains(".")
+            ? funcId.substring(funcId.lastIndexOf('.') + 1)
+            : funcId;
+        methodNameToFuncId.put(shortName, funcId);
     }
 
     private void handleDependencyChanged(MeshEvent event) {
@@ -631,12 +635,7 @@ public class MeshEventProcessor implements SmartLifecycle {
             proxy.updateProvider(endpoint, functionName, model);
 
             // Store proxy for later tool updates (using wrapper's funcId)
-            llmAgentProxies.put(wrapperFuncId, proxy);
-            // Populate reverse lookup: extract short method name from full funcId
-            String shortMethodName = wrapperFuncId.contains(".")
-                ? wrapperFuncId.substring(wrapperFuncId.lastIndexOf('.') + 1)
-                : wrapperFuncId;
-            methodNameToFuncId.put(shortMethodName, wrapperFuncId);
+            storeProxyWithReverseLookup(wrapperFuncId, proxy);
 
             // Update the wrapper's LLM agent array (using wrapper's funcId for composite key)
             String compositeKey = MeshToolWrapperRegistry.buildLlmKey(wrapperFuncId, llmIndex);

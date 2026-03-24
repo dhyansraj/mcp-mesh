@@ -71,7 +71,7 @@ public class MeshLlmAgentImpl implements MeshLlmAgent {
 
     // Available tools for agentic loop
     private final List<ToolInfo> availableTools = new ArrayList<>();
-    private Map<String, ToolInfo> toolsByName = Map.of();
+    private volatile Map<String, ToolInfo> toolsByName = Map.of();
 
     // Tool executor for agentic loop
     private ToolExecutor toolExecutor;

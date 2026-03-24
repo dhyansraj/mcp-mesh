@@ -499,8 +499,12 @@ public class GeminiHandler implements LlmProviderHandler {
                     .writeValueAsString(args) : "{}";
                 return toolExecutor.execute(tool.name(), argsJson);
             } catch (Exception e) {
-                log.error("Tool execution failed: {} - {}", tool.name(), e.getMessage());
-                return "{\"error\": \"" + e.getMessage() + "\"}";
+                log.error("Tool execution failed: {}", tool.name(), e);
+                try {
+                    return TOOL_CALLBACK_MAPPER.writeValueAsString(Map.of("error", "Tool execution failed: " + tool.name()));
+                } catch (Exception ignored) {
+                    return "{\"error\": \"tool execution failed\"}";
+                }
             }
         };
 
