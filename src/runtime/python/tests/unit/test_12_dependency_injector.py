@@ -385,7 +385,7 @@ class TestFindOriginalFunction:
         with patch(
             "_mcp_mesh.engine.decorator_registry.DecoratorRegistry"
         ) as mock_registry:
-            mock_registry.get_mesh_tools.side_effect = Exception("Registry error")
+            mock_registry.get_mesh_tools.side_effect = AttributeError("Registry error")
 
             result = injector.find_original_function("test_function")
             assert result is None

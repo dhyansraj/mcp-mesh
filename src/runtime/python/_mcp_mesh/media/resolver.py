@@ -133,10 +133,11 @@ async def _resolve_single_resource_link(resource_link: dict, vendor: str) -> dic
     mime_type = resource.get("mimeType", "")
     name = resource.get("name", uri)
 
+    store = get_media_store()
+
     # --- Images: existing behaviour ---
     if mime_type in IMAGE_MIME_TYPES:
         try:
-            store = get_media_store()
             data, fetched_mime = await store.fetch(uri)
             b64_data = base64.b64encode(data).decode("ascii")
 
@@ -159,7 +160,6 @@ async def _resolve_single_resource_link(resource_link: dict, vendor: str) -> dic
     # --- PDFs: provider-specific ---
     if mime_type in PDF_MIME_TYPES:
         try:
-            store = get_media_store()
             data, _fetched_mime = await store.fetch(uri)
             b64_data = base64.b64encode(data).decode("ascii")
             if vendor in ("anthropic", "claude"):
@@ -175,7 +175,6 @@ async def _resolve_single_resource_link(resource_link: dict, vendor: str) -> dic
     # --- Text files: read content and include as text (all providers) ---
     if mime_type in TEXT_MIME_TYPES or mime_type.startswith("text/"):
         try:
-            store = get_media_store()
             data, _fetched_mime = await store.fetch(uri)
             return _format_text_content(data, mime_type, name)
         except Exception as exc:

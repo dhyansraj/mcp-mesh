@@ -5,7 +5,6 @@ Provides automatic agentic loop for LLM-based agents with tool integration.
 """
 
 import asyncio
-import copy
 import json
 import logging
 import time
@@ -45,6 +44,102 @@ logger = logging.getLogger(__name__)
 
 # Sentinel value to distinguish "context not provided" from "explicitly None/empty"
 _CONTEXT_NOT_PROVIDED = object()
+
+
+# ---------------------------------------------------------------------------
+# Mock LiteLLM response types for mesh-delegated provider responses
+# ---------------------------------------------------------------------------
+# These lightweight classes mimic the litellm.completion() response shape so
+# that the agentic loop can treat direct-LiteLLM and mesh-delegated responses
+# identically.  Extracted to module level for reusability and testability.
+
+
+class _MockFunction:
+    """Function namespace with .name and .arguments attributes."""
+
+    __slots__ = ("name", "arguments")
+
+    def __init__(self, name: str, arguments: str):
+        self.name = name
+        self.arguments = arguments
+
+
+class _MockToolCall:
+    """Mock tool call object matching LiteLLM structure."""
+
+    __slots__ = ("id", "type", "function")
+
+    def __init__(self, tc_dict: dict):
+        self.id = tc_dict["id"]
+        self.type = tc_dict["type"]
+        self.function = _MockFunction(
+            name=tc_dict["function"]["name"],
+            arguments=tc_dict["function"]["arguments"],
+        )
+
+
+class _MockMessage:
+    """Mock message matching LiteLLM ModelResponse.choices[].message."""
+
+    __slots__ = ("content", "role", "tool_calls")
+
+    def __init__(self, message_dict: dict):
+        self.content = message_dict.get("content")
+        self.role = message_dict.get("role", "assistant")
+        self.tool_calls = None
+        if "tool_calls" in message_dict and message_dict["tool_calls"]:
+            self.tool_calls = [
+                _MockToolCall(tc) for tc in message_dict["tool_calls"]
+            ]
+
+    def model_dump(self) -> dict:
+        dump: dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_calls:
+            dump["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": tc.type,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in self.tool_calls
+            ]
+        return dump
+
+
+class _MockChoice:
+    """Mock choice object matching LiteLLM ModelResponse.choices[]."""
+
+    __slots__ = ("message", "finish_reason")
+
+    def __init__(self, message: _MockMessage):
+        self.message = message
+        self.finish_reason = "stop"
+
+
+class _MockUsage:
+    """Mock usage object for token tracking (Issue #311)."""
+
+    __slots__ = ("prompt_tokens", "completion_tokens", "total_tokens")
+
+    def __init__(self, usage_dict: dict):
+        self.prompt_tokens = usage_dict.get("prompt_tokens", 0)
+        self.completion_tokens = usage_dict.get("completion_tokens", 0)
+        self.total_tokens = self.prompt_tokens + self.completion_tokens
+
+
+class _MockResponse:
+    """Mock LiteLLM ModelResponse for mesh-delegated provider results."""
+
+    __slots__ = ("choices", "usage", "model")
+
+    def __init__(self, message_dict: dict):
+        self.choices = [_MockChoice(_MockMessage(message_dict))]
+        mesh_usage = message_dict.get("_mesh_usage")
+        self.usage = _MockUsage(mesh_usage) if mesh_usage else None
+        self.model = mesh_usage.get("model") if mesh_usage else None
 
 
 class MeshLlmAgent:
@@ -418,11 +513,13 @@ IMPORTANT TOOL CALLING RULES:
             return []
         enriched = []
         for tool in self._tool_schemas:
-            tool_copy = copy.deepcopy(tool)
-            func_name = tool_copy.get("function", {}).get("name", "")
+            func = tool.get("function", {})
+            func_name = func.get("name", "")
             proxy = self.tool_proxies.get(func_name)
             if proxy and hasattr(proxy, "endpoint"):
-                tool_copy["function"]["_mesh_endpoint"] = proxy.endpoint
+                tool_copy = {**tool, "function": {**func, "_mesh_endpoint": proxy.endpoint}}
+            else:
+                tool_copy = {**tool, "function": dict(func)}
             enriched.append(tool_copy)
         return enriched
 
@@ -518,78 +615,13 @@ IMPORTANT TOOL CALLING RULES:
                         "content": message_dict,
                     }
 
-            # Create mock LiteLLM response structure
-            # This mimics litellm.completion() response format
-            class MockToolCall:
-                """Mock tool call object matching LiteLLM structure."""
-
-                def __init__(self, tc_dict):
-                    self.id = tc_dict["id"]
-                    self.type = tc_dict["type"]
-                    # Create function object
-                    self.function = type(
-                        "Function",
-                        (),
-                        {
-                            "name": tc_dict["function"]["name"],
-                            "arguments": tc_dict["function"]["arguments"],
-                        },
-                    )()
-
-            class MockMessage:
-                def __init__(self, message_dict):
-                    self.content = message_dict.get("content")
-                    self.role = message_dict.get("role", "assistant")
-                    # Extract tool_calls if present (critical for agentic loop!)
-                    self.tool_calls = None
-                    if "tool_calls" in message_dict and message_dict["tool_calls"]:
-                        self.tool_calls = [
-                            MockToolCall(tc) for tc in message_dict["tool_calls"]
-                        ]
-
-                def model_dump(self):
-                    dump = {"role": self.role, "content": self.content}
-                    if self.tool_calls:
-                        dump["tool_calls"] = [
-                            {
-                                "id": tc.id,
-                                "type": tc.type,
-                                "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments,
-                                },
-                            }
-                            for tc in self.tool_calls
-                        ]
-                    return dump
-
-            class MockChoice:
-                def __init__(self, message):
-                    self.message = message
-                    self.finish_reason = "stop"
-
-            # Issue #311: Mock usage object for token tracking
-            class MockUsage:
-                def __init__(self, usage_dict):
-                    self.prompt_tokens = usage_dict.get("prompt_tokens", 0)
-                    self.completion_tokens = usage_dict.get("completion_tokens", 0)
-                    self.total_tokens = self.prompt_tokens + self.completion_tokens
-
-            class MockResponse:
-                def __init__(self, message_dict):
-                    self.choices = [MockChoice(MockMessage(message_dict))]
-                    # Issue #311: Extract usage from _mesh_usage if present
-                    mesh_usage = message_dict.get("_mesh_usage")
-                    self.usage = MockUsage(mesh_usage) if mesh_usage else None
-                    self.model = mesh_usage.get("model") if mesh_usage else None
-
             logger.debug(
                 f"📥 Received response from mesh provider: "
                 f"content={(message_dict.get('content') or '')[:200]}..., "
                 f"tool_calls={len(message_dict.get('tool_calls') or [])}"
             )
 
-            return MockResponse(message_dict)
+            return _MockResponse(message_dict)
 
         except Exception as e:
             logger.error(f"❌ Mesh provider call failed: {e}")

@@ -88,6 +88,13 @@ class HeartbeatPreparationStep(PipelineStep):
         tools_list = []
         skipped_tools = []
 
+        # Build reverse lookup ONCE before loop (avoid calling get_mesh_llm_agents per tool)
+        llm_agents = DecoratorRegistry.get_mesh_llm_agents()
+        llm_agent_by_func = {
+            f"{meta.function.__module__}.{meta.function.__name__}": (agent_id, meta)
+            for agent_id, meta in llm_agents.items()
+        }
+
         for func_name, decorated_func in mesh_tools.items():
             metadata = decorated_func.metadata
             current_function = decorated_func.function
@@ -118,60 +125,58 @@ class HeartbeatPreparationStep(PipelineStep):
             # Check if this function has @mesh.llm decorator (Phase 3)
             llm_filter_data = None
             llm_provider_data = None
-            llm_agents = DecoratorRegistry.get_mesh_llm_agents()
             self.logger.debug(
                 f"🤖 Checking for LLM filter: function={func_name}, total_llm_agents_registered={len(llm_agents)}"
             )
 
-            for llm_agent_id, llm_metadata in llm_agents.items():
-                if llm_metadata.function.__name__ == func_name:
-                    # Found matching LLM agent - extract filter config
-                    raw_filter = llm_metadata.config.get("filter")
-                    filter_mode = llm_metadata.config.get("filter_mode", "all")
+            qualified_name = f"{decorated_func.function.__module__}.{decorated_func.function.__name__}"
+            if qualified_name in llm_agent_by_func:
+                llm_agent_id, llm_metadata = llm_agent_by_func[qualified_name]
+                # Found matching LLM agent - extract filter config
+                raw_filter = llm_metadata.config.get("filter")
+                filter_mode = llm_metadata.config.get("filter_mode", "all")
 
-                    # Normalize filter to array format (OpenAPI schema requirement)
-                    if raw_filter is None:
-                        normalized_filter = []
-                    elif isinstance(raw_filter, str):
-                        normalized_filter = [raw_filter]
-                    elif isinstance(raw_filter, dict):
-                        normalized_filter = [raw_filter]
-                    elif isinstance(raw_filter, list):
-                        normalized_filter = raw_filter
-                    else:
-                        self.logger.warning(
-                            f"⚠️ Invalid filter type for {func_name}: {type(raw_filter)}"
-                        )
-                        normalized_filter = []
+                # Normalize filter to array format (OpenAPI schema requirement)
+                if raw_filter is None:
+                    normalized_filter = []
+                elif isinstance(raw_filter, str):
+                    normalized_filter = [raw_filter]
+                elif isinstance(raw_filter, dict):
+                    normalized_filter = [raw_filter]
+                elif isinstance(raw_filter, list):
+                    normalized_filter = raw_filter
+                else:
+                    self.logger.warning(
+                        f"⚠️ Invalid filter type for {func_name}: {type(raw_filter)}"
+                    )
+                    normalized_filter = []
 
-                    llm_filter_data = {
-                        "filter": normalized_filter,
-                        "filter_mode": filter_mode,
+                llm_filter_data = {
+                    "filter": normalized_filter,
+                    "filter_mode": filter_mode,
+                }
+                self.logger.debug(
+                    f"🤖 LLM filter found for {func_name}: {len(normalized_filter)} filters, mode={filter_mode}, raw_filter={raw_filter}"
+                )
+
+                # Check if provider is a dict (mesh delegation mode - v0.6.1)
+                # If so, add it as llm_provider field (NOT in dependencies array)
+                provider = llm_metadata.config.get("provider")
+                if isinstance(provider, dict):
+                    self.logger.debug(
+                        f"🔌 LLM provider is dict (mesh delegation) for {func_name}: {provider}"
+                    )
+                    # Set llm_provider field (separate from dependencies)
+                    # Registry will resolve this to an actual provider agent
+                    llm_provider_data = {
+                        "capability": provider.get("capability", "llm"),
+                        "tags": provider.get("tags", []),
+                        "version": provider.get("version", ""),
+                        "namespace": provider.get("namespace", "default"),
                     }
                     self.logger.debug(
-                        f"🤖 LLM filter found for {func_name}: {len(normalized_filter)} filters, mode={filter_mode}, raw_filter={raw_filter}"
+                        f"✅ LLM provider spec prepared for {func_name}: {llm_provider_data}"
                     )
-
-                    # Check if provider is a dict (mesh delegation mode - v0.6.1)
-                    # If so, add it as llm_provider field (NOT in dependencies array)
-                    provider = llm_metadata.config.get("provider")
-                    if isinstance(provider, dict):
-                        self.logger.debug(
-                            f"🔌 LLM provider is dict (mesh delegation) for {func_name}: {provider}"
-                        )
-                        # Set llm_provider field (separate from dependencies)
-                        # Registry will resolve this to an actual provider agent
-                        llm_provider_data = {
-                            "capability": provider.get("capability", "llm"),
-                            "tags": provider.get("tags", []),
-                            "version": provider.get("version", ""),
-                            "namespace": provider.get("namespace", "default"),
-                        }
-                        self.logger.debug(
-                            f"✅ LLM provider spec prepared for {func_name}: {llm_provider_data}"
-                        )
-
-                    break
 
             # Build tool registration data
             self.logger.debug(
