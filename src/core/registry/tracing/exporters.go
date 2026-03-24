@@ -1133,6 +1133,15 @@ func (oe *OTLPExporter) EstablishSpanContext(event *TraceEvent) error {
 	// Parse the start time
 	startTime := time.Unix(int64(event.Timestamp), int64((event.Timestamp-float64(int64(event.Timestamp)))*1e9))
 
+	// Get tracer BEFORE acquiring spansMutex to maintain consistent lock ordering.
+	// getTracerForAgent acquires connMu internally; acquiring spansMutex first
+	// would create a spansMutex -> connMu ordering that risks deadlock if any
+	// other code path acquires connMu -> spansMutex.
+	tracer, err := oe.getTracerForAgent(event.AgentName)
+	if err != nil {
+		return fmt.Errorf("failed to get tracer for agent %s: %w", event.AgentName, err)
+	}
+
 	// Use context tracking to maintain proper parent-child span relationships
 	oe.spansMutex.Lock()
 	defer oe.spansMutex.Unlock()
@@ -1147,12 +1156,6 @@ func (oe *OTLPExporter) EstablishSpanContext(event *TraceEvent) error {
 		}
 	} else {
 		// Root span - no parent
-	}
-
-	// Get tracer for this specific agent
-	tracer, err := oe.getTracerForAgent(event.AgentName)
-	if err != nil {
-		return fmt.Errorf("failed to get tracer for agent %s: %w", event.AgentName, err)
 	}
 
 	// Create the span context - we start the span but don't end it yet
@@ -1565,11 +1568,15 @@ func (oe *OTLPExporter) parseSpanID(spanIDStr string) (oteltrace.SpanID, error) 
 
 // Close gracefully shuts down the OTLP exporter
 func (oe *OTLPExporter) Close() error {
-	// Signal connection manager to stop
+	// Signal connection manager and bufferFlushLoop to stop
 	oe.cancel()
 
 	// Wait for connection manager goroutine to finish
 	oe.wg.Wait()
+
+	// bufferFlushLoop exits on oe.ctx.Done() (already cancelled above),
+	// so the ticker is no longer being read. Stop it to release resources.
+	oe.flushTicker.Stop()
 
 	// Collect all resources under lock, then clean up outside the lock
 	oe.connMu.Lock()
@@ -1577,13 +1584,15 @@ func (oe *OTLPExporter) Close() error {
 	oe.directConn = nil
 	providers := oe.tracerProviders
 	oe.tracerProviders = nil
+	exporter := oe.exporter
+	oe.exporter = nil
 	oe.connMu.Unlock()
 
 	if directConn != nil {
 		directConn.Close()
 	}
 
-	// Shutdown all tracer providers with timeout
+	// Shutdown all tracer providers and SDK exporter with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -1591,6 +1600,12 @@ func (oe *OTLPExporter) Close() error {
 	for agentName, tp := range providers {
 		if err := tp.Shutdown(shutdownCtx); err != nil {
 			errors = append(errors, fmt.Sprintf("agent %s: %v", agentName, err))
+		}
+	}
+
+	if exporter != nil {
+		if err := exporter.Shutdown(shutdownCtx); err != nil {
+			errors = append(errors, fmt.Sprintf("SDK exporter: %v", err))
 		}
 	}
 
