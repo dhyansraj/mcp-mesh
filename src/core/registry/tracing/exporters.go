@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -742,6 +743,14 @@ func (je *JaegerExporter) ExportCompleteSpan(event *TraceEvent) error {
 	return nil
 }
 
+// OTLP connection states (matches Redis StreamConsumer pattern)
+const (
+	otlpStateDisconnected = "disconnected"
+	otlpStateConnecting   = "connecting"
+	otlpStateConnected    = "connected"
+	otlpStateFailed       = "failed"
+)
+
 // OTLPExporter exports traces to any OTLP-compatible backend (Tempo, Jaeger, etc.)
 // PendingSpan represents a span waiting to be exported
 type PendingSpan struct {
@@ -782,56 +791,31 @@ type OTLPExporter struct {
 	// Direct OTLP client for exact span ID preservation
 	directClient     tracecollectorv1.TraceServiceClient
 	directConn       *grpc.ClientConn
+
+	// Connection management (matches Redis StreamConsumer pattern)
+	connMu          sync.RWMutex
+	connectionState string
+	retryCount      int
+	lastError       error
+	lastErrorTime   time.Time
+	wg              sync.WaitGroup
 }
 
-// NewOTLPExporter creates a new generic OTLP exporter
+// NewOTLPExporter creates a new generic OTLP exporter.
+// Connection to the OTLP endpoint is deferred to a background goroutine,
+// so this constructor only fails for truly invalid config (unsupported protocol).
 func NewOTLPExporter(endpoint, protocol string) (*OTLPExporter, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	var exporter sdktrace.SpanExporter
-	var err error
-
-	// Support both gRPC and HTTP protocols
+	// Validate protocol upfront - the only error we return at construction time
 	switch strings.ToLower(protocol) {
-	case "http", "http/protobuf":
-		// Create OTLP HTTP exporter
-		exporter, err = otlptracehttp.New(ctx,
-			otlptracehttp.WithEndpoint("http://"+endpoint),
-			otlptracehttp.WithInsecure(),
-		)
-	case "grpc", "":
-		// Create OTLP gRPC exporter (default)
-		exporter, err = otlptracegrpc.New(ctx,
-			otlptracegrpc.WithEndpoint(endpoint),
-			otlptracegrpc.WithTLSCredentials(insecure.NewCredentials()),
-			otlptracegrpc.WithDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
-		)
+	case "http", "http/protobuf", "grpc", "":
+		// valid
 	default:
-		cancel()
 		return nil, fmt.Errorf("unsupported OTLP protocol: %s (supported: grpc, http)", protocol)
 	}
 
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to create OTLP exporter: %w", err)
-	}
-
-	// Create direct gRPC client for exact span ID preservation (only for gRPC protocol)
-	var directClient tracecollectorv1.TraceServiceClient
-	var directConn *grpc.ClientConn
-	if strings.ToLower(protocol) == "grpc" || protocol == "" {
-		directConn, err = grpc.Dial(endpoint,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-		if err != nil {
-			cancel()
-			return nil, fmt.Errorf("failed to create direct gRPC connection: %w", err)
-		}
-		directClient = tracecollectorv1.NewTraceServiceClient(directConn)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
 
 	otlpExporter := &OTLPExporter{
-		exporter:        exporter,
 		tracerProviders: make(map[string]*sdktrace.TracerProvider),
 		tracers:         make(map[string]oteltrace.Tracer),
 		logger:          log.New(os.Stdout, "[OTLP-EXPORT] ", log.LstdFlags),
@@ -846,13 +830,16 @@ func NewOTLPExporter(endpoint, protocol string) (*OTLPExporter, error) {
 		// Initialize trace buffering
 		traceBuffers:     make(map[string]*TraceBuffer),
 		bufferMutex:      sync.RWMutex{},
-		bufferTimeout:    1 * time.Second, // Wait up to 1 second for complete traces
-		flushTicker:      time.NewTicker(500 * time.Millisecond), // Check for expired buffers every 500ms
+		bufferTimeout:    1 * time.Second,
+		flushTicker:      time.NewTicker(500 * time.Millisecond),
 
-		// Direct OTLP client for exact span ID preservation
-		directClient:     directClient,
-		directConn:       directConn,
+		// Connection state starts disconnected
+		connectionState: otlpStateDisconnected,
 	}
+
+	// Start connection manager goroutine (matches Redis StreamConsumer pattern)
+	otlpExporter.wg.Add(1)
+	go otlpExporter.connectionManager()
 
 	// Start buffer flush routine
 	go otlpExporter.bufferFlushLoop()
@@ -860,12 +847,268 @@ func NewOTLPExporter(endpoint, protocol string) (*OTLPExporter, error) {
 	return otlpExporter, nil
 }
 
-// getTracerForAgent gets or creates a tracer for a specific agent
+// connectionManager runs in a background goroutine, continuously monitoring
+// and managing the OTLP endpoint connection with exponential backoff retry.
+// Modeled after StreamConsumer.connectionManager() in consumer.go.
+func (oe *OTLPExporter) connectionManager() {
+	defer oe.wg.Done()
+
+	retryInterval := 5 * time.Second
+	maxRetryInterval := 60 * time.Second
+
+	for {
+		select {
+		case <-oe.ctx.Done():
+			oe.logger.Println("OTLP connection manager shutting down")
+			return
+		default:
+		}
+
+		oe.connMu.RLock()
+		state := oe.connectionState
+		oe.connMu.RUnlock()
+
+		switch state {
+		case otlpStateDisconnected, otlpStateFailed:
+			oe.attemptConnection()
+		case otlpStateConnected:
+			if err := oe.checkConnectionHealth(); err != nil {
+				oe.logger.Printf("OTLP connection health check failed: %v", err)
+				oe.handleConnectionLoss()
+			}
+		}
+
+		// Exponential backoff when retrying, 5s health check when connected
+		oe.connMu.RLock()
+		retryCount := oe.retryCount
+		oe.connMu.RUnlock()
+
+		if retryCount > 0 {
+			backoff := retryInterval * time.Duration(1<<uint(min(retryCount-1, 5)))
+			if backoff > maxRetryInterval {
+				backoff = maxRetryInterval
+			}
+			select {
+			case <-oe.ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+		} else {
+			select {
+			case <-oe.ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+		}
+	}
+}
+
+// attemptConnection tries to establish a connection to the OTLP endpoint.
+// Creates both the SDK exporter and direct gRPC client (for gRPC protocol).
+func (oe *OTLPExporter) attemptConnection() {
+	oe.connMu.Lock()
+	oe.connectionState = otlpStateConnecting
+	oe.connMu.Unlock()
+
+	oe.logger.Printf("Attempting to connect to OTLP endpoint %s (attempt %d)...", oe.endpoint, oe.retryCount+1)
+
+	// Create OTLP SDK exporter
+	var exporter sdktrace.SpanExporter
+	var err error
+
+	switch strings.ToLower(oe.protocol) {
+	case "http", "http/protobuf":
+		exporter, err = otlptracehttp.New(oe.ctx,
+			otlptracehttp.WithEndpointURL("http://"+oe.endpoint),
+			otlptracehttp.WithInsecure(),
+		)
+	case "grpc", "":
+		exporter, err = otlptracegrpc.New(oe.ctx,
+			otlptracegrpc.WithEndpoint(oe.endpoint),
+			otlptracegrpc.WithTLSCredentials(insecure.NewCredentials()),
+			otlptracegrpc.WithDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
+		)
+	}
+
+	if err != nil {
+		oe.handleConnectionError(fmt.Errorf("failed to create OTLP exporter: %w", err))
+		return
+	}
+
+	// Create direct gRPC connection for exact span ID preservation (gRPC only)
+	var directClient tracecollectorv1.TraceServiceClient
+	var directConn *grpc.ClientConn
+	if strings.ToLower(oe.protocol) == "grpc" || oe.protocol == "" {
+		directConn, err = grpc.NewClient(oe.endpoint,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+		if err != nil {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			exporter.Shutdown(shutdownCtx)
+			shutdownCancel()
+			oe.handleConnectionError(fmt.Errorf("failed to create direct gRPC connection: %w", err))
+			return
+		}
+		directClient = tracecollectorv1.NewTraceServiceClient(directConn)
+
+		// Verify connectivity with a test export
+		testCtx, testCancel := context.WithTimeout(oe.ctx, 5*time.Second)
+		_, err = directClient.Export(testCtx, &tracecollectorv1.ExportTraceServiceRequest{})
+		testCancel()
+		if err != nil {
+			directConn.Close()
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			exporter.Shutdown(shutdownCtx)
+			shutdownCancel()
+			oe.handleConnectionError(fmt.Errorf("OTLP endpoint health check failed: %w", err))
+			return
+		}
+	}
+
+	// Connection successful - swap state under lock, then cleanup old resources outside lock
+	// to avoid blocking concurrent RLock callers with slow shutdown operations.
+	oe.connMu.Lock()
+	oldDirectConn := oe.directConn
+	oldExporter := oe.exporter
+	oldProviders := oe.tracerProviders
+
+	oe.exporter = exporter
+	oe.directClient = directClient
+	oe.directConn = directConn
+	oe.tracerProviders = make(map[string]*sdktrace.TracerProvider)
+	oe.tracers = make(map[string]oteltrace.Tracer)
+	oe.connectionState = otlpStateConnected
+	oe.lastError = nil
+	oe.retryCount = 0
+	oe.connMu.Unlock()
+
+	// Cleanup old resources outside the lock to avoid blocking readers
+	if oldDirectConn != nil {
+		oldDirectConn.Close()
+	}
+	if oldExporter != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		oldExporter.Shutdown(shutdownCtx)
+		shutdownCancel()
+	}
+	if len(oldProviders) > 0 {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		for _, tp := range oldProviders {
+			tp.Shutdown(shutdownCtx)
+		}
+	}
+
+	oe.logger.Println("Successfully connected to OTLP endpoint")
+}
+
+// handleConnectionError records connection failure and updates state
+func (oe *OTLPExporter) handleConnectionError(err error) {
+	oe.connMu.Lock()
+	oe.connectionState = otlpStateFailed
+	oe.lastError = err
+	oe.lastErrorTime = time.Now()
+	oe.retryCount++
+	oe.connMu.Unlock()
+
+	oe.logger.Printf("OTLP connection failed: %v (will retry, attempt %d)", err, oe.retryCount)
+}
+
+// handleConnectionLoss cleans up after losing connection to the OTLP endpoint.
+// Collects old resources under lock, then cleans them up outside the lock
+// to avoid blocking concurrent RLock callers.
+func (oe *OTLPExporter) handleConnectionLoss() {
+	oe.connMu.Lock()
+	oe.connectionState = otlpStateDisconnected
+
+	oldDirectConn := oe.directConn
+	oldExporter := oe.exporter
+	oldProviders := oe.tracerProviders
+
+	oe.directConn = nil
+	oe.directClient = nil
+	oe.exporter = nil
+	oe.tracerProviders = make(map[string]*sdktrace.TracerProvider)
+	oe.tracers = make(map[string]oteltrace.Tracer)
+	oe.connMu.Unlock()
+
+	// Cleanup old resources outside the lock to avoid blocking readers
+	if oldDirectConn != nil {
+		oldDirectConn.Close()
+	}
+	if oldExporter != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		oldExporter.Shutdown(shutdownCtx)
+		shutdownCancel()
+	}
+	if len(oldProviders) > 0 {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		for _, tp := range oldProviders {
+			tp.Shutdown(shutdownCtx)
+		}
+	}
+
+	oe.logger.Println("OTLP connection lost, will attempt to reconnect")
+}
+
+// checkConnectionHealth verifies the OTLP endpoint connection is still healthy
+func (oe *OTLPExporter) checkConnectionHealth() error {
+	oe.connMu.RLock()
+	directClient := oe.directClient
+	exporter := oe.exporter
+	oe.connMu.RUnlock()
+
+	if directClient != nil {
+		// gRPC mode - test with empty export
+		ctx, cancel := context.WithTimeout(oe.ctx, 3*time.Second)
+		defer cancel()
+		_, err := directClient.Export(ctx, &tracecollectorv1.ExportTraceServiceRequest{})
+		return err
+	}
+
+	if exporter == nil {
+		return fmt.Errorf("exporter is nil")
+	}
+
+	// HTTP mode - probe the endpoint
+	ctx, cancel := context.WithTimeout(oe.ctx, 3*time.Second)
+	defer cancel()
+	url := fmt.Sprintf("http://%s/v1/traces", oe.endpoint)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create health check request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("HTTP health check failed: %w", err)
+	}
+	resp.Body.Close()
+	// Any response (even 405 Method Not Allowed) means the endpoint is reachable
+	return nil
+}
+
+// isConnected returns whether the OTLP exporter has an active connection
+func (oe *OTLPExporter) isConnected() bool {
+	oe.connMu.RLock()
+	defer oe.connMu.RUnlock()
+	return oe.connectionState == otlpStateConnected
+}
+
+// getTracerForAgent gets or creates a tracer for a specific agent.
+// Caller must NOT already hold connMu — this method acquires connMu.Lock()
+// to prevent data races with connectionManager/handleConnectionLoss.
 func (oe *OTLPExporter) getTracerForAgent(agentName string) (oteltrace.Tracer, error) {
+	oe.connMu.Lock()
+	defer oe.connMu.Unlock()
+
+	if oe.exporter == nil {
+		return nil, fmt.Errorf("OTLP exporter not initialized")
+	}
+
 	if tracer, exists := oe.tracers[agentName]; exists {
 		return tracer, nil
 	}
-
 
 	// Create resource for this specific agent
 	res, err := resource.New(oe.ctx,
@@ -881,10 +1124,13 @@ func (oe *OTLPExporter) getTracerForAgent(agentName string) (oteltrace.Tracer, e
 		return nil, fmt.Errorf("failed to create resource for agent %s: %w", agentName, err)
 	}
 
+	// Capture exporter reference while under lock to avoid stale reference
+	exporter := oe.exporter
+
 	// Create tracer provider for this agent with proper resource
 	// Each agent needs its own TracerProvider with distinct service.name resource attribute
 	tracerProvider := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(oe.exporter), // Use shared exporter for batching
+		sdktrace.WithBatcher(exporter),    // Use shared exporter for batching
 		sdktrace.WithResource(res),        // Agent-specific resource with service.name
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
@@ -899,16 +1145,32 @@ func (oe *OTLPExporter) getTracerForAgent(agentName string) (oteltrace.Tracer, e
 	oe.tracerProviders[agentName] = tracerProvider
 	oe.tracers[agentName] = tracer
 
-
 	return tracer, nil
 }
 
 // ExportSpan exports a single span immediately (stream-through mode) with preserved trace correlation
 // EstablishSpanContext creates span contexts for span_start events to enable proper parent-child relationships
 func (oe *OTLPExporter) EstablishSpanContext(event *TraceEvent) error {
+	// Read connection state in a single lock acquisition to avoid TOCTOU race.
+	oe.connMu.RLock()
+	state := oe.connectionState
+	oe.connMu.RUnlock()
+
+	if state != otlpStateConnected {
+		return fmt.Errorf("OTLP exporter not connected (state: %s)", state)
+	}
 
 	// Parse the start time
 	startTime := time.Unix(int64(event.Timestamp), int64((event.Timestamp-float64(int64(event.Timestamp)))*1e9))
+
+	// Get tracer BEFORE acquiring spansMutex to maintain consistent lock ordering.
+	// getTracerForAgent acquires connMu internally; acquiring spansMutex first
+	// would create a spansMutex -> connMu ordering that risks deadlock if any
+	// other code path acquires connMu -> spansMutex.
+	tracer, err := oe.getTracerForAgent(event.AgentName)
+	if err != nil {
+		return fmt.Errorf("failed to get tracer for agent %s: %w", event.AgentName, err)
+	}
 
 	// Use context tracking to maintain proper parent-child span relationships
 	oe.spansMutex.Lock()
@@ -924,12 +1186,6 @@ func (oe *OTLPExporter) EstablishSpanContext(event *TraceEvent) error {
 		}
 	} else {
 		// Root span - no parent
-	}
-
-	// Get tracer for this specific agent
-	tracer, err := oe.getTracerForAgent(event.AgentName)
-	if err != nil {
-		return fmt.Errorf("failed to get tracer for agent %s: %w", event.AgentName, err)
 	}
 
 	// Create the span context - we start the span but don't end it yet
@@ -949,9 +1205,19 @@ func (oe *OTLPExporter) EstablishSpanContext(event *TraceEvent) error {
 }
 
 func (oe *OTLPExporter) ExportSpan(event *TraceEvent) error {
+	// Read connection state and directClient in a single lock acquisition
+	// to avoid TOCTOU race between isConnected check and directClient read.
+	oe.connMu.RLock()
+	state := oe.connectionState
+	directClient := oe.directClient
+	oe.connMu.RUnlock()
+
+	if state != otlpStateConnected {
+		return fmt.Errorf("OTLP exporter not connected (state: %s)", state)
+	}
 
 	// Use direct OTLP protobuf generation for exact span ID preservation
-	if oe.directClient != nil {
+	if directClient != nil {
 		return oe.exportDirectOTLP(event)
 	}
 
@@ -961,6 +1227,13 @@ func (oe *OTLPExporter) ExportSpan(event *TraceEvent) error {
 
 // exportDirectOTLP creates and exports spans using direct OTLP protobuf generation for exact span ID preservation
 func (oe *OTLPExporter) exportDirectOTLP(event *TraceEvent) error {
+	oe.connMu.RLock()
+	client := oe.directClient
+	oe.connMu.RUnlock()
+
+	if client == nil {
+		return fmt.Errorf("direct OTLP client not available")
+	}
 
 	// Parse hex IDs to bytes for OTLP protobuf
 	traceIDBytes, err := hex.DecodeString(strings.ReplaceAll(event.TraceID, "-", ""))
@@ -1072,7 +1345,9 @@ func (oe *OTLPExporter) exportDirectOTLP(event *TraceEvent) error {
 		ResourceSpans: []*tracepb.ResourceSpans{resourceSpans},
 	}
 
-	_, err = oe.directClient.Export(oe.ctx, req)
+	exportCtx, exportCancel := context.WithTimeout(oe.ctx, 10*time.Second)
+	defer exportCancel()
+	_, err = client.Export(exportCtx, req)
 	if err != nil {
 		return fmt.Errorf("failed to export direct OTLP span: %w", err)
 	}
@@ -1206,13 +1481,16 @@ func (oe *OTLPExporter) exportSDKSpan(event *TraceEvent) error {
 	span.End(oteltrace.WithTimestamp(endTime))
 
 	// Force flush to ensure immediate export
-	if tracerProvider, exists := oe.tracerProviders[event.AgentName]; exists {
+	oe.connMu.RLock()
+	tracerProvider := oe.tracerProviders[event.AgentName]
+	oe.connMu.RUnlock()
+	if tracerProvider != nil {
 		if err := tracerProvider.ForceFlush(ctx); err != nil {
 			return fmt.Errorf("failed to flush span: %w", err)
 		}
 	}
 
-	oe.logger.Printf("🎯 SDK span export completed: %s/%s", traceID.String()[:16], spanID.String()[:16])
+	oe.logger.Printf("SDK span export completed: %s/%s", traceID.String()[:16], spanID.String()[:16])
 	return nil
 }
 
@@ -1322,25 +1600,46 @@ func (oe *OTLPExporter) parseSpanID(spanIDStr string) (oteltrace.SpanID, error) 
 
 // Close gracefully shuts down the OTLP exporter
 func (oe *OTLPExporter) Close() error {
+	// Signal connection manager and bufferFlushLoop to stop
+	oe.cancel()
 
-	// Close direct gRPC connection if exists
-	if oe.directConn != nil {
-		if err := oe.directConn.Close(); err != nil {
-		}
+	// Wait for connection manager goroutine to finish
+	oe.wg.Wait()
+
+	// bufferFlushLoop exits on oe.ctx.Done() (already cancelled above),
+	// so the ticker is no longer being read. Stop it to release resources.
+	oe.flushTicker.Stop()
+
+	// Collect all resources under lock, then clean up outside the lock
+	oe.connMu.Lock()
+	directConn := oe.directConn
+	oe.directConn = nil
+	providers := oe.tracerProviders
+	oe.tracerProviders = nil
+	exporter := oe.exporter
+	oe.exporter = nil
+	oe.connMu.Unlock()
+
+	if directConn != nil {
+		directConn.Close()
 	}
 
-	// Shutdown all tracer providers with timeout
+	// Shutdown all tracer providers and SDK exporter with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	var errors []string
-	for agentName, tracerProvider := range oe.tracerProviders {
-		if err := tracerProvider.Shutdown(shutdownCtx); err != nil {
+	for agentName, tp := range providers {
+		if err := tp.Shutdown(shutdownCtx); err != nil {
 			errors = append(errors, fmt.Sprintf("agent %s: %v", agentName, err))
 		}
 	}
 
-	oe.cancel()
+	if exporter != nil {
+		if err := exporter.Shutdown(shutdownCtx); err != nil {
+			errors = append(errors, fmt.Sprintf("SDK exporter: %v", err))
+		}
+	}
 
 	if len(errors) > 0 {
 		return fmt.Errorf("failed to shutdown tracer providers: %s", strings.Join(errors, "; "))
@@ -1478,6 +1777,9 @@ func (oe *OTLPExporter) sortSpansByHierarchy(spans []*PendingSpan) []*PendingSpa
 
 // ExportCompleteSpan buffers spans and exports them in correct order
 func (oe *OTLPExporter) ExportCompleteSpan(event *TraceEvent) error {
+	if !oe.isConnected() {
+		return fmt.Errorf("OTLP exporter not connected")
+	}
 
 	// Add span to buffer
 	oe.bufferMutex.Lock()
@@ -1514,6 +1816,9 @@ func (oe *OTLPExporter) ExportCompleteSpan(event *TraceEvent) error {
 
 // exportSingleSpan exports a single span using predetermined trace/span IDs
 func (oe *OTLPExporter) exportSingleSpan(event *TraceEvent) error {
+	if !oe.isConnected() {
+		return fmt.Errorf("OTLP exporter not connected")
+	}
 
 	// Parse the existing trace and span IDs from Python
 	traceID, err := parseTraceID(event.TraceID)
@@ -1551,6 +1856,9 @@ func (oe *OTLPExporter) exportSingleSpan(event *TraceEvent) error {
 
 // exportSpanDirectlyToOTLP creates OTLP span data with exact IDs and parent relationships
 func (oe *OTLPExporter) exportSpanDirectlyToOTLP(event *TraceEvent, traceID oteltrace.TraceID, spanID oteltrace.SpanID, parentSpanID oteltrace.SpanID, startTime, endTime time.Time) error {
+	if !oe.isConnected() {
+		return fmt.Errorf("OTLP exporter not connected")
+	}
 
 	// Build span attributes
 	attributes := oe.buildSpanAttributes(event)

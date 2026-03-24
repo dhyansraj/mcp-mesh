@@ -5,7 +5,7 @@ mcp-mesh>=1.0.0b2
 fastmcp>=3.0.0,<4.0.0
 
 # LiteLLM for LLM provider
-litellm
+litellm>=1.80.5,!=1.82.7,!=1.82.8
 
 # HTTP client for health checks
 httpx

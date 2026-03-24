@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir \
     pydantic \
     python-dateutil \
     "fastmcp>=3.0.0,<4.0.0" \
-    litellm \
+    "litellm>=1.80.5,!=1.82.7,!=1.82.8" \
     jinja2
 
 # Create app user for security
