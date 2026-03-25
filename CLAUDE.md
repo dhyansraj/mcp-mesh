@@ -1,1 +1,0 @@
-/home/dhyanraj/mcp-mesh-CLAUDE.md
