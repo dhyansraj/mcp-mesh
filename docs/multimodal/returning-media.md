@@ -1,14 +1,6 @@
 # Returning Media from Tools
 
-> Upload binary content and return it as MCP resource_link objects.
-
-## Overview
-
-Mesh tools can return binary media (images, PDFs, documents) to callers and LLMs. The flow is:
-
-1. **Upload** binary data to MediaStore → get a URI
-2. **Return** a `resource_link` object with the URI, name, and MIME type
-3. **LLMs** automatically resolve the URI and see the actual content
+When a tool generates an image, chart, or document, use `MediaResult` to upload the bytes and return a `resource_link`. LLM providers auto-resolve these links -- no manual fetching needed.
 
 ## MediaResult (Recommended)
 
@@ -122,13 +114,7 @@ Tools return media as MCP `resource_link` content:
 
 When an LLM agent receives this in a tool result, the SDK automatically fetches the URI from MediaStore and converts it to the provider's native format. See [Provider Support](provider-support.md) for details.
 
-## Supported MIME Types
-
-| Category | MIME Types | LLM Support |
-| --- | --- | --- |
-| **Images** | `image/png`, `image/jpeg`, `image/gif`, `image/webp` | All providers |
-| **PDF** | `application/pdf` | Claude (native), others (text fallback) |
-| **Text** | `text/plain`, `text/csv`, `text/markdown`, `text/html`, `application/json` | All providers (as text) |
+See [Provider Support](provider-support.md) for which MIME types each LLM vendor supports.
 
 ## See Also
 

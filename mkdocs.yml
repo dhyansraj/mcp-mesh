@@ -207,12 +207,12 @@ nav:
 
   - Multimodal:
       - Getting Started: multimodal/getting-started.md
-      - MediaStore: multimodal/media-store.md
+      - Web Uploads: multimodal/web-uploads.md
       - Returning Media: multimodal/returning-media.md
       - LLM Media Input: multimodal/llm-media-input.md
-      - Web Uploads: multimodal/web-uploads.md
       - MediaParam: multimodal/media-param.md
       - Provider Support: multimodal/provider-support.md
+      - Storage Configuration: multimodal/media-store.md
 
   - API Reference:
       - MediaResult: api/media-result.md

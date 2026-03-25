@@ -1,10 +1,6 @@
 # MediaParam Type Hints
 
-> Tell LLMs which tool parameters accept media URIs.
-
-## Overview
-
-`MediaParam` marks tool parameters that accept media URIs. This adds `x-media-type` to the JSON schema, enabling LLMs to correctly route media through multi-agent call chains.
+In multi-agent chains, LLMs need to know which tool parameters accept media URIs. `MediaParam` type hints annotate your tool schema so media is routed to the right place.
 
 ## Usage
 
@@ -63,12 +59,12 @@
 
 ## MIME Type Patterns
 
-| Pattern | Accepts |
-| --- | --- |
-| `"image/*"` | Any image (PNG, JPEG, GIF, WebP) |
-| `"application/pdf"` | PDF documents |
-| `"text/*"` | Text files (plain, CSV, markdown, HTML) |
-| `"*/*"` | Any media type (default) |
+| Pattern             | Accepts                                 |
+| ------------------- | --------------------------------------- |
+| `"image/*"`         | Any image (PNG, JPEG, GIF, WebP)        |
+| `"application/pdf"` | PDF documents                           |
+| `"text/*"`          | Text files (plain, CSV, markdown, HTML) |
+| `"*/*"`             | Any media type (default)                |
 
 ## How It Works
 

@@ -1,10 +1,6 @@
 # LLM Media Input
 
-> Pass images, PDFs, and files directly to LLM agents.
-
-## Overview
-
-The `media=` parameter lets you attach media when calling an LLM agent. The SDK resolves URIs from MediaStore and converts them to provider-native formats automatically.
+Once media is in the mesh -- uploaded by a user or produced by a tool -- pass it to an LLM using the `media` parameter.
 
 ## Basic Usage
 
@@ -79,58 +75,7 @@ The `media=` parameter lets you attach media when calling an LLM agent. The SDK 
 
 ## Automatic Resource Link Resolution
 
-You don't need to use `media=` explicitly when an LLM calls tools that return `resource_link`. The resolution is automatic:
-
-```
-1. LLM calls tool -> tool returns resource_link
-2. SDK detects resource_link in tool result
-3. SDK fetches media bytes from MediaStore
-4. SDK converts to provider-native format
-5. LLM sees the actual image/document content
-```
-
-This means a simple agentic loop works for multimodal:
-
-=== "Python"
-
-    ```python
-    @mesh.llm(
-        provider={"capability": "llm"},
-        filter=[{"capability": "chart_gen"}],
-        max_iterations=3,
-    )
-    @mesh.tool(capability="analyst")
-    async def analyze(question: str, llm: mesh.MeshLlmAgent = None) -> str:
-        # LLM calls chart_gen, gets image back, analyzes it
-        return await llm(f"Generate and analyze a chart: {question}")
-    ```
-
-=== "TypeScript"
-
-    ```typescript
-    const tool = mesh.llm({
-      provider: { capability: "llm" },
-      filter: [{ capability: "chart_gen" }],
-      maxIterations: 3,
-    });
-    // LLM calls chart_gen, gets image back, analyzes it
-    ```
-
-=== "Java"
-
-    ```java
-    @MeshLlm(
-        providerSelector = @Selector(capability = "llm"),
-        filter = @Selector(capability = "chart_gen"),
-        maxIterations = 3
-    )
-    @MeshTool(capability = "analyst")
-    public String analyze(@Param("question") String question, MeshLlmAgent llm) {
-        return llm.request()
-            .user("Generate and analyze a chart: " + question)
-            .generate();
-    }
-    ```
+When an LLM calls a tool that returns a `resource_link`, the SDK resolves it automatically -- the LLM provider fetches the media bytes and converts them to the vendor's native format. No `media=` parameter is needed for tool-returned media. See [Getting Started](getting-started.md) for the full flow.
 
 ## See Also
 
