@@ -45,7 +45,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>1.0.0-beta.3</version>
+        <version>1.0.0</version>
     </dependency>
     ```
 
@@ -295,7 +295,7 @@ Return images, PDFs, and files from tools — LLMs see them natively.
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>1.0.0-beta.3</version>
+        <version>1.0.0</version>
     </dependency>
     ```
 
@@ -343,7 +343,7 @@ Return images, PDFs, and files from tools — LLMs see them natively.
 
 ## :star: Project Status
 
-- **Latest Release**: v1.0.0-beta.3 (March 2026)
+- **Latest Release**: v1.0.0 (March 2026)
 - **License**: MIT
 - **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed
