@@ -13,7 +13,7 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 
 # Install MCP Mesh SDK
-pip install "mcp-mesh>=0.8,<0.9"
+pip install mcp-mesh
 ```
 
 ## 1. Start the Registry
@@ -37,8 +37,8 @@ import mesh
 
 app = mesh.get_app()
 
-@app.tool()
-@mesh.tool(
+@app.tool()        # Register with FastMCP protocol
+@mesh.tool(        # Register with mesh for discovery + dependency injection
     capability="greeting",
     description="Greet a user by name",
 )
@@ -87,8 +87,8 @@ import mesh
 
 app = mesh.get_app()
 
-@app.tool()
-@mesh.tool(
+@app.tool()        # Register with FastMCP protocol
+@mesh.tool(        # Register with mesh for discovery + dependency injection
     capability="smart_greeting",
     description="Enhanced greeting with time",
     dependencies=["greeting"],  # Depend on greeter

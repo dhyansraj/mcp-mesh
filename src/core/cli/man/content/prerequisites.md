@@ -49,7 +49,7 @@ pip install --upgrade pip
 ### MCP Mesh SDK
 
 ```bash
-pip install "mcp-mesh>=0.8,<0.9"
+pip install mcp-mesh
 
 # Verify
 python -c "import mesh; print('Ready!')"
@@ -62,7 +62,7 @@ python -c "import mesh; print('Ready!')"
 python3.11 -m venv .venv
 source .venv/bin/activate    # Only needed for pip
 pip install --upgrade pip
-pip install "mcp-mesh>=0.8,<0.9"
+pip install mcp-mesh
 deactivate                   # Can deactivate after pip install
 
 # 2. Scaffold agents - meshctl auto-detects .venv (no activation needed)
@@ -87,19 +87,19 @@ docker compose version
 
 ### MCP Mesh Images
 
-| Image                            | Description                 |
-| -------------------------------- | --------------------------- |
-| `mcpmesh/registry:0.9`           | Registry service            |
-| `mcpmesh/python-runtime:0.9`     | Python runtime with SDK     |
-| `mcpmesh/java-runtime:0.9`       | Java runtime with SDK       |
-| `mcpmesh/typescript-runtime:0.9` | TypeScript runtime with SDK |
+| Image                                     | Description                 |
+| ----------------------------------------- | --------------------------- |
+| `mcpmesh/registry:1.0.0-beta.3`           | Registry service            |
+| `mcpmesh/python-runtime:1.0.0-beta.3`     | Python runtime with SDK     |
+| `mcpmesh/java-runtime:1.0.0-beta.3`       | Java runtime with SDK       |
+| `mcpmesh/typescript-runtime:1.0.0-beta.3` | TypeScript runtime with SDK |
 
 ```bash
 # Pull images
-docker pull mcpmesh/registry:0.9
-docker pull mcpmesh/python-runtime:0.9
-docker pull mcpmesh/java-runtime:0.9
-docker pull mcpmesh/typescript-runtime:0.9
+docker pull mcpmesh/registry:1.0.0-beta.3
+docker pull mcpmesh/python-runtime:1.0.0-beta.3
+docker pull mcpmesh/java-runtime:1.0.0-beta.3
+docker pull mcpmesh/typescript-runtime:1.0.0-beta.3
 ```
 
 ### Generate Docker Compose

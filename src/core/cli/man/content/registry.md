@@ -154,13 +154,32 @@ meshctl status
 meshctl list
 ```
 
-## High Availability (Future)
+## High Availability
 
-Planned features:
+The registry supports multiple replicas for high availability. All replicas share the same PostgreSQL database — no additional configuration is needed.
 
-- Multi-registry federation
-- Cross-cluster discovery
-- Leader election
+### How It Works
+
+- All agent state (registrations, heartbeats, capabilities) is stored in PostgreSQL
+- No in-memory state affects cross-replica consistency
+- Heartbeat updates use optimistic locking to prevent concurrent update conflicts
+- Each replica runs an independent health monitor against the shared database
+- Startup cleanup only evicts agents that haven't heartbeated to any replica within the threshold
+
+### Kubernetes Deployment
+
+```bash
+# Scale registry replicas
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --version 1.0.0-beta.3 \
+  -n mcp-mesh --create-namespace \
+  --set registry.replicas=3
+```
+
+### Roadmap
+
+- Multi-registry federation across clusters
+- Cross-cluster agent discovery
 
 ## See Also
 
