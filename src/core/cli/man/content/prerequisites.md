@@ -87,19 +87,19 @@ docker compose version
 
 ### MCP Mesh Images
 
-| Image                                     | Description                 |
-| ----------------------------------------- | --------------------------- |
-| `mcpmesh/registry:1.0.0-beta.3`           | Registry service            |
-| `mcpmesh/python-runtime:1.0.0-beta.3`     | Python runtime with SDK     |
-| `mcpmesh/java-runtime:1.0.0-beta.3`       | Java runtime with SDK       |
-| `mcpmesh/typescript-runtime:1.0.0-beta.3` | TypeScript runtime with SDK |
+| Image                              | Description                 |
+| ---------------------------------- | --------------------------- |
+| `mcpmesh/registry:1.0.0`           | Registry service            |
+| `mcpmesh/python-runtime:1.0.0`     | Python runtime with SDK     |
+| `mcpmesh/java-runtime:1.0.0`       | Java runtime with SDK       |
+| `mcpmesh/typescript-runtime:1.0.0` | TypeScript runtime with SDK |
 
 ```bash
 # Pull images
-docker pull mcpmesh/registry:1.0.0-beta.3
-docker pull mcpmesh/python-runtime:1.0.0-beta.3
-docker pull mcpmesh/java-runtime:1.0.0-beta.3
-docker pull mcpmesh/typescript-runtime:1.0.0-beta.3
+docker pull mcpmesh/registry:1.0.0
+docker pull mcpmesh/python-runtime:1.0.0
+docker pull mcpmesh/java-runtime:1.0.0
+docker pull mcpmesh/typescript-runtime:1.0.0
 ```
 
 ### Generate Docker Compose

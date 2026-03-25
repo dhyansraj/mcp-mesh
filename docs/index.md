@@ -20,7 +20,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
 === "Python"
 
     ```bash
-    pip install "mcp-mesh>=0.9,<1.0"
+    pip install mcp-mesh
     ```
 
     ```python
@@ -283,7 +283,7 @@ Return images, PDFs, and files from tools — LLMs see them natively.
 === "Python Runtime"
 
     ```bash
-    pip install "mcp-mesh>=0.9,<1.0"
+    pip install mcp-mesh
     ```
 
     Runtime for building agents with `@mesh.agent`, `@mesh.tool`, `@mesh.llm`, and `@mesh.llm_provider` decorators.
@@ -314,10 +314,10 @@ Return images, PDFs, and files from tools — LLMs see them natively.
 === "Docker Images"
 
     ```bash
-    docker pull mcpmesh/registry:0.9
-    docker pull mcpmesh/python-runtime:0.9
-    docker pull mcpmesh/java-runtime:0.9
-    docker pull mcpmesh/typescript-runtime:0.9
+    docker pull mcpmesh/registry:1.0.0
+    docker pull mcpmesh/python-runtime:1.0.0
+    docker pull mcpmesh/java-runtime:1.0.0
+    docker pull mcpmesh/typescript-runtime:1.0.0
     ```
 
     Official container images for production deployments.

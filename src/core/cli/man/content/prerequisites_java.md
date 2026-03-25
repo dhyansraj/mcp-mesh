@@ -98,12 +98,12 @@ docker compose version
 
 ### MCP Mesh Images
 
-| Image                            | Description                 |
-| -------------------------------- | --------------------------- |
-| `mcpmesh/registry:0.9`           | Registry service            |
-| `mcpmesh/python-runtime:0.9`     | Python runtime with SDK     |
-| `mcpmesh/java-runtime:0.9`       | Java runtime with SDK       |
-| `mcpmesh/typescript-runtime:0.9` | TypeScript runtime with SDK |
+| Image                              | Description                 |
+| ---------------------------------- | --------------------------- |
+| `mcpmesh/registry:1.0.0`           | Registry service            |
+| `mcpmesh/python-runtime:1.0.0`     | Python runtime with SDK     |
+| `mcpmesh/java-runtime:1.0.0`       | Java runtime with SDK       |
+| `mcpmesh/typescript-runtime:1.0.0` | TypeScript runtime with SDK |
 
 Java agents use standard Maven-based Docker builds (see Docker Deployment guide).
 

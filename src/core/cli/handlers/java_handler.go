@@ -289,7 +289,7 @@ const javaPomTemplate = `<?xml version="1.0" encoding="UTF-8"?>
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.2.0</version>
+        <version>4.0.2</version>
     </parent>
 
     <groupId>com.example</groupId>

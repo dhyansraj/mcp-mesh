@@ -117,7 +117,7 @@ For Kubernetes, configure TLS via Helm values:
 
 ```bash
 helm install mcp-registry oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-registry \
-  --version 0.9.9 -n mcp-mesh --create-namespace \
+  --version 1.0.0 -n mcp-mesh --create-namespace \
   --set registry.security.tls.mode=strict \
   --set registry.security.trust.backend=k8s-secrets
 ```

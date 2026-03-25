@@ -10,13 +10,12 @@ keywords:
   - registry
   - microservices
   - agent-registry
-home: https://github.com/your-org/mcp-mesh
+home: https://github.com/dhyansraj/mcp-mesh
 sources:
-  - https://github.com/your-org/mcp-mesh
+  - https://github.com/dhyansraj/mcp-mesh
 maintainers:
-  - name: MCP Mesh Team
-    email: team@example.com
-icon: https://example.com/mcp-mesh-icon.png
+  - name: Dhyan Raj
+    email: dhyanraj@gmail.com
 annotations:
   "artifacthub.io/changes": |
     - kind: added

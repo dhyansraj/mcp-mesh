@@ -8,11 +8,11 @@ MCP Mesh supports multiple deployment patterns from local development to product
 
 ## Official Docker Images
 
-| Image                                     | Description                                        |
-| ----------------------------------------- | -------------------------------------------------- |
-| `mcpmesh/registry:1.0.0-beta.3`           | Registry service for agent discovery               |
-| `mcpmesh/python-runtime:1.0.0-beta.3`     | Python runtime with mcp-mesh SDK pre-installed     |
-| `mcpmesh/typescript-runtime:1.0.0-beta.3` | TypeScript runtime with @mcpmesh/sdk pre-installed |
+| Image                              | Description                                        |
+| ---------------------------------- | -------------------------------------------------- |
+| `mcpmesh/registry:1.0.0`           | Registry service for agent discovery               |
+| `mcpmesh/python-runtime:1.0.0`     | Python runtime with mcp-mesh SDK pre-installed     |
+| `mcpmesh/typescript-runtime:1.0.0` | TypeScript runtime with @mcpmesh/sdk pre-installed |
 
 ## Local Development
 
@@ -101,7 +101,7 @@ meshctl scaffold --name my-agent --agent-type tool
 The generated Dockerfile uses the official runtime:
 
 ```dockerfile
-FROM mcpmesh/python-runtime:1.0.0-beta.3
+FROM mcpmesh/python-runtime:1.0.0
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -129,7 +129,7 @@ meshctl scaffold --compose --observability
 Generated docker-compose.yml includes:
 
 - PostgreSQL database for registry
-- Registry service (`mcpmesh/registry:1.0.0-beta.3`)
+- Registry service (`mcpmesh/registry:1.0.0`)
 - All detected agents with proper networking
 - Health checks and dependency ordering
 - Optional: Redis, Tempo, Grafana (with `--observability`)
