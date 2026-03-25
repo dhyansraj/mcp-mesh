@@ -8,11 +8,11 @@ MCP Mesh supports multiple deployment patterns from local development to product
 
 ## Official Docker Images
 
-| Image                                     | Description                                        |
-| ----------------------------------------- | -------------------------------------------------- |
-| `mcpmesh/registry:1.0.0-beta.3`           | Registry service for agent discovery               |
-| `mcpmesh/python-runtime:1.0.0-beta.3`     | Python runtime with mcp-mesh SDK pre-installed     |
-| `mcpmesh/typescript-runtime:1.0.0-beta.3` | TypeScript runtime with @mcpmesh/sdk pre-installed |
+| Image                              | Description                                        |
+| ---------------------------------- | -------------------------------------------------- |
+| `mcpmesh/registry:1.0.0`           | Registry service for agent discovery               |
+| `mcpmesh/python-runtime:1.0.0`     | Python runtime with mcp-mesh SDK pre-installed     |
+| `mcpmesh/typescript-runtime:1.0.0` | TypeScript runtime with @mcpmesh/sdk pre-installed |
 
 ## Local Development
 
@@ -101,7 +101,7 @@ meshctl scaffold --name my-agent --agent-type tool
 The generated Dockerfile uses the official runtime:
 
 ```dockerfile
-FROM mcpmesh/python-runtime:1.0.0-beta.3
+FROM mcpmesh/python-runtime:1.0.0
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -129,7 +129,7 @@ meshctl scaffold --compose --observability
 Generated docker-compose.yml includes:
 
 - PostgreSQL database for registry
-- Registry service (`mcpmesh/registry:1.0.0-beta.3`)
+- Registry service (`mcpmesh/registry:1.0.0`)
 - All detected agents with proper networking
 - Health checks and dependency ordering
 - Optional: Redis, Tempo, Grafana (with `--observability`)
@@ -152,12 +152,12 @@ For production Kubernetes deployment, use the official Helm charts from the MCP 
 # Install core infrastructure (registry + database + observability)
 # No "helm repo add" needed - uses OCI registry directly
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.0.0-beta.3 \
+  --version 1.0.0 \
   -n mcp-mesh --create-namespace
 
 # Deploy agent using scaffold-generated helm-values.yaml
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.0.0-beta.3 \
+  --version 1.0.0 \
   -n mcp-mesh \
   -f my-agent/helm-values.yaml
 ```
@@ -168,12 +168,12 @@ Deploy into any namespace — just match `-n` with `--set global.namespace`:
 
 ```bash
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.0.0-beta.3 \
+  --version 1.0.0 \
   -n my-namespace --create-namespace \
   --set global.namespace=my-namespace
 
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.0.0-beta.3 \
+  --version 1.0.0 \
   -n my-namespace \
   -f helm-values.yaml
 ```
@@ -192,19 +192,19 @@ its own namespace. Short service names resolve independently within each namespa
 ```bash
 # Team A
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.0.0-beta.3 \
+  --version 1.0.0 \
   -n team-a --create-namespace --set global.namespace=team-a
 
 helm install greeter oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.0.0-beta.3 -n team-a -f greeter/helm-values.yaml
+  --version 1.0.0 -n team-a -f greeter/helm-values.yaml
 
 # Team B — same helm-values.yaml, different namespace
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.0.0-beta.3 \
+  --version 1.0.0 \
   -n team-b --create-namespace --set global.namespace=team-b
 
 helm install greeter oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.0.0-beta.3 -n team-b -f greeter/helm-values.yaml
+  --version 1.0.0 -n team-b -f greeter/helm-values.yaml
 ```
 
 ### Available Helm Charts
@@ -258,7 +258,7 @@ docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.0.0 --pu
 # 3. Update helm-values.yaml with your image repository
 # 4. Deploy with Helm
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.0.0-beta.3 \
+  --version 1.0.0 \
   -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
@@ -270,14 +270,14 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
 ```bash
 # Core without observability
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.0.0-beta.3 \
+  --version 1.0.0 \
   -n mcp-mesh --create-namespace \
   --set grafana.enabled=false \
   --set tempo.enabled=false
 
 # Core without PostgreSQL (in-memory registry)
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.0.0-beta.3 \
+  --version 1.0.0 \
   -n mcp-mesh --create-namespace \
   --set postgres.enabled=false
 ```

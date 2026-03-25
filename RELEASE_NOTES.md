@@ -1,5 +1,47 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.9...v1.0.0)
+
+## v1.0.0 (2026-03-25)
+
+The first stable release of MCP Mesh. This milestone brings production-grade security with mutual TLS everywhere, first-class multimodal/media support across all three SDKs, and provider-side tool execution for single-round-trip agentic workflows.
+
+### 🔒 Security & Trust
+
+- **Registration Trust — Phase 1** (#599): Registry validates agent identity via X.509 certificates before allowing registration. Entity-level trust model with pluggable trust backends (LocalCA, FileStore, K8s Secrets, SPIRE) and credential providers (File, Vault, SPIRE) for agent cert sourcing.
+- **Agent-to-Agent mTLS — Phase 2** (#601): Every inter-agent call is mutually authenticated. The same cert used for registry registration is reused for peer auth, with SPIFFE-aware TLS verification.
+- **Vault credential provider** (#605): Agents fetch TLS certs from HashiCorp Vault PKI at startup with in-memory fetch, secure temp files, and cleanup on shutdown.
+- **SPIRE credential provider** (#607): X.509-SVID fetching from SPIRE Workload API via Unix domain socket for full workload identity support.
+- **Helm TLS support + security docs** (#609): Helm charts support TLS configuration with full security documentation covering registration trust, agent-to-agent mTLS, and authorization.
+- **litellm supply chain mitigation** (#644): Excluded compromised litellm versions 1.82.7 and 1.82.8.
+
+### 🖼️ Multimodal / Media
+
+- **Phase 1 — MediaStore + resource_link** (#616): Local and S3 storage backends with `upload_media()` and `media_result()` APIs. Resource link format for passing media references between agents.
+- **Phase 2 — LLM handler media resolution** (#617): LLM providers auto-resolve resource_link URIs to native format (Claude image blocks, OpenAI image_url, Gemini inline_data) with no manual fetching needed.
+- **Phase 3 — Developer convenience APIs** (#618): `MediaResult` one-step upload+link, `save_upload()` for web frameworks, `media=` parameter for LLM calls, and `MediaParam` type hints across all three SDKs.
+
+### ✨ New Features
+
+- **Provider-side tool execution + Gemini** (#603): LLM providers execute tool calls internally (full agentic loop on provider side), returning final structured responses in one round-trip. Gemini re-enabled for Python.
+- **FastMCP/MCP SDK upgrade** (#611): Upgraded to FastMCP 3.x and latest MCP SDK across all runtimes with Streamable HTTP transport.
+
+### 🔧 Improvements
+
+- **OTLP exporter reconnection** (#644): Background connection manager with exponential backoff retry (5s-60s). Registry no longer fails to start when Tempo is unavailable, with auto-reconnection on connection loss and HTTP health check probe.
+- **Go codebase optimization** (#634): Decomposition and optimization of Go registry code.
+- **Rust core optimization** (#636): Deduplication and optimization of Rust FFI core.
+- **Python SDK optimization** (#638): Handler deduplication across provider handlers.
+- **Java SDK optimization** (#640): Handler deduplication and optimization.
+- **TypeScript SDK optimization** (#642): Handler deduplication and optimization.
+
+### 📚 Documentation
+
+- **Multimodal docs + DDDI branding** (#628): MkDocs multimodal guide, DDDI concept page, and Sky chatbot widget.
+- **Man page improvements** (#632): Distributed deployment and security man pages.
+- **Media/multimodal restructure** (#651): Story-driven getting-started guide (receipt upload + chart generation), nav reorder, and man page condensing (52% reduction) with security mermaid diagram.
+- **Man page fixes** (#651): Stale version refs, duplicate model, HA documentation, and decorator comments.
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.8...v0.9.9)
 
 ## v0.9.9 (2026-03-05)

@@ -87,19 +87,19 @@ docker compose version
 
 ### MCP Mesh Images
 
-| Image                                     | Description                 |
-| ----------------------------------------- | --------------------------- |
-| `mcpmesh/registry:1.0.0-beta.3`           | Registry service            |
-| `mcpmesh/python-runtime:1.0.0-beta.3`     | Python runtime with SDK     |
-| `mcpmesh/java-runtime:1.0.0-beta.3`       | Java runtime with SDK       |
-| `mcpmesh/typescript-runtime:1.0.0-beta.3` | TypeScript runtime with SDK |
+| Image                              | Description                 |
+| ---------------------------------- | --------------------------- |
+| `mcpmesh/registry:1.0.0`           | Registry service            |
+| `mcpmesh/python-runtime:1.0.0`     | Python runtime with SDK     |
+| `mcpmesh/java-runtime:1.0.0`       | Java runtime with SDK       |
+| `mcpmesh/typescript-runtime:1.0.0` | TypeScript runtime with SDK |
 
 ```bash
 # Pull images
-docker pull mcpmesh/registry:1.0.0-beta.3
-docker pull mcpmesh/python-runtime:1.0.0-beta.3
-docker pull mcpmesh/java-runtime:1.0.0-beta.3
-docker pull mcpmesh/typescript-runtime:1.0.0-beta.3
+docker pull mcpmesh/registry:1.0.0
+docker pull mcpmesh/python-runtime:1.0.0
+docker pull mcpmesh/java-runtime:1.0.0
+docker pull mcpmesh/typescript-runtime:1.0.0
 ```
 
 ### Generate Docker Compose
@@ -137,12 +137,12 @@ Available from OCI registry (no `helm repo add` needed):
 ```bash
 # Install core infrastructure
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.0.0-beta.3 \
+  --version 1.0.0 \
   -n mcp-mesh --create-namespace
 
 # Deploy an agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.0.0-beta.3 \
+  --version 1.0.0 \
   -n mcp-mesh \
   -f helm-values.yaml
 ```

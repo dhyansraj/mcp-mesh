@@ -108,7 +108,7 @@ const agent = mesh(server, {
 ```bash
 docker run --rm -it \
   -v $(pwd)/suites/uc01_registry/artifacts:/uc-artifacts:ro \
-  tsuite-mesh:1.0.0-beta.3 bash
+  tsuite-mesh:1.0.0 bash
 ```
 
 ### Common issues:
@@ -121,11 +121,11 @@ docker run --rm -it \
 
 Available in test.yaml via `${config.X}`:
 
-| Variable                                 | Example      |
-| ---------------------------------------- | ------------ |
-| `config.packages.cli_version`            | 1.0.0-beta.3 |
-| `config.packages.sdk_python_version`     | 1.0.0-beta.3 |
-| `config.packages.sdk_typescript_version` | 1.0.0-beta.3 |
+| Variable                                 | Example |
+| ---------------------------------------- | ------- |
+| `config.packages.cli_version`            | 1.0.0   |
+| `config.packages.sdk_python_version`     | 1.0.0   |
+| `config.packages.sdk_typescript_version` | 1.0.0   |
 
 ## Issue Reporting Policy
 

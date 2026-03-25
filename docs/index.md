@@ -20,7 +20,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
 === "Python"
 
     ```bash
-    pip install "mcp-mesh>=0.9,<1.0"
+    pip install mcp-mesh
     ```
 
     ```python
@@ -45,7 +45,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>1.0.0-beta.3</version>
+        <version>1.0.0</version>
     </dependency>
     ```
 
@@ -283,7 +283,7 @@ Return images, PDFs, and files from tools — LLMs see them natively.
 === "Python Runtime"
 
     ```bash
-    pip install "mcp-mesh>=0.9,<1.0"
+    pip install mcp-mesh
     ```
 
     Runtime for building agents with `@mesh.agent`, `@mesh.tool`, `@mesh.llm`, and `@mesh.llm_provider` decorators.
@@ -295,7 +295,7 @@ Return images, PDFs, and files from tools — LLMs see them natively.
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>1.0.0-beta.3</version>
+        <version>1.0.0</version>
     </dependency>
     ```
 
@@ -314,10 +314,10 @@ Return images, PDFs, and files from tools — LLMs see them natively.
 === "Docker Images"
 
     ```bash
-    docker pull mcpmesh/registry:0.9
-    docker pull mcpmesh/python-runtime:0.9
-    docker pull mcpmesh/java-runtime:0.9
-    docker pull mcpmesh/typescript-runtime:0.9
+    docker pull mcpmesh/registry:1.0.0
+    docker pull mcpmesh/python-runtime:1.0.0
+    docker pull mcpmesh/java-runtime:1.0.0
+    docker pull mcpmesh/typescript-runtime:1.0.0
     ```
 
     Official container images for production deployments.
@@ -343,7 +343,7 @@ Return images, PDFs, and files from tools — LLMs see them natively.
 
 ## :star: Project Status
 
-- **Latest Release**: v1.0.0-beta.3 (March 2026)
+- **Latest Release**: v1.0.0 (March 2026)
 - **License**: MIT
 - **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed

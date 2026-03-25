@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "mcp-mesh-core"
-version = "1.0.0b3"
+version = "1.0.0"
 description = "Rust core runtime for MCP Mesh agents"
 readme = "README.md"
 license = { text = "MIT" }
@@ -13,7 +13,7 @@ authors = [
     { name = "MCP Mesh Contributors", email = "noreply@mcp-mesh.dev" }
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Rust",
