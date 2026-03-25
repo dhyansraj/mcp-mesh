@@ -1,10 +1,36 @@
 # Web Framework Uploads
 
-> Save uploaded files from FastAPI, Express, and Spring Boot directly to MediaStore.
+The most common way media enters the mesh is through a user upload. Use the framework helpers to receive files and store them in MediaStore.
 
-## Overview
+## End-to-End Example
 
-When building web APIs that accept file uploads, use `save_upload()` to store files in MediaStore. This gives you a URI that can be passed to mesh tools and LLM agents.
+Upload an image via HTTP, then analyze it with an LLM:
+
+=== "Python"
+
+    ```python
+    @app.post("/analyze")
+    async def analyze_upload(file: UploadFile, question: str):
+        uri = await mesh.save_upload(file)
+        result = await call_tool("image_analyzer", {
+            "question": question,
+            "image": uri,
+        })
+        return {"analysis": result}
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    app.post("/analyze", upload.single("file"), async (req, res) => {
+      const uri = await saveUpload(req.file);
+      const result = await callTool("image_analyzer", {
+        question: req.body.question,
+        image: uri,
+      });
+      res.json({ analysis: result });
+    });
+    ```
 
 ## FastAPI (Python)
 
@@ -30,11 +56,11 @@ result = await mesh.save_upload_result(file)
 
 ### Parameters
 
-| Parameter | Type | Description |
-| --- | --- | --- |
-| `upload` | `UploadFile` | FastAPI upload object |
-| `filename` | `str \| None` | Override filename |
-| `mime_type` | `str \| None` | Override MIME type |
+| Parameter   | Type          | Description           |
+| ----------- | ------------- | --------------------- |
+| `upload`    | `UploadFile`  | FastAPI upload object |
+| `filename`  | `str \| None` | Override filename     |
+| `mime_type` | `str \| None` | Override MIME type    |
 
 ## Express (TypeScript)
 
@@ -83,35 +109,7 @@ MediaUploadResult result = MeshMedia.saveUploadResult(file, mediaStore);
 // result.uri(), result.name(), result.mimeType(), result.size()
 ```
 
-## End-to-End Example
-
-Upload an image via HTTP, then analyze it with an LLM:
-
-=== "Python"
-
-    ```python
-    @app.post("/analyze")
-    async def analyze_upload(file: UploadFile, question: str):
-        uri = await mesh.save_upload(file)
-        result = await call_tool("image_analyzer", {
-            "question": question,
-            "image": uri,
-        })
-        return {"analysis": result}
-    ```
-
-=== "TypeScript"
-
-    ```typescript
-    app.post("/analyze", upload.single("file"), async (req, res) => {
-      const uri = await saveUpload(req.file);
-      const result = await callTool("image_analyzer", {
-        question: req.body.question,
-        image: uri,
-      });
-      res.json({ analysis: result });
-    });
-    ```
+Once you have a URI from `save_upload()`, pass it to tools via `MediaParam` or directly via the `media=` parameter. See [Returning Media](returning-media.md) for the reverse direction -- producing media from tools.
 
 ## See Also
 

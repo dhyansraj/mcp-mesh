@@ -7,28 +7,28 @@ description: mTLS, trust management, and credential providers for MCP Mesh
 
 MCP Mesh provides three layers of security for production agent deployments:
 
-```
-┌─────────────────────────────────────────────────┐
-│  Layer 3: Authorization (WHO can do WHAT)        │
-│  Header propagation + application-layer auth     │
-├─────────────────────────────────────────────────┤
-│  Layer 2: Agent-to-Agent mTLS                    │
-│  Every inter-agent call is mutually authenticated│
-├─────────────────────────────────────────────────┤
-│  Layer 1: Registration Trust                     │
-│  Identity verification before joining the mesh   │
-└─────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    L3["<b>Layer 3: Authorization</b><br/>WHO can do WHAT<br/>Header propagation + application-layer auth"]
+    L2["<b>Layer 2: Agent-to-Agent mTLS</b><br/>Every inter-agent call is mutually authenticated"]
+    L1["<b>Layer 1: Registration Trust</b><br/>Identity verification before joining the mesh"]
+
+    L3 --- L2 --- L1
+
+    style L3 fill:#7ba7cc,color:#fff,stroke:#6b97bc
+    style L2 fill:#6baa8e,color:#fff,stroke:#5b9a7e
+    style L1 fill:#cca76b,color:#fff,stroke:#bc975b
 ```
 
 Security is **opt-in** — local development works with no TLS by default. You can incrementally adopt stricter modes as you move toward production.
 
 ## TLS Modes
 
-| Mode | Description | Use Case |
-|------|-------------|----------|
-| **off** | No TLS, plain HTTP | Local development |
-| **auto** | Registry verifies certs if presented, allows without | Transitional rollout |
-| **strict** | mTLS required — registry rejects connections without valid certificates | Production |
+| Mode       | Description                                                             | Use Case             |
+| ---------- | ----------------------------------------------------------------------- | -------------------- |
+| **off**    | No TLS, plain HTTP                                                      | Local development    |
+| **auto**   | Registry verifies certs if presented, allows without                    | Transitional rollout |
+| **strict** | mTLS required — registry rejects connections without valid certificates | Production           |
 
 ## Quick Start
 
@@ -69,28 +69,28 @@ Security is **opt-in** — local development works with no TLS by default. You c
 
 <div class="grid cards" markdown>
 
--   :material-shield-lock:{ .lg .middle } **Registration Trust**
+- :material-shield-lock:{ .lg .middle } **Registration Trust**
 
-    ---
+  ***
 
-    Registry validates agent identity before accepting registration. Supports file-based certs, Vault PKI, and SPIRE workload identity.
+  Registry validates agent identity before accepting registration. Supports file-based certs, Vault PKI, and SPIRE workload identity.
 
-    [:octicons-arrow-right-24: Registration Trust](registration-trust.md)
+  [:octicons-arrow-right-24: Registration Trust](registration-trust.md)
 
--   :material-lock:{ .lg .middle } **Agent-to-Agent mTLS**
+- :material-lock:{ .lg .middle } **Agent-to-Agent mTLS**
 
-    ---
+  ***
 
-    Every inter-agent call is mutually authenticated with TLS certificates. Works across Python, TypeScript, Java, and Go.
+  Every inter-agent call is mutually authenticated with TLS certificates. Works across Python, TypeScript, Java, and Go.
 
-    [:octicons-arrow-right-24: Agent-to-Agent mTLS](agent-to-agent-mtls.md)
+  [:octicons-arrow-right-24: Agent-to-Agent mTLS](agent-to-agent-mtls.md)
 
--   :material-key:{ .lg .middle } **Authorization**
+- :material-key:{ .lg .middle } **Authorization**
 
-    ---
+  ***
 
-    Control which agents and users can access capabilities using header propagation and application-layer auth frameworks.
+  Control which agents and users can access capabilities using header propagation and application-layer auth frameworks.
 
-    [:octicons-arrow-right-24: Authorization](authorization.md)
+  [:octicons-arrow-right-24: Authorization](authorization.md)
 
 </div>

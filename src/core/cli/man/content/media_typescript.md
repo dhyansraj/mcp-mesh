@@ -1,10 +1,7 @@
 # Media Storage (TypeScript)
 
 > Store, retrieve, and return binary media from mesh tools
-
-## Overview
-
-MCP Mesh includes a pluggable media storage system for tools that produce or consume binary content — images, PDFs, audio, documents. Media is stored in a configurable backend (local filesystem or S3) and referenced via URIs. Tools return media as MCP `resource_link` objects that LLMs can resolve.
+> Full guide: https://mcp-mesh.ai/multimodal/
 
 ## Storage Backends
 
@@ -25,8 +22,6 @@ export MCP_MESH_MEDIA_STORAGE_ENDPOINT=http://localhost:9000
 export MCP_MESH_MEDIA_STORAGE_PREFIX=media/
 ```
 
-Lazy-loads `@aws-sdk/client-s3` — only needed when S3 backend is configured.
-
 ## Environment Variables
 
 | Variable                          | Default               | Description                |
@@ -41,9 +36,7 @@ Lazy-loads `@aws-sdk/client-s3` — only needed when S3 backend is configured.
 
 ```typescript
 import { uploadMedia } from "@mcpmesh/sdk";
-
 const uri = await uploadMedia(pngBuffer, "chart.png", "image/png");
-// Returns: "file:///tmp/mcp-mesh-media/media/chart.png"
 ```
 
 | Parameter  | Type     | Description                 |
@@ -59,24 +52,14 @@ Returns: URI string.
 ### mediaResult() — URI to ResourceLink
 
 ```typescript
-import { mediaResult, uploadMedia } from "@mcpmesh/sdk";
-
-agent.addTool({
-  name: "generate_chart",
-  capability: "chart_gen",
-  parameters: z.object({ query: z.string() }),
-  execute: async ({ query }) => {
-    const pngBuffer = renderChart(query);
-    const uri = await uploadMedia(pngBuffer, "chart.png", "image/png");
-    return mediaResult(
-      uri,
-      "Sales Chart",
-      "image/png",
-      "Q3 revenue",
-      pngBuffer.length,
-    );
-  },
-});
+const uri = await uploadMedia(pngBuffer, "chart.png", "image/png");
+return mediaResult(
+  uri,
+  "Sales Chart",
+  "image/png",
+  "Q3 revenue",
+  pngBuffer.length,
+);
 ```
 
 | Parameter     | Type      | Description          |
@@ -93,53 +76,26 @@ Returns: MCP `ResourceLink`.
 
 ```typescript
 import { createMediaResult } from "@mcpmesh/sdk";
-
 const link = await createMediaResult(
   pngBuffer,
   "chart.png",
   "image/png",
   "Sales Chart",
-  "Q3 chart",
 );
-```
-
-Or use the class form:
-
-```typescript
-import { MediaResult } from "@mcpmesh/sdk";
-
-const result = new MediaResult(
-  pngBuffer,
-  "chart.png",
-  "image/png",
-  "Sales Chart",
-);
-const link = await result.toResourceLink();
 ```
 
 ## Web Framework Helpers
 
 ### saveUpload() — Express/Multer File Upload
 
-Compatible with multer's file format:
-
 ```typescript
 import { saveUpload } from "@mcpmesh/sdk";
-import multer from "multer";
-
-const upload = multer({ storage: multer.memoryStorage() });
-
-app.post("/upload", upload.single("file"), async (req, res) => {
-  const uri = await saveUpload(req.file);
-  res.json({ uri });
-});
+const uri = await saveUpload(req.file); // multer file object
 ```
 
 ### saveUploadResult() — Full Metadata
 
 ```typescript
-import { saveUploadResult } from "@mcpmesh/sdk";
-
 const result = await saveUploadResult(req.file);
 // result.uri, result.name, result.mimeType, result.size
 ```

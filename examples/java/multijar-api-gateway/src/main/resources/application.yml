@@ -1,0 +1,15 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: multijar-api-gateway
+
+mesh:
+  registry:
+    url: http://localhost:8000
+
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG
