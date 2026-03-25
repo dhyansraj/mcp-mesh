@@ -1,0 +1,15 @@
+server:
+  port: 9010
+
+spring:
+  application:
+    name: multijar-payment-service
+
+mcp:
+  mesh:
+    registry-url: http://localhost:8000
+
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG
