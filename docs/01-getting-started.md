@@ -15,7 +15,7 @@ MCP Mesh is a **distributed service mesh framework** that enhances FastMCP with 
 - 💉 **Smart dependency injection**: Use remote functions with type safety (`mesh.McpMeshTool`)
 - 🏷️ **Tag-based resolution**: Smart capability matching using tags and metadata
 - 🚀 **Zero boilerplate**: Mesh discovers your FastMCP `app` and handles everything
-- 📦 **Production ready**: Go registry + Python agents + Kubernetes support
+- 📦 **Production ready**: Go registry + MCP agents (Python, TypeScript, Java) + Kubernetes support
 
 ## The Simplest Example
 
