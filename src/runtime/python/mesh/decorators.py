@@ -139,7 +139,10 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                     if full_body:
                         try:
                             payload = json_module.loads(full_body.decode("utf-8"))
-                            if isinstance(payload, dict) and payload.get("method") == "tools/call":
+                            if (
+                                isinstance(payload, dict)
+                                and payload.get("method") == "tools/call"
+                            ):
                                 arguments = payload.get("params", {}).get(
                                     "arguments", {}
                                 )
@@ -156,9 +159,7 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                                         changed = True
 
                                     # Strip and capture _mesh_headers from arguments
-                                    mesh_headers = arguments.pop(
-                                        "_mesh_headers", None
-                                    )
+                                    mesh_headers = arguments.pop("_mesh_headers", None)
                                     if mesh_headers is not None:
                                         changed = True
                                         if isinstance(mesh_headers, dict):
@@ -177,9 +178,7 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                                                         k.lower(): v
                                                         for k, v in mesh_headers.items()
                                                         if isinstance(v, str)
-                                                        and matches_propagate_header(
-                                                            k
-                                                        )
+                                                        and matches_propagate_header(k)
                                                     }
                                                     if filtered:
                                                         # Merge with HTTP-captured headers (HTTP takes precedence)
@@ -1462,9 +1461,9 @@ def llm(
             model="claude-3-5-sonnet-20241022"
         )
         @mesh.tool(capability="chat")
-        def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
+        async def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             llm.set_system_prompt("You are a helpful assistant.")
-            return llm(message)
+            return await llm(message)
 
     Args:
         filter: Tool filter (string, dict, or list of mixed)
