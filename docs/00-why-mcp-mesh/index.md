@@ -193,6 +193,87 @@ MCP Mesh doesn't replace your agent logic - it handles the infrastructure so you
 
 ---
 
+## 15 Requirements, 14 Lines of Code
+
+Here's a real-world agent spec: a portfolio analyzer that needs provider failover, multi-tool discovery, structured output, context-aware prompts, and mesh registration. That's 15 requirements — and each one maps to a single line or decorator parameter.
+
+### The Requirements
+
+| #   | Requirement                               | MCP Mesh Feature                       |
+| --- | ----------------------------------------- | -------------------------------------- |
+| 1   | Portfolio analysis agent with LLM         | `@mesh.llm` decorator                  |
+| 2   | Claude Sonnet as primary provider         | `model` parameter                      |
+| 3   | Fall back to Gemini if Claude unavailable | Tag-based provider failover            |
+| 4   | Fall back to any available LLM            | Automatic mesh resolution              |
+| 5   | Deterministic provider selection by score | Scored tag matching                    |
+| 6   | Access to financial analysis tools        | `dependencies` parameter               |
+| 7   | Access to data retrieval tools            | `dependencies` parameter               |
+| 8   | Auto-discover new tools at runtime        | DDDI — automatic                       |
+| 9   | System prompt from file                   | `system_prompt="file://..."`           |
+| 10  | Context-aware dynamic rendering           | Jinja2 template with `context_param`   |
+| 11  | Accept user query as input                | Function parameter                     |
+| 12  | Accept analysis context object            | Function parameter                     |
+| 13  | Structured `PortfolioAnalysis` output     | `output_type` with Pydantic/Zod/record |
+| 14  | Register capability for other agents      | `capability` parameter                 |
+| 15  | Handle provider failures gracefully       | Built-in failover + error handling     |
+
+### The Implementation
+
+=== "Python"
+
+    ```python
+    @mesh.llm(
+        model="anthropic/claude-sonnet-4-5",
+        provider={"capability": "llm", "tags": ["+anthropic", "+sonnet"]},
+        filter=[{"tags": ["+financial"]}, {"tags": ["+data"]}],
+        system_prompt="file://prompts/analyst.jinja2",
+        context_param="ctx",
+        max_iterations=5,
+    )
+    @mesh.tool(capability="analyze_portfolio")
+    async def analyze(
+        query: str, ctx: AnalysisContext, llm: mesh.MeshLlmAgent = None
+    ) -> PortfolioAnalysis:
+        return await llm(query)
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    agent.addLlmTool({
+      name: "analyze",
+      model: "anthropic/claude-sonnet-4-5",
+      provider: { capability: "llm", tags: ["+anthropic", "+sonnet"] },
+      filter: [{ tags: ["+financial"] }, { tags: ["+data"] }],
+      systemPrompt: "file://prompts/analyst.jinja2",
+      contextParam: "ctx",
+      maxIterations: 5,
+      capability: "analyze_portfolio",
+      returns: PortfolioAnalysisSchema,
+      execute: async ({ query, ctx }, { llm }) => {
+        return await llm(query);
+      },
+    });
+    ```
+
+=== "Java"
+
+    ```java
+    @MeshLlm(
+        providerSelector = @Selector(capability = "llm", tags = {"+anthropic", "+sonnet"}),
+        filter = @Selector(tags = {"+financial", "+data"}),
+        systemPrompt = "classpath:prompts/analyst.ftl",
+    )
+    @MeshTool(capability = "analyze_portfolio")
+    public PortfolioAnalysis analyze(String query, MeshLlmAgent llm) {
+        return llm.request().user(query).generate(PortfolioAnalysis.class);
+    }
+    ```
+
+Every requirement is handled — provider failover, tool discovery, structured output, context rendering, mesh registration. No HTTP clients, no retry logic, no service discovery code, no serialization boilerplate. The mesh does it all.
+
+---
+
 ## Next Steps
 
 Ready to build your first agent?
