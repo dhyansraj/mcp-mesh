@@ -140,8 +140,16 @@ Grafana dashboards, distributed tracing with Tempo, and Redis-backed session man
 Graceful failure handling, auto-reconnection, RBAC support, and real-time monitoring.
 </div>
 <div class="feature-card" markdown>
+### :globe_with_meridians: Multi-Language Agents
+Write agents in Python, TypeScript, or Java — they discover and call each other natively across the mesh via a shared Rust FFI core.
+</div>
+<div class="feature-card" markdown>
+### :brain: Multi-Provider LLM Support
+First-class support for Claude, GPT, and Gemini with agentic tool execution, structured output, and auto-resolution. Any provider supported by LiteLLM, Vercel AI SDK, or Spring AI works out of the box.
+</div>
+<div class="feature-card" markdown>
 ### :camera: Multimodal Support
-Return images, PDFs, and files from tools — LLMs see them natively. [Learn more →](multimodal/getting-started.md)
+Return images, PDFs, and files from tools — LLMs see them natively.
 </div>
 </div>
 
