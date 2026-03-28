@@ -149,7 +149,7 @@ First-class support for Claude, GPT, and Gemini with agentic tool execution, str
 </div>
 <div class="feature-card" markdown>
 ### :camera: Multimodal Support
-Return images, PDFs, and files from tools — LLMs see them natively.
+Pass images, PDFs, and files between agents and LLMs. Claude, OpenAI, and Gemini each require different API structures for media — the mesh abstracts that away.
 </div>
 </div>
 

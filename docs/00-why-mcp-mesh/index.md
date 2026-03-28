@@ -199,23 +199,23 @@ Here's a real-world agent spec: a portfolio analyzer that needs provider failove
 
 ### The Requirements
 
-| #   | Requirement                               | MCP Mesh Feature                       |
-| --- | ----------------------------------------- | -------------------------------------- |
-| 1   | Portfolio analysis agent with LLM         | `@mesh.llm` decorator                  |
-| 2   | Claude Sonnet as primary provider         | `model` parameter                      |
-| 3   | Fall back to Gemini if Claude unavailable | Tag-based provider failover            |
-| 4   | Fall back to any available LLM            | Automatic mesh resolution              |
-| 5   | Deterministic provider selection by score | Scored tag matching                    |
-| 6   | Access to financial analysis tools        | `dependencies` parameter               |
-| 7   | Access to data retrieval tools            | `dependencies` parameter               |
-| 8   | Auto-discover new tools at runtime        | DDDI — automatic                       |
-| 9   | System prompt from file                   | `system_prompt="file://..."`           |
-| 10  | Context-aware dynamic rendering           | Jinja2 template with `context_param`   |
-| 11  | Accept user query as input                | Function parameter                     |
-| 12  | Accept analysis context object            | Function parameter                     |
-| 13  | Structured `PortfolioAnalysis` output     | `output_type` with Pydantic/Zod/record |
-| 14  | Register capability for other agents      | `capability` parameter                 |
-| 15  | Handle provider failures gracefully       | Built-in failover + error handling     |
+| #   | Requirement                               | MCP Mesh Feature                         |
+| --- | ----------------------------------------- | ---------------------------------------- |
+| 1   | Portfolio analysis agent with LLM         | `@mesh.llm` decorator                    |
+| 2   | Claude as primary provider                | Provider tags with higher score          |
+| 3   | Fall back to Gemini if Claude unavailable | Provider tags with lower score           |
+| 4   | Fall back to any available LLM            | Automatic mesh resolution                |
+| 5   | Deterministic provider selection          | Scored tag matching (more tags = higher) |
+| 6   | Access to financial analysis tools        | Tool filter by tag                       |
+| 7   | Access to data retrieval tools            | Tool filter by tag                       |
+| 8   | Auto-discover new tools at runtime        | DDDI — automatic                         |
+| 9   | System prompt from file                   | `system_prompt="file://..."`             |
+| 10  | Context-aware dynamic rendering           | Jinja2 template with `context_param`     |
+| 11  | Accept user query as input                | Function parameter                       |
+| 12  | Accept analysis context object            | Function parameter                       |
+| 13  | Structured `PortfolioAnalysis` output     | `output_type` with Pydantic/Zod/record   |
+| 14  | Register capability for other agents      | `capability` parameter                   |
+| 15  | Handle provider failures gracefully       | Built-in failover + error handling       |
 
 ### The Implementation
 
@@ -223,9 +223,11 @@ Here's a real-world agent spec: a portfolio analyzer that needs provider failove
 
     ```python
     @mesh.llm(
-        model="anthropic/claude-sonnet-4-5",
-        provider={"capability": "llm", "tags": ["+anthropic", "+sonnet"]},
-        filter=[{"tags": ["+financial"]}, {"tags": ["+data"]}],
+        provider={"capability": "llm", "tags": [
+            ["+anthropic", "+sonnet"],  # Primary (score 2)
+            ["+gemini"],                # Secondary (score 1)
+        ]},
+        filter=[{"tags": ["financial"]}, {"tags": ["data"]}],
         system_prompt="file://prompts/analyst.jinja2",
         context_param="ctx",
         max_iterations=5,
@@ -242,9 +244,11 @@ Here's a real-world agent spec: a portfolio analyzer that needs provider failove
     ```typescript
     agent.addLlmTool({
       name: "analyze",
-      model: "anthropic/claude-sonnet-4-5",
-      provider: { capability: "llm", tags: ["+anthropic", "+sonnet"] },
-      filter: [{ tags: ["+financial"] }, { tags: ["+data"] }],
+      provider: { capability: "llm", tags: [
+        ["+anthropic", "+sonnet"],  // Primary (score 2)
+        ["+gemini"],                // Secondary (score 1)
+      ]},
+      filter: [{ tags: ["financial"] }, { tags: ["data"] }],
       systemPrompt: "file://prompts/analyst.jinja2",
       contextParam: "ctx",
       maxIterations: 5,
@@ -260,8 +264,14 @@ Here's a real-world agent spec: a portfolio analyzer that needs provider failove
 
     ```java
     @MeshLlm(
-        providerSelector = @Selector(capability = "llm", tags = {"+anthropic", "+sonnet"}),
-        filter = @Selector(tags = {"+financial", "+data"}),
+        providerSelector = @Selector(
+            capability = "llm",
+            filter = {
+                @Tags({"+anthropic", "+sonnet"}),  // Primary (score 2)
+                @Tags({"+gemini"})                 // Secondary (score 1)
+            }
+        ),
+        filter = @Selector(tags = {"financial", "data"}),
         systemPrompt = "classpath:prompts/analyst.ftl",
     )
     @MeshTool(capability = "analyze_portfolio")
@@ -270,7 +280,7 @@ Here's a real-world agent spec: a portfolio analyzer that needs provider failove
     }
     ```
 
-Every requirement is handled — provider failover, tool discovery, structured output, context rendering, mesh registration. No HTTP clients, no retry logic, no service discovery code, no serialization boilerplate. The mesh does it all.
+Every requirement is handled. The provider selector has two tag groups — Claude matches both `+anthropic` and `+sonnet` (score 2), while Gemini matches only `+gemini` (score 1). The mesh deterministically selects the highest-scoring provider and falls back automatically. Filter tags (`financial`, `data`) are hard requirements — only tools with those capabilities are wired in. No HTTP clients, no retry logic, no service discovery code. The mesh does it all.
 
 ---
 

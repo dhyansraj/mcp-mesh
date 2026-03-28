@@ -155,6 +155,8 @@ nav:
 
   - Why MCP Mesh?: 00-why-mcp-mesh/index.md
 
+  - From Dev to Production: dev-to-production.md
+
   # Python SDK - Generated from meshctl man pages
   - Python SDK:
       - python/index.md
