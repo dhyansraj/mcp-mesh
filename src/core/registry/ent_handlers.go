@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -735,9 +736,18 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		proxyReq.Header.Set("X-Parent-Span", parentSpan)
 	}
 
-	// Execute the request
+	// Respect client timeout if provided via X-Mesh-Timeout header (#656)
+	proxyTimeout := 60 * time.Second
+	if timeoutHeader := c.Request.Header.Get("X-Mesh-Timeout"); timeoutHeader != "" {
+		if secs, err := strconv.Atoi(timeoutHeader); err == nil && secs > 0 {
+			if secs > 600 {
+				secs = 600 // Cap at 10 minutes
+			}
+			proxyTimeout = time.Duration(secs) * time.Second
+		}
+	}
 	client := &http.Client{
-		Timeout: 60 * time.Second, // Reasonable timeout for MCP calls
+		Timeout: proxyTimeout,
 	}
 
 	// Configure TLS transport for HTTPS targets (mTLS proxy support).
