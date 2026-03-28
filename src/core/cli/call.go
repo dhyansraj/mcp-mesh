@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -246,9 +247,9 @@ func runCallCommand(cmd *cobra.Command, args []string) error {
 	var callResult *MCPCallResult
 	if ingressDomain != "" && agentURL == "" {
 		// Ingress mode: need Host header
-		callResult, err = callMCPToolWithHost(httpClient, agentEndpoint, agentHostHeader, toolName, toolArgs, traceCtx)
+		callResult, err = callMCPToolWithHost(httpClient, agentEndpoint, agentHostHeader, toolName, toolArgs, traceCtx, timeout)
 	} else {
-		callResult, err = callMCPTool(httpClient, agentEndpoint, toolName, toolArgs, traceCtx)
+		callResult, err = callMCPTool(httpClient, agentEndpoint, toolName, toolArgs, traceCtx, timeout)
 	}
 	if err != nil {
 		return fmt.Errorf("MCP call failed: %w", err)
@@ -517,7 +518,7 @@ func isIPAddress(s string) bool {
 }
 
 // callMCPToolWithHost makes an MCP tools/call request with a custom Host header (for ingress)
-func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName string, args map[string]interface{}, traceCtx *TraceContext) (*MCPCallResult, error) {
+func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName string, args map[string]interface{}, traceCtx *TraceContext, timeout int) (*MCPCallResult, error) {
 	// Inject trace context into arguments (for agents that can't access HTTP headers)
 	// This is in addition to HTTP headers for maximum compatibility
 	argsWithTrace := args
@@ -554,6 +555,11 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+
+	// Propagate timeout to registry proxy (#656)
+	if timeout > 0 {
+		req.Header.Set("X-Mesh-Timeout", strconv.Itoa(timeout))
+	}
 
 	// Inject trace headers if tracing is enabled (Issue #310)
 	if traceCtx != nil {
@@ -623,7 +629,7 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 }
 
 // callMCPTool makes an MCP tools/call request to the agent
-func callMCPTool(client *http.Client, endpoint, toolName string, args map[string]interface{}, traceCtx *TraceContext) (*MCPCallResult, error) {
+func callMCPTool(client *http.Client, endpoint, toolName string, args map[string]interface{}, traceCtx *TraceContext, timeout int) (*MCPCallResult, error) {
 	// Inject trace context into arguments (for agents that can't access HTTP headers)
 	// This is in addition to HTTP headers for maximum compatibility
 	argsWithTrace := args
@@ -660,6 +666,11 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+
+	// Propagate timeout to registry proxy (#656)
+	if timeout > 0 {
+		req.Header.Set("X-Mesh-Timeout", strconv.Itoa(timeout))
+	}
 
 	// Inject trace headers if tracing is enabled (Issue #310)
 	if traceCtx != nil {

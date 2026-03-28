@@ -63,7 +63,7 @@ You write the agent logic. The mesh discovers, connects, heals, and traces — a
 ```python
 # MCP Agent
 @app.tool()
-@mesh.tool(dependencies=["weather_service"])
+@mesh.tool(capability="plan_trip", dependencies=["weather_service"])
 def plan_trip(weather_service=None):
     # Just write business logic - mesh handles the rest
 
@@ -178,21 +178,21 @@ async def create_trip(trip_data: dict, plan_trip=None):
 
 ## MCP Mesh vs Other AI Agent Frameworks
 
-| Feature                                      | Other Frameworks  | MCP Mesh               |
-| -------------------------------------------- | ----------------- | ---------------------- |
-| **Zero-config Dependency Injection**         | ❌                | ✅                     |
-| **Dynamic Agent Discovery & Hot Join/Leave** | ❌                | ✅                     |
+| Feature                                      | Other Frameworks  | MCP Mesh                      |
+| -------------------------------------------- | ----------------- | ----------------------------- |
+| **Zero-config Dependency Injection**         | ❌                | ✅                            |
+| **Dynamic Agent Discovery & Hot Join/Leave** | ❌                | ✅                            |
 | **Cross-language Support**                   | ❌                | ✅ Python + Java + TypeScript |
-| **Same Code: Local → Docker → K8s**          | ❌ Rewrite needed | ✅                     |
-| **Developer CLI (scaffold, trace, status)**  | ❌                | ✅ `meshctl`           |
-| **Kubernetes-native (Helm)**                 | ❌ DIY            | ✅                     |
-| **Distributed Tracing (OpenTelemetry)**      | ❌ DIY            | ✅ Grafana/Tempo       |
-| **Auto-failover & Graceful Degradation**     | ❌                | ✅                     |
-| **LLM as Dependency (Discovery + Failover)** | ❌                | ✅                     |
-| **Zero-config Testing (Topology Mocking)**   | ❌                | ✅                     |
-| **Standard Protocol**                        | ❌ Custom         | ✅ MCP                 |
-| **Framework Lock-in**                        | High (classes)    | Low (decorators)       |
-| **Lines of Code per Agent**                  | ~50+              | ~10                    |
+| **Same Code: Local → Docker → K8s**          | ❌ Rewrite needed | ✅                            |
+| **Developer CLI (scaffold, trace, status)**  | ❌                | ✅ `meshctl`                  |
+| **Kubernetes-native (Helm)**                 | ❌ DIY            | ✅                            |
+| **Distributed Tracing (OpenTelemetry)**      | ❌ DIY            | ✅ Grafana/Tempo              |
+| **Auto-failover & Graceful Degradation**     | ❌                | ✅                            |
+| **LLM as Dependency (Discovery + Failover)** | ❌                | ✅                            |
+| **Zero-config Testing (Topology Mocking)**   | ❌                | ✅                            |
+| **Standard Protocol**                        | ❌ Custom         | ✅ MCP                        |
+| **Framework Lock-in**                        | High (classes)    | Low (decorators)              |
+| **Lines of Code per Agent**                  | ~50+              | ~10                           |
 
 **[See full comparison →](https://mcp-mesh.ai/comparison/)**
 

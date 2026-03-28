@@ -23,7 +23,7 @@ python3.11 -m venv .venv
 source .venv/bin/activate
 
 # Install MCP Mesh SDK
-pip install "mcp-mesh>=0.8,<0.9"
+pip install mcp-mesh
 ```
 
 ## 1. Start the Registry

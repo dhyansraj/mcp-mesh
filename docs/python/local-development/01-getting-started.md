@@ -42,7 +42,7 @@ source .venv/bin/activate         # macOS/Linux
 
 # Install SDK
 pip install --upgrade pip
-pip install "mcp-mesh>=0.8,<0.9"
+pip install mcp-mesh
 
 # Verify
 python -c "import mesh; print('Ready!')"

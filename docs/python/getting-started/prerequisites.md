@@ -57,7 +57,7 @@ pip install --upgrade pip
 ### MCP Mesh SDK
 
 ```bash
-pip install "mcp-mesh>=0.8,<0.9"
+pip install mcp-mesh
 
 # Verify
 python -c "import mesh; print('Ready!')"
@@ -70,7 +70,7 @@ python -c "import mesh; print('Ready!')"
 python3.11 -m venv .venv
 source .venv/bin/activate    # Only needed for pip
 pip install --upgrade pip
-pip install "mcp-mesh>=0.8,<0.9"
+pip install mcp-mesh
 deactivate                   # Can deactivate after pip install
 
 # 2. Scaffold agents - meshctl auto-detects .venv (no activation needed)

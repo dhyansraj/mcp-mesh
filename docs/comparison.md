@@ -1,8 +1,8 @@
 # Feature Comparison
 
-> **MCP Mesh vs LangChain, AutoGen, and CrewAI**
+> **MCP Mesh vs Agent Frameworks and Cloud Platforms**
 
-How does MCP Mesh compare to other popular AI agent frameworks? This detailed comparison covers development, deployment, observability, and enterprise features.
+How does MCP Mesh compare to agent frameworks (LangChain, AutoGen, CrewAI) and managed cloud agent services (AWS Bedrock, Google Vertex AI, Azure AI)? This comparison covers development, deployment, security, observability, and enterprise features.
 
 ---
 
@@ -22,17 +22,17 @@ How does MCP Mesh compare to other popular AI agent frameworks? This detailed co
 
 ## Build
 
-| Feature                          | LangChain        | AutoGen          | CrewAI           | MCP Mesh                                 |
-| -------------------------------- | ---------------- | ---------------- | ---------------- | ---------------------------------------- |
-| Zero-config Dependency Injection | :x:              | :x:              | :x:              | :white_check_mark:                       |
-| Distributed Dynamic DI ([DDDI](concepts/dddi.md)) | :x:              | :x:              | :x:              | :white_check_mark:                       |
-| Capability-based discovery       | :x:              | :x:              | :x:              | :white_check_mark:                       |
-| Tag-based filtering              | :x:              | :x:              | :x:              | :white_check_mark:                       |
-| Cross-language support           | :x:              | :x:              | :x:              | :white_check_mark: Python + Java + TypeScript |
-| Same code local/Docker/K8s       | :x:              | :x:              | :x:              | :white_check_mark:                       |
-| Monolith mode (single process)   | :x:              | :x:              | :x:              | :white_check_mark:                       |
-| Distributed mode                 | :warning: DIY    | :warning: DIY    | :warning: DIY    | :white_check_mark: Auto                  |
-| Structured output                | :warning: Manual | :warning: Manual | :warning: Manual | :white_check_mark: Native (Pydantic/Zod) |
+| Feature                                           | LangChain        | AutoGen          | CrewAI           | MCP Mesh                                      |
+| ------------------------------------------------- | ---------------- | ---------------- | ---------------- | --------------------------------------------- |
+| Zero-config Dependency Injection                  | :x:              | :x:              | :x:              | :white_check_mark:                            |
+| Distributed Dynamic DI ([DDDI](concepts/dddi.md)) | :x:              | :x:              | :x:              | :white_check_mark:                            |
+| Capability-based discovery                        | :x:              | :x:              | :x:              | :white_check_mark:                            |
+| Tag-based filtering                               | :x:              | :x:              | :x:              | :white_check_mark:                            |
+| Cross-language support                            | :x:              | :x:              | :x:              | :white_check_mark: Python + Java + TypeScript |
+| Same code local/Docker/K8s                        | :x:              | :x:              | :x:              | :white_check_mark:                            |
+| Monolith mode (single process)                    | :x:              | :x:              | :x:              | :white_check_mark:                            |
+| Distributed mode                                  | :warning: DIY    | :warning: DIY    | :warning: DIY    | :white_check_mark: Auto                       |
+| Structured output                                 | :warning: Manual | :warning: Manual | :warning: Manual | :white_check_mark: Native (Pydantic/Zod)      |
 
 ---
 
@@ -114,6 +114,20 @@ How does MCP Mesh compare to other popular AI agent frameworks? This detailed co
 
 ---
 
+## Security
+
+| Feature                     | LangChain | AutoGen | CrewAI | MCP Mesh                                       |
+| --------------------------- | --------- | ------- | ------ | ---------------------------------------------- |
+| Registration trust          | :x:       | :x:     | :x:    | :white_check_mark: X.509 identity verification |
+| Agent-to-agent mTLS         | :x:       | :x:     | :x:    | :white_check_mark: Every call authenticated    |
+| Fine-grained authorization  | :x:       | :x:     | :x:    | :white_check_mark: Header propagation          |
+| Zero-config TLS (dev)       | :x:       | :x:     | :x:    | :white_check_mark: `--tls-auto`                |
+| Vault integration           | :x:       | :x:     | :x:    | :white_check_mark: PKI provider                |
+| SPIRE / workload identity   | :x:       | :x:     | :x:    | :white_check_mark: X.509-SVID                  |
+| Cert rotation via heartbeat | :x:       | :x:     | :x:    | :white_check_mark: Auto                        |
+
+---
+
 ## Architecture
 
 | Feature                       | LangChain     | AutoGen       | CrewAI        | MCP Mesh                      |
@@ -144,6 +158,31 @@ How does MCP Mesh compare to other popular AI agent frameworks? This detailed co
 | Enterprise observability | :x:          | :x:          | :x:          | :white_check_mark:                       |
 | Team development         | :x: Blocking | :x: Blocking | :x: Blocking | :white_check_mark: Non-blocking          |
 | Multi-team support       | :x:          | :x:          | :x:          | :white_check_mark: Capability boundaries |
+
+---
+
+## vs Cloud Agent Platforms
+
+How MCP Mesh compares to managed cloud agent services — AWS Bedrock Agents, Google Vertex AI Agent Builder, and Azure AI Agent Service.
+
+| Feature                            | Bedrock Agents              | Vertex AI Agent Builder     | Azure AI Agent Service      | MCP Mesh                                        |
+| ---------------------------------- | --------------------------- | --------------------------- | --------------------------- | ----------------------------------------------- |
+| **Run anywhere**                   | :x: AWS only                | :x: GCP only                | :x: Azure only              | :white_check_mark: Any infra                    |
+| **Self-hosted**                    | :x:                         | :x:                         | :x:                         | :white_check_mark: Your data stays yours        |
+| **Multi-language agents**          | :x: Python only             | :x: Python only             | :x: Python only             | :white_check_mark: Python + TypeScript + Java   |
+| **Multi-LLM provider**             | :x: AWS models              | :x: Google models           | :x: Azure models            | :white_check_mark: Claude + GPT + Gemini + any  |
+| **Switch LLM without code change** | :x:                         | :x:                         | :x:                         | :white_check_mark: Tag-based provider selection |
+| **Agent-to-agent communication**   | :x: Limited                 | :x: Limited                 | :x: Limited                 | :white_check_mark: Native mTLS mesh             |
+| **Dynamic agent discovery**        | :x:                         | :x:                         | :x:                         | :white_check_mark: DDDI                         |
+| **Open protocol**                  | :x: Proprietary API         | :x: Proprietary API         | :x: Proprietary API         | :white_check_mark: MCP (open standard)          |
+| **Own your security**              | :x: Their IAM               | :x: Their IAM               | :x: Their IAM               | :white_check_mark: Your PKI, Vault, SPIRE       |
+| **Own your observability**         | :x: CloudWatch              | :x: Cloud Monitoring        | :x: App Insights            | :white_check_mark: Your Grafana, your Tempo     |
+| **Cost model**                     | Per-invocation              | Per-invocation              | Per-invocation              | :white_check_mark: Open source, free            |
+| **Kubernetes native**              | :x:                         | :x:                         | :x:                         | :white_check_mark: Helm charts, HPA             |
+| **Structured output**              | :warning: Limited           | :warning: Limited           | :warning: Limited           | :white_check_mark: Native (Pydantic/Zod/record) |
+| **Multimodal**                     | :warning: Provider-specific | :warning: Provider-specific | :warning: Provider-specific | :white_check_mark: Unified across providers     |
+
+Cloud platforms give you a managed environment — but lock you into one vendor's LLMs, one cloud, and their pricing model. MCP Mesh gives you the same capabilities with full control over where it runs, which LLMs it uses, and how it scales.
 
 ---
 

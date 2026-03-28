@@ -137,7 +137,7 @@ meshctl list --tools=my_tool_name
 pip show mcp-mesh
 
 # Reinstall if needed
-pip install --force-reinstall "mcp-mesh>=0.8,<0.9"
+pip install --force-reinstall mcp-mesh
 
 # Check Python path
 python -c "import mesh; print(mesh.__file__)"

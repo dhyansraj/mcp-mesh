@@ -37,8 +37,8 @@ export OPENAI_API_KEY=sk-...
     capability="smart_assistant",
     description="LLM-powered assistant",
 )
-def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
-    return llm("Help the user with their request")
+async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
+    return await llm("Help the user with their request")
 ```
 
 ## Parameters
@@ -68,12 +68,12 @@ Pass any LiteLLM parameter in the decorator as defaults:
     temperature=0.7,
     top_p=0.9,
 )
-def assist(ctx, llm = None):
+async def assist(ctx, llm = None):
     # Uses decorator defaults
-    return llm("Help the user")
+    return await llm("Help the user")
 
     # Override at call time
-    return llm("Help", max_tokens=8000)
+    return await llm("Help", max_tokens=8000)
 ```
 
 Call-time parameters take precedence over decorator defaults.
@@ -114,8 +114,8 @@ Override provider's default model at the consumer:
     provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-haiku",  # Override provider default
 )
-def fast_assist(ctx, llm = None):
-    return llm("Quick response needed")
+async def fast_assist(ctx, llm = None):
+    return await llm("Quick response needed")
 ```
 
 Vendor mismatch (e.g., requesting OpenAI model from Claude provider) logs a warning and falls back to provider default.
@@ -204,8 +204,8 @@ class AssistContext(BaseModel):
     preferences: dict = Field(default_factory=dict)
 
 @mesh.llm(context_param="ctx", ...)
-def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
-    return llm(f"Help with: {ctx.input_text}")
+async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
+    return await llm(f"Help with: {ctx.input_text}")
 ```
 
 ## Response Formats
@@ -222,8 +222,8 @@ Response format is determined by the **return type annotation** - not a decorato
 ```python
 @mesh.llm(provider={"capability": "llm"}, ...)
 @mesh.tool(capability="summarize")
-def summarize(ctx: SummaryContext, llm: mesh.MeshLlmAgent = None) -> str:
-    return llm("Summarize the input")  # Returns plain text
+async def summarize(ctx: SummaryContext, llm: mesh.MeshLlmAgent = None) -> str:
+    return await llm("Summarize the input")  # Returns plain text
 ```
 
 ### Structured JSON Response
@@ -236,8 +236,8 @@ class AssistResponse(BaseModel):
 
 @mesh.llm(provider={"capability": "llm"}, ...)
 @mesh.tool(capability="smart_assistant")
-def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
-    return llm("Analyze and respond")  # Returns validated Pydantic object
+async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
+    return await llm("Analyze and respond")  # Returns validated Pydantic object
 ```
 
 ## Agentic Loops
@@ -249,8 +249,8 @@ Set `max_iterations` for multi-step reasoning:
     max_iterations=10,  # Allow up to 10 tool calls
     filter=[{"tags": ["tools"]}],
 )
-def complex_task(ctx: TaskContext, llm: mesh.MeshLlmAgent = None):
-    return llm("Complete this multi-step task")
+async def complex_task(ctx: TaskContext, llm: mesh.MeshLlmAgent = None):
+    return await llm("Complete this multi-step task")
 ```
 
 The LLM will:
@@ -269,18 +269,18 @@ Pass additional context at call time to merge with or override auto-populated co
     system_prompt="file://prompts/assistant.jinja2",
     context_param="ctx",
 )
-def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
+async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
     # Default: uses ctx from context_param
-    return llm("Help the user")
+    return await llm("Help the user")
 
     # Add extra context (runtime wins on conflicts)
-    return llm("Help", context={"extra_info": "value"})
+    return await llm("Help", context={"extra_info": "value"})
 
     # Auto context wins on conflicts
-    return llm("Help", context={"extra": "value"}, context_mode="prepend")
+    return await llm("Help", context={"extra": "value"}, context_mode="prepend")
 
     # Replace context entirely
-    return llm("Help", context={"only": "this"}, context_mode="replace")
+    return await llm("Help", context={"only": "this"}, context_mode="replace")
 ```
 
 ### Context Modes

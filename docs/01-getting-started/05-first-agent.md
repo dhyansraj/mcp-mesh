@@ -344,7 +344,7 @@ class WeatherService:
 Create `requirements.txt`:
 
 ```txt
-mcp-mesh>=0.8,<0.9
+mcp-mesh>=1.0,<2.0
 fastmcp>=2.8.0
 ```
 

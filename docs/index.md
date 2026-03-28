@@ -140,42 +140,18 @@ Grafana dashboards, distributed tracing with Tempo, and Redis-backed session man
 Graceful failure handling, auto-reconnection, RBAC support, and real-time monitoring.
 </div>
 <div class="feature-card" markdown>
+### :globe_with_meridians: Multi-Language Agents
+Write agents in Python, TypeScript, or Java — they discover and call each other natively across the mesh via a shared Rust FFI core.
+</div>
+<div class="feature-card" markdown>
+### :brain: Multi-Provider LLM Support
+First-class support for Claude, GPT, and Gemini with agentic tool execution, structured output, and auto-resolution. Any provider supported by LiteLLM, Vercel AI SDK, or Spring AI works out of the box.
+</div>
+<div class="feature-card" markdown>
 ### :camera: Multimodal Support
-Return images, PDFs, and files from tools — LLMs see them natively. [Learn more →](multimodal/getting-started.md)
+Pass images, PDFs, and files between agents and LLMs. Claude, OpenAI, and Gemini each require different API structures for media — the mesh abstracts that away.
 </div>
 </div>
-
----
-
-### :camera: Multimodal Support
-
-Return images, PDFs, and files from tools — LLMs see them natively.
-
-=== "Python"
-
-    ```python
-    @mesh.tool(capability="chart_gen")
-    async def generate_chart(query: str):
-        png = render_chart(query)
-        return await mesh.MediaResult(
-            data=png, filename="chart.png", mime_type="image/png",
-        )
-    ```
-
-=== "TypeScript"
-
-    ```typescript
-    const uri = await uploadMedia(png, "chart.png", "image/png");
-    return mediaResult(uri, "Chart", "image/png");
-    ```
-
-=== "Java"
-
-    ```java
-    return MeshMedia.mediaResult(png, "chart.png", "image/png", mediaStore);
-    ```
-
-[Learn more →](multimodal/getting-started.md)
 
 ---
 

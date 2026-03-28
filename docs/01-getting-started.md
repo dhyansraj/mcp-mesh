@@ -15,7 +15,7 @@ MCP Mesh is a **distributed service mesh framework** that enhances FastMCP with 
 - 💉 **Smart dependency injection**: Use remote functions with type safety (`mesh.McpMeshTool`)
 - 🏷️ **Tag-based resolution**: Smart capability matching using tags and metadata
 - 🚀 **Zero boilerplate**: Mesh discovers your FastMCP `app` and handles everything
-- 📦 **Production ready**: Go registry + Python agents + Kubernetes support
+- 📦 **Production ready**: Go registry + MCP agents (Python, TypeScript, Java) + Kubernetes support
 
 ## The Simplest Example
 
@@ -98,7 +98,7 @@ source .venv/bin/activate  # Linux/macOS
 .venv\Scripts\activate      # Windows
 
 # Install MCP Mesh SDK
-pip install "mcp-mesh>=0.8,<0.9"
+pip install mcp-mesh
 ```
 
 !!! tip "Why .venv?"
@@ -259,7 +259,7 @@ That's it! You now have a working distributed MCP service mesh! 🎉
 
 ```bash
 # 1. Install MCP Mesh
-pip install "mcp-mesh>=0.8,<0.9"
+pip install mcp-mesh
 
 # 2. Clone examples
 git clone https://github.com/dhyansraj/mcp-mesh.git
@@ -287,7 +287,7 @@ brew tap dhyansraj/mcp-mesh
 brew install mcp-mesh
 
 # Then follow the Quick Start above
-pip install "mcp-mesh>=0.8,<0.9"
+pip install mcp-mesh
 ```
 
 </details>
@@ -300,7 +300,7 @@ pip install "mcp-mesh>=0.8,<0.9"
 curl -sSL https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh | bash
 
 # Then follow the Quick Start above
-pip install "mcp-mesh>=0.8,<0.9"
+pip install mcp-mesh
 ```
 
 </details>
