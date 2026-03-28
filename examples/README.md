@@ -51,7 +51,7 @@ kubectl apply -k base/
 
 ```bash
 # Install MCP Mesh with semantic versioning (allows patch updates)
-pip install "mcp-mesh>=0.1.0,<0.2.0"
+pip install mcp-mesh
 
 cd simple/
 # See simple/README.md for detailed instructions

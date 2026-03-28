@@ -40,7 +40,7 @@ npm install -g @mcpmesh/cli
 # Set up Python (at project root)
 python3 -m venv .venv
 source .venv/bin/activate
-pip install "mcp-mesh>=0.8,<0.9"
+pip install mcp-mesh
 deactivate  # meshctl auto-detects .venv
 
 # Scaffold (interactive wizard)
