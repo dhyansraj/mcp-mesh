@@ -147,38 +147,6 @@ Return images, PDFs, and files from tools — LLMs see them natively. [Learn mor
 
 ---
 
-### :camera: Multimodal Support
-
-Return images, PDFs, and files from tools — LLMs see them natively.
-
-=== "Python"
-
-    ```python
-    @mesh.tool(capability="chart_gen")
-    async def generate_chart(query: str):
-        png = render_chart(query)
-        return await mesh.MediaResult(
-            data=png, filename="chart.png", mime_type="image/png",
-        )
-    ```
-
-=== "TypeScript"
-
-    ```typescript
-    const uri = await uploadMedia(png, "chart.png", "image/png");
-    return mediaResult(uri, "Chart", "image/png");
-    ```
-
-=== "Java"
-
-    ```java
-    return MeshMedia.mediaResult(png, "chart.png", "image/png", mediaStore);
-    ```
-
-[Learn more →](multimodal/getting-started.md)
-
----
-
 ## :fire: Why MCP Mesh?
 
 === "For Developers"
