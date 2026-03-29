@@ -121,6 +121,7 @@ func main() {
 		TlsKeyFile:              os.Getenv("MCP_MESH_TLS_KEY"),
 		TrustDir:                os.Getenv("MCP_MESH_TRUST_DIR"),
 		AdminPort:               getEnvIntDefault("MCP_MESH_ADMIN_PORT", 0),
+		CorsOrigin:              getEnvDefault("MCP_MESH_CORS_ORIGIN", ""),
 	}
 
 	if registryConfig.TlsMode != "off" {

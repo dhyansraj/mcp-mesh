@@ -39,6 +39,8 @@ tags:
     description: Dependency resolution and discovery
   - name: tracing
     description: Distributed tracing and real-time trace streaming
+  - name: events
+    description: Dashboard event history and lifecycle tracking
 
 paths:
   /health:
@@ -270,6 +272,80 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+
+  /events/history:
+    get:
+      tags: [events]
+      summary: Get recent registry event history
+      description: |
+        Returns recent agent lifecycle events from the registry event log.
+        Events include agent registrations, deregistrations, health changes,
+        and dependency resolution changes.
+
+        Used by the dashboard to backfill event history on initial load
+        and to display recent activity.
+
+        🤖 AI NOTE: The real-time SSE stream is at GET /events (operational endpoint).
+        This REST endpoint provides historical data for initial page load.
+      operationId: getEventsHistory
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          description: Maximum number of events to return (most recent first)
+        - name: event_type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [register, unregister, unhealthy, update, expire, rotate]
+          description: Filter by event type
+      responses:
+        "200":
+          description: List of recent registry events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventsHistoryResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /events:
+    get:
+      tags: [events]
+      summary: Stream dashboard events via Server-Sent Events
+      description: |
+        Establishes a persistent SSE connection to stream real-time agent lifecycle events.
+        Events include agent registrations, deregistrations, health changes,
+        and dependency resolution changes.
+
+        On connect, sends recent event history as an initial batch before streaming live events.
+
+        Used by the web dashboard for real-time updates.
+      operationId: streamDashboardEvents
+      responses:
+        "200":
+          description: Streaming dashboard events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events stream of agent lifecycle data
+              example: |
+                event: connected
+                data: {"timestamp": "2024-01-20T10:30:45Z", "agents": 5}
+
+                event: agent_registered
+                data: {"agent_id": "hello-world-abc123", "agent_name": "hello-world"}
 
   # Note: /proxy/{target} endpoint is implemented as an operational endpoint
   # (not in OpenAPI) because it requires wildcard path matching which OpenAPI
@@ -1772,3 +1848,58 @@ components:
               X-API-Version: v2
             streaming: true
             auth_required: true
+
+    # Dashboard event history schemas
+    RegistryEventInfo:
+      type: object
+      required: [event_type, agent_id, timestamp]
+      description: |
+        A single registry lifecycle event.
+        Events are created automatically by status hooks when agent state changes.
+      properties:
+        event_type:
+          type: string
+          enum: [register, unregister, unhealthy, update, expire, rotate]
+          example: "register"
+          description: Type of lifecycle event
+        agent_id:
+          type: string
+          example: "hello-world-abc123"
+          description: ID of the agent this event relates to
+        agent_name:
+          type: string
+          example: "hello-world"
+          description: Human-readable agent name (if available)
+        function_name:
+          type: string
+          example: "greet"
+          description: Function name (for function-level events, null for agent-level)
+        timestamp:
+          type: string
+          format: date-time
+          example: "2024-01-20T10:30:45Z"
+          description: When the event occurred
+        data:
+          type: object
+          additionalProperties: true
+          description: Additional event metadata (reason, old/new status, etc.)
+          example:
+            reason: "status_change"
+            old_status: "healthy"
+            new_status: "unhealthy"
+
+    EventsHistoryResponse:
+      type: object
+      required: [events, count]
+      description: Response containing recent registry events
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/RegistryEventInfo"
+          description: List of events, most recent first
+        count:
+          type: integer
+          minimum: 0
+          example: 25
+          description: Number of events returned

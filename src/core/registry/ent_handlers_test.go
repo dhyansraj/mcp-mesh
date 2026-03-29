@@ -290,13 +290,21 @@ func (h *TestHandlers) UnregisterAgent(c *gin.Context, agentId string) {
 	c.Status(204) // No content - successfully unregistered (idempotent)
 }
 
-// StreamTrace implements the GET /traces/{trace_id}/stream endpoint for testing
+func (h *TestHandlers) GetEventsHistory(c *gin.Context, params generated.GetEventsHistoryParams) {
+	c.JSON(200, generated.EventsHistoryResponse{Events: []generated.RegistryEventInfo{}, Count: 0})
+}
+
+func (h *TestHandlers) StreamDashboardEvents(c *gin.Context) {
+	c.Header("Content-Type", "text/event-stream")
+	c.String(200, "event: connected\ndata: {\"message\": \"test\"}\n\n")
+}
+
 func (h *TestHandlers) StreamTrace(c *gin.Context, traceId string) {
 	// Simple test implementation - just return a mock SSE response
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
-	
+
 	// Send a test event and close
 	c.String(200, "event: connected\ndata: {\"trace_id\": \"%s\", \"message\": \"test connection\"}\n\n", traceId)
 }

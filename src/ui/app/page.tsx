@@ -1,0 +1,120 @@
+"use client";
+
+import { Header } from "@/components/layout/Header";
+import { StatsCards } from "@/components/dashboard/StatsCards";
+import { EventFeed } from "@/components/dashboard/EventFeed";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { useMesh } from "@/lib/mesh-context";
+import { getStatusBgColor, getRuntimeLabel } from "@/lib/api";
+import { Loader2, AlertCircle, RefreshCw, Bot } from "lucide-react";
+
+export default function DashboardPage() {
+  const { agents, events, loading, error, refresh } = useMesh();
+
+  if (loading) {
+    return (
+      <div className="flex flex-col h-full">
+        <Header title="Dashboard" subtitle="MCP Mesh overview" />
+        <div className="flex flex-1 items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col h-full">
+        <Header title="Dashboard" subtitle="MCP Mesh overview" />
+        <div className="flex flex-1 flex-col items-center justify-center gap-4">
+          <AlertCircle className="h-10 w-10 text-destructive" />
+          <p className="text-sm text-muted-foreground">{error.message}</p>
+          <Button variant="outline" size="sm" onClick={refresh}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      <Header title="Dashboard" subtitle="MCP Mesh overview" />
+      <div className="flex-1 space-y-6 p-6 overflow-auto">
+        <StatsCards agents={agents} />
+
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          {/* Event Feed */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Recent Events</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <EventFeed events={events} />
+            </CardContent>
+          </Card>
+
+          {/* Agent Health Overview */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Agent Overview</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {agents.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                  <Bot className="mb-3 h-10 w-10 opacity-40" />
+                  <p className="text-sm">No agents registered</p>
+                  <p className="text-xs mt-1">Agents will appear here once they connect to the mesh</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {agents.slice(0, 10).map((agent) => (
+                    <div
+                      key={agent.id}
+                      className="flex items-center justify-between rounded-lg border border-border/50 px-4 py-3 transition-colors hover:bg-muted/20"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span
+                          className={`flex h-2.5 w-2.5 shrink-0 rounded-full ${getStatusBgColor(agent.status)}`}
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-foreground truncate">
+                            {agent.name}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {agent.dependencies_resolved}/{agent.total_dependencies} deps resolved
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {agent.runtime && (
+                          <Badge variant="outline" className="text-xs">
+                            {getRuntimeLabel(agent.runtime)}
+                          </Badge>
+                        )}
+                        <Badge
+                          variant={agent.status === "healthy" ? "default" : "destructive"}
+                          className="text-xs"
+                        >
+                          {agent.status}
+                        </Badge>
+                      </div>
+                    </div>
+                  ))}
+                  {agents.length > 10 && (
+                    <p className="text-xs text-center text-muted-foreground pt-2">
+                      and {agents.length - 10} more agents...
+                    </p>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}

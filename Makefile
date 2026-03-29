@@ -482,6 +482,21 @@ npm-clean:
 	rm -rf dist/npm
 	@echo "✅ npm artifacts cleaned"
 
+# Dashboard
+.PHONY: ui-install ui-dev ui-build ui-clean
+
+ui-install:
+	cd src/ui && npm install
+
+ui-dev:
+	cd src/ui && npm run dev
+
+ui-build:
+	cd src/ui && npm run build
+
+ui-clean:
+	rm -rf src/ui/.next src/ui/out
+
 # Show help
 .PHONY: help
 help:
@@ -518,6 +533,10 @@ help:
 	@echo "  docs-generate - Generate docs from man pages"
 	@echo "  docs-serve    - Start MkDocs dev server"
 	@echo "  docs-build    - Build static docs site"
+	@echo "  ui-install    - Install dashboard dependencies"
+	@echo "  ui-dev        - Start dashboard dev server (port 3000)"
+	@echo "  ui-build      - Build dashboard for production"
+	@echo "  ui-clean      - Clean dashboard build artifacts"
 	@echo "  help          - Show this help"
 	@echo ""
 	@echo "Common environment variables:"

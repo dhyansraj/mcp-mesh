@@ -18,6 +18,8 @@ import (
 	"mcp-mesh/src/core/ent/registryevent"
 	"mcp-mesh/src/core/logger"
 	"mcp-mesh/src/core/registry/generated"
+
+	"entgo.io/ent/dialect/sql"
 )
 
 // Dependency represents a tool dependency with constraints
@@ -44,6 +46,7 @@ type RegistryConfig struct {
 	TlsKeyFile               string // registry server key — from MCP_MESH_TLS_KEY
 	TrustDir                 string // directory for FileStore backend — from MCP_MESH_TRUST_DIR
 	AdminPort                int    // admin API port — from MCP_MESH_ADMIN_PORT (0 = disabled)
+	CorsOrigin               string // CORS allowed origin — from MCP_MESH_CORS_ORIGIN (empty = disabled)
 }
 
 // ResponseCache provides caching functionality matching Python implementation
@@ -1279,6 +1282,9 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 		if params.Type != "" {
 			query = query.Where(agent.AgentTypeEQ(agent.AgentType(params.Type)))
 		}
+		if params.Status != "" {
+			query = query.Where(agent.StatusEQ(agent.Status(params.Status)))
+		}
 	}
 
 	// Execute query with capabilities, dependency resolutions, and LLM resolutions
@@ -2052,4 +2058,52 @@ func convertToLLMProvider(data map[string]interface{}) *generated.LLMProvider {
 	}
 
 	return &provider
+}
+
+// RegistryEventWithAgent holds a registry event with its associated agent info.
+type RegistryEventWithAgent struct {
+	EventType    string
+	AgentID      string
+	AgentName    string
+	FunctionName string
+	Timestamp    time.Time
+	Data         map[string]interface{}
+}
+
+// ListRecentEvents queries recent registry events, optionally filtered by event type.
+// Results are ordered by timestamp DESC and limited to the requested count.
+func (s *EntService) ListRecentEvents(limit int, eventType string) ([]RegistryEventWithAgent, error) {
+	ctx := context.Background()
+
+	query := s.entDB.Client.RegistryEvent.Query().
+		WithAgent().
+		Order(registryevent.ByTimestamp(sql.OrderDesc())).
+		Limit(limit)
+
+	if eventType != "" {
+		query = query.Where(registryevent.EventTypeEQ(registryevent.EventType(eventType)))
+	}
+
+	events, err := query.All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query registry events: %w", err)
+	}
+
+	results := make([]RegistryEventWithAgent, 0, len(events))
+	for _, e := range events {
+		r := RegistryEventWithAgent{
+			EventType:    string(e.EventType),
+			AgentID:      "",
+			FunctionName: e.FunctionName,
+			Timestamp:    e.Timestamp,
+			Data:         e.Data,
+		}
+		if a := e.Edges.Agent; a != nil {
+			r.AgentID = a.ID
+			r.AgentName = a.Name
+		}
+		results = append(results, r)
+	}
+
+	return results, nil
 }
