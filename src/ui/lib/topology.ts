@@ -25,8 +25,12 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
   }
 
   for (const agent of agents) {
+    const isApi = agent.agent_type === "api";
+
     for (const dep of agent.dependency_resolutions ?? []) {
       if (dep.provider_agent_id && agentIds.has(dep.provider_agent_id)) {
+        // Pink (#ec4899) for API agents, green (#22c55e) for regular agents
+        const availableColor = isApi ? "#ec4899" : "#22c55e";
         edges.push({
           id: uniqueEdgeId(`${agent.id}-${dep.function_name}-${dep.capability}-${dep.provider_agent_id}`),
           source: agent.id,
@@ -34,7 +38,7 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
           label: dep.capability,
           animated: dep.status === "available",
           style: {
-            stroke: dep.status === "available" ? "#22c55e" : dep.status === "unavailable" ? "#ef4444" : "#6b7280",
+            stroke: dep.status === "available" ? availableColor : dep.status === "unavailable" ? "#ef4444" : "#6b7280",
             strokeDasharray: dep.status === "unresolved" ? "5 5" : undefined,
           },
         });

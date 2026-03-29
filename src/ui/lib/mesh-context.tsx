@@ -13,6 +13,8 @@ export interface MeshContextValue {
   error: Error | null;
   showAll: boolean;
   setShowAll: (show: boolean) => void;
+  paused: boolean;
+  setPaused: (paused: boolean) => void;
   refresh: () => Promise<void>;
 }
 
@@ -24,6 +26,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
   const [fetchError, setFetchError] = useState<Error | null>(null);
   const [historyEvents, setHistoryEvents] = useState<DashboardEvent[]>([]);
   const [showAll, setShowAll] = useState(false);
+  const [paused, setPaused] = useState(false);
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -37,10 +40,10 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
     }
   }, [showAll]);
 
-  // SSE subscription — refetch agents on structural changes
+  // SSE subscription — refetch agents on structural changes (unless paused)
   const handleEvent = useCallback(
     (event: DashboardEvent) => {
-      // Refetch on any structural change — agent appears/disappears from filtered list
+      if (paused) return;
       const refetchEvents = [
         "agent_registered",
         "agent_deregistered",
@@ -53,7 +56,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         fetchAgents();
       }
     },
-    [fetchAgents]
+    [fetchAgents, paused]
   );
 
   const { events, connected, error: sseError } = useMeshEvents({
@@ -65,11 +68,12 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
     fetchAgents();
   }, [fetchAgents]);
 
-  // Periodic refresh as fallback (every 30s)
+  // Periodic refresh as fallback (every 30s, unless paused)
   useEffect(() => {
+    if (paused) return;
     const interval = setInterval(fetchAgents, 30000);
     return () => clearInterval(interval);
-  }, [fetchAgents]);
+  }, [fetchAgents, paused]);
 
   // Fetch event history on mount
   useEffect(() => {
@@ -105,6 +109,8 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         error: fetchError || sseError,
         showAll,
         setShowAll,
+        paused,
+        setPaused,
         refresh: fetchAgents,
       }}
     >

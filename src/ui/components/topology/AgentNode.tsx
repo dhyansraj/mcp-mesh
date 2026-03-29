@@ -43,6 +43,7 @@ function getStatusDotColor(status: string): string {
 
 function AgentNodeComponent({ data }: NodeProps) {
   const agent = data.agent as Agent;
+  const dimmed = data.dimmed as boolean | undefined;
   const depsResolved = agent.dependencies_resolved;
   const depsTotal = agent.total_dependencies;
   const capCount = agent.capabilities?.length ?? 0;
@@ -53,8 +54,9 @@ function AgentNodeComponent({ data }: NodeProps) {
       <div
         className={cn(
           "rounded-lg border-2 bg-card shadow-lg px-4 py-3 min-w-[240px] max-w-[280px]",
-          "transition-shadow hover:shadow-xl hover:shadow-primary/10",
-          getNodeBorderColor(agent.status, depsResolved, depsTotal)
+          "transition-all duration-300 hover:shadow-xl hover:shadow-primary/10",
+          getNodeBorderColor(agent.status, depsResolved, depsTotal),
+          dimmed && "opacity-15"
         )}
       >
         <div className="flex items-start gap-2 mb-2">

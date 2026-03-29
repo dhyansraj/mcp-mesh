@@ -166,8 +166,8 @@ export function TopologySidebar({ agent, onClose }: TopologySidebarProps) {
             <div>
               <SectionTitle>LLM Tool Resolutions ({llmTools.length})</SectionTitle>
               <div className="space-y-2">
-                {llmTools.map((llm) => (
-                  <div key={llm.function_name} className="rounded-md border border-border bg-background/50 p-2">
+                {llmTools.map((llm, idx) => (
+                  <div key={`${llm.function_name}-${llm.filter_capability}-${idx}`} className="rounded-md border border-border bg-background/50 p-2">
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <Zap className={cn("h-3 w-3 shrink-0", getDepStatusColor(llm.status))} />
@@ -187,8 +187,8 @@ export function TopologySidebar({ agent, onClose }: TopologySidebarProps) {
             <div>
               <SectionTitle>LLM Provider Resolutions ({llmProviders.length})</SectionTitle>
               <div className="space-y-2">
-                {llmProviders.map((prov) => (
-                  <div key={prov.function_name} className="rounded-md border border-border bg-background/50 p-2">
+                {llmProviders.map((prov, idx) => (
+                  <div key={`${prov.function_name}-${prov.required_capability}-${idx}`} className="rounded-md border border-border bg-background/50 p-2">
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <BrainCircuit className={cn("h-3 w-3 shrink-0", getDepStatusColor(prov.status))} />
