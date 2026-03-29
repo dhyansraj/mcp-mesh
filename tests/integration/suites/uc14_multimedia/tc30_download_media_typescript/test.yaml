@@ -1,0 +1,104 @@
+# Test Case: TypeScript downloadMedia API
+# Verifies that downloadMedia() returns correct bytes and MIME type
+# after uploading via uploadMedia().
+#
+# Agent Setup:
+#   - ts-download-agent (port auto): provides test_download_media
+#
+# Flow: meshctl call -> test_download_media -> uploadMedia + downloadMedia -> compare
+
+name: "TypeScript downloadMedia API"
+description: "Verify downloadMedia() returns correct bytes and MIME type"
+tags:
+  - multimedia
+  - download
+  - typescript
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/ts-download-agent /workspace/"
+    capture: copy_output
+
+  - name: "Install dependencies"
+    handler: npm-install
+    path: /workspace/ts-download-agent
+    timeout: 120
+
+  - name: "Start download agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start ts-download-agent/src/index.ts -d"
+    capture: start_output
+
+  - name: "Wait for registration"
+    handler: shell
+    command: |
+      echo "Waiting for ts-download-agent to register..."
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "ts-download-agent"; then
+          echo "ts-download-agent registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: ts-download-agent did not register within 40s"
+      meshctl list 2>/dev/null || true
+      echo "=== Agent logs ==="
+      meshctl logs ts-download-agent 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_output
+    timeout: 60
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  - name: "Test upload then download"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call test_download_media '{}'"
+    capture: result
+    timeout: 30
+
+assertions:
+  - expr: "${captured.list_output} contains 'ts-download-agent'"
+    message: "ts-download-agent should be registered"
+
+  - expr: "${captured.tools_output} contains 'test_download_media'"
+    message: "test_download_media tool should be listed"
+
+  - expr: "${captured.result} contains 'content_match'"
+    message: "Result should contain content_match field"
+
+  - expr: "${captured.result} contains 'true'"
+    message: "Downloaded bytes should match uploaded bytes (content_match: true)"
+
+  - expr: "${captured.result} contains 'text/plain'"
+    message: "Downloaded MIME type should be text/plain"
+
+  - expr: "${captured.result} contains 'Hello Media Download Test - TypeScript'"
+    message: "Downloaded text content should match uploaded content"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "tsx src/index.ts" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

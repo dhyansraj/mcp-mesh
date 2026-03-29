@@ -1,0 +1,112 @@
+# Test Case: Java downloadMedia API
+# Verifies that MeshMedia.downloadMedia() returns correct bytes and MIME type
+# after uploading via MediaStore.upload().
+#
+# Agent Setup:
+#   - java-download-agent (port 9050): provides testDownloadMedia
+#
+# Note: Java agents register as {name}-{8char_uuid} so we grep for base name.
+# Java @MeshTool methods register with the method name as tool name.
+# Tool name: testDownloadMedia
+#
+# Flow: meshctl call -> testDownloadMedia -> upload + downloadMedia -> compare
+
+name: "Java downloadMedia API"
+description: "Verify MeshMedia.downloadMedia() returns correct bytes and MIME type"
+tags:
+  - multimedia
+  - download
+  - java
+  - slow
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/java-download-agent /workspace/"
+    capture: copy_output
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-download-agent
+    timeout: 600
+
+  - name: "Start download agent"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-download-agent -d
+      echo "Java download agent starting via meshctl"
+    capture: start_output
+
+  - name: "Wait for registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for java-download-agent to register..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "download-agent"; then
+          echo "java-download-agent registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: java-download-agent did not register within 90s"
+      meshctl list 2>/dev/null || true
+      meshctl logs download-agent 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_output
+    timeout: 120
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  - name: "Test upload then download"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call testDownloadMedia '{}'"
+    capture: result
+    timeout: 60
+
+assertions:
+  - expr: "${captured.list_output} contains 'download-agent'"
+    message: "java-download-agent should be registered"
+
+  - expr: "${captured.tools_output} contains 'testDownloadMedia'"
+    message: "testDownloadMedia tool should be listed"
+
+  - expr: "${captured.result} contains 'content_match'"
+    message: "Result should contain content_match field"
+
+  - expr: "${captured.result} contains 'true'"
+    message: "Downloaded bytes should match uploaded bytes (content_match: true)"
+
+  - expr: "${captured.result} contains 'text/plain'"
+    message: "Downloaded MIME type should be text/plain"
+
+  - expr: "${captured.result} contains 'Hello Media Download Test - Java'"
+    message: "Downloaded text content should match uploaded content"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*download" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

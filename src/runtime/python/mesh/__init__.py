@@ -129,6 +129,10 @@ def __getattr__(name):
         from .media import upload_media
 
         return upload_media
+    elif name == "download_media":
+        from .media import download_media
+
+        return download_media
     elif name == "media_result":
         from .media import media_result
 

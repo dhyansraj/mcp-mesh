@@ -1,0 +1,100 @@
+# Test Case: Python download_media API
+# Verifies that mesh.download_media() returns correct bytes and MIME type
+# after uploading via mesh.upload_media().
+#
+# Agent Setup:
+#   - py-download-agent (port auto): provides test_download_media
+#
+# Flow: meshctl call -> test_download_media -> upload_media + download_media -> compare
+
+name: "Python download_media API"
+description: "Verify mesh.download_media() returns correct bytes and MIME type"
+tags:
+  - multimedia
+  - download
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/py-download-agent /workspace/"
+    capture: copy_output
+
+  - name: "Install dependencies"
+    handler: pip-install
+    path: /workspace/py-download-agent
+
+  - name: "Start download agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start py-download-agent/main.py -d"
+    capture: start_output
+
+  - name: "Wait for registration"
+    handler: shell
+    command: |
+      echo "Waiting for py-download-agent to register..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "py-download-agent"; then
+          echo "py-download-agent registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: py-download-agent did not register within 30s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_output
+    timeout: 60
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  - name: "List tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  - name: "Test upload then download"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl call test_download_media '{}'"
+    capture: result
+    timeout: 30
+
+assertions:
+  - expr: "${captured.list_output} contains 'py-download-agent'"
+    message: "py-download-agent should be registered"
+
+  - expr: "${captured.tools_output} contains 'test_download_media'"
+    message: "test_download_media tool should be listed"
+
+  - expr: "${captured.result} contains 'content_match'"
+    message: "Result should contain content_match field"
+
+  - expr: "${captured.result} contains 'true'"
+    message: "Downloaded bytes should match uploaded bytes (content_match: true)"
+
+  - expr: "${captured.result} contains 'text/plain'"
+    message: "Downloaded MIME type should be text/plain"
+
+  - expr: "${captured.result} contains 'Hello Media Download Test - Python'"
+    message: "Downloaded text content should match uploaded content"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -47,6 +47,21 @@ const uri = await uploadMedia(pngBuffer, "chart.png", "image/png");
 
 Returns: URI string.
 
+## Downloading Media
+
+```typescript
+import { downloadMedia } from "@mcpmesh/sdk";
+const { data, mimeType } = await downloadMedia(
+  "s3://mcp-mesh-media/media/chart.png",
+);
+```
+
+| Parameter | Type     | Description           |
+| --------- | -------- | --------------------- |
+| `uri`     | `string` | Media URI from upload |
+
+Returns: `{ data: Buffer, mimeType: string }`.
+
 ## Returning Media from Tools
 
 ### mediaResult() — URI to ResourceLink

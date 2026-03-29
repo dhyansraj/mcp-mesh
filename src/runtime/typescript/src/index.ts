@@ -188,6 +188,7 @@ export {
 // Media utilities (multimodal content)
 export {
   uploadMedia,
+  downloadMedia,
   mediaResult,
   MediaResult,
   createMediaResult,

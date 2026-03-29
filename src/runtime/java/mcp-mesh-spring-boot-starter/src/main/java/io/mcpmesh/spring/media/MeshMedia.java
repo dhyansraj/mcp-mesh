@@ -115,6 +115,19 @@ public final class MeshMedia {
         return mediaResult(uri, name != null ? name : filename, mimeType, description, (long) data.length);
     }
 
+    // ── Download helpers ───────────────────────────────────────────────
+
+    /**
+     * Download media by URI from a {@link MediaStore}.
+     *
+     * @param uri   Media URI (e.g., {@code "file://..."} or {@code "s3://..."})
+     * @param store MediaStore to fetch from
+     * @return A {@link MediaFetchResult} containing the bytes and MIME type
+     */
+    public static MediaFetchResult downloadMedia(String uri, MediaStore store) {
+        return store.fetch(uri);
+    }
+
     // ── MultipartFile helpers ───────────────────────────────────────────
 
     /**

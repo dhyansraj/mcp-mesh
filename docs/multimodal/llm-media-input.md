@@ -77,6 +77,32 @@ Once media is in the mesh -- uploaded by a user or produced by a tool -- pass it
 
 When an LLM calls a tool that returns a `resource_link`, the SDK resolves it automatically -- the LLM provider fetches the media bytes and converts them to the vendor's native format. No `media=` parameter is needed for tool-returned media. See [Getting Started](getting-started.md) for the full flow.
 
+## Reading Media in Agents
+
+When an agent receives a media URI (e.g., from a tool parameter or another agent) and needs to read the actual bytes — not pass it to an LLM — use `download_media`:
+
+=== "Python"
+
+    ```python
+    data, mime_type = await mesh.download_media("s3://mcp-mesh-media/media/report.csv")
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    import { downloadMedia } from "@mcpmesh/sdk";
+    const { data, mimeType } = await downloadMedia("s3://mcp-mesh-media/media/report.csv");
+    ```
+
+=== "Java"
+
+    ```java
+    MediaFetchResult result = MeshMedia.downloadMedia(uri, mediaStore);
+    byte[] data = result.data();
+    ```
+
+This reads from the same MediaStore backend (local or S3) that `upload_media` wrote to.
+
 ## See Also
 
 - [MediaParam](media-param.md) -- Type hints for media parameters
