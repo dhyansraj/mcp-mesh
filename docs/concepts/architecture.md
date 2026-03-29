@@ -201,7 +201,7 @@ Designed for containers and Kubernetes.
 
 ## Multimodal Pipeline
 
-MCP Mesh v1.0.0 adds a media pipeline that lets tools produce and LLMs consume binary content:
+MCP Mesh v1.0.1 adds a media pipeline that lets tools produce and LLMs consume binary content:
 
 ```
 Tool produces media
@@ -224,11 +224,11 @@ LLM receives tool result
 
 ### Provider-Native Formats
 
-| Content | Claude | OpenAI | Gemini |
-| --- | --- | --- | --- |
-| Images | Native image blocks | image_url (base64) | image_url (base64) |
-| PDF | Native document blocks | Text fallback | Text fallback |
-| Text files | Text content | Text content | Text content |
+| Content    | Claude                 | OpenAI             | Gemini             |
+| ---------- | ---------------------- | ------------------ | ------------------ |
+| Images     | Native image blocks    | image_url (base64) | image_url (base64) |
+| PDF        | Native document blocks | Text fallback      | Text fallback      |
+| Text files | Text content           | Text content       | Text content       |
 
 See [Multimodal documentation](../multimodal/getting-started.md) for usage guides.
 

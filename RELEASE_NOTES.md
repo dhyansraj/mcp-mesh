@@ -1,5 +1,22 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.0.0...v1.0.1)
+
+## v1.0.1 (2026-03-28)
+
+### ✨ New Features
+
+- **download_media API** (#660): Added `mesh.download_media(uri)` / `downloadMedia(uri)` / `MeshMedia.downloadMedia(uri, store)` across all three SDKs for reading media back from MediaStore
+
+### 🐛 Bug Fixes
+
+- **Registry proxy timeout** (#657): `meshctl call --timeout` now propagates to the registry proxy via `X-Mesh-Timeout` header (was hardcoded 60s, capped at 600s)
+- **Helm scaffold env/secrets override** (#660): Commented out `env: []` and `secrets: []` in scaffold helm-values templates to prevent silently wiping base values during multi-file `helm install`
+
+### 📚 Documentation
+
+- Various documentation fixes and improvements (#657)
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v0.9.9...v1.0.0)
 
 ## v1.0.0 (2026-03-25)
