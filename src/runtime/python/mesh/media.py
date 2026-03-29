@@ -13,6 +13,19 @@ async def upload_media(data: bytes, filename: str, mime_type: str) -> str:
     return await store.upload(data, filename, mime_type)
 
 
+async def download_media(uri: str) -> tuple[bytes, str]:
+    """Download media by URI.
+
+    Args:
+        uri: Media URI (e.g., "file:///..." or "s3://...").
+
+    Returns:
+        A tuple of (raw_bytes, mime_type).
+    """
+    store = get_media_store()
+    return await store.fetch(uri)
+
+
 def media_result(
     uri: str,
     name: str,

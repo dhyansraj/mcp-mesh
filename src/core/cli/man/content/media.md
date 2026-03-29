@@ -50,6 +50,18 @@ uri = await mesh.upload_media(png_bytes, "chart.png", "image/png")
 
 Returns: URI string (`file://...` or `s3://...`).
 
+## Downloading Media
+
+```python
+data, mime_type = await mesh.download_media("s3://mcp-mesh-media/media/chart.png")
+```
+
+| Parameter | Type  | Description           |
+| --------- | ----- | --------------------- |
+| `uri`     | `str` | Media URI from upload |
+
+Returns: `tuple[bytes, str]` — raw bytes and MIME type.
+
 ## Returning Media from Tools
 
 ### media_result() — URI to ResourceLink

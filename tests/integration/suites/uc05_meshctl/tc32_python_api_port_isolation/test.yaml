@@ -1,0 +1,98 @@
+# Test Case: Python API Port Isolation (#658)
+# Verifies that MCP_MESH_HTTP_PORT does NOT override uvicorn port for
+# FastAPI apps that use @mesh.route but do NOT use @mesh.agent.
+
+name: "Python API Port Isolation"
+description: "Verify MCP_MESH_HTTP_PORT does not affect @mesh.route FastAPI apps"
+tags:
+  - meshctl
+  - port
+  - python
+  - api
+  - isolation
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/py-api-app /workspace/"
+    capture: copy_output
+
+  # Start the API app via meshctl with MCP_MESH_HTTP_PORT=7777
+  # meshctl may inject port env vars — this tests that API apps are not affected
+  # The app has @mesh.route (SDK active) but no @mesh.agent
+  - name: "Start API app via meshctl with MCP_MESH_HTTP_PORT set"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start py-api-app/main.py --env MCP_MESH_HTTP_PORT=7777 -d --debug
+      echo "Started Python API app via meshctl with MCP_MESH_HTTP_PORT=7777"
+    capture: start_app
+
+  - name: "Wait for app on port 8080"
+    handler: shell
+    command: |
+      echo "Waiting for app to start on port 8080..."
+      for i in $(seq 1 30); do
+        if curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ping 2>/dev/null | grep -q "200"; then
+          echo "App responding on port 8080 after $((i * 2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: App did not start on port 8080 within 60s"
+      echo "=== App logs ==="
+      tail -50 /tmp/py-api-app.log 2>/dev/null || true
+      echo "=== Check if app started on 7777 instead ==="
+      curl -s http://localhost:7777/ping 2>/dev/null && echo "FAIL: App is on 7777 (port override not guarded)" || echo "Not on 7777 either"
+      exit 1
+    capture: wait_app
+    timeout: 90
+
+  - name: "Verify app on port 8080"
+    handler: shell
+    command: |
+      RESPONSE=$(curl -s http://localhost:8080/ping)
+      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ping)
+      echo "Response: ${RESPONSE}"
+      echo "HTTP_CODE:${HTTP_CODE}"
+    capture: check_8080
+
+  - name: "Verify app NOT on port 7777"
+    handler: shell
+    command: |
+      HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 http://localhost:7777/ping 2>/dev/null || echo "000")
+      echo "HTTP_CODE:${HTTP_CODE}"
+      if [ "${HTTP_CODE}" = "200" ]; then
+        echo "FAIL: App is listening on 7777 - MCP_MESH_HTTP_PORT leaked to API app"
+      else
+        echo "PASS: App is NOT on port 7777"
+      fi
+    capture: check_7777
+
+assertions:
+  - expr: "${captured.wait_app} contains 'App responding on port 8080'"
+    message: "API app should start on port 8080 despite MCP_MESH_HTTP_PORT=7777"
+
+  - expr: "${captured.check_8080} contains 'HTTP_CODE:200'"
+    message: "App should respond 200 on port 8080"
+
+  - expr: "${captured.check_8080} contains 'pong'"
+    message: "App should return 'pong' from /ping endpoint"
+
+  - expr: "${captured.check_7777} contains 'PASS'"
+    message: "MCP_MESH_HTTP_PORT should NOT override port for API apps"
+
+post_run:
+  - handler: shell
+    command: |
+      pkill -f "uvicorn main:app" 2>/dev/null || true
+      pkill -f "py-api-app" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

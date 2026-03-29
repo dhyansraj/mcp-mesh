@@ -38,6 +38,21 @@ mesh:
 
 Auto-configured via `MediaStoreAutoConfiguration`.
 
+## Downloading Media
+
+```java
+MediaFetchResult result = MeshMedia.downloadMedia("s3://mcp-mesh-media/media/chart.png", mediaStore);
+byte[] data = result.data();
+String mimeType = result.mimeType();
+```
+
+| Parameter | Type         | Description           |
+| --------- | ------------ | --------------------- |
+| `uri`     | `String`     | Media URI from upload |
+| `store`   | `MediaStore` | Injected media store  |
+
+Returns: `MediaFetchResult` with `data()` and `mimeType()`.
+
 ## Returning Media from Tools
 
 ### MeshMedia.mediaResult() — Bytes to ResourceLink

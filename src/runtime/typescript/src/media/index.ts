@@ -40,6 +40,18 @@ export async function uploadMedia(
 }
 
 /**
+ * Download media by URI from the configured media store.
+ *
+ * @returns An object with `data` (Buffer) and `mimeType` (string).
+ */
+export async function downloadMedia(
+  uri: string
+): Promise<{ data: Buffer; mimeType: string }> {
+  const store = getMediaStore();
+  return store.fetch(uri);
+}
+
+/**
  * Build an MCP `resource_link` content item.
  *
  * This is the standard way for tools to return references to binary media

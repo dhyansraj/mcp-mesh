@@ -46,10 +46,8 @@ env:
         key: openai-api-key
         optional: true
 
-# Optional: Configure additional secrets
-secrets: []
-  # - name: CUSTOM_API_KEY
-  #   valueFrom:
-  #     secretKeyRef:
-  #       name: my-secret
-  #       key: api-key
+# Optional: Secrets (creates a K8s Secret, injected via envFrom)
+# Uncomment to add — leaving commented avoids overriding base values
+# secrets:
+#   DATABASE_URL: "postgres://user:pass@host:5432/db"
+#   API_KEY: "your-api-key"
