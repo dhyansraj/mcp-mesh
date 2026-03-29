@@ -642,12 +642,10 @@ func (h *EntBusinessLogicHandlers) writeSSEEvent(c *gin.Context, eventType strin
 
 // StreamDashboardEvents implements GET /events (SSE stream for dashboard)
 func (h *EntBusinessLogicHandlers) StreamDashboardEvents(c *gin.Context) {
-	// Set SSE headers
+	// Set SSE headers (CORS handled by middleware in server.go)
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
-	c.Header("Access-Control-Allow-Origin", "*")
-	c.Header("Access-Control-Allow-Headers", "Cache-Control")
 
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
@@ -732,8 +730,9 @@ func (h *EntBusinessLogicHandlers) GetEventsHistory(c *gin.Context, params gener
 
 	events, err := h.entService.ListRecentEvents(limit, eventType)
 	if err != nil {
+		log.Printf("[events-history] Failed to query events: %v", err)
 		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
-			Error:     fmt.Sprintf("Failed to query events: %v", err),
+			Error:     "Failed to query event history",
 			Timestamp: time.Now().UTC(),
 		})
 		return
