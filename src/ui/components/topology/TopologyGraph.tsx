@@ -154,6 +154,37 @@ export function TopologyGraph({ agents }: TopologyGraphProps) {
         />
       </ReactFlow>
 
+      {/* Legend */}
+      <div className="absolute top-4 left-4 z-10 rounded-lg border border-border bg-card/90 backdrop-blur-sm px-3 py-2.5 shadow-lg">
+        <p className="text-[10px] font-medium text-muted-foreground mb-1.5 uppercase tracking-wider">Edges</p>
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-0.5 bg-[#22c55e] rounded" />
+            <span className="text-[10px] text-muted-foreground">Dependency</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-0.5 bg-[#ec4899] rounded" />
+            <span className="text-[10px] text-muted-foreground">API dependency</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-0.5 bg-[#22d3ee] rounded" />
+            <span className="text-[10px] text-muted-foreground">LLM tool</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-0.5 bg-[#a855f7] rounded" />
+            <span className="text-[10px] text-muted-foreground">LLM provider</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-0.5 bg-[#ef4444] rounded" />
+            <span className="text-[10px] text-muted-foreground">Unavailable</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-5 h-0.5 border-t border-dashed border-[#6b7280]" />
+            <span className="text-[10px] text-muted-foreground">Unresolved</span>
+          </div>
+        </div>
+      </div>
+
       <TopologySidebar agent={sidebarAgent} onClose={() => setSidebarAgent(null)} />
     </div>
   );
