@@ -145,12 +145,12 @@ Available from OCI registry (no `helm repo add` needed):
 ```bash
 # Install core infrastructure
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.0.0 \
+  --version 1.0.1 \
   -n mcp-mesh --create-namespace
 
 # Deploy an agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.0.0 \
+  --version 1.0.1 \
   -n mcp-mesh \
   -f helm-values.yaml
 ```
