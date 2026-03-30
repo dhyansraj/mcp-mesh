@@ -96,7 +96,13 @@ export default function DashboardPage() {
                           </Badge>
                         )}
                         <Badge
-                          variant={agent.status === "healthy" ? "default" : "destructive"}
+                          variant={
+                            agent.status === "healthy"
+                              ? "default"
+                              : agent.status === "unhealthy"
+                                ? "destructive"
+                                : "secondary"
+                          }
                           className="text-xs"
                         >
                           {agent.status}

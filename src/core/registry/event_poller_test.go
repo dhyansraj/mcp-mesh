@@ -134,7 +134,8 @@ func TestDiffAgents_DependencyResolved(t *testing.T) {
 	assert.Equal(t, "dependency_resolved", events[0].Type)
 	assert.Equal(t, 1, events[0].Data["previous_resolved"])
 	assert.Equal(t, 2, events[0].Data["current_resolved"])
-	assert.Equal(t, 3, events[0].Data["total"])
+	assert.Equal(t, 3, events[0].Data["previous_total"])
+	assert.Equal(t, 3, events[0].Data["current_total"])
 }
 
 func TestDiffAgents_DependencyLost(t *testing.T) {

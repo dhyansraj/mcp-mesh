@@ -42,8 +42,9 @@ function getEventDotColor(type: DashboardEvent["type"]): string {
     case "agent_unhealthy":
       return "bg-red-500";
     case "dependency_resolved":
-    case "dependency_lost":
       return "bg-blue-500";
+    case "dependency_lost":
+      return "bg-orange-500";
     case "connected":
       return "bg-cyan-400";
     case "snapshot":

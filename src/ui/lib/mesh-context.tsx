@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Agent, DashboardEvent } from "./types";
 import { getAgents, getEventHistory, mapRegistryEventToDashboardEvent } from "./api";
 import { useMeshEvents } from "./sse";
@@ -40,6 +40,9 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
     }
   }, [showAll]);
 
+  // Debounced refetch: coalesce rapid SSE events into a single fetchAgents call
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // SSE subscription — refetch agents on structural changes (unless paused)
   const handleEvent = useCallback(
     (event: DashboardEvent) => {
@@ -53,11 +56,21 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         "dependency_lost",
       ];
       if (refetchEvents.includes(event.type)) {
-        fetchAgents();
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(() => {
+          fetchAgents();
+          debounceRef.current = null;
+        }, 500);
       }
     },
     [fetchAgents, paused]
   );
+
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
 
   const { events, connected, error: sseError } = useMeshEvents({
     onEvent: handleEvent,

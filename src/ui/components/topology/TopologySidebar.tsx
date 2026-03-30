@@ -57,6 +57,7 @@ export function TopologySidebar({ agent, onClose }: TopologySidebarProps) {
         </div>
         <button
           onClick={onClose}
+          aria-label="Close sidebar"
           className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
         >
           <X className="h-4 w-4" />

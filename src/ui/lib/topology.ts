@@ -89,7 +89,8 @@ function applyDagreLayout(nodes: Node[], edges: Edge[]): { nodes: Node[]; edges:
   g.setGraph({ rankdir: "TB", nodesep: 80, ranksep: 100, marginx: 40, marginy: 40 });
 
   const nodeWidth = 280;
-  const nodeHeight = 100;
+  // Slightly taller than the visual node to add vertical spacing between rows
+  const nodeHeight = 140;
 
   for (const node of nodes) {
     g.setNode(node.id, { width: nodeWidth, height: nodeHeight });

@@ -24,8 +24,12 @@ export function useMeshEvents(options: UseMeshEventsOptions = {}): UseMeshEvents
   const [error, setError] = useState<Error | null>(null);
   const onEventRef = useRef(onEvent);
   onEventRef.current = onEvent;
+  const seenKeys = useRef<Set<string>>(new Set());
 
-  const clearEvents = useCallback(() => setEvents([]), []);
+  const clearEvents = useCallback(() => {
+    setEvents([]);
+    seenKeys.current.clear();
+  }, []);
 
   useEffect(() => {
     const eventSource = new EventSource(`${API_BASE}/events`);
@@ -56,6 +60,10 @@ export function useMeshEvents(options: UseMeshEventsOptions = {}): UseMeshEvents
         const data = JSON.parse(e.data) as DashboardEvent;
         // Override type from the SSE event type field
         const event: DashboardEvent = { ...data, type: e.type as DashboardEvent["type"] };
+
+        const key = `${event.type}:${event.agent_id ?? ""}:${event.timestamp}`;
+        if (seenKeys.current.has(key)) return;
+        seenKeys.current.add(key);
 
         setEvents((prev) => {
           const next = [event, ...prev];

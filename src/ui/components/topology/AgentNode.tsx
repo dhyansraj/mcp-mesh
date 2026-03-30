@@ -56,7 +56,7 @@ function AgentNodeComponent({ data }: NodeProps) {
           "rounded-lg border-2 bg-card shadow-lg px-4 py-3 min-w-[240px] max-w-[280px]",
           "transition-all duration-300 hover:shadow-xl hover:shadow-primary/10",
           getNodeBorderColor(agent.status, depsResolved, depsTotal),
-          dimmed && "opacity-15"
+          dimmed && "opacity-20"
         )}
       >
         <div className="flex items-start gap-2 mb-2">

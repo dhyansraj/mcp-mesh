@@ -1,6 +1,5 @@
 "use client";
 
-import { ReactFlowProvider } from "@xyflow/react";
 import { Header } from "@/components/layout/Header";
 import { TopologyGraph } from "@/components/topology/TopologyGraph";
 import { useMesh } from "@/lib/mesh-context";
@@ -26,9 +25,7 @@ export default function TopologyPage() {
             </p>
           </div>
         ) : (
-          <ReactFlowProvider>
-            <TopologyGraph agents={agents} />
-          </ReactFlowProvider>
+          <TopologyGraph agents={agents} />
         )}
       </div>
     </div>

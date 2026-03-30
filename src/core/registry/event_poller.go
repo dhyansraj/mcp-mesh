@@ -163,7 +163,7 @@ func diffAgents(lastSnap map[string]agentSnapshot, agents []generated.AgentInfo)
 				})
 			}
 
-			if prev.DependenciesResolved != snap.DependenciesResolved {
+			if prev.DependenciesResolved != snap.DependenciesResolved || prev.TotalDependencies != snap.TotalDependencies {
 				eventType := "dependency_resolved"
 				if snap.DependenciesResolved < prev.DependenciesResolved {
 					eventType = "dependency_lost"
@@ -176,7 +176,8 @@ func diffAgents(lastSnap map[string]agentSnapshot, agents []generated.AgentInfo)
 					Data: map[string]interface{}{
 						"previous_resolved": prev.DependenciesResolved,
 						"current_resolved":  snap.DependenciesResolved,
-						"total":             snap.TotalDependencies,
+						"previous_total":    prev.TotalDependencies,
+						"current_total":     snap.TotalDependencies,
 					},
 					Timestamp: now,
 				})

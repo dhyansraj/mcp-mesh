@@ -16,8 +16,10 @@ function StatusBadge({ status }: { status: string }) {
     unresolved: "bg-yellow-600/20 text-yellow-400 border-yellow-500/30",
   };
 
+  const fallback = "bg-gray-600/20 text-gray-400 border-gray-500/30";
+
   return (
-    <Badge variant="outline" className={`text-xs ${colorMap[status] || ""}`}>
+    <Badge variant="outline" className={`text-xs ${colorMap[status] || fallback}`}>
       {status}
     </Badge>
   );

@@ -9,8 +9,12 @@ export async function getHealth(): Promise<HealthResponse> {
 }
 
 export async function getAgents(status?: string): Promise<AgentsResponse> {
-  const params = status ? `?status=${status}` : "";
-  const res = await fetch(`${API_BASE}/agents${params}`, { cache: "no-store" });
+  let url = `${API_BASE}/agents`;
+  if (status) {
+    const params = new URLSearchParams({ status });
+    url += `?${params.toString()}`;
+  }
+  const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch agents: ${res.status}`);
   return res.json();
 }
@@ -58,8 +62,10 @@ export function mapRegistryEventToDashboardEvent(event: RegistryEventInfo): Dash
 export function formatRelativeTime(dateString: string | null | undefined): string {
   if (!dateString) return "Unknown";
   const date = new Date(dateString);
+  if (isNaN(date.getTime())) return "Unknown";
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
+  if (diffMs < 0) return "0s ago";
   const diffSeconds = Math.floor(diffMs / 1000);
   if (diffSeconds < 60) return `${diffSeconds}s ago`;
   const diffMinutes = Math.floor(diffSeconds / 60);
