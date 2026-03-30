@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -563,72 +562,6 @@ func (s *Server) handleEdgeStats(c *gin.Context) {
 		"count":      len(stats),
 		"edge_count": len(stats),
 	})
-}
-
-// handleLiveTraces streams raw trace events via SSE for the Live dashboard page.
-func (s *Server) handleLiveTraces(c *gin.Context) {
-	if s.tracingManager == nil {
-		c.JSON(503, map[string]interface{}{
-			"error":   "tracing not enabled",
-			"enabled": false,
-		})
-		return
-	}
-
-	accumulator := s.tracingManager.GetAccumulator()
-	if accumulator == nil {
-		c.JSON(503, map[string]interface{}{
-			"error":   "trace accumulator not available",
-			"enabled": false,
-		})
-		return
-	}
-
-	// SSE headers (CORS handled by middleware in server.go)
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
-		c.JSON(500, map[string]interface{}{
-			"error": "streaming not supported",
-		})
-		return
-	}
-
-	ch := accumulator.SubscribeLive()
-	defer accumulator.UnsubscribeLive(ch)
-
-	// Send initial connected event
-	connData, _ := json.Marshal(map[string]interface{}{
-		"message":   "Connected to live trace stream",
-		"timestamp": time.Now().UTC().Format(time.RFC3339),
-	})
-	fmt.Fprintf(c.Writer, "event: connected\ndata: %s\n\n", string(connData))
-	flusher.Flush()
-
-	// Send current active trace snapshots so the client has initial state
-	for _, snapshot := range accumulator.GetActiveTraceSnapshots() {
-		data, _ := json.Marshal(snapshot)
-		fmt.Fprintf(c.Writer, "event: trace_update\ndata: %s\n\n", string(data))
-		flusher.Flush()
-	}
-
-	ctx := c.Request.Context()
-	for {
-		select {
-		case event, ok := <-ch:
-			if !ok {
-				return
-			}
-			data, _ := json.Marshal(event.Snapshot)
-			fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event.EventType, string(data))
-			flusher.Flush()
-		case <-ctx.Done():
-			return
-		}
-	}
 }
 
 // runWithTLS starts the server with TLS configured to request (but not require)

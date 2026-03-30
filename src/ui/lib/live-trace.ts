@@ -46,27 +46,27 @@ export function useLiveTraces(): UseLiveTracesResult {
     const map = tracesRef.current;
     map.set(snapshot.trace_id, snapshot);
 
-    // Evict oldest traces if over limit
-    if (map.size > MAX_TRACES) {
-      const sorted = Array.from(map.values()).sort(
-        (a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime()
-      );
-      const keep = new Set(sorted.slice(0, MAX_TRACES).map((t) => t.trace_id));
-      for (const id of map.keys()) {
-        if (!keep.has(id)) map.delete(id);
-      }
-    }
-
-    // Build sorted array: newest first by start_time
+    // Sort once: newest first by start_time
     const sorted = Array.from(map.values()).sort(
       (a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime()
     );
+
+    // Evict oldest traces if over limit
+    if (sorted.length > MAX_TRACES) {
+      const evicted = sorted.splice(MAX_TRACES);
+      for (const t of evicted) {
+        map.delete(t.trace_id);
+      }
+    }
+
     setTraces(sorted);
   }, []);
 
   useEffect(() => {
     if (!active) {
       setConnected(false);
+      tracesRef.current.clear();
+      setTraces([]);
       return;
     }
 
@@ -87,19 +87,19 @@ export function useLiveTraces(): UseLiveTracesResult {
     eventSource.addEventListener("trace_started", (e: MessageEvent) => {
       try {
         handleSnapshot(JSON.parse(e.data) as LiveTrace);
-      } catch { /* ignore parse errors */ }
+      } catch (err) { console.error("live-trace: failed to parse trace_started event", err); }
     });
 
     eventSource.addEventListener("trace_update", (e: MessageEvent) => {
       try {
         handleSnapshot(JSON.parse(e.data) as LiveTrace);
-      } catch { /* ignore parse errors */ }
+      } catch (err) { console.error("live-trace: failed to parse trace_update event", err); }
     });
 
     eventSource.addEventListener("trace_completed", (e: MessageEvent) => {
       try {
         handleSnapshot(JSON.parse(e.data) as LiveTrace);
-      } catch { /* ignore parse errors */ }
+      } catch (err) { console.error("live-trace: failed to parse trace_completed event", err); }
     });
 
     return () => {
@@ -107,14 +107,6 @@ export function useLiveTraces(): UseLiveTracesResult {
       setConnected(false);
     };
   }, [active, handleSnapshot]);
-
-  // Clear state when deactivated
-  useEffect(() => {
-    if (!active) {
-      tracesRef.current.clear();
-      setTraces([]);
-    }
-  }, [active]);
 
   return { traces, connected, active, setActive };
 }

@@ -34,10 +34,14 @@ export function Sidebar() {
       }
       prevKeysRef.current = keys;
     }
+  }, [traceActivity]);
+
+  // Clear timer on unmount only
+  useEffect(() => {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };
-  }, [traceActivity]);
+  }, []);
 
   return (
     <aside className="flex h-screen w-64 flex-col border-r border-border bg-sidebar">

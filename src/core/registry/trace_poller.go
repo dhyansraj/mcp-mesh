@@ -94,11 +94,15 @@ func (p *TracePoller) poll() {
 	// Prefer accumulator-based agent activity (in-memory, fast)
 	agentCounts := p.tracingManager.GetAgentActivity()
 	if len(agentCounts) > 0 {
+		totalSpans := 0
+		for _, count := range agentCounts {
+			totalSpans += count
+		}
 		p.hub.Publish(DashboardEvent{
 			Type: "trace_activity",
 			Data: map[string]interface{}{
 				"agents":      agentCounts,
-				"trace_count": len(agentCounts),
+				"trace_count": totalSpans,
 			},
 			Timestamp: now,
 		})

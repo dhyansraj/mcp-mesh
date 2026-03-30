@@ -42,6 +42,8 @@ function buildSpanTree(spans: SnapshotSpan[]): SpanNode[] {
 
 // -- Span tree row --
 
+const MAX_DEPTH = 50;
+
 function LiveSpanRow({
   node,
   depth,
@@ -53,6 +55,7 @@ function LiveSpanRow({
   isLast: boolean;
   parentAgent: string | null;
 }) {
+  if (depth >= MAX_DEPTH) return null;
   const { span, children } = node;
   const connector = depth === 0 ? "" : isLast ? "\u2514\u2500 " : "\u251C\u2500 ";
   const showAgentBadge = span.agent_name !== parentAgent;

@@ -278,9 +278,16 @@ paths:
       tags: [tracing]
       summary: Stream all trace spans in real-time via SSE
       description: |
-        Streams ALL trace spans from Redis in real-time.
-        Starts from latest position — only new spans, no history.
-        Used by the dashboard Live page for call flow visualization.
+        Opens an SSE connection that streams live trace data. On connect,
+        the server replays snapshots of all currently active (in-progress)
+        traces so the client starts with up-to-date state.
+
+        Three SSE event types are emitted:
+          - `trace_started`   — a new trace has begun (first span received)
+          - `trace_update`    — an existing trace received additional spans
+          - `trace_completed` — the root span finished; the trace is complete
+
+        Used by the dashboard Live page for real-time call flow visualization.
       operationId: streamLiveTraces
       responses:
         "200":

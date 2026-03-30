@@ -84,13 +84,16 @@ type activeTrace struct {
 	HasError  bool
 }
 
+const maxEdgeLatencies = 10000
+
 type edgeAccum struct {
-	CallCount  int
-	ErrorCount int
-	Latencies  []int64
-	TotalMs    int64
-	MaxMs      int64
-	MinMs      int64
+	CallCount    int
+	ErrorCount   int
+	Latencies    []int64
+	latencyHead  int // ring buffer write position (used once Latencies reaches cap)
+	TotalMs      int64
+	MaxMs        int64
+	MinMs        int64
 }
 
 // NewTraceAccumulator creates a new accumulator with the given ring buffer size.
@@ -202,7 +205,12 @@ func (ta *TraceAccumulator) recordEdge(source, target string, durationMs int64, 
 	}
 	ea.CallCount++
 	ea.TotalMs += durationMs
-	ea.Latencies = append(ea.Latencies, durationMs)
+	if len(ea.Latencies) < maxEdgeLatencies {
+		ea.Latencies = append(ea.Latencies, durationMs)
+	} else {
+		ea.Latencies[ea.latencyHead] = durationMs
+		ea.latencyHead = (ea.latencyHead + 1) % maxEdgeLatencies
+	}
 	if durationMs > ea.MaxMs {
 		ea.MaxMs = durationMs
 	}

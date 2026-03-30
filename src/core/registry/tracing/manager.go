@@ -143,22 +143,25 @@ func (tm *TracingManager) Start() error {
 	return nil
 }
 
-// Stop stops the tracing manager
+// Stop stops the tracing manager. The consumer is stopped first so that
+// in-flight spans can still be processed by the accumulator before it shuts down.
 func (tm *TracingManager) Stop() error {
 	if !tm.enabled {
 		return nil
 	}
 
-	if tm.accumulator != nil {
-		tm.accumulator.Stop()
-	}
-
 	var errors []string
 
+	// Stop consumer first to drain in-flight spans before the accumulator shuts down
 	if tm.consumer != nil {
 		if err := tm.consumer.Stop(); err != nil {
 			errors = append(errors, fmt.Sprintf("consumer stop failed: %v", err))
 		}
+	}
+
+	// Now stop the accumulator — no more spans will arrive
+	if tm.accumulator != nil {
+		tm.accumulator.Stop()
 	}
 
 	// Stop processor (could be correlator or stream-through)
@@ -533,7 +536,11 @@ func (tm *TracingManager) GetEdgeStats(limit int) ([]EdgeStats, error) {
 
 	// Prefer accumulator (fast, in-memory)
 	if tm.accumulator != nil {
-		return tm.accumulator.GetEdgeStats(), nil
+		edges := tm.accumulator.GetEdgeStats()
+		if limit > 0 && limit < len(edges) {
+			edges = edges[:limit]
+		}
+		return edges, nil
 	}
 
 	if !tm.streamThroughMode || tm.tempoClient == nil {
