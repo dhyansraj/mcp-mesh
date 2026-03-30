@@ -8,21 +8,26 @@ import (
 	"strings"
 	"time"
 
+	"mcp-mesh/src/core/registry"
+
 	"github.com/gin-gonic/gin"
 )
 
 // Server is the MCP Mesh UI HTTP server. It serves the embedded Next.js
 // dashboard SPA and proxies /api/* requests to the registry.
 type Server struct {
-	engine     *gin.Engine
-	config     *UIConfig
-	httpClient *http.Client
-	startTime  time.Time
+	engine      *gin.Engine
+	config      *UIConfig
+	httpClient  *http.Client
+	startTime   time.Time
+	entService  *registry.EntService
+	eventHub    *EventHub
+	eventPoller *EventPoller
 }
 
 // NewServer creates a new UI server that serves the embedded SPA and proxies
 // API requests to the registry at config.RegistryURL.
-func NewServer(config *UIConfig, embeddedFS embed.FS, logLevel string) *Server {
+func NewServer(config *UIConfig, entService *registry.EntService, embeddedFS embed.FS, logLevel string) *Server {
 	// Set Gin mode based on log level
 	upperLevel := strings.ToUpper(logLevel)
 	if upperLevel == "DEBUG" || upperLevel == "TRACE" {
@@ -35,13 +40,19 @@ func NewServer(config *UIConfig, embeddedFS embed.FS, logLevel string) *Server {
 	engine.Use(gin.Recovery())
 	engine.Use(gin.Logger())
 
+	eventHub := NewEventHub()
+	eventPoller := NewEventPoller(entService, eventHub, 3*time.Second)
+
 	s := &Server{
 		engine: engine,
 		config: config,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		startTime: time.Now().UTC(),
+		startTime:   time.Now().UTC(),
+		entService:  entService,
+		eventHub:    eventHub,
+		eventPoller: eventPoller,
 	}
 
 	// --- API routes (proxied to registry) ---
@@ -50,8 +61,8 @@ func NewServer(config *UIConfig, embeddedFS embed.FS, logLevel string) *Server {
 		api.GET("/health", s.proxyToRegistry)
 		api.GET("/agents", s.proxyToRegistry)
 		api.GET("/agents/*path", s.proxyToRegistry)
-		api.GET("/events/history", s.proxyToRegistry)
-		api.GET("/events", s.handleEventsSSEStub)
+		api.GET("/events/history", s.GetEventsHistory)
+		api.GET("/events", s.StreamDashboardEvents)
 		api.GET("/trace/recent", s.proxyToRegistry)
 		api.GET("/trace/edge-stats", s.proxyToRegistry)
 		api.GET("/trace/:trace_id", s.proxyToRegistry)
@@ -125,32 +136,17 @@ func (s *Server) handleUIHealth(c *gin.Context) {
 	})
 }
 
-// handleEventsSSEStub provides a minimal SSE connection for Phase 1.
-// It sends a "connected" event and keeps the connection alive until the client disconnects.
-// Phase 2 will replace this with the full EventHub + EventPoller implementation.
-func (s *Server) handleEventsSSEStub(c *gin.Context) {
-	c.Header("Content-Type", "text/event-stream")
-	c.Header("Cache-Control", "no-cache")
-	c.Header("Connection", "keep-alive")
-
-	// Send initial connected event (same format the SPA expects)
-	c.SSEvent("connected", gin.H{
-		"type":    "connected",
-		"message": "UI server connected",
-	})
-	c.Writer.Flush()
-
-	// Keep connection alive until client disconnects
-	<-c.Request.Context().Done()
-}
-
 // Run starts the Gin HTTP server on the given address (e.g. ":3001").
 func (s *Server) Run(addr string) error {
+	s.eventPoller.Start()
 	return s.engine.Run(addr)
 }
 
 // Stop performs a graceful shutdown of the UI server.
 func (s *Server) Stop() error {
+	if s.eventPoller != nil {
+		s.eventPoller.Stop()
+	}
 	// Close the HTTP client transport to release idle connections
 	if transport, ok := s.httpClient.Transport.(*http.Transport); ok {
 		transport.CloseIdleConnections()

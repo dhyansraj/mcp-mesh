@@ -11,6 +11,10 @@ import (
 
 	flag "github.com/spf13/pflag"
 
+	"mcp-mesh/src/core/config"
+	"mcp-mesh/src/core/database"
+	"mcp-mesh/src/core/logger"
+	"mcp-mesh/src/core/registry"
 	"mcp-mesh/src/core/ui"
 )
 
@@ -39,6 +43,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_UI_PORT         - Port to bind to (default: 3001)\n")
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_REGISTRY_URL    - Registry URL for API proxy (default: http://localhost:8000)\n")
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_LOG_LEVEL       - Log level: TRACE, DEBUG, INFO, WARNING, ERROR (default: INFO)\n")
+		fmt.Fprintf(os.Stderr, "  DATABASE_URL             - Path to SQLite database or PostgreSQL URL (default: mcp_mesh_registry.db)\n")
 	}
 
 	flag.Parse()
@@ -77,8 +82,35 @@ func main() {
 
 	log.Printf("Starting MCP Mesh UI Server | port=%d registry=%s", uiPort, regURL)
 
+	// Initialize database (read-only, shared with registry)
+	dbURL := getEnvDefault("DATABASE_URL", "mcp_mesh_registry.db")
+	dbConfig := &database.Config{
+		DatabaseURL:        dbURL,
+		MaxOpenConnections: 5,
+		MaxIdleConnections: 2,
+		ConnMaxLifetime:    300,
+		BusyTimeout:        5000,
+		JournalMode:        "WAL",
+		Synchronous:        "NORMAL",
+		CacheSize:          10000,
+		EnableForeignKeys:  true,
+	}
+	db, err := database.InitializeEnt(dbConfig, strings.ToUpper(logLevel) == "TRACE")
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+	defer func() {
+		if err := db.Close(); err != nil {
+			log.Printf("Failed to close database: %v", err)
+		}
+	}()
+
+	// Create EntService for read-only DB queries (agent list, event history)
+	meshLogger := logger.New(&config.Config{LogLevel: logLevel})
+	entService := registry.NewEntService(db, nil, meshLogger)
+
 	// Create UI server
-	server := ui.NewServer(uiConfig, EmbeddedSPA, logLevel)
+	server := ui.NewServer(uiConfig, entService, EmbeddedSPA, logLevel)
 
 	// Graceful shutdown
 	go func() {
