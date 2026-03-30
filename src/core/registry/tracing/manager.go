@@ -601,7 +601,8 @@ func (tm *TracingManager) GetEdgeStats(limit int) ([]EdgeStats, error) {
 		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 
 		avgLatency := float64(totalLatency) / float64(callCount)
-		errorRate := float64(errorCount) / float64(callCount)
+		// ErrorRate as a percentage (0-100) for direct display in the UI
+		errorRate := 100.0 * float64(errorCount) / float64(callCount)
 
 		// P99: index at 99th percentile
 		p99Index := int(math.Ceil(float64(callCount)*0.99)) - 1
@@ -612,10 +613,6 @@ func (tm *TracingManager) GetEdgeStats(limit int) ([]EdgeStats, error) {
 			p99Index = callCount - 1
 		}
 		p99Latency := float64(latencies[p99Index])
-
-		if callCount == 0 {
-			minLatency = 0
-		}
 
 		edges = append(edges, EdgeStats{
 			Source:       parts[0],

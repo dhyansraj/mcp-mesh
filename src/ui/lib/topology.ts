@@ -67,6 +67,7 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
           target: dep.provider_agent_id,
           label: dep.capability,
           animated: dep.status === "available",
+          data: { originalLabel: dep.capability },
           style: {
             stroke: dep.status === "available" ? availableColor : dep.status === "unavailable" ? "#ef4444" : "#6b7280",
             strokeDasharray: dep.status === "unresolved" ? "5 5" : undefined,
@@ -83,6 +84,7 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
           target: llm.provider_agent_id,
           label: `llm:${llm.filter_capability}`,
           animated: llm.status === "available",
+          data: { originalLabel: `llm:${llm.filter_capability}` },
           style: {
             stroke: llm.status === "available" ? "#22d3ee" : "#ef4444",
             strokeDasharray: llm.status !== "available" ? "5 5" : undefined,
@@ -99,6 +101,7 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
           target: prov.provider_agent_id,
           label: `provider:${prov.required_capability}`,
           animated: prov.status === "available",
+          data: { originalLabel: `provider:${prov.required_capability}` },
           style: {
             stroke: prov.status === "available" ? "#a855f7" : "#ef4444",
             strokeDasharray: prov.status !== "available" ? "5 5" : undefined,

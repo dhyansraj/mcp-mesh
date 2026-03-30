@@ -68,9 +68,8 @@ func (p *TracePoller) Start() {
 // Stop gracefully stops the trace poller
 func (p *TracePoller) Stop() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	if !p.running {
+		p.mu.Unlock()
 		return
 	}
 
@@ -78,6 +77,8 @@ func (p *TracePoller) Stop() {
 	if p.cancel != nil {
 		p.cancel()
 	}
+	p.mu.Unlock()
+
 	p.wg.Wait()
 	p.logger.Info("Trace poller stopped successfully")
 }
@@ -94,41 +95,39 @@ func (p *TracePoller) poll() {
 	traces, err := p.tracingManager.GetRecentTraces(20)
 	if err != nil {
 		p.logger.Warning("Trace poller: failed to get recent traces: %v", err)
-		return
-	}
-
-	// Build agent activity map from trace data
-	agentCounts := make(map[string]int)
-	for _, t := range traces {
-		for _, agent := range t.Agents {
-			agentCounts[agent]++
+	} else {
+		// Build agent activity map from trace data
+		agentCounts := make(map[string]int)
+		for _, t := range traces {
+			for _, agent := range t.Agents {
+				agentCounts[agent]++
+			}
 		}
+
+		// Publish trace_activity event
+		p.hub.Publish(DashboardEvent{
+			Type: "trace_activity",
+			Data: map[string]interface{}{
+				"agents":      agentCounts,
+				"trace_count": len(traces),
+			},
+			Timestamp: now,
+		})
 	}
 
-	// Publish trace_activity event
-	p.hub.Publish(DashboardEvent{
-		Type: "trace_activity",
-		Data: map[string]interface{}{
-			"agents":      agentCounts,
-			"trace_count": len(traces),
-		},
-		Timestamp: now,
-	})
-
-	// Fetch edge stats
-	edges, err := p.tracingManager.GetEdgeStats(20)
-	if err != nil {
-		p.logger.Warning("Trace poller: failed to get edge stats: %v", err)
-		return
+	// Fetch edge stats independently of trace fetch
+	edges, edgeErr := p.tracingManager.GetEdgeStats(20)
+	if edgeErr != nil {
+		p.logger.Warning("Trace poller: failed to get edge stats: %v", edgeErr)
+	} else {
+		// Publish edge_stats event
+		p.hub.Publish(DashboardEvent{
+			Type: "edge_stats",
+			Data: map[string]interface{}{
+				"edges":      edges,
+				"edge_count": len(edges),
+			},
+			Timestamp: now,
+		})
 	}
-
-	// Publish edge_stats event
-	p.hub.Publish(DashboardEvent{
-		Type: "edge_stats",
-		Data: map[string]interface{}{
-			"edges":           edges,
-			"traces_analyzed": len(traces),
-		},
-		Timestamp: now,
-	})
 }

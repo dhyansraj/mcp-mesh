@@ -490,6 +490,8 @@ func (s *Server) handleRecentTraces(c *gin.Context) {
 		c.JSON(200, map[string]interface{}{
 			"enabled": false,
 			"traces":  []interface{}{},
+			"count":   0,
+			"limit":   0,
 		})
 		return
 	}
@@ -524,8 +526,10 @@ func (s *Server) handleRecentTraces(c *gin.Context) {
 func (s *Server) handleEdgeStats(c *gin.Context) {
 	if s.tracingManager == nil {
 		c.JSON(200, map[string]interface{}{
-			"enabled": false,
-			"edges":   []interface{}{},
+			"enabled":    false,
+			"edges":      []interface{}{},
+			"count":      0,
+			"edge_count": 0,
 		})
 		return
 	}
@@ -549,10 +553,10 @@ func (s *Server) handleEdgeStats(c *gin.Context) {
 	}
 
 	c.JSON(200, map[string]interface{}{
-		"enabled":        true,
-		"edges":          stats,
-		"count":          len(stats),
-		"traces_analyzed": limit,
+		"enabled":    true,
+		"edges":      stats,
+		"count":      len(stats),
+		"edge_count": len(stats),
 	})
 }
 

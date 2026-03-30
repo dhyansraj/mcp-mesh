@@ -174,5 +174,5 @@ export interface EdgeStatsResponse {
   enabled: boolean;
   edges: EdgeStat[];
   count: number;
-  traces_analyzed: number;
+  edge_count: number;
 }

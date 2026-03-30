@@ -31,12 +31,14 @@ function buildSpanTree(spans: TraceSpan[]): SpanNode[] {
   }
 
   // Resolve the effective parent: skip over proxy_call_wrapper spans
-  function resolveParent(parentId: string | null): string | null {
+  function resolveParent(parentId: string | null, visited = new Set<string>()): string | null {
     if (!parentId) return null;
     if (!wrapperIds.has(parentId)) return parentId;
+    if (visited.has(parentId)) return null;
+    visited.add(parentId);
     const parent = spanById.get(parentId);
     if (!parent) return null;
-    return resolveParent(parent.ParentSpan);
+    return resolveParent(parent.ParentSpan, visited);
   }
 
   const childrenMap = new Map<string | "root", SpanNode[]>();

@@ -74,12 +74,13 @@ function mergeEdgeStatsIntoEdges(edges: Edge[], edgeStats: EdgeStat[]): Edge[] {
     const stat = statsMap.get(`${sourceName}->${targetName}`);
     if (!stat) return edge;
 
-    // Keep the original capability label, append latency
-    const originalLabel = edge.label ? `${edge.label}  ${stat.avg_latency_ms.toFixed(0)}ms` : `${stat.avg_latency_ms.toFixed(0)}ms`;
+    // Use stored original label to prevent accumulation on repeated merges
+    const baseLabel = (edge.data?.originalLabel as string) || edge.label || "";
+    const mergedLabel = baseLabel ? `${baseLabel}  ${stat.avg_latency_ms.toFixed(0)}ms` : `${stat.avg_latency_ms.toFixed(0)}ms`;
 
     return {
       ...edge,
-      label: originalLabel,
+      label: mergedLabel,
       style: {
         ...edge.style,
         stroke: getEdgeHeatColor(stat.error_rate),
