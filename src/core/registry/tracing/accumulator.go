@@ -8,6 +8,37 @@ import (
 	"time"
 )
 
+// TraceSnapshot is a complete trace state sent to live SSE clients
+type TraceSnapshot struct {
+	TraceID       string         `json:"trace_id"`
+	RootAgent     string         `json:"root_agent,omitempty"`
+	RootOperation string         `json:"root_operation,omitempty"`
+	StartTime     time.Time      `json:"start_time"`
+	Completed     bool           `json:"completed"`
+	DurationMs    *int64         `json:"duration_ms,omitempty"`
+	HasError      bool           `json:"has_error"`
+	SpanCount     int            `json:"span_count"`
+	Agents        []string       `json:"agents"`
+	Spans         []SnapshotSpan `json:"spans"`
+}
+
+// SnapshotSpan is a flattened span with effective parent resolution
+type SnapshotSpan struct {
+	SpanID          string `json:"span_id"`
+	EffectiveParent string `json:"effective_parent,omitempty"`
+	AgentName       string `json:"agent_name"`
+	Operation       string `json:"operation"`
+	DurationMs      *int64 `json:"duration_ms,omitempty"`
+	Success         *bool  `json:"success,omitempty"`
+	Runtime         string `json:"runtime,omitempty"`
+}
+
+// LiveTraceEvent is sent to live SSE subscribers
+type LiveTraceEvent struct {
+	EventType string         `json:"event_type"` // trace_started, trace_update, trace_completed
+	Snapshot  *TraceSnapshot `json:"snapshot"`
+}
+
 // TraceAccumulator accumulates trace data in-memory as spans stream through
 // the Redis consumer. It replaces the Tempo-polling approach for recent traces,
 // edge stats, and agent activity.
@@ -31,7 +62,10 @@ type TraceAccumulator struct {
 
 	// Live subscribers for SSE streaming
 	liveMu      sync.RWMutex
-	liveClients map[chan *TraceEvent]struct{}
+	liveClients map[chan *LiveTraceEvent]struct{}
+
+	// Dirty traces needing debounced update publish
+	dirtyTraces map[string]bool
 
 	logger *log.Logger
 	cancel chan struct{}
@@ -70,7 +104,8 @@ func NewTraceAccumulator(ringSize int, logger *log.Logger) *TraceAccumulator {
 		activeTraces:  make(map[string]*activeTrace),
 		edgeStats:     make(map[string]*edgeAccum),
 		agentActivity: make(map[string]int),
-		liveClients:   make(map[chan *TraceEvent]struct{}),
+		liveClients:   make(map[chan *LiveTraceEvent]struct{}),
+		dirtyTraces:   make(map[string]bool),
 		logger:        logger,
 		cancel:        make(chan struct{}),
 	}
@@ -117,12 +152,25 @@ func (ta *TraceAccumulator) ProcessTraceEvent(event *TraceEvent) error {
 		at.RootOp = event.Operation
 	}
 
-	// 3. Publish to live subscribers (non-blocking)
-	ta.publishLive(event)
+	// 3. Publish live events based on trace state
+	if !exists {
+		// New trace — publish trace_started
+		ta.publishLive(&LiveTraceEvent{
+			EventType: "trace_started",
+			Snapshot:  at.buildSnapshot(false),
+		})
+	}
 
 	// 4. On root span completion (span_end with no parent), finalize trace + detect edges
 	if event.DurationMS != nil && event.ParentSpan == nil {
-		// Root span completed — all spans should be in the map now
+		// Root span completed — publish trace_completed BEFORE finalizing
+		ta.publishLive(&LiveTraceEvent{
+			EventType: "trace_completed",
+			Snapshot:  at.buildSnapshot(true),
+		})
+		// Remove from dirty set since we just published the completed snapshot
+		delete(ta.dirtyTraces, event.TraceID)
+
 		// Detect cross-agent edges from all spans in this trace
 		for _, s := range at.Spans {
 			if s.ParentSpan == nil || s.DurationMS == nil {
@@ -134,6 +182,9 @@ func (ta *TraceAccumulator) ProcessTraceEvent(event *TraceEvent) error {
 			}
 		}
 		ta.finalizeTrace(at, event)
+	} else if exists {
+		// Existing trace with a new span — mark dirty for debounced update
+		ta.dirtyTraces[event.TraceID] = true
 	}
 
 	return nil
@@ -200,9 +251,95 @@ func (ta *TraceAccumulator) finalizeTrace(at *activeTrace, rootSpan *TraceEvent)
 	delete(ta.activeTraces, at.TraceID)
 }
 
-// publishLive sends the event to all live subscribers (non-blocking).
+// buildSnapshot creates a TraceSnapshot from the current state of the activeTrace.
+// Caller must hold ta.mu (read or write).
+func (at *activeTrace) buildSnapshot(completed bool) *TraceSnapshot {
+	// Build wrapper ID set for proxy_call_wrapper filtering
+	wrapperIDs := make(map[string]bool)
+	for _, s := range at.Spans {
+		if s.Operation == "proxy_call_wrapper" {
+			wrapperIDs[s.SpanID] = true
+		}
+	}
+
+	// Resolve effective parent: skip through proxy_call_wrapper spans
+	resolveParent := func(parentID string) string {
+		visited := make(map[string]bool)
+		current := parentID
+		for wrapperIDs[current] {
+			if visited[current] {
+				break
+			}
+			visited[current] = true
+			for _, s := range at.Spans {
+				if s.SpanID == current && s.ParentSpan != nil {
+					current = *s.ParentSpan
+					break
+				}
+			}
+		}
+		return current
+	}
+
+	// Build filtered spans
+	var spans []SnapshotSpan
+	for _, s := range at.Spans {
+		if s.Operation == "proxy_call_wrapper" {
+			continue
+		}
+
+		ss := SnapshotSpan{
+			SpanID:    s.SpanID,
+			AgentName: s.AgentName,
+			Operation: s.Operation,
+			DurationMs: s.DurationMS,
+			Success:   s.Success,
+			Runtime:   s.Runtime,
+		}
+
+		if s.ParentSpan != nil {
+			resolved := resolveParent(*s.ParentSpan)
+			if !wrapperIDs[resolved] {
+				ss.EffectiveParent = resolved
+			}
+		}
+
+		spans = append(spans, ss)
+	}
+
+	// Build agents list
+	agents := make([]string, 0, len(at.Agents))
+	for a := range at.Agents {
+		agents = append(agents, a)
+	}
+	sort.Strings(agents)
+
+	// Find root span duration
+	var durationMs *int64
+	for _, s := range at.Spans {
+		if s.ParentSpan == nil && s.DurationMS != nil && *s.DurationMS > 0 {
+			durationMs = s.DurationMS
+			break
+		}
+	}
+
+	return &TraceSnapshot{
+		TraceID:       at.TraceID,
+		RootAgent:     at.RootAgent,
+		RootOperation: at.RootOp,
+		StartTime:     at.StartTime,
+		Completed:     completed,
+		DurationMs:    durationMs,
+		HasError:      at.HasError,
+		SpanCount:     len(spans),
+		Agents:        agents,
+		Spans:         spans,
+	}
+}
+
+// publishLive sends a LiveTraceEvent to all live subscribers (non-blocking).
 // Caller must NOT hold liveMu.
-func (ta *TraceAccumulator) publishLive(event *TraceEvent) {
+func (ta *TraceAccumulator) publishLive(event *LiveTraceEvent) {
 	ta.liveMu.RLock()
 	defer ta.liveMu.RUnlock()
 	for ch := range ta.liveClients {
@@ -306,22 +443,33 @@ func (ta *TraceAccumulator) GetAgentActivity() map[string]int {
 }
 
 // SubscribeLive creates a new live subscriber channel for SSE streaming.
-func (ta *TraceAccumulator) SubscribeLive() chan *TraceEvent {
+func (ta *TraceAccumulator) SubscribeLive() chan *LiveTraceEvent {
 	ta.liveMu.Lock()
 	defer ta.liveMu.Unlock()
-	ch := make(chan *TraceEvent, 64)
+	ch := make(chan *LiveTraceEvent, 64)
 	ta.liveClients[ch] = struct{}{}
 	return ch
 }
 
 // UnsubscribeLive removes a live subscriber and closes its channel.
-func (ta *TraceAccumulator) UnsubscribeLive(ch chan *TraceEvent) {
+func (ta *TraceAccumulator) UnsubscribeLive(ch chan *LiveTraceEvent) {
 	ta.liveMu.Lock()
 	defer ta.liveMu.Unlock()
 	if _, ok := ta.liveClients[ch]; ok {
 		delete(ta.liveClients, ch)
 		close(ch)
 	}
+}
+
+// GetActiveTraceSnapshots returns snapshots for all currently active traces.
+func (ta *TraceAccumulator) GetActiveTraceSnapshots() []*TraceSnapshot {
+	ta.mu.RLock()
+	defer ta.mu.RUnlock()
+	var snapshots []*TraceSnapshot
+	for _, at := range ta.activeTraces {
+		snapshots = append(snapshots, at.buildSnapshot(false))
+	}
+	return snapshots
 }
 
 // LiveSubscriberCount returns the number of active live SSE subscribers.
@@ -331,10 +479,11 @@ func (ta *TraceAccumulator) LiveSubscriberCount() int {
 	return len(ta.liveClients)
 }
 
-// Start begins the background cleanup goroutine that removes stale active traces.
+// Start begins the background cleanup and debounce goroutines.
 func (ta *TraceAccumulator) Start() {
-	ta.wg.Add(1)
+	ta.wg.Add(2)
 	go ta.cleanupLoop()
+	go ta.debounceLoop()
 }
 
 // Stop cancels the cleanup goroutine and waits for it to finish.
@@ -360,17 +509,71 @@ func (ta *TraceAccumulator) cleanupLoop() {
 
 func (ta *TraceAccumulator) cleanupStaleTraces() {
 	ta.mu.Lock()
-	defer ta.mu.Unlock()
 
 	cutoff := time.Now().Add(-2 * time.Minute)
+	var staleEvents []*LiveTraceEvent
 	stale := 0
 	for id, at := range ta.activeTraces {
 		if at.LastSeen.Before(cutoff) {
+			staleEvents = append(staleEvents, &LiveTraceEvent{
+				EventType: "trace_completed",
+				Snapshot:  at.buildSnapshot(true),
+			})
 			delete(ta.activeTraces, id)
+			delete(ta.dirtyTraces, id)
 			stale++
 		}
 	}
+	ta.mu.Unlock()
+
+	// Publish outside of mu lock
+	for _, evt := range staleEvents {
+		ta.publishLive(evt)
+	}
+
 	if stale > 0 {
 		ta.logger.Printf("TraceAccumulator: cleaned up %d stale active traces", stale)
+	}
+}
+
+func (ta *TraceAccumulator) debounceLoop() {
+	defer ta.wg.Done()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ta.cancel:
+			return
+		case <-ticker.C:
+			ta.publishDirtyTraces()
+		}
+	}
+}
+
+func (ta *TraceAccumulator) publishDirtyTraces() {
+	ta.mu.Lock()
+	if len(ta.dirtyTraces) == 0 {
+		ta.mu.Unlock()
+		return
+	}
+
+	// Copy dirty set and build snapshots under lock
+	var events []*LiveTraceEvent
+	for id := range ta.dirtyTraces {
+		at, ok := ta.activeTraces[id]
+		if ok {
+			events = append(events, &LiveTraceEvent{
+				EventType: "trace_update",
+				Snapshot:  at.buildSnapshot(false),
+			})
+		}
+	}
+	ta.dirtyTraces = make(map[string]bool)
+	ta.mu.Unlock()
+
+	// Publish outside of mu lock
+	for _, evt := range events {
+		ta.publishLive(evt)
 	}
 }

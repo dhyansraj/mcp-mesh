@@ -4,28 +4,27 @@ import { useState, useEffect, useCallback, useRef } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_REGISTRY_URL || "http://localhost:8000";
 
-export interface LiveSpan {
-  trace_id: string;
+export interface SnapshotSpan {
   span_id: string;
-  parent_span?: string;
+  effective_parent?: string;
   agent_name: string;
-  agent_id: string;
   operation: string;
-  event_type: string;
   duration_ms?: number;
   success?: boolean;
   runtime?: string;
-  timestamp: string;
 }
 
 export interface LiveTrace {
   trace_id: string;
-  spans: LiveSpan[];
   root_agent?: string;
   root_operation?: string;
   start_time: string;
-  last_seen: string;
   completed: boolean;
+  duration_ms?: number;
+  has_error: boolean;
+  span_count: number;
+  agents: string[];
+  spans: SnapshotSpan[];
 }
 
 const MAX_TRACES = 20;
@@ -42,66 +41,26 @@ export function useLiveTraces(): UseLiveTracesResult {
   const [connected, setConnected] = useState(false);
   const [active, setActive] = useState(false);
   const tracesRef = useRef<Map<string, LiveTrace>>(new Map());
-  const orderRef = useRef<string[]>([]);
 
-  const handleSpan = useCallback((span: LiveSpan) => {
+  const handleSnapshot = useCallback((snapshot: LiveTrace) => {
     const map = tracesRef.current;
-    const order = orderRef.current;
+    map.set(snapshot.trace_id, snapshot);
 
-    let trace = map.get(span.trace_id);
-    if (!trace) {
-      trace = {
-        trace_id: span.trace_id,
-        spans: [],
-        start_time: span.timestamp,
-        last_seen: span.timestamp,
-        completed: false,
-      };
-      map.set(span.trace_id, trace);
-      order.unshift(span.trace_id);
-
-      // Evict oldest if over limit
-      while (order.length > MAX_TRACES) {
-        const old = order.pop()!;
-        map.delete(old);
+    // Evict oldest traces if over limit
+    if (map.size > MAX_TRACES) {
+      const sorted = Array.from(map.values()).sort(
+        (a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime()
+      );
+      const keep = new Set(sorted.slice(0, MAX_TRACES).map((t) => t.trace_id));
+      for (const id of map.keys()) {
+        if (!keep.has(id)) map.delete(id);
       }
     }
 
-    // Merge span: update existing or add new
-    const existingIdx = trace.spans.findIndex((s) => s.span_id === span.span_id);
-    if (existingIdx >= 0) {
-      // Merge span_end data into existing span_start entry
-      trace.spans[existingIdx] = { ...trace.spans[existingIdx], ...span };
-    } else {
-      trace.spans.push(span);
-    }
-
-    // Update root info — root span has no parent or parent is "null"/""/undefined
-    const isRootSpan = !span.parent_span || span.parent_span === "null";
-    if (isRootSpan) {
-      trace.root_agent = span.agent_name;
-      trace.root_operation = span.operation;
-      // Mark completed when root span has duration > 0 (span_end arrived)
-      if (span.duration_ms !== undefined && span.duration_ms !== null && span.duration_ms > 0) {
-        trace.completed = true;
-      }
-    }
-
-    trace.last_seen = span.timestamp;
-
-    // Move this trace to front of order if not already
-    const idx = order.indexOf(span.trace_id);
-    if (idx > 0) {
-      order.splice(idx, 1);
-      order.unshift(span.trace_id);
-    }
-
-    // Build sorted array from order
-    const sorted: LiveTrace[] = [];
-    for (const id of order) {
-      const t = map.get(id);
-      if (t) sorted.push({ ...t, spans: [...t.spans] });
-    }
+    // Build sorted array: newest first by start_time
+    const sorted = Array.from(map.values()).sort(
+      (a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime()
+    );
     setTraces(sorted);
   }, []);
 
@@ -121,30 +80,47 @@ export function useLiveTraces(): UseLiveTracesResult {
       setConnected(false);
     };
 
-    eventSource.addEventListener("span", (e: MessageEvent) => {
+    eventSource.addEventListener("connected", () => {
+      setConnected(true);
+    });
+
+    eventSource.addEventListener("trace_started", (e: MessageEvent) => {
       try {
-        const span = JSON.parse(e.data) as LiveSpan;
-        handleSpan(span);
+        const snapshot = JSON.parse(e.data) as LiveTrace;
+        handleSnapshot(snapshot);
       } catch (err) {
-        console.error("Failed to parse live span:", err);
+        console.error("Failed to parse trace_started:", err);
       }
     });
 
-    eventSource.addEventListener("connected", () => {
-      setConnected(true);
+    eventSource.addEventListener("trace_update", (e: MessageEvent) => {
+      try {
+        const snapshot = JSON.parse(e.data) as LiveTrace;
+        handleSnapshot(snapshot);
+      } catch (err) {
+        console.error("Failed to parse trace_update:", err);
+      }
+    });
+
+    eventSource.addEventListener("trace_completed", (e: MessageEvent) => {
+      try {
+        const snapshot = JSON.parse(e.data) as LiveTrace;
+        handleSnapshot(snapshot);
+      } catch (err) {
+        console.error("Failed to parse trace_completed:", err);
+      }
     });
 
     return () => {
       eventSource.close();
       setConnected(false);
     };
-  }, [active, handleSpan]);
+  }, [active, handleSnapshot]);
 
   // Clear state when deactivated
   useEffect(() => {
     if (!active) {
       tracesRef.current.clear();
-      orderRef.current = [];
       setTraces([]);
     }
   }, [active]);

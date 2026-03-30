@@ -18,19 +18,22 @@ export function Sidebar() {
   const pathname = usePathname();
   const { connected, traceActivity } = useMesh();
 
-  // Pulse the Live dot only when total trace count increases (new traces arriving)
+  // Pulse the Live dot only when new agent names appear in trace activity
   const [recentActivity, setRecentActivity] = useState(false);
-  const prevTotalRef = useRef(0);
+  const prevKeysRef = useRef<string>("");
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const total = Object.values(traceActivity).reduce((sum, n) => sum + n, 0);
-    if (total > prevTotalRef.current && prevTotalRef.current > 0) {
-      setRecentActivity(true);
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => setRecentActivity(false), 10000);
+    const keys = Object.keys(traceActivity).sort().join(",");
+    if (keys !== prevKeysRef.current && keys !== "") {
+      // New agents appeared in trace activity
+      if (prevKeysRef.current !== "") {
+        setRecentActivity(true);
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => setRecentActivity(false), 10000);
+      }
+      prevKeysRef.current = keys;
     }
-    prevTotalRef.current = total;
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
     };

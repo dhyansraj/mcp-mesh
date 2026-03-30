@@ -745,6 +745,12 @@ func (h *EntBusinessLogicHandlers) StreamLiveTraces(c *gin.Context) {
 	})
 	flusher.Flush()
 
+	// Send current active trace snapshots so the client has initial state
+	for _, snapshot := range h.traceAccumulator.GetActiveTraceSnapshots() {
+		h.writeSSEEvent(c, "trace_update", snapshot)
+		flusher.Flush()
+	}
+
 	ctx := c.Request.Context()
 	for {
 		select {
@@ -752,26 +758,7 @@ func (h *EntBusinessLogicHandlers) StreamLiveTraces(c *gin.Context) {
 			if !ok {
 				return
 			}
-			data := map[string]interface{}{
-				"trace_id":   event.TraceID,
-				"span_id":    event.SpanID,
-				"agent_name": event.AgentName,
-				"agent_id":   event.AgentID,
-				"operation":  event.Operation,
-				"event_type": event.EventType,
-				"runtime":    event.Runtime,
-				"timestamp":  time.Unix(int64(event.Timestamp), int64((event.Timestamp-float64(int64(event.Timestamp)))*1e9)).UTC().Format(time.RFC3339),
-			}
-			if event.ParentSpan != nil {
-				data["parent_span"] = *event.ParentSpan
-			}
-			if event.DurationMS != nil {
-				data["duration_ms"] = *event.DurationMS
-			}
-			if event.Success != nil {
-				data["success"] = *event.Success
-			}
-			h.writeSSEEvent(c, "span", data)
+			h.writeSSEEvent(c, event.EventType, event.Snapshot)
 			flusher.Flush()
 		case <-ctx.Done():
 			return

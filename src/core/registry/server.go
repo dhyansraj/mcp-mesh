@@ -608,6 +608,13 @@ func (s *Server) handleLiveTraces(c *gin.Context) {
 	fmt.Fprintf(c.Writer, "event: connected\ndata: %s\n\n", string(connData))
 	flusher.Flush()
 
+	// Send current active trace snapshots so the client has initial state
+	for _, snapshot := range accumulator.GetActiveTraceSnapshots() {
+		data, _ := json.Marshal(snapshot)
+		fmt.Fprintf(c.Writer, "event: trace_update\ndata: %s\n\n", string(data))
+		flusher.Flush()
+	}
+
 	ctx := c.Request.Context()
 	for {
 		select {
@@ -615,33 +622,8 @@ func (s *Server) handleLiveTraces(c *gin.Context) {
 			if !ok {
 				return
 			}
-			payload := map[string]interface{}{
-				"trace_id":   event.TraceID,
-				"span_id":    event.SpanID,
-				"agent_name": event.AgentName,
-				"agent_id":   event.AgentID,
-				"operation":  event.Operation,
-				"event_type": event.EventType,
-				"runtime":    event.Runtime,
-				"timestamp":  time.Unix(int64(event.Timestamp), int64((event.Timestamp-float64(int64(event.Timestamp)))*1e9)).UTC().Format(time.RFC3339Nano),
-			}
-			if event.ParentSpan != nil {
-				payload["parent_span"] = *event.ParentSpan
-			}
-			if event.DurationMS != nil {
-				payload["duration_ms"] = *event.DurationMS
-			}
-			if event.Success != nil {
-				payload["success"] = *event.Success
-			}
-			if event.TargetAgent != nil {
-				payload["target_agent"] = *event.TargetAgent
-			}
-			if event.ErrorMessage != nil {
-				payload["error_message"] = *event.ErrorMessage
-			}
-			data, _ := json.Marshal(payload)
-			fmt.Fprintf(c.Writer, "event: span\ndata: %s\n\n", string(data))
+			data, _ := json.Marshal(event.Snapshot)
+			fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event.EventType, string(data))
 			flusher.Flush()
 		case <-ctx.Done():
 			return
