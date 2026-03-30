@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { LayoutDashboard, Bot, Network, Radio } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMesh } from "@/lib/mesh-context";
@@ -15,7 +16,25 @@ const navigation = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { connected } = useMesh();
+  const { connected, traceActivity } = useMesh();
+
+  // Pulse the Live dot only when total trace count increases (new traces arriving)
+  const [recentActivity, setRecentActivity] = useState(false);
+  const prevTotalRef = useRef(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const total = Object.values(traceActivity).reduce((sum, n) => sum + n, 0);
+    if (total > prevTotalRef.current && prevTotalRef.current > 0) {
+      setRecentActivity(true);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setRecentActivity(false), 10000);
+    }
+    prevTotalRef.current = total;
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [traceActivity]);
 
   return (
     <aside className="flex h-screen w-64 flex-col border-r border-border bg-sidebar">
@@ -48,6 +67,9 @@ export function Sidebar() {
             >
               <item.icon className="h-5 w-5" />
               {item.name}
+              {item.name === "Live" && recentActivity && (
+                <span className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
+              )}
             </Link>
           );
         })}

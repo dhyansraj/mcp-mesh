@@ -205,6 +205,9 @@ function TraceCard({
               {trace.root_agent}
             </Badge>
           )}
+          <span className="text-[10px] font-mono text-muted-foreground/40 ml-1">
+            {trace.trace_id.slice(0, 12)}
+          </span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           {totalDuration !== undefined && (

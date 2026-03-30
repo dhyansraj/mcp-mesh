@@ -76,11 +76,13 @@ export function useLiveTraces(): UseLiveTracesResult {
       trace.spans.push(span);
     }
 
-    // Update root info from root span (no parent)
-    if (!span.parent_span) {
+    // Update root info — root span has no parent or parent is "null"/""/undefined
+    const isRootSpan = !span.parent_span || span.parent_span === "null";
+    if (isRootSpan) {
       trace.root_agent = span.agent_name;
       trace.root_operation = span.operation;
-      if (span.duration_ms !== undefined && span.duration_ms !== null) {
+      // Mark completed when root span has duration > 0 (span_end arrived)
+      if (span.duration_ms !== undefined && span.duration_ms !== null && span.duration_ms > 0) {
         trace.completed = true;
       }
     }
