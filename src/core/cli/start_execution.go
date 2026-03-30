@@ -517,13 +517,15 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 		}(agentCmd, agentName)
 	}
 
-	// Set PID update callbacks for watchers so PID files track the actual agent process
-	// Write agent's actual PID so meshctl stop can target individual agents
+	// Set PID update callbacks for watchers so PID files track the actual agent process.
+	// The callback fires on initial start and on every file-change restart.
 	for _, w := range watchers {
 		name := w.config.AgentName // capture for closure
 		w.config.PIDUpdateCallback = func(pid int) {
 			if pmErr == nil {
-				pm.WritePID(name, pid)
+				if err := pm.WritePID(name, pid); err != nil && !quiet {
+					fmt.Printf("Warning: failed to update PID file for %s: %v\n", name, err)
+				}
 			}
 		}
 	}
@@ -540,7 +542,8 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 	// Wait briefly for watchers to start their initial agent processes
 	time.Sleep(1 * time.Second)
 
-	// Write initial PID files using actual agent PIDs
+	// Fallback: write initial PID files in case PIDUpdateCallback fired before pm was ready.
+	// The callback is the primary mechanism; this is best-effort for the initial startup window.
 	for _, w := range watchers {
 		agentName := w.config.AgentName
 		agentNames = append(agentNames, agentName)
