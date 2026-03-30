@@ -94,6 +94,11 @@ func (p *EventPoller) Stop() {
 }
 
 func (p *EventPoller) poll(lastSnap map[string]agentSnapshot) {
+	// Skip polling when no dashboard clients are connected
+	if p.hub.SubscriberCount() == 0 {
+		return
+	}
+
 	resp, err := p.service.ListAgents(nil)
 	if err != nil {
 		p.logger.Warning("Event poller: failed to list agents: %v", err)
