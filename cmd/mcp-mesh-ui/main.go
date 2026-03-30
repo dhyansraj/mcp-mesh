@@ -40,7 +40,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nEnvironment Variables:\n")
-		fmt.Fprintf(os.Stderr, "  MCP_MESH_UI_PORT         - Port to bind to (default: 3001)\n")
+		fmt.Fprintf(os.Stderr, "  MCP_MESH_UI_PORT         - Port to bind to (default: 3080)\n")
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_REGISTRY_URL    - Registry URL for API proxy (default: http://localhost:8000)\n")
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_LOG_LEVEL       - Log level: TRACE, DEBUG, INFO, WARNING, ERROR (default: INFO)\n")
 		fmt.Fprintf(os.Stderr, "  DATABASE_URL             - Path to SQLite database or PostgreSQL URL (default: mcp_mesh_registry.db)\n")
@@ -60,7 +60,7 @@ func main() {
 	}
 
 	// Resolve configuration: flags > env > defaults
-	uiPort := getEnvIntDefault("MCP_MESH_UI_PORT", 3001)
+	uiPort := getEnvIntDefault("MCP_MESH_UI_PORT", 3080)
 	if port != 0 {
 		uiPort = port
 	}

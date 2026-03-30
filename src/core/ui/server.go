@@ -136,7 +136,7 @@ func (s *Server) handleUIHealth(c *gin.Context) {
 	})
 }
 
-// Run starts the Gin HTTP server on the given address (e.g. ":3001").
+// Run starts the Gin HTTP server on the given address (e.g. ":3080").
 func (s *Server) Run(addr string) error {
 	s.eventPoller.Start()
 	return s.engine.Run(addr)
