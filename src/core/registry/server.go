@@ -34,6 +34,7 @@ type Server struct {
 	logger         *logger.Logger
 	eventHub       *EventHub
 	eventPoller    *EventPoller
+	tracePoller    *TracePoller
 }
 
 // NewServer creates a new registry server using Ent database
@@ -106,6 +107,12 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 		engine.Use(TLSVerifyMiddleware(trustChain, config.TlsMode))
 	}
 
+	// Create trace poller for pushing trace activity via SSE (only when tracing is enabled)
+	var tracePoller *TracePoller
+	if tracingManager != nil {
+		tracePoller = NewTracePoller(tracingManager, eventHub, logger, 10*time.Second)
+	}
+
 	// Create server
 	server := &Server{
 		engine:         engine,
@@ -119,6 +126,7 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 		logger:         logger,
 		eventHub:       eventHub,
 		eventPoller:    eventPoller,
+		tracePoller:    tracePoller,
 	}
 
 	// Add operational endpoints first (includes wildcard proxy routes that must be registered before generated routes)
@@ -146,6 +154,11 @@ func (s *Server) Run(addr string) error {
 
 	// Start dashboard event poller
 	s.eventPoller.Start()
+
+	// Start trace poller (publishes trace activity via SSE)
+	if s.tracePoller != nil {
+		s.tracePoller.Start()
+	}
 
 	// Start distributed tracing if enabled
 	if s.tracingManager != nil {
@@ -181,6 +194,11 @@ func (s *Server) Start() error {
 
 // Stop stops the HTTP server and health monitor
 func (s *Server) Stop() error {
+	// Stop trace poller
+	if s.tracePoller != nil {
+		s.tracePoller.Stop()
+	}
+
 	// Stop dashboard event poller
 	s.eventPoller.Stop()
 

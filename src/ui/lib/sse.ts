@@ -53,6 +53,8 @@ export function useMeshEvents(options: UseMeshEventsOptions = {}): UseMeshEvents
       "agent_unhealthy",
       "dependency_resolved",
       "dependency_lost",
+      "trace_activity",
+      "edge_stats",
     ];
 
     const handleEvent = (e: MessageEvent) => {

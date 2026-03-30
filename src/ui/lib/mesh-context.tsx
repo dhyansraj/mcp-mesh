@@ -16,6 +16,7 @@ export interface MeshContextValue {
   paused: boolean;
   setPaused: (paused: boolean) => void;
   refresh: () => Promise<void>;
+  traceActivity: Record<string, number>;
 }
 
 const MeshContext = createContext<MeshContextValue | null>(null);
@@ -27,6 +28,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
   const [historyEvents, setHistoryEvents] = useState<DashboardEvent[]>([]);
   const [showAll, setShowAll] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [traceActivity, setTraceActivity] = useState<Record<string, number>>({});
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -47,6 +49,14 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
   const handleEvent = useCallback(
     (event: DashboardEvent) => {
       if (paused) return;
+
+      // Handle trace activity updates (no agent refetch needed)
+      if (event.type === "trace_activity") {
+        const agents = event.data?.agents as Record<string, number> | undefined;
+        if (agents) setTraceActivity(agents);
+        return;
+      }
+
       const refetchEvents = [
         "agent_registered",
         "agent_deregistered",
@@ -125,6 +135,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         paused,
         setPaused,
         refresh: fetchAgents,
+        traceActivity,
       }}
     >
       {children}

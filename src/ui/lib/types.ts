@@ -109,7 +109,9 @@ export interface DashboardEvent {
     | "dependency_resolved"
     | "dependency_lost"
     | "connected"
-    | "snapshot";
+    | "snapshot"
+    | "trace_activity"
+    | "edge_stats";
   agent_id?: string;
   agent_name?: string;
   runtime?: string;

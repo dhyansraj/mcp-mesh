@@ -16,8 +16,10 @@ import {
   getStatusBgColor,
   getRuntimeLabel,
   getAgentTypeLabel,
+  extractAgentName,
 } from "@/lib/api";
-import { ChevronDown, ChevronRight, Bot } from "lucide-react";
+import { useMesh } from "@/lib/mesh-context";
+import { ChevronDown, ChevronRight, Bot, Activity } from "lucide-react";
 import { AgentDetail } from "./AgentDetail";
 
 interface AgentTableProps {
@@ -46,6 +48,7 @@ function getDepsColor(resolved: number, total: number): string {
 
 export function AgentTable({ agents }: AgentTableProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const { traceActivity } = useMesh();
 
   if (agents.length === 0) {
     return (
@@ -81,6 +84,7 @@ export function AgentTable({ agents }: AgentTableProps) {
               agent={agent}
               isExpanded={isExpanded}
               onToggle={() => setExpandedId(isExpanded ? null : agent.id)}
+              traceCount={traceActivity[extractAgentName(agent.id)] || 0}
             />
           );
         })}
@@ -93,9 +97,10 @@ interface AgentRowProps {
   agent: Agent;
   isExpanded: boolean;
   onToggle: () => void;
+  traceCount: number;
 }
 
-function AgentRow({ agent, isExpanded, onToggle }: AgentRowProps) {
+function AgentRow({ agent, isExpanded, onToggle, traceCount }: AgentRowProps) {
   return (
     <>
       <TableRow
@@ -114,7 +119,17 @@ function AgentRow({ agent, isExpanded, onToggle }: AgentRowProps) {
             className={`inline-flex h-2.5 w-2.5 rounded-full ${getStatusBgColor(agent.status)}`}
           />
         </TableCell>
-        <TableCell className="font-medium text-foreground">{agent.name}</TableCell>
+        <TableCell className="font-medium text-foreground">
+          <span className="inline-flex items-center gap-1.5">
+            {agent.name}
+            {traceCount > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-cyan-400" title={`${traceCount} recent trace(s)`}>
+                <Activity className="h-3 w-3 animate-pulse" />
+                <span className="text-[10px] font-mono">{traceCount}</span>
+              </span>
+            )}
+          </span>
+        </TableCell>
         <TableCell className="text-muted-foreground">
           {getAgentTypeLabel(agent.agent_type)}
         </TableCell>
