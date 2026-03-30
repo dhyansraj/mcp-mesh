@@ -36,10 +36,11 @@ type EntBusinessLogicHandlers struct {
 	entService  *EntService
 	startTime   time.Time
 	redisClient *redis.Client
+	eventHub    *EventHub
 }
 
 // NewEntBusinessLogicHandlers creates a new handler instance using EntService
-func NewEntBusinessLogicHandlers(entService *EntService) *EntBusinessLogicHandlers {
+func NewEntBusinessLogicHandlers(entService *EntService, eventHub *EventHub) *EntBusinessLogicHandlers {
 	// Initialize Redis client for trace streaming
 	redisClient := initializeRedisClient()
 
@@ -47,6 +48,7 @@ func NewEntBusinessLogicHandlers(entService *EntService) *EntBusinessLogicHandle
 		entService:  entService,
 		startTime:   time.Now().UTC(),
 		redisClient: redisClient,
+		eventHub:    eventHub,
 	}
 }
 
@@ -636,6 +638,155 @@ func (h *EntBusinessLogicHandlers) mapEventType(eventType string) string {
 func (h *EntBusinessLogicHandlers) writeSSEEvent(c *gin.Context, eventType string, data interface{}) {
 	jsonData, _ := json.Marshal(data)
 	fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, string(jsonData))
+}
+
+// StreamDashboardEvents implements GET /events (SSE stream for dashboard)
+func (h *EntBusinessLogicHandlers) StreamDashboardEvents(c *gin.Context) {
+	// Set SSE headers (CORS handled by middleware in server.go)
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "streaming not supported",
+		})
+		return
+	}
+
+	// Subscribe to dashboard events
+	ch := h.eventHub.Subscribe()
+	defer h.eventHub.Unsubscribe(ch)
+
+	// Send initial connected event with current agent summary
+	resp, err := h.entService.ListAgents(nil)
+	if err != nil {
+		h.writeSSEEvent(c, "connected", map[string]interface{}{
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+			"message":   "Connected to dashboard event stream",
+			"agents":    0,
+		})
+	} else {
+		h.writeSSEEvent(c, "connected", map[string]interface{}{
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+			"message":   "Connected to dashboard event stream",
+			"agents":    resp.Count,
+		})
+	}
+	flusher.Flush()
+
+	// Backfill recent events so a newly-connected dashboard sees history
+	if recentEvents, err := h.entService.ListRecentEvents(50, ""); err == nil {
+		for i := len(recentEvents) - 1; i >= 0; i-- {
+			e := recentEvents[i]
+			sseType := mapRegistryEventToSSEType(e.EventType, e.Data)
+			if sseType == "" {
+				continue
+			}
+			h.writeSSEEvent(c, sseType, DashboardEvent{
+				Type:      sseType,
+				AgentID:   e.AgentID,
+				AgentName: e.AgentName,
+				Data:      e.Data,
+				Timestamp: e.Timestamp,
+			})
+		}
+		flusher.Flush()
+	}
+
+	// Stream events until client disconnects
+	for {
+		select {
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			h.writeSSEEvent(c, event.Type, event)
+			flusher.Flush()
+		case <-c.Request.Context().Done():
+			return
+		}
+	}
+}
+
+// GetEventsHistory implements GET /events/history
+func (h *EntBusinessLogicHandlers) GetEventsHistory(c *gin.Context, params generated.GetEventsHistoryParams) {
+	limit := 50
+	if params.Limit != nil {
+		limit = *params.Limit
+		if limit > 200 {
+			limit = 200
+		}
+		if limit < 1 {
+			limit = 1
+		}
+	}
+
+	eventType := ""
+	if params.EventType != nil {
+		eventType = string(*params.EventType)
+	}
+
+	events, err := h.entService.ListRecentEvents(limit, eventType)
+	if err != nil {
+		log.Printf("[events-history] Failed to query events: %v", err)
+		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+			Error:     "Failed to query event history",
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	eventInfos := make([]generated.RegistryEventInfo, 0, len(events))
+	for _, e := range events {
+		info := generated.RegistryEventInfo{
+			EventType: generated.RegistryEventInfoEventType(e.EventType),
+			AgentId:   e.AgentID,
+			Timestamp: e.Timestamp,
+		}
+		if e.AgentName != "" {
+			name := e.AgentName
+			info.AgentName = &name
+		}
+		if e.FunctionName != "" {
+			fn := e.FunctionName
+			info.FunctionName = &fn
+		}
+		if len(e.Data) > 0 {
+			data := e.Data
+			info.Data = &data
+		}
+		eventInfos = append(eventInfos, info)
+	}
+
+	c.JSON(http.StatusOK, generated.EventsHistoryResponse{
+		Count:  len(eventInfos),
+		Events: eventInfos,
+	})
+}
+
+// mapRegistryEventToSSEType converts a registry event_type to a dashboard SSE
+// event name. Returns "" for event types that are noise for the dashboard
+// (heartbeat, expire, rotate).
+func mapRegistryEventToSSEType(eventType string, data map[string]interface{}) string {
+	switch eventType {
+	case "register":
+		return "agent_registered"
+	case "unregister":
+		return "agent_deregistered"
+	case "unhealthy":
+		return "agent_unhealthy"
+	case "update":
+		if ns, ok := data["new_status"]; ok {
+			if ns == "healthy" {
+				return "agent_healthy"
+			}
+		}
+		return ""
+	default:
+		return ""
+	}
 }
 
 // getHostname gets the hostname for consumer group naming

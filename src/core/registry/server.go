@@ -32,6 +32,8 @@ type Server struct {
 	tracingManager *tracing.TracingManager
 	trustChain     *trust.TrustChain
 	logger         *logger.Logger
+	eventHub       *EventHub
+	eventPoller    *EventPoller
 }
 
 // NewServer creates a new registry server using Ent database
@@ -39,8 +41,12 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	// Create Ent-based service
 	entService := NewEntService(entDB, config, logger)
 
+	// Create event hub and poller for dashboard SSE
+	eventHub := NewEventHub()
+	eventPoller := NewEventPoller(entService, eventHub, logger, 3*time.Second)
+
 	// Create Ent-based business logic handlers
-	handlers := NewEntBusinessLogicHandlers(entService)
+	handlers := NewEntBusinessLogicHandlers(entService, eventHub)
 
 	// Create health monitor using configuration values
 	heartbeatTimeout := time.Duration(config.DefaultTimeoutThreshold) * time.Second
@@ -80,6 +86,21 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	engine.Use(gin.Recovery())
 	engine.Use(gin.Logger())
 
+	// Add CORS middleware if configured (for dashboard dev mode)
+	if config.CorsOrigin != "" {
+		origin := config.CorsOrigin
+		engine.Use(func(c *gin.Context) {
+			c.Header("Access-Control-Allow-Origin", origin)
+			c.Header("Access-Control-Allow-Methods", "GET, POST, DELETE, HEAD, OPTIONS")
+			c.Header("Access-Control-Allow-Headers", "Content-Type, Cache-Control")
+			if c.Request.Method == "OPTIONS" {
+				c.AbortWithStatus(http.StatusNoContent)
+				return
+			}
+			c.Next()
+		})
+	}
+
 	// Add TLS middleware before routes (only if trust chain is configured)
 	if trustChain != nil {
 		engine.Use(TLSVerifyMiddleware(trustChain, config.TlsMode))
@@ -96,6 +117,8 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 		tracingManager: tracingManager,
 		trustChain:     trustChain,
 		logger:         logger,
+		eventHub:       eventHub,
+		eventPoller:    eventPoller,
 	}
 
 	// Add operational endpoints first (includes wildcard proxy routes that must be registered before generated routes)
@@ -120,6 +143,9 @@ func (s *Server) Run(addr string) error {
 
 	// Start health monitor
 	s.healthMonitor.Start()
+
+	// Start dashboard event poller
+	s.eventPoller.Start()
 
 	// Start distributed tracing if enabled
 	if s.tracingManager != nil {
@@ -155,6 +181,9 @@ func (s *Server) Start() error {
 
 // Stop stops the HTTP server and health monitor
 func (s *Server) Stop() error {
+	// Stop dashboard event poller
+	s.eventPoller.Stop()
+
 	// Stop health monitor
 	s.healthMonitor.Stop()
 
@@ -206,6 +235,8 @@ func (s *Server) setupOperationalEndpoints() {
 	s.engine.GET("/trace/list", s.handleTraceList)
 	s.engine.GET("/trace/:trace_id", s.handleTraceGet)
 	s.engine.GET("/trace/search", s.handleTraceSearch)
+
+	// Note: GET /events (dashboard SSE) is now in OpenAPI spec and registered via generated routes
 
 	// Admin endpoints on main engine only when no separate admin port is configured
 	if s.config.AdminPort <= 0 {
