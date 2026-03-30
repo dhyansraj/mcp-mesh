@@ -76,6 +76,17 @@ export function formatRelativeTime(dateString: string | null | undefined): strin
   return `${diffDays}d ago`;
 }
 
+export function formatDuration(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return "";
+  if (ms >= 1000) {
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+  if (ms < 1) {
+    return `${Math.round(ms * 1000)}µs`;
+  }
+  return `${Math.round(ms)}ms`;
+}
+
 export function getStatusColor(status: string): string {
   switch (status) {
     case "healthy": return "text-green-500";

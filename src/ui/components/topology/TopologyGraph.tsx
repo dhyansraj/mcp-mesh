@@ -15,7 +15,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { Agent, EdgeStat } from "@/lib/types";
 import { buildGraphFromAgents, computeStructureHash } from "@/lib/topology";
-import { extractAgentName } from "@/lib/api";
+import { extractAgentName, formatDuration } from "@/lib/api";
 import { useMesh } from "@/lib/mesh-context";
 import { AgentNode } from "./AgentNode";
 import { TopologySidebar } from "./TopologySidebar";
@@ -76,7 +76,7 @@ function mergeEdgeStatsIntoEdges(edges: Edge[], edgeStats: EdgeStat[]): Edge[] {
 
     // Use stored original label to prevent accumulation on repeated merges
     const baseLabel = (edge.data?.originalLabel as string) || edge.label || "";
-    const mergedLabel = baseLabel ? `${baseLabel}  ${stat.avg_latency_ms.toFixed(0)}ms` : `${stat.avg_latency_ms.toFixed(0)}ms`;
+    const mergedLabel = baseLabel ? `${baseLabel}  ${formatDuration(stat.avg_latency_ms)}` : `${formatDuration(stat.avg_latency_ms)}`;
 
     return {
       ...edge,
