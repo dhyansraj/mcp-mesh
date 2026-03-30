@@ -137,6 +137,25 @@ export interface RecentTracesResponse {
   limit: number;
 }
 
+export interface TraceSpan {
+  SpanID: string;
+  ParentSpan: string | null;
+  AgentName: string;
+  Operation: string;
+  DurationMS: number | null;
+  Success: boolean | null;
+  ErrorMessage: string | null;
+}
+
+export interface TraceDetail {
+  TraceID: string;
+  Spans: TraceSpan[];
+  Success: boolean;
+  SpanCount: number;
+  AgentCount: number;
+  Agents: string[];
+}
+
 export interface EdgeStat {
   source: string;
   target: string;

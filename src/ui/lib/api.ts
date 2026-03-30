@@ -1,4 +1,4 @@
-import { AgentsResponse, DashboardEvent, EdgeStatsResponse, EventsHistoryResponse, HealthResponse, RecentTracesResponse, RegistryEventInfo } from "./types";
+import { AgentsResponse, DashboardEvent, EdgeStatsResponse, EventsHistoryResponse, HealthResponse, RecentTracesResponse, RegistryEventInfo, TraceDetail } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_REGISTRY_URL || "http://localhost:8000";
 
@@ -125,6 +125,12 @@ export function getDepStatusColor(status: string): string {
 export async function getRecentTraces(limit: number = 20): Promise<RecentTracesResponse> {
   const res = await fetch(`${API_BASE}/trace/recent?limit=${limit}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch recent traces: ${res.status}`);
+  return res.json();
+}
+
+export async function getTraceDetail(traceId: string): Promise<TraceDetail> {
+  const res = await fetch(`${API_BASE}/trace/${traceId}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to fetch trace: ${res.status}`);
   return res.json();
 }
 
