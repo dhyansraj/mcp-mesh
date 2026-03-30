@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { DashboardEvent } from "./types";
 
-const API_BASE = process.env.NEXT_PUBLIC_REGISTRY_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_REGISTRY_URL || "/api";
 
 export interface UseMeshEventsOptions {
   maxEvents?: number;
