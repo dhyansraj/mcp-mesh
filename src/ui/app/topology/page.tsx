@@ -1,12 +1,22 @@
 "use client";
 
 import { Header } from "@/components/layout/Header";
+import { ConnectionError } from "@/components/layout/ConnectionError";
 import { TopologyGraph } from "@/components/topology/TopologyGraph";
 import { useMesh } from "@/lib/mesh-context";
 import { Loader2, Network } from "lucide-react";
 
 export default function TopologyPage() {
-  const { agents, loading } = useMesh();
+  const { agents, loading, error, refresh } = useMesh();
+
+  if (error) {
+    return (
+      <div className="flex flex-col h-full">
+        <Header title="Topology" subtitle="Agent dependency graph" />
+        <ConnectionError error={error} onRetry={refresh} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full">

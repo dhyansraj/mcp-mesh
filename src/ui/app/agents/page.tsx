@@ -3,8 +3,9 @@
 import { Header } from "@/components/layout/Header";
 import { AgentTable } from "@/components/agents/AgentTable";
 import { Button } from "@/components/ui/button";
+import { ConnectionError } from "@/components/layout/ConnectionError";
 import { useMesh } from "@/lib/mesh-context";
-import { Loader2, AlertCircle, RefreshCw, Eye, EyeOff } from "lucide-react";
+import { Loader2, Eye, EyeOff } from "lucide-react";
 
 export default function AgentsPage() {
   const { agents, loading, error, refresh, showAll, setShowAll } = useMesh();
@@ -24,14 +25,7 @@ export default function AgentsPage() {
     return (
       <div className="flex flex-col h-full">
         <Header title="Agents" subtitle="Registered agents and capabilities" />
-        <div className="flex flex-1 flex-col items-center justify-center gap-4">
-          <AlertCircle className="h-10 w-10 text-destructive" />
-          <p className="text-sm text-muted-foreground">{error.message}</p>
-          <Button variant="outline" size="sm" onClick={refresh}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Retry
-          </Button>
-        </div>
+        <ConnectionError error={error} onRetry={refresh} />
       </div>
     );
   }
