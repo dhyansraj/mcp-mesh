@@ -55,6 +55,25 @@ const (
 	AgentInfoStatusUnhealthy AgentInfoStatus = "unhealthy"
 )
 
+// Defines values for AgentMetadataAgentType.
+const (
+	AgentMetadataAgentTypeMcpAgent    AgentMetadataAgentType = "mcp_agent"
+	AgentMetadataAgentTypeMeshAgent   AgentMetadataAgentType = "mesh_agent"
+	AgentMetadataAgentTypeSystemAgent AgentMetadataAgentType = "system_agent"
+)
+
+// Defines values for DecoratorAgentMetadataAgentType.
+const (
+	DecoratorAgentMetadataAgentTypeMcpAgent DecoratorAgentMetadataAgentType = "mcp_agent"
+)
+
+// Defines values for DependencyInfoStatus.
+const (
+	DependencyInfoStatusAvailable   DependencyInfoStatus = "available"
+	DependencyInfoStatusDegraded    DependencyInfoStatus = "degraded"
+	DependencyInfoStatusUnavailable DependencyInfoStatus = "unavailable"
+)
+
 // Defines values for DependencyResolutionInfoStatus.
 const (
 	DependencyResolutionInfoStatusAvailable   DependencyResolutionInfoStatus = "available"
@@ -67,6 +86,26 @@ const (
 	HealthResponseStatusDegraded  HealthResponseStatus = "degraded"
 	HealthResponseStatusHealthy   HealthResponseStatus = "healthy"
 	HealthResponseStatusUnhealthy HealthResponseStatus = "unhealthy"
+)
+
+// Defines values for HeartbeatRequestStatus.
+const (
+	HeartbeatRequestStatusDegraded  HeartbeatRequestStatus = "degraded"
+	HeartbeatRequestStatusHealthy   HeartbeatRequestStatus = "healthy"
+	HeartbeatRequestStatusUnhealthy HeartbeatRequestStatus = "unhealthy"
+)
+
+// Defines values for HeartbeatResponseDependenciesResolvedStatus.
+const (
+	HeartbeatResponseDependenciesResolvedStatusAvailable   HeartbeatResponseDependenciesResolvedStatus = "available"
+	HeartbeatResponseDependenciesResolvedStatusDegraded    HeartbeatResponseDependenciesResolvedStatus = "degraded"
+	HeartbeatResponseDependenciesResolvedStatusUnavailable HeartbeatResponseDependenciesResolvedStatus = "unavailable"
+)
+
+// Defines values for HeartbeatResponseStatus.
+const (
+	HeartbeatResponseStatusError   HeartbeatResponseStatus = "error"
+	HeartbeatResponseStatusSuccess HeartbeatResponseStatus = "success"
 )
 
 // Defines values for LLMProviderResolutionInfoStatus.
@@ -97,10 +136,15 @@ const (
 	LLMToolResolutionInfoStatusUnresolved  LLMToolResolutionInfoStatus = "unresolved"
 )
 
+// Defines values for MeshAgentRegisterMetadataAgentType.
+const (
+	MeshAgentRegisterMetadataAgentTypeMcpAgent MeshAgentRegisterMetadataAgentType = "mcp_agent"
+)
+
 // Defines values for MeshAgentRegistrationAgentType.
 const (
-	MeshAgentRegistrationAgentTypeApi      MeshAgentRegistrationAgentType = "api"
-	MeshAgentRegistrationAgentTypeMcpAgent MeshAgentRegistrationAgentType = "mcp_agent"
+	Api      MeshAgentRegistrationAgentType = "api"
+	McpAgent MeshAgentRegistrationAgentType = "mcp_agent"
 )
 
 // Defines values for MeshAgentRegistrationRuntime.
@@ -119,35 +163,35 @@ const (
 
 // Defines values for MeshRegistrationResponseStatus.
 const (
-	Error   MeshRegistrationResponseStatus = "error"
-	Success MeshRegistrationResponseStatus = "success"
+	MeshRegistrationResponseStatusError   MeshRegistrationResponseStatus = "error"
+	MeshRegistrationResponseStatusSuccess MeshRegistrationResponseStatus = "success"
 )
 
 // Defines values for RegistryEventInfoEventType.
 const (
-	RegistryEventInfoEventTypeExpire     RegistryEventInfoEventType = "expire"
-	RegistryEventInfoEventTypeRegister   RegistryEventInfoEventType = "register"
-	RegistryEventInfoEventTypeRotate     RegistryEventInfoEventType = "rotate"
-	RegistryEventInfoEventTypeUnhealthy  RegistryEventInfoEventType = "unhealthy"
-	RegistryEventInfoEventTypeUnregister RegistryEventInfoEventType = "unregister"
-	RegistryEventInfoEventTypeUpdate     RegistryEventInfoEventType = "update"
+	Expire     RegistryEventInfoEventType = "expire"
+	Register   RegistryEventInfoEventType = "register"
+	Rotate     RegistryEventInfoEventType = "rotate"
+	Unhealthy  RegistryEventInfoEventType = "unhealthy"
+	Unregister RegistryEventInfoEventType = "unregister"
+	Update     RegistryEventInfoEventType = "update"
 )
 
 // Defines values for ResolvedLLMProviderStatus.
 const (
-	Available   ResolvedLLMProviderStatus = "available"
-	Degraded    ResolvedLLMProviderStatus = "degraded"
-	Unavailable ResolvedLLMProviderStatus = "unavailable"
+	ResolvedLLMProviderStatusAvailable   ResolvedLLMProviderStatus = "available"
+	ResolvedLLMProviderStatusDegraded    ResolvedLLMProviderStatus = "degraded"
+	ResolvedLLMProviderStatusUnavailable ResolvedLLMProviderStatus = "unavailable"
 )
 
-// Defines values for GetEventsHistoryParamsEventType.
+// Defines values for TraceEventEventType.
 const (
-	GetEventsHistoryParamsEventTypeExpire     GetEventsHistoryParamsEventType = "expire"
-	GetEventsHistoryParamsEventTypeRegister   GetEventsHistoryParamsEventType = "register"
-	GetEventsHistoryParamsEventTypeRotate     GetEventsHistoryParamsEventType = "rotate"
-	GetEventsHistoryParamsEventTypeUnhealthy  GetEventsHistoryParamsEventType = "unhealthy"
-	GetEventsHistoryParamsEventTypeUnregister GetEventsHistoryParamsEventType = "unregister"
-	GetEventsHistoryParamsEventTypeUpdate     GetEventsHistoryParamsEventType = "update"
+	AgentCalled        TraceEventEventType = "agent_called"
+	DependencyResolved TraceEventEventType = "dependency_resolved"
+	TaskCompleted      TraceEventEventType = "task_completed"
+	TaskFailed         TraceEventEventType = "task_failed"
+	TaskProgress       TraceEventEventType = "task_progress"
+	TaskStarted        TraceEventEventType = "task_started"
 )
 
 // AgentInfo defines model for AgentInfo.
@@ -198,6 +242,91 @@ type AgentInfoRuntime string
 // AgentInfoStatus defines model for AgentInfo.Status.
 type AgentInfoStatus string
 
+// AgentMetadata defines model for AgentMetadata.
+type AgentMetadata struct {
+	// AgentType Type of agent
+	AgentType AgentMetadataAgentType `json:"agent_type"`
+
+	// Capabilities List of capabilities provided by agent (0 or more)
+	Capabilities *[]string `json:"capabilities,omitempty"`
+
+	// Dependencies List of agent dependencies (0 or more) - supports both simple strings and rich objects
+	Dependencies *[]AgentMetadata_Dependencies_Item `json:"dependencies,omitempty"`
+
+	// Description Agent description
+	Description *string `json:"description,omitempty"`
+
+	// Endpoint Agent endpoint URL (http://, https://, or stdio://)
+	Endpoint string `json:"endpoint"`
+
+	// EvictionThreshold Eviction threshold in seconds
+	EvictionThreshold *int `json:"eviction_threshold,omitempty"`
+
+	// HealthInterval Health check interval in seconds
+	HealthInterval *int `json:"health_interval,omitempty"`
+
+	// Name Human-readable agent name
+	Name string `json:"name"`
+
+	// Namespace Agent namespace for organization
+	Namespace string `json:"namespace"`
+
+	// SecurityContext Security context for agent
+	SecurityContext *string `json:"security_context,omitempty"`
+
+	// Tags Agent tags for categorization
+	Tags *[]string `json:"tags,omitempty"`
+
+	// TimeoutThreshold Timeout threshold in seconds
+	TimeoutThreshold *int `json:"timeout_threshold,omitempty"`
+
+	// Version Agent version
+	Version *string `json:"version,omitempty"`
+}
+
+// AgentMetadataAgentType Type of agent
+type AgentMetadataAgentType string
+
+// AgentMetadataDependencies0 Simple dependency by capability name
+type AgentMetadataDependencies0 = string
+
+// AgentMetadataDependencies1 Rich dependency with tags and metadata
+type AgentMetadataDependencies1 struct {
+	// Capability Required capability name
+	Capability string `json:"capability"`
+
+	// Namespace Optional namespace filter
+	Namespace *string `json:"namespace,omitempty"`
+
+	// Tags Optional tags for smart matching
+	Tags *[]string `json:"tags,omitempty"`
+
+	// Version Optional version constraint
+	Version *string `json:"version,omitempty"`
+}
+
+// AgentMetadata_Dependencies_Item defines model for AgentMetadata.dependencies.Item.
+type AgentMetadata_Dependencies_Item struct {
+	union json.RawMessage
+}
+
+// AgentRegistration defines model for AgentRegistration.
+type AgentRegistration struct {
+	// AgentId Unique identifier for the agent
+	AgentId string `json:"agent_id"`
+
+	// Metadata Agent metadata (legacy format or new mesh format)
+	Metadata AgentRegistration_Metadata `json:"metadata"`
+
+	// Timestamp Registration timestamp
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// AgentRegistration_Metadata Agent metadata (legacy format or new mesh format)
+type AgentRegistration_Metadata struct {
+	union json.RawMessage
+}
+
 // AgentsListResponse defines model for AgentsListResponse.
 type AgentsListResponse struct {
 	// Agents List of registered agents
@@ -236,6 +365,88 @@ type CapabilityInfo struct {
 	// Version Capability version
 	Version string `json:"version"`
 }
+
+// DecoratorAgentMetadata Agent metadata containing all decorator information
+type DecoratorAgentMetadata struct {
+	// AgentType Type of agent (standardized to mcp_agent)
+	AgentType DecoratorAgentMetadataAgentType `json:"agent_type"`
+
+	// Decorators Array of all @mesh_agent decorators from the agent script
+	Decorators []DecoratorInfo `json:"decorators"`
+
+	// Endpoint Agent endpoint URL (http://, https://, or stdio://)
+	Endpoint string `json:"endpoint"`
+
+	// Name Human-readable agent name
+	Name string `json:"name"`
+
+	// Namespace Agent namespace for organization
+	Namespace string `json:"namespace"`
+
+	// Version Agent version
+	Version *string `json:"version,omitempty"`
+}
+
+// DecoratorAgentMetadataAgentType Type of agent (standardized to mcp_agent)
+type DecoratorAgentMetadataAgentType string
+
+// DecoratorAgentRequest Unified request schema for both /agents/register and /heartbeat endpoints.
+// Supports decorator-based agent registration with per-function dependencies.
+type DecoratorAgentRequest struct {
+	// AgentId Unique identifier for the agent
+	AgentId string `json:"agent_id"`
+
+	// Metadata Agent metadata containing all decorator information
+	Metadata DecoratorAgentMetadata `json:"metadata"`
+
+	// Timestamp Request timestamp
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// DecoratorInfo Information about a single @mesh_agent decorated function
+type DecoratorInfo struct {
+	// Capability Capability provided by this function
+	Capability string `json:"capability"`
+
+	// Dependencies Dependencies required by this function
+	Dependencies []StandardizedDependency `json:"dependencies"`
+
+	// Description Function description
+	Description *string `json:"description,omitempty"`
+
+	// FunctionName Name of the decorated function
+	FunctionName string `json:"function_name"`
+
+	// Tags Tags for this capability
+	Tags *[]string `json:"tags,omitempty"`
+
+	// Version Function/capability version
+	Version *string `json:"version,omitempty"`
+}
+
+// DependencyInfo defines model for DependencyInfo.
+type DependencyInfo struct {
+	// AgentId ID of the agent providing the dependency
+	AgentId string `json:"agent_id"`
+
+	// Capabilities Capabilities provided by this dependency
+	Capabilities *[]string `json:"capabilities,omitempty"`
+
+	// Endpoint Endpoint to connect to the provider
+	Endpoint string `json:"endpoint"`
+
+	// Metadata Additional metadata about the provider
+	Metadata *map[string]interface{} `json:"metadata,omitempty"`
+
+	// Status Current status of the dependency
+	Status DependencyInfoStatus `json:"status"`
+
+	// Version Version of the provider agent
+	Version *string `json:"version,omitempty"`
+}
+
+// DependencyInfoStatus Current status of the dependency
+type DependencyInfoStatus string
 
 // DependencyResolutionInfo defines model for DependencyResolutionInfo.
 type DependencyResolutionInfo struct {
@@ -303,6 +514,67 @@ type HealthResponse struct {
 
 // HealthResponseStatus Overall registry health status
 type HealthResponseStatus string
+
+// HeartbeatRequest defines model for HeartbeatRequest.
+type HeartbeatRequest struct {
+	// AgentId Agent identifier from registration
+	AgentId string `json:"agent_id"`
+
+	// Metadata Agent metadata and health information
+	Metadata HeartbeatRequest_Metadata `json:"metadata"`
+
+	// Status Current agent health status
+	Status HeartbeatRequestStatus `json:"status"`
+}
+
+// HeartbeatRequest_Metadata Agent metadata and health information
+type HeartbeatRequest_Metadata struct {
+	Capabilities []string `json:"capabilities"`
+
+	// Checks Health check results
+	Checks *map[string]interface{} `json:"checks,omitempty"`
+
+	// Errors Any error messages
+	Errors               *[]string              `json:"errors,omitempty"`
+	Timestamp            time.Time              `json:"timestamp"`
+	UptimeSeconds        *int                   `json:"uptime_seconds,omitempty"`
+	Version              *string                `json:"version,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// HeartbeatRequestStatus Current agent health status
+type HeartbeatRequestStatus string
+
+// HeartbeatResponse defines model for HeartbeatResponse.
+type HeartbeatResponse struct {
+	// DependenciesResolved Function name to array of resolved dependencies mapping.
+	// 🤖 AI CRITICAL: Python runtime uses this for dependency injection updates.
+	DependenciesResolved *map[string][]struct {
+		// AgentId ID of the agent providing the dependency
+		AgentId string `json:"agent_id"`
+
+		// Capability Capability name for dependency matching
+		Capability string `json:"capability"`
+
+		// Endpoint Endpoint to connect to the provider
+		Endpoint string `json:"endpoint"`
+
+		// FunctionName Actual function name to call on provider
+		FunctionName string `json:"function_name"`
+
+		// Status Current status of the dependency
+		Status HeartbeatResponseDependenciesResolvedStatus `json:"status"`
+	} `json:"dependencies_resolved,omitempty"`
+	Message   string                  `json:"message"`
+	Status    HeartbeatResponseStatus `json:"status"`
+	Timestamp time.Time               `json:"timestamp"`
+}
+
+// HeartbeatResponseDependenciesResolvedStatus Current status of the dependency
+type HeartbeatResponseDependenciesResolvedStatus string
+
+// HeartbeatResponseStatus defines model for HeartbeatResponse.Status.
+type HeartbeatResponseStatus string
 
 // LLMProvider LLM provider specification for mesh delegation mode.
 // When @mesh.llm uses provider=dict, the registry resolves a matching LLM provider
@@ -464,6 +736,30 @@ type LLMToolResolutionInfoFilterMode string
 // LLMToolResolutionInfoStatus Tool resolution status
 type LLMToolResolutionInfoStatus string
 
+// MeshAgentRegisterMetadata Agent registration metadata for @mesh.tool based agents
+type MeshAgentRegisterMetadata struct {
+	// AgentType Type of agent (always mcp_agent for mesh tools)
+	AgentType MeshAgentRegisterMetadataAgentType `json:"agent_type"`
+
+	// Endpoint Agent endpoint URL
+	Endpoint *string `json:"endpoint,omitempty"`
+
+	// Name Agent name
+	Name string `json:"name"`
+
+	// Namespace Agent namespace
+	Namespace *string `json:"namespace,omitempty"`
+
+	// Tools Array of tools provided by this agent
+	Tools []MeshToolRegisterMetadata `json:"tools"`
+
+	// Version Agent version
+	Version *string `json:"version,omitempty"`
+}
+
+// MeshAgentRegisterMetadataAgentType Type of agent (always mcp_agent for mesh tools)
+type MeshAgentRegisterMetadataAgentType string
+
 // MeshAgentRegistration Service registration request with flattened structure.
 // Used by both /agents/register and /heartbeat endpoints.
 // Supports both agents (agent_type=mcp_agent) and API services (agent_type=api).
@@ -583,6 +879,31 @@ type MeshToolDependencyRegistration_Tags_Item struct {
 	union json.RawMessage
 }
 
+// MeshToolRegisterMetadata Metadata for a single @mesh.tool decorated function
+type MeshToolRegisterMetadata struct {
+	// Capability Capability provided by this function
+	Capability string `json:"capability"`
+
+	// Dependencies Dependencies required by this function
+	Dependencies *[]StandardizedDependency `json:"dependencies,omitempty"`
+
+	// Description Function description
+	Description *string `json:"description,omitempty"`
+
+	// FunctionName Name of the decorated function
+	FunctionName string `json:"function_name"`
+
+	// Kwargs Additional kwargs from @mesh.tool decorator for enhanced client proxy configuration.
+	// Supports timeout, retry_count, custom_headers, streaming, auth_required, etc.
+	Kwargs *map[string]interface{} `json:"kwargs,omitempty"`
+
+	// Tags Tags for this capability
+	Tags *[]string `json:"tags,omitempty"`
+
+	// Version Function/capability version
+	Version *string `json:"version,omitempty"`
+}
+
 // MeshToolRegistration Metadata for a single @mesh.tool decorated function
 type MeshToolRegistration struct {
 	// Capability Capability provided by this function
@@ -688,6 +1009,21 @@ type ResolvedLLMProvider struct {
 // ResolvedLLMProviderStatus Current status of the provider
 type ResolvedLLMProviderStatus string
 
+// RichDependency Rich dependency format with full metadata for internal processing
+type RichDependency struct {
+	// Capability Required capability name
+	Capability string `json:"capability"`
+
+	// Namespace Namespace filter
+	Namespace string `json:"namespace"`
+
+	// Tags Tags for smart matching
+	Tags []string `json:"tags"`
+
+	// Version Version constraint
+	Version string `json:"version"`
+}
+
 // RootResponse defines model for RootResponse.
 type RootResponse struct {
 	// Endpoints Available API endpoints
@@ -697,20 +1033,315 @@ type RootResponse struct {
 	Version   string   `json:"version"`
 }
 
-// GetEventsHistoryParams defines parameters for GetEventsHistory.
-type GetEventsHistoryParams struct {
-	// Limit Maximum number of events to return (most recent first)
-	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+// StandardizedDependency Standardized dependency format (always object, never string)
+type StandardizedDependency struct {
+	// Capability Required capability name
+	Capability string `json:"capability"`
 
-	// EventType Filter by event type
-	EventType *GetEventsHistoryParamsEventType `form:"event_type,omitempty" json:"event_type,omitempty"`
+	// Namespace Namespace filter
+	Namespace *string `json:"namespace,omitempty"`
+
+	// Tags Tags for smart matching
+	Tags *[]string `json:"tags,omitempty"`
+
+	// Version Version constraint
+	Version *string `json:"version,omitempty"`
 }
 
-// GetEventsHistoryParamsEventType defines parameters for GetEventsHistory.
-type GetEventsHistoryParamsEventType string
+// TraceEvent Individual trace event streamed via SSE
+type TraceEvent struct {
+	// AgentId Agent that generated this event
+	AgentId string `json:"agent_id"`
+
+	// CorrelationId Optional correlation ID for request tracking
+	CorrelationId *string `json:"correlation_id,omitempty"`
+
+	// Details Event-specific details
+	Details *map[string]interface{} `json:"details,omitempty"`
+
+	// EventType Type of trace event
+	EventType TraceEventEventType `json:"event_type"`
+
+	// ParentSpanId Parent span for distributed tracing hierarchy
+	ParentSpanId *string `json:"parent_span_id,omitempty"`
+
+	// Timestamp When this event occurred
+	Timestamp time.Time `json:"timestamp"`
+
+	// TraceId Trace identifier this event belongs to
+	TraceId string `json:"trace_id"`
+}
+
+// TraceEventEventType Type of trace event
+type TraceEventEventType string
 
 // SendHeartbeatJSONRequestBody defines body for SendHeartbeat for application/json ContentType.
 type SendHeartbeatJSONRequestBody = MeshAgentRegistration
+
+// Getter for additional properties for HeartbeatRequest_Metadata. Returns the specified
+// element and whether it was found
+func (a HeartbeatRequest_Metadata) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for HeartbeatRequest_Metadata
+func (a *HeartbeatRequest_Metadata) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for HeartbeatRequest_Metadata to handle AdditionalProperties
+func (a *HeartbeatRequest_Metadata) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["capabilities"]; found {
+		err = json.Unmarshal(raw, &a.Capabilities)
+		if err != nil {
+			return fmt.Errorf("error reading 'capabilities': %w", err)
+		}
+		delete(object, "capabilities")
+	}
+
+	if raw, found := object["checks"]; found {
+		err = json.Unmarshal(raw, &a.Checks)
+		if err != nil {
+			return fmt.Errorf("error reading 'checks': %w", err)
+		}
+		delete(object, "checks")
+	}
+
+	if raw, found := object["errors"]; found {
+		err = json.Unmarshal(raw, &a.Errors)
+		if err != nil {
+			return fmt.Errorf("error reading 'errors': %w", err)
+		}
+		delete(object, "errors")
+	}
+
+	if raw, found := object["timestamp"]; found {
+		err = json.Unmarshal(raw, &a.Timestamp)
+		if err != nil {
+			return fmt.Errorf("error reading 'timestamp': %w", err)
+		}
+		delete(object, "timestamp")
+	}
+
+	if raw, found := object["uptime_seconds"]; found {
+		err = json.Unmarshal(raw, &a.UptimeSeconds)
+		if err != nil {
+			return fmt.Errorf("error reading 'uptime_seconds': %w", err)
+		}
+		delete(object, "uptime_seconds")
+	}
+
+	if raw, found := object["version"]; found {
+		err = json.Unmarshal(raw, &a.Version)
+		if err != nil {
+			return fmt.Errorf("error reading 'version': %w", err)
+		}
+		delete(object, "version")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for HeartbeatRequest_Metadata to handle AdditionalProperties
+func (a HeartbeatRequest_Metadata) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.Capabilities != nil {
+		object["capabilities"], err = json.Marshal(a.Capabilities)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'capabilities': %w", err)
+		}
+	}
+
+	if a.Checks != nil {
+		object["checks"], err = json.Marshal(a.Checks)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'checks': %w", err)
+		}
+	}
+
+	if a.Errors != nil {
+		object["errors"], err = json.Marshal(a.Errors)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'errors': %w", err)
+		}
+	}
+
+	object["timestamp"], err = json.Marshal(a.Timestamp)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'timestamp': %w", err)
+	}
+
+	if a.UptimeSeconds != nil {
+		object["uptime_seconds"], err = json.Marshal(a.UptimeSeconds)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'uptime_seconds': %w", err)
+		}
+	}
+
+	if a.Version != nil {
+		object["version"], err = json.Marshal(a.Version)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'version': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// AsAgentMetadataDependencies0 returns the union data inside the AgentMetadata_Dependencies_Item as a AgentMetadataDependencies0
+func (t AgentMetadata_Dependencies_Item) AsAgentMetadataDependencies0() (AgentMetadataDependencies0, error) {
+	var body AgentMetadataDependencies0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromAgentMetadataDependencies0 overwrites any union data inside the AgentMetadata_Dependencies_Item as the provided AgentMetadataDependencies0
+func (t *AgentMetadata_Dependencies_Item) FromAgentMetadataDependencies0(v AgentMetadataDependencies0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeAgentMetadataDependencies0 performs a merge with any union data inside the AgentMetadata_Dependencies_Item, using the provided AgentMetadataDependencies0
+func (t *AgentMetadata_Dependencies_Item) MergeAgentMetadataDependencies0(v AgentMetadataDependencies0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsAgentMetadataDependencies1 returns the union data inside the AgentMetadata_Dependencies_Item as a AgentMetadataDependencies1
+func (t AgentMetadata_Dependencies_Item) AsAgentMetadataDependencies1() (AgentMetadataDependencies1, error) {
+	var body AgentMetadataDependencies1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromAgentMetadataDependencies1 overwrites any union data inside the AgentMetadata_Dependencies_Item as the provided AgentMetadataDependencies1
+func (t *AgentMetadata_Dependencies_Item) FromAgentMetadataDependencies1(v AgentMetadataDependencies1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeAgentMetadataDependencies1 performs a merge with any union data inside the AgentMetadata_Dependencies_Item, using the provided AgentMetadataDependencies1
+func (t *AgentMetadata_Dependencies_Item) MergeAgentMetadataDependencies1(v AgentMetadataDependencies1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t AgentMetadata_Dependencies_Item) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *AgentMetadata_Dependencies_Item) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsAgentMetadata returns the union data inside the AgentRegistration_Metadata as a AgentMetadata
+func (t AgentRegistration_Metadata) AsAgentMetadata() (AgentMetadata, error) {
+	var body AgentMetadata
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromAgentMetadata overwrites any union data inside the AgentRegistration_Metadata as the provided AgentMetadata
+func (t *AgentRegistration_Metadata) FromAgentMetadata(v AgentMetadata) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeAgentMetadata performs a merge with any union data inside the AgentRegistration_Metadata, using the provided AgentMetadata
+func (t *AgentRegistration_Metadata) MergeAgentMetadata(v AgentMetadata) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsMeshAgentRegisterMetadata returns the union data inside the AgentRegistration_Metadata as a MeshAgentRegisterMetadata
+func (t AgentRegistration_Metadata) AsMeshAgentRegisterMetadata() (MeshAgentRegisterMetadata, error) {
+	var body MeshAgentRegisterMetadata
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMeshAgentRegisterMetadata overwrites any union data inside the AgentRegistration_Metadata as the provided MeshAgentRegisterMetadata
+func (t *AgentRegistration_Metadata) FromMeshAgentRegisterMetadata(v MeshAgentRegisterMetadata) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMeshAgentRegisterMetadata performs a merge with any union data inside the AgentRegistration_Metadata, using the provided MeshAgentRegisterMetadata
+func (t *AgentRegistration_Metadata) MergeMeshAgentRegisterMetadata(v MeshAgentRegisterMetadata) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t AgentRegistration_Metadata) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *AgentRegistration_Metadata) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
 
 // AsLLMToolFilterFilter0 returns the union data inside the LLMToolFilter_Filter_Item as a LLMToolFilterFilter0
 func (t LLMToolFilter_Filter_Item) AsLLMToolFilterFilter0() (LLMToolFilterFilter0, error) {
@@ -847,12 +1478,6 @@ type ServerInterface interface {
 	// Graceful agent unregistration
 	// (DELETE /agents/{agent_id})
 	UnregisterAgent(c *gin.Context, agentId string)
-	// Stream dashboard events via Server-Sent Events
-	// (GET /events)
-	StreamDashboardEvents(c *gin.Context)
-	// Get recent registry event history
-	// (GET /events/history)
-	GetEventsHistory(c *gin.Context, params GetEventsHistoryParams)
 	// Registry health check
 	// (GET /health)
 	GetHealth(c *gin.Context)
@@ -865,12 +1490,6 @@ type ServerInterface interface {
 	// Fast agent health check
 	// (HEAD /heartbeat/{agent_id})
 	FastHeartbeatCheck(c *gin.Context, agentId string)
-	// Stream all trace spans in real-time via SSE
-	// (GET /traces/live)
-	StreamLiveTraces(c *gin.Context)
-	// Stream trace events for a specific trace ID
-	// (GET /traces/{trace_id}/stream)
-	StreamTrace(c *gin.Context, traceId string)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -930,53 +1549,6 @@ func (siw *ServerInterfaceWrapper) UnregisterAgent(c *gin.Context) {
 	}
 
 	siw.Handler.UnregisterAgent(c, agentId)
-}
-
-// StreamDashboardEvents operation middleware
-func (siw *ServerInterfaceWrapper) StreamDashboardEvents(c *gin.Context) {
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		middleware(c)
-		if c.IsAborted() {
-			return
-		}
-	}
-
-	siw.Handler.StreamDashboardEvents(c)
-}
-
-// GetEventsHistory operation middleware
-func (siw *ServerInterfaceWrapper) GetEventsHistory(c *gin.Context) {
-
-	var err error
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params GetEventsHistoryParams
-
-	// ------------- Optional query parameter "limit" -------------
-
-	err = runtime.BindQueryParameter("form", true, false, "limit", c.Request.URL.Query(), &params.Limit)
-	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter limit: %w", err), http.StatusBadRequest)
-		return
-	}
-
-	// ------------- Optional query parameter "event_type" -------------
-
-	err = runtime.BindQueryParameter("form", true, false, "event_type", c.Request.URL.Query(), &params.EventType)
-	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter event_type: %w", err), http.StatusBadRequest)
-		return
-	}
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		middleware(c)
-		if c.IsAborted() {
-			return
-		}
-	}
-
-	siw.Handler.GetEventsHistory(c, params)
 }
 
 // GetHealth operation middleware
@@ -1042,43 +1614,6 @@ func (siw *ServerInterfaceWrapper) FastHeartbeatCheck(c *gin.Context) {
 	siw.Handler.FastHeartbeatCheck(c, agentId)
 }
 
-// StreamLiveTraces operation middleware
-func (siw *ServerInterfaceWrapper) StreamLiveTraces(c *gin.Context) {
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		middleware(c)
-		if c.IsAborted() {
-			return
-		}
-	}
-
-	siw.Handler.StreamLiveTraces(c)
-}
-
-// StreamTrace operation middleware
-func (siw *ServerInterfaceWrapper) StreamTrace(c *gin.Context) {
-
-	var err error
-
-	// ------------- Path parameter "trace_id" -------------
-	var traceId string
-
-	err = runtime.BindStyledParameterWithOptions("simple", "trace_id", c.Param("trace_id"), &traceId, runtime.BindStyledParameterOptions{Explode: false, Required: true})
-	if err != nil {
-		siw.ErrorHandler(c, fmt.Errorf("Invalid format for parameter trace_id: %w", err), http.StatusBadRequest)
-		return
-	}
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		middleware(c)
-		if c.IsAborted() {
-			return
-		}
-	}
-
-	siw.Handler.StreamTrace(c, traceId)
-}
-
 // GinServerOptions provides options for the Gin server.
 type GinServerOptions struct {
 	BaseURL      string
@@ -1109,155 +1644,157 @@ func RegisterHandlersWithOptions(router gin.IRouter, si ServerInterface, options
 	router.GET(options.BaseURL+"/", wrapper.GetRoot)
 	router.GET(options.BaseURL+"/agents", wrapper.ListAgents)
 	router.DELETE(options.BaseURL+"/agents/:agent_id", wrapper.UnregisterAgent)
-	router.GET(options.BaseURL+"/events", wrapper.StreamDashboardEvents)
-	router.GET(options.BaseURL+"/events/history", wrapper.GetEventsHistory)
 	router.GET(options.BaseURL+"/health", wrapper.GetHealth)
 	router.HEAD(options.BaseURL+"/health", wrapper.HeadHealth)
 	router.POST(options.BaseURL+"/heartbeat", wrapper.SendHeartbeat)
 	router.HEAD(options.BaseURL+"/heartbeat/:agent_id", wrapper.FastHeartbeatCheck)
-	router.GET(options.BaseURL+"/traces/live", wrapper.StreamLiveTraces)
-	router.GET(options.BaseURL+"/traces/:trace_id/stream", wrapper.StreamTrace)
 }
 
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"H4sIAAAAAAAC/+x93XIbOdbYq6A6W7XyDilR8s/OsGqqVitpbGVlSyXJs6kdKSywGyQx7gZ6ADRljstP",
+	"kItcpCoXuUku8hB5nrxA8ghf4beBbjTZ1I9nvl1f2CWS3cABzsH5PwefkpQWJSWICJ6MPyU8XaACqj8P",
+	"54iIUzKj8kPJaImYwEj9BOVPE7EqkfyUIZ4yXApMSTJOrlclAnQGOGJLnCIwBEVaTtQboGR0iTPEQQpL",
+	"OMU5lgMOACwxSCnhVYE4EAtUJIMEkapIxj8l7uVkkMASJ7eDBH2ERZmjZBz8qKFJuGCYzJPPg8SfQ4Lp",
+	"XvupCfKFBWvOEBKYzMGsIqn8EeZYrJJBYj9PCCzkLOrBZJD4H+W0g0TAOZdwZ6igySDhNMUwl1AvEeN6",
+	"uv3d0e4o+TzoBGMGGbpDeb4ZDEqz6QrVgNg3twLkdpBggQq1SX9gaJaMk/+wV5PFnqGJvSO7oStFFZ/d",
+	"nkPG4EptOUNQoGwCRZsu/r5ABGgyuIMczDDjAjA0x1wghrLEx+vB6ODFcLQ/PBhd74/GBy/Ho9E/5PIp",
+	"K+TQSQYFGgpcoBjeM1QikiGSYsQnDHGaL1HWhuddVUwRk5TqvwDEAgqwgEsEpggR4N73wHs+SApMcCEJ",
+	"dOQAwESgOWIBBCs9fyWn5G0QzjAXEgCY5zUQK+C9A3amVCwcFACSDFTEfnzmQ/XTp5riV2aPJuYQqvOU",
+	"lRQTuXsLIcrx3t7+nw9297/dHe2+HH83+m4/Ql6QwHz1K5rcYbGYIMJwuij0YZMHT1CaSxpEYpJWjCmO",
+	"oFFijjnTZ3OCM4mfFReoGKpvht9NXx6M/px9J+lSQFFxOdkS4hxOc+TRrn5JfiEHvpVHJljjHYJigZi3",
+	"zP5LcBPX++nNbEZObnufjmOHwEuHv65zUiPDY0sWLzlNYb6gXIy/HY32YxSOiMBipfa1SVIn6idwegxm",
+	"jBbg+uwKpJJvz3AKBQJLxPSfmBKww5EAd/JYFvI5zAEiEgEhXSUKnmGGljFQNAzeGlCe0+EdZXkWezyH",
+	"XEw4QiRyGCAXYIEgE1MEBZAY5wIW5RrG8Hw0fvGyP2PI82LiSLP3wTw7e2vlFguO5owy8JcC8cVunhfu",
+	"kcaRbB+7NIdVhob2+fF3o4NRhHB5AZmYGPINT1yeFx2HrDH2EE7T/YPnySBh6JcKM5RNguOjB3K/WdrX",
+	"X3+jB5MSI3JGex+Ls7O3Rq6xzedCYkgucjvsyDfWYGaGc9EDLzPIRZGWmkONvx19q7Ci3g13TZKXz3H0",
+	"IwXN5FKmiItJAUW62A6nPbmoBdJMP0SvRs9fvpy98h9fB+wDMXlNab4Zi3q1W3AFVhG15hamr47/BsyP",
+	"IIdkXsE5AjvlSiwoGQA5jn56ACgDP8MlfOZpjvoxM59+Lhkk8qlQiQyeC+Cyu/XJjblAMBcLqYplaM5g",
+	"pmRGReqv6WyWY4LCGeqfW1MIKmA+8TWQiEYtnwEkrq/Y0wumKyAWmAOrD7vpX25SV5xC6KNM64YtiD/X",
+	"/ELuB86s7jnwjQK3dZ6oayjk0aV3KW+3Dg46/RmlQkKtzJO3SMAMCng/E8VtlbU1EF84e8K3LbQeYj6G",
+	"Foj/ykYTJM7H/KesHFH41NryzkhSd0EZCvU93+pwer9/mNvE1jiobbKbwSoXyfin20EXz1UgBRTowQeG",
+	"gFdlSZngQCmuHEtggQaBK/VVqmBAo5GH6wk11oaqhyWziWiGc0QQk4ZNwMcoQeeziKV3peHxlO3pqt7/",
+	"FTCkXOO3oUU3t/RTArMMaxPtwqO/Gcw5au7hpVy5N7XUSYFckNqXwpLyoEHJ/jY013NpT/+6Ndita5KD",
+	"fJCXMEUB7t1fTfDPS71O4N6LiFbv7Tb5Kdx96hpW7YQU3UpMAiVENXV7NNLG+zYE73G6DiDME8odIRjE",
+	"IStNbqrR6Dn6vh9z9BDXZmC30fPowdQE8dCcvPo7HzBD2M6B0cmSfNMjNoH9Hby/PAM7RjcaAPkHV39J",
+	"BIkM0/HeXmgn9DdfllirRWLBEF/QPAsIcP9g1CS9E/MGcG8ATABHKSVZwETUu07a7ceknRbGE/kNW8I8",
+	"mPp5a+Y36mmQLlD6Adh3OiaXbxfwo577+avRRlCsotSYsiogGTIEM6mfGY7bOtShSlXAj2eIzMUiGb96",
+	"oaa1H/cffvAPHQTm1FMGKJtDgn+FLUJcc/45SismDdeUEoE+RkjwyjwBzBNqqpZC04/HdIoyvRzHbaRd",
+	"PKcsspafJCPOqtR8z4XSl7diOFJzpZXooPRXLXK71s9vpPNXG2krYHUWw5ZvxTbEvjDYWgmM6X81iXks",
+	"p1ONu1RuQAYt54upcjFvx3uCf6kQwBkiAs8wYgqjYoEiRLPFgSmhEIjJCf7zT3D46+HwH6Phd5Ph7Td/",
+	"iJFc4emgsY21v4OdHM1hugLaWyEZKUF3QGqQ5ivJT2vNZZ0tFiq/Ug9Z9/RbxBfePiNWv3lriFS7WiL6",
+	"RY2Yx3fJNOjI4dnbUx+6TvLhUju9RLykhKMO+lmjf9dOaGAe7WkR1xGSmC+cVjEp2zTm3IxuRw822WsB",
+	"vp4MERImvYZNOGjEBVr7v1ataUg770e5O/Ioe2qUT3ebgzatk9rwx7QiArBAdlL7qI4HuLiVsrA7ALIx",
+	"oQ3CN8+LidGb+zlcftAPNxyYW/jdulWNozVWg2ddblhRD5l7rawcroJQAmXG9OnezEjY6p5a/nrR523A",
+	"g+VfPUBIZ7Ejc4xSyqCgrOXFWCtBpFoEMVEKvooZmVGANPHkMdfz39MTAna4gCSDLMO/ogwIWkdun0Uj",
+	"sv1jsQ7SCBs+lHiz/ty/1A6VenlcBzOcXAfOm9czMmPGsay6wORUv7i/PjbzuAaS/VbHwDx9ZKid9FE9",
+	"/V/IPvg9qqwB6W4+yZfolwpxEdVUZxhlyl2LuKRgSZtqq5SjTBMF37O6iHIJ7dXhMAsQ370hV9bF5kAb",
+	"TiG32otRZ4zOphhtidjQCTTfd7d708UuHqptd9H4E+ndvY5/U2ler/hqPH1Bndefyq1tLclZdSsE/bSW",
+	"BQBOpTUJAcdknqMYd0WZ03W28jx6ktN3WSuZ7g14H31iC7f08dpQiAdHL0Fx5Ym/OpyfbOup+6E+av2c",
+	"deqQSprxvMMP1F+j2G1Ih4miBu2ifzwtT/OENZqdRwhm7sfx4dpt30sfQ6kL93qQBKsJKDR+RC0e1yXQ",
+	"xZjs6bFFoZ8yJ6lEo9WjDy+E6QL+94tEHXVFoBQi45N6iNwKf9361YnVrASVmi5BqfpTrjuWXRF1OB9s",
+	"khTxeI1gVStcc+ierBVwzU8bELWwX8eNG9usA/xA/14fVX97jZLtZ0NVxP/kAs+B9h1kT61VrHyAfjTR",
+	"DgOJS3Npy/N+h8aTZp4GZbZj/TlppBW0TsyDo2CNSN4GbtdNpdaqrg2BnXfvz84AnnVl5nUn3G3L4Z1k",
+	"0ZuuuULnCV2Xv7d+9XViShOCt0cXOt+GKGFDaprZuAuRFJfWxJGcl8791/zx9HjzzF25h2sSPjrUDD85",
+	"E3g5DpsOrZdj2P/Y9pC4jvJdOGND2FQnUvbn19tIxTXn/IQxyro9tBkSEOf83vwZyeGBHSUyv3ogInHU",
+	"ewXiHM5DbnFKljDHxqSa4Mx46KNoemp3rAZ+kxf2ZCl12TeYC8pW/lY3KUb/4vuSGEo9w3EF0NL4fxss",
+	"OO7RrhOp9XuAIVExEuZMH2zMQjKTdnrp9e8DUFCVN64gVknkfbV7E8tYqY2Ke+2bG78M/OCxXdfx4W7K",
+	"tgInEurU5RG1NZ00vGlDqZ4PLVK2YVfnS8RgntcI1THvNsPakM52u4naO9QbxJaIPUUGb1WafEYdEO0K",
+	"V62AfrArTh+G5kcbw6fRKe5vWjg01EM0FhY6AywNddCf9hB5nqe+poZ2ovnuHEaLwH20xqP4WEp26OCG",
+	"JLPEus6l3V3a8/CkOJXqsaUoCrJEGOJVLrrFUMwFTlZGhhlZFIQge2UZPK4Eih01L89l9IQppc0s0bVC",
+	"b5OlpXXE+7O/Hjm83SaQm2+tN887wd3qUUdFU5xCP9Wk8wReh27XwmpjgFFpqF4GpKesbmGB9fMTbGtb",
+	"HaaignXJnYZXziAlqWfobCOIH93g7017TUU9loa9QWdf6/OsTVG7T9CG8VyxWpAlXMCyxGS+e0P+///8",
+	"3/8dHJ6Co8vT69Ojw7MxuFAZ+C7Tv+I20t4gF0wkbHLSqpTMy8QvWpBbhT7gPu6cKeURm3KvzSn/vEpT",
+	"xBXbUHp4wBXqH7+8WeDYSxg40EuPIdRPCRhvlbkc1EDxEqV1EdlMC60FyFCO5vq7gmZo94aois+6Dkeh",
+	"1Y7yfYZTMVDHwWmphnA4gI4xBNVXN0QzJ5VFrmwMDrDgtSMGE+CnSEhLxBg7M4zyzKO9d+fXJ2NwvXA1",
+	"b1zN1FzIznK0+2p3H8wQFBVDz2Lxsvs4psCOWJVYcpYVuEnyvLhJGjV3qgTrccO07x6ctr3Z8R+mbuvA",
+	"htwsFT8d35AhuJHj3STgexeu0d9+Y78uGZoh5r4f2u/RxzSvMvl16NowZWqD5Jtplc1VBs6Q8NndI0UV",
+	"fmwlhIMdjoqljn6apL2nSBAPzmvbO9qy6q1XSurNChfBod1pVypKar5a0DsO7hY4XYTP14Xajp0LqhEb",
+	"uooDbhA7H0/hSe2ooby3O1XRab1DLq4eehGb1Xu/gQ9V84Uv5DbtrCZtF/DFykv7MEOPD/4xz4s/3oML",
+	"NspXH8Vd2qqA7c9IulTBi3YJ8RM7kDe4bmM4W6sPhumIkcRWmhvJElERIGmfLy84vXtDToopyjKTG4gJ",
+	"eIv4QtebeuksQxAsA2AOcFHmOMVCey9KqBRuebx2b4hz1ig0S62S0pwDnS0jIdPgpgwLxDAMNAv9G8pA",
+	"jrlTLfT7Vq2IsbtZx/a0iv1WZga+C44gAVPULJbbaSgN/NkNoSyon2uUkLWLl4yG3N0kgqaVCQnZyroy",
+	"myWDBGZLSFJJbZ8HyR2aTjiCLF20yvJSWhSQZBP0EaWV5piujJym29blNdWkiKJSZrMJ+igYTM1srYq8",
+	"SNGdwbParXqOgdq5gb91902BsUaQrfz2FKt6hx8zwQLOTc6XXppUtnZ4NeWo1r4a1aJNvD6RdvSE5XJr",
+	"0zaDMnxfHYaqG05D8Gt6kA/r7ZS8y+6bUVNhnt8kY3BKlNqpklP16XfaLSSrJgfRr9ZNAOQI5wTpCUr5",
+	"oCf7pirBDM71iM/0u3+SrxzmOXCc3UyLiTZPdvCcUIYsg3qmD7gVIGqxQROCPzUEhm4O1OrjoUzrSQkZ",
+	"LML9c2yvtYsX8mEkl2/JX4/iABYU7MjtDe37lox3w28QYJoZrBFNcd34iMqphEGC51Z2WrLuPVUaQWQw",
+	"zgFaIrYSBtXqQYJQJoUIqIi0L4XkHPKf8hFJtVhNscQQSB2vZFTQVAmih/EVaaZqCjJ1CGs54sbsuv7V",
+	"GGpSvyTD2zFVwefDcaJhAKpwz69o1pL54vgHSbKIP6gqVQLg763aeh6zEcpsFvbyiNB8WYkrFR1sz/sf",
+	"r87fgas6S1fvv6V4DnYkFMYC3L0hclNqv1VIIS4vUX6gttK4Hqsho5teW4PbCS5UYMA/nFFnzd8XSCyQ",
+	"hBiYVwGyupUZw23GlNIcQWIYKJqUUJJNS3eFUsvQHlaLxj7H1Yy3xrlYf/HhDrL5lmGXC0Y/qlrRGZ5X",
+	"rD7TCldaI1FeHFOFOZC6HVsNpIaFYIHJfACQSHcl/i4g59rGNZnab48u9PByQEQWSmqCNMeSHKdoAZeY",
+	"shbm1AQTEyh/LtVpM5PDlYElGb8axbZhg6GqnUfBAcjREuUhT7UUo0X+w9UOjyGpp8NCnVrB0fOZ2eWr",
+	"T1W2o2yNB2f/N1I6/VxdnzVsKGCNt8Xp7aERtdnEfS+Nke4NH42WrHeIoQ6/TMwA+1JemWgHpbZPpt1S",
+	"aY0ANAtBqhC6XmAwfaPHUdeM26uGFddJLL2Vq+C3Ljj66vk9lu4Su7Y6aP90XrHfLrNwTT+ubgh6kr6J",
+	"FnrnnOZb0X2XK+o67Jf227qh1jicusvWO7TEoPKp1j5dNzhFXl6pFH9IrSTM7+CKe81tXSRMMemHVkxu",
+	"U4a4psrQpsNsV2J4GK8pdIO5HllfsKywd7hKGZPdVaZahLaKHOySeqUShr5Jv5/CBi/Fo5Q4HmyRi+/V",
+	"NiZ2b3qctboVRzxrMThptqZRyYtZDoVABGVSy65SUTG0e0Pec73V9691VG/qF8FOvbbv6xJlNczhxant",
+	"PB0+B0v87OnKHZ+suUiTIVma8XnH77T/ttQKJwtqq2Et5KPdUZTe31xfXwD5eN30B3hZK/Wk9QDxKSW9",
+	"BFOOolPJxyJTgZ2RjmRLNhoIe6nQPkIXJ7BjAFNuAkt+z/69F28HPTztpK615u+qrWfPfjd7T9qM+CFi",
+	"ytqJ2nY0ChWX7O1avZVC4vxM+Qpg48KuO49IlbYOwoV6vmaS9xCDRmZ8ERG4dTnaesnnL6BH6YSr2g/E",
+	"oMlddklmSijyLQTOESUzzApXyH96vE3+9dck0a9Jov98SaKRRD1cFCjDYbW8lxrKkajKjsTQIDtw3dlY",
+	"X0ekQW90WGp4M2AplxlmKwharzvItookUe7ekAtaVrni0JTkK92p38SwTITKX0/L53fZyquMZlWaw+xy",
+	"ImrM7wk453uG/T5W8qTnLE8X+p6QPg3sI33re7fWN93XS0ZTxPlETbvh4gmXVMgl6xCaidtWkLE7VD53",
+	"UJsT8xu5cI9OYF2t5vqRnktoUTSkslqsE1rbVbs35MTDpzG2FNGqhGkAK0GHdpgBqMqhoEPVt8IN6SXX",
+	"+OoGsU36a3kZJyjMQdmL7PXIPpnDssyxi4tLMs/pHKdBUo87AcaRrizWKs9NPx7eQaPNtJlmyLUhevoH",
+	"Qts03ApbNqKUrWyjTUG7RwrY1fG5MIJlDlcYcnJ3D4WxoY5bkBpXutS5Ri3ng/xaScc7NFXEGxaJtXdT",
+	"j7TFhv5SIbaKeNEbe6Ufu+0M4CV64skdmvpNy+265NfRm5g+961m8B2e6lCbSgRJzKt/5sKGQS0uurR5",
+	"ySr9xhKhQ2uLsgev7D+S0QgC82v3htwQHbfRLitwfgmg5EQECiyl7xJDQBCXjE1xbp0P/9ONg+gmGciP",
+	"2nCVH248G/cmub0FBYKEj4F9ARy+O7Z2s5yufvqZGXoGuXzTvvhzxYVNRwD2VyDg/JHqGh7QcON3X8yw",
+	"C5wvciNmpSTV0Iy3Q/D3/XAbxgDtK8kg7h25jWdgtjMn+4YQb3+XKYL14d8cL3rrB4fC9mi7Junpa3e0",
+	"30l3NA/OJ+yI1rN7733SlLxGJfp1rQe2qY2yaLZR2U5z8iMjYXaTTj4agLTighaTBYLS1g1ynmAlFhNL",
+	"DjoFqqn2Bo/YVYVDysf+0/Dw4nT4o1Njlge6IqMzCUoP5DTIFy9jCs+jdZozPYSX+0+WiPTFes5tZndd",
+	"IbuvrG57VrdBi/zXYnlbpck6z2gzVVYryy5f9rASdKjv8FHwSYbo3uV4TpTPSCLwB8jF26MLL4gcOie8",
+	"RNsFvXPOWJc0vSG71u75hqQPj2it/aQWk6tjyivdo7xnesU745GxCOiRrfhkObRfhdN2wils399/n90N",
+	"U42kz4Zlqbxd7iBgvi5Md4xmmKAwNVSRvTsgpmABKlseCCoxI6hKRedAHt0BmNE8p3fqnbq6z7an9lM4",
+	"NvnTt7yQ4KuQ7yfk213L2kEpK9RdJ4Ucz1C6SnOku6ZJc1S3ZoMMAXNJt/LmFlCY8tvpygagFpR+4JoQ",
+	"Tbd9AQUC6QKS+bYtw5shQ4VJBRNgKIdClWR2RTnXFBzrGbfOvMCzuqzq2VbB1Yd0j9Xrra8BYghySgaA",
+	"5tkeQXdm300tQsjqCLqbeBdVe/eM5ln9Q/21HlqBLn+baKRFhYWCaoPUa9CRJ/ys59HkhHofamB0kxa1",
+	"oBIzVXNMJSmFnkbv5XvX72vs+vrHUJVFuKaBpMrzOtlnGKmZ6JDFa7NFVIMTSdwawzRVScjZE7WK9xA2",
+	"iPeNj/OPdrQyXpzQiko2S+XaEcoj3UOSq+pIgqSUgWwFFJlLRUxxGgCNkiBVNPM60lVkMM+5jsrjujXM",
+	"07Rp6cOj1vQ/7t8LYZtMh35tYO7TnBjet2yub2uN++iaTgeKKI3tKq2nLM068PS8/YN7V2IZuglOTStN",
+	"vxF33mBtbZcl4vdFf4rO4T20NEdy6boqsU0B9W0UN5LFevlKJOjf9hwuFJJMaNJamQXNUG6aLHhGpcl/",
+	"VWWTHOUoFQCWkoUwlWpiV/kGkiw3GRu0FLgwGr26GhTaSNBhoFrVAFRcZV9ggc7O3v6RgzkSE1+H3nlW",
+	"6/5ZpWLYZd03JIidH9GioAQsYV4hPgY3CSRiwWiJUx1YoCUiEOu/55TOc6T/TukCMfM3zXNYQBOIoHNV",
+	"Nio/tY2uevTNFLyFZu1o58G1fF7qkicaY1lMjoKi0hKnC8+3PX7Q/c7mnsc6ySAoSVEUY5ih5A/aufA1",
+	"BrcuBvdkd0GvJ9MNIaytY1dmC/wGwPXWR8mS0jXtQV29RMQ0dE0kDi9O68KKcB/3tMqeDJI65Vl+MDVS",
+	"27U/qvtd37uZtWcbVIR0ZH4+oMNsfR7q/fdq4OwexRDREQPbjk/4g0T4ha0s07MOAEFLxIzAevaVRfxW",
+	"LOI3imlfM5gi5b2J3fSV4SXOKpgDqWFYO1S7NFGm8hKurk62sIXM3dgLKEDtnK+dNsEq7yj7gNgweo9J",
+	"Spny70jbPTaPswS8B8HpscKnLSeTS/rQwKjcueHH1a9//va7eA78Pe6RUJs7tG5Y7xaJMGYwZ4hzfZGB",
+	"7vAdZklB/sHT9d0Nc/fxuni49PR6OcOEC8iE7lwrPzqwzOfUtLpxD8wgztUnjXKpj6qPNdeZxAt6m7O1",
+	"iplVn7UJL2EcwRe6D5v8XefzS76Pp5WiJwZTqdouMGKQpYvw0hr5ylAP31W0utkl47yMj+2TGSQKO9E1",
+	"q6Pq1wt6cExRTsm85e1UgxlnwjBDsxcvX23nB3LQhNlya3LkPquQnvYjqztAUsVZUAFxLte+WEHC4M9/",
+	"mcsvdlNa1BnUx/I3cAl/lqYly43TgI/39uZYLKqpfHpPDcAZ/HnPiv12ivIRZVojkQCoXFnroHiL+AK4",
+	"lF4jllRu3f/9H//r//2f/wpc22jww/klODwFxyc/npydX5xcXo1viHIVnZeIqDrQILKSmWiJNJuPzi9P",
+	"wNH5u+vLw6NrMEXiDiECXtPagw5JZttWaccCV0BYx9RfT94c/nh6fgku35+dXKlEvncnP55cSusSz0zU",
+	"Wc6vtH9aCYA+mjaFFUdMm5ZLmMsXT2dAIC44kIcVqO63iKTubic5ygDM8EewohUDKc3QABCqbyGTP8ox",
+	"DskKTBmCkl9aTz2Qhh6As5m0ZVW50mvqr0vFnAtEhNofLoe5dmBjvVGcViw1TKkS6p56hTfrZdF78t/+",
+	"C7AS0dw/o3ZkqQTgGJwSLLDi9QbZChU6I07qXjlOkVFsDaG9Pb1ukZg0aDU4u5TN98xLfE8+q3iCUCeq",
+	"TUSHF6dJLPFYm8glTsbJ893RruQ0JRQLJT32VGgYiZhOpTPJp5DjtKYX31equoI5xduvZm56NpXzQe6p",
+	"qVDCS+U9QVzopmNZ7cHLME/pErGVtsx1U2VMyWmWjJPXSEgTQQUAtJWgVnEwGtlTbvQHlSOvD8Tez1yr",
+	"NtyF9tdWvfgmiGIiHfei+CnZ8jFeFQVkK/8RRqlopG7bFGljitzKN/fqi/ujqHiNhC5jMHdHmxYg+ap9",
+	"o3/X3k9X4OjsVI9iWlkaN3Xkwq/Yzp9hLg5tL4kn23w9g5xrHQpsi9HW6ht4UM/V9wP5D9aIsMafh4i9",
+	"T1asfNbIkKpGBC1SJKk8dFCHhgC00UR3lbc9O7s35EgFCrh86MaLJ90kRnrqpl4lzel8Zdib1NNQnXnd",
+	"vFTAcXfFiRSujUNNQzE3QAK+qERG7wjYuTp9fX1y+Xbv6vT16btrlUFt4QpvxtLOP9VjrU5D0eA0oVT8",
+	"3dWrMVRIph/cs7MCO4TaNAkVr0eZmvvcn+AO5zmYIwEORgd1V3tKAEEfBXhzcnhs1eYIjb53G3po4hp1",
+	"ck6kF2vrWiCVZOOF6eLB2qrC9pJnLIdRlSROdfCccs3MjfoIbNMa4fNt67y96LJnauibhRKfB8kL/d6j",
+	"nNPwmrvIETXV9lTSUEUyOf/LR+QTG+c/tU5Hc0eXrvwI2YM9v+ak2M1jTVYdcAjDtzdJzfiNZIrlaoHq",
+	"SYUIzzaRQCMS+YJWeWYUL13hpRfEQUVylfHiXy8hVRpW5VJRoh8Q8Xz/ys6pypqlmMoxTKR06BC4b6zT",
+	"7Mm4fuNuubVClwMbd++QuQvviqqYvB3IP7OtMWfyrZya63jTlGYrb4uPafoBsb2/fcsDSEwJ3p1kbcMh",
+	"L038t4n3K1ggW83HweuTa2AIDkzVnBpEVS5oAPJqGU1b7WDacTgliF0lPDJzRND/BsFsLf43ogns2J2T",
+	"UD/rg7XmKx1KU+3ClRzVtV9pw+OixPL0cUQyUCKGaYZTr42Bai6IVZS/3e1AbqGnKdWX8mySx1eS+3CJ",
+	"S2WXYGMgtCZoAyTftojNtUz13lFJS45SU1ogtVmYSDuoXrA573Is19PBFZdG+yhsvIlIGWFGVlP2AaiE",
+	"VJhTghpAYQ6kujFwypfy0tUbrvOurPUQob0rRLI3npveyP2/0mzVg/P4aZR12XUj+0nXLDeLXv2b9cK8",
+	"HJc8UycFdEbbn48+q/qhfiww3paqU7DW26gzrbhpJ1FAASAPaOVZSxP5/ISsvLPJSGQp7YuqIjrLF9UZ",
+	"9FW44eY2OFakAV/QD2WN3qAfaBgXcWF0hucLcYfk/yFrrPs4Gblk5ZGKuwZglXCVU5ipxBKm7KUZ5D7p",
+	"qLC+6X6kAwzVdLg/MjeJPsgOscJUNaAykKY0Q1p0SUMgkJ/KDjgYjcD538bgHW1OzQfgA0Kl4t3SsvHN",
+	"AK5fPQCHaYpKgbIxuA7fzgagzBHkSPN+tVEX51fXIa99sT8CrylBY/CefCDSTlLb7N51XEzJ8fb7L0fP",
+	"gW0a977ORhnX7hmlsQ3AFKYfAJ3NbLk+W0V43w+QC3c8jowqs50x0/uO09+BQRNRJSJUYCgQKWviYHQQ",
+	"a/jZxHwXyhVz2R/FmuGtw762Y56v0XwaWG5wD4nX8K7Opp5aMw0TZI6j+0wqcCBDS5TTsvAvtQ78iS1V",
+	"L3JxiNVYqyliBPlegOZQ9nsz0q2DunM3zCKV4qW5gB+aNxRmtLo2ZB28toAEzpFpt+BTKY+tLnqjvXJ9",
+	"WUdjPUpQh/X59vO/BQAA//+N1VtbNawAAA==",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

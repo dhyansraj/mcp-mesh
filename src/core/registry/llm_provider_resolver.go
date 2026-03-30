@@ -121,7 +121,7 @@ func convertToResolvedProvider(cap *ent.Capability) *generated.ResolvedLLMProvid
 	}
 
 	endpoint := buildProviderEndpoint(cap)
-	status := generated.Available
+	status := generated.ResolvedLLMProviderStatusAvailable
 
 	// Extract vendor from kwargs (stored by @mesh.llm_provider decorator)
 	vendor := "unknown"

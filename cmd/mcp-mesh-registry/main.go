@@ -53,7 +53,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  CACHE_TTL                - Response cache TTL in seconds (default: 30)\n")
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_DISTRIBUTED_TRACING_ENABLED - Enable distributed tracing (true/false, default: false)\n")
 		fmt.Fprintf(os.Stderr, "  REDIS_URL                - Redis URL for distributed tracing (default: redis://localhost:6379)\n")
-		fmt.Fprintf(os.Stderr, "  MCP_MESH_CORS_ORIGIN     - Allowed CORS origin for the dashboard (default: same-origin)\n")
 		fmt.Fprintf(os.Stderr, "\nThe registry service provides:\n")
 		fmt.Fprintf(os.Stderr, "  - Agent registration and discovery\n")
 		fmt.Fprintf(os.Stderr, "  - Capability-based service matching\n")
@@ -127,7 +126,6 @@ func main() {
 		TlsKeyFile:              os.Getenv("MCP_MESH_TLS_KEY"),
 		TrustDir:                os.Getenv("MCP_MESH_TRUST_DIR"),
 		AdminPort:               getEnvIntDefault("MCP_MESH_ADMIN_PORT", 0),
-		CorsOrigin:              getEnvDefault("MCP_MESH_CORS_ORIGIN", ""),
 	}
 
 	if registryConfig.TlsMode != "off" {

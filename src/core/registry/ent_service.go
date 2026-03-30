@@ -46,7 +46,6 @@ type RegistryConfig struct {
 	TlsKeyFile               string // registry server key — from MCP_MESH_TLS_KEY
 	TrustDir                 string // directory for FileStore backend — from MCP_MESH_TRUST_DIR
 	AdminPort                int    // admin API port — from MCP_MESH_ADMIN_PORT (0 = disabled)
-	CorsOrigin               string // CORS allowed origin — from MCP_MESH_CORS_ORIGIN (empty = disabled)
 }
 
 // ResponseCache provides caching functionality matching Python implementation

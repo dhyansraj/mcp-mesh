@@ -24,7 +24,7 @@ func TestLLMToolsInHeartbeatResponse(t *testing.T) {
 		router := setupTestRouter(t, service)
 
 		// Step 1: Register a tool provider agent with input_schema
-		agentType := generated.MeshAgentRegistrationAgentTypeMcpAgent
+		agentType := generated.McpAgent
 		providerAgent := generated.MeshAgentRegistration{
 			AgentId:   "pdf-provider",
 			AgentType: &agentType,
@@ -58,7 +58,7 @@ func TestLLMToolsInHeartbeatResponse(t *testing.T) {
 		assert.Equal(t, http.StatusOK, recorder.Code)
 
 		// Step 2: Register an LLM agent with llm_filter that references the pdf tool
-		llmAgentType := generated.MeshAgentRegistrationAgentTypeMcpAgent
+		llmAgentType := generated.McpAgent
 		llmAgent := generated.MeshAgentRegistration{
 			AgentId:   "claude-agent",
 			AgentType: &llmAgentType,
@@ -133,7 +133,7 @@ func TestLLMToolsInHeartbeatResponse(t *testing.T) {
 		router := setupTestRouter(t, service)
 
 		// Register agent without llm_filter
-		agentType := generated.MeshAgentRegistrationAgentTypeMcpAgent
+		agentType := generated.McpAgent
 		simpleAgent := generated.MeshAgentRegistration{
 			AgentId:   "simple-agent",
 			AgentType: &agentType,
@@ -176,7 +176,7 @@ func TestLLMToolsInHeartbeatResponse(t *testing.T) {
 		router := setupTestRouter(t, service)
 
 		// Register two tool providers
-		agentType := generated.MeshAgentRegistrationAgentTypeMcpAgent
+		agentType := generated.McpAgent
 
 		// Provider 1: PDF tools
 		pdfProvider := generated.MeshAgentRegistration{
@@ -293,7 +293,7 @@ func TestLLMToolsInHeartbeatResponse(t *testing.T) {
 		router := setupTestRouter(t, service)
 
 		// Register multiple tool providers
-		agentType := generated.MeshAgentRegistrationAgentTypeMcpAgent
+		agentType := generated.McpAgent
 
 		providers := []generated.MeshAgentRegistration{
 			{
@@ -381,7 +381,7 @@ func TestLLMToolsInHeartbeatResponse(t *testing.T) {
 		service := setupTestService(t)
 		router := setupTestRouter(t, service)
 
-		agentType := generated.MeshAgentRegistrationAgentTypeMcpAgent
+		agentType := generated.McpAgent
 
 		// Register LLM agent first with filter
 		llmAgent := generated.MeshAgentRegistration{

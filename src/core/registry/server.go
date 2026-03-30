@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -32,9 +31,6 @@ type Server struct {
 	tracingManager *tracing.TracingManager
 	trustChain     *trust.TrustChain
 	logger         *logger.Logger
-	eventHub       *EventHub
-	eventPoller    *EventPoller
-	tracePoller    *TracePoller
 }
 
 // NewServer creates a new registry server using Ent database
@@ -42,12 +38,8 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	// Create Ent-based service
 	entService := NewEntService(entDB, config, logger)
 
-	// Create event hub and poller for dashboard SSE
-	eventHub := NewEventHub()
-	eventPoller := NewEventPoller(entService, eventHub, logger, 3*time.Second)
-
 	// Create Ent-based business logic handlers
-	handlers := NewEntBusinessLogicHandlers(entService, eventHub)
+	handlers := NewEntBusinessLogicHandlers(entService)
 
 	// Create health monitor using configuration values
 	heartbeatTimeout := time.Duration(config.DefaultTimeoutThreshold) * time.Second
@@ -87,34 +79,9 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	engine.Use(gin.Recovery())
 	engine.Use(gin.Logger())
 
-	// Add CORS middleware if configured (for dashboard dev mode)
-	if config.CorsOrigin != "" {
-		origin := config.CorsOrigin
-		engine.Use(func(c *gin.Context) {
-			c.Header("Access-Control-Allow-Origin", origin)
-			c.Header("Access-Control-Allow-Methods", "GET, POST, DELETE, HEAD, OPTIONS")
-			c.Header("Access-Control-Allow-Headers", "Content-Type, Cache-Control")
-			if c.Request.Method == "OPTIONS" {
-				c.AbortWithStatus(http.StatusNoContent)
-				return
-			}
-			c.Next()
-		})
-	}
-
 	// Add TLS middleware before routes (only if trust chain is configured)
 	if trustChain != nil {
 		engine.Use(TLSVerifyMiddleware(trustChain, config.TlsMode))
-	}
-
-	// Create trace poller for pushing trace activity via SSE (only when tracing is enabled)
-	var tracePoller *TracePoller
-	if tracingManager != nil {
-		tracePoller = NewTracePoller(tracingManager, eventHub, logger, 3*time.Second)
-		// Give handlers access to the accumulator for live trace streaming
-		if acc := tracingManager.GetAccumulator(); acc != nil {
-			handlers.traceAccumulator = acc
-		}
 	}
 
 	// Create server
@@ -128,9 +95,6 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 		tracingManager: tracingManager,
 		trustChain:     trustChain,
 		logger:         logger,
-		eventHub:       eventHub,
-		eventPoller:    eventPoller,
-		tracePoller:    tracePoller,
 	}
 
 	// Add operational endpoints first (includes wildcard proxy routes that must be registered before generated routes)
@@ -155,14 +119,6 @@ func (s *Server) Run(addr string) error {
 
 	// Start health monitor
 	s.healthMonitor.Start()
-
-	// Start dashboard event poller
-	s.eventPoller.Start()
-
-	// Start trace poller (publishes trace activity via SSE)
-	if s.tracePoller != nil {
-		s.tracePoller.Start()
-	}
 
 	// Start distributed tracing if enabled
 	if s.tracingManager != nil {
@@ -198,14 +154,6 @@ func (s *Server) Start() error {
 
 // Stop stops the HTTP server and health monitor
 func (s *Server) Stop() error {
-	// Stop trace poller
-	if s.tracePoller != nil {
-		s.tracePoller.Stop()
-	}
-
-	// Stop dashboard event poller
-	s.eventPoller.Stop()
-
 	// Stop health monitor
 	s.healthMonitor.Stop()
 
@@ -253,14 +201,8 @@ func (s *Server) setupOperationalEndpoints() {
 	// Tracing manager info endpoint
 	s.engine.GET("/trace/info", s.handleTracingInfo)
 
-	// Trace query endpoints
-	s.engine.GET("/trace/list", s.handleTraceList)
-	s.engine.GET("/trace/recent", s.handleRecentTraces)
-	s.engine.GET("/trace/edge-stats", s.handleEdgeStats)
+	// Trace detail endpoint (used by meshctl trace)
 	s.engine.GET("/trace/:trace_id", s.handleTraceGet)
-	s.engine.GET("/trace/search", s.handleTraceSearch)
-
-	// Note: GET /traces/live and GET /events (SSE) are in OpenAPI spec, registered via generated routes
 
 	// Admin endpoints on main engine only when no separate admin port is configured
 	if s.config.AdminPort <= 0 {
@@ -321,47 +263,6 @@ func (s *Server) handleTracingStats(c *gin.Context) {
 	c.JSON(200, stats)
 }
 
-// handleTraceList lists recent traces with pagination
-func (s *Server) handleTraceList(c *gin.Context) {
-	if s.tracingManager == nil {
-		c.JSON(200, map[string]interface{}{
-			"enabled": false,
-			"traces":  []interface{}{},
-			"total":   0,
-		})
-		return
-	}
-
-	// Parse query parameters
-	limitStr := c.DefaultQuery("limit", "20")
-	offsetStr := c.DefaultQuery("offset", "0")
-
-	limit, err := strconv.Atoi(limitStr)
-	if err != nil || limit < 1 || limit > 100 {
-		limit = 20
-	}
-
-	offset, err := strconv.Atoi(offsetStr)
-	if err != nil || offset < 0 {
-		offset = 0
-	}
-
-	// Get traces
-	traces := s.tracingManager.ListTraces(limit, offset)
-	total := s.tracingManager.GetTraceCount()
-
-	response := map[string]interface{}{
-		"enabled": true,
-		"traces":  traces,
-		"total":   total,
-		"limit":   limit,
-		"offset":  offset,
-		"count":   len(traces),
-	}
-
-	c.JSON(200, response)
-}
-
 // handleTraceGet retrieves a specific trace by ID
 func (s *Server) handleTraceGet(c *gin.Context) {
 	if s.tracingManager == nil {
@@ -410,158 +311,6 @@ func (s *Server) handleProxyGetRequest(c *gin.Context) {
 		target = target[1:]
 	}
 	s.handlers.ProxyMcpGetRequest(c, target)
-}
-
-// handleTraceSearch searches traces based on criteria
-func (s *Server) handleTraceSearch(c *gin.Context) {
-	if s.tracingManager == nil {
-		c.JSON(200, map[string]interface{}{
-			"enabled": false,
-			"traces":  []interface{}{},
-			"total":   0,
-		})
-		return
-	}
-
-	// Parse search criteria from query parameters
-	criteria := tracing.TraceSearchCriteria{}
-
-	if parentSpanID := c.Query("parent_span_id"); parentSpanID != "" {
-		criteria.ParentSpanID = &parentSpanID
-	}
-
-	if agentName := c.Query("agent_name"); agentName != "" {
-		criteria.AgentName = &agentName
-	}
-
-	if operation := c.Query("operation"); operation != "" {
-		criteria.Operation = &operation
-	}
-
-	if successStr := c.Query("success"); successStr != "" {
-		if success, err := strconv.ParseBool(successStr); err == nil {
-			criteria.Success = &success
-		}
-	}
-
-	if startTimeStr := c.Query("start_time"); startTimeStr != "" {
-		if startTime, err := time.Parse(time.RFC3339, startTimeStr); err == nil {
-			criteria.StartTime = &startTime
-		}
-	}
-
-	if endTimeStr := c.Query("end_time"); endTimeStr != "" {
-		if endTime, err := time.Parse(time.RFC3339, endTimeStr); err == nil {
-			criteria.EndTime = &endTime
-		}
-	}
-
-	if minDurationStr := c.Query("min_duration_ms"); minDurationStr != "" {
-		if minDuration, err := strconv.ParseInt(minDurationStr, 10, 64); err == nil {
-			criteria.MinDuration = &minDuration
-		}
-	}
-
-	if maxDurationStr := c.Query("max_duration_ms"); maxDurationStr != "" {
-		if maxDuration, err := strconv.ParseInt(maxDurationStr, 10, 64); err == nil {
-			criteria.MaxDuration = &maxDuration
-		}
-	}
-
-	limitStr := c.DefaultQuery("limit", "20")
-	if limit, err := strconv.Atoi(limitStr); err == nil && limit > 0 && limit <= 100 {
-		criteria.Limit = limit
-	} else {
-		criteria.Limit = 20
-	}
-
-	// Perform search
-	traces := s.tracingManager.SearchTraces(criteria)
-
-	response := map[string]interface{}{
-		"enabled":  true,
-		"traces":   traces,
-		"count":    len(traces),
-		"criteria": criteria,
-	}
-
-	c.JSON(200, response)
-}
-
-// handleRecentTraces returns recent trace summaries from Tempo
-func (s *Server) handleRecentTraces(c *gin.Context) {
-	if s.tracingManager == nil {
-		c.JSON(200, map[string]interface{}{
-			"enabled": false,
-			"traces":  []interface{}{},
-			"count":   0,
-			"limit":   0,
-		})
-		return
-	}
-
-	limit := 20
-	if l := c.Query("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
-		}
-	}
-	if limit > 100 {
-		limit = 100
-	}
-
-	traces, err := s.tracingManager.GetRecentTraces(limit)
-	if err != nil {
-		c.JSON(500, map[string]interface{}{
-			"error": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(200, map[string]interface{}{
-		"enabled": true,
-		"traces":  traces,
-		"count":   len(traces),
-		"limit":   limit,
-	})
-}
-
-// handleEdgeStats returns aggregated edge statistics from recent traces
-func (s *Server) handleEdgeStats(c *gin.Context) {
-	if s.tracingManager == nil {
-		c.JSON(200, map[string]interface{}{
-			"enabled":    false,
-			"edges":      []interface{}{},
-			"count":      0,
-			"edge_count": 0,
-		})
-		return
-	}
-
-	limit := 20
-	if l := c.Query("limit"); l != "" {
-		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
-			limit = parsed
-		}
-	}
-	if limit > 100 {
-		limit = 100
-	}
-
-	stats, err := s.tracingManager.GetEdgeStats(limit)
-	if err != nil {
-		c.JSON(500, map[string]interface{}{
-			"error": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(200, map[string]interface{}{
-		"enabled":    true,
-		"edges":      stats,
-		"count":      len(stats),
-		"edge_count": len(stats),
-	})
 }
 
 // runWithTLS starts the server with TLS configured to request (but not require)
