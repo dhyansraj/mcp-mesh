@@ -159,6 +159,9 @@ func main() {
 		if err := server.Stop(); err != nil {
 			log.Printf("Error during shutdown: %v", err)
 		}
+		if err := db.Close(); err != nil {
+			log.Printf("Failed to close database: %v", err)
+		}
 
 		log.Println("UI server stopped")
 		os.Exit(0)
