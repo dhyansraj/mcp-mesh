@@ -517,6 +517,17 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 		}(agentCmd, agentName)
 	}
 
+	// Set PID update callbacks for watchers so PID files track the actual agent process
+	// Write agent's actual PID so meshctl stop can target individual agents
+	for _, w := range watchers {
+		name := w.config.AgentName // capture for closure
+		w.config.PIDUpdateCallback = func(pid int) {
+			if pmErr == nil {
+				pm.WritePID(name, pid)
+			}
+		}
+	}
+
 	// Start all watchers (each blocks in its own goroutine)
 	for _, w := range watchers {
 		go func(watcher *AgentWatcher) {
@@ -526,21 +537,24 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 		}(w)
 	}
 
-	// Write PID files for watcher-managed agents
-	// Use meshctl's own PID — when meshctl stop sends SIGTERM, signal handler cleans up watchers
+	// Wait briefly for watchers to start their initial agent processes
+	time.Sleep(1 * time.Second)
+
+	// Write initial PID files using actual agent PIDs
 	for _, w := range watchers {
 		agentName := w.config.AgentName
 		agentNames = append(agentNames, agentName)
 
-		if pmErr == nil {
-			if err := pm.WritePID(agentName, os.Getpid()); err != nil && !quiet {
+		pid := w.GetPID()
+		if pmErr == nil && pid > 0 {
+			if err := pm.WritePID(agentName, pid); err != nil && !quiet {
 				fmt.Printf("Warning: failed to write PID file for %s: %v\n", agentName, err)
 			}
 		}
 
 		// Record the process for tracking
 		agentProc := ProcessInfo{
-			PID:       os.Getpid(),
+			PID:       pid,
 			Name:      agentName,
 			Type:      "agent",
 			Command:   "watcher:" + agentName,

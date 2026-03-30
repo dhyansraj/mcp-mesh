@@ -27,9 +27,10 @@ type WatchConfig struct {
 	DebounceDelay time.Duration // default 500ms, configurable via MCP_MESH_RELOAD_DEBOUNCE env var
 	PortDelay     time.Duration // delay after kill for port release, default 500ms, configurable via MCP_MESH_RELOAD_PORT_DELAY
 	StopTimeout   time.Duration // SIGTERM -> SIGKILL timeout, default 3s
-	AgentName       string        // for logging
-	LogFileFactory  func() (*os.File, error) // returns fresh log file (with rotation); nil = use os.Stdout
-	PreRestartCheck func() error  // optional: validate before killing agent (e.g., compile check)
+	AgentName         string        // for logging
+	LogFileFactory    func() (*os.File, error) // returns fresh log file (with rotation); nil = use os.Stdout
+	PreRestartCheck   func() error  // optional: validate before killing agent (e.g., compile check)
+	PIDUpdateCallback func(pid int) // Called after agent starts/restarts with new PID
 }
 
 // AgentWatcher provides event-driven file watching with process restart capability.
@@ -124,6 +125,10 @@ func (aw *AgentWatcher) Start() error {
 	}
 	aw.currentCmd = cmd
 	aw.mu.Unlock()
+
+	if aw.config.PIDUpdateCallback != nil {
+		aw.config.PIDUpdateCallback(cmd.Process.Pid)
+	}
 
 	if !aw.quiet {
 		fmt.Printf("Watch mode: watching %s for changes\n", aw.config.WatchDir)
@@ -344,6 +349,10 @@ func (aw *AgentWatcher) restartAgent(exitCh *chan struct{}) {
 	}
 	aw.currentCmd = cmd
 	aw.mu.Unlock()
+
+	if aw.config.PIDUpdateCallback != nil {
+		aw.config.PIDUpdateCallback(cmd.Process.Pid)
+	}
 
 	if !aw.quiet {
 		fmt.Printf("Agent restarted (PID: %d)\n", cmd.Process.Pid)
