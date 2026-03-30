@@ -160,7 +160,16 @@ func (s *Server) Run(addr string) error {
 	if s.tracePoller != nil {
 		s.tracePoller.Start()
 	}
-	return s.engine.Run(addr)
+	err := s.engine.Run(addr)
+	// engine.Run returned — clean up background components
+	if s.tracePoller != nil {
+		s.tracePoller.Stop()
+	}
+	if s.tracingManager != nil {
+		s.tracingManager.Stop()
+	}
+	s.eventPoller.Stop()
+	return err
 }
 
 // Stop performs a graceful shutdown of the UI server.

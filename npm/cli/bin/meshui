@@ -15,6 +15,14 @@ if (fs.existsSync(binaryPath) && binaryPath !== __filename) {
   const result = child_process.spawnSync(binaryPath, process.argv.slice(2), {
     stdio: "inherit",
   });
+  if (result.error) {
+    console.error(`[mcp-mesh] Failed to run meshui: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.signal) {
+    console.error(`[mcp-mesh] meshui terminated by signal: ${result.signal}`);
+    process.exit(128 + (result.signal === "SIGTERM" ? 15 : result.signal === "SIGINT" ? 2 : 1));
+  }
   process.exit(result.status || 0);
 } else {
   console.error("Error: meshui binary not found.");

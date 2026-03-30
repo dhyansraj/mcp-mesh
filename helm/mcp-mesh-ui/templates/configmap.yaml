@@ -9,8 +9,6 @@ data:
   MCP_MESH_UI_PORT: {{ .Values.ui.port | quote }}
   MCP_MESH_REGISTRY_URL: {{ .Values.ui.registryURL | quote }}
   MCP_MESH_LOG_LEVEL: {{ .Values.ui.logLevel | default "INFO" | quote }}
-  DATABASE_URL: {{ .Values.ui.database.url | quote }}
   MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ .Values.ui.tracing.enabled | default "true" | quote }}
-  REDIS_URL: {{ .Values.ui.redis.url | quote }}
   TEMPO_URL: {{ .Values.ui.tempo.url | quote }}
   TELEMETRY_ENDPOINT: {{ .Values.ui.tempo.telemetryEndpoint | quote }}

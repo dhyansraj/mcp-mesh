@@ -137,7 +137,11 @@ func (s *Server) GetEventsHistory(c *gin.Context) {
 
 // writeSSEEvent writes a single SSE event to the response writer
 func writeSSEEvent(c *gin.Context, eventType string, data interface{}) {
-	jsonData, _ := json.Marshal(data)
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[ui] SSE marshal error: %v", err)
+		return
+	}
 	fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", eventType, string(jsonData))
 }
 

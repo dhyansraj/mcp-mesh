@@ -227,6 +227,13 @@ func (s *Server) handleTraceList(c *gin.Context) {
 
 // handleStreamLiveTraces streams all trace spans in real-time via SSE
 func (s *Server) handleStreamLiveTraces(c *gin.Context) {
+	// Check flusher support first, before setting SSE headers
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "streaming not supported"})
+		return
+	}
+
 	if s.tracingManager == nil || s.tracingManager.GetAccumulator() == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error": "Live trace streaming not available (tracing not enabled)",
@@ -236,18 +243,10 @@ func (s *Server) handleStreamLiveTraces(c *gin.Context) {
 
 	accumulator := s.tracingManager.GetAccumulator()
 
-	// SSE headers
+	// Set SSE headers after confirming flusher support
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
-
-	flusher, ok := c.Writer.(http.Flusher)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Streaming not supported",
-		})
-		return
-	}
 
 	ch := accumulator.SubscribeLive()
 	defer accumulator.UnsubscribeLive(ch)

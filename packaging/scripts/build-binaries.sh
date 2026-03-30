@@ -243,7 +243,17 @@ build_all_binaries() {
         cp -r "$PROJECT_ROOT/src/ui/out" "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
         success "Next.js SPA built and copied to cmd/mcp-mesh-ui/out/"
     else
-        warn "npm not available, meshui will use placeholder SPA"
+        if [[ "${MESHUI_USE_PREBUILT:-}" == "true" ]]; then
+            if [[ -d "$PROJECT_ROOT/cmd/mcp-mesh-ui/out" ]]; then
+                warn "Using prebuilt SPA from cmd/mcp-mesh-ui/out/"
+            else
+                error "MESHUI_USE_PREBUILT=true but cmd/mcp-mesh-ui/out/ does not exist"
+                exit 1
+            fi
+        else
+            error "npm not available — cannot build Next.js SPA for meshui. Install Node.js or set MESHUI_USE_PREBUILT=true"
+            exit 1
+        fi
     fi
 
     # Parse platforms and build

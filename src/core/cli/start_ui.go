@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os/exec"
+	"runtime"
 
 	"github.com/spf13/cobra"
 )
@@ -51,11 +52,27 @@ func maybeStartUIServer(cmd *cobra.Command, config *CLIConfig, registryURL strin
 	}
 }
 
-// openBrowser opens the default browser on macOS/Linux
+// openBrowser opens the default browser to the given URL
 func openBrowser(url string) {
-	// Use "open" on macOS, "xdg-open" on Linux
-	if err := exec.Command("open", url).Start(); err != nil {
-		// Fallback for Linux
-		exec.Command("xdg-open", url).Start()
+	var cmd string
+	var args []string
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = "open"
+		args = []string{url}
+	case "linux":
+		cmd = "xdg-open"
+		args = []string{url}
+	case "windows":
+		cmd = "rundll32"
+		args = []string{"url.dll,FileProtocolHandler", url}
+	default:
+		fmt.Printf("Open %s in your browser\n", url)
+		return
+	}
+
+	if err := exec.Command(cmd, args...).Start(); err != nil {
+		fmt.Printf("Could not open browser: %v\nOpen %s manually\n", err, url)
 	}
 }

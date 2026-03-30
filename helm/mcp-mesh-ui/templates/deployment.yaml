@@ -25,6 +25,10 @@ spec:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            readOnlyRootFilesystem: true
           ports:
             - name: http
               containerPort: {{ .Values.service.targetPort }}
@@ -32,6 +36,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "mcp-mesh-ui.fullname" . }}-config
+            - secretRef:
+                name: {{ include "mcp-mesh-ui.fullname" . }}-secret
           livenessProbe:
             httpGet:
               path: /api/ui-health
@@ -44,8 +50,14 @@ spec:
               port: http
             initialDelaySeconds: 3
             periodSeconds: 10
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -52,7 +52,7 @@ func (s *Server) proxyToRegistry(c *gin.Context) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 10MB limit
 	if err != nil {
 		log.Printf("proxy: failed to read registry response: %v", err)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to read registry response"})

@@ -109,12 +109,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			log.Printf("Failed to close database: %v", err)
-		}
-	}()
-
 	// Create EntService for read-only DB queries (agent list, event history)
 	meshLogger := logger.New(&config.Config{LogLevel: logLevel})
 	entService := registry.NewEntService(db, nil, meshLogger)

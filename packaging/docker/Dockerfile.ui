@@ -21,7 +21,7 @@ RUN cd cmd/mcp-mesh-ui && \
     go build -tags "sqlite_omit_load_extension" -ldflags="-s -w" -o mcp-mesh-ui .
 
 # Stage 3: Runtime
-FROM alpine:latest
+FROM alpine:3.21
 RUN apk --no-cache add ca-certificates sqlite wget
 RUN mkdir -p /data
 RUN adduser -D -u 1000 appuser && chown -R appuser:appuser /data
