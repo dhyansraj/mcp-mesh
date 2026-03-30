@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	flag "github.com/spf13/pflag"
 
 	"mcp-mesh/src/core/ui"
 )
@@ -18,11 +19,15 @@ var version = "dev"
 
 func main() {
 	var (
-		port        = flag.Int("port", 0, "Port to bind the UI server to (overrides MCP_MESH_UI_PORT env var)")
-		registryURL = flag.String("registry-url", "", "Registry URL to proxy API requests (overrides MCP_MESH_REGISTRY_URL env var)")
-		showVersion = flag.Bool("version", false, "Show version information")
-		help        = flag.Bool("help", false, "Show help information")
+		port        int
+		registryURL string
+		showVersion bool
+		help        bool
 	)
+	flag.IntVarP(&port, "port", "p", 0, "Port to bind the UI server to (overrides MCP_MESH_UI_PORT env var)")
+	flag.StringVarP(&registryURL, "registry-url", "r", "", "Registry URL to proxy API requests (overrides MCP_MESH_REGISTRY_URL env var)")
+	flag.BoolVarP(&showVersion, "version", "v", false, "Show version information")
+	flag.BoolVarP(&help, "help", "h", false, "Show help information")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\n", os.Args[0])
@@ -38,12 +43,12 @@ func main() {
 
 	flag.Parse()
 
-	if *help {
+	if help {
 		flag.Usage()
 		return
 	}
 
-	if *showVersion {
+	if showVersion {
 		fmt.Printf("MCP Mesh UI Server %s\n", version)
 		fmt.Println("Embedded dashboard and registry API proxy for MCP Mesh")
 		return
@@ -51,13 +56,13 @@ func main() {
 
 	// Resolve configuration: flags > env > defaults
 	uiPort := getEnvIntDefault("MCP_MESH_UI_PORT", 3001)
-	if *port != 0 {
-		uiPort = *port
+	if port != 0 {
+		uiPort = port
 	}
 
 	regURL := getEnvDefault("MCP_MESH_REGISTRY_URL", "http://localhost:8000")
-	if *registryURL != "" {
-		regURL = *registryURL
+	if registryURL != "" {
+		regURL = registryURL
 	}
 	// Trim trailing slash for consistent URL joining
 	regURL = strings.TrimRight(regURL, "/")

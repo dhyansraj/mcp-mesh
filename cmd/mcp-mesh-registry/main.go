@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	flag "github.com/spf13/pflag"
 
 	"mcp-mesh/src/core/config"
 	"mcp-mesh/src/core/database"
@@ -22,11 +23,15 @@ var version = "dev"
 func main() {
 	// Command line flags
 	var (
-		host        = flag.String("host", "", "Host to bind the server to (overrides HOST env var)")
-		port        = flag.Int("port", 0, "Port to bind the server to (overrides PORT env var)")
-		showVersion = flag.Bool("version", false, "Show version information")
-		help        = flag.Bool("help", false, "Show help information")
+		host        string
+		port        int
+		showVersion bool
+		help        bool
 	)
+	flag.StringVarP(&host, "host", "H", "", "Host to bind the server to (overrides HOST env var)")
+	flag.IntVarP(&port, "port", "p", 0, "Port to bind the server to (overrides PORT env var)")
+	flag.BoolVarP(&showVersion, "version", "v", false, "Show version information")
+	flag.BoolVarP(&help, "help", "h", false, "Show help information")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\n", os.Args[0])
@@ -59,12 +64,12 @@ func main() {
 
 	flag.Parse()
 
-	if *help {
+	if help {
 		flag.Usage()
 		return
 	}
 
-	if *showVersion {
+	if showVersion {
 		fmt.Printf("MCP Mesh Registry %s\n", version)
 		fmt.Println("Central service discovery and agent coordination for MCP Mesh")
 		return
@@ -74,11 +79,11 @@ func main() {
 	cfg := config.LoadFromEnv()
 
 	// Override with command line flags if provided
-	if *host != "" {
-		cfg.Host = *host
+	if host != "" {
+		cfg.Host = host
 	}
-	if *port != 0 {
-		cfg.Port = *port
+	if port != 0 {
+		cfg.Port = port
 	}
 
 	// Validate configuration
