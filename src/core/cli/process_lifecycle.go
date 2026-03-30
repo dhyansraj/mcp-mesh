@@ -535,10 +535,12 @@ func (pm *ProcessManager) waitForUIReady(port int, timeout time.Duration) error 
 // findUIBinary finds the UI server binary in local paths or PATH
 func (pm *ProcessManager) findUIBinary() (string, error) {
 	localPaths := []string{
+		"./bin/meshui",
 		"./bin/mcp-mesh-ui",
+		"./meshui",
 		"./mcp-mesh-ui",
+		"./build/meshui",
 		"./build/mcp-mesh-ui",
-		"cmd/mcp-mesh-ui/mcp-mesh-ui",
 	}
 
 	for _, path := range localPaths {
@@ -547,12 +549,15 @@ func (pm *ProcessManager) findUIBinary() (string, error) {
 		}
 	}
 
+	// Check PATH for both names
+	if path, err := exec.LookPath("meshui"); err == nil {
+		return path, nil
+	}
 	if path, err := exec.LookPath("mcp-mesh-ui"); err == nil {
 		return path, nil
 	}
 
-	allPaths := append(localPaths, "mcp-mesh-ui (in PATH)")
-	return "", fmt.Errorf("UI server binary not found at any of these locations: %v. Please ensure the binary is built or run 'make build' to compile it", allPaths)
+	return "", fmt.Errorf("UI server binary not found. Run 'make build' to compile it")
 }
 
 // generateProcessName generates a unique process name from a file path

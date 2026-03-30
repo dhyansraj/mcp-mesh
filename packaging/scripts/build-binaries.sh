@@ -83,7 +83,7 @@ build_binary() {
 
     # Set build environment
     # Enable CGO for registry (needs SQLite), disable for others
-    if [[ "$cmd" == "registry" ]]; then
+    if [[ "$cmd" == "registry" || "$cmd" == "meshui" ]]; then
         export CGO_ENABLED=1
 
         # Set cross-compilation tools for CGO
@@ -125,6 +125,9 @@ build_binary() {
             ;;
         "registry")
             cmd_path="./cmd/mcp-mesh-registry"
+            ;;
+        "meshui")
+            cmd_path="./cmd/mcp-mesh-ui"
             ;;
         *)
             cmd_path="./cmd/$cmd"
@@ -232,6 +235,17 @@ build_all_binaries() {
     rm -rf "$OUTPUT_DIR"
     mkdir -p "$OUTPUT_DIR"
 
+    # Build Next.js SPA for meshui (must happen before Go cross-compilation)
+    log "Building Next.js dashboard SPA..."
+    if command -v npm &> /dev/null; then
+        (cd "$PROJECT_ROOT/src/ui" && npm ci --silent && npm run build)
+        rm -rf "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
+        cp -r "$PROJECT_ROOT/src/ui/out" "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
+        success "Next.js SPA built and copied to cmd/mcp-mesh-ui/out/"
+    else
+        warn "npm not available, meshui will use placeholder SPA"
+    fi
+
     # Parse platforms and build
     local failed_builds=()
     local built_platforms=()
@@ -252,6 +266,11 @@ build_all_binaries() {
             fi
         else
             failed_builds+=("meshctl-${goos}_${goarch}")
+        fi
+
+        # Build meshui (UI server)
+        if ! build_binary "meshui" "$goos" "$goarch" "meshui"; then
+            failed_builds+=("meshui-${goos}_${goarch}")
         fi
     done
 

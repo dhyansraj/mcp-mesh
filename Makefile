@@ -7,7 +7,7 @@ VERSION ?= dev
 BUILD_DIR = bin
 REGISTRY_CMD_DIR = cmd/mcp-mesh-registry
 DEV_CMD_DIR = cmd/meshctl
-UI_SERVER_NAME = mcp-mesh-ui
+UI_SERVER_NAME = meshui
 UI_SERVER_CMD_DIR = cmd/mcp-mesh-ui
 
 # OpenAPI and code generation (dual-contract support)

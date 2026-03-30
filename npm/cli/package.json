@@ -16,7 +16,8 @@
   },
   "bin": {
     "meshctl": "bin/meshctl",
-    "mcp-mesh-registry": "bin/mcp-mesh-registry"
+    "mcp-mesh-registry": "bin/mcp-mesh-registry",
+    "meshui": "bin/meshui"
   },
   "engines": {
     "node": ">=18"
