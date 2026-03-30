@@ -441,6 +441,13 @@ docker-build:
 	docker tag mcp-mesh-registry:$(VERSION) mcp-mesh-registry:latest
 	@echo "✅ Built Docker image: mcp-mesh-registry:$(VERSION)"
 
+# Docker build for UI server
+.PHONY: docker-build-ui
+docker-build-ui:
+	@echo "🐳 Building UI server Docker image..."
+	docker build -f packaging/docker/Dockerfile.ui -t mcpmesh/ui:$(VERSION) .
+	@echo "✅ Built mcpmesh/ui:$(VERSION)"
+
 # Run with Docker
 .PHONY: docker-run
 docker-run:
