@@ -233,6 +233,8 @@ func (s *Server) setupOperationalEndpoints() {
 
 	// Trace query endpoints
 	s.engine.GET("/trace/list", s.handleTraceList)
+	s.engine.GET("/trace/recent", s.handleRecentTraces)
+	s.engine.GET("/trace/edge-stats", s.handleEdgeStats)
 	s.engine.GET("/trace/:trace_id", s.handleTraceGet)
 	s.engine.GET("/trace/search", s.handleTraceSearch)
 
@@ -462,6 +464,78 @@ func (s *Server) handleTraceSearch(c *gin.Context) {
 	}
 
 	c.JSON(200, response)
+}
+
+// handleRecentTraces returns recent trace summaries from Tempo
+func (s *Server) handleRecentTraces(c *gin.Context) {
+	if s.tracingManager == nil {
+		c.JSON(200, map[string]interface{}{
+			"enabled": false,
+			"traces":  []interface{}{},
+		})
+		return
+	}
+
+	limit := 20
+	if l := c.Query("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	traces, err := s.tracingManager.GetRecentTraces(limit)
+	if err != nil {
+		c.JSON(500, map[string]interface{}{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(200, map[string]interface{}{
+		"enabled": true,
+		"traces":  traces,
+		"count":   len(traces),
+		"limit":   limit,
+	})
+}
+
+// handleEdgeStats returns aggregated edge statistics from recent traces
+func (s *Server) handleEdgeStats(c *gin.Context) {
+	if s.tracingManager == nil {
+		c.JSON(200, map[string]interface{}{
+			"enabled": false,
+			"edges":   []interface{}{},
+		})
+		return
+	}
+
+	limit := 20
+	if l := c.Query("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	stats, err := s.tracingManager.GetEdgeStats(limit)
+	if err != nil {
+		c.JSON(500, map[string]interface{}{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(200, map[string]interface{}{
+		"enabled":        true,
+		"edges":          stats,
+		"count":          len(stats),
+		"traces_analyzed": limit,
+	})
 }
 
 // runWithTLS starts the server with TLS configured to request (but not require)

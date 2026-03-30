@@ -10,10 +10,12 @@ import {
   useNodesState,
   useEdgesState,
   type Node,
+  type Edge,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Agent } from "@/lib/types";
+import { Agent, EdgeStat } from "@/lib/types";
 import { buildGraphFromAgents } from "@/lib/topology";
+import { getEdgeStats, extractAgentName } from "@/lib/api";
 import { useMesh } from "@/lib/mesh-context";
 import { AgentNode } from "./AgentNode";
 import { TopologySidebar } from "./TopologySidebar";
@@ -44,14 +46,76 @@ function getForwardNeighborIds(selectedId: string, agents: Agent[]): Set<string>
   return ids;
 }
 
+function getEdgeHeatColor(errorRate: number): string {
+  if (errorRate === 0) return "#22c55e";
+  if (errorRate < 10) return "#eab308";
+  return "#ef4444";
+}
+
+function computeStrokeWidth(callCount: number, maxCount: number): number {
+  if (maxCount <= 0) return 1;
+  const ratio = callCount / maxCount;
+  return 1 + ratio * 3; // min 1, max 4
+}
+
+function mergeEdgeStatsIntoEdges(edges: Edge[], edgeStats: EdgeStat[]): Edge[] {
+  if (edgeStats.length === 0) return edges;
+
+  const statsMap = new Map<string, EdgeStat>();
+  for (const stat of edgeStats) {
+    statsMap.set(`${stat.source}->${stat.target}`, stat);
+  }
+
+  const maxCallCount = Math.max(...edgeStats.map((e) => e.call_count), 1);
+
+  return edges.map((edge) => {
+    const sourceName = extractAgentName(edge.source);
+    const targetName = extractAgentName(edge.target);
+    const stat = statsMap.get(`${sourceName}->${targetName}`);
+    if (!stat) return edge;
+
+    return {
+      ...edge,
+      label: `${stat.avg_latency_ms.toFixed(0)}ms`,
+      style: {
+        ...edge.style,
+        stroke: getEdgeHeatColor(stat.error_rate),
+        strokeWidth: computeStrokeWidth(stat.call_count, maxCallCount),
+      },
+    };
+  });
+}
+
 export function TopologyGraph({ agents }: TopologyGraphProps) {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [sidebarAgent, setSidebarAgent] = useState<Agent | null>(null);
+  const [edgeStats, setEdgeStats] = useState<EdgeStat[]>([]);
   const { setPaused } = useMesh();
 
-  const { nodes: layoutedNodes, edges: layoutedEdges } = useMemo(
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchStats() {
+      try {
+        const data = await getEdgeStats(20);
+        if (!cancelled && data.enabled) {
+          setEdgeStats(data.edges || []);
+        }
+      } catch {
+        // Silently fail — edge stats are optional
+      }
+    }
+    fetchStats();
+    return () => { cancelled = true; };
+  }, []);
+
+  const { nodes: layoutedNodes, edges: rawEdges } = useMemo(
     () => buildGraphFromAgents(agents),
     [agents]
+  );
+
+  const layoutedEdges = useMemo(
+    () => mergeEdgeStatsIntoEdges(rawEdges, edgeStats),
+    [rawEdges, edgeStats]
   );
 
   // Compute highlighted neighbor set

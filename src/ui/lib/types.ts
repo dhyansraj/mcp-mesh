@@ -117,3 +117,41 @@ export interface DashboardEvent {
   data?: Record<string, unknown>;
   timestamp: string;
 }
+
+export interface RecentTrace {
+  trace_id: string;
+  root_agent: string;
+  root_operation: string;
+  duration_ms: number;
+  start_time: string;
+  span_count: number;
+  agent_count: number;
+  success: boolean;
+  agents: string[];
+}
+
+export interface RecentTracesResponse {
+  enabled: boolean;
+  traces: RecentTrace[];
+  count: number;
+  limit: number;
+}
+
+export interface EdgeStat {
+  source: string;
+  target: string;
+  call_count: number;
+  error_count: number;
+  error_rate: number;
+  avg_latency_ms: number;
+  p99_latency_ms: number;
+  max_latency_ms: number;
+  min_latency_ms: number;
+}
+
+export interface EdgeStatsResponse {
+  enabled: boolean;
+  edges: EdgeStat[];
+  count: number;
+  traces_analyzed: number;
+}

@@ -1,4 +1,4 @@
-import { AgentsResponse, DashboardEvent, EventsHistoryResponse, HealthResponse, RegistryEventInfo } from "./types";
+import { AgentsResponse, DashboardEvent, EdgeStatsResponse, EventsHistoryResponse, HealthResponse, RecentTracesResponse, RegistryEventInfo } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_REGISTRY_URL || "http://localhost:8000";
 
@@ -120,6 +120,28 @@ export function getDepStatusColor(status: string): string {
     case "unresolved": return "text-yellow-500";
     default: return "text-muted-foreground";
   }
+}
+
+export async function getRecentTraces(limit: number = 20): Promise<RecentTracesResponse> {
+  const res = await fetch(`${API_BASE}/trace/recent?limit=${limit}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to fetch recent traces: ${res.status}`);
+  return res.json();
+}
+
+export async function getEdgeStats(limit: number = 20): Promise<EdgeStatsResponse> {
+  const res = await fetch(`${API_BASE}/trace/edge-stats?limit=${limit}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to fetch edge stats: ${res.status}`);
+  return res.json();
+}
+
+export function extractAgentName(agentId: string): string {
+  // Agent IDs are formatted as "{name}-{8char_hex_uuid}"
+  // E.g., "digest-agent-b1a5da10" -> "digest-agent"
+  const parts = agentId.split("-");
+  if (parts.length >= 2) {
+    return parts.slice(0, -1).join("-");
+  }
+  return agentId;
 }
 
 export { API_BASE };

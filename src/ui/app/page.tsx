@@ -3,6 +3,7 @@
 import { Header } from "@/components/layout/Header";
 import { StatsCards } from "@/components/dashboard/StatsCards";
 import { EventFeed } from "@/components/dashboard/EventFeed";
+import { TrafficTable } from "@/components/dashboard/TrafficTable";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ConnectionError } from "@/components/layout/ConnectionError";
@@ -38,6 +39,15 @@ export default function DashboardPage() {
       <Header title="Dashboard" subtitle="MCP Mesh overview" />
       <div className="flex-1 space-y-6 p-6 overflow-auto">
         <StatsCards agents={agents} />
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Traffic</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <TrafficTable />
+          </CardContent>
+        </Card>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {/* Event Feed */}
