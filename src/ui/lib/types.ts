@@ -109,11 +109,70 @@ export interface DashboardEvent {
     | "dependency_resolved"
     | "dependency_lost"
     | "connected"
-    | "snapshot";
+    | "snapshot"
+    | "trace_activity"
+    | "edge_stats";
   agent_id?: string;
   agent_name?: string;
   runtime?: string;
   status?: string;
   data?: Record<string, unknown>;
   timestamp: string;
+}
+
+export interface RecentTrace {
+  trace_id: string;
+  root_agent: string;
+  root_operation: string;
+  duration_ms: number;
+  start_time: string;
+  span_count: number;
+  agent_count: number;
+  success: boolean;
+  agents: string[];
+}
+
+export interface RecentTracesResponse {
+  enabled: boolean;
+  traces: RecentTrace[];
+  count: number;
+  limit: number;
+}
+
+export interface TraceSpan {
+  SpanID: string;
+  ParentSpan: string | null;
+  AgentName: string;
+  Operation: string;
+  DurationMS: number | null;
+  Success: boolean | null;
+  ErrorMessage: string | null;
+}
+
+export interface TraceDetail {
+  TraceID: string;
+  Spans: TraceSpan[];
+  Success: boolean;
+  SpanCount: number;
+  AgentCount: number;
+  Agents: string[];
+}
+
+export interface EdgeStat {
+  source: string;
+  target: string;
+  call_count: number;
+  error_count: number;
+  error_rate: number;
+  avg_latency_ms: number;
+  p99_latency_ms: number;
+  max_latency_ms: number;
+  min_latency_ms: number;
+}
+
+export interface EdgeStatsResponse {
+  enabled: boolean;
+  edges: EdgeStat[];
+  count: number;
+  edge_count: number;
 }

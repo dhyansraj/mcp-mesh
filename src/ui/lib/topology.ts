@@ -2,6 +2,36 @@ import dagre from "dagre";
 import { type Node, type Edge } from "@xyflow/react";
 import { Agent } from "./types";
 
+// Compute a structural fingerprint: sorted agent IDs + sorted edge pairs.
+// If this hash is the same, the graph structure hasn't changed — only node data has.
+export function computeStructureHash(agents: Agent[]): string {
+  const agentIds = agents.map((a) => a.id).sort();
+
+  const edgePairs: string[] = [];
+  const agentIdSet = new Set(agentIds);
+
+  for (const agent of agents) {
+    for (const dep of agent.dependency_resolutions ?? []) {
+      if (dep.provider_agent_id && agentIdSet.has(dep.provider_agent_id)) {
+        edgePairs.push(`${agent.id}->${dep.provider_agent_id}`);
+      }
+    }
+    for (const llm of agent.llm_tool_resolutions ?? []) {
+      if (llm.provider_agent_id && agentIdSet.has(llm.provider_agent_id)) {
+        edgePairs.push(`${agent.id}->llm:${llm.provider_agent_id}`);
+      }
+    }
+    for (const prov of agent.llm_provider_resolutions ?? []) {
+      if (prov.provider_agent_id && agentIdSet.has(prov.provider_agent_id)) {
+        edgePairs.push(`${agent.id}->prov:${prov.provider_agent_id}`);
+      }
+    }
+  }
+
+  edgePairs.sort();
+  return agentIds.join(",") + "|" + edgePairs.join(",");
+}
+
 export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = agents.map((agent) => ({
     id: agent.id,
@@ -37,6 +67,7 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
           target: dep.provider_agent_id,
           label: dep.capability,
           animated: dep.status === "available",
+          data: { originalLabel: dep.capability },
           style: {
             stroke: dep.status === "available" ? availableColor : dep.status === "unavailable" ? "#ef4444" : "#6b7280",
             strokeDasharray: dep.status === "unresolved" ? "5 5" : undefined,
@@ -53,6 +84,7 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
           target: llm.provider_agent_id,
           label: `llm:${llm.filter_capability}`,
           animated: llm.status === "available",
+          data: { originalLabel: `llm:${llm.filter_capability}` },
           style: {
             stroke: llm.status === "available" ? "#22d3ee" : "#ef4444",
             strokeDasharray: llm.status !== "available" ? "5 5" : undefined,
@@ -69,6 +101,7 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
           target: prov.provider_agent_id,
           label: `provider:${prov.required_capability}`,
           animated: prov.status === "available",
+          data: { originalLabel: `provider:${prov.required_capability}` },
           style: {
             stroke: prov.status === "available" ? "#a855f7" : "#ef4444",
             strokeDasharray: prov.status !== "available" ? "5 5" : undefined,

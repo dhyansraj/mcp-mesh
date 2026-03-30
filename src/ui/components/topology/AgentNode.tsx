@@ -5,7 +5,7 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { Agent } from "@/lib/types";
 import { getRuntimeLabel } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { Bot, Puzzle, GitBranch } from "lucide-react";
+import { Bot, Puzzle, GitBranch, Activity } from "lucide-react";
 
 function getRuntimeColor(runtime?: string): string {
   switch (runtime) {
@@ -44,6 +44,7 @@ function getStatusDotColor(status: string): string {
 function AgentNodeComponent({ data }: NodeProps) {
   const agent = data.agent as Agent;
   const dimmed = data.dimmed as boolean | undefined;
+  const traceCount = (data.traceCount as number) || 0;
   const depsResolved = agent.dependencies_resolved;
   const depsTotal = agent.total_dependencies;
   const capCount = agent.capabilities?.length ?? 0;
@@ -96,6 +97,13 @@ function AgentNodeComponent({ data }: NodeProps) {
             <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
               <Puzzle className="h-3 w-3" />
               {capCount}
+            </span>
+          )}
+
+          {traceCount > 0 && (
+            <span className="inline-flex items-center gap-0.5 text-[10px] text-cyan-400">
+              <Activity className="h-3 w-3 animate-pulse" />
+              {traceCount}
             </span>
           )}
         </div>

@@ -3,7 +3,9 @@ package tracing
 import (
 	"fmt"
 	"log"
+	"math"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -423,4 +425,212 @@ func GetRedisURLFromEnv() string {
 		redisURL = "redis://localhost:6379"
 	}
 	return redisURL
+}
+
+// RecentTraceSummary is a lightweight trace summary for dashboard display
+type RecentTraceSummary struct {
+	TraceID       string    `json:"trace_id"`
+	RootAgent     string    `json:"root_agent"`
+	RootOperation string    `json:"root_operation"`
+	DurationMs    int64     `json:"duration_ms"`
+	StartTime     time.Time `json:"start_time"`
+	SpanCount     int       `json:"span_count"`
+	AgentCount    int       `json:"agent_count"`
+	Success       bool      `json:"success"`
+	Agents        []string  `json:"agents"`
+}
+
+// EdgeStats represents aggregated call stats for a dependency edge
+type EdgeStats struct {
+	Source       string  `json:"source"`
+	Target       string  `json:"target"`
+	CallCount    int     `json:"call_count"`
+	ErrorCount   int     `json:"error_count"`
+	ErrorRate    float64 `json:"error_rate"`
+	AvgLatencyMs float64 `json:"avg_latency_ms"`
+	P99LatencyMs float64 `json:"p99_latency_ms"`
+	MaxLatencyMs int64   `json:"max_latency_ms"`
+	MinLatencyMs int64   `json:"min_latency_ms"`
+}
+
+// GetRecentTraces returns recent trace summaries from Tempo search API
+func (tm *TracingManager) GetRecentTraces(limit int) ([]RecentTraceSummary, error) {
+	if !tm.enabled {
+		return []RecentTraceSummary{}, nil
+	}
+
+	if !tm.streamThroughMode || tm.tempoClient == nil {
+		return []RecentTraceSummary{}, nil
+	}
+
+	results, err := tm.tempoClient.SearchRecentTraces(limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search recent traces: %w", err)
+	}
+
+	summaries := make([]RecentTraceSummary, 0, len(results))
+	for _, r := range results {
+		startNano := parseNanoTimestamp(r.StartTimeUnixNano)
+		startTime := time.Unix(0, startNano)
+
+		// Fetch full trace details to get span/agent counts and success status
+		trace, err := tm.tempoClient.GetTrace(r.TraceID)
+		if err != nil || trace == nil {
+			// Fall back to search result data only
+			summaries = append(summaries, RecentTraceSummary{
+				TraceID:       r.TraceID,
+				RootAgent:     r.RootServiceName,
+				RootOperation: r.RootTraceName,
+				DurationMs:    r.DurationMs,
+				StartTime:     startTime,
+				SpanCount:     0,
+				AgentCount:    0,
+				Success:       true,
+				Agents:        []string{r.RootServiceName},
+			})
+			continue
+		}
+
+		summaries = append(summaries, RecentTraceSummary{
+			TraceID:       r.TraceID,
+			RootAgent:     r.RootServiceName,
+			RootOperation: r.RootTraceName,
+			DurationMs:    r.DurationMs,
+			StartTime:     startTime,
+			SpanCount:     trace.SpanCount,
+			AgentCount:    trace.AgentCount,
+			Success:       trace.Success,
+			Agents:        trace.Agents,
+		})
+	}
+
+	return summaries, nil
+}
+
+// GetEdgeStats computes aggregated edge statistics from recent traces
+func (tm *TracingManager) GetEdgeStats(limit int) ([]EdgeStats, error) {
+	if !tm.enabled {
+		return []EdgeStats{}, nil
+	}
+
+	if !tm.streamThroughMode || tm.tempoClient == nil {
+		return []EdgeStats{}, nil
+	}
+
+	// Get recent trace IDs from Tempo search
+	results, err := tm.tempoClient.SearchRecentTraces(limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search traces for edge stats: %w", err)
+	}
+
+	// edgeKey -> list of observations
+	type edgeObs struct {
+		durationMs int64
+		success    bool
+	}
+	edgeData := make(map[string][]edgeObs)
+
+	for _, r := range results {
+		trace, err := tm.tempoClient.GetTrace(r.TraceID)
+		if err != nil || trace == nil {
+			continue
+		}
+
+		// Build spanID -> agentName map
+		spanAgent := make(map[string]string)
+		for _, span := range trace.Spans {
+			spanAgent[span.SpanID] = span.AgentName
+		}
+
+		// Detect cross-agent edges from parent-child relationships
+		for _, span := range trace.Spans {
+			if span.ParentSpan == nil {
+				continue
+			}
+			parentAgent, ok := spanAgent[*span.ParentSpan]
+			if !ok {
+				continue
+			}
+			childAgent := span.AgentName
+			if parentAgent == childAgent {
+				continue
+			}
+
+			key := parentAgent + " -> " + childAgent
+			dur := int64(0)
+			if span.DurationMS != nil {
+				dur = *span.DurationMS
+			}
+			success := true
+			if span.Success != nil {
+				success = *span.Success
+			}
+			edgeData[key] = append(edgeData[key], edgeObs{durationMs: dur, success: success})
+		}
+	}
+
+	// Aggregate per edge
+	edges := make([]EdgeStats, 0, len(edgeData))
+	for key, observations := range edgeData {
+		parts := strings.SplitN(key, " -> ", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		callCount := len(observations)
+		errorCount := 0
+		var totalLatency int64
+		var maxLatency int64
+		minLatency := int64(math.MaxInt64)
+		latencies := make([]int64, 0, callCount)
+
+		for _, obs := range observations {
+			if !obs.success {
+				errorCount++
+			}
+			totalLatency += obs.durationMs
+			latencies = append(latencies, obs.durationMs)
+			if obs.durationMs > maxLatency {
+				maxLatency = obs.durationMs
+			}
+			if obs.durationMs < minLatency {
+				minLatency = obs.durationMs
+			}
+		}
+
+		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+
+		avgLatency := float64(totalLatency) / float64(callCount)
+		// ErrorRate as a percentage (0-100) for direct display in the UI
+		errorRate := 100.0 * float64(errorCount) / float64(callCount)
+
+		// P99: index at 99th percentile
+		p99Index := int(math.Ceil(float64(callCount)*0.99)) - 1
+		if p99Index < 0 {
+			p99Index = 0
+		}
+		if p99Index >= callCount {
+			p99Index = callCount - 1
+		}
+		p99Latency := float64(latencies[p99Index])
+
+		edges = append(edges, EdgeStats{
+			Source:       parts[0],
+			Target:       parts[1],
+			CallCount:    callCount,
+			ErrorCount:   errorCount,
+			ErrorRate:    errorRate,
+			AvgLatencyMs: avgLatency,
+			P99LatencyMs: p99Latency,
+			MaxLatencyMs: maxLatency,
+			MinLatencyMs: minLatency,
+		})
+	}
+
+	// Sort edges by call count descending for consistent ordering
+	sort.Slice(edges, func(i, j int) bool {
+		return edges[i].CallCount > edges[j].CallCount
+	})
+
+	return edges, nil
 }

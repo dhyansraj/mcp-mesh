@@ -34,6 +34,7 @@ type Server struct {
 	logger         *logger.Logger
 	eventHub       *EventHub
 	eventPoller    *EventPoller
+	tracePoller    *TracePoller
 }
 
 // NewServer creates a new registry server using Ent database
@@ -106,6 +107,12 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 		engine.Use(TLSVerifyMiddleware(trustChain, config.TlsMode))
 	}
 
+	// Create trace poller for pushing trace activity via SSE (only when tracing is enabled)
+	var tracePoller *TracePoller
+	if tracingManager != nil {
+		tracePoller = NewTracePoller(tracingManager, eventHub, logger, 10*time.Second)
+	}
+
 	// Create server
 	server := &Server{
 		engine:         engine,
@@ -119,6 +126,7 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 		logger:         logger,
 		eventHub:       eventHub,
 		eventPoller:    eventPoller,
+		tracePoller:    tracePoller,
 	}
 
 	// Add operational endpoints first (includes wildcard proxy routes that must be registered before generated routes)
@@ -146,6 +154,11 @@ func (s *Server) Run(addr string) error {
 
 	// Start dashboard event poller
 	s.eventPoller.Start()
+
+	// Start trace poller (publishes trace activity via SSE)
+	if s.tracePoller != nil {
+		s.tracePoller.Start()
+	}
 
 	// Start distributed tracing if enabled
 	if s.tracingManager != nil {
@@ -181,6 +194,11 @@ func (s *Server) Start() error {
 
 // Stop stops the HTTP server and health monitor
 func (s *Server) Stop() error {
+	// Stop trace poller
+	if s.tracePoller != nil {
+		s.tracePoller.Stop()
+	}
+
 	// Stop dashboard event poller
 	s.eventPoller.Stop()
 
@@ -233,6 +251,8 @@ func (s *Server) setupOperationalEndpoints() {
 
 	// Trace query endpoints
 	s.engine.GET("/trace/list", s.handleTraceList)
+	s.engine.GET("/trace/recent", s.handleRecentTraces)
+	s.engine.GET("/trace/edge-stats", s.handleEdgeStats)
 	s.engine.GET("/trace/:trace_id", s.handleTraceGet)
 	s.engine.GET("/trace/search", s.handleTraceSearch)
 
@@ -462,6 +482,82 @@ func (s *Server) handleTraceSearch(c *gin.Context) {
 	}
 
 	c.JSON(200, response)
+}
+
+// handleRecentTraces returns recent trace summaries from Tempo
+func (s *Server) handleRecentTraces(c *gin.Context) {
+	if s.tracingManager == nil {
+		c.JSON(200, map[string]interface{}{
+			"enabled": false,
+			"traces":  []interface{}{},
+			"count":   0,
+			"limit":   0,
+		})
+		return
+	}
+
+	limit := 20
+	if l := c.Query("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	traces, err := s.tracingManager.GetRecentTraces(limit)
+	if err != nil {
+		c.JSON(500, map[string]interface{}{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(200, map[string]interface{}{
+		"enabled": true,
+		"traces":  traces,
+		"count":   len(traces),
+		"limit":   limit,
+	})
+}
+
+// handleEdgeStats returns aggregated edge statistics from recent traces
+func (s *Server) handleEdgeStats(c *gin.Context) {
+	if s.tracingManager == nil {
+		c.JSON(200, map[string]interface{}{
+			"enabled":    false,
+			"edges":      []interface{}{},
+			"count":      0,
+			"edge_count": 0,
+		})
+		return
+	}
+
+	limit := 20
+	if l := c.Query("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	stats, err := s.tracingManager.GetEdgeStats(limit)
+	if err != nil {
+		c.JSON(500, map[string]interface{}{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(200, map[string]interface{}{
+		"enabled":    true,
+		"edges":      stats,
+		"count":      len(stats),
+		"edge_count": len(stats),
+	})
 }
 
 // runWithTLS starts the server with TLS configured to request (but not require)

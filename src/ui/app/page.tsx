@@ -3,12 +3,13 @@
 import { Header } from "@/components/layout/Header";
 import { StatsCards } from "@/components/dashboard/StatsCards";
 import { EventFeed } from "@/components/dashboard/EventFeed";
+import { TrafficTable } from "@/components/dashboard/TrafficTable";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ConnectionError } from "@/components/layout/ConnectionError";
 import { useMesh } from "@/lib/mesh-context";
 import { getStatusBgColor, getRuntimeLabel } from "@/lib/api";
-import { Loader2, AlertCircle, RefreshCw, Bot } from "lucide-react";
+import { Loader2, Bot } from "lucide-react";
 
 export default function DashboardPage() {
   const { agents, events, loading, error, refresh } = useMesh();
@@ -28,14 +29,7 @@ export default function DashboardPage() {
     return (
       <div className="flex flex-col h-full">
         <Header title="Dashboard" subtitle="MCP Mesh overview" />
-        <div className="flex flex-1 flex-col items-center justify-center gap-4">
-          <AlertCircle className="h-10 w-10 text-destructive" />
-          <p className="text-sm text-muted-foreground">{error.message}</p>
-          <Button variant="outline" size="sm" onClick={refresh}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Retry
-          </Button>
-        </div>
+        <ConnectionError error={error} onRetry={refresh} />
       </div>
     );
   }
@@ -45,6 +39,15 @@ export default function DashboardPage() {
       <Header title="Dashboard" subtitle="MCP Mesh overview" />
       <div className="flex-1 space-y-6 p-6 overflow-auto">
         <StatsCards agents={agents} />
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Traffic</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <TrafficTable />
+          </CardContent>
+        </Card>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {/* Event Feed */}

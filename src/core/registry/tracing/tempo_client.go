@@ -111,6 +111,48 @@ func GetTempoURLFromEnv() string {
 	return "http://localhost:3200"
 }
 
+// TempoSearchResponse represents Tempo's search API response
+type TempoSearchResponse struct {
+	Traces []TempoSearchResult `json:"traces"`
+}
+
+// TempoSearchResult represents a single trace from Tempo's search API
+type TempoSearchResult struct {
+	TraceID           string `json:"traceID"`
+	RootServiceName   string `json:"rootServiceName"`
+	RootTraceName     string `json:"rootTraceName"`
+	StartTimeUnixNano string `json:"startTimeUnixNano"`
+	DurationMs        int64  `json:"durationMs"`
+}
+
+// SearchRecentTraces queries Tempo's search API for recent traces
+func (tc *TempoClient) SearchRecentTraces(limit int) ([]TempoSearchResult, error) {
+	url := fmt.Sprintf("%s/api/search?limit=%d", tc.endpoint, limit)
+
+	resp, err := tc.httpClient.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query Tempo search API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("Tempo search returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Tempo search response: %w", err)
+	}
+
+	var searchResp TempoSearchResponse
+	if err := json.Unmarshal(body, &searchResp); err != nil {
+		return nil, fmt.Errorf("failed to parse Tempo search response: %w", err)
+	}
+
+	return searchResp.Traces, nil
+}
+
 // GetTrace retrieves a trace by ID from Tempo
 func (tc *TempoClient) GetTrace(traceID string) (*CompletedTrace, error) {
 	// Normalize trace ID (remove dashes if present)

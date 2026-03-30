@@ -3,7 +3,9 @@
 import { Agent } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { getDepStatusColor } from "@/lib/api";
+import { getDepStatusColor, extractAgentName } from "@/lib/api";
+import { useMesh } from "@/lib/mesh-context";
+import { AgentTraces } from "./AgentTraces";
 
 interface AgentDetailProps {
   agent: Agent;
@@ -37,6 +39,8 @@ export function AgentDetail({ agent }: AgentDetailProps) {
     (agent.llm_provider_resolutions && agent.llm_provider_resolutions.length > 0);
 
   const capabilities = agent.capabilities ?? [];
+  const agentName = extractAgentName(agent.id);
+  const { traceActivity } = useMesh();
 
   const defaultTab = capabilities.length > 0
     ? "capabilities"
@@ -59,6 +63,7 @@ export function AgentDetail({ agent }: AgentDetailProps) {
               LLM ({(agent.llm_tool_resolutions?.length || 0) + (agent.llm_provider_resolutions?.length || 0)})
             </TabsTrigger>
           )}
+          <TabsTrigger value="traces">Traces</TabsTrigger>
         </TabsList>
 
         {/* Capabilities Tab */}
@@ -259,6 +264,11 @@ export function AgentDetail({ agent }: AgentDetailProps) {
             )}
           </TabsContent>
         )}
+
+        {/* Traces Tab */}
+        <TabsContent value="traces" className="mt-3">
+          <AgentTraces agentName={agentName} refreshKey={traceActivity[agentName] || 0} />
+        </TabsContent>
       </Tabs>
     </div>
   );
