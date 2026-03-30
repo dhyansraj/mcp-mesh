@@ -9,6 +9,7 @@ import { Loader2, CheckCircle2, XCircle, Activity, ChevronRight, ChevronDown } f
 
 interface AgentTracesProps {
   agentName: string;
+  refreshKey?: number; // Changes when new trace data arrives via SSE
 }
 
 interface SpanNode {
@@ -167,8 +168,30 @@ function SpanTree({ traceId }: { traceId: string }) {
 
   const roots = buildSpanTree(detail.Spans || []);
   if (roots.length === 0) {
+    // Root span not yet received — show flat span list
+    const meaningful = (detail.Spans || []).filter((s) => s.Operation !== "proxy_call_wrapper");
+    if (meaningful.length === 0) {
+      return (
+        <p className="py-3 pl-6 text-xs text-muted-foreground">Trace still being collected...</p>
+      );
+    }
     return (
-      <p className="py-3 pl-6 text-xs text-muted-foreground">No spans to display</p>
+      <div className="border-t border-border/30 bg-muted/20 px-4 py-3">
+        <p className="text-[10px] text-muted-foreground/60 mb-2">Partial trace (root span pending)</p>
+        {meaningful.map((s) => (
+          <div key={s.SpanID} className="flex items-center gap-1 font-mono text-xs py-0.5">
+            <span className="text-foreground">{s.Operation}</span>
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-primary border-primary/30 ml-1">
+              {s.AgentName}
+            </Badge>
+            {s.DurationMS !== null && (
+              <span className="text-muted-foreground ml-1">[{s.DurationMS}ms]</span>
+            )}
+            {s.Success === true && <CheckCircle2 className="h-3 w-3 text-green-500 ml-0.5" />}
+            {s.Success === false && <XCircle className="h-3 w-3 text-red-500 ml-0.5" />}
+          </div>
+        ))}
+      </div>
     );
   }
 
@@ -187,7 +210,7 @@ function SpanTree({ traceId }: { traceId: string }) {
   );
 }
 
-export function AgentTraces({ agentName }: AgentTracesProps) {
+export function AgentTraces({ agentName, refreshKey }: AgentTracesProps) {
   const [traces, setTraces] = useState<RecentTrace[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -221,7 +244,7 @@ export function AgentTraces({ agentName }: AgentTracesProps) {
 
     fetchTraces();
     return () => { cancelled = true; };
-  }, [agentName]);
+  }, [agentName, refreshKey]);
 
   if (loading) {
     return (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Table,
   TableBody,
@@ -19,12 +19,16 @@ import {
   extractAgentName,
 } from "@/lib/api";
 import { useMesh } from "@/lib/mesh-context";
-import { ChevronDown, ChevronRight, Bot, Activity } from "lucide-react";
+import { ChevronDown, ChevronRight, Bot, Activity, ArrowUp, ArrowDown } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { AgentDetail } from "./AgentDetail";
 
 interface AgentTableProps {
   agents: Agent[];
 }
+
+type SortKey = "name" | "type" | "runtime" | "deps" | "last_seen";
+type SortDir = "asc" | "desc";
 
 function getRuntimeBadgeColor(runtime?: string): string {
   switch (runtime) {
@@ -46,9 +50,80 @@ function getDepsColor(resolved: number, total: number): string {
   return "text-orange-400";
 }
 
+function sortAgents(agents: Agent[], key: SortKey, dir: SortDir): Agent[] {
+  const sorted = [...agents].sort((a, b) => {
+    let cmp = 0;
+    switch (key) {
+      case "name":
+        cmp = a.name.localeCompare(b.name);
+        break;
+      case "type":
+        cmp = a.agent_type.localeCompare(b.agent_type);
+        break;
+      case "runtime":
+        cmp = (a.runtime || "").localeCompare(b.runtime || "");
+        break;
+      case "deps":
+        cmp = a.dependencies_resolved - b.dependencies_resolved;
+        break;
+      case "last_seen":
+        cmp = (a.last_seen || "").localeCompare(b.last_seen || "");
+        break;
+    }
+    return dir === "asc" ? cmp : -cmp;
+  });
+  return sorted;
+}
+
+function SortableHead({
+  label,
+  sortKey,
+  currentKey,
+  currentDir,
+  onSort,
+  className,
+}: {
+  label: string;
+  sortKey: SortKey;
+  currentKey: SortKey;
+  currentDir: SortDir;
+  onSort: (key: SortKey) => void;
+  className?: string;
+}) {
+  const active = currentKey === sortKey;
+  return (
+    <TableHead
+      className={cn("cursor-pointer select-none hover:text-foreground", className)}
+      onClick={() => onSort(sortKey)}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {active && (currentDir === "asc" ? (
+          <ArrowUp className="h-3 w-3" />
+        ) : (
+          <ArrowDown className="h-3 w-3" />
+        ))}
+      </span>
+    </TableHead>
+  );
+}
+
 export function AgentTable({ agents }: AgentTableProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
   const { traceActivity } = useMesh();
+
+  const handleSort = (key: SortKey) => {
+    if (key === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir("asc");
+    }
+  };
+
+  const sorted = useMemo(() => sortAgents(agents, sortKey, sortDir), [agents, sortKey, sortDir]);
 
   if (agents.length === 0) {
     return (
@@ -66,16 +141,16 @@ export function AgentTable({ agents }: AgentTableProps) {
         <TableRow className="hover:bg-transparent">
           <TableHead className="w-8" />
           <TableHead className="w-12">Status</TableHead>
-          <TableHead>Name</TableHead>
-          <TableHead>Type</TableHead>
-          <TableHead>Runtime</TableHead>
+          <SortableHead label="Name" sortKey="name" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+          <SortableHead label="Type" sortKey="type" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+          <SortableHead label="Runtime" sortKey="runtime" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
           <TableHead>Version</TableHead>
-          <TableHead>Dependencies</TableHead>
-          <TableHead>Last Seen</TableHead>
+          <SortableHead label="Dependencies" sortKey="deps" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
+          <SortableHead label="Last Seen" sortKey="last_seen" currentKey={sortKey} currentDir={sortDir} onSort={handleSort} />
         </TableRow>
       </TableHeader>
       <TableBody>
-        {agents.map((agent) => {
+        {sorted.map((agent) => {
           const isExpanded = expandedId === agent.id;
 
           return (

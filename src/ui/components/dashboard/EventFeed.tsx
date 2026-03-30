@@ -67,8 +67,10 @@ function getRuntimeBadgeColor(runtime?: string): string {
   }
 }
 
+const INTERNAL_EVENTS = new Set(["trace_activity", "edge_stats"]);
+
 export function EventFeed({ events }: EventFeedProps) {
-  const displayEvents = events.slice(0, 50);
+  const displayEvents = events.filter((e) => !INTERNAL_EVENTS.has(e.type)).slice(0, 50);
 
   if (displayEvents.length === 0) {
     return (

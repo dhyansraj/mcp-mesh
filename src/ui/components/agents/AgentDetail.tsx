@@ -4,6 +4,7 @@ import { Agent } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getDepStatusColor, extractAgentName } from "@/lib/api";
+import { useMesh } from "@/lib/mesh-context";
 import { AgentTraces } from "./AgentTraces";
 
 interface AgentDetailProps {
@@ -39,6 +40,7 @@ export function AgentDetail({ agent }: AgentDetailProps) {
 
   const capabilities = agent.capabilities ?? [];
   const agentName = extractAgentName(agent.id);
+  const { traceActivity } = useMesh();
 
   const defaultTab = capabilities.length > 0
     ? "capabilities"
@@ -265,7 +267,7 @@ export function AgentDetail({ agent }: AgentDetailProps) {
 
         {/* Traces Tab */}
         <TabsContent value="traces" className="mt-3">
-          <AgentTraces agentName={agentName} />
+          <AgentTraces agentName={agentName} refreshKey={traceActivity[agentName] || 0} />
         </TabsContent>
       </Tabs>
     </div>

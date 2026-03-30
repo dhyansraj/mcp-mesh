@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Agent, DashboardEvent } from "./types";
+import { Agent, DashboardEvent, EdgeStat } from "./types";
 import { getAgents, getEventHistory, mapRegistryEventToDashboardEvent } from "./api";
 import { useMeshEvents } from "./sse";
 
@@ -17,6 +17,7 @@ export interface MeshContextValue {
   setPaused: (paused: boolean) => void;
   refresh: () => Promise<void>;
   traceActivity: Record<string, number>;
+  edgeStats: EdgeStat[];
 }
 
 const MeshContext = createContext<MeshContextValue | null>(null);
@@ -29,6 +30,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
   const [showAll, setShowAll] = useState(false);
   const [paused, setPaused] = useState(false);
   const [traceActivity, setTraceActivity] = useState<Record<string, number>>({});
+  const [edgeStats, setEdgeStats] = useState<EdgeStat[]>([]);
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -50,10 +52,15 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
     (event: DashboardEvent) => {
       if (paused) return;
 
-      // Handle trace activity updates (no agent refetch needed)
+      // Handle trace updates (no agent refetch needed)
       if (event.type === "trace_activity") {
         const agents = event.data?.agents as Record<string, number> | undefined;
         if (agents) setTraceActivity(agents);
+        return;
+      }
+      if (event.type === "edge_stats") {
+        const edges = event.data?.edges as EdgeStat[] | undefined;
+        if (edges) setEdgeStats(edges);
         return;
       }
 
@@ -136,6 +143,7 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         setPaused,
         refresh: fetchAgents,
         traceActivity,
+        edgeStats,
       }}
     >
       {children}

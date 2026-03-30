@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState, useEffect } from "react";
+import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import {
   ReactFlow,
   Controls,
@@ -14,8 +14,8 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Agent, EdgeStat } from "@/lib/types";
-import { buildGraphFromAgents } from "@/lib/topology";
-import { getEdgeStats, extractAgentName } from "@/lib/api";
+import { buildGraphFromAgents, computeStructureHash } from "@/lib/topology";
+import { extractAgentName } from "@/lib/api";
 import { useMesh } from "@/lib/mesh-context";
 import { AgentNode } from "./AgentNode";
 import { TopologySidebar } from "./TopologySidebar";
@@ -74,9 +74,12 @@ function mergeEdgeStatsIntoEdges(edges: Edge[], edgeStats: EdgeStat[]): Edge[] {
     const stat = statsMap.get(`${sourceName}->${targetName}`);
     if (!stat) return edge;
 
+    // Keep the original capability label, append latency
+    const originalLabel = edge.label ? `${edge.label}  ${stat.avg_latency_ms.toFixed(0)}ms` : `${stat.avg_latency_ms.toFixed(0)}ms`;
+
     return {
       ...edge,
-      label: `${stat.avg_latency_ms.toFixed(0)}ms`,
+      label: originalLabel,
       style: {
         ...edge.style,
         stroke: getEdgeHeatColor(stat.error_rate),
@@ -89,29 +92,33 @@ function mergeEdgeStatsIntoEdges(edges: Edge[], edgeStats: EdgeStat[]): Edge[] {
 export function TopologyGraph({ agents }: TopologyGraphProps) {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [sidebarAgent, setSidebarAgent] = useState<Agent | null>(null);
-  const [edgeStats, setEdgeStats] = useState<EdgeStat[]>([]);
-  const { setPaused } = useMesh();
+  const { setPaused, edgeStats, traceActivity } = useMesh();
 
-  useEffect(() => {
-    let cancelled = false;
-    async function fetchStats() {
-      try {
-        const data = await getEdgeStats(20);
-        if (!cancelled && data.enabled) {
-          setEdgeStats(data.edges || []);
-        }
-      } catch {
-        // Silently fail — edge stats are optional
-      }
+  // Structural hash: only relayout when agents or edges change, not on data-only updates
+  const structureHash = useMemo(() => computeStructureHash(agents), [agents]);
+  const prevHashRef = useRef<string>("");
+  const layoutCacheRef = useRef<{ nodes: Node[]; edges: Edge[] }>({ nodes: [], edges: [] });
+
+  const { layoutedNodes, rawEdges } = useMemo(() => {
+    if (structureHash === prevHashRef.current && layoutCacheRef.current.nodes.length > 0) {
+      // Structure unchanged — reuse cached positions, update node data only
+      const agentMap = new Map(agents.map((a) => [a.id, a]));
+      const updatedNodes = layoutCacheRef.current.nodes.map((node) => {
+        const agent = agentMap.get(node.id);
+        if (!agent) return node;
+        return { ...node, data: { ...node.data, agent } };
+      });
+      // Rebuild edges (they carry status/style info that may change)
+      const { edges: freshEdges } = buildGraphFromAgents(agents);
+      return { layoutedNodes: updatedNodes, rawEdges: freshEdges };
     }
-    fetchStats();
-    return () => { cancelled = true; };
-  }, []);
 
-  const { nodes: layoutedNodes, edges: rawEdges } = useMemo(
-    () => buildGraphFromAgents(agents),
-    [agents]
-  );
+    // Structure changed — full relayout
+    const result = buildGraphFromAgents(agents);
+    prevHashRef.current = structureHash;
+    layoutCacheRef.current = result;
+    return { layoutedNodes: result.nodes, rawEdges: result.edges };
+  }, [agents, structureHash]);
 
   const layoutedEdges = useMemo(
     () => mergeEdgeStatsIntoEdges(rawEdges, edgeStats),
@@ -124,17 +131,20 @@ export function TopologyGraph({ agents }: TopologyGraphProps) {
     return getForwardNeighborIds(selectedAgentId, agents);
   }, [selectedAgentId, agents]);
 
-  // Apply dimming to nodes
+  // Apply dimming + trace count to nodes
   const styledNodes = useMemo(() => {
-    if (!highlightedIds) return layoutedNodes;
-    return layoutedNodes.map((node) => ({
-      ...node,
-      data: {
-        ...node.data,
-        dimmed: !highlightedIds.has(node.id),
-      },
-    }));
-  }, [layoutedNodes, highlightedIds]);
+    return layoutedNodes.map((node) => {
+      const agentName = extractAgentName(node.id);
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          dimmed: highlightedIds ? !highlightedIds.has(node.id) : false,
+          traceCount: traceActivity[agentName] || 0,
+        },
+      };
+    });
+  }, [layoutedNodes, highlightedIds, traceActivity]);
 
   // Apply dimming to edges
   const styledEdges = useMemo(() => {
