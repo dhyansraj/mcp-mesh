@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	flag "github.com/spf13/pflag"
 
@@ -15,6 +16,7 @@ import (
 	"mcp-mesh/src/core/database"
 	"mcp-mesh/src/core/logger"
 	"mcp-mesh/src/core/registry"
+	"mcp-mesh/src/core/registry/tracing"
 	"mcp-mesh/src/core/ui"
 )
 
@@ -44,6 +46,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_REGISTRY_URL    - Registry URL for API proxy (default: http://localhost:8000)\n")
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_LOG_LEVEL       - Log level: TRACE, DEBUG, INFO, WARNING, ERROR (default: INFO)\n")
 		fmt.Fprintf(os.Stderr, "  DATABASE_URL             - Path to SQLite database or PostgreSQL URL (default: mcp_mesh_registry.db)\n")
+		fmt.Fprintf(os.Stderr, "  MCP_MESH_DISTRIBUTED_TRACING_ENABLED - Enable trace streaming (default: false)\n")
+		fmt.Fprintf(os.Stderr, "  REDIS_URL                - Redis URL for trace streaming (default: redis://localhost:6379)\n")
+		fmt.Fprintf(os.Stderr, "  MCP_MESH_TEMPO_QUERY_URL - Tempo HTTP query URL for historical traces\n")
 	}
 
 	flag.Parse()
@@ -109,8 +114,34 @@ func main() {
 	meshLogger := logger.New(&config.Config{LogLevel: logLevel})
 	entService := registry.NewEntService(db, nil, meshLogger)
 
+	// Initialize distributed tracing (accumulator-only, no OTLP export)
+	var tracingManager *tracing.TracingManager
+	tracingEnabled := strings.ToLower(getEnvDefault("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "false")) == "true"
+	if tracingEnabled {
+		hostname, _ := os.Hostname()
+		tracingConfig := &tracing.TracingConfig{
+			Enabled:       true,
+			RedisURL:      getEnvDefault("REDIS_URL", "redis://localhost:6379"),
+			StreamName:    "mesh:trace",
+			ConsumerGroup: "mcp-mesh-ui-dashboard",
+			ConsumerName:  fmt.Sprintf("ui-%s", hostname),
+			BatchSize:     100,
+			BlockTimeout:  2 * time.Second,
+			TraceTimeout:  5 * time.Minute,
+			TempoQueryURL: getEnvDefault("MCP_MESH_TEMPO_QUERY_URL", ""),
+		}
+
+		tm, err := tracing.NewAccumulatorOnlyManager(tracingConfig)
+		if err != nil {
+			log.Printf("Warning: failed to initialize tracing: %v", err)
+		} else {
+			tracingManager = tm
+			log.Printf("Distributed tracing enabled (accumulator-only, group=%s)", tracingConfig.ConsumerGroup)
+		}
+	}
+
 	// Create UI server
-	server := ui.NewServer(uiConfig, entService, EmbeddedSPA, logLevel)
+	server := ui.NewServer(uiConfig, entService, tracingManager, EmbeddedSPA, logLevel)
 
 	// Graceful shutdown
 	go func() {

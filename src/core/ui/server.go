@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"mcp-mesh/src/core/registry"
+	"mcp-mesh/src/core/registry/tracing"
 
 	"github.com/gin-gonic/gin"
 )
@@ -16,18 +17,21 @@ import (
 // Server is the MCP Mesh UI HTTP server. It serves the embedded Next.js
 // dashboard SPA and proxies /api/* requests to the registry.
 type Server struct {
-	engine      *gin.Engine
-	config      *UIConfig
-	httpClient  *http.Client
-	startTime   time.Time
-	entService  *registry.EntService
-	eventHub    *EventHub
-	eventPoller *EventPoller
+	engine         *gin.Engine
+	config         *UIConfig
+	httpClient     *http.Client
+	startTime      time.Time
+	entService     *registry.EntService
+	eventHub       *EventHub
+	eventPoller    *EventPoller
+	tracingManager *tracing.TracingManager
+	tracePoller    *TracePoller
 }
 
 // NewServer creates a new UI server that serves the embedded SPA and proxies
-// API requests to the registry at config.RegistryURL.
-func NewServer(config *UIConfig, entService *registry.EntService, embeddedFS embed.FS, logLevel string) *Server {
+// API requests to the registry at config.RegistryURL. If tracingManager is
+// non-nil, trace endpoints are handled locally instead of being proxied.
+func NewServer(config *UIConfig, entService *registry.EntService, tracingManager *tracing.TracingManager, embeddedFS embed.FS, logLevel string) *Server {
 	// Set Gin mode based on log level
 	upperLevel := strings.ToUpper(logLevel)
 	if upperLevel == "DEBUG" || upperLevel == "TRACE" {
@@ -49,10 +53,16 @@ func NewServer(config *UIConfig, entService *registry.EntService, embeddedFS emb
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		startTime:   time.Now().UTC(),
-		entService:  entService,
-		eventHub:    eventHub,
-		eventPoller: eventPoller,
+		startTime:      time.Now().UTC(),
+		entService:     entService,
+		eventHub:       eventHub,
+		eventPoller:    eventPoller,
+		tracingManager: tracingManager,
+	}
+
+	// If tracing is enabled, create a trace poller for dashboard events
+	if tracingManager != nil {
+		s.tracePoller = NewTracePoller(tracingManager, eventHub, 3*time.Second)
 	}
 
 	// --- API routes (proxied to registry) ---
@@ -63,9 +73,12 @@ func NewServer(config *UIConfig, entService *registry.EntService, embeddedFS emb
 		api.GET("/agents/*path", s.proxyToRegistry)
 		api.GET("/events/history", s.GetEventsHistory)
 		api.GET("/events", s.StreamDashboardEvents)
-		api.GET("/trace/recent", s.proxyToRegistry)
-		api.GET("/trace/edge-stats", s.proxyToRegistry)
-		api.GET("/trace/:trace_id", s.proxyToRegistry)
+		api.GET("/trace/recent", s.handleRecentTraces)
+		api.GET("/trace/edge-stats", s.handleEdgeStats)
+		api.GET("/trace/list", s.handleTraceList)
+		api.GET("/trace/search", s.handleTraceSearch)
+		api.GET("/trace/:trace_id", s.handleTraceGet)
+		api.GET("/traces/live", s.handleStreamLiveTraces)
 	}
 
 	// Local health endpoint for the UI server itself
@@ -139,11 +152,27 @@ func (s *Server) handleUIHealth(c *gin.Context) {
 // Run starts the Gin HTTP server on the given address (e.g. ":3080").
 func (s *Server) Run(addr string) error {
 	s.eventPoller.Start()
+	if s.tracingManager != nil {
+		if err := s.tracingManager.Start(); err != nil {
+			log.Printf("[ui] Warning: failed to start tracing manager: %v", err)
+		}
+	}
+	if s.tracePoller != nil {
+		s.tracePoller.Start()
+	}
 	return s.engine.Run(addr)
 }
 
 // Stop performs a graceful shutdown of the UI server.
 func (s *Server) Stop() error {
+	if s.tracePoller != nil {
+		s.tracePoller.Stop()
+	}
+	if s.tracingManager != nil {
+		if err := s.tracingManager.Stop(); err != nil {
+			log.Printf("[ui] Warning: failed to stop tracing manager: %v", err)
+		}
+	}
 	if s.eventPoller != nil {
 		s.eventPoller.Stop()
 	}
