@@ -110,7 +110,11 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	// Create trace poller for pushing trace activity via SSE (only when tracing is enabled)
 	var tracePoller *TracePoller
 	if tracingManager != nil {
-		tracePoller = NewTracePoller(tracingManager, eventHub, logger, 10*time.Second)
+		tracePoller = NewTracePoller(tracingManager, eventHub, logger, 3*time.Second)
+		// Give handlers access to the accumulator for live trace streaming
+		if acc := tracingManager.GetAccumulator(); acc != nil {
+			handlers.traceAccumulator = acc
+		}
 	}
 
 	// Create server
@@ -256,7 +260,7 @@ func (s *Server) setupOperationalEndpoints() {
 	s.engine.GET("/trace/:trace_id", s.handleTraceGet)
 	s.engine.GET("/trace/search", s.handleTraceSearch)
 
-	// Note: GET /events (dashboard SSE) is now in OpenAPI spec and registered via generated routes
+	// Note: GET /traces/live and GET /events (SSE) are in OpenAPI spec, registered via generated routes
 
 	// Admin endpoints on main engine only when no separate admin port is configured
 	if s.config.AdminPort <= 0 {

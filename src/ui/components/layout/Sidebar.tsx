@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Bot, Network } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { LayoutDashboard, Bot, Network, Radio } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMesh } from "@/lib/mesh-context";
 
@@ -10,11 +11,37 @@ const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Agents", href: "/agents", icon: Bot },
   { name: "Topology", href: "/topology", icon: Network },
+  { name: "Live", href: "/live", icon: Radio },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { connected } = useMesh();
+  const { connected, traceActivity } = useMesh();
+
+  // Pulse the Live dot only when new agent names appear in trace activity
+  const [recentActivity, setRecentActivity] = useState(false);
+  const prevKeysRef = useRef<string>("");
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const keys = Object.keys(traceActivity).sort().join(",");
+    if (keys !== prevKeysRef.current && keys !== "") {
+      // New agents appeared in trace activity
+      if (prevKeysRef.current !== "") {
+        setRecentActivity(true);
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => setRecentActivity(false), 10000);
+      }
+      prevKeysRef.current = keys;
+    }
+  }, [traceActivity]);
+
+  // Clear timer on unmount only
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
 
   return (
     <aside className="flex h-screen w-64 flex-col border-r border-border bg-sidebar">
@@ -47,6 +74,9 @@ export function Sidebar() {
             >
               <item.icon className="h-5 w-5" />
               {item.name}
+              {item.name === "Live" && recentActivity && (
+                <span className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
+              )}
             </Link>
           );
         })}

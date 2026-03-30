@@ -33,10 +33,11 @@ type resolvedDependency = struct {
 
 // EntBusinessLogicHandlers implements the generated server interface using EntService
 type EntBusinessLogicHandlers struct {
-	entService  *EntService
-	startTime   time.Time
-	redisClient *redis.Client
-	eventHub    *EventHub
+	entService       *EntService
+	startTime        time.Time
+	redisClient      *redis.Client
+	eventHub         *EventHub
+	traceAccumulator *tracing.TraceAccumulator
 }
 
 // NewEntBusinessLogicHandlers creates a new handler instance using EntService
@@ -705,6 +706,61 @@ func (h *EntBusinessLogicHandlers) StreamDashboardEvents(c *gin.Context) {
 			h.writeSSEEvent(c, event.Type, event)
 			flusher.Flush()
 		case <-c.Request.Context().Done():
+			return
+		}
+	}
+}
+
+// StreamLiveTraces implements GET /traces/live — streams ALL trace spans in real-time via SSE
+func (h *EntBusinessLogicHandlers) StreamLiveTraces(c *gin.Context) {
+	if h.traceAccumulator == nil {
+		c.JSON(http.StatusServiceUnavailable, generated.ErrorResponse{
+			Error:     "Live trace streaming not available (tracing not enabled)",
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	// SSE headers (CORS handled by middleware)
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+			Error:     "Streaming not supported",
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	ch := h.traceAccumulator.SubscribeLive()
+	defer h.traceAccumulator.UnsubscribeLive(ch)
+
+	// Send connected event
+	h.writeSSEEvent(c, "connected", map[string]interface{}{
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"message":   "Connected to live trace stream",
+	})
+	flusher.Flush()
+
+	// Send current active trace snapshots so the client has initial state
+	for _, snapshot := range h.traceAccumulator.GetActiveTraceSnapshots() {
+		h.writeSSEEvent(c, "trace_update", snapshot)
+		flusher.Flush()
+	}
+
+	ctx := c.Request.Context()
+	for {
+		select {
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			h.writeSSEEvent(c, event.EventType, event.Snapshot)
+			flusher.Flush()
+		case <-ctx.Done():
 			return
 		}
 	}
