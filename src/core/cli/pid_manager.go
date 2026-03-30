@@ -134,6 +134,8 @@ func (pm *PIDManager) ListRunningProcesses() ([]PIDInfo, error) {
 		procType := "agent"
 		if name == "registry" {
 			procType = "registry"
+		} else if name == "ui" {
+			procType = "ui"
 		}
 
 		processes = append(processes, PIDInfo{

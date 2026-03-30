@@ -258,21 +258,25 @@ func stopAll(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
 		return fmt.Errorf("failed to list processes: %w", err)
 	}
 
-	// Separate agents and registry
+	// Separate agents, UI, and registry
 	var agents []PIDInfo
+	var uiProc *PIDInfo
 	var registry *PIDInfo
 	for _, proc := range processes {
 		if !proc.Running {
 			continue
 		}
-		if proc.Type == "registry" {
+		switch proc.Type {
+		case "registry":
 			registry = &proc
-		} else {
+		case "ui":
+			uiProc = &proc
+		default:
 			agents = append(agents, proc)
 		}
 	}
 
-	if len(agents) == 0 && registry == nil {
+	if len(agents) == 0 && uiProc == nil && registry == nil {
 		if !quiet {
 			fmt.Println("No agents running in background. Use 'meshctl start --detach' to run agents in background.")
 		}
@@ -319,6 +323,26 @@ func stopAll(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
 			}(agent)
 		}
 		wg.Wait()
+	}
+
+	// Stop UI server before registry (UI depends on registry)
+	if uiProc != nil {
+		if !quiet {
+			fmt.Printf("Stopping UI server (PID: %d)...\n", uiProc.PID)
+		}
+
+		if err := stopProcess(uiProc.PID, timeout, force); err != nil {
+			if !quiet {
+				fmt.Printf("Failed to stop UI server: %v\n", err)
+			}
+			failed++
+		} else {
+			pm.RemovePIDFile(uiProc.PIDFile)
+			stopped++
+			if !quiet {
+				fmt.Println("UI server stopped")
+			}
+		}
 	}
 
 	// Stop registry last (sequential)
