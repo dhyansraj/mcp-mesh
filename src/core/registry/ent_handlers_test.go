@@ -299,6 +299,11 @@ func (h *TestHandlers) StreamDashboardEvents(c *gin.Context) {
 	c.String(200, "event: connected\ndata: {\"message\": \"test\"}\n\n")
 }
 
+func (h *TestHandlers) StreamLiveTraces(c *gin.Context) {
+	c.Header("Content-Type", "text/event-stream")
+	c.String(200, "event: connected\ndata: {\"message\": \"test live\"}\n\n")
+}
+
 func (h *TestHandlers) StreamTrace(c *gin.Context, traceId string) {
 	// Simple test implementation - just return a mock SSE response
 	c.Header("Content-Type", "text/event-stream")

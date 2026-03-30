@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log"
@@ -110,7 +111,11 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	// Create trace poller for pushing trace activity via SSE (only when tracing is enabled)
 	var tracePoller *TracePoller
 	if tracingManager != nil {
-		tracePoller = NewTracePoller(tracingManager, eventHub, logger, 10*time.Second)
+		tracePoller = NewTracePoller(tracingManager, eventHub, logger, 3*time.Second)
+		// Give handlers access to the accumulator for live trace streaming
+		if acc := tracingManager.GetAccumulator(); acc != nil {
+			handlers.traceAccumulator = acc
+		}
 	}
 
 	// Create server
@@ -256,7 +261,7 @@ func (s *Server) setupOperationalEndpoints() {
 	s.engine.GET("/trace/:trace_id", s.handleTraceGet)
 	s.engine.GET("/trace/search", s.handleTraceSearch)
 
-	// Note: GET /events (dashboard SSE) is now in OpenAPI spec and registered via generated routes
+	// Note: GET /traces/live and GET /events (SSE) are in OpenAPI spec, registered via generated routes
 
 	// Admin endpoints on main engine only when no separate admin port is configured
 	if s.config.AdminPort <= 0 {
@@ -558,6 +563,90 @@ func (s *Server) handleEdgeStats(c *gin.Context) {
 		"count":      len(stats),
 		"edge_count": len(stats),
 	})
+}
+
+// handleLiveTraces streams raw trace events via SSE for the Live dashboard page.
+func (s *Server) handleLiveTraces(c *gin.Context) {
+	if s.tracingManager == nil {
+		c.JSON(503, map[string]interface{}{
+			"error":   "tracing not enabled",
+			"enabled": false,
+		})
+		return
+	}
+
+	accumulator := s.tracingManager.GetAccumulator()
+	if accumulator == nil {
+		c.JSON(503, map[string]interface{}{
+			"error":   "trace accumulator not available",
+			"enabled": false,
+		})
+		return
+	}
+
+	// SSE headers (CORS handled by middleware in server.go)
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		c.JSON(500, map[string]interface{}{
+			"error": "streaming not supported",
+		})
+		return
+	}
+
+	ch := accumulator.SubscribeLive()
+	defer accumulator.UnsubscribeLive(ch)
+
+	// Send initial connected event
+	connData, _ := json.Marshal(map[string]interface{}{
+		"message":   "Connected to live trace stream",
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	})
+	fmt.Fprintf(c.Writer, "event: connected\ndata: %s\n\n", string(connData))
+	flusher.Flush()
+
+	ctx := c.Request.Context()
+	for {
+		select {
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			payload := map[string]interface{}{
+				"trace_id":   event.TraceID,
+				"span_id":    event.SpanID,
+				"agent_name": event.AgentName,
+				"agent_id":   event.AgentID,
+				"operation":  event.Operation,
+				"event_type": event.EventType,
+				"runtime":    event.Runtime,
+				"timestamp":  time.Unix(int64(event.Timestamp), int64((event.Timestamp-float64(int64(event.Timestamp)))*1e9)).UTC().Format(time.RFC3339Nano),
+			}
+			if event.ParentSpan != nil {
+				payload["parent_span"] = *event.ParentSpan
+			}
+			if event.DurationMS != nil {
+				payload["duration_ms"] = *event.DurationMS
+			}
+			if event.Success != nil {
+				payload["success"] = *event.Success
+			}
+			if event.TargetAgent != nil {
+				payload["target_agent"] = *event.TargetAgent
+			}
+			if event.ErrorMessage != nil {
+				payload["error_message"] = *event.ErrorMessage
+			}
+			data, _ := json.Marshal(payload)
+			fmt.Fprintf(c.Writer, "event: span\ndata: %s\n\n", string(data))
+			flusher.Flush()
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // runWithTLS starts the server with TLS configured to request (but not require)

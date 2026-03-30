@@ -273,6 +273,30 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /traces/live:
+    get:
+      tags: [tracing]
+      summary: Stream all trace spans in real-time via SSE
+      description: |
+        Streams ALL trace spans from Redis in real-time.
+        Starts from latest position — only new spans, no history.
+        Used by the dashboard Live page for call flow visualization.
+      operationId: streamLiveTraces
+      responses:
+        "200":
+          description: Streaming live trace spans
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE stream of live trace spans
+        "503":
+          description: Tracing not enabled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /events/history:
     get:
       tags: [events]

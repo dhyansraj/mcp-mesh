@@ -91,36 +91,45 @@ func (p *TracePoller) poll() {
 
 	now := time.Now().UTC()
 
-	// Fetch recent traces
-	traces, err := p.tracingManager.GetRecentTraces(20)
-	if err != nil {
-		p.logger.Warning("Trace poller: failed to get recent traces: %v", err)
-	} else {
-		// Build agent activity map from trace data
-		agentCounts := make(map[string]int)
-		for _, t := range traces {
-			for _, agent := range t.Agents {
-				agentCounts[agent]++
-			}
-		}
-
-		// Publish trace_activity event
+	// Prefer accumulator-based agent activity (in-memory, fast)
+	agentCounts := p.tracingManager.GetAgentActivity()
+	if len(agentCounts) > 0 {
 		p.hub.Publish(DashboardEvent{
 			Type: "trace_activity",
 			Data: map[string]interface{}{
 				"agents":      agentCounts,
-				"trace_count": len(traces),
+				"trace_count": len(agentCounts),
 			},
 			Timestamp: now,
 		})
+	} else {
+		// Fallback: derive agent activity from recent traces
+		traces, err := p.tracingManager.GetRecentTraces(20)
+		if err != nil {
+			p.logger.Warning("Trace poller: failed to get recent traces: %v", err)
+		} else {
+			fallbackCounts := make(map[string]int)
+			for _, t := range traces {
+				for _, agent := range t.Agents {
+					fallbackCounts[agent]++
+				}
+			}
+			p.hub.Publish(DashboardEvent{
+				Type: "trace_activity",
+				Data: map[string]interface{}{
+					"agents":      fallbackCounts,
+					"trace_count": len(traces),
+				},
+				Timestamp: now,
+			})
+		}
 	}
 
-	// Fetch edge stats independently of trace fetch
+	// Fetch edge stats (reads from accumulator when available)
 	edges, edgeErr := p.tracingManager.GetEdgeStats(20)
 	if edgeErr != nil {
 		p.logger.Warning("Trace poller: failed to get edge stats: %v", edgeErr)
 	} else {
-		// Publish edge_stats event
 		p.hub.Publish(DashboardEvent{
 			Type: "edge_stats",
 			Data: map[string]interface{}{

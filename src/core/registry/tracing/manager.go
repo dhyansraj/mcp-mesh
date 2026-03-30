@@ -18,6 +18,7 @@ type TracingManager struct {
 	processor         TraceEventProcessor
 	otlpExporter      *OTLPExporter
 	tempoClient       *TempoClient // For querying traces from Tempo in stream-through mode
+	accumulator       *TraceAccumulator
 	logger            *log.Logger
 	enabled           bool
 	streamThroughMode bool
@@ -86,8 +87,11 @@ func NewTracingManager(config *TracingConfig) (*TracingManager, error) {
 			manager.logger.Printf("Tempo query client initialized: %s", config.TempoQueryURL)
 		}
 
-		// Create stream-through processor
-		manager.processor = NewStreamThroughProcessor(otlpExporter)
+		// Create stream-through processor and wrap with accumulator
+		streamProcessor := NewStreamThroughProcessor(otlpExporter)
+		accumulator := NewTraceAccumulator(200, manager.logger)
+		manager.accumulator = accumulator
+		manager.processor = NewMultiProcessor(manager.logger, streamProcessor, accumulator)
 
 	} else {
 		// Use traditional correlation approach for other exporters
@@ -128,6 +132,10 @@ func (tm *TracingManager) Start() error {
 		return nil
 	}
 
+	if tm.accumulator != nil {
+		tm.accumulator.Start()
+	}
+
 	if err := tm.consumer.Start(); err != nil {
 		return fmt.Errorf("failed to start consumer: %w", err)
 	}
@@ -141,6 +149,9 @@ func (tm *TracingManager) Stop() error {
 		return nil
 	}
 
+	if tm.accumulator != nil {
+		tm.accumulator.Stop()
+	}
 
 	var errors []string
 
@@ -453,10 +464,16 @@ type EdgeStats struct {
 	MinLatencyMs int64   `json:"min_latency_ms"`
 }
 
-// GetRecentTraces returns recent trace summaries from Tempo search API
+// GetRecentTraces returns recent trace summaries. Prefers the in-memory
+// accumulator when available, falling back to the Tempo search API.
 func (tm *TracingManager) GetRecentTraces(limit int) ([]RecentTraceSummary, error) {
 	if !tm.enabled {
 		return []RecentTraceSummary{}, nil
+	}
+
+	// Prefer accumulator (fast, in-memory)
+	if tm.accumulator != nil {
+		return tm.accumulator.GetRecentTraces(limit), nil
 	}
 
 	if !tm.streamThroughMode || tm.tempoClient == nil {
@@ -507,10 +524,16 @@ func (tm *TracingManager) GetRecentTraces(limit int) ([]RecentTraceSummary, erro
 	return summaries, nil
 }
 
-// GetEdgeStats computes aggregated edge statistics from recent traces
+// GetEdgeStats computes aggregated edge statistics. Prefers the in-memory
+// accumulator when available, falling back to Tempo trace analysis.
 func (tm *TracingManager) GetEdgeStats(limit int) ([]EdgeStats, error) {
 	if !tm.enabled {
 		return []EdgeStats{}, nil
+	}
+
+	// Prefer accumulator (fast, in-memory)
+	if tm.accumulator != nil {
+		return tm.accumulator.GetEdgeStats(), nil
 	}
 
 	if !tm.streamThroughMode || tm.tempoClient == nil {
@@ -633,4 +656,18 @@ func (tm *TracingManager) GetEdgeStats(limit int) ([]EdgeStats, error) {
 	})
 
 	return edges, nil
+}
+
+// GetAccumulator returns the trace accumulator (may be nil if tracing is
+// disabled or not in stream-through mode).
+func (tm *TracingManager) GetAccumulator() *TraceAccumulator {
+	return tm.accumulator
+}
+
+// GetAgentActivity returns per-agent span counts from the accumulator.
+func (tm *TracingManager) GetAgentActivity() map[string]int {
+	if tm.accumulator != nil {
+		return tm.accumulator.GetAgentActivity()
+	}
+	return map[string]int{}
 }
