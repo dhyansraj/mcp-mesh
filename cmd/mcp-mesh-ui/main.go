@@ -27,12 +27,14 @@ func main() {
 	var (
 		port        int
 		registryURL string
+		redisURL    string
 		tempoURL    string
 		showVersion bool
 		help        bool
 	)
 	flag.IntVarP(&port, "port", "p", 0, "Port to bind the UI server to (overrides MCP_MESH_UI_PORT env var)")
 	flag.StringVarP(&registryURL, "registry-url", "r", "", "Registry URL to proxy API requests (overrides MCP_MESH_REGISTRY_URL env var)")
+	flag.StringVar(&redisURL, "redis-url", "", "Redis URL for live trace streaming (overrides REDIS_URL)")
 	flag.StringVarP(&tempoURL, "tempo-url", "t", "", "Tempo HTTP query URL for historical traces (overrides MCP_MESH_TEMPO_QUERY_URL)")
 	flag.BoolVarP(&showVersion, "version", "v", false, "Show version information")
 	flag.BoolVarP(&help, "help", "h", false, "Show help information")
@@ -123,7 +125,7 @@ func main() {
 		hostname, _ := os.Hostname()
 		tracingConfig := &tracing.TracingConfig{
 			Enabled:       true,
-			RedisURL:      getEnvDefault("REDIS_URL", "redis://localhost:6379"),
+			RedisURL:      resolveRedisURL(redisURL),
 			StreamName:    "mesh:trace",
 			ConsumerGroup: "mcp-mesh-ui-dashboard",
 			ConsumerName:  fmt.Sprintf("ui-%s", hostname),
@@ -182,6 +184,13 @@ func getEnvIntDefault(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
+}
+
+func resolveRedisURL(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return getEnvDefault("REDIS_URL", "redis://localhost:6379")
 }
 
 func resolveTempoURL(flagValue string) string {
