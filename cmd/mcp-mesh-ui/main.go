@@ -35,7 +35,7 @@ func main() {
 	flag.IntVarP(&port, "port", "p", 0, "Port to bind the UI server to (overrides MCP_MESH_UI_PORT env var)")
 	flag.StringVarP(&registryURL, "registry-url", "r", "", "Registry URL to proxy API requests (overrides MCP_MESH_REGISTRY_URL env var)")
 	flag.StringVar(&redisURL, "redis-url", "", "Redis URL for live trace streaming (overrides REDIS_URL)")
-	flag.StringVarP(&tempoURL, "tempo-url", "t", "", "Tempo HTTP query URL for historical traces (overrides MCP_MESH_TEMPO_QUERY_URL)")
+	flag.StringVarP(&tempoURL, "tempo-url", "t", "", "Tempo HTTP query URL for historical traces (overrides TEMPO_URL env var)")
 	flag.BoolVarP(&showVersion, "version", "v", false, "Show version information")
 	flag.BoolVarP(&help, "help", "h", false, "Show help information")
 
@@ -52,7 +52,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  DATABASE_URL             - Path to SQLite database or PostgreSQL URL (default: mcp_mesh_registry.db)\n")
 		fmt.Fprintf(os.Stderr, "  MCP_MESH_DISTRIBUTED_TRACING_ENABLED - Enable trace streaming (default: false)\n")
 		fmt.Fprintf(os.Stderr, "  REDIS_URL                - Redis URL for trace streaming (default: redis://localhost:6379)\n")
-		fmt.Fprintf(os.Stderr, "  MCP_MESH_TEMPO_QUERY_URL - Tempo HTTP query URL for historical traces\n")
+		fmt.Fprintf(os.Stderr, "  TEMPO_URL              - Tempo HTTP query URL (default: http://localhost:3200)\n")
+		fmt.Fprintf(os.Stderr, "  TELEMETRY_ENDPOINT     - OTLP endpoint; Tempo URL auto-derived if TEMPO_URL not set\n")
 	}
 
 	flag.Parse()
@@ -197,5 +198,5 @@ func resolveTempoURL(flagValue string) string {
 	if flagValue != "" {
 		return flagValue
 	}
-	return getEnvDefault("MCP_MESH_TEMPO_QUERY_URL", "")
+	return tracing.GetTempoURLFromEnv()
 }
