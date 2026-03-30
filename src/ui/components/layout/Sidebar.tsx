@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Bot, Network } from "lucide-react";
+import { LayoutDashboard, Bot, Network, Radio } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMesh } from "@/lib/mesh-context";
 
@@ -10,6 +10,7 @@ const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Agents", href: "/agents", icon: Bot },
   { name: "Topology", href: "/topology", icon: Network },
+  { name: "Live", href: "/live", icon: Radio },
 ];
 
 export function Sidebar() {
