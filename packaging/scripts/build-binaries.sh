@@ -266,21 +266,26 @@ build_all_binaries() {
         local goos="${PARTS[0]}"
         local goarch="${PARTS[1]}"
 
-        # Build meshctl
-        if build_binary "meshctl" "$goos" "$goarch" "meshctl"; then
-            # Build registry
-            if build_binary "registry" "$goos" "$goarch" "mcp-mesh-registry"; then
-                built_platforms+=("${goos}_${goarch}")
-            else
-                failed_builds+=("registry-${goos}_${goarch}")
-            fi
-        else
+        # Build all three binaries — only mark platform as built if all succeed
+        local platform_ok=true
+
+        if ! build_binary "meshctl" "$goos" "$goarch" "meshctl"; then
             failed_builds+=("meshctl-${goos}_${goarch}")
+            platform_ok=false
         fi
 
-        # Build meshui (UI server)
+        if ! build_binary "registry" "$goos" "$goarch" "mcp-mesh-registry"; then
+            failed_builds+=("registry-${goos}_${goarch}")
+            platform_ok=false
+        fi
+
         if ! build_binary "meshui" "$goos" "$goarch" "meshui"; then
             failed_builds+=("meshui-${goos}_${goarch}")
+            platform_ok=false
+        fi
+
+        if [[ "$platform_ok" == "true" ]]; then
+            built_platforms+=("${goos}_${goarch}")
         fi
     done
 

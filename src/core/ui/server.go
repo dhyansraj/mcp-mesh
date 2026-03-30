@@ -96,7 +96,7 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 		path := c.Request.URL.Path
 
 		// Don't serve SPA for unmatched /api/* paths
-		if strings.HasPrefix(path, "/api/") {
+		if path == "/api" || strings.HasPrefix(path, "/api/") {
 			c.JSON(http.StatusNotFound, gin.H{"error": "API endpoint not found"})
 			return
 		}
