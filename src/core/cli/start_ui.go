@@ -23,9 +23,8 @@ func maybeStartUIServer(cmd *cobra.Command, config *CLIConfig, registryURL strin
 
 	processInfo, err := pm.StartUIProcess(uiPort, registryURL, config.DBPath)
 	if err != nil {
-		if !quiet {
-			fmt.Printf("Warning: failed to start UI server: %v\n", err)
-		}
+		fmt.Printf("Warning: failed to start UI server: %v\n", err)
+		fmt.Println("Agents and registry will continue without the dashboard")
 		return
 	}
 

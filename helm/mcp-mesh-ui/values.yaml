@@ -19,8 +19,8 @@ ui:
   registryURL: "http://mcp-mesh-registry:8000"
   logLevel: "INFO"
   database:
-    # Use same database as registry (read-only)
-    url: "postgresql://mcp_mesh:mcp_mesh@mcp-mesh-postgres:5432/mcp_mesh_registry?sslmode=disable"
+    # Override with a read-only database credential for production
+    url: "postgresql://mcp_mesh_readonly:changeme@mcp-mesh-postgres:5432/mcp_mesh_registry?sslmode=disable"
   tracing:
     enabled: true
   redis:
