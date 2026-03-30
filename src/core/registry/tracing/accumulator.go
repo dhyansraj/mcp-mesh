@@ -494,7 +494,7 @@ func (ta *TraceAccumulator) Stop() {
 
 func (ta *TraceAccumulator) cleanupLoop() {
 	defer ta.wg.Done()
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -510,7 +510,7 @@ func (ta *TraceAccumulator) cleanupLoop() {
 func (ta *TraceAccumulator) cleanupStaleTraces() {
 	ta.mu.Lock()
 
-	cutoff := time.Now().Add(-2 * time.Minute)
+	cutoff := time.Now().Add(-30 * time.Second)
 	var staleEvents []*LiveTraceEvent
 	stale := 0
 	for id, at := range ta.activeTraces {

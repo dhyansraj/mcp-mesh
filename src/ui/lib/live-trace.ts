@@ -86,29 +86,20 @@ export function useLiveTraces(): UseLiveTracesResult {
 
     eventSource.addEventListener("trace_started", (e: MessageEvent) => {
       try {
-        const snapshot = JSON.parse(e.data) as LiveTrace;
-        handleSnapshot(snapshot);
-      } catch (err) {
-        console.error("Failed to parse trace_started:", err);
-      }
+        handleSnapshot(JSON.parse(e.data) as LiveTrace);
+      } catch { /* ignore parse errors */ }
     });
 
     eventSource.addEventListener("trace_update", (e: MessageEvent) => {
       try {
-        const snapshot = JSON.parse(e.data) as LiveTrace;
-        handleSnapshot(snapshot);
-      } catch (err) {
-        console.error("Failed to parse trace_update:", err);
-      }
+        handleSnapshot(JSON.parse(e.data) as LiveTrace);
+      } catch { /* ignore parse errors */ }
     });
 
     eventSource.addEventListener("trace_completed", (e: MessageEvent) => {
       try {
-        const snapshot = JSON.parse(e.data) as LiveTrace;
-        handleSnapshot(snapshot);
-      } catch (err) {
-        console.error("Failed to parse trace_completed:", err);
-      }
+        handleSnapshot(JSON.parse(e.data) as LiveTrace);
+      } catch { /* ignore parse errors */ }
     });
 
     return () => {
