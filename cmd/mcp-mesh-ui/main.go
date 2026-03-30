@@ -27,11 +27,13 @@ func main() {
 	var (
 		port        int
 		registryURL string
+		tempoURL    string
 		showVersion bool
 		help        bool
 	)
 	flag.IntVarP(&port, "port", "p", 0, "Port to bind the UI server to (overrides MCP_MESH_UI_PORT env var)")
 	flag.StringVarP(&registryURL, "registry-url", "r", "", "Registry URL to proxy API requests (overrides MCP_MESH_REGISTRY_URL env var)")
+	flag.StringVarP(&tempoURL, "tempo-url", "t", "", "Tempo HTTP query URL for historical traces (overrides MCP_MESH_TEMPO_QUERY_URL)")
 	flag.BoolVarP(&showVersion, "version", "v", false, "Show version information")
 	flag.BoolVarP(&help, "help", "h", false, "Show help information")
 
@@ -128,7 +130,7 @@ func main() {
 			BatchSize:     100,
 			BlockTimeout:  2 * time.Second,
 			TraceTimeout:  5 * time.Minute,
-			TempoQueryURL: getEnvDefault("MCP_MESH_TEMPO_QUERY_URL", ""),
+			TempoQueryURL: resolveTempoURL(tempoURL),
 		}
 
 		tm, err := tracing.NewAccumulatorOnlyManager(tracingConfig)
@@ -180,4 +182,11 @@ func getEnvIntDefault(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
+}
+
+func resolveTempoURL(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	return getEnvDefault("MCP_MESH_TEMPO_QUERY_URL", "")
 }
