@@ -1,11 +1,12 @@
-package registry
+package ui
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
-	"mcp-mesh/src/core/logger"
+	"mcp-mesh/src/core/registry"
 	"mcp-mesh/src/core/registry/generated"
 )
 
@@ -20,9 +21,8 @@ type agentSnapshot struct {
 
 // EventPoller polls the agent list periodically and publishes lifecycle events
 type EventPoller struct {
-	service  *EntService
+	service  *registry.EntService
 	hub      *EventHub
-	logger   *logger.Logger
 	interval time.Duration
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
@@ -31,11 +31,10 @@ type EventPoller struct {
 }
 
 // NewEventPoller creates a new poller that diffs agent state and publishes events
-func NewEventPoller(service *EntService, hub *EventHub, logger *logger.Logger, interval time.Duration) *EventPoller {
+func NewEventPoller(service *registry.EntService, hub *EventHub, interval time.Duration) *EventPoller {
 	return &EventPoller{
 		service:  service,
 		hub:      hub,
-		logger:   logger,
 		interval: interval,
 	}
 }
@@ -46,7 +45,7 @@ func (p *EventPoller) Start() {
 	defer p.mu.Unlock()
 
 	if p.running {
-		p.logger.Warning("Event poller is already running")
+		log.Printf("ui: event poller is already running")
 		return
 	}
 
@@ -57,7 +56,7 @@ func (p *EventPoller) Start() {
 
 	go func() {
 		defer p.wg.Done()
-		p.logger.Info("Starting dashboard event poller (interval: %v)", p.interval)
+		log.Printf("ui: starting dashboard event poller (interval: %v)", p.interval)
 
 		lastSnap := make(map[string]agentSnapshot)
 
@@ -69,7 +68,7 @@ func (p *EventPoller) Start() {
 			case <-ticker.C:
 				p.poll(lastSnap)
 			case <-ctx.Done():
-				p.logger.Info("Dashboard event poller stopped")
+				log.Printf("ui: dashboard event poller stopped")
 				return
 			}
 		}
@@ -90,7 +89,7 @@ func (p *EventPoller) Stop() {
 		p.cancel()
 	}
 	p.wg.Wait()
-	p.logger.Info("Dashboard event poller stopped successfully")
+	log.Printf("ui: dashboard event poller stopped successfully")
 }
 
 func (p *EventPoller) poll(lastSnap map[string]agentSnapshot) {
@@ -101,7 +100,7 @@ func (p *EventPoller) poll(lastSnap map[string]agentSnapshot) {
 
 	resp, err := p.service.ListAgents(nil)
 	if err != nil {
-		p.logger.Warning("Event poller: failed to list agents: %v", err)
+		log.Printf("ui: event poller: failed to list agents: %v", err)
 		return
 	}
 
@@ -112,7 +111,7 @@ func (p *EventPoller) poll(lastSnap map[string]agentSnapshot) {
 }
 
 // diffAgents compares current agents against the last snapshot, emits events,
-// and updates lastSnap in place. Exported for testing.
+// and updates lastSnap in place.
 func diffAgents(lastSnap map[string]agentSnapshot, agents []generated.AgentInfo) []DashboardEvent {
 	var events []DashboardEvent
 	now := time.Now().UTC()

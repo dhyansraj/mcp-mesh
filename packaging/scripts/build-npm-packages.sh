@@ -91,6 +91,16 @@ for platform in "${PLATFORMS[@]}"; do
       rm -rf "$EXTRACT_DIR"
       exit 1
     fi
+
+    if [ -f "$PLATFORM_DIR/meshui" ]; then
+      cp "$PLATFORM_DIR/meshui" "$PKG_DIR/bin/"
+      chmod +x "$PKG_DIR/bin/meshui"
+      echo "    ✓ Extracted meshui"
+    else
+      echo "    ✗ meshui not found in tarball"
+      rm -rf "$EXTRACT_DIR"
+      exit 1
+    fi
   else
     echo "    ✗ Platform directory not found: $PLATFORM_DIR"
     ls -la "$EXTRACT_DIR"
@@ -146,6 +156,7 @@ cp npm/cli/install.js "$CLI_PKG_DIR/"
 cp npm/cli/README.md "$CLI_PKG_DIR/"
 cp npm/cli/bin/meshctl "$CLI_PKG_DIR/bin/"
 cp npm/cli/bin/mcp-mesh-registry "$CLI_PKG_DIR/bin/"
+cp npm/cli/bin/meshui "$CLI_PKG_DIR/bin/"
 
 # Update version in main package.json
 sed -i.bak "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" "$CLI_PKG_DIR/package.json"

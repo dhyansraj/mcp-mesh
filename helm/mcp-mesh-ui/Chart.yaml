@@ -1,0 +1,19 @@
+apiVersion: v2
+name: mcp-mesh-ui
+description: MCP Mesh Dashboard UI Server - Web dashboard for monitoring MCP agents
+type: application
+version: 1.0.1
+appVersion: "1.0.1"
+keywords:
+  - mcp
+  - mesh
+  - dashboard
+  - ui
+  - monitoring
+home: https://github.com/dhyansraj/mcp-mesh
+sources:
+  - https://github.com/dhyansraj/mcp-mesh
+maintainers:
+  - name: Dhyan Raj
+    email: dhyanraj@gmail.com
+dependencies: []

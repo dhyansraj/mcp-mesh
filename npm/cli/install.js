@@ -19,6 +19,7 @@ const knownPlatforms = {
 const BINARIES = [
   { name: "meshctl", required: true },
   { name: "mcp-mesh-registry", required: true },
+  { name: "meshui", required: true },
 ];
 
 function getPlatformPackage() {

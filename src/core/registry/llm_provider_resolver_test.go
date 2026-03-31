@@ -189,7 +189,7 @@ func TestResolveLLMProvider(t *testing.T) {
 				assert.Equal(t, tt.expectedEndpoint, provider.Endpoint)
 				assert.Equal(t, "process_chat", provider.Name)
 				assert.Equal(t, "llm", provider.Capability)
-				assert.Equal(t, generated.Available, provider.Status)
+				assert.Equal(t, generated.ResolvedLLMProviderStatusAvailable, provider.Status)
 				assert.NotNil(t, provider.Tags)
 				assert.NotNil(t, provider.Version)
 			} else {
@@ -318,11 +318,10 @@ func TestResolveLLMProvidersFromMetadata(t *testing.T) {
 				assert.Equal(t, "claude-provider", provider.AgentId)
 				assert.Equal(t, "http://localhost:9020", provider.Endpoint)
 				assert.Equal(t, "llm", provider.Capability)
-				assert.Equal(t, generated.Available, provider.Status)
+				assert.Equal(t, generated.ResolvedLLMProviderStatusAvailable, provider.Status)
 			} else {
 				assert.Empty(t, providers)
 			}
 		})
 	}
 }
-

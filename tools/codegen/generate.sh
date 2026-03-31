@@ -166,8 +166,9 @@ generate_go_registry_server() {
 
     # Generate server stubs with types included
     log_info "Generating Go server with Gin bindings and types..."
+    # skip-prune: preserve generated types referenced by ui server (src/core/ui/)
     oapi-codegen \
-        -generate gin-server,types,spec \
+        -generate gin-server,types,spec,skip-prune \
         -package generated \
         "$REGISTRY_SPEC" > "$output_file"
 

@@ -1,0 +1,37 @@
+#!/usr/bin/env node
+"use strict";
+
+// This is a fallback script that gets replaced by the actual binary after installation.
+// If you're seeing this error, the installation might have failed.
+
+const fs = require("fs");
+const path = require("path");
+const child_process = require("child_process");
+
+const binaryPath = path.join(__dirname, "meshui");
+
+if (fs.existsSync(binaryPath) && binaryPath !== __filename) {
+  // Binary exists, execute it
+  const result = child_process.spawnSync(binaryPath, process.argv.slice(2), {
+    stdio: "inherit",
+  });
+  if (result.error) {
+    console.error(`[mcp-mesh] Failed to run meshui: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.signal) {
+    console.error(`[mcp-mesh] meshui terminated by signal: ${result.signal}`);
+    process.exit(128 + (result.signal === "SIGTERM" ? 15 : result.signal === "SIGINT" ? 2 : 1));
+  }
+  process.exit(result.status || 0);
+} else {
+  console.error("Error: meshui binary not found.");
+  console.error("");
+  console.error("The meshui binary was not properly installed. Try:");
+  console.error("  1. Reinstall: npm install -g @mcpmesh/cli");
+  console.error("  2. Or install from source: https://github.com/dhyansraj/mcp-mesh");
+  console.error("");
+  console.error("If the problem persists, please report at:");
+  console.error("  https://github.com/dhyansraj/mcp-mesh/issues");
+  process.exit(1);
+}

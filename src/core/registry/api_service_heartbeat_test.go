@@ -54,7 +54,7 @@ func TestAPIServiceHeartbeat(t *testing.T) {
 		router := setupTestRouter(t, service)
 
 		// Create API service heartbeat request
-		agentType := generated.MeshAgentRegistrationAgentTypeApi
+		agentType := generated.Api
 		apiServiceRequest := generated.MeshAgentRegistration{
 			AgentId:   "api-fastapi-test-123",
 			AgentType: &agentType,
@@ -102,7 +102,7 @@ func TestAPIServiceHeartbeat(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, "api-fastapi-test-123", response.AgentId)
-		assert.Equal(t, generated.Success, response.Status)
+		assert.Equal(t, generated.MeshRegistrationResponseStatusSuccess, response.Status)
 
 		// CRITICAL: Verify agent was created in database (API services get saved but don't create events)
 		agentsResponse, err := service.ListAgents(nil)
@@ -123,7 +123,7 @@ func TestAPIServiceHeartbeat(t *testing.T) {
 		router := setupTestRouter(t, service)
 
 		// First, register a real agent that provides the required capability
-		agentType := generated.MeshAgentRegistrationAgentTypeMcpAgent
+		agentType := generated.McpAgent
 		agentRequest := generated.MeshAgentRegistration{
 			AgentId:   "pdf-extractor-agent",
 			AgentType: &agentType, // Default agent
@@ -149,7 +149,7 @@ func TestAPIServiceHeartbeat(t *testing.T) {
 		assert.Equal(t, http.StatusOK, recorder.Code)
 
 		// Now send API service heartbeat
-		apiAgentType := generated.MeshAgentRegistrationAgentTypeApi
+		apiAgentType := generated.Api
 		apiServiceRequest := generated.MeshAgentRegistration{
 			AgentId:   "api-fastapi-service-456",
 			AgentType: &apiAgentType,
@@ -221,7 +221,7 @@ func TestAPIServiceHeartbeat(t *testing.T) {
 		router := setupTestRouter(t, service)
 
 		// Register a regular agent first
-		agentType := generated.MeshAgentRegistrationAgentTypeMcpAgent
+		agentType := generated.McpAgent
 		agentRequest := generated.MeshAgentRegistration{
 			AgentId:   "notification-listener-agent",
 			AgentType: &agentType,
@@ -253,7 +253,7 @@ func TestAPIServiceHeartbeat(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 
 		// Now register an API service
-		apiAgentType := generated.MeshAgentRegistrationAgentTypeApi
+		apiAgentType := generated.Api
 		apiServiceRequest := generated.MeshAgentRegistration{
 			AgentId:   "api-should-not-notify",
 			AgentType: &apiAgentType,
@@ -313,7 +313,7 @@ func TestAPIServiceHeartbeat(t *testing.T) {
 		router := setupTestRouter(t, service)
 
 		// Step 1: Register agent providing capability
-		agentType := generated.MeshAgentRegistrationAgentTypeMcpAgent
+		agentType := generated.McpAgent
 		providerAgent := generated.MeshAgentRegistration{
 			AgentId:   "provider-agent",
 			AgentType: &agentType,
@@ -337,7 +337,7 @@ func TestAPIServiceHeartbeat(t *testing.T) {
 		assert.Equal(t, http.StatusOK, recorder.Code)
 
 		// Step 2: Register agent consumer (should trigger topology notifications)
-		consumerAgentType := generated.MeshAgentRegistrationAgentTypeMcpAgent
+		consumerAgentType := generated.McpAgent
 		consumerAgent := generated.MeshAgentRegistration{
 			AgentId:   "consumer-agent",
 			AgentType: &consumerAgentType,
@@ -366,7 +366,7 @@ func TestAPIServiceHeartbeat(t *testing.T) {
 		assert.Equal(t, http.StatusOK, recorder.Code)
 
 		// Step 3: Register API service consumer (should NOT trigger topology notifications)
-		apiAgentType := generated.MeshAgentRegistrationAgentTypeApi
+		apiAgentType := generated.Api
 		apiConsumer := generated.MeshAgentRegistration{
 			AgentId:   "api-consumer-service",
 			AgentType: &apiAgentType,

@@ -88,8 +88,13 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 			fmt.Printf("Registry started in detach (PID: %d)\n", processInfo.PID)
 			fmt.Printf("Registry URL: %s\n", config.GetRegistryURL())
 		}
+		// Start UI server if --ui flag is set (detach mode)
+		maybeStartUIServer(cmd, config, config.GetRegistryURL())
 		return nil
 	}
+
+	// Start UI server if --ui flag is set (before blocking on signals)
+	maybeStartUIServer(cmd, config, config.GetRegistryURL())
 
 	// Foreground mode - wait for signal
 	if !quiet {

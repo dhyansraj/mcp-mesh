@@ -83,6 +83,11 @@ Examples:
 	// Development flags
 	cmd.Flags().BoolP("watch", "w", false, "Watch files and restart on changes")
 
+	// UI server flags
+	cmd.Flags().Bool("ui", false, "Start the dashboard UI server alongside agents")
+	cmd.Flags().Int("ui-port", 0, "UI server port (default: 3080, overrides MCP_MESH_UI_PORT)")
+	cmd.Flags().Bool("dashboard", false, "Open browser to dashboard after start")
+
 	return cmd
 }
 

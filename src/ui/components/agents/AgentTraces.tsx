@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { RecentTrace, TraceDetail, TraceSpan } from "@/lib/types";
-import { getRecentTraces, getTraceDetail, formatRelativeTime } from "@/lib/api";
+import { getRecentTraces, getTraceDetail, formatRelativeTime, formatDuration } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Loader2, CheckCircle2, XCircle, Activity, ChevronRight, ChevronDown } from "lucide-react";
@@ -104,7 +104,7 @@ function SpanTreeRow({
           </Badge>
         )}
         {span.DurationMS !== null && (
-          <span className="text-muted-foreground ml-1">[{span.DurationMS}ms]</span>
+          <span className="text-muted-foreground ml-1">[{formatDuration(span.DurationMS)}]</span>
         )}
         {span.Success === true && (
           <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0 ml-0.5" />
@@ -187,7 +187,7 @@ function SpanTree({ traceId }: { traceId: string }) {
               {s.AgentName}
             </Badge>
             {s.DurationMS !== null && (
-              <span className="text-muted-foreground ml-1">[{s.DurationMS}ms]</span>
+              <span className="text-muted-foreground ml-1">[{formatDuration(s.DurationMS)}]</span>
             )}
             {s.Success === true && <CheckCircle2 className="h-3 w-3 text-green-500 ml-0.5" />}
             {s.Success === false && <XCircle className="h-3 w-3 text-red-500 ml-0.5" />}
@@ -313,7 +313,7 @@ export function AgentTraces({ agentName, refreshKey }: AgentTracesProps) {
                 </span>
               </div>
               <div className="px-4 pb-3 flex items-center gap-3 flex-wrap text-xs text-muted-foreground">
-                <span className="font-mono">{trace.duration_ms}ms</span>
+                <span className="font-mono">{formatDuration(trace.duration_ms)}</span>
                 <span>{trace.agent_count} agents</span>
                 <span>{trace.span_count} spans</span>
                 <Badge variant="outline" className="text-[10px] px-1.5 py-0">

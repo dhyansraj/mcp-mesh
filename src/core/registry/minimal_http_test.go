@@ -32,7 +32,7 @@ func mockHeartbeatHandler(c *gin.Context) {
 
 	// Return success response with the parsed data
 	response := generated.MeshRegistrationResponse{
-		Status:    generated.Success,
+		Status:    generated.MeshRegistrationResponseStatusSuccess,
 		Timestamp: time.Now(),
 		Message:   "Agent heartbeat parsed successfully",
 		AgentId:   req.AgentId,
@@ -97,7 +97,7 @@ func TestMinimalHTTPJSONParsing(t *testing.T) {
 
 		// Validate response content
 		assert.Equal(t, "agent-b065c499", response.AgentId)
-		assert.Equal(t, generated.Success, response.Status)
+		assert.Equal(t, generated.MeshRegistrationResponseStatusSuccess, response.Status)
 		assert.Contains(t, response.Message, "parsed successfully")
 
 		t.Logf("✅ SUCCESS: HTTP POST /heartbeat with JSON file")
@@ -148,7 +148,7 @@ func TestMinimalHTTPJSONParsing(t *testing.T) {
 
 				// Validate expected content
 				assert.Equal(t, testCase.expectedAgentId, response.AgentId)
-				assert.Equal(t, generated.Success, response.Status)
+				assert.Equal(t, generated.MeshRegistrationResponseStatusSuccess, response.Status)
 
 				t.Logf("✅ %s -> AgentId: %s", testCase.filename, response.AgentId)
 			})

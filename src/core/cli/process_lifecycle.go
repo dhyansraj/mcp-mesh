@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -304,11 +305,20 @@ func (pm *ProcessManager) StopAllProcesses(timeout time.Duration) []error {
 
 	pm.logger.Printf("Stopping all %d processes", len(processes))
 
-	// Stop agents first, then registry
+	// Stop agents first
 	for name, info := range processes {
 		if info.ServiceType == "agent" {
 			if err := pm.StopProcess(name, timeout); err != nil {
 				errors = append(errors, fmt.Errorf("failed to stop agent %s: %w", name, err))
+			}
+		}
+	}
+
+	// Stop UI server before registry (UI depends on registry)
+	for name, info := range processes {
+		if info.ServiceType == "ui" {
+			if err := pm.StopProcess(name, timeout); err != nil {
+				errors = append(errors, fmt.Errorf("failed to stop UI server %s: %w", name, err))
 			}
 		}
 	}
@@ -434,6 +444,120 @@ func (pm *ProcessManager) findRegistryBinary() (string, error) {
 	// Return error with all attempted paths
 	allPaths := append(localPaths, "mcp-mesh-registry (in PATH)")
 	return "", fmt.Errorf("registry binary not found at any of these locations: %v. Please ensure the binary is built or run 'make build' to compile it", allPaths)
+}
+
+// StartUIProcess starts the dashboard UI server
+func (pm *ProcessManager) StartUIProcess(port int, registryURL string, dbPath string) (*ProcessInfo, error) {
+	name := "ui"
+
+	// Check if UI already running
+	if info, exists := pm.GetProcess(name); exists && pm.isProcessRunning(info) {
+		return info, nil
+	}
+
+	if port == 0 {
+		if val := os.Getenv("MCP_MESH_UI_PORT"); val != "" {
+			if parsed, err := strconv.Atoi(val); err == nil {
+				port = parsed
+			}
+		}
+		if port == 0 {
+			port = 3080
+		}
+	}
+
+	uiBinary, err := pm.findUIBinary()
+	if err != nil {
+		return nil, fmt.Errorf("failed to start UI server: %w", err)
+	}
+
+	args := []string{
+		"--port", fmt.Sprintf("%d", port),
+	}
+
+	cmd := exec.Command(uiBinary, args...)
+
+	// Set up environment
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("MCP_MESH_UI_PORT=%d", port),
+		fmt.Sprintf("MCP_MESH_REGISTRY_URL=%s", registryURL),
+	)
+	if dbPath != "" {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("DATABASE_URL=%s", dbPath))
+	}
+
+	workingDir, _ := os.Getwd()
+	cmd.Dir = workingDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start UI server process: %w", err)
+	}
+
+	metadata := map[string]interface{}{
+		"port":         port,
+		"registry_url": registryURL,
+	}
+
+	processInfo := pm.TrackProcess(name, uiBinary, "ui", cmd.Process, metadata)
+
+	pm.logger.Printf("Started UI server: %s (PID: %d, Port: %d)", name, cmd.Process.Pid, port)
+
+	// Wait for UI to be ready
+	if err := pm.waitForUIReady(port, 5*time.Second); err != nil {
+		pm.logger.Printf("Warning: UI server may not be fully ready: %v", err)
+	}
+
+	return processInfo, nil
+}
+
+// waitForUIReady waits for the UI server to respond to health checks
+func (pm *ProcessManager) waitForUIReady(port int, timeout time.Duration) error {
+	healthURL := fmt.Sprintf("http://localhost:%d/api/ui-health", port)
+	client := newTLSSkipVerifyClient()
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(healthURL)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				return nil
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	return fmt.Errorf("UI server did not become ready within timeout")
+}
+
+// findUIBinary finds the UI server binary in local paths or PATH
+func (pm *ProcessManager) findUIBinary() (string, error) {
+	localPaths := []string{
+		"./bin/meshui",
+		"./bin/mcp-mesh-ui",
+		"./meshui",
+		"./mcp-mesh-ui",
+		"./build/meshui",
+		"./build/mcp-mesh-ui",
+	}
+
+	for _, path := range localPaths {
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+
+	// Check PATH for both names
+	if path, err := exec.LookPath("meshui"); err == nil {
+		return path, nil
+	}
+	if path, err := exec.LookPath("mcp-mesh-ui"); err == nil {
+		return path, nil
+	}
+
+	return "", fmt.Errorf("UI server binary not found. Run 'make build' to compile it")
 }
 
 // generateProcessName generates a unique process name from a file path

@@ -181,21 +181,25 @@ func (pcm *ProcessCleanupManager) PerformProcessCleanup() error {
 	// Step 3: Stop agents first (graceful)
 	agentErrors := pcm.stopAgentProcesses(processes)
 
-	// Step 4: Stop registry services (graceful)
+	// Step 4: Stop UI server (before registry, since UI depends on registry)
+	uiErrors := pcm.stopUIProcesses(processes)
+
+	// Step 5: Stop registry services (graceful)
 	registryErrors := pcm.stopRegistryProcesses(processes)
 
-	// Step 5: Force kill any remaining processes
+	// Step 6: Force kill any remaining processes
 	forceErrors := pcm.forceKillRemainingProcesses()
 
-	// Step 6: Clean up orphaned processes
+	// Step 7: Clean up orphaned processes
 	orphanErrors := pcm.cleanupOrphanedProcesses()
 
-	// Step 7: Clear process state
+	// Step 8: Clear process state
 	pcm.processManager.clearAllProcesses()
 
 	// Collect all errors
 	var allErrors []error
 	allErrors = append(allErrors, agentErrors...)
+	allErrors = append(allErrors, uiErrors...)
 	allErrors = append(allErrors, registryErrors...)
 	allErrors = append(allErrors, forceErrors...)
 	allErrors = append(allErrors, orphanErrors...)
@@ -238,6 +242,21 @@ func (pcm *ProcessCleanupManager) stopAgentProcesses(processes map[string]*Proce
 		errors = append(errors, err)
 	}
 
+	return errors
+}
+
+// stopUIProcesses stops UI server processes gracefully
+func (pcm *ProcessCleanupManager) stopUIProcesses(processes map[string]*ProcessInfo) []error {
+	var errors []error
+	for name, info := range processes {
+		if info.ServiceType == "ui" {
+			pcm.logger.Printf("Stopping UI server: %s", name)
+			if err := pcm.processManager.StopProcess(name, 5*time.Second); err != nil {
+				pcm.logger.Printf("Error stopping UI server %s: %v", name, err)
+				errors = append(errors, err)
+			}
+		}
+	}
 	return errors
 }
 

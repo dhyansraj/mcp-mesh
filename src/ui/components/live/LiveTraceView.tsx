@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { LiveTrace, SnapshotSpan } from "@/lib/live-trace";
-import { formatRelativeTime } from "@/lib/api";
+import { formatRelativeTime, formatDuration } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -92,7 +92,7 @@ function LiveSpanRow({
         )}
         {!isInProgress && (
           <span className="text-muted-foreground ml-1">
-            [{span.duration_ms}ms]
+            [{formatDuration(span.duration_ms)}]
           </span>
         )}
         {isInProgress && (
@@ -175,7 +175,7 @@ function TraceCard({
         <div className="flex items-center gap-3 shrink-0">
           {trace.duration_ms !== undefined && trace.duration_ms !== null && (
             <span className="text-xs font-mono text-muted-foreground">
-              {trace.duration_ms}ms
+              {formatDuration(trace.duration_ms)}
             </span>
           )}
           <span className="text-xs text-muted-foreground/60">

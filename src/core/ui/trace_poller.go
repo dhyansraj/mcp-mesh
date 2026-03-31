@@ -1,19 +1,19 @@
-package registry
+package ui
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
-	"mcp-mesh/src/core/logger"
 	"mcp-mesh/src/core/registry/tracing"
 )
 
-// TracePoller polls Tempo for recent trace data and publishes summary events via the EventHub
+// TracePoller polls the TracingManager for recent trace data and publishes
+// summary events via the UI EventHub.
 type TracePoller struct {
 	tracingManager *tracing.TracingManager
 	hub            *EventHub
-	logger         *logger.Logger
 	interval       time.Duration
 	cancel         context.CancelFunc
 	wg             sync.WaitGroup
@@ -22,11 +22,10 @@ type TracePoller struct {
 }
 
 // NewTracePoller creates a new poller that fetches trace data and publishes events
-func NewTracePoller(tracingManager *tracing.TracingManager, hub *EventHub, logger *logger.Logger, interval time.Duration) *TracePoller {
+func NewTracePoller(tracingManager *tracing.TracingManager, hub *EventHub, interval time.Duration) *TracePoller {
 	return &TracePoller{
 		tracingManager: tracingManager,
 		hub:            hub,
-		logger:         logger,
 		interval:       interval,
 	}
 }
@@ -37,7 +36,7 @@ func (p *TracePoller) Start() {
 	defer p.mu.Unlock()
 
 	if p.running {
-		p.logger.Warning("Trace poller is already running")
+		log.Println("[ui] Trace poller is already running")
 		return
 	}
 
@@ -48,7 +47,7 @@ func (p *TracePoller) Start() {
 
 	go func() {
 		defer p.wg.Done()
-		p.logger.Info("Starting trace poller (interval: %v)", p.interval)
+		log.Printf("[ui] Starting trace poller (interval: %v)", p.interval)
 
 		ticker := time.NewTicker(p.interval)
 		defer ticker.Stop()
@@ -58,7 +57,7 @@ func (p *TracePoller) Start() {
 			case <-ticker.C:
 				p.poll()
 			case <-ctx.Done():
-				p.logger.Info("Trace poller stopped")
+				log.Println("[ui] Trace poller stopped")
 				return
 			}
 		}
@@ -80,7 +79,7 @@ func (p *TracePoller) Stop() {
 	p.mu.Unlock()
 
 	p.wg.Wait()
-	p.logger.Info("Trace poller stopped successfully")
+	log.Println("[ui] Trace poller stopped successfully")
 }
 
 func (p *TracePoller) poll() {
@@ -110,7 +109,7 @@ func (p *TracePoller) poll() {
 		// Fallback: derive agent activity from recent traces
 		traces, err := p.tracingManager.GetRecentTraces(20)
 		if err != nil {
-			p.logger.Warning("Trace poller: failed to get recent traces: %v", err)
+			log.Printf("[ui] Trace poller: failed to get recent traces: %v", err)
 		} else {
 			fallbackCounts := make(map[string]int)
 			for _, t := range traces {
@@ -132,7 +131,7 @@ func (p *TracePoller) poll() {
 	// Fetch edge stats (reads from accumulator when available)
 	edges, edgeErr := p.tracingManager.GetEdgeStats(20)
 	if edgeErr != nil {
-		p.logger.Warning("Trace poller: failed to get edge stats: %v", edgeErr)
+		log.Printf("[ui] Trace poller: failed to get edge stats: %v", edgeErr)
 	} else {
 		p.hub.Publish(DashboardEvent{
 			Type: "edge_stats",

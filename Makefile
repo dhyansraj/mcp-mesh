@@ -7,6 +7,8 @@ VERSION ?= dev
 BUILD_DIR = bin
 REGISTRY_CMD_DIR = cmd/mcp-mesh-registry
 DEV_CMD_DIR = cmd/meshctl
+UI_SERVER_NAME = meshui
+UI_SERVER_CMD_DIR = cmd/mcp-mesh-ui
 
 # OpenAPI and code generation (dual-contract support)
 REGISTRY_OPENAPI_SPEC = api/mcp-mesh-registry.openapi.yaml
@@ -82,6 +84,9 @@ build:
 	@echo "🔨 Building $(DEV_NAME)..."
 	go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(DEV_NAME) ./$(DEV_CMD_DIR)
 	@echo "✅ Built $(BUILD_DIR)/$(DEV_NAME)"
+	@echo "🔨 Building $(UI_SERVER_NAME)..."
+	go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(UI_SERVER_NAME) ./$(UI_SERVER_CMD_DIR)
+	@echo "✅ Built $(BUILD_DIR)/$(UI_SERVER_NAME)"
 
 # Build for multiple platforms
 .PHONY: build-all
@@ -93,7 +98,8 @@ build-linux:
 	@mkdir -p $(BUILD_DIR)
 	GOOS=linux GOARCH=amd64 go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(REGISTRY_NAME)-linux-amd64 ./$(REGISTRY_CMD_DIR)
 	GOOS=linux GOARCH=amd64 go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(DEV_NAME)-linux-amd64 ./$(DEV_CMD_DIR)
-	@echo "✅ Built $(BUILD_DIR)/$(REGISTRY_NAME)-linux-amd64 and $(BUILD_DIR)/$(DEV_NAME)-linux-amd64"
+	GOOS=linux GOARCH=amd64 go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(UI_SERVER_NAME)-linux-amd64 ./$(UI_SERVER_CMD_DIR)
+	@echo "✅ Built $(BUILD_DIR)/$(REGISTRY_NAME)-linux-amd64, $(BUILD_DIR)/$(DEV_NAME)-linux-amd64, and $(BUILD_DIR)/$(UI_SERVER_NAME)-linux-amd64"
 
 .PHONY: build-darwin
 build-darwin:
@@ -103,6 +109,8 @@ build-darwin:
 	GOOS=darwin GOARCH=arm64 go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(REGISTRY_NAME)-darwin-arm64 ./$(REGISTRY_CMD_DIR)
 	GOOS=darwin GOARCH=amd64 go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(DEV_NAME)-darwin-amd64 ./$(DEV_CMD_DIR)
 	GOOS=darwin GOARCH=arm64 go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(DEV_NAME)-darwin-arm64 ./$(DEV_CMD_DIR)
+	GOOS=darwin GOARCH=amd64 go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(UI_SERVER_NAME)-darwin-amd64 ./$(UI_SERVER_CMD_DIR)
+	GOOS=darwin GOARCH=arm64 go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(UI_SERVER_NAME)-darwin-arm64 ./$(UI_SERVER_CMD_DIR)
 	@echo "✅ Built binaries for macOS (amd64 and arm64)"
 
 .PHONY: build-windows
@@ -111,7 +119,8 @@ build-windows:
 	@mkdir -p $(BUILD_DIR)
 	GOOS=windows GOARCH=amd64 go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(REGISTRY_NAME)-windows-amd64.exe ./$(REGISTRY_CMD_DIR)
 	GOOS=windows GOARCH=amd64 go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(DEV_NAME)-windows-amd64.exe ./$(DEV_CMD_DIR)
-	@echo "✅ Built $(BUILD_DIR)/$(REGISTRY_NAME)-windows-amd64.exe and $(BUILD_DIR)/$(DEV_NAME)-windows-amd64.exe"
+	GOOS=windows GOARCH=amd64 go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(UI_SERVER_NAME)-windows-amd64.exe ./$(UI_SERVER_CMD_DIR)
+	@echo "✅ Built $(BUILD_DIR)/$(REGISTRY_NAME)-windows-amd64.exe, $(BUILD_DIR)/$(DEV_NAME)-windows-amd64.exe, and $(BUILD_DIR)/$(UI_SERVER_NAME)-windows-amd64.exe"
 
 # Build Rust core NAPI bindings (required for TypeScript SDK)
 # This compiles the Rust runtime and generates the .node binary for Node.js
@@ -137,7 +146,8 @@ build-dev:
 	@mkdir -p $(BUILD_DIR)
 	go build -race -o $(BUILD_DIR)/$(REGISTRY_NAME)-debug ./$(REGISTRY_CMD_DIR)
 	go build -race -o $(BUILD_DIR)/$(DEV_NAME)-debug ./$(DEV_CMD_DIR)
-	@echo "✅ Built $(BUILD_DIR)/$(REGISTRY_NAME)-debug and $(BUILD_DIR)/$(DEV_NAME)-debug"
+	go build -race -o $(BUILD_DIR)/$(UI_SERVER_NAME)-debug ./$(UI_SERVER_CMD_DIR)
+	@echo "✅ Built $(BUILD_DIR)/$(REGISTRY_NAME)-debug, $(BUILD_DIR)/$(DEV_NAME)-debug, and $(BUILD_DIR)/$(UI_SERVER_NAME)-debug"
 
 # Run the registry
 .PHONY: run
@@ -431,6 +441,13 @@ docker-build:
 	docker tag mcp-mesh-registry:$(VERSION) mcp-mesh-registry:latest
 	@echo "✅ Built Docker image: mcp-mesh-registry:$(VERSION)"
 
+# Docker build for UI server
+.PHONY: docker-build-ui
+docker-build-ui:
+	@echo "🐳 Building UI server Docker image..."
+	docker build -f packaging/docker/Dockerfile.ui -t mcpmesh/ui:$(VERSION) .
+	@echo "✅ Built mcpmesh/ui:$(VERSION)"
+
 # Run with Docker
 .PHONY: docker-run
 docker-run:
@@ -496,6 +513,17 @@ ui-build:
 
 ui-clean:
 	rm -rf src/ui/.next src/ui/out
+
+# UI Server (builds SPA + Go binary)
+.PHONY: ui-server-build
+ui-server-build: ui-build
+	@echo "📦 Copying SPA to embed directory..."
+	@rm -rf cmd/mcp-mesh-ui/out
+	@cp -r src/ui/out cmd/mcp-mesh-ui/out
+	@echo "🔨 Building $(UI_SERVER_NAME) with embedded SPA..."
+	@mkdir -p $(BUILD_DIR)
+	go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(UI_SERVER_NAME) ./$(UI_SERVER_CMD_DIR)
+	@echo "✅ Built $(BUILD_DIR)/$(UI_SERVER_NAME) with embedded dashboard"
 
 # Show help
 .PHONY: help

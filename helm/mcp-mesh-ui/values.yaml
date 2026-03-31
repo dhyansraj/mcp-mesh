@@ -1,0 +1,42 @@
+replicaCount: 1
+
+image:
+  repository: mcpmesh/ui
+  pullPolicy: IfNotPresent
+  tag: "1.0.1"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 3080
+  targetPort: 3080
+
+ui:
+  port: "3080"
+  registryURL: "http://mcp-mesh-registry:8000"
+  logLevel: "INFO"
+  database:
+    # Override with a read-only database credential for production
+    url: "postgresql://mcp_mesh_readonly:changeme@mcp-mesh-postgres:5432/mcp_mesh_registry?sslmode=disable"
+  tracing:
+    enabled: true
+  redis:
+    url: "redis://mcp-mesh-redis:6379"
+  tempo:
+    url: "http://mcp-mesh-tempo:3200"
+    telemetryEndpoint: "mcp-mesh-tempo:4317"
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 50m
+    memory: 64Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

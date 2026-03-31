@@ -124,6 +124,17 @@ meshctl start agent.py --env MESH_LLM_PROVIDER=claude --env MESH_LLM_MODEL=claud
 ```bash
 # Distributed tracing (enable with single flag — all other defaults work)
 export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+
+# Redis — trace span streaming (agents publish, registry + UI consume)
+export REDIS_URL=redis://localhost:6379
+
+# Tempo — trace storage and query
+export TEMPO_URL=http://localhost:3200          # Tempo HTTP query API
+export TELEMETRY_ENDPOINT=localhost:4317        # OTLP gRPC endpoint (registry → Tempo)
+export TELEMETRY_PROTOCOL=grpc                  # OTLP protocol: grpc or http
+
+# UI server
+export MCP_MESH_UI_PORT=3080                    # Dashboard server port
 ```
 
 ## Media Storage
@@ -147,15 +158,15 @@ export AWS_ACCESS_KEY_ID=your-access-key
 export AWS_SECRET_ACCESS_KEY=your-secret-key
 ```
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `MCP_MESH_MEDIA_STORAGE` | `local` | Backend: `local` or `s3` |
-| `MCP_MESH_MEDIA_STORAGE_PATH` | `/tmp/mcp-mesh-media` | Local filesystem base path |
-| `MCP_MESH_MEDIA_STORAGE_BUCKET` | _(none)_ | S3 bucket name |
-| `MCP_MESH_MEDIA_STORAGE_ENDPOINT` | _(none)_ | S3-compatible endpoint URL |
-| `MCP_MESH_MEDIA_STORAGE_PREFIX` | `media/` | Key/directory prefix |
-| `AWS_ACCESS_KEY_ID` | _(none)_ | S3 access key (or use IAM roles) |
-| `AWS_SECRET_ACCESS_KEY` | _(none)_ | S3 secret key (or use IAM roles) |
+| Variable                          | Default               | Description                      |
+| --------------------------------- | --------------------- | -------------------------------- |
+| `MCP_MESH_MEDIA_STORAGE`          | `local`               | Backend: `local` or `s3`         |
+| `MCP_MESH_MEDIA_STORAGE_PATH`     | `/tmp/mcp-mesh-media` | Local filesystem base path       |
+| `MCP_MESH_MEDIA_STORAGE_BUCKET`   | _(none)_              | S3 bucket name                   |
+| `MCP_MESH_MEDIA_STORAGE_ENDPOINT` | _(none)_              | S3-compatible endpoint URL       |
+| `MCP_MESH_MEDIA_STORAGE_PREFIX`   | `media/`              | Key/directory prefix             |
+| `AWS_ACCESS_KEY_ID`               | _(none)_              | S3 access key (or use IAM roles) |
+| `AWS_SECRET_ACCESS_KEY`           | _(none)_              | S3 secret key (or use IAM roles) |
 
 In distributed deployments (Docker, Kubernetes), all agents that read or write media must share the same storage config. Use S3 for multi-container setups — `file://` URIs don't work across pods.
 

@@ -1,6 +1,6 @@
 import { AgentsResponse, DashboardEvent, EdgeStatsResponse, EventsHistoryResponse, HealthResponse, RecentTracesResponse, RegistryEventInfo, TraceDetail } from "./types";
 
-const API_BASE = process.env.NEXT_PUBLIC_REGISTRY_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_REGISTRY_URL || "/api";
 
 export async function getHealth(): Promise<HealthResponse> {
   const res = await fetch(`${API_BASE}/health`, { cache: "no-store" });
@@ -74,6 +74,17 @@ export function formatRelativeTime(dateString: string | null | undefined): strin
   if (diffHours < 24) return `${diffHours}h ago`;
   const diffDays = Math.floor(diffHours / 24);
   return `${diffDays}d ago`;
+}
+
+export function formatDuration(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return "";
+  if (ms >= 1000) {
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+  if (ms < 1) {
+    return `${Math.round(ms * 1000)}µs`;
+  }
+  return `${Math.round(ms)}ms`;
 }
 
 export function getStatusColor(status: string): string {
