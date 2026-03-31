@@ -74,30 +74,19 @@ _outbound_headers_var: contextvars.ContextVar[dict[str, str] | None] = (
 # so concurrent `async with` blocks on the same pooled client share one session.
 _fastmcp_client_pool: dict[str, Any] = {}
 _fallback_httpx_pool: dict[str, Any] = {}
-_pool_lock: asyncio.Lock | None = None
+_pool_lock = asyncio.Lock()
 
 
-def _get_pool_lock() -> asyncio.Lock:
-    """Get or create the module-level pool lock."""
-    global _pool_lock
-    if _pool_lock is None:
-        _pool_lock = asyncio.Lock()
-    return _pool_lock
-
-
-async def _get_fallback_httpx_client(
-    base_endpoint: str, timeout: float
-) -> "httpx.AsyncClient":
+async def _get_fallback_httpx_client(base_endpoint: str) -> "httpx.AsyncClient":
     """Get or create a pooled httpx client for the HTTP fallback path."""
     import httpx
 
-    lock = _get_pool_lock()
-    async with lock:
+    async with _pool_lock:
         if base_endpoint not in _fallback_httpx_pool:
             ssl_ctx = _create_ssl_context_for_endpoint(base_endpoint)
             tls_kwargs = {"verify": ssl_ctx} if ssl_ctx is not None else {}
             _fallback_httpx_pool[base_endpoint] = httpx.AsyncClient(
-                timeout=httpx.Timeout(timeout, read=timeout),
+                timeout=httpx.Timeout(300.0, read=300.0),
                 limits=httpx.Limits(
                     max_connections=100,
                     max_keepalive_connections=20,
@@ -110,8 +99,7 @@ async def _get_fallback_httpx_client(
 
 async def close_connection_pools() -> None:
     """Close all pooled HTTP clients. Call during application shutdown."""
-    lock = _get_pool_lock()
-    async with lock:
+    async with _pool_lock:
         for endpoint, client in list(_fastmcp_client_pool.items()):
             try:
                 # Use anyio timeout to prevent hanging on unresponsive connections
@@ -305,8 +293,7 @@ class UnifiedMCPProxy:
         cls, mcp_endpoint: str, base_endpoint: str, stream_timeout: float = 300.0
     ):
         """Get a pooled FastMCP client for the endpoint, creating one if needed."""
-        lock = _get_pool_lock()
-        async with lock:
+        async with _pool_lock:
             if mcp_endpoint in _fastmcp_client_pool:
                 return _fastmcp_client_pool[mcp_endpoint]
 
@@ -890,8 +877,13 @@ class UnifiedMCPProxy:
                 f"🔄 HTTP fallback call to {url} with {len(str(payload))} byte payload, timeout: {enhanced_timeout}s"
             )
 
-            client = await _get_fallback_httpx_client(self.endpoint, enhanced_timeout)
-            response = await client.post(url, json=payload, headers=headers)
+            client = await _get_fallback_httpx_client(self.endpoint)
+            response = await client.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=httpx.Timeout(enhanced_timeout, read=enhanced_timeout),
+            )
 
             self.logger.debug(
                 f"📥 Response status: {response.status_code}, headers: {dict(response.headers)}"
