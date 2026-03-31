@@ -289,3 +289,7 @@ java-sdk-mcp-integration.md
 src/ui/.next/
 src/ui/out/
 src/ui/node_modules/
+.next/
+
+# Built binaries (local dev)
+mcp-mesh-ui
