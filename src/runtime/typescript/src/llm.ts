@@ -172,6 +172,8 @@ export interface LlmToolConfig {
   inputSchema: string;
   returnSchema?: ZodType;
   outputMode?: LlmOutputMode;
+  /** Enable parallel tool execution */
+  parallelToolCalls?: boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   execute: (args: any, context: { llm: LlmAgent<any> }) => Promise<any>;
 }
@@ -239,6 +241,7 @@ export function llm<
     inputSchema: JSON.stringify(zodToJsonSchema(config.parameters, { $refStrategy: "none" })),
     returnSchema: config.returns,
     outputMode: config.outputMode ?? "hint",
+    parallelToolCalls: config.parallelToolCalls ?? false,
     execute: config.execute as LlmToolConfig["execute"],
   };
 
@@ -259,6 +262,7 @@ export function llm<
     stop: llmConfig.stop,
     returnSchema: llmConfig.returnSchema,
     outputMode: llmConfig.outputMode,
+    parallelToolCalls: llmConfig.parallelToolCalls,
   });
 
   // Create the execute wrapper

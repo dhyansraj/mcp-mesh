@@ -1,0 +1,150 @@
+# Test Case: TC05 - Java Parallel Tool Calls
+# Tests parallel tool execution in Java LLM agent
+#
+# Scenario:
+#   - Start slow-tool-java (3 tools, each sleeps 3s) on port 9001
+#   - Start claude-provider-py on port 9002
+#   - Start parallel-consumer-java (parallelToolCalls=true) on port 9003
+#   - Query triggers all 3 tools simultaneously
+#   - Assert all 3 tool results are in the response
+
+name: "Java Parallel Tool Calls"
+description: "Test parallelToolCalls=true in Java LLM agent with 3 slow financial tools"
+tags:
+  - parallel
+  - java
+  - claude
+  - llm
+  - issue-672
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+  - routine: global.setup_for_python_agent
+
+test:
+  # 1. Copy artifacts
+  - name: "Copy artifacts"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/slow-tool-java /workspace/
+      cp -r /uc-artifacts/claude-provider-py /workspace/
+      cp -r /uc-artifacts/parallel-consumer-java /workspace/
+      ls -la /workspace/
+
+  # 2. Create env file
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+    keys:
+      - ANTHROPIC_API_KEY
+
+  # 3. Install dependencies
+  - name: "Install tool dependencies"
+    handler: maven-install
+    path: /workspace/slow-tool-java
+    timeout: 600
+
+  - name: "Install provider dependencies"
+    handler: pip-install
+    path: /workspace/claude-provider-py
+
+  - name: "Install consumer dependencies"
+    handler: maven-install
+    path: /workspace/parallel-consumer-java
+    timeout: 600
+
+  # 4. Start slow tool agent (port 9001)
+  - name: "Start slow tool agent"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cd /workspace
+      meshctl start slow-tool-java --env MCP_MESH_HTTP_PORT=9001 -d
+      echo "Slow tool agent starting..."
+    capture: start_tool
+
+  - name: "Wait for tool agent"
+    handler: wait
+    seconds: 20
+
+  # 5. Start Claude provider (port 9002)
+  - name: "Start Claude provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cd /workspace
+      meshctl start claude-provider-py/main.py --env-file .env --env MCP_MESH_HTTP_PORT=9002 -d
+      echo "Provider agent starting..."
+    capture: start_provider
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 20
+
+  # 6. Start parallel consumer (port 9003)
+  - name: "Start parallel consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cd /workspace
+      meshctl start parallel-consumer-java --env MCP_MESH_HTTP_PORT=9003 -d
+      echo "Parallel consumer starting..."
+    capture: start_consumer
+
+  - name: "Wait for consumer and resolution"
+    handler: wait
+    seconds: 45
+
+  # 7. Verify all agents registered
+  - name: "Verify agents registered"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl list
+    capture: agent_list
+
+  # 8. Call parallel_analyze with stock query (should trigger all 3 tools)
+  - name: "Parallel tool query"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call parallelAnalyze --timeout 120 '{"ctx": {"query": "Give me a comprehensive analysis of NVDA stock. Get the stock price, company info, and market sentiment.", "ticker": "NVDA"}}'
+    capture: parallel_response
+    timeout: 180
+
+  # 9. Check consumer logs for parallel mode
+  - name: "Check consumer logs for parallel mode"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl logs parallel-consumer-java 2>&1
+    capture: consumer_logs
+
+assertions:
+  # Verify agents registered
+  - expr: "${captured.agent_list} contains 'slow-tool-java'"
+    message: "Slow tool agent should be registered"
+  - expr: "${captured.agent_list} contains 'claude-provider-py'"
+    message: "Claude provider should be registered"
+  - expr: "${captured.agent_list} contains 'parallel-consumer-java'"
+    message: "Parallel consumer should be registered"
+  # Verify response contains data from all 3 tools
+  - expr: "${captured.parallel_response} contains 'NVDA'"
+    message: "Response should reference the NVDA ticker"
+  - expr: "${captured.parallel_response} contains 'price'"
+    message: "Response should contain stock price data (from get_stock_price)"
+  - expr: "${captured.parallel_response} contains 'sentiment'"
+    message: "Response should contain sentiment data (from get_market_sentiment)"
+  # TDD assertion: parallel mode must be explicitly enabled in agent
+  - expr: "${captured.consumer_logs} contains 'parallel tool calls enabled'"
+    message: "TDD: Consumer agent should log 'parallel tool calls enabled' when parallelToolCalls=true is set (feature not yet implemented)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

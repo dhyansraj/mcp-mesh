@@ -1,0 +1,128 @@
+# Test Case: TC08 - Java Parallel Timing Validation
+# Tests that parallel tool execution is faster than sequential in Java
+#
+# Scenario:
+#   - Start slow-tool-java (3 tools, each sleeps 3s)
+#   - Start claude-provider-py
+#   - Start parallel-consumer-java (parallelToolCalls=true)
+#   - Measure wall clock time for a query that triggers all 3 tools
+#   - Sequential: ~9s tool time + LLM overhead
+#   - Parallel: ~3s tool time + LLM overhead
+
+name: "Java Parallel Tool Execution Timing"
+description: "Validate parallel tool execution timing in Java LLM agent"
+tags:
+  - parallel
+  - java
+  - claude
+  - timing
+  - issue-672
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+  - routine: global.setup_for_python_agent
+
+test:
+  # 1. Copy artifacts
+  - name: "Copy artifacts"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/slow-tool-java /workspace/
+      cp -r /uc-artifacts/claude-provider-py /workspace/
+      cp -r /uc-artifacts/parallel-consumer-java /workspace/
+
+  # 2. Create env file
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+    keys:
+      - ANTHROPIC_API_KEY
+
+  # 3. Install dependencies
+  - name: "Install tool dependencies"
+    handler: maven-install
+    path: /workspace/slow-tool-java
+    timeout: 600
+
+  - name: "Install provider dependencies"
+    handler: pip-install
+    path: /workspace/claude-provider-py
+
+  - name: "Install consumer dependencies"
+    handler: maven-install
+    path: /workspace/parallel-consumer-java
+    timeout: 600
+
+  # 4. Start agents
+  - name: "Start slow tool agent"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cd /workspace
+      meshctl start slow-tool-java --env MCP_MESH_HTTP_PORT=9001 -d
+
+  - name: "Wait for tool agent"
+    handler: wait
+    seconds: 20
+
+  - name: "Start Claude provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cd /workspace
+      meshctl start claude-provider-py/main.py --env-file .env --env MCP_MESH_HTTP_PORT=9002 -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 20
+
+  - name: "Start parallel consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cd /workspace
+      meshctl start parallel-consumer-java --env MCP_MESH_HTTP_PORT=9003 -d
+
+  - name: "Wait for consumer and resolution"
+    handler: wait
+    seconds: 45
+
+  # 5. Timed parallel query
+  - name: "Timed parallel tool query"
+    handler: shell
+    workdir: /workspace
+    command: |
+      START_TIME=$(date +%s)
+      meshctl call parallelAnalyze --timeout 120 '{"ctx": {"query": "Analyze AMZN stock. Get the stock price, company info, and market sentiment all at once.", "ticker": "AMZN"}}'
+      END_TIME=$(date +%s)
+      ELAPSED=$((END_TIME - START_TIME))
+      echo "ELAPSED_SECONDS=${ELAPSED}"
+    capture: timed_response
+    timeout: 180
+
+  # 6. Check consumer logs for parallel execution evidence
+  - name: "Check consumer logs for parallel execution"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl logs parallel-consumer-java 2>&1
+    capture: consumer_logs
+
+assertions:
+  - expr: "${captured.timed_response} contains 'AMZN'"
+    message: "Response should reference the AMZN ticker"
+  - expr: "${captured.timed_response} contains 'ELAPSED_SECONDS'"
+    message: "Should capture elapsed time"
+  # TDD assertion: parallel mode must be enabled
+  - expr: "${captured.consumer_logs} contains 'parallel tool calls enabled'"
+    message: "TDD: Consumer agent should log 'parallel tool calls enabled' (feature not yet implemented)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -742,10 +742,12 @@ class MeshLlmAgentInjector(BaseInjector):
             "template_path",
             "context_param",
             "output_mode",
+            "parallel_tool_calls",
         }
         default_model_params = {
             k: v for k, v in config_dict.items() if k not in INTERNAL_CONFIG_KEYS
         }
+        parallel_tool_calls = config_dict.get("parallel_tool_calls", False)
         if default_model_params:
             logger.debug(
                 f"🔧 Extracted default model params for {function_id}: {list(default_model_params.keys())}"
@@ -783,6 +785,7 @@ class MeshLlmAgentInjector(BaseInjector):
             ),  # Provider proxy for mesh delegation
             vendor=vendor,  # Vendor for provider handler selection (from registry or model name)
             default_model_params=default_model_params,  # Decorator-level LLM params
+            parallel_tool_calls=parallel_tool_calls,
         )
 
         logger.debug(

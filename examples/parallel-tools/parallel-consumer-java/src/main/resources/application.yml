@@ -1,0 +1,21 @@
+# MCP Mesh Parallel Consumer Agent Configuration
+#
+# These settings can be overridden by environment variables:
+#   MCP_MESH_REGISTRY_URL - Registry URL
+#   MCP_MESH_HTTP_PORT    - Agent HTTP port
+#   MCP_MESH_AGENT_NAME   - Agent name
+
+spring:
+  application:
+    name: parallel-consumer-java
+  freemarker:
+    template-loader-path: classpath:/prompts/
+    suffix: .ftl
+
+server:
+  port: ${MCP_MESH_HTTP_PORT:9000}
+
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG

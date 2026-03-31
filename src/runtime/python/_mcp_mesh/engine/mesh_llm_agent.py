@@ -88,9 +88,7 @@ class _MockMessage:
         self.role = message_dict.get("role", "assistant")
         self.tool_calls = None
         if "tool_calls" in message_dict and message_dict["tool_calls"]:
-            self.tool_calls = [
-                _MockToolCall(tc) for tc in message_dict["tool_calls"]
-            ]
+            self.tool_calls = [_MockToolCall(tc) for tc in message_dict["tool_calls"]]
 
     def model_dump(self) -> dict:
         dump: dict[str, Any] = {"role": self.role, "content": self.content}
@@ -165,6 +163,7 @@ class MeshLlmAgent:
         provider_proxy: Optional[Any] = None,
         vendor: Optional[str] = None,
         default_model_params: Optional[dict[str, Any]] = None,
+        parallel_tool_calls: bool = False,
     ):
         """
         Initialize MeshLlmAgent proxy.
@@ -196,6 +195,11 @@ class MeshLlmAgent:
         self._default_model_params = (
             default_model_params or {}
         )  # Decorator-level defaults
+        self._parallel_tool_calls = parallel_tool_calls
+        if self._parallel_tool_calls:
+            logger.info(
+                "🔀 parallel tool calls enabled — tools will execute concurrently via asyncio.gather()"
+            )
 
         # Detect if using mesh delegation (provider is dict)
         self._is_mesh_delegated = isinstance(self.provider, dict)
@@ -220,9 +224,23 @@ class MeshLlmAgent:
             f"🎯 Using provider handler: {self._provider_handler} for vendor: {vendor}"
         )
 
-        # DEPRECATED: Legacy cached instructions (now handled by provider handlers)
-        # Kept for backward compatibility with tests
-        self._cached_tool_instructions = """
+        # Tool calling instructions injected into system prompt.
+        # When parallel_tool_calls is enabled, the LLM is allowed to return
+        # multiple tool_use blocks in a single response for concurrent execution.
+        if self._parallel_tool_calls:
+            self._cached_tool_instructions = """
+
+IMPORTANT TOOL CALLING RULES:
+- You have access to tools that you can call to gather information
+- You CAN and SHOULD make multiple tool calls at once when the calls are independent
+- Return all independent tool calls in a single response for parallel execution
+- NEVER use XML-style syntax like <invoke name="tool_name"/>
+- Each tool must be called using proper JSON tool_use format
+- After receiving results from tools, you can make additional tool calls if needed
+- Once you have gathered all necessary information, provide your final response
+"""
+        else:
+            self._cached_tool_instructions = """
 
 IMPORTANT TOOL CALLING RULES:
 - You have access to tools that you can call to gather information
@@ -517,7 +535,10 @@ IMPORTANT TOOL CALLING RULES:
             func_name = func.get("name", "")
             proxy = self.tool_proxies.get(func_name)
             if proxy and hasattr(proxy, "endpoint"):
-                tool_copy = {**tool, "function": {**func, "_mesh_endpoint": proxy.endpoint}}
+                tool_copy = {
+                    **tool,
+                    "function": {**func, "_mesh_endpoint": proxy.endpoint},
+                }
             else:
                 tool_copy = {**tool, "function": dict(func)}
             enriched.append(tool_copy)
@@ -684,11 +705,25 @@ IMPORTANT TOOL CALLING RULES:
                 else:
                     try:
                         text = data.decode("utf-8")
-                        parts.append({"type": "text", "text": f"[File content ({mime_type})]\n{text[:50000]}"})
+                        parts.append(
+                            {
+                                "type": "text",
+                                "text": f"[File content ({mime_type})]\n{text[:50000]}",
+                            }
+                        )
                     except (UnicodeDecodeError, AttributeError):
-                        parts.append({"type": "text", "text": f"[Unsupported media type: {mime_type}]"})
+                        parts.append(
+                            {
+                                "type": "text",
+                                "text": f"[Unsupported media type: {mime_type}]",
+                            }
+                        )
             except Exception as exc:
-                logger.error("Failed to resolve media item %s: %s", item if isinstance(item, str) else "(bytes)", exc)
+                logger.error(
+                    "Failed to resolve media item %s: %s",
+                    item if isinstance(item, str) else "(bytes)",
+                    exc,
+                )
 
         return parts
 
@@ -796,9 +831,7 @@ IMPORTANT TOOL CALLING RULES:
         if media:
             media_parts = await self._resolve_media_inputs(media)
             if media_parts:
-                logger.info(
-                    f"Resolved {len(media_parts)} media items for user message"
-                )
+                logger.info(f"Resolved {len(media_parts)} media items for user message")
 
         # Build messages array based on input type
         if isinstance(message, list):
@@ -879,6 +912,11 @@ IMPORTANT TOOL CALLING RULES:
                     # Merge decorator-level defaults with call-time kwargs
                     # Call-time kwargs take precedence over defaults
                     effective_kwargs = {**self._default_model_params, **kwargs}
+
+                    # Pass parallel_tool_calls to the LLM API for providers that support it
+                    # (e.g., OpenAI). Provider handlers that don't support it will strip it.
+                    if self._parallel_tool_calls:
+                        effective_kwargs["parallel_tool_calls"] = True
 
                     # Build kwargs with output_mode override if set
                     call_kwargs = (
@@ -984,13 +1022,21 @@ IMPORTANT TOOL CALLING RULES:
                     and assistant_message.tool_calls
                 ):
                     tool_calls = assistant_message.tool_calls
-                    logger.debug(f"🛠️  LLM requested {len(tool_calls)} tool calls")
+                    logger.info(f"🛠️  LLM requested {len(tool_calls)} tool calls")
 
                     # Add assistant message to history
                     messages.append(assistant_message.model_dump())
 
-                    # Execute all tool calls
-                    tool_results = await self._execute_tool_calls(tool_calls)
+                    # Execute tool calls (parallel or sequential)
+                    if self._parallel_tool_calls and len(tool_calls) > 1:
+                        logger.info(
+                            f"⚡ Executing {len(tool_calls)} tool calls in parallel"
+                        )
+                        tool_results = await self._execute_tool_calls_parallel(
+                            tool_calls
+                        )
+                    else:
+                        tool_results = await self._execute_tool_calls(tool_calls)
 
                     # Resolve resource_link items in tool results to
                     # provider-native multimodal content (e.g., base64 images)
@@ -1060,6 +1106,33 @@ IMPORTANT TOOL CALLING RULES:
         """
         return await ToolExecutor.execute_calls(tool_calls, self.tool_proxies)
 
+    async def _execute_tool_calls_parallel(
+        self, tool_calls: list[Any]
+    ) -> list[dict[str, Any]]:
+        """Execute tool calls in parallel using asyncio.gather()."""
+        import asyncio
+
+        async def execute_single(tool_call):
+            """Execute a single tool call, catching errors."""
+            try:
+                results = await ToolExecutor.execute_calls(
+                    [tool_call], self.tool_proxies
+                )
+                return results[0] if results else None
+            except Exception as e:
+                logger.error(
+                    f"❌ Parallel tool call failed for {tool_call.function.name}: {e}"
+                )
+                # Return error result so other tools aren't affected
+                return {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps({"error": str(e)}),
+                }
+
+        results = await asyncio.gather(*[execute_single(tc) for tc in tool_calls])
+        return [r for r in results if r is not None]
+
     async def _resolve_media_in_tool_results(
         self, tool_results: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
@@ -1097,9 +1170,19 @@ IMPORTANT TOOL CALLING RULES:
                         parts = await resolve_resource_links(parsed, vendor)
                     except Exception as e:
                         logger.error(f"Media resolution failed for tool result: {e}")
-                        parts = [{"type": "text", "text": json.dumps(parsed) if isinstance(parsed, dict) else str(parsed)}]
+                        parts = [
+                            {
+                                "type": "text",
+                                "text": (
+                                    json.dumps(parsed)
+                                    if isinstance(parsed, dict)
+                                    else str(parsed)
+                                ),
+                            }
+                        ]
                     has_media = any(
-                        p.get("type") in ("image", "image_url", "document") for p in parts
+                        p.get("type") in ("image", "image_url", "document")
+                        for p in parts
                     )
                     if has_media:
                         resolved.append(

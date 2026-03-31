@@ -513,6 +513,8 @@ export interface MeshLlmConfig<TParams extends z.ZodType, TReturns extends z.Zod
   model?: string;
   /** Maximum agentic loop iterations. Defaults to 10 */
   maxIterations?: number;
+  /** Enable parallel tool execution. When true, multiple tool calls execute concurrently. Defaults to false */
+  parallelToolCalls?: boolean;
 
   // System prompt
   /** System prompt template (inline or "file://path/to/template.hbs") */

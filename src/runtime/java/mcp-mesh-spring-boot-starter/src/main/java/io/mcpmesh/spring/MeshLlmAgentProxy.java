@@ -65,6 +65,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     private volatile int defaultMaxIterations = 1;
     private volatile int defaultMaxTokens = 4096;
     private volatile double defaultTemperature = 0.7;
+    private volatile boolean parallelToolCalls = false;
 
     private McpHttpClient mcpClient;
     private McpMeshToolProxyFactory proxyFactory;
@@ -117,6 +118,20 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         this.systemPromptTemplate = systemPrompt != null ? systemPrompt : "";
         this.contextParamName = contextParamName != null ? contextParamName : "ctx";
         this.defaultMaxIterations = maxIterations > 0 ? maxIterations : 1;
+    }
+
+    /**
+     * Configure the proxy with dependencies and parallel tool calls option.
+     */
+    public void configure(McpHttpClient mcpClient, McpMeshToolProxyFactory proxyFactory,
+                          ToolInvoker toolInvoker, MeshDependencyInjector dependencyInjector,
+                          String systemPrompt, String contextParamName, int maxIterations,
+                          boolean parallelToolCalls) {
+        configure(mcpClient, proxyFactory, toolInvoker, dependencyInjector, systemPrompt, contextParamName, maxIterations);
+        this.parallelToolCalls = parallelToolCalls;
+        if (parallelToolCalls) {
+            log.info("parallel tool calls enabled — tools will execute concurrently for {}", functionId);
+        }
     }
 
     /**
@@ -506,35 +521,78 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                     "tool_calls", toolCalls
                 ));
 
-                // Execute tool calls and add results
-                for (Map<String, Object> toolCall : toolCalls) {
-                    String toolId = (String) toolCall.get("id");
-                    String toolName;
-                    Map<String, Object> toolArgs;
+                log.info("LLM requested {} tool calls", toolCalls.size());
 
-                    // Handle OpenAI-style format where name/arguments are nested in "function"
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> function = (Map<String, Object>) toolCall.get("function");
-                    if (function != null) {
-                        toolName = (String) function.get("name");
-                        // Arguments come as a JSON string in OpenAI format
-                        Object argsObj = function.get("arguments");
-                        toolArgs = parseToolArguments(argsObj);
-                    } else {
-                        // Fallback to flat format (Anthropic native format)
-                        toolName = (String) toolCall.get("name");
-                        Object argsObj = toolCall.get("arguments");
-                        toolArgs = parseToolArguments(argsObj);
+                if (parallelToolCalls && toolCalls.size() > 1) {
+                    // Parallel execution via CompletableFuture
+                    log.info("Executing {} tool calls in parallel", toolCalls.size());
+                    List<CompletableFuture<Map<String, Object>>> futures = new ArrayList<>();
+
+                    for (Map<String, Object> toolCall : toolCalls) {
+                        String toolId = (String) toolCall.get("id");
+                        String toolName;
+                        Map<String, Object> toolArgs;
+
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> function = (Map<String, Object>) toolCall.get("function");
+                        if (function != null) {
+                            toolName = (String) function.get("name");
+                            Object argsObj = function.get("arguments");
+                            toolArgs = parseToolArguments(argsObj);
+                        } else {
+                            toolName = (String) toolCall.get("name");
+                            Object argsObj = toolCall.get("arguments");
+                            toolArgs = parseToolArguments(argsObj);
+                        }
+
+                        final String finalToolName = toolName;
+                        final Map<String, Object> finalToolArgs = toolArgs;
+                        final String finalToolId = toolId;
+
+                        futures.add(CompletableFuture.supplyAsync(() -> {
+                            log.debug("Executing tool: {} with args: {}", finalToolName, finalToolArgs);
+                            String toolResult = executeToolCall(finalToolName, finalToolArgs);
+                            return Map.<String, Object>of(
+                                "role", "tool",
+                                "tool_call_id", finalToolId,
+                                "content", toolResult
+                            );
+                        }));
                     }
 
-                    log.debug("Executing tool: {} with args: {}", toolName, toolArgs);
-                    String toolResult = executeToolCall(toolName, toolArgs);
+                    // Wait for all tools to complete and add results
+                    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+                    for (CompletableFuture<Map<String, Object>> future : futures) {
+                        llmMessages.add(future.join());
+                    }
+                } else {
+                    // Sequential execution (default)
+                    for (Map<String, Object> toolCall : toolCalls) {
+                        String toolId = (String) toolCall.get("id");
+                        String toolName;
+                        Map<String, Object> toolArgs;
 
-                    llmMessages.add(Map.of(
-                        "role", "tool",
-                        "tool_call_id", toolId,
-                        "content", toolResult
-                    ));
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> function = (Map<String, Object>) toolCall.get("function");
+                        if (function != null) {
+                            toolName = (String) function.get("name");
+                            Object argsObj = function.get("arguments");
+                            toolArgs = parseToolArguments(argsObj);
+                        } else {
+                            toolName = (String) toolCall.get("name");
+                            Object argsObj = toolCall.get("arguments");
+                            toolArgs = parseToolArguments(argsObj);
+                        }
+
+                        log.debug("Executing tool: {} with args: {}", toolName, toolArgs);
+                        String toolResult = executeToolCall(toolName, toolArgs);
+
+                        llmMessages.add(Map.of(
+                            "role", "tool",
+                            "tool_call_id", toolId,
+                            "content", toolResult
+                        ));
+                    }
                 }
             }
 
