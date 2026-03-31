@@ -30,6 +30,8 @@ function getHttpsAgent(): Agent | null {
     try {
       const tlsOpts = getTlsOptions();
       if (tlsOpts) {
+        // TLS credentials are cached when the Agent is first created.
+        // Certificate rotation requires process restart (matches Python SDK).
         httpsAgent = new Agent({ ...POOL_CONFIG, connect: tlsOpts });
       }
     } catch (err) {
@@ -58,8 +60,17 @@ export function getDispatcher(url: string): Agent | undefined {
  * Close all pooled HTTP agents. Call during application shutdown.
  */
 export async function closeHttpPool(): Promise<void> {
-  await httpAgent?.close();
+  try {
+    await httpAgent?.close();
+  } catch (err) {
+    console.warn("Error closing HTTP agent:", err);
+  }
   httpAgent = null;
-  await httpsAgent?.close();
+
+  try {
+    await httpsAgent?.close();
+  } catch (err) {
+    console.warn("Error closing HTTPS agent:", err);
+  }
   httpsAgent = null;
 }

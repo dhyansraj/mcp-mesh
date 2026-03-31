@@ -880,7 +880,11 @@ export class MeshAgent {
    * Shutdown the agent gracefully.
    */
   async shutdown(): Promise<void> {
-    await closeHttpPool();
+    try {
+      await closeHttpPool();
+    } catch (err) {
+      console.warn("Error closing HTTP pool:", err);
+    }
     if (this.httpsProxy) {
       this.httpsProxy.close();
       this.httpsProxy = undefined;
