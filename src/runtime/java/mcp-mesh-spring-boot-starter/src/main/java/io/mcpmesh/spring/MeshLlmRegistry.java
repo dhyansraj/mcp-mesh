@@ -32,7 +32,8 @@ public class MeshLlmRegistry {
         Selector[] filters,
         int filterMode,
         int maxTokens,
-        double temperature
+        double temperature,
+        boolean parallelToolCalls
     ) {
         /**
          * Check if this is mesh delegation mode.
@@ -69,7 +70,8 @@ public class MeshLlmRegistry {
             annotation.filter(),
             annotation.filterMode().ordinal(),
             annotation.maxTokens(),
-            annotation.temperature()
+            annotation.temperature(),
+            annotation.parallelToolCalls()
         );
 
         configsByFunctionId.put(functionId, config);

@@ -1428,6 +1428,7 @@ def llm(
     system_prompt: str | None = None,
     system_prompt_file: str | None = None,
     context_param: str | None = None,
+    parallel_tool_calls: bool = False,
     **kwargs: Any,
 ) -> Callable[[T], T]:
     """
@@ -1585,6 +1586,7 @@ def llm(
             "is_template": is_template,
             "template_path": template_path,
             "context_param": context_param,
+            "parallel_tool_calls": parallel_tool_calls,
         }
         resolved_config.update(kwargs)
 

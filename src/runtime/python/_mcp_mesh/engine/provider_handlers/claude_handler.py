@@ -26,10 +26,7 @@ from typing import Any, Optional
 import mcp_mesh_core
 from pydantic import BaseModel
 
-from .base_provider_handler import (
-    BaseProviderHandler,
-    has_media_params,
-)
+from .base_provider_handler import BaseProviderHandler, has_media_params
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +191,10 @@ class ClaudeHandler(BaseProviderHandler):
         """
         # Extract output_mode from kwargs to prevent it leaking into request params
         kwargs.pop("output_mode", None)
+
+        # Claude doesn't support parallel_tool_calls API param
+        # (it naturally supports multiple tool_use blocks)
+        kwargs.pop("parallel_tool_calls", None)
 
         # Remove response_format from kwargs - we control this based on output mode
         # The decorator's response_format="json" is just a hint for parsing, not API param

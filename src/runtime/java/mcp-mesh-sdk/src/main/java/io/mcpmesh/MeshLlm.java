@@ -125,4 +125,13 @@ public @interface MeshLlm {
      * lower values (0.0-0.3) are more deterministic.
      */
     double temperature() default 0.7;
+
+    /**
+     * Enable parallel tool execution.
+     *
+     * <p>When true, multiple tool calls from a single LLM response
+     * will be executed concurrently using CompletableFuture.
+     * Default is false (sequential execution).
+     */
+    boolean parallelToolCalls() default false;
 }

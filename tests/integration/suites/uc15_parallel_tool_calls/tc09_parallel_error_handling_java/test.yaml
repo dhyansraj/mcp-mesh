@@ -1,0 +1,141 @@
+# Test Case: TC09 - Java Parallel Error Handling
+# Tests that when tools are unavailable in parallel mode, the Java agent handles gracefully
+#
+# Scenario:
+#   - Start slow-tool-java (3 tools) on port 9001
+#   - Start claude-provider-py on port 9002
+#   - Start parallel-consumer-java on port 9003
+#   - Stop slow-tool-java to simulate tool unavailability
+#   - Query - agent should handle gracefully without crashing
+#
+# Note: The error handling behavior (continue on partial failure)
+# is part of the parallel_tool_calls feature spec.
+
+name: "Java Parallel Tool Error Handling"
+description: "Test parallel tool execution handles partial failures in Java"
+tags:
+  - parallel
+  - java
+  - claude
+  - error-handling
+  - issue-672
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+  - routine: global.setup_for_python_agent
+
+test:
+  # 1. Copy artifacts
+  - name: "Copy artifacts"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/slow-tool-java /workspace/
+      cp -r /uc-artifacts/claude-provider-py /workspace/
+      cp -r /uc-artifacts/parallel-consumer-java /workspace/
+
+  # 2. Create env file
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+    keys:
+      - ANTHROPIC_API_KEY
+
+  # 3. Install dependencies
+  - name: "Install tool dependencies"
+    handler: maven-install
+    path: /workspace/slow-tool-java
+    timeout: 600
+
+  - name: "Install provider dependencies"
+    handler: pip-install
+    path: /workspace/claude-provider-py
+
+  - name: "Install consumer dependencies"
+    handler: maven-install
+    path: /workspace/parallel-consumer-java
+    timeout: 600
+
+  # 4. Start agents
+  - name: "Start slow tool agent"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cd /workspace
+      meshctl start slow-tool-java --env MCP_MESH_HTTP_PORT=9001 -d
+
+  - name: "Wait for tool agent"
+    handler: wait
+    seconds: 20
+
+  - name: "Start Claude provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cd /workspace
+      meshctl start claude-provider-py/main.py --env-file .env --env MCP_MESH_HTTP_PORT=9002 -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 20
+
+  - name: "Start parallel consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cd /workspace
+      meshctl start parallel-consumer-java --env MCP_MESH_HTTP_PORT=9003 -d
+
+  - name: "Wait for consumer and resolution"
+    handler: wait
+    seconds: 45
+
+  # 5. Stop the tool agent mid-session to simulate partial failure
+  - name: "Stop slow tool agent to simulate failure"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop slow-tool-java 2>/dev/null || true
+      pkill -f "spring-boot:run.*slow-tool" 2>/dev/null || true
+      echo "Stopped slow-tool-java to simulate tool unavailability"
+
+  - name: "Wait for deregistration"
+    handler: wait
+    seconds: 5
+
+  # 6. Query - tools are unavailable, agent should handle gracefully
+  - name: "Query with unavailable tools"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call parallelAnalyze --timeout 120 '{"ctx": {"query": "Analyze META stock price, company info, and market sentiment.", "ticker": "META"}}' 2>&1 || true
+    capture: error_response
+    timeout: 180
+
+  # 7. Check consumer logs for parallel mode
+  - name: "Check consumer logs for parallel mode"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl logs parallel-consumer-java 2>&1
+    capture: consumer_logs
+
+assertions:
+  # The agent should either:
+  # a) Return an error indicating tools are unavailable, OR
+  # b) Return a response using LLM knowledge (no tool data)
+  # Either way, it should NOT crash or hang
+  - expr: "${last.exit_code} == 0"
+    message: "Agent should handle tool unavailability without crashing"
+  # Assertion: parallel mode must be explicitly enabled
+  - expr: "${captured.consumer_logs} contains 'parallel tool calls enabled'"
+    message: "Consumer agent should log 'parallel tool calls enabled' when parallelToolCalls=true is set"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

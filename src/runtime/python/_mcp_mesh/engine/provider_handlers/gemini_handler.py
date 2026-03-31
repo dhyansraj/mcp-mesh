@@ -115,6 +115,9 @@ class GeminiHandler(BaseProviderHandler):
         Returns:
             Dictionary of parameters for litellm.completion()
         """
+        # Gemini doesn't support parallel_tool_calls API param
+        kwargs.pop("parallel_tool_calls", None)
+
         # Build base request
         request_params = {
             "messages": messages,

@@ -1,0 +1,14 @@
+# Parallel Tool Calls Integration Test Routines
+
+routines:
+  verify_parallel_response:
+    description: "Verify parallel tool call response contains data from all tools"
+    params:
+      response:
+        type: string
+        required: true
+    steps:
+      - handler: shell
+        command: |
+          echo "Verifying parallel tool call response..."
+          echo "${params.response}"

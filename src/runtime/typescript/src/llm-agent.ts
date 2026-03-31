@@ -99,6 +99,8 @@ export interface MeshLlmAgentConfig {
   returnSchema?: ZodType;
   /** Output mode: strict, hint, or text */
   outputMode?: LlmOutputMode;
+  /** Enable parallel tool execution */
+  parallelToolCalls?: boolean;
 }
 
 /**
@@ -644,6 +646,7 @@ export class MeshLlmAgent<T = string> {
   private responseParser: ResponseParser<T>;
   private _meta: LlmMeta | null = null;
   private _systemPromptOverride: string | null = null;
+  private _parallelLogEmitted = false;
 
   constructor(config: MeshLlmAgentConfig) {
     this.config = config;
@@ -679,6 +682,10 @@ export class MeshLlmAgent<T = string> {
    * @returns Parsed response (validated if schema provided)
    */
   async run(messageInput: LlmMessageInput, context: AgentRunContext): Promise<T> {
+    if (this.config.parallelToolCalls && !this._parallelLogEmitted) {
+      console.log("[mesh.llm] parallel tool calls enabled — tools will execute concurrently via Promise.all()");
+      this._parallelLogEmitted = true;
+    }
     const startTime = Date.now();
     const toolCalls: LlmToolCall[] = [];
     let totalInputTokens = 0;
@@ -831,17 +838,48 @@ export class MeshLlmAgent<T = string> {
 
       // Check for tool calls
       if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
-        // Execute tool calls
-        for (const toolCall of assistantMessage.tool_calls) {
-          const toolResult = await this.executeToolCall(toolCall, context.tools, toolCalls);
+        console.log(`[mesh.llm] LLM requested ${assistantMessage.tool_calls.length} tool calls`);
 
-          // Add tool result to messages
-          messages.push({
-            role: "tool",
-            content: typeof toolResult === "string" ? toolResult : JSON.stringify(toolResult),
-            tool_call_id: toolCall.id,
-            name: toolCall.function.name,
+        if (this.config.parallelToolCalls && assistantMessage.tool_calls.length > 1) {
+          // Parallel execution via Promise.all()
+          console.log(`[mesh.llm] Executing ${assistantMessage.tool_calls.length} tool calls in parallel`);
+          const toolResultPromises = assistantMessage.tool_calls.map(async (toolCall) => {
+            try {
+              const toolResult = await this.executeToolCall(toolCall, context.tools, toolCalls);
+              return {
+                role: "tool" as const,
+                content: typeof toolResult === "string" ? toolResult : JSON.stringify(toolResult),
+                tool_call_id: toolCall.id,
+                name: toolCall.function.name,
+              };
+            } catch (err) {
+              console.error(`[mesh.llm] Parallel tool call failed for ${toolCall.function.name}: ${err}`);
+              return {
+                role: "tool" as const,
+                content: JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
+                tool_call_id: toolCall.id,
+                name: toolCall.function.name,
+              };
+            }
           });
+
+          const toolResults = await Promise.all(toolResultPromises);
+          for (const result of toolResults) {
+            messages.push(result);
+          }
+        } else {
+          // Sequential execution (default)
+          for (const toolCall of assistantMessage.tool_calls) {
+            const toolResult = await this.executeToolCall(toolCall, context.tools, toolCalls);
+
+            // Add tool result to messages
+            messages.push({
+              role: "tool",
+              content: typeof toolResult === "string" ? toolResult : JSON.stringify(toolResult),
+              tool_call_id: toolCall.id,
+              name: toolCall.function.name,
+            });
+          }
         }
 
         // Continue loop to get next response
