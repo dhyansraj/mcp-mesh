@@ -11,6 +11,16 @@ class AnthropicHandlerTest {
 
     private AnthropicHandler handler;
 
+    @BeforeAll
+    static void installNativeStub() {
+        FormatSystemPromptStub.install();
+    }
+
+    @AfterAll
+    static void uninstallNativeStub() {
+        FormatSystemPromptStub.uninstall();
+    }
+
     @BeforeEach
     void setUp() {
         handler = new AnthropicHandler();
@@ -131,7 +141,7 @@ class AnthropicHandlerTest {
         }
 
         @Test
-        @DisplayName("with tools contains TOOL CALLING INSTRUCTIONS and anti-XML warning")
+        @DisplayName("with tools contains TOOL CALLING RULES and anti-XML warning")
         void withToolsContainsToolInstructionsAndAntiXml() {
             List<ToolDefinition> tools = List.of(
                 new ToolDefinition("get_weather", "Get weather info", Map.of(
@@ -141,7 +151,7 @@ class AnthropicHandlerTest {
             );
 
             String result = handler.formatSystemPrompt("You are helpful.", tools, null);
-            assertTrue(result.contains("TOOL CALLING INSTRUCTIONS"), "Should contain tool instructions");
+            assertTrue(result.contains("TOOL CALLING RULES"), "Should contain tool instructions");
             assertTrue(result.contains("NEVER use XML-style syntax"), "Should contain anti-XML warning");
         }
 
@@ -167,8 +177,8 @@ class AnthropicHandlerTest {
         }
 
         @Test
-        @DisplayName("with both tools and schema contains DECISION GUIDE and brief JSON note (strict mode)")
-        void withToolsAndSchemaContainsDecisionGuide() {
+        @DisplayName("with both tools and schema contains tool instructions and brief JSON note (strict mode)")
+        void withToolsAndSchemaContainsToolInstructionsAndBriefNote() {
             List<ToolDefinition> tools = List.of(
                 new ToolDefinition("search", "Search the web", Map.of())
             );
@@ -180,12 +190,13 @@ class AnthropicHandlerTest {
             OutputSchema outputSchema = OutputSchema.fromSchema("SearchResult", schema);
 
             String result = handler.formatSystemPrompt("Base prompt.", tools, outputSchema);
-            assertTrue(result.contains("DECISION GUIDE:"), "Should contain DECISION GUIDE");
-            assertTrue(result.contains("TOOL CALLING INSTRUCTIONS"), "Should contain tool instructions");
+            assertTrue(result.contains("TOOL CALLING RULES"), "Should contain tool instructions");
             assertTrue(result.contains("structured as JSON matching the SearchResult format"),
                 "Should contain brief schema note");
             assertFalse(result.contains("RESPONSE FORMAT:"),
                 "Strict mode should NOT contain detailed RESPONSE FORMAT");
+            assertFalse(result.contains("DECISION GUIDE:"),
+                "Strict mode should NOT contain DECISION GUIDE (output_format enforces schema)");
         }
 
         @Test
@@ -205,7 +216,7 @@ class AnthropicHandlerTest {
             );
 
             String result = handler.formatSystemPrompt("You are helpful.", tools, null);
-            assertTrue(result.contains("TOOL CALLING INSTRUCTIONS"), "Should contain tool instructions");
+            assertTrue(result.contains("TOOL CALLING RULES"), "Should contain tool instructions");
             assertFalse(result.contains("RESPONSE FORMAT:"), "Should not contain RESPONSE FORMAT");
         }
 
@@ -258,7 +269,7 @@ class AnthropicHandlerTest {
             );
 
             String result = handler.formatSystemPrompt(null, tools, null);
-            assertTrue(result.contains("TOOL CALLING INSTRUCTIONS"), "Should contain tool instructions");
+            assertTrue(result.contains("TOOL CALLING RULES"), "Should contain tool instructions");
         }
 
         @Test
@@ -266,7 +277,7 @@ class AnthropicHandlerTest {
         void emptyToolsListNoInstructions() {
             String result = handler.formatSystemPrompt("Base prompt.", List.of(), null);
             assertEquals("Base prompt.", result);
-            assertFalse(result.contains("TOOL CALLING INSTRUCTIONS"));
+            assertFalse(result.contains("TOOL CALLING RULES"));
         }
 
         @Test

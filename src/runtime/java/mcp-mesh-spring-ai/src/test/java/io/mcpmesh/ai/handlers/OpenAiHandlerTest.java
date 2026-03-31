@@ -11,6 +11,16 @@ class OpenAiHandlerTest {
 
     private OpenAiHandler handler;
 
+    @BeforeAll
+    static void installNativeStub() {
+        FormatSystemPromptStub.install();
+    }
+
+    @AfterAll
+    static void uninstallNativeStub() {
+        FormatSystemPromptStub.uninstall();
+    }
+
     @BeforeEach
     void setUp() {
         handler = new OpenAiHandler();
@@ -102,7 +112,7 @@ class OpenAiHandlerTest {
         }
 
         @Test
-        @DisplayName("with tools contains TOOL CALLING INSTRUCTIONS but not XML warning")
+        @DisplayName("with tools contains TOOL CALLING RULES but not XML warning")
         void withToolsContainsInstructionsNoXmlWarning() {
             List<ToolDefinition> tools = List.of(
                 new ToolDefinition("get_weather", "Get weather info", Map.of(
@@ -112,7 +122,7 @@ class OpenAiHandlerTest {
             );
 
             String result = handler.formatSystemPrompt("You are helpful.", tools, null);
-            assertTrue(result.contains("TOOL CALLING INSTRUCTIONS"), "Should contain tool instructions");
+            assertTrue(result.contains("TOOL CALLING RULES"), "Should contain tool instructions");
             assertFalse(result.contains("XML"), "Should NOT contain XML warning");
         }
 
@@ -165,7 +175,7 @@ class OpenAiHandlerTest {
             OutputSchema outputSchema = OutputSchema.fromSchema("SearchResult", schema);
 
             String result = handler.formatSystemPrompt("Base prompt.", tools, outputSchema);
-            assertTrue(result.contains("TOOL CALLING INSTRUCTIONS"),
+            assertTrue(result.contains("TOOL CALLING RULES"),
                 "Should contain tool instructions");
             assertTrue(result.contains("structured as JSON matching the SearchResult format"),
                 "Should contain JSON note");
@@ -183,7 +193,7 @@ class OpenAiHandlerTest {
         void emptyToolsListNoInstructions() {
             String result = handler.formatSystemPrompt("Base prompt.", List.of(), null);
             assertEquals("Base prompt.", result);
-            assertFalse(result.contains("TOOL CALLING INSTRUCTIONS"));
+            assertFalse(result.contains("TOOL CALLING RULES"));
         }
     }
 }

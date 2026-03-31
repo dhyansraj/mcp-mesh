@@ -31,7 +31,25 @@ public final class MeshCoreBridge {
     private static volatile MeshCore core;
     private static volatile boolean loaded = false;
 
+    // Test-only override for formatSystemPrompt (null in production)
+    private static volatile FormatSystemPromptFn formatSystemPromptOverride;
+
     private MeshCoreBridge() {
+    }
+
+    /**
+     * Register a test-only override for {@link #formatSystemPrompt}.
+     *
+     * <p>When set, the override function is called instead of the native
+     * Rust library. Pass {@code null} to clear the override and restore
+     * normal native behaviour.
+     *
+     * <p><b>This method is intended for test use only.</b>
+     *
+     * @param override the override function, or null to clear
+     */
+    public static void setFormatSystemPromptOverride(FormatSystemPromptFn override) {
+        formatSystemPromptOverride = override;
     }
 
     // =========================================================================
@@ -259,6 +277,13 @@ public final class MeshCoreBridge {
      */
     public static String formatSystemPrompt(String provider, String basePrompt, boolean hasTools, boolean hasMediaParams, String schemaJson, String schemaName, String outputMode) {
         if (provider == null || outputMode == null) return null;
+
+        // Test-only override — allows tests to run without the native library
+        FormatSystemPromptFn override = formatSystemPromptOverride;
+        if (override != null) {
+            return override.apply(provider, basePrompt, hasTools, hasMediaParams, schemaJson, schemaName, outputMode);
+        }
+
         return callNativeString(c -> c.mesh_format_system_prompt(
             provider,
             basePrompt != null ? basePrompt : "",
