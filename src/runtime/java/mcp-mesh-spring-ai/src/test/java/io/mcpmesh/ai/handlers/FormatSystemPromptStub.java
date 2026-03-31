@@ -307,18 +307,12 @@ final class FormatSystemPromptStub implements FormatSystemPromptFn {
                 case "array" -> "[\"item1\", \"item2\"]";
                 case "boolean" -> "true";
                 case "object" -> "{}";
-                default -> "...";
+                default -> "null";
             };
 
             String comma = (i < items.size() - 1) ? "," : "";
-            String desc = (String) prop.get("description");
-            if (desc != null) {
-                sb.append("  \"").append(name).append("\": ").append(exampleValue)
-                  .append(comma).append("  // ").append(desc).append("\n");
-            } else {
-                sb.append("  \"").append(name).append("\": ").append(exampleValue)
-                  .append(comma).append("\n");
-            }
+            sb.append("  \"").append(name).append("\": ").append(exampleValue)
+              .append(comma).append("\n");
         }
         sb.append("}");
         return sb.toString();
