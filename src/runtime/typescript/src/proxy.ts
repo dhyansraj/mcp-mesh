@@ -14,6 +14,7 @@ import {
   matchesPropagateHeader,
 } from "./tracing.js";
 import { isTimeoutError } from "./timeout-utils.js";
+import { getDispatcher } from "./http-pool.js";
 
 /**
  * AsyncLocalStorage for trace context - provides async-safe context propagation.
@@ -229,18 +230,10 @@ export async function callMcpTool(
         signal: controller.signal,
       };
 
-      // Apply mTLS for https:// endpoints
-      if (mcpEndpoint.startsWith("https://")) {
-        try {
-          const { Agent } = await import("undici");
-          const { getTlsOptions } = await import("./tls-config.js");
-          const tlsOpts = getTlsOptions();
-          if (tlsOpts) {
-            fetchOptions.dispatcher = new Agent({ connect: tlsOpts });
-          }
-        } catch (err) {
-          console.warn("mTLS proxy setup failed for HTTPS endpoint:", err);
-        }
+      // Use pooled dispatcher for connection reuse
+      const dispatcher = getDispatcher(mcpEndpoint);
+      if (dispatcher) {
+        fetchOptions.dispatcher = dispatcher;
       }
 
       const response = await fetch(mcpEndpoint, fetchOptions as RequestInit);

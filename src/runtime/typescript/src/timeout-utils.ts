@@ -15,19 +15,23 @@
  */
 export async function fetchWithTimeout(
   url: string,
-  options: RequestInit & { timeout?: number },
+  options: RequestInit & { timeout?: number; dispatcher?: unknown },
 ): Promise<Response> {
-  const { timeout: timeoutMs, ...fetchOptions } = options;
+  const { timeout: timeoutMs, dispatcher, ...fetchOptions } = options;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const opts: any = { ...fetchOptions };
+  if (dispatcher) opts.dispatcher = dispatcher;
 
   if (!timeoutMs) {
-    return fetch(url, fetchOptions);
+    return fetch(url, opts);
   }
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return await fetch(url, { ...fetchOptions, signal: controller.signal });
+    return await fetch(url, { ...opts, signal: controller.signal });
   } finally {
     clearTimeout(timeoutId);
   }

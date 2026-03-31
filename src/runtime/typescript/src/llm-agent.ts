@@ -70,6 +70,7 @@ import {
   createTraceHeaders,
 } from "./tracing.js";
 import { fetchWithTimeout, isTimeoutError } from "./timeout-utils.js";
+import { getDispatcher } from "./http-pool.js";
 
 /**
  * Configuration for MeshLlmAgent.
@@ -189,6 +190,8 @@ export class LiteLLMProvider implements LlmProvider {
         },
         body: JSON.stringify(body),
         timeout: timeoutMs,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        dispatcher: getDispatcher(`${this.baseUrl}/v1/chat/completions`) as any,
       });
     } catch (error) {
       if (isTimeoutError(error)) {
@@ -521,6 +524,8 @@ export class MeshDelegatedProvider implements LlmProvider {
             },
           }),
           timeout: timeoutMs,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          dispatcher: getDispatcher(`${this.endpoint}/mcp`) as any,
         });
       } catch (error) {
         if (isTimeoutError(error)) {
@@ -1202,6 +1207,8 @@ export function createLlmToolProxy(
             },
           }),
           timeout: timeoutMs,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          dispatcher: getDispatcher(`${toolInfo.endpoint}/mcp`) as any,
         });
       } catch (error) {
         if (isTimeoutError(error)) {
