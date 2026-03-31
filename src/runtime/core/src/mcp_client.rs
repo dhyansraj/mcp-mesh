@@ -50,14 +50,17 @@ pub fn generate_request_id() -> String {
 /// Parse SSE (Server-Sent Events) or plain JSON response and extract JSON data.
 ///
 /// Logic (matches all three SDKs):
-/// 1. Check if it's SSE format (contains "event:", "data: ", or "data:")
+/// 1. Check if it's SSE format (event: at line start, data: after newline)
 /// 2. If NOT SSE: try parsing as plain JSON, return as-is if valid
 /// 3. If SSE: scan lines for `data:` prefix, try JSON parse on each, return first valid
 /// 4. If no valid JSON found: return error
 pub fn parse_sse_response(response_text: &str) -> Result<String, String> {
-    let is_sse = response_text.contains("event:")
-        || response_text.contains("data: ")
-        || response_text.contains("data:");
+    // Match Python SSEParser behavior: check SSE markers at line beginnings only
+    // to avoid false positives from JSON values containing these strings
+    let is_sse = response_text.starts_with("event:")
+        || response_text.starts_with("data:")
+        || response_text.contains("\nevent:")
+        || response_text.contains("\ndata:");
 
     if !is_sse {
         // Try parsing as plain JSON
