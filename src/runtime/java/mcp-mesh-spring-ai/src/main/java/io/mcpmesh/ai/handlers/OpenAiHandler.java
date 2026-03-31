@@ -87,9 +87,13 @@ public class OpenAiHandler implements LlmProviderHandler {
                 if (tool.inputSchema() != null) {
                     try {
                         String toolSchemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(tool.inputSchema());
-                        if (MeshCoreBridge.detectMediaParams(toolSchemaJson)) {
-                            hasMediaParams = true;
-                            break;
+                        try {
+                            if (MeshCoreBridge.detectMediaParams(toolSchemaJson)) {
+                                hasMediaParams = true;
+                                break;
+                            }
+                        } catch (UnsatisfiedLinkError e) {
+                            // Native library unavailable (e.g., CI) — safe default
                         }
                     } catch (Exception ignored) {}
                 }
