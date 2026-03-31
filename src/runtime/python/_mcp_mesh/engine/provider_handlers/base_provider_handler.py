@@ -16,33 +16,6 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# Shared Constants
-# ============================================================================
-
-# Base tool calling instructions shared across all providers.
-# Claude handler adds anti-XML instruction on top of this.
-BASE_TOOL_INSTRUCTIONS = """
-IMPORTANT TOOL CALLING RULES:
-- You have access to tools that you can call to gather information
-- Make ONE tool call at a time
-- After receiving tool results, you can make additional calls if needed
-- Once you have all needed information, provide your final response
-"""
-
-# Anti-XML instruction for Claude (prevents <invoke> style tool calls).
-CLAUDE_ANTI_XML_INSTRUCTION = (
-    '- NEVER use XML-style syntax like <invoke name="tool_name"/>'
-)
-
-# Media parameter instructions appended when tools have x-media-type properties.
-MEDIA_PARAM_INSTRUCTIONS = (
-    "\n\nMEDIA PARAMETERS: Some tools accept media URIs (file://, s3://) "
-    "in parameters marked with x-media-type. If you received images or media "
-    "in this conversation, pass the media URI to the appropriate tool parameter."
-)
-
-
-# ============================================================================
 # Shared Media Detection
 # ============================================================================
 

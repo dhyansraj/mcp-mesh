@@ -7,7 +7,7 @@ Separated from MeshLlmAgent for better testability and reusability.
 
 import json
 import logging
-from typing import Any, TypeVar, Union
+from typing import Any, TypeVar
 
 import mcp_mesh_core
 from pydantic import BaseModel, ValidationError

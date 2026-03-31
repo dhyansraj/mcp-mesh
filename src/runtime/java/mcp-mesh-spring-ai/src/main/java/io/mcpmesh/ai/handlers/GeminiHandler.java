@@ -16,7 +16,6 @@ import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 
 import java.util.*;
-import java.util.LinkedHashMap;
 import java.util.function.Function;
 
 /**

@@ -7,7 +7,6 @@ Inspired by the dev branch implementation but simplified for this feature branch
 
 import contextvars
 import os
-from typing import Optional
 
 import mcp_mesh_core
 
