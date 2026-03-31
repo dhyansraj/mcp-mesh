@@ -93,13 +93,10 @@ impl CredentialProvider for VaultProvider {
             info!("Including DNS SAN: {}", advertised_host);
         }
 
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .build()
-            .map_err(|e| TlsError::VaultError(format!("Failed to create HTTP client: {}", e)))?;
+        let client = crate::mcp_client::get_http_client();
         let response = client
             .post(&url)
+            .timeout(std::time::Duration::from_secs(30))
             .header("X-Vault-Token", &self.token)
             .json(&request_body)
             .send()
