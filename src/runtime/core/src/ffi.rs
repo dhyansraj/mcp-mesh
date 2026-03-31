@@ -1100,6 +1100,268 @@ pub unsafe extern "C" fn mesh_is_simple_schema(schema_json: *const c_char) -> i3
 }
 
 // =============================================================================
+// Trace Context Functions
+// =============================================================================
+
+/// Generate OpenTelemetry-compliant trace ID (32-char hex, 128-bit).
+///
+/// # Returns
+/// Trace ID string (caller must free with `mesh_free_string`), or NULL on error
+#[no_mangle]
+pub extern "C" fn mesh_generate_trace_id() -> *mut c_char {
+    let id = crate::trace_context::generate_trace_id();
+    match CString::new(id) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Generate OpenTelemetry-compliant span ID (16-char hex, 64-bit).
+///
+/// # Returns
+/// Span ID string (caller must free with `mesh_free_string`), or NULL on error
+#[no_mangle]
+pub extern "C" fn mesh_generate_span_id() -> *mut c_char {
+    let id = crate::trace_context::generate_span_id();
+    match CString::new(id) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Inject trace context into JSON-RPC arguments.
+///
+/// # Arguments
+/// * `args_json` - JSON object string with existing arguments
+/// * `trace_id` - Trace ID to inject
+/// * `span_id` - Span ID to inject as _parent_span
+/// * `propagated_headers_json` - Optional JSON object of headers to propagate (may be NULL)
+///
+/// # Returns
+/// Modified JSON string (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `args_json`, `trace_id`, and `span_id` must be valid null-terminated C strings
+/// * `propagated_headers_json` may be NULL
+#[no_mangle]
+pub unsafe extern "C" fn mesh_inject_trace_context(
+    args_json: *const c_char,
+    trace_id: *const c_char,
+    span_id: *const c_char,
+    propagated_headers_json: *const c_char,
+) -> *mut c_char {
+    if args_json.is_null() {
+        set_last_error("args_json is null");
+        return ptr::null_mut();
+    }
+    if trace_id.is_null() {
+        set_last_error("trace_id is null");
+        return ptr::null_mut();
+    }
+    if span_id.is_null() {
+        set_last_error("span_id is null");
+        return ptr::null_mut();
+    }
+
+    let args_str = match CStr::from_ptr(args_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in args_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let trace_str = match CStr::from_ptr(trace_id).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in trace_id: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let span_str = match CStr::from_ptr(span_id).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in span_id: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let headers_opt = if propagated_headers_json.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(propagated_headers_json).to_str() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in propagated_headers_json: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    match crate::trace_context::inject_trace_context(args_str, trace_str, span_str, headers_opt) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Extract trace context from HTTP headers with body fallback.
+///
+/// # Arguments
+/// * `headers_json` - JSON object of HTTP headers
+/// * `body_json` - Optional JSON-RPC body (may be NULL)
+///
+/// # Returns
+/// JSON string with trace_id and parent_span (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `headers_json` must be a valid null-terminated C string
+/// * `body_json` may be NULL
+#[no_mangle]
+pub unsafe extern "C" fn mesh_extract_trace_context(
+    headers_json: *const c_char,
+    body_json: *const c_char,
+) -> *mut c_char {
+    if headers_json.is_null() {
+        set_last_error("headers_json is null");
+        return ptr::null_mut();
+    }
+
+    let headers_str = match CStr::from_ptr(headers_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in headers_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let body_opt = if body_json.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(body_json).to_str() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in body_json: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let result = crate::trace_context::extract_trace_context(headers_str, body_opt);
+    match CString::new(result) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Filter headers by propagation allowlist with prefix matching.
+///
+/// # Arguments
+/// * `headers_json` - JSON object of HTTP headers
+/// * `allowlist_csv` - Comma-separated list of header prefixes
+///
+/// # Returns
+/// JSON string of matching headers (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * Both parameters must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn mesh_filter_propagation_headers(
+    headers_json: *const c_char,
+    allowlist_csv: *const c_char,
+) -> *mut c_char {
+    if headers_json.is_null() {
+        set_last_error("headers_json is null");
+        return ptr::null_mut();
+    }
+    if allowlist_csv.is_null() {
+        set_last_error("allowlist_csv is null");
+        return ptr::null_mut();
+    }
+
+    let headers_str = match CStr::from_ptr(headers_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in headers_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let allowlist_str = match CStr::from_ptr(allowlist_csv).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in allowlist_csv: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::trace_context::filter_propagation_headers(headers_str, allowlist_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Check if a header matches the propagation allowlist.
+///
+/// # Arguments
+/// * `header_name` - Header name to check
+/// * `allowlist_csv` - Comma-separated list of header prefixes
+///
+/// # Returns
+/// 1 if matches, 0 otherwise
+///
+/// # Safety
+/// * Both parameters must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn mesh_matches_propagate_header(
+    header_name: *const c_char,
+    allowlist_csv: *const c_char,
+) -> i32 {
+    if header_name.is_null() || allowlist_csv.is_null() {
+        return 0;
+    }
+
+    let name_str = match CStr::from_ptr(header_name).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let allowlist_str = match CStr::from_ptr(allowlist_csv).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    if crate::trace_context::matches_propagate_header(name_str, allowlist_str) {
+        1
+    } else {
+        0
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 

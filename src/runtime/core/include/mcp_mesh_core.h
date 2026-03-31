@@ -379,6 +379,78 @@ int32_t mesh_detect_media_params(const char *schema_json);
 // * `schema_json` must be a valid null-terminated C string
 int32_t mesh_is_simple_schema(const char *schema_json);
 
+// Generate OpenTelemetry-compliant trace ID (32-char hex, 128-bit).
+//
+// # Returns
+// Trace ID string (caller must free with `mesh_free_string`), or NULL on error
+char *mesh_generate_trace_id(void);
+
+// Generate OpenTelemetry-compliant span ID (16-char hex, 64-bit).
+//
+// # Returns
+// Span ID string (caller must free with `mesh_free_string`), or NULL on error
+char *mesh_generate_span_id(void);
+
+// Inject trace context into JSON-RPC arguments.
+//
+// # Arguments
+// * `args_json` - JSON object string with existing arguments
+// * `trace_id` - Trace ID to inject
+// * `span_id` - Span ID to inject as _parent_span
+// * `propagated_headers_json` - Optional JSON object of headers to propagate (may be NULL)
+//
+// # Returns
+// Modified JSON string (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `args_json`, `trace_id`, and `span_id` must be valid null-terminated C strings
+// * `propagated_headers_json` may be NULL
+char *mesh_inject_trace_context(const char *args_json,
+                                const char *trace_id,
+                                const char *span_id,
+                                const char *propagated_headers_json);
+
+// Extract trace context from HTTP headers with body fallback.
+//
+// # Arguments
+// * `headers_json` - JSON object of HTTP headers
+// * `body_json` - Optional JSON-RPC body (may be NULL)
+//
+// # Returns
+// JSON string with trace_id and parent_span (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `headers_json` must be a valid null-terminated C string
+// * `body_json` may be NULL
+char *mesh_extract_trace_context(const char *headers_json,
+                                 const char *body_json);
+
+// Filter headers by propagation allowlist with prefix matching.
+//
+// # Arguments
+// * `headers_json` - JSON object of HTTP headers
+// * `allowlist_csv` - Comma-separated list of header prefixes
+//
+// # Returns
+// JSON string of matching headers (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * Both parameters must be valid null-terminated C strings
+char *mesh_filter_propagation_headers(const char *headers_json, const char *allowlist_csv);
+
+// Check if a header matches the propagation allowlist.
+//
+// # Arguments
+// * `header_name` - Header name to check
+// * `allowlist_csv` - Comma-separated list of header prefixes
+//
+// # Returns
+// 1 if matches, 0 otherwise
+//
+// # Safety
+// * Both parameters must be valid null-terminated C strings
+int32_t mesh_matches_propagate_header(const char *header_name, const char *allowlist_csv);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

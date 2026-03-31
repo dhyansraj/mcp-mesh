@@ -41,6 +41,7 @@ pub mod runtime;
 pub mod schema;
 pub mod spec;
 pub mod tls;
+pub mod trace_context;
 pub mod tracing_publish;
 pub mod vault;
 #[cfg(feature = "spire")]
@@ -213,6 +214,52 @@ fn is_simple_schema_py(schema_json: &str) -> bool {
     schema::is_simple_schema(schema_json)
 }
 
+/// Generate OpenTelemetry-compliant trace ID (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn generate_trace_id_py() -> String {
+    trace_context::generate_trace_id()
+}
+
+/// Generate OpenTelemetry-compliant span ID (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn generate_span_id_py() -> String {
+    trace_context::generate_span_id()
+}
+
+/// Inject trace context into JSON-RPC arguments (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+#[pyo3(signature = (args_json, trace_id, span_id, propagated_headers_json=None))]
+fn inject_trace_context_py(args_json: &str, trace_id: &str, span_id: &str, propagated_headers_json: Option<&str>) -> PyResult<String> {
+    trace_context::inject_trace_context(args_json, trace_id, span_id, propagated_headers_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+}
+
+/// Extract trace context from HTTP headers with body fallback (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+#[pyo3(signature = (headers_json, body_json=None))]
+fn extract_trace_context_py(headers_json: &str, body_json: Option<&str>) -> String {
+    trace_context::extract_trace_context(headers_json, body_json)
+}
+
+/// Filter headers by propagation allowlist (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn filter_propagation_headers_py(headers_json: &str, allowlist_csv: &str) -> PyResult<String> {
+    trace_context::filter_propagation_headers(headers_json, allowlist_csv)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+}
+
+/// Check if a header matches the propagation allowlist (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn matches_propagate_header_py(header_name: &str, allowlist_csv: &str) -> bool {
+    trace_context::matches_propagate_header(header_name, allowlist_csv)
+}
+
 /// MCP Mesh Core Python module.
 #[cfg(feature = "python")]
 #[pymodule]
@@ -262,6 +309,14 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sanitize_schema_py, m)?)?;
     m.add_function(wrap_pyfunction!(detect_media_params_py, m)?)?;
     m.add_function(wrap_pyfunction!(is_simple_schema_py, m)?)?;
+
+    // Trace context
+    m.add_function(wrap_pyfunction!(generate_trace_id_py, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_span_id_py, m)?)?;
+    m.add_function(wrap_pyfunction!(inject_trace_context_py, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_trace_context_py, m)?)?;
+    m.add_function(wrap_pyfunction!(filter_propagation_headers_py, m)?)?;
+    m.add_function(wrap_pyfunction!(matches_propagate_header_py, m)?)?;
 
     Ok(())
 }

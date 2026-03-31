@@ -622,6 +622,61 @@ pub fn is_simple_schema(schema_json: String) -> bool {
     crate::schema::is_simple_schema(&schema_json)
 }
 
+// =============================================================================
+// Trace Context
+// =============================================================================
+
+/// Generate OpenTelemetry-compliant trace ID (32-char hex, 128-bit).
+#[napi]
+pub fn generate_trace_id() -> String {
+    crate::trace_context::generate_trace_id()
+}
+
+/// Generate OpenTelemetry-compliant span ID (16-char hex, 64-bit).
+#[napi]
+pub fn generate_span_id() -> String {
+    crate::trace_context::generate_span_id()
+}
+
+/// Inject trace context into JSON-RPC arguments.
+#[napi]
+pub fn inject_trace_context(
+    args_json: String,
+    trace_id: String,
+    span_id: String,
+    propagated_headers_json: Option<String>,
+) -> napi::Result<String> {
+    crate::trace_context::inject_trace_context(
+        &args_json,
+        &trace_id,
+        &span_id,
+        propagated_headers_json.as_deref(),
+    )
+    .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Extract trace context from HTTP headers with body fallback.
+#[napi]
+pub fn extract_trace_context(headers_json: String, body_json: Option<String>) -> String {
+    crate::trace_context::extract_trace_context(&headers_json, body_json.as_deref())
+}
+
+/// Filter headers by propagation allowlist with prefix matching.
+#[napi]
+pub fn filter_propagation_headers(
+    headers_json: String,
+    allowlist_csv: String,
+) -> napi::Result<String> {
+    crate::trace_context::filter_propagation_headers(&headers_json, &allowlist_csv)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Check if a header matches the propagation allowlist.
+#[napi]
+pub fn matches_propagate_header(header_name: String, allowlist_csv: String) -> bool {
+    crate::trace_context::matches_propagate_header(&header_name, &allowlist_csv)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
