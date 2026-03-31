@@ -308,8 +308,8 @@ func startRegistryService(config *CLIConfig) (*exec.Cmd, error) {
 
 	// Create registry command
 	cmd := exec.Command(registryBinary,
-		"-host", config.RegistryHost,
-		"-port", fmt.Sprintf("%d", config.RegistryPort),
+		"--host", config.RegistryHost,
+		"--port", fmt.Sprintf("%d", config.RegistryPort),
 	)
 
 	// Set up environment

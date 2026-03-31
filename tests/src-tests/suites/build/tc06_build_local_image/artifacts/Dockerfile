@@ -100,6 +100,7 @@ COPY wheels/*.whl /wheels/
 COPY packages/*.tgz /packages/
 COPY bin/meshctl /usr/local/bin/meshctl
 COPY bin/mcp-mesh-registry /usr/local/bin/mcp-mesh-registry
+COPY bin/meshui /usr/local/bin/meshui
 
 # Copy tsuite runner binaries for Docker/K8s test execution
 COPY bin/tsuite-runner-linux-amd64 /usr/local/bin/tsuite-runner-linux-amd64
@@ -114,7 +115,7 @@ COPY native-libs/ /native-libs/
 COPY m2-repo/ /root/.m2/repository/io/
 
 # Make binaries executable
-RUN chmod +x /usr/local/bin/meshctl /usr/local/bin/mcp-mesh-registry
+RUN chmod +x /usr/local/bin/meshctl /usr/local/bin/mcp-mesh-registry /usr/local/bin/meshui
 RUN chmod +x /usr/local/bin/select-runner /usr/local/bin/tsuite-runner-linux-* 2>/dev/null || true
 
 # Install Python packages from local wheels (direct path to ensure local version is used)

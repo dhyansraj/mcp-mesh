@@ -8,7 +8,6 @@ and maintain consistency.
 import json
 import logging
 import time
-import uuid
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -49,7 +48,7 @@ def generate_span_id() -> str:
     Returns:
         16-character hex string (64-bit span ID per OTel spec)
     """
-    return uuid.uuid4().hex[:16]
+    return mcp_mesh_core.generate_span_id_py()
 
 
 def generate_trace_id() -> str:
@@ -58,7 +57,7 @@ def generate_trace_id() -> str:
     Returns:
         32-character hex string (128-bit trace ID per OTel spec)
     """
-    return uuid.uuid4().hex
+    return mcp_mesh_core.generate_trace_id_py()
 
 
 def get_agent_metadata_with_fallback(logger_instance: logging.Logger) -> dict[str, Any]:

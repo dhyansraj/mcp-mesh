@@ -10,13 +10,12 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
-
 from .base_provider_handler import (
-    MEDIA_PARAM_INSTRUCTIONS,
     BaseProviderHandler,
     has_media_params,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class GenericHandler(BaseProviderHandler):
@@ -99,12 +98,7 @@ class GenericHandler(BaseProviderHandler):
         """
         Format system prompt with explicit JSON instructions.
 
-        Generic Strategy:
-        - Use detailed prompt instructions (works with most models)
-        - Explicit JSON schema (since we can't assume response_format)
-        - Clear tool calling guidelines
-        - Maximum explicitness for compatibility
-        - Skip JSON schema for str return type (text mode)
+        Delegates to Rust core for prompt construction.
 
         Args:
             base_prompt: Base system prompt
@@ -114,45 +108,30 @@ class GenericHandler(BaseProviderHandler):
         Returns:
             Formatted system prompt with explicit instructions
         """
-        system_content = base_prompt
+        import mcp_mesh_core
 
-        # Add tool calling instructions if tools available
-        if tool_schemas:
-            system_content += """
+        is_string = output_type is str
+        output_mode = "text" if is_string else "hint"
 
-TOOL CALLING RULES:
-- You can call tools to gather information
-- Make one tool call at a time
-- Wait for tool results before making additional calls
-- Use standard JSON function calling format
-- Provide your final response after gathering needed information
-"""
+        schema_json = None
+        schema_name = None
+        if (
+            not is_string
+            and isinstance(output_type, type)
+            and issubclass(output_type, BaseModel)
+        ):
+            schema_json = json.dumps(output_type.model_json_schema())
+            schema_name = output_type.__name__
 
-        # Add media parameter instructions if any tools have x-media-type
-        if has_media_params(tool_schemas):
-            system_content += MEDIA_PARAM_INSTRUCTIONS
-
-        # Skip JSON schema for str return type (text mode)
-        if output_type is str:
-            return system_content
-
-        # Add explicit JSON schema instructions for Pydantic models
-        # (since we can't rely on vendor-specific structured output)
-        if isinstance(output_type, type) and issubclass(output_type, BaseModel):
-            schema = output_type.model_json_schema()
-            schema_str = json.dumps(schema, indent=2)
-            system_content += (
-                f"\n\nIMPORTANT: Return your final response as valid JSON matching this exact schema:\n"
-                f"{schema_str}\n\n"
-                f"Rules:\n"
-                f"- Return ONLY the JSON object, no markdown, no additional text\n"
-                f"- Ensure all required fields are present\n"
-                f"- Match the schema exactly\n"
-                f"- Use double quotes for strings\n"
-                f"- Do not include comments"
-            )
-
-        return system_content
+        return mcp_mesh_core.format_system_prompt_py(
+            self.vendor,
+            base_prompt,
+            bool(tool_schemas),
+            has_media_params(tool_schemas),
+            schema_json,
+            schema_name,
+            output_mode,
+        )
 
     def get_vendor_capabilities(self) -> dict[str, bool]:
         """

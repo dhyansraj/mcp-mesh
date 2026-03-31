@@ -5,14 +5,15 @@ This module defines the abstract base class for provider-specific handlers
 that customize how different LLM vendors (Claude, OpenAI, Gemini, etc.) are called.
 """
 
-import copy
+import json
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-logger = logging.getLogger(__name__)
-
+import mcp_mesh_core
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # Shared Constants
@@ -59,12 +60,8 @@ def has_media_params(tool_schemas: Optional[list[dict[str, Any]]]) -> bool:
     if not tool_schemas:
         return False
     for tool_schema in tool_schemas:
-        params = (
-            tool_schema.get("function", {}).get("parameters", {}).get("properties", {})
-        )
-        for prop in params.values():
-            if isinstance(prop, dict) and "x-media-type" in prop:
-                return True
+        if mcp_mesh_core.detect_media_params_py(json.dumps(tool_schema)):
+            return True
     return False
 
 
@@ -80,9 +77,8 @@ def make_schema_strict(
     """
     Make a JSON schema strict for structured output.
 
-    This is a shared utility used by OpenAI, Gemini, and Claude handlers.
-    Adds additionalProperties: false to all object types and optionally
-    ensures 'required' includes all property keys.
+    Delegates to Rust core. Adds additionalProperties: false to all object
+    types and optionally ensures 'required' includes all property keys.
 
     Args:
         schema: JSON schema to make strict
@@ -93,22 +89,20 @@ def make_schema_strict(
     Returns:
         New schema with strict constraints (original not mutated)
     """
-    result = copy.deepcopy(schema)
-    _add_strict_constraints_recursive(result, add_all_required)
-    return result
+    result_json = mcp_mesh_core.make_schema_strict_py(
+        json.dumps(schema), add_all_required
+    )
+    return json.loads(result_json)
 
 
 def is_simple_schema(schema: dict[str, Any]) -> bool:
     """
     Check if a JSON schema is simple enough for hint mode.
 
-    Simple schema criteria:
+    Delegates to Rust core. Simple schema criteria:
     - Less than 5 fields
     - All fields are basic types (str, int, float, bool, list)
     - No nested Pydantic models ($ref or nested objects with properties)
-
-    This is used by provider handlers to decide between hint mode
-    (prompt-based JSON instructions) and strict mode (response_format).
 
     Args:
         schema: JSON schema dict
@@ -116,51 +110,15 @@ def is_simple_schema(schema: dict[str, Any]) -> bool:
     Returns:
         True if schema is simple, False otherwise
     """
-    try:
-        properties = schema.get("properties", {})
-
-        # Check field count
-        if len(properties) >= 5:
-            return False
-
-        # Check for nested objects or complex types
-        for field_name, field_schema in properties.items():
-            field_type = field_schema.get("type")
-
-            # Check for nested objects (indicates nested Pydantic model)
-            if field_type == "object" and "properties" in field_schema:
-                return False
-
-            # Check for $ref (nested model reference)
-            if "$ref" in field_schema:
-                return False
-
-            # Check array items for complex types
-            if field_type == "array":
-                items = field_schema.get("items", {})
-                if items.get("type") == "object" or "$ref" in items:
-                    return False
-
-        return True
-    except Exception:
-        return False
+    return mcp_mesh_core.is_simple_schema_py(json.dumps(schema))
 
 
 def sanitize_schema_for_structured_output(schema: dict[str, Any]) -> dict[str, Any]:
     """
     Sanitize a JSON schema by removing validation keywords unsupported by LLM APIs.
 
-    LLM structured output APIs (Claude, OpenAI, Gemini) typically only support
-    the structural parts of JSON Schema, not validation constraints. This function
-    removes unsupported keywords to ensure uniform behavior across all providers.
-
-    Removed keywords:
-    - minimum, maximum (number range)
-    - exclusiveMinimum, exclusiveMaximum (exclusive bounds)
-    - minLength, maxLength (string length)
-    - minItems, maxItems (array size)
-    - pattern (regex validation)
-    - multipleOf (divisibility)
+    Delegates to Rust core. Removes keywords like minimum, maximum, pattern, etc.
+    that are not supported by LLM structured output APIs.
 
     Args:
         schema: JSON schema dict (will not be mutated)
@@ -168,108 +126,8 @@ def sanitize_schema_for_structured_output(schema: dict[str, Any]) -> dict[str, A
     Returns:
         New schema with unsupported validation keywords removed
     """
-    result = copy.deepcopy(schema)
-    _strip_unsupported_keywords_recursive(result)
-    logger.debug(
-        "Sanitized schema for structured output (removed validation-only keywords)"
-    )
-    return result
-
-
-# Keywords that are validation-only and not supported by LLM structured output APIs
-_UNSUPPORTED_SCHEMA_KEYWORDS = {
-    "minimum",
-    "maximum",
-    "exclusiveMinimum",
-    "exclusiveMaximum",
-    "minLength",
-    "maxLength",
-    "minItems",
-    "maxItems",
-    "pattern",
-    "multipleOf",
-}
-
-
-def _traverse_schema(obj: Any, visitor_fn) -> None:
-    """
-    Recursively traverse a JSON schema, applying visitor_fn to every schema node.
-
-    Handles all standard schema composition patterns: $defs, properties, items,
-    prefixItems, and anyOf/oneOf/allOf.
-
-    Args:
-        obj: Schema object to traverse
-        visitor_fn: Callable applied to each dict node before recursing
-    """
-    if not isinstance(obj, dict):
-        return
-
-    visitor_fn(obj)
-
-    # Process $defs (Pydantic uses this for nested models)
-    if "$defs" in obj:
-        for def_schema in obj["$defs"].values():
-            _traverse_schema(def_schema, visitor_fn)
-
-    # Process properties
-    if "properties" in obj:
-        for prop_schema in obj["properties"].values():
-            _traverse_schema(prop_schema, visitor_fn)
-
-    # Process items (for arrays)
-    # items can be an object (single schema) or a list (tuple validation in older drafts)
-    if "items" in obj:
-        items = obj["items"]
-        if isinstance(items, dict):
-            _traverse_schema(items, visitor_fn)
-        elif isinstance(items, list):
-            for item in items:
-                _traverse_schema(item, visitor_fn)
-
-    # Process prefixItems (tuple validation in JSON Schema draft 2020-12)
-    if "prefixItems" in obj:
-        for item in obj["prefixItems"]:
-            _traverse_schema(item, visitor_fn)
-
-    # Process anyOf, oneOf, allOf
-    for key in ("anyOf", "oneOf", "allOf"):
-        if key in obj:
-            for item in obj[key]:
-                _traverse_schema(item, visitor_fn)
-
-
-def _strip_unsupported_keywords_recursive(obj: Any) -> None:
-    """
-    Recursively strip unsupported validation keywords from a schema object.
-
-    Args:
-        obj: Schema object to process (mutated in place)
-    """
-
-    def _strip_visitor(node: dict) -> None:
-        for keyword in _UNSUPPORTED_SCHEMA_KEYWORDS:
-            node.pop(keyword, None)
-
-    _traverse_schema(obj, _strip_visitor)
-
-
-def _add_strict_constraints_recursive(obj: Any, add_all_required: bool) -> None:
-    """
-    Recursively add strict constraints to a schema object.
-
-    Args:
-        obj: Schema object to process (mutated in place)
-        add_all_required: Whether to set required to all property keys
-    """
-
-    def _strict_visitor(node: dict) -> None:
-        if node.get("type") == "object":
-            node["additionalProperties"] = False
-            if add_all_required and "properties" in node:
-                node["required"] = list(node["properties"].keys())
-
-    _traverse_schema(obj, _strict_visitor)
+    result_json = mcp_mesh_core.sanitize_schema_py(json.dumps(schema))
+    return json.loads(result_json)
 
 
 # ============================================================================
@@ -465,9 +323,7 @@ class BaseProviderHandler(ABC):
 
             comma = "," if i < len(prop_items) - 1 else ""
             if prop_desc:
-                parts.append(
-                    f'  "{prop_name}": {example_value}{comma}  // {prop_desc}'
-                )
+                parts.append(f'  "{prop_name}": {example_value}{comma}  // {prop_desc}')
             else:
                 parts.append(f'  "{prop_name}": {example_value}{comma}')
 

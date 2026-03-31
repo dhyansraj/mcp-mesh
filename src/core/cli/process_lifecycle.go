@@ -247,7 +247,7 @@ func (pm *ProcessManager) StartRegistryProcess(port int, dbPath string, metadata
 	}
 
 	args := []string{
-		"-port", fmt.Sprintf("%d", port),
+		"--port", fmt.Sprintf("%d", port),
 	}
 
 	// Database path is passed via environment variable, not as an argument
@@ -385,7 +385,7 @@ func (pm *ProcessManager) startProcessInternal(name string, info *ProcessInfo) e
 			port = portVal
 		}
 
-		args := []string{"-port", fmt.Sprintf("%d", port)}
+		args := []string{"--port", fmt.Sprintf("%d", port)}
 		// Database path is passed via environment variable, not as an argument
 
 		cmd = exec.Command(registryBinary, args...)

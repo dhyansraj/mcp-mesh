@@ -26,9 +26,6 @@ from typing import Any, Optional
 from pydantic import BaseModel
 
 from .base_provider_handler import (
-    BASE_TOOL_INSTRUCTIONS,
-    CLAUDE_ANTI_XML_INSTRUCTION,
-    MEDIA_PARAM_INSTRUCTIONS,
     BaseProviderHandler,
     has_media_params,
 )
@@ -226,9 +223,7 @@ class ClaudeHandler(BaseProviderHandler):
         """
         Format system prompt for Claude with output mode support.
 
-        Output Mode Strategy (TEXT + HINT only):
-        - hint: Add detailed JSON schema instructions with DECISION GUIDE in prompt
-        - text: No JSON instructions (plain text output)
+        Delegates to Rust core for prompt construction.
 
         Args:
             base_prompt: Base system prompt
@@ -239,76 +234,25 @@ class ClaudeHandler(BaseProviderHandler):
         Returns:
             Formatted system prompt optimized for Claude
         """
-        system_content = base_prompt
+        import mcp_mesh_core
+
         determined_mode = self.determine_output_mode(output_type, output_mode)
 
-        # Add tool calling instructions if tools available
-        # These prevent Claude from using XML-style <invoke> syntax
-        if tool_schemas:
-            # Use base instructions but insert anti-XML rule for Claude
-            instructions = BASE_TOOL_INSTRUCTIONS.replace(
-                "- Make ONE tool call at a time",
-                f"- Make ONE tool call at a time\n{CLAUDE_ANTI_XML_INSTRUCTION}",
-            )
-            system_content += instructions
+        schema_json = None
+        schema_name = None
+        if isinstance(output_type, type) and issubclass(output_type, BaseModel):
+            schema_json = json.dumps(output_type.model_json_schema())
+            schema_name = output_type.__name__
 
-        # Add media parameter instructions if any tools have x-media-type
-        if has_media_params(tool_schemas):
-            system_content += MEDIA_PARAM_INSTRUCTIONS
-
-        # Add output format instructions based on mode
-        if determined_mode == OUTPUT_MODE_TEXT:
-            # Text mode: No JSON instructions
-            pass
-
-        elif determined_mode == OUTPUT_MODE_HINT:
-            # Hint mode: Add detailed JSON schema instructions with DECISION GUIDE
-            if isinstance(output_type, type) and issubclass(output_type, BaseModel):
-                schema = output_type.model_json_schema()
-                properties = schema.get("properties", {})
-                required = schema.get("required", [])
-
-                # Build human-readable schema description
-                field_descriptions = []
-                for field_name, field_schema in properties.items():
-                    field_type = field_schema.get("type", "any")
-                    is_required = field_name in required
-                    req_marker = " (required)" if is_required else " (optional)"
-                    desc = field_schema.get("description", "")
-                    desc_text = f" - {desc}" if desc else ""
-                    field_descriptions.append(
-                        f"  - {field_name}: {field_type}{req_marker}{desc_text}"
-                    )
-
-                fields_text = "\n".join(field_descriptions)
-
-                # Add DECISION GUIDE when tools are present
-                decision_guide = ""
-                if tool_schemas:
-                    decision_guide = """
-DECISION GUIDE:
-- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
-- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
-- After calling a tool and receiving results, STOP calling tools and return your final JSON response.
-"""
-
-                system_content += f"""
-{decision_guide}
-RESPONSE FORMAT:
-You MUST respond with valid JSON matching this schema:
-{{
-{fields_text}
-}}
-
-Example format:
-{json.dumps({k: f"<{v.get('type', 'value')}>" for k, v in properties.items()}, indent=2)}
-
-CRITICAL: Your response must be ONLY the raw JSON object.
-- DO NOT wrap in markdown code fences (```json or ```)
-- DO NOT include any text before or after the JSON
-- Start directly with {{ and end with }}"""
-
-        return system_content
+        return mcp_mesh_core.format_system_prompt_py(
+            "anthropic",
+            base_prompt,
+            bool(tool_schemas),
+            has_media_params(tool_schemas),
+            schema_json,
+            schema_name,
+            determined_mode,
+        )
 
     def get_vendor_capabilities(self) -> dict[str, bool]:
         """
