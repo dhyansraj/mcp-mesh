@@ -747,6 +747,91 @@ pub async fn call_tool(
     ).await.map_err(|e| napi::Error::from_reason(e))
 }
 
+// =============================================================================
+// Provider
+// =============================================================================
+
+/// Determine output mode for a vendor given the context.
+///
+/// @param provider - Vendor name (e.g., "anthropic", "openai", "gemini")
+/// @param isStringType - Whether the output schema is a plain string type
+/// @param hasTools - Whether tools are present in the request
+/// @param overrideMode - Optional override mode
+/// @returns Output mode: "text", "hint", or "strict"
+#[napi]
+pub fn determine_output_mode(
+    provider: String,
+    is_string_type: bool,
+    has_tools: bool,
+    override_mode: Option<String>,
+) -> String {
+    crate::provider::determine_output_mode(
+        &provider,
+        is_string_type,
+        has_tools,
+        override_mode.as_deref(),
+    )
+}
+
+/// Build the complete system prompt with vendor-specific additions.
+///
+/// @param provider - Vendor name
+/// @param basePrompt - Base system prompt text
+/// @param hasTools - Whether tools are present
+/// @param hasMediaParams - Whether media parameters are present
+/// @param schemaJson - Optional JSON schema string
+/// @param schemaName - Optional schema name
+/// @param outputMode - Output mode: "text", "hint", or "strict"
+/// @returns Complete system prompt string
+#[napi]
+pub fn format_system_prompt(
+    provider: String,
+    base_prompt: String,
+    has_tools: bool,
+    has_media_params: bool,
+    schema_json: Option<String>,
+    schema_name: Option<String>,
+    output_mode: String,
+) -> String {
+    crate::provider::format_system_prompt(
+        &provider,
+        &base_prompt,
+        has_tools,
+        has_media_params,
+        schema_json.as_deref(),
+        schema_name.as_deref(),
+        &output_mode,
+    )
+}
+
+/// Build the `response_format` JSON object for structured output.
+///
+/// Returns null for vendors that do not support response_format.
+///
+/// @param provider - Vendor name
+/// @param schemaJson - JSON schema string
+/// @param schemaName - Schema name for the response_format
+/// @param hasTools - Whether tools are present
+/// @returns JSON string with response_format, or null
+#[napi]
+pub fn build_response_format(
+    provider: String,
+    schema_json: String,
+    schema_name: String,
+    has_tools: bool,
+) -> Option<String> {
+    crate::provider::build_response_format(&provider, &schema_json, &schema_name, has_tools)
+}
+
+/// Get vendor capabilities as JSON.
+///
+/// @param provider - Vendor name
+/// @returns JSON string with vendor capabilities
+#[napi]
+pub fn get_vendor_capabilities(provider: String) -> String {
+    crate::provider::get_vendor_capabilities(&provider)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

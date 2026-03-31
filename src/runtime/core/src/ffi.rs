@@ -1648,6 +1648,283 @@ pub unsafe extern "C" fn mesh_call_tool(
 }
 
 // =============================================================================
+// Provider Functions
+// =============================================================================
+
+/// Determine output mode for a vendor given the context.
+///
+/// # Arguments
+/// * `provider` - Vendor name (e.g., "anthropic", "openai", "gemini")
+/// * `is_string_type` - 1 if the output schema is a plain string type
+/// * `has_tools` - 1 if tools are present in the request
+/// * `override_mode` - Optional override mode (may be NULL)
+///
+/// # Returns
+/// Output mode string: "text", "hint", or "strict" (caller must free with `mesh_free_string`)
+///
+/// # Safety
+/// * `provider` must be a valid null-terminated C string
+/// * `override_mode` may be NULL
+#[no_mangle]
+pub unsafe extern "C" fn mesh_determine_output_mode(
+    provider: *const c_char,
+    is_string_type: i32,
+    has_tools: i32,
+    override_mode: *const c_char,
+) -> *mut c_char {
+    if provider.is_null() {
+        set_last_error("provider is null");
+        return ptr::null_mut();
+    }
+
+    let provider_str = match CStr::from_ptr(provider).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in provider: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let override_opt = if override_mode.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(override_mode).to_str() {
+            Ok(s) if !s.is_empty() => Some(s),
+            Ok(_) => None,
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in override_mode: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let result = crate::provider::determine_output_mode(
+        provider_str,
+        is_string_type != 0,
+        has_tools != 0,
+        override_opt,
+    );
+
+    match CString::new(result) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Build the complete system prompt with vendor-specific additions.
+///
+/// # Arguments
+/// * `provider` - Vendor name
+/// * `base_prompt` - Base system prompt text
+/// * `has_tools` - 1 if tools are present
+/// * `has_media_params` - 1 if media parameters are present
+/// * `schema_json` - Optional JSON schema string (may be NULL)
+/// * `schema_name` - Optional schema name (may be NULL)
+/// * `output_mode` - Output mode: "text", "hint", or "strict"
+///
+/// # Returns
+/// Complete system prompt (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `provider`, `base_prompt`, and `output_mode` must be valid null-terminated C strings
+/// * `schema_json` and `schema_name` may be NULL
+#[no_mangle]
+pub unsafe extern "C" fn mesh_format_system_prompt(
+    provider: *const c_char,
+    base_prompt: *const c_char,
+    has_tools: i32,
+    has_media_params: i32,
+    schema_json: *const c_char,
+    schema_name: *const c_char,
+    output_mode: *const c_char,
+) -> *mut c_char {
+    if provider.is_null() {
+        set_last_error("provider is null");
+        return ptr::null_mut();
+    }
+    if base_prompt.is_null() {
+        set_last_error("base_prompt is null");
+        return ptr::null_mut();
+    }
+    if output_mode.is_null() {
+        set_last_error("output_mode is null");
+        return ptr::null_mut();
+    }
+
+    let provider_str = match CStr::from_ptr(provider).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in provider: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let base_str = match CStr::from_ptr(base_prompt).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in base_prompt: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let mode_str = match CStr::from_ptr(output_mode).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in output_mode: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let schema_opt = if schema_json.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(schema_json).to_str() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in schema_json: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let name_opt = if schema_name.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(schema_name).to_str() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in schema_name: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let result = crate::provider::format_system_prompt(
+        provider_str,
+        base_str,
+        has_tools != 0,
+        has_media_params != 0,
+        schema_opt,
+        name_opt,
+        mode_str,
+    );
+
+    match CString::new(result) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Build the `response_format` JSON object for vendors that support it.
+///
+/// # Arguments
+/// * `provider` - Vendor name
+/// * `schema_json` - JSON schema string
+/// * `schema_name` - Schema name for the response_format
+/// * `has_tools` - 1 if tools are present
+///
+/// # Returns
+/// JSON string with response_format (caller must free with `mesh_free_string`),
+/// or NULL if vendor does not support response_format for this scenario
+///
+/// # Safety
+/// * All parameters must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn mesh_build_response_format(
+    provider: *const c_char,
+    schema_json: *const c_char,
+    schema_name: *const c_char,
+    has_tools: i32,
+) -> *mut c_char {
+    if provider.is_null() {
+        set_last_error("provider is null");
+        return ptr::null_mut();
+    }
+    if schema_json.is_null() {
+        set_last_error("schema_json is null");
+        return ptr::null_mut();
+    }
+    if schema_name.is_null() {
+        set_last_error("schema_name is null");
+        return ptr::null_mut();
+    }
+
+    let provider_str = match CStr::from_ptr(provider).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in provider: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let schema_str = match CStr::from_ptr(schema_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in schema_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let name_str = match CStr::from_ptr(schema_name).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in schema_name: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::provider::build_response_format(provider_str, schema_str, name_str, has_tools != 0) {
+        Some(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        None => ptr::null_mut(),
+    }
+}
+
+/// Get vendor capabilities as JSON.
+///
+/// # Arguments
+/// * `provider` - Vendor name
+///
+/// # Returns
+/// JSON string with vendor capabilities (caller must free with `mesh_free_string`),
+/// or NULL on error
+///
+/// # Safety
+/// * `provider` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_get_vendor_capabilities(provider: *const c_char) -> *mut c_char {
+    if provider.is_null() {
+        set_last_error("provider is null");
+        return ptr::null_mut();
+    }
+
+    let provider_str = match CStr::from_ptr(provider).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in provider: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let result = crate::provider::get_vendor_capabilities(provider_str);
+
+    match CString::new(result) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 

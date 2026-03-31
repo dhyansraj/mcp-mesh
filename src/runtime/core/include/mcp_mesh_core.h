@@ -520,6 +520,82 @@ char *mesh_call_tool(const char *endpoint,
                      int64_t timeout_ms,
                      int32_t max_retries);
 
+// Determine output mode for a vendor given the context.
+//
+// # Arguments
+// * `provider` - Vendor name (e.g., "anthropic", "openai", "gemini")
+// * `is_string_type` - 1 if the output schema is a plain string type
+// * `has_tools` - 1 if tools are present in the request
+// * `override_mode` - Optional override mode (may be NULL)
+//
+// # Returns
+// Output mode string: "text", "hint", or "strict" (caller must free with `mesh_free_string`)
+//
+// # Safety
+// * `provider` must be a valid null-terminated C string
+// * `override_mode` may be NULL
+char *mesh_determine_output_mode(const char *provider,
+                                 int32_t is_string_type,
+                                 int32_t has_tools,
+                                 const char *override_mode);
+
+// Build the complete system prompt with vendor-specific additions.
+//
+// # Arguments
+// * `provider` - Vendor name
+// * `base_prompt` - Base system prompt text
+// * `has_tools` - 1 if tools are present
+// * `has_media_params` - 1 if media parameters are present
+// * `schema_json` - Optional JSON schema string (may be NULL)
+// * `schema_name` - Optional schema name (may be NULL)
+// * `output_mode` - Output mode: "text", "hint", or "strict"
+//
+// # Returns
+// Complete system prompt (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `provider`, `base_prompt`, and `output_mode` must be valid null-terminated C strings
+// * `schema_json` and `schema_name` may be NULL
+char *mesh_format_system_prompt(const char *provider,
+                                const char *base_prompt,
+                                int32_t has_tools,
+                                int32_t has_media_params,
+                                const char *schema_json,
+                                const char *schema_name,
+                                const char *output_mode);
+
+// Build the `response_format` JSON object for vendors that support it.
+//
+// # Arguments
+// * `provider` - Vendor name
+// * `schema_json` - JSON schema string
+// * `schema_name` - Schema name for the response_format
+// * `has_tools` - 1 if tools are present
+//
+// # Returns
+// JSON string with response_format (caller must free with `mesh_free_string`),
+// or NULL if vendor does not support response_format for this scenario
+//
+// # Safety
+// * All parameters must be valid null-terminated C strings
+char *mesh_build_response_format(const char *provider,
+                                 const char *schema_json,
+                                 const char *schema_name,
+                                 int32_t has_tools);
+
+// Get vendor capabilities as JSON.
+//
+// # Arguments
+// * `provider` - Vendor name
+//
+// # Returns
+// JSON string with vendor capabilities (caller must free with `mesh_free_string`),
+// or NULL on error
+//
+// # Safety
+// * `provider` must be a valid null-terminated C string
+char *mesh_get_vendor_capabilities(const char *provider);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

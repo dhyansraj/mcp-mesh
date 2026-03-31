@@ -38,6 +38,7 @@ pub mod heartbeat;
 pub mod registry;
 pub mod response_parser;
 pub mod runtime;
+pub mod provider;
 pub mod schema;
 pub mod spec;
 pub mod tls;
@@ -262,6 +263,40 @@ fn matches_propagate_header_py(header_name: &str, allowlist_csv: &str) -> bool {
 }
 
 // =============================================================================
+// Provider (Python bindings)
+// =============================================================================
+
+/// Determine output mode for a vendor given the context (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+#[pyo3(signature = (provider, is_string_type, has_tools, override_mode=None))]
+fn determine_output_mode_py(provider: &str, is_string_type: bool, has_tools: bool, override_mode: Option<&str>) -> String {
+    provider::determine_output_mode(provider, is_string_type, has_tools, override_mode)
+}
+
+/// Build complete system prompt with vendor-specific additions (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+#[pyo3(signature = (provider, base_prompt, has_tools, has_media_params, schema_json=None, schema_name=None, output_mode="text"))]
+fn format_system_prompt_py(provider: &str, base_prompt: &str, has_tools: bool, has_media_params: bool, schema_json: Option<&str>, schema_name: Option<&str>, output_mode: &str) -> String {
+    provider::format_system_prompt(provider, base_prompt, has_tools, has_media_params, schema_json, schema_name, output_mode)
+}
+
+/// Build response_format JSON object for structured output (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn build_response_format_py(provider: &str, schema_json: &str, schema_name: &str, has_tools: bool) -> Option<String> {
+    provider::build_response_format(provider, schema_json, schema_name, has_tools)
+}
+
+/// Get vendor capabilities as JSON (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn get_vendor_capabilities_py(provider: &str) -> String {
+    provider::get_vendor_capabilities(provider)
+}
+
+// =============================================================================
 // MCP Client (Python bindings)
 // =============================================================================
 
@@ -387,6 +422,12 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_sse_response_py, m)?)?;
     m.add_function(wrap_pyfunction!(extract_content_py, m)?)?;
     m.add_function(wrap_pyfunction!(call_tool_py, m)?)?;
+
+    // Provider
+    m.add_function(wrap_pyfunction!(determine_output_mode_py, m)?)?;
+    m.add_function(wrap_pyfunction!(format_system_prompt_py, m)?)?;
+    m.add_function(wrap_pyfunction!(build_response_format_py, m)?)?;
+    m.add_function(wrap_pyfunction!(get_vendor_capabilities_py, m)?)?;
 
     Ok(())
 }
