@@ -1,0 +1,69 @@
+# Test Case: FastMCP Lifespan Extraction
+# Verifies that a FastMCP lifespan's startup code executes when agent starts.
+# This is the TDD test for issue #671.
+
+name: "FastMCP Lifespan Extraction"
+description: "Verify that a FastMCP lifespan context manager runs on agent startup"
+tags:
+  - lifecycle
+  - lifespan
+  - fastmcp
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy lifespan agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-lifespan-agent /workspace/"
+    capture: copy_output
+
+  - name: "Start lifespan agent"
+    handler: shell
+    command: "meshctl start py-lifespan-agent/main.py -d"
+    workdir: /workspace
+    capture: start_output
+
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 15
+
+  - name: "Check agent is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  - name: "Call lifespan_status tool"
+    handler: shell
+    command: "meshctl call lifespan_status '{}'"
+    workdir: /workspace
+    capture: lifespan_result
+
+  - name: "Show agent logs for debugging"
+    handler: shell
+    command: "meshctl logs lifespan-agent 2>/dev/null | tail -30 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+assertions:
+  - expr: ${captured.list_output} contains 'lifespan-agent'
+    message: "Agent should be registered"
+
+  - expr: ${captured.lifespan_result} contains 'lifespan_started'
+    message: "Tool should return lifespan_started field"
+
+  - expr: ${captured.lifespan_result} contains 'true'
+    message: "Lifespan startup code should have executed"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

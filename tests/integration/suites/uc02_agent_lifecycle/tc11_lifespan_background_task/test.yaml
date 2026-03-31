@@ -1,0 +1,75 @@
+# Test Case: FastMCP Lifespan with Background Task
+# Verifies that a lifespan which starts an asyncio.Task works correctly.
+# This mimics the real-world pattern used by wisefolio agents (issue #671).
+
+name: "FastMCP Lifespan Background Task"
+description: "Verify that a lifespan-started background asyncio.Task runs after agent startup"
+tags:
+  - lifecycle
+  - lifespan
+  - fastmcp
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy lifespan task agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-lifespan-task-agent /workspace/"
+    capture: copy_output
+
+  - name: "Start lifespan task agent"
+    handler: shell
+    command: "meshctl start py-lifespan-task-agent/main.py -d"
+    workdir: /workspace
+    capture: start_output
+
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 15
+
+  - name: "Check agent is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  - name: "Call task_status tool"
+    handler: shell
+    command: "meshctl call task_status '{}'"
+    workdir: /workspace
+    capture: task_result
+
+  - name: "Show agent logs for debugging"
+    handler: shell
+    command: "meshctl logs lifespan-task-agent 2>/dev/null | tail -30 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+assertions:
+  - expr: ${captured.list_output} contains 'lifespan-task-agent'
+    message: "Agent should be registered"
+
+  - expr: ${captured.task_result} contains 'lifespan_started'
+    message: "Tool should return lifespan_started field"
+
+  - expr: ${captured.task_result} contains 'true'
+    message: "Lifespan startup code should have executed"
+
+  - expr: ${captured.task_result} contains 'task_running'
+    message: "Tool should return task_running field"
+
+  - expr: ${captured.task_result} contains 'tick_count'
+    message: "Tool should return tick_count field"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
