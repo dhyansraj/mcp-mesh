@@ -23,6 +23,7 @@ import json
 import logging
 from typing import Any, Optional
 
+import mcp_mesh_core
 from pydantic import BaseModel
 
 from .base_provider_handler import (
@@ -234,8 +235,6 @@ class ClaudeHandler(BaseProviderHandler):
         Returns:
             Formatted system prompt optimized for Claude
         """
-        import mcp_mesh_core
-
         determined_mode = self.determine_output_mode(output_type, output_mode)
 
         schema_json = None

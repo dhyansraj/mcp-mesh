@@ -403,15 +403,7 @@ fn build_json_example(schema: &Value) -> String {
                 _ => "...".to_string(),
             };
             let comma = if i < items.len() - 1 { "," } else { "" };
-            let desc = prop.get("description").and_then(|d| d.as_str());
-            if let Some(d) = desc {
-                parts.push(format!(
-                    "  \"{}\": {}{}  // {}",
-                    name, example_value, comma, d
-                ));
-            } else {
-                parts.push(format!("  \"{}\": {}{}", name, example_value, comma));
-            }
+            parts.push(format!("  \"{}\": {}{}", name, example_value, comma));
         }
         format!("{{\n{}\n}}", parts.join("\n"))
     } else {
@@ -952,7 +944,9 @@ mod tests {
             }
         });
         let hint = format_hint_example(&schema, false);
-        assert!(hint.contains("// Name of the city"));
+        // Comments are not included in JSON examples to keep output valid JSON
+        assert!(hint.contains("<your city here>"));
+        assert!(!hint.contains("//"));
     }
 
     #[test]

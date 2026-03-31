@@ -246,7 +246,13 @@ func (pm *ProcessManager) StartRegistryProcess(port int, dbPath string, metadata
 		return nil, fmt.Errorf("failed to start registry: %w", err)
 	}
 
+	host := pm.config.RegistryHost
+	if host == "" {
+		host = "localhost"
+	}
+
 	args := []string{
+		"--host", host,
 		"--port", fmt.Sprintf("%d", port),
 	}
 
@@ -277,6 +283,7 @@ func (pm *ProcessManager) StartRegistryProcess(port int, dbPath string, metadata
 	if metadata == nil {
 		metadata = make(map[string]interface{})
 	}
+	metadata["host"] = host
 	metadata["port"] = port
 	metadata["db_path"] = dbPath
 
@@ -380,12 +387,17 @@ func (pm *ProcessManager) startProcessInternal(name string, info *ProcessInfo) e
 			return err
 		}
 
+		host := "localhost"
+		if hostVal, ok := info.Metadata["host"].(string); ok {
+			host = hostVal
+		}
+
 		port := 8080
 		if portVal, ok := info.Metadata["port"].(int); ok {
 			port = portVal
 		}
 
-		args := []string{"--port", fmt.Sprintf("%d", port)}
+		args := []string{"--host", host, "--port", fmt.Sprintf("%d", port)}
 		// Database path is passed via environment variable, not as an argument
 
 		cmd = exec.Command(registryBinary, args...)

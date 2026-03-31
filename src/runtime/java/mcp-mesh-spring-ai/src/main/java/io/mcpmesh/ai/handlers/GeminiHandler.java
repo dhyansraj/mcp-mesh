@@ -86,8 +86,23 @@ public class GeminiHandler implements LlmProviderHandler {
             }
         }
 
+        boolean hasMediaParams = false;
+        if (tools != null) {
+            for (ToolDefinition tool : tools) {
+                if (tool.inputSchema() != null) {
+                    try {
+                        String toolSchemaJson = MAPPER.writeValueAsString(tool.inputSchema());
+                        if (MeshCoreBridge.detectMediaParams(toolSchemaJson)) {
+                            hasMediaParams = true;
+                            break;
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+
         return MeshCoreBridge.formatSystemPrompt(
-            "gemini", basePrompt, hasTools, false, schemaJson, schemaName, outputMode);
+            "gemini", basePrompt, hasTools, hasMediaParams, schemaJson, schemaName, outputMode);
     }
 
     // =========================================================================

@@ -8,6 +8,7 @@ import json
 import logging
 from typing import Any, Optional
 
+import mcp_mesh_core
 from pydantic import BaseModel
 
 from .base_provider_handler import (
@@ -108,8 +109,6 @@ class GenericHandler(BaseProviderHandler):
         Returns:
             Formatted system prompt with explicit instructions
         """
-        import mcp_mesh_core
-
         is_string = output_type is str
         output_mode = "text" if is_string else "hint"
 

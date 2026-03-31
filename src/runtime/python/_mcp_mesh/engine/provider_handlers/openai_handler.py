@@ -8,6 +8,7 @@ using OpenAI's native structured output capabilities.
 import json
 from typing import Any, Optional
 
+import mcp_mesh_core
 from pydantic import BaseModel
 
 from .base_provider_handler import (
@@ -128,8 +129,6 @@ class OpenAIHandler(BaseProviderHandler):
         Returns:
             Formatted system prompt optimized for OpenAI
         """
-        import mcp_mesh_core
-
         # OpenAI uses strict mode (response_format handles output) for schemas, text for str
         is_string = output_type is str
         output_mode = "text" if is_string else "strict"

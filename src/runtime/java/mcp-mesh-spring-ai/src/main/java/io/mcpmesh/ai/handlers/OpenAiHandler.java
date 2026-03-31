@@ -81,8 +81,23 @@ public class OpenAiHandler implements LlmProviderHandler {
             }
         }
 
+        boolean hasMediaParams = false;
+        if (tools != null) {
+            for (ToolDefinition tool : tools) {
+                if (tool.inputSchema() != null) {
+                    try {
+                        String toolSchemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(tool.inputSchema());
+                        if (MeshCoreBridge.detectMediaParams(toolSchemaJson)) {
+                            hasMediaParams = true;
+                            break;
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+
         return MeshCoreBridge.formatSystemPrompt(
-            "openai", basePrompt, hasTools, false, schemaJson, schemaName, outputMode);
+            "openai", basePrompt, hasTools, hasMediaParams, schemaJson, schemaName, outputMode);
     }
 
     // =========================================================================

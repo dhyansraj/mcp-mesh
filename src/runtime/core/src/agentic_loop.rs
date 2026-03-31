@@ -54,6 +54,10 @@ pub fn create_loop(config_json: &str) -> Result<String, String> {
         .and_then(|m| m.as_u64())
         .unwrap_or(10) as u32;
 
+    if max_iterations == 0 {
+        return Err("max_iterations must be greater than 0".to_string());
+    }
+
     let state = LoopState {
         messages,
         iteration: 0,
@@ -168,15 +172,6 @@ pub fn add_tool_results(state_json: &str, tool_results_json: &str) -> Result<Str
     let results: Vec<Value> = serde_json::from_str(tool_results_json)
         .map_err(|e| format!("Invalid tool results JSON: {}", e))?;
 
-    for result in &results {
-        let tool_msg = serde_json::json!({
-            "role": "tool",
-            "tool_call_id": result.get("tool_call_id").and_then(|id| id.as_str()).unwrap_or(""),
-            "content": result.get("content").and_then(|c| c.as_str()).unwrap_or(""),
-        });
-        state.messages.push(tool_msg);
-    }
-
     if state.iteration >= state.max_iterations {
         let state_str = serde_json::to_string(&state)
             .map_err(|e| format!("Failed to serialize state: {}", e))?;
@@ -188,6 +183,15 @@ pub fn add_tool_results(state_json: &str, tool_results_json: &str) -> Result<Str
         });
         return serde_json::to_string(&action)
             .map_err(|e| format!("Failed to serialize action: {}", e));
+    }
+
+    for result in &results {
+        let tool_msg = serde_json::json!({
+            "role": "tool",
+            "tool_call_id": result.get("tool_call_id").and_then(|id| id.as_str()).unwrap_or(""),
+            "content": result.get("content").and_then(|c| c.as_str()).unwrap_or(""),
+        });
+        state.messages.push(tool_msg);
     }
 
     let state_str = serde_json::to_string(&state)
@@ -284,6 +288,17 @@ mod tests {
         let action: Value = serde_json::from_str(&result).unwrap();
         let state: LoopState = serde_json::from_str(action["state"].as_str().unwrap()).unwrap();
         assert_eq!(state.max_iterations, 20);
+    }
+
+    #[test]
+    fn test_create_loop_zero_max_iterations() {
+        let config = json!({
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_iterations": 0
+        });
+        let result = create_loop(&config.to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("max_iterations must be greater than 0"));
     }
 
     #[test]

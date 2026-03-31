@@ -66,8 +66,8 @@ pub fn extract_trace_context(headers_json: &str, body_json: Option<&str>) -> Str
         }
     }
 
-    // Strategy 2: Fallback to body if no trace_id found in headers
-    if trace_id.is_null() {
+    // Strategy 2: Fallback to body if trace_id or parent_span still missing
+    if trace_id.is_null() || parent_span.is_null() {
         if let Some(body_str) = body_json {
             if let Ok(body) = serde_json::from_str::<Value>(body_str) {
                 if body.get("method").and_then(|m| m.as_str()) == Some("tools/call") {
@@ -75,11 +75,15 @@ pub fn extract_trace_context(headers_json: &str, body_json: Option<&str>) -> Str
                         .get("params")
                         .and_then(|p| p.get("arguments"))
                     {
-                        if let Some(tid) = args.get("_trace_id") {
-                            trace_id = tid.clone();
+                        if trace_id.is_null() {
+                            if let Some(tid) = args.get("_trace_id") {
+                                trace_id = tid.clone();
+                            }
                         }
-                        if let Some(ps) = args.get("_parent_span") {
-                            parent_span = ps.clone();
+                        if parent_span.is_null() {
+                            if let Some(ps) = args.get("_parent_span") {
+                                parent_span = ps.clone();
+                            }
                         }
                     }
                 }
@@ -261,6 +265,17 @@ mod tests {
         let v: Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["trace_id"], "t1");
         assert!(v["parent_span"].is_null());
+    }
+
+    #[test]
+    fn test_extract_trace_id_from_header_parent_span_from_body() {
+        let body = r#"{"method":"tools/call","params":{"arguments":{"_trace_id":"bt","_parent_span":"bs"}}}"#;
+        let result = extract_trace_context(r#"{"X-Trace-Id": "ht"}"#, Some(body));
+        let v: Value = serde_json::from_str(&result).unwrap();
+        // trace_id from headers takes precedence
+        assert_eq!(v["trace_id"], "ht");
+        // parent_span falls back to body since headers had none
+        assert_eq!(v["parent_span"], "bs");
     }
 
     // =========================================================================

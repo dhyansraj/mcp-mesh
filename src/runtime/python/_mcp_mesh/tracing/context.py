@@ -13,6 +13,7 @@ import mcp_mesh_core
 # Parse MCP_MESH_PROPAGATE_HEADERS env var once at import time
 _raw = os.environ.get("MCP_MESH_PROPAGATE_HEADERS", "")
 PROPAGATE_HEADERS: list[str] = [h.strip().lower() for h in _raw.split(",") if h.strip()]
+PROPAGATE_HEADERS_CSV: str = ",".join(PROPAGATE_HEADERS)
 
 
 def matches_propagate_header(name: str) -> bool:
@@ -23,9 +24,7 @@ def matches_propagate_header(name: str) -> bool:
     """
     if not PROPAGATE_HEADERS:
         return False
-    # Build CSV from the already-parsed list
-    allowlist_csv = ",".join(PROPAGATE_HEADERS)
-    return mcp_mesh_core.matches_propagate_header_py(name, allowlist_csv)
+    return mcp_mesh_core.matches_propagate_header_py(name, PROPAGATE_HEADERS_CSV)
 
 
 class TraceInfo:

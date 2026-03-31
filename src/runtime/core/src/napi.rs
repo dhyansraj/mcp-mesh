@@ -737,6 +737,12 @@ pub async fn call_tool(
     timeout_ms: i64,
     max_retries: i32,
 ) -> napi::Result<String> {
+    if timeout_ms < 0 {
+        return Err(napi::Error::from_reason("timeout_ms must be non-negative"));
+    }
+    if max_retries < 0 {
+        return Err(napi::Error::from_reason("max_retries must be non-negative"));
+    }
     crate::mcp_client::call_tool(
         &endpoint,
         &tool_name,
