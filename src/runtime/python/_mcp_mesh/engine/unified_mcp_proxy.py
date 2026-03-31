@@ -69,6 +69,69 @@ _outbound_headers_var: contextvars.ContextVar[dict[str, str] | None] = (
     contextvars.ContextVar("_outbound_headers", default=None)
 )
 
+# Module-level connection pools for reuse across tool calls.
+# FastMCP Client supports reentrant context managers (ref-counted sessions),
+# so concurrent `async with` blocks on the same pooled client share one session.
+_fastmcp_client_pool: dict[str, Any] = {}
+_fallback_httpx_pool: dict[str, Any] = {}
+_pool_lock: asyncio.Lock | None = None
+
+
+def _get_pool_lock() -> asyncio.Lock:
+    """Get or create the module-level pool lock."""
+    global _pool_lock
+    if _pool_lock is None:
+        _pool_lock = asyncio.Lock()
+    return _pool_lock
+
+
+async def _get_fallback_httpx_client(
+    base_endpoint: str, timeout: float
+) -> "httpx.AsyncClient":
+    """Get or create a pooled httpx client for the HTTP fallback path."""
+    import httpx
+
+    lock = _get_pool_lock()
+    async with lock:
+        if base_endpoint not in _fallback_httpx_pool:
+            ssl_ctx = _create_ssl_context_for_endpoint(base_endpoint)
+            tls_kwargs = {"verify": ssl_ctx} if ssl_ctx is not None else {}
+            _fallback_httpx_pool[base_endpoint] = httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout, read=timeout),
+                limits=httpx.Limits(
+                    max_connections=100,
+                    max_keepalive_connections=20,
+                ),
+                **tls_kwargs,
+            )
+            logger.debug(f"Created pooled httpx fallback client for: {base_endpoint}")
+        return _fallback_httpx_pool[base_endpoint]
+
+
+async def close_connection_pools() -> None:
+    """Close all pooled HTTP clients. Call during application shutdown."""
+    lock = _get_pool_lock()
+    async with lock:
+        for endpoint, client in list(_fastmcp_client_pool.items()):
+            try:
+                # Use anyio timeout to prevent hanging on unresponsive connections
+                import anyio
+
+                with anyio.move_on_after(5):
+                    await client.__aexit__(None, None, None)
+                logger.debug(f"Closed pooled FastMCP client for: {endpoint}")
+            except Exception as e:
+                logger.warning(f"Error closing FastMCP client for {endpoint}: {e}")
+        _fastmcp_client_pool.clear()
+
+        for endpoint, client in list(_fallback_httpx_pool.items()):
+            try:
+                await client.aclose()
+                logger.debug(f"Closed pooled httpx client for: {endpoint}")
+            except Exception as e:
+                logger.warning(f"Error closing httpx client for {endpoint}: {e}")
+        _fallback_httpx_pool.clear()
+
 
 class UnifiedMCPProxy:
     """Unified MCP proxy using FastMCP's built-in client.
@@ -129,15 +192,20 @@ class UnifiedMCPProxy:
         except ValueError:
             return False
 
-    def _create_fastmcp_client(self, endpoint: str):
-        """Create FastMCP client with dynamic trace header injection.
+    @staticmethod
+    def _build_fastmcp_client(
+        mcp_endpoint: str, base_endpoint: str, stream_timeout: float = 300.0
+    ):
+        """Build a FastMCP client with dynamic trace header injection.
 
         Uses httpx event_hooks to inject trace headers at REQUEST TIME rather than
         at transport construction time. This ensures the current trace context is
         captured when the HTTP request is actually made, fixing the trace hierarchy bug.
 
         Args:
-            endpoint: MCP endpoint URL
+            mcp_endpoint: MCP endpoint URL (e.g. http://host/mcp)
+            base_endpoint: Base endpoint URL (for SSL context)
+            stream_timeout: Read timeout for long-running LLM calls
 
         Returns:
             FastMCP Client instance with dynamic trace header injection
@@ -146,19 +214,16 @@ class UnifiedMCPProxy:
             # Extract hostname from endpoint URL for DNS detection
             from urllib.parse import urlparse
 
-            parsed = urlparse(endpoint)
+            parsed = urlparse(mcp_endpoint)
             hostname = parsed.hostname or parsed.netloc.split(":")[0]
 
             # DNS resolution works perfectly with FastMCP - no need to force HTTP fallback
-            self.logger.debug(f"✅ Using FastMCP client for endpoint: {hostname}")
+            logger.debug(f"✅ Using FastMCP client for endpoint: {hostname}")
 
             # Use stream_timeout for read timeout (default 300s for LLM calls)
             import httpx
             from fastmcp import Client
             from fastmcp.client.transports import StreamableHttpTransport
-
-            # Capture self for use in nested function
-            proxy_instance = self
 
             def create_httpx_client(**kwargs):
                 """Create httpx client with dynamic trace header injection via event hooks."""
@@ -178,7 +243,7 @@ class UnifiedMCPProxy:
                         if trace_context:
                             request.headers["X-Trace-ID"] = trace_context.trace_id
                             request.headers["X-Parent-Span"] = trace_context.span_id
-                            proxy_instance.logger.trace(
+                            logger.debug(
                                 f"🔗 TRACE_HOOK: Injecting at request time - "
                                 f"trace_id={trace_context.trace_id[:8]}... "
                                 f"parent_span={trace_context.span_id[:8]}..."
@@ -192,15 +257,13 @@ class UnifiedMCPProxy:
                                 request.headers[key] = value
                     except Exception as e:
                         # Never fail HTTP requests due to tracing issues
-                        proxy_instance.logger.trace(
-                            f"🔗 TRACE_HOOK: Failed to inject headers: {e}"
-                        )
+                        logger.debug(f"🔗 TRACE_HOOK: Failed to inject headers: {e}")
 
                 # Override timeout to use stream_timeout for long-running LLM calls
                 kwargs["timeout"] = httpx.Timeout(
-                    timeout=proxy_instance.stream_timeout,
+                    timeout=stream_timeout,
                     connect=30.0,  # 30s for connection
-                    read=proxy_instance.stream_timeout,  # Long read timeout for SSE streams
+                    read=stream_timeout,  # Long read timeout for SSE streams
                     write=30.0,  # 30s for writes
                     pool=30.0,  # 30s for pool
                 )
@@ -213,9 +276,7 @@ class UnifiedMCPProxy:
                 kwargs["event_hooks"] = existing_hooks
 
                 # Apply mTLS config for https endpoints
-                ssl_ctx = _create_ssl_context_for_endpoint(
-                    proxy_instance.endpoint
-                )
+                ssl_ctx = _create_ssl_context_for_endpoint(base_endpoint)
                 if ssl_ctx is not None:
                     kwargs["verify"] = ssl_ctx
 
@@ -223,21 +284,38 @@ class UnifiedMCPProxy:
 
             # Create client WITHOUT static headers - headers injected via hook at request time
             transport = StreamableHttpTransport(
-                url=endpoint,
+                url=mcp_endpoint,
                 httpx_client_factory=create_httpx_client,
             )
             return Client(transport)
 
         except ImportError as e:
             # DNS names or FastMCP not available - this will trigger HTTP fallback
-            self.logger.debug(f"🔄 FastMCP client unavailable: {e}")
+            logger.debug(f"🔄 FastMCP client unavailable: {e}")
             raise  # Re-raise to trigger _fallback_http_call
         except Exception as e:
             # Any other error - this will trigger HTTP fallback
-            self.logger.debug(f"🔄 FastMCP client error: {e}")
+            logger.debug(f"🔄 FastMCP client error: {e}")
             raise ImportError(
                 f"FastMCP client failed: {e}"
             )  # Convert to ImportError to trigger fallback
+
+    @classmethod
+    async def _get_or_create_fastmcp_client(
+        cls, mcp_endpoint: str, base_endpoint: str, stream_timeout: float = 300.0
+    ):
+        """Get a pooled FastMCP client for the endpoint, creating one if needed."""
+        lock = _get_pool_lock()
+        async with lock:
+            if mcp_endpoint in _fastmcp_client_pool:
+                return _fastmcp_client_pool[mcp_endpoint]
+
+            client = cls._build_fastmcp_client(
+                mcp_endpoint, base_endpoint, stream_timeout
+            )
+            _fastmcp_client_pool[mcp_endpoint] = client
+            logger.debug(f"Created pooled FastMCP client for: {mcp_endpoint}")
+            return client
 
     def _configure_from_kwargs(self):
         """Auto-configure proxy settings from kwargs."""
@@ -384,8 +462,8 @@ class UnifiedMCPProxy:
                 "call_context": "mcp_mesh_dependency_injection",
             }
 
-    # Note: We use context managers for each call instead of persistent client
-    # This is cleaner and follows FastMCP patterns
+    # Note: We use module-level pooled clients with reentrant context managers.
+    # FastMCP Client ref-counts sessions, so concurrent `async with` blocks share one session.
 
     # Main tool call method - clean async interface following FastMCP patterns
     async def __call__(self, *args, **kwargs) -> Any:
@@ -533,7 +611,9 @@ class UnifiedMCPProxy:
             try:
                 # Use correct FastMCP client endpoint - agents expose MCP on /mcp
                 mcp_endpoint = f"{self.endpoint}/mcp"
-                client_instance = self._create_fastmcp_client(mcp_endpoint)
+                client_instance = await self._get_or_create_fastmcp_client(
+                    mcp_endpoint, self.endpoint, self.stream_timeout
+                )
 
                 async with client_instance as client:
 
@@ -810,67 +890,57 @@ class UnifiedMCPProxy:
                 f"🔄 HTTP fallback call to {url} with {len(str(payload))} byte payload, timeout: {enhanced_timeout}s"
             )
 
-            # Apply mTLS config for https endpoints
-            tls_kwargs = {}
-            ssl_ctx = _create_ssl_context_for_endpoint(url)
-            if ssl_ctx is not None:
-                tls_kwargs["verify"] = ssl_ctx
+            client = await _get_fallback_httpx_client(self.endpoint, enhanced_timeout)
+            response = await client.post(url, json=payload, headers=headers)
 
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(enhanced_timeout, read=enhanced_timeout),
-                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-                **tls_kwargs,
-            ) as client:
-                response = await client.post(url, json=payload, headers=headers)
+            self.logger.debug(
+                f"📥 Response status: {response.status_code}, headers: {dict(response.headers)}"
+            )
 
-                self.logger.debug(
-                    f"📥 Response status: {response.status_code}, headers: {dict(response.headers)}"
-                )
+            response.raise_for_status()
 
-                response.raise_for_status()
+            response_text = response.text.strip()
 
-                response_text = response.text.strip()
+            if not response_text:
+                self.logger.error("❌ Empty response from server")
+                raise RuntimeError("Empty response from server")
 
-                if not response_text:
-                    self.logger.error("❌ Empty response from server")
-                    raise RuntimeError("Empty response from server")
+            self.logger.debug(
+                f"📄 Response length: {len(response_text)} chars, starts with: {response_text[:100]}"
+            )
 
-                self.logger.debug(
-                    f"📄 Response length: {len(response_text)} chars, starts with: {response_text[:100]}"
-                )
+            # Use shared SSE parser for both SSE and plain JSON responses
+            data = SSEParser.parse_sse_response(
+                response_text, f"UnifiedMCPProxy.{name}"
+            )
 
-                # Use shared SSE parser for both SSE and plain JSON responses
-                data = SSEParser.parse_sse_response(
-                    response_text, f"UnifiedMCPProxy.{name}"
-                )
+            # Check for JSON-RPC error
+            if "error" in data:
+                error = data["error"]
+                error_msg = error.get("message", "Unknown error")
+                error_code = error.get("code", -1)
+                self.logger.error(f"❌ JSON-RPC error {error_code}: {error_msg}")
+                raise RuntimeError(f"Tool call error [{error_code}]: {error_msg}")
 
-                # Check for JSON-RPC error
-                if "error" in data:
-                    error = data["error"]
-                    error_msg = error.get("message", "Unknown error")
-                    error_code = error.get("code", -1)
-                    self.logger.error(f"❌ JSON-RPC error {error_code}: {error_msg}")
-                    raise RuntimeError(f"Tool call error [{error_code}]: {error_msg}")
+            # Return the result (compatible with CallToolResult)
+            result = data.get("result")
+            if result is None:
+                self.logger.warning("⚠️ No result field in response")
+                return {"content": [{"type": "text", "text": "No result returned"}]}
 
-                # Return the result (compatible with CallToolResult)
-                result = data.get("result")
-                if result is None:
-                    self.logger.warning("⚠️ No result field in response")
-                    return {"content": [{"type": "text", "text": "No result returned"}]}
+            # Calculate performance metrics
+            end_time = time.time()
+            duration_ms = round((end_time - start_time) * 1000, 2)
 
-                # Calculate performance metrics
-                end_time = time.time()
-                duration_ms = round((end_time - start_time) * 1000, 2)
+            # Log performance metrics
+            self.logger.info(
+                f"📊 HTTP fallback performance: {duration_ms}ms for tool '{name}'"
+            )
 
-                # Log performance metrics
-                self.logger.info(
-                    f"📊 HTTP fallback performance: {duration_ms}ms for tool '{name}'"
-                )
-
-                # Normalize HTTP response to match FastMCP format
-                normalized_result = self._normalize_http_result(result)
-                self.logger.info(f"✅ HTTP fallback successful in {duration_ms}ms")
-                return normalized_result
+            # Normalize HTTP response to match FastMCP format
+            normalized_result = self._normalize_http_result(result)
+            self.logger.info(f"✅ HTTP fallback successful in {duration_ms}ms")
+            return normalized_result
 
         except ImportError:
             raise RuntimeError("httpx not available for HTTP fallback")
@@ -889,7 +959,9 @@ class UnifiedMCPProxy:
             raise RuntimeError(f"HTTP fallback failed: {e}")
 
     async def call_tool_streaming(
-        self, name: str, arguments: dict = None,
+        self,
+        name: str,
+        arguments: dict = None,
     ) -> AsyncIterator[Any]:
         """Call a tool with streaming response using FastMCP's streaming support.
 
@@ -906,7 +978,9 @@ class UnifiedMCPProxy:
         mcp_endpoint = f"{self.endpoint}/mcp"
 
         try:
-            client_instance = self._create_fastmcp_client(mcp_endpoint)
+            client_instance = await self._get_or_create_fastmcp_client(
+                mcp_endpoint, self.endpoint, self.stream_timeout
+            )
 
             async with client_instance as client:
                 self.logger.debug(f"🌊 Streaming call to tool '{name}'")
@@ -929,8 +1003,10 @@ class UnifiedMCPProxy:
         """List available tools from remote agent."""
         mcp_endpoint = f"{self.endpoint}/mcp"
 
-        # Create client with automatic trace header injection
-        client_instance = self._create_fastmcp_client(mcp_endpoint)
+        # Get pooled client with automatic trace header injection
+        client_instance = await self._get_or_create_fastmcp_client(
+            mcp_endpoint, self.endpoint, self.stream_timeout
+        )
         async with client_instance as client:
             result = await client.list_tools()
             return result.tools if hasattr(result, "tools") else result
@@ -939,8 +1015,10 @@ class UnifiedMCPProxy:
         """List available resources from remote agent."""
         mcp_endpoint = f"{self.endpoint}/mcp"
 
-        # Create client with automatic trace header injection
-        client_instance = self._create_fastmcp_client(mcp_endpoint)
+        # Get pooled client with automatic trace header injection
+        client_instance = await self._get_or_create_fastmcp_client(
+            mcp_endpoint, self.endpoint, self.stream_timeout
+        )
         async with client_instance as client:
             result = await client.list_resources()
             return result.resources if hasattr(result, "resources") else result
@@ -949,8 +1027,10 @@ class UnifiedMCPProxy:
         """Read resource contents from remote agent."""
         mcp_endpoint = f"{self.endpoint}/mcp"
 
-        # Create client with automatic trace header injection
-        client_instance = self._create_fastmcp_client(mcp_endpoint)
+        # Get pooled client with automatic trace header injection
+        client_instance = await self._get_or_create_fastmcp_client(
+            mcp_endpoint, self.endpoint, self.stream_timeout
+        )
         async with client_instance as client:
             result = await client.read_resource(uri)
             return result.contents if hasattr(result, "contents") else result
@@ -959,8 +1039,10 @@ class UnifiedMCPProxy:
         """List available prompts from remote agent."""
         mcp_endpoint = f"{self.endpoint}/mcp"
 
-        # Create client with automatic trace header injection
-        client_instance = self._create_fastmcp_client(mcp_endpoint)
+        # Get pooled client with automatic trace header injection
+        client_instance = await self._get_or_create_fastmcp_client(
+            mcp_endpoint, self.endpoint, self.stream_timeout
+        )
         async with client_instance as client:
             result = await client.list_prompts()
             return result.prompts if hasattr(result, "prompts") else result
@@ -969,8 +1051,10 @@ class UnifiedMCPProxy:
         """Get prompt template from remote agent."""
         mcp_endpoint = f"{self.endpoint}/mcp"
 
-        # Create client with automatic trace header injection
-        client_instance = self._create_fastmcp_client(mcp_endpoint)
+        # Get pooled client with automatic trace header injection
+        client_instance = await self._get_or_create_fastmcp_client(
+            mcp_endpoint, self.endpoint, self.stream_timeout
+        )
         async with client_instance as client:
             result = await client.get_prompt(name, arguments or {})
             return result

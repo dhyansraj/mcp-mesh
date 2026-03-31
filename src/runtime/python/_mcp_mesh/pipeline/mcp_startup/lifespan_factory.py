@@ -67,6 +67,13 @@ def create_single_fastmcp_lifespan(
                 ctx.get("registry_url"),
                 ctx.get("agent_id"),
             )
+            # Close pooled HTTP clients before FastMCP lifespan exits
+            try:
+                from ...engine.unified_mcp_proxy import close_connection_pools
+
+                await close_connection_pools()
+            except Exception as e:
+                logger.warning(f"Error closing connection pools: {e}")
             if fastmcp_ctx:
                 try:
                     await fastmcp_ctx.__aexit__(None, None, None)
@@ -108,6 +115,13 @@ def create_multiple_fastmcp_lifespan(
                 ctx.get("registry_url"),
                 ctx.get("agent_id"),
             )
+            # Close pooled HTTP clients before FastMCP lifespans exit
+            try:
+                from ...engine.unified_mcp_proxy import close_connection_pools
+
+                await close_connection_pools()
+            except Exception as e:
+                logger.warning(f"Error closing connection pools: {e}")
             # Exit in reverse order (LIFO) for proper cleanup
             for lctx in reversed(lifespan_contexts):
                 try:
@@ -138,5 +152,12 @@ def create_minimal_lifespan(
                 ctx.get("registry_url"),
                 ctx.get("agent_id"),
             )
+            # Close pooled HTTP clients
+            try:
+                from ...engine.unified_mcp_proxy import close_connection_pools
+
+                await close_connection_pools()
+            except Exception as e:
+                logger.warning(f"Error closing connection pools: {e}")
 
     return lifespan

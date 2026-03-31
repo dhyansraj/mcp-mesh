@@ -5,7 +5,21 @@
 
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+static HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn get_http_client() -> &'static reqwest::Client {
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .pool_max_idle_per_host(20)
+            .pool_idle_timeout(Duration::from_secs(90))
+            .connect_timeout(Duration::from_secs(30))
+            .build()
+            .expect("Failed to build HTTP client")
+    })
+}
 
 /// Build a JSON-RPC 2.0 request envelope.
 ///
@@ -192,16 +206,14 @@ pub async fn call_tool(
         _ => HashMap::new(),
     };
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(timeout_ms))
-        .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+    let client = get_http_client();
 
     let mut last_error = String::new();
 
     for attempt in 0..=max_retries {
         let mut request = client
             .post(&url)
+            .timeout(Duration::from_millis(timeout_ms))
             .header("Content-Type", "application/json")
             .header("Accept", "application/json, text/event-stream");
 
@@ -458,5 +470,16 @@ mod tests {
         let json = r#"{"content":[]}"#;
         let result = extract_content(json).unwrap();
         assert_eq!(result, "");
+    }
+
+    // =========================================================================
+    // get_http_client (connection pool singleton)
+    // =========================================================================
+
+    #[test]
+    fn test_get_http_client_returns_same_instance() {
+        let a = get_http_client() as *const reqwest::Client;
+        let b = get_http_client() as *const reqwest::Client;
+        assert_eq!(a, b, "get_http_client() must return the same static instance");
     }
 }
