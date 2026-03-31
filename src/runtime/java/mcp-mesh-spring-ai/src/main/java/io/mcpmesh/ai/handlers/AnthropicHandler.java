@@ -47,18 +47,6 @@ public class AnthropicHandler implements LlmProviderHandler {
 
     private static final Logger log = LoggerFactory.getLogger(AnthropicHandler.class);
 
-    /** Base tool instructions for Claude */
-    private static final String BASE_TOOL_INSTRUCTIONS = """
-
-
-        TOOL CALLING INSTRUCTIONS:
-        - Use the provided tools when you need to gather information or perform actions
-        - Make ONE tool call at a time and wait for the result
-        - NEVER use XML-style syntax like <invoke> or <function_calls> - use only the native tool calling format
-        - After receiving tool results, incorporate them into your response
-        - If a tool call fails, explain the error and try an alternative approach
-        """;
-
     @Override
     public String getVendor() {
         return "anthropic";
@@ -102,55 +90,8 @@ public class AnthropicHandler implements LlmProviderHandler {
             }
         }
 
-        String result = MeshCoreBridge.formatSystemPrompt(
+        return MeshCoreBridge.formatSystemPrompt(
             "anthropic", basePrompt, hasTools, false, schemaJson, schemaName, outputMode);
-        if (result != null) {
-            return result;
-        }
-
-        // Fallback: Java implementation
-        return formatSystemPromptFallback(basePrompt, tools, outputSchema, outputMode);
-    }
-
-    /**
-     * Fallback Java implementation for formatSystemPrompt.
-     */
-    private String formatSystemPromptFallback(
-            String basePrompt,
-            List<ToolDefinition> tools,
-            OutputSchema outputSchema,
-            String outputMode) {
-
-        StringBuilder systemContent = new StringBuilder(basePrompt != null ? basePrompt : "");
-
-        if (tools != null && !tools.isEmpty()) {
-            systemContent.append(BASE_TOOL_INSTRUCTIONS);
-        }
-
-        if (OUTPUT_MODE_TEXT.equals(outputMode)) {
-            // Text mode: No JSON instructions
-        } else if (OUTPUT_MODE_STRICT.equals(outputMode)) {
-            if (outputSchema != null) {
-                if (tools != null && !tools.isEmpty()) {
-                    systemContent.append("""
-
-            DECISION GUIDE:
-            - If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.
-            - If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.
-            - After calling a tool and receiving results, STOP calling tools and return your final JSON response.
-            """);
-                }
-                systemContent.append("\n\nYour final response will be structured as JSON matching the ")
-                    .append(outputSchema.name())
-                    .append(" format.");
-            }
-        } else if (OUTPUT_MODE_HINT.equals(outputMode)) {
-            if (outputSchema != null) {
-                systemContent.append(buildHintModeInstructions(outputSchema, tools));
-            }
-        }
-
-        return systemContent.toString();
     }
 
     /**

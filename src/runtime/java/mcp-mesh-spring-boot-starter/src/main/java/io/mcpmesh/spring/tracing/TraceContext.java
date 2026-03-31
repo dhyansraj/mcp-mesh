@@ -145,30 +145,13 @@ public class TraceContext {
      * "x-audit", "x-audit-id", "x-audit-source", etc.
      *
      * <p>Delegates to Rust core for consistent cross-SDK behavior.
-     * Falls back to Java implementation if the native library is unavailable.
      *
      * @param name Header name to check
      * @return true if the name matches any prefix in the allowlist
      */
     public static boolean matchesPropagateHeader(String name) {
         if (PROPAGATE_HEADERS.isEmpty()) return false;
-
-        // Delegate to Rust core, with Java fallback for prefix matching
-        // MeshCoreBridge returns false when native is unavailable, so we
-        // always fall through to Java logic to ensure correctness.
-        try {
-            boolean nativeResult = MeshCoreBridge.matchesPropagateHeader(name, PROPAGATE_HEADERS_CSV);
-            if (nativeResult) return true;
-        } catch (Exception ignored) {
-            // Fall through to Java implementation
-        }
-
-        // Java fallback: prefix-based matching
-        String lower = name.toLowerCase();
-        for (String prefix : PROPAGATE_HEADERS) {
-            if (lower.startsWith(prefix)) return true;
-        }
-        return false;
+        return MeshCoreBridge.matchesPropagateHeader(name, PROPAGATE_HEADERS_CSV);
     }
 
     /**

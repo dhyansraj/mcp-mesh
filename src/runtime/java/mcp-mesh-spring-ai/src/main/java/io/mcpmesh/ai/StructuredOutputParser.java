@@ -11,8 +11,6 @@ import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.RecordComponent;
 import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Parses LLM responses into structured Java objects.
@@ -48,13 +46,6 @@ import java.util.regex.Pattern;
 public class StructuredOutputParser {
 
     private static final Logger log = LoggerFactory.getLogger(StructuredOutputParser.class);
-
-    // Pattern to find JSON in text response
-    private static final Pattern JSON_OBJECT_PATTERN = Pattern.compile("\\{[^{}]*(?:\\{[^{}]*\\}[^{}]*)*\\}");
-    private static final Pattern JSON_ARRAY_PATTERN = Pattern.compile("\\[[^\\[\\]]*(?:\\[[^\\[\\]]*\\][^\\[\\]]*)*\\]");
-
-    // Pattern for markdown code blocks
-    private static final Pattern CODE_BLOCK_PATTERN = Pattern.compile("```(?:json)?\\s*([\\s\\S]*?)```");
 
     private final ObjectMapper objectMapper;
 
@@ -154,70 +145,9 @@ public class StructuredOutputParser {
      * Extract JSON from a text response.
      *
      * <p>Delegates to Rust core for consistent cross-SDK behavior.
-     * Falls back to Java regex-based extraction if the native library is unavailable.
      */
     private String extractJson(String response, boolean expectArray) {
-        // Delegate to Rust core
-        String extracted = MeshCoreBridge.extractJson(response);
-        if (extracted != null) {
-            return extracted;
-        }
-
-        // Fallback: Java regex-based extraction (used when Rust core unavailable)
-        return extractJsonFallback(response, expectArray);
-    }
-
-    /**
-     * Fallback JSON extraction using Java regex patterns.
-     */
-    private String extractJsonFallback(String response, boolean expectArray) {
-        // First, try to extract from code blocks
-        Matcher codeBlockMatcher = CODE_BLOCK_PATTERN.matcher(response);
-        if (codeBlockMatcher.find()) {
-            String content = codeBlockMatcher.group(1).trim();
-            if (isValidJson(content)) {
-                return content;
-            }
-        }
-
-        // Try to find JSON directly
-        Pattern pattern = expectArray ? JSON_ARRAY_PATTERN : JSON_OBJECT_PATTERN;
-
-        // Find the largest matching JSON
-        String bestMatch = null;
-        int maxLength = 0;
-
-        Matcher matcher = pattern.matcher(response);
-        while (matcher.find()) {
-            String match = matcher.group();
-            if (match.length() > maxLength && isValidJson(match)) {
-                bestMatch = match;
-                maxLength = match.length();
-            }
-        }
-
-        // If looking for object but found nothing, try array pattern
-        if (bestMatch == null && !expectArray) {
-            matcher = JSON_ARRAY_PATTERN.matcher(response);
-            while (matcher.find()) {
-                String match = matcher.group();
-                if (match.length() > maxLength && isValidJson(match)) {
-                    bestMatch = match;
-                    maxLength = match.length();
-                }
-            }
-        }
-
-        return bestMatch;
-    }
-
-    private boolean isValidJson(String json) {
-        try {
-            objectMapper.readTree(json);
-            return true;
-        } catch (JacksonException e) {
-            return false;
-        }
+        return MeshCoreBridge.extractJson(response);
     }
 
     private Map<String, Object> buildSchema(Class<?> type) {

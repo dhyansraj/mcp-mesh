@@ -40,17 +40,6 @@ public class OpenAiHandler implements LlmProviderHandler {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAiHandler.class);
 
-    /** Base tool instructions for OpenAI */
-    private static final String BASE_TOOL_INSTRUCTIONS = """
-
-
-        TOOL CALLING INSTRUCTIONS:
-        - Use the provided tools when you need to gather information or perform actions
-        - Make ONE tool call at a time and wait for the result
-        - After receiving tool results, incorporate them into your response
-        - If a tool call fails, explain the error and try an alternative approach
-        """;
-
     @Override
     public String getVendor() {
         return "openai";
@@ -92,26 +81,8 @@ public class OpenAiHandler implements LlmProviderHandler {
             }
         }
 
-        String result = MeshCoreBridge.formatSystemPrompt(
+        return MeshCoreBridge.formatSystemPrompt(
             "openai", basePrompt, hasTools, false, schemaJson, schemaName, outputMode);
-        if (result != null) {
-            return result;
-        }
-
-        // Fallback: Java implementation
-        StringBuilder systemContent = new StringBuilder(basePrompt != null ? basePrompt : "");
-
-        if (hasTools) {
-            systemContent.append(BASE_TOOL_INSTRUCTIONS);
-        }
-
-        if (outputSchema != null) {
-            systemContent.append("\n\nYour final response will be structured as JSON matching the ")
-                .append(outputSchema.name())
-                .append(" format.");
-        }
-
-        return systemContent.toString();
     }
 
     // =========================================================================

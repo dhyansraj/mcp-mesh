@@ -444,29 +444,12 @@ public class McpHttpClient {
      * </pre>
      *
      * <p>Delegates to Rust core for consistent cross-SDK behavior.
-     * Falls back to Java implementation if the native library is unavailable.
      *
      * @param sseContent The SSE-formatted response
      * @return The extracted JSON content from the data: line
      */
     private String extractJsonFromSse(String sseContent) {
-        // Delegate to Rust core
-        String result = MeshCoreBridge.parseSseResponse(sseContent);
-        if (result != null) {
-            return result;
-        }
-
-        // Fallback: Java implementation
-        StringBuilder jsonBuilder = new StringBuilder();
-        for (String line : sseContent.split("\n")) {
-            if (line.startsWith("data: ")) {
-                jsonBuilder.append(line.substring(6));
-            } else if (line.startsWith("data:")) {
-                jsonBuilder.append(line.substring(5));
-            }
-        }
-        String json = jsonBuilder.toString().trim();
-        return json.isEmpty() ? sseContent : json;
+        return MeshCoreBridge.parseSseResponse(sseContent);
     }
 
     private static KeyStore loadCaTrustStore(String caPath) throws Exception {

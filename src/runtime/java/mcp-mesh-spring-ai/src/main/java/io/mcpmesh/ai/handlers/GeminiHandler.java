@@ -44,17 +44,6 @@ public class GeminiHandler implements LlmProviderHandler {
     private static final Logger log = LoggerFactory.getLogger(GeminiHandler.class);
     private static final tools.jackson.databind.ObjectMapper MAPPER = new tools.jackson.databind.ObjectMapper();
 
-    /** Base tool instructions for Gemini */
-    private static final String BASE_TOOL_INSTRUCTIONS = """
-
-
-        TOOL CALLING INSTRUCTIONS:
-        - Use the provided tools when you need to gather information or perform actions
-        - Make ONE tool call at a time and wait for the result
-        - After receiving tool results, incorporate them into your response
-        - If a tool call fails, explain the error and try an alternative approach
-        """;
-
     @Override
     public String getVendor() {
         return "gemini";
@@ -98,84 +87,8 @@ public class GeminiHandler implements LlmProviderHandler {
             }
         }
 
-        String result = MeshCoreBridge.formatSystemPrompt(
+        return MeshCoreBridge.formatSystemPrompt(
             "gemini", basePrompt, hasTools, false, schemaJson, schemaName, outputMode);
-        if (result != null) {
-            return result;
-        }
-
-        // Fallback: Java implementation
-        return formatSystemPromptFallback(basePrompt, tools, outputSchema, hasTools);
-    }
-
-    /**
-     * Fallback Java implementation for formatSystemPrompt.
-     */
-    @SuppressWarnings("unchecked")
-    private String formatSystemPromptFallback(
-            String basePrompt,
-            List<ToolDefinition> tools,
-            OutputSchema outputSchema,
-            boolean hasTools) {
-
-        StringBuilder systemContent = new StringBuilder(basePrompt != null ? basePrompt : "");
-
-        if (hasTools) {
-            systemContent.append(BASE_TOOL_INSTRUCTIONS);
-        }
-
-        if (outputSchema != null) {
-            systemContent.append("\n\n");
-
-            if (hasTools) {
-                systemContent.append("DECISION GUIDE:\n")
-                    .append("- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.\n")
-                    .append("- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.\n")
-                    .append("- After calling a tool and receiving results, STOP calling tools and return your final JSON response.\n\n");
-            }
-
-            systemContent.append("RESPONSE FORMAT (for your final response after any tool calls):\n")
-                .append("Your final response must be ONLY valid JSON (no markdown, no code blocks) with this exact structure:\n")
-                .append("{\n");
-
-            Map<String, Object> properties = (Map<String, Object>) outputSchema.sanitize().get("properties");
-            if (properties != null) {
-                int i = 0;
-                for (Map.Entry<String, Object> entry : properties.entrySet()) {
-                    String propName = entry.getKey();
-                    Map<String, Object> propSchema = (Map<String, Object>) entry.getValue();
-                    String propType = (String) propSchema.get("type");
-
-                    String exampleValue;
-                    if ("string".equals(propType)) {
-                        exampleValue = "\"<your " + propName + " here>\"";
-                    } else if ("number".equals(propType) || "integer".equals(propType)) {
-                        exampleValue = "0";
-                    } else if ("array".equals(propType)) {
-                        exampleValue = "[\"item1\", \"item2\"]";
-                    } else if ("boolean".equals(propType)) {
-                        exampleValue = "true";
-                    } else if ("object".equals(propType)) {
-                        exampleValue = "{}";
-                    } else {
-                        exampleValue = "...";
-                    }
-
-                    systemContent.append("  \"").append(propName).append("\": ").append(exampleValue);
-                    if (i < properties.size() - 1) {
-                        systemContent.append(",");
-                    }
-                    systemContent.append("\n");
-                    i++;
-                }
-            }
-
-            systemContent.append("}\n\n")
-                .append("Do NOT wrap the response in a type name key like {\"").append(outputSchema.name()).append("\": {...}}. Return the flat JSON object directly.\n")
-                .append("Return ONLY the JSON object with actual values. Do not include the schema definition, markdown formatting, or code blocks.");
-        }
-
-        return systemContent.toString();
     }
 
     // =========================================================================
