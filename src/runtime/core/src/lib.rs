@@ -36,7 +36,9 @@ pub mod events;
 pub mod handle;
 pub mod heartbeat;
 pub mod registry;
+pub mod response_parser;
 pub mod runtime;
+pub mod schema;
 pub mod spec;
 pub mod tls;
 pub mod tracing_publish;
@@ -166,6 +168,51 @@ pub fn start_agent_internal(spec: AgentSpec) -> Result<AgentHandle, String> {
     Ok(handle)
 }
 
+/// Extract JSON from LLM response text (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn extract_json_py(text: &str) -> Option<String> {
+    response_parser::extract_json(text)
+}
+
+/// Strip markdown code fences from content (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn strip_code_fences_py(text: &str) -> String {
+    response_parser::strip_code_fences(text)
+}
+
+/// Make a JSON schema strict for structured output (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+#[pyo3(signature = (schema_json, add_all_required=true))]
+fn make_schema_strict_py(schema_json: &str, add_all_required: bool) -> PyResult<String> {
+    schema::make_schema_strict(schema_json, add_all_required)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+}
+
+/// Sanitize a JSON schema by removing unsupported validation keywords (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn sanitize_schema_py(schema_json: &str) -> PyResult<String> {
+    schema::sanitize_schema(schema_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+}
+
+/// Check if any tool schema property contains x-media-type (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn detect_media_params_py(schema_json: &str) -> bool {
+    schema::detect_media_params(schema_json)
+}
+
+/// Check if a JSON schema is simple enough for hint mode (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn is_simple_schema_py(schema_json: &str) -> bool {
+    schema::is_simple_schema(schema_json)
+}
+
 /// MCP Mesh Core Python module.
 #[cfg(feature = "python")]
 #[pymodule]
@@ -205,6 +252,16 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tracing_publish::init_trace_publisher_py, m)?)?;
     m.add_function(wrap_pyfunction!(tracing_publish::publish_span_py, m)?)?;
     m.add_function(wrap_pyfunction!(tracing_publish::is_trace_publisher_available_py, m)?)?;
+
+    // Response parsing
+    m.add_function(wrap_pyfunction!(extract_json_py, m)?)?;
+    m.add_function(wrap_pyfunction!(strip_code_fences_py, m)?)?;
+
+    // Schema normalization
+    m.add_function(wrap_pyfunction!(make_schema_strict_py, m)?)?;
+    m.add_function(wrap_pyfunction!(sanitize_schema_py, m)?)?;
+    m.add_function(wrap_pyfunction!(detect_media_params_py, m)?)?;
+    m.add_function(wrap_pyfunction!(is_simple_schema_py, m)?)?;
 
     Ok(())
 }

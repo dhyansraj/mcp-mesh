@@ -298,6 +298,87 @@ int32_t mesh_is_trace_publisher_available(void);
 // * `span_json` must be a valid null-terminated C string
 int32_t mesh_publish_span(const char *span_json);
 
+// Extract JSON from LLM response text.
+//
+// Strategies (in order):
+// 1. Find ```json...``` code blocks
+// 2. Progressive JSON object extraction
+// 3. Progressive JSON array extraction
+//
+// # Arguments
+// * `text` - Raw LLM response text
+//
+// # Returns
+// Extracted JSON string (caller must free with `mesh_free_string`), or NULL if no JSON found
+//
+// # Safety
+// * `text` must be a valid null-terminated C string
+char *mesh_extract_json(const char *text);
+
+// Strip markdown code fences from content.
+//
+// # Arguments
+// * `text` - Text with potential code fences
+//
+// # Returns
+// Text with fences removed (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `text` must be a valid null-terminated C string
+char *mesh_strip_code_fences(const char *text);
+
+// Make a JSON schema strict for structured output.
+//
+// Adds additionalProperties: false to all object types and optionally
+// sets required to include all property keys.
+//
+// # Arguments
+// * `schema_json` - JSON schema string
+// * `add_all_required` - 1 to add all properties to required, 0 to skip
+//
+// # Returns
+// Modified schema JSON (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `schema_json` must be a valid null-terminated C string
+char *mesh_make_schema_strict(const char *schema_json, int32_t add_all_required);
+
+// Sanitize a JSON schema by removing unsupported validation keywords.
+//
+// # Arguments
+// * `schema_json` - JSON schema string
+//
+// # Returns
+// Sanitized schema JSON (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `schema_json` must be a valid null-terminated C string
+char *mesh_sanitize_schema(const char *schema_json);
+
+// Check if any tool schema property contains x-media-type.
+//
+// # Arguments
+// * `schema_json` - JSON schema string (OpenAI tool format or bare schema)
+//
+// # Returns
+// 1 if media params found, 0 otherwise
+//
+// # Safety
+// * `schema_json` must be a valid null-terminated C string
+int32_t mesh_detect_media_params(const char *schema_json);
+
+// Check if a JSON schema is simple enough for hint mode.
+//
+// # Arguments
+// * `schema_json` - JSON schema string
+//
+// # Returns
+// 1 if simple, 0 otherwise
+//
+// # Safety
+// * `schema_json` must be a valid null-terminated C string
+int32_t mesh_is_simple_schema(const char *schema_json);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

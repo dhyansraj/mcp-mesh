@@ -570,6 +570,58 @@ pub async fn is_trace_publisher_available() -> Result<bool> {
     Ok(crate::tracing_publish::is_trace_publisher_available().await)
 }
 
+// =============================================================================
+// Response Parsing
+// =============================================================================
+
+/// Extract JSON from LLM response text.
+///
+/// Strategies: code fences -> progressive object parse -> progressive array parse.
+/// Returns null if no JSON found.
+#[napi]
+pub fn extract_json(text: String) -> Option<String> {
+    crate::response_parser::extract_json(&text)
+}
+
+/// Strip markdown code fences from content.
+#[napi]
+pub fn strip_code_fences(text: String) -> String {
+    crate::response_parser::strip_code_fences(&text)
+}
+
+// =============================================================================
+// Schema Normalization
+// =============================================================================
+
+/// Make a JSON schema strict for structured output.
+///
+/// Adds additionalProperties: false to all object types.
+/// If addAllRequired is true, sets required to include all property keys.
+#[napi]
+pub fn make_schema_strict(schema_json: String, add_all_required: Option<bool>) -> napi::Result<String> {
+    crate::schema::make_schema_strict(&schema_json, add_all_required.unwrap_or(true))
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Sanitize a JSON schema by removing unsupported validation keywords.
+#[napi]
+pub fn sanitize_schema(schema_json: String) -> napi::Result<String> {
+    crate::schema::sanitize_schema(&schema_json)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Check if any tool schema property contains x-media-type.
+#[napi]
+pub fn detect_media_params(schema_json: String) -> bool {
+    crate::schema::detect_media_params(&schema_json)
+}
+
+/// Check if a JSON schema is simple enough for hint mode.
+#[napi]
+pub fn is_simple_schema(schema_json: String) -> bool {
+    crate::schema::is_simple_schema(&schema_json)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

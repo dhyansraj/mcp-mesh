@@ -880,6 +880,226 @@ pub unsafe extern "C" fn mesh_publish_span(span_json: *const c_char) -> i32 {
 }
 
 // =============================================================================
+// Response Parsing Functions
+// =============================================================================
+
+/// Extract JSON from LLM response text.
+///
+/// Strategies (in order):
+/// 1. Find ```json...``` code blocks
+/// 2. Progressive JSON object extraction
+/// 3. Progressive JSON array extraction
+///
+/// # Arguments
+/// * `text` - Raw LLM response text
+///
+/// # Returns
+/// Extracted JSON string (caller must free with `mesh_free_string`), or NULL if no JSON found
+///
+/// # Safety
+/// * `text` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_extract_json(text: *const c_char) -> *mut c_char {
+    if text.is_null() {
+        set_last_error("text is null");
+        return ptr::null_mut();
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in text: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::response_parser::extract_json(text_str) {
+        Some(json) => match CString::new(json) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        None => ptr::null_mut(),
+    }
+}
+
+/// Strip markdown code fences from content.
+///
+/// # Arguments
+/// * `text` - Text with potential code fences
+///
+/// # Returns
+/// Text with fences removed (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `text` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_strip_code_fences(text: *const c_char) -> *mut c_char {
+    if text.is_null() {
+        set_last_error("text is null");
+        return ptr::null_mut();
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in text: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let result = crate::response_parser::strip_code_fences(text_str);
+    match CString::new(result) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+// =============================================================================
+// Schema Normalization Functions
+// =============================================================================
+
+/// Make a JSON schema strict for structured output.
+///
+/// Adds additionalProperties: false to all object types and optionally
+/// sets required to include all property keys.
+///
+/// # Arguments
+/// * `schema_json` - JSON schema string
+/// * `add_all_required` - 1 to add all properties to required, 0 to skip
+///
+/// # Returns
+/// Modified schema JSON (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `schema_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_make_schema_strict(
+    schema_json: *const c_char,
+    add_all_required: i32,
+) -> *mut c_char {
+    if schema_json.is_null() {
+        set_last_error("schema_json is null");
+        return ptr::null_mut();
+    }
+
+    let json_str = match CStr::from_ptr(schema_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in schema_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::schema::make_schema_strict(json_str, add_all_required != 0) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Sanitize a JSON schema by removing unsupported validation keywords.
+///
+/// # Arguments
+/// * `schema_json` - JSON schema string
+///
+/// # Returns
+/// Sanitized schema JSON (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `schema_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_sanitize_schema(schema_json: *const c_char) -> *mut c_char {
+    if schema_json.is_null() {
+        set_last_error("schema_json is null");
+        return ptr::null_mut();
+    }
+
+    let json_str = match CStr::from_ptr(schema_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in schema_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::schema::sanitize_schema(json_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Check if any tool schema property contains x-media-type.
+///
+/// # Arguments
+/// * `schema_json` - JSON schema string (OpenAI tool format or bare schema)
+///
+/// # Returns
+/// 1 if media params found, 0 otherwise
+///
+/// # Safety
+/// * `schema_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_detect_media_params(schema_json: *const c_char) -> i32 {
+    if schema_json.is_null() {
+        return 0;
+    }
+
+    let json_str = match CStr::from_ptr(schema_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    if crate::schema::detect_media_params(json_str) { 1 } else { 0 }
+}
+
+/// Check if a JSON schema is simple enough for hint mode.
+///
+/// # Arguments
+/// * `schema_json` - JSON schema string
+///
+/// # Returns
+/// 1 if simple, 0 otherwise
+///
+/// # Safety
+/// * `schema_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_is_simple_schema(schema_json: *const c_char) -> i32 {
+    if schema_json.is_null() {
+        return 0;
+    }
+
+    let json_str = match CStr::from_ptr(schema_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    if crate::schema::is_simple_schema(json_str) { 1 } else { 0 }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
