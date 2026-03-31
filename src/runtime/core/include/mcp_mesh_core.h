@@ -596,6 +596,56 @@ char *mesh_build_response_format(const char *provider,
 // * `provider` must be a valid null-terminated C string
 char *mesh_get_vendor_capabilities(const char *provider);
 
+// Create initial agentic loop state.
+//
+// # Arguments
+// * `config_json` - JSON config with `messages` array and optional `max_iterations`
+//
+// # Returns
+// Action JSON (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `config_json` must be a valid null-terminated C string
+char *mesh_create_agentic_loop(const char *config_json);
+
+// Process an LLM response in the agentic loop.
+//
+// # Arguments
+// * `state_json` - Serialized loop state from a previous call
+// * `llm_response_json` - LLM response with optional `tool_calls`, `content`, `usage`
+//
+// # Returns
+// Action JSON (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * Both parameters must be valid null-terminated C strings
+char *mesh_process_llm_response(const char *state_json, const char *llm_response_json);
+
+// Add tool execution results to the agentic loop.
+//
+// # Arguments
+// * `state_json` - Serialized loop state from a previous call
+// * `tool_results_json` - Array of `{"tool_call_id": "...", "content": "..."}`
+//
+// # Returns
+// Action JSON (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * Both parameters must be valid null-terminated C strings
+char *mesh_add_tool_results(const char *state_json, const char *tool_results_json);
+
+// Get a read-only view of the agentic loop state.
+//
+// # Arguments
+// * `state_json` - Serialized loop state
+//
+// # Returns
+// State info JSON (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `state_json` must be a valid null-terminated C string
+char *mesh_get_loop_state(const char *state_json);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

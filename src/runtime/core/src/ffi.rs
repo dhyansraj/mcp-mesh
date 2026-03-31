@@ -1925,6 +1925,200 @@ pub unsafe extern "C" fn mesh_get_vendor_capabilities(provider: *const c_char) -
 }
 
 // =============================================================================
+// Agentic Loop Functions
+// =============================================================================
+
+/// Create initial agentic loop state.
+///
+/// # Arguments
+/// * `config_json` - JSON config with `messages` array and optional `max_iterations`
+///
+/// # Returns
+/// Action JSON (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `config_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_create_agentic_loop(config_json: *const c_char) -> *mut c_char {
+    if config_json.is_null() {
+        set_last_error("config_json is null");
+        return ptr::null_mut();
+    }
+
+    let config_str = match CStr::from_ptr(config_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in config_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::agentic_loop::create_loop(config_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Process an LLM response in the agentic loop.
+///
+/// # Arguments
+/// * `state_json` - Serialized loop state from a previous call
+/// * `llm_response_json` - LLM response with optional `tool_calls`, `content`, `usage`
+///
+/// # Returns
+/// Action JSON (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * Both parameters must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn mesh_process_llm_response(
+    state_json: *const c_char,
+    llm_response_json: *const c_char,
+) -> *mut c_char {
+    if state_json.is_null() {
+        set_last_error("state_json is null");
+        return ptr::null_mut();
+    }
+    if llm_response_json.is_null() {
+        set_last_error("llm_response_json is null");
+        return ptr::null_mut();
+    }
+
+    let state_str = match CStr::from_ptr(state_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in state_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let response_str = match CStr::from_ptr(llm_response_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in llm_response_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::agentic_loop::process_response(state_str, response_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Add tool execution results to the agentic loop.
+///
+/// # Arguments
+/// * `state_json` - Serialized loop state from a previous call
+/// * `tool_results_json` - Array of `{"tool_call_id": "...", "content": "..."}`
+///
+/// # Returns
+/// Action JSON (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * Both parameters must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn mesh_add_tool_results(
+    state_json: *const c_char,
+    tool_results_json: *const c_char,
+) -> *mut c_char {
+    if state_json.is_null() {
+        set_last_error("state_json is null");
+        return ptr::null_mut();
+    }
+    if tool_results_json.is_null() {
+        set_last_error("tool_results_json is null");
+        return ptr::null_mut();
+    }
+
+    let state_str = match CStr::from_ptr(state_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in state_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let results_str = match CStr::from_ptr(tool_results_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in tool_results_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::agentic_loop::add_tool_results(state_str, results_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Get a read-only view of the agentic loop state.
+///
+/// # Arguments
+/// * `state_json` - Serialized loop state
+///
+/// # Returns
+/// State info JSON (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `state_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_get_loop_state(state_json: *const c_char) -> *mut c_char {
+    if state_json.is_null() {
+        set_last_error("state_json is null");
+        return ptr::null_mut();
+    }
+
+    let state_str = match CStr::from_ptr(state_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in state_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::agentic_loop::get_loop_state(state_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 

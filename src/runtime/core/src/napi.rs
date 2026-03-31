@@ -832,6 +832,52 @@ pub fn get_vendor_capabilities(provider: String) -> String {
     crate::provider::get_vendor_capabilities(&provider)
 }
 
+// =============================================================================
+// Agentic Loop
+// =============================================================================
+
+/// Create initial agentic loop state.
+///
+/// @param configJson - JSON config with `messages` array and optional `maxIterations`
+/// @returns Action JSON with `action: "call_llm"` and serialized state
+#[napi]
+pub fn create_agentic_loop(config_json: String) -> napi::Result<String> {
+    crate::agentic_loop::create_loop(&config_json)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Process an LLM response in the agentic loop.
+///
+/// @param stateJson - Serialized loop state from a previous call
+/// @param llmResponseJson - LLM response with optional tool_calls, content, usage
+/// @returns Action JSON: execute_tools, done, max_iterations, or error
+#[napi]
+pub fn process_llm_response(state_json: String, llm_response_json: String) -> napi::Result<String> {
+    crate::agentic_loop::process_response(&state_json, &llm_response_json)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Add tool execution results to the agentic loop.
+///
+/// @param stateJson - Serialized loop state from a previous call
+/// @param toolResultsJson - Array of {tool_call_id, content} objects
+/// @returns Action JSON: call_llm or max_iterations
+#[napi]
+pub fn add_tool_results(state_json: String, tool_results_json: String) -> napi::Result<String> {
+    crate::agentic_loop::add_tool_results(&state_json, &tool_results_json)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Get a read-only view of the agentic loop state.
+///
+/// @param stateJson - Serialized loop state
+/// @returns State info JSON with iteration, token counts, message_count
+#[napi]
+pub fn get_loop_state(state_json: String) -> napi::Result<String> {
+    crate::agentic_loop::get_loop_state(&state_json)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
