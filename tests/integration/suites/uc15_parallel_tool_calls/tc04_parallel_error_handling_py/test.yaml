@@ -9,8 +9,8 @@
 #   - Even if one tool encounters an issue, the agent should still
 #     return a response with data from the successful tools
 #
-# Note: This is a TDD test. The error handling behavior (continue on
-# partial failure) is part of the parallel_tool_calls feature spec.
+# Note: The error handling behavior (continue on partial failure)
+# is part of the parallel_tool_calls feature spec.
 
 name: "Parallel Tool Error Handling"
 description: "Test that parallel tool execution handles partial failures gracefully"
@@ -124,9 +124,9 @@ assertions:
   # Either way, it should NOT crash or hang
   - expr: "${last.exit_code} == 0"
     message: "Agent should handle tool unavailability without crashing"
-  # TDD assertion: parallel mode must be explicitly enabled
+  # Assertion: parallel mode must be explicitly enabled
   - expr: "${captured.consumer_logs} contains 'parallel tool calls enabled'"
-    message: "TDD: Consumer agent should log 'parallel tool calls enabled' when parallel_tool_calls=True is set (feature not yet implemented)"
+    message: "Consumer agent should log 'parallel tool calls enabled' when parallel_tool_calls=True is set"
 
 post_run:
   - handler: shell

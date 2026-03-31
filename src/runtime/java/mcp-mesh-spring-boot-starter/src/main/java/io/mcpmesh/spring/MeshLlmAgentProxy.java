@@ -529,32 +529,13 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                     List<CompletableFuture<Map<String, Object>>> futures = new ArrayList<>();
 
                     for (Map<String, Object> toolCall : toolCalls) {
-                        String toolId = (String) toolCall.get("id");
-                        String toolName;
-                        Map<String, Object> toolArgs;
-
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> function = (Map<String, Object>) toolCall.get("function");
-                        if (function != null) {
-                            toolName = (String) function.get("name");
-                            Object argsObj = function.get("arguments");
-                            toolArgs = parseToolArguments(argsObj);
-                        } else {
-                            toolName = (String) toolCall.get("name");
-                            Object argsObj = toolCall.get("arguments");
-                            toolArgs = parseToolArguments(argsObj);
-                        }
-
-                        final String finalToolName = toolName;
-                        final Map<String, Object> finalToolArgs = toolArgs;
-                        final String finalToolId = toolId;
-
+                        ParsedToolCall parsed = parseToolCall(toolCall);
                         futures.add(CompletableFuture.supplyAsync(() -> {
-                            log.debug("Executing tool: {} with args: {}", finalToolName, finalToolArgs);
-                            String toolResult = executeToolCall(finalToolName, finalToolArgs);
+                            log.debug("Executing tool: {} with args: {}", parsed.toolName(), parsed.toolArgs());
+                            String toolResult = executeToolCall(parsed.toolName(), parsed.toolArgs());
                             return Map.<String, Object>of(
                                 "role", "tool",
-                                "tool_call_id", finalToolId,
+                                "tool_call_id", parsed.toolId(),
                                 "content", toolResult
                             );
                         }));
@@ -568,28 +549,12 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 } else {
                     // Sequential execution (default)
                     for (Map<String, Object> toolCall : toolCalls) {
-                        String toolId = (String) toolCall.get("id");
-                        String toolName;
-                        Map<String, Object> toolArgs;
-
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> function = (Map<String, Object>) toolCall.get("function");
-                        if (function != null) {
-                            toolName = (String) function.get("name");
-                            Object argsObj = function.get("arguments");
-                            toolArgs = parseToolArguments(argsObj);
-                        } else {
-                            toolName = (String) toolCall.get("name");
-                            Object argsObj = toolCall.get("arguments");
-                            toolArgs = parseToolArguments(argsObj);
-                        }
-
-                        log.debug("Executing tool: {} with args: {}", toolName, toolArgs);
-                        String toolResult = executeToolCall(toolName, toolArgs);
-
+                        ParsedToolCall parsed = parseToolCall(toolCall);
+                        log.debug("Executing tool: {} with args: {}", parsed.toolName(), parsed.toolArgs());
+                        String toolResult = executeToolCall(parsed.toolName(), parsed.toolArgs());
                         llmMessages.add(Map.of(
                             "role", "tool",
-                            "tool_call_id", toolId,
+                            "tool_call_id", parsed.toolId(),
                             "content", toolResult
                         ));
                     }
@@ -954,6 +919,28 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
      *   <li>Null or empty values</li>
      * </ul>
      */
+    private record ParsedToolCall(String toolId, String toolName, Map<String, Object> toolArgs) {}
+
+    @SuppressWarnings("unchecked")
+    private ParsedToolCall parseToolCall(Map<String, Object> toolCall) {
+        String toolId = (String) toolCall.get("id");
+        String toolName;
+        Map<String, Object> toolArgs;
+
+        Map<String, Object> function = (Map<String, Object>) toolCall.get("function");
+        if (function != null) {
+            toolName = (String) function.get("name");
+            Object argsObj = function.get("arguments");
+            toolArgs = parseToolArguments(argsObj);
+        } else {
+            toolName = (String) toolCall.get("name");
+            Object argsObj = toolCall.get("arguments");
+            toolArgs = parseToolArguments(argsObj);
+        }
+
+        return new ParsedToolCall(toolId, toolName, toolArgs);
+    }
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> parseToolArguments(Object argsObj) {
         if (argsObj == null) {

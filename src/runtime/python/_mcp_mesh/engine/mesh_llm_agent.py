@@ -1131,7 +1131,22 @@ IMPORTANT TOOL CALLING RULES:
                 }
 
         results = await asyncio.gather(*[execute_single(tc) for tc in tool_calls])
-        return [r for r in results if r is not None]
+        filtered = []
+        for i, r in enumerate(results):
+            if r is not None:
+                filtered.append(r)
+            else:
+                logger.warning(
+                    f"Parallel tool call {i} returned no result — substituting error"
+                )
+                filtered.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_calls[i].id,
+                        "content": json.dumps({"error": "Tool returned no result"}),
+                    }
+                )
+        return filtered
 
     async def _resolve_media_in_tool_results(
         self, tool_results: list[dict[str, Any]]

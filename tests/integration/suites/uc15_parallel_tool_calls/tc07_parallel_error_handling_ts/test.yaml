@@ -8,8 +8,8 @@
 #   - Stop slow-tool-ts to simulate tool unavailability
 #   - Query - agent should handle gracefully without crashing
 #
-# Note: This is a TDD test. The error handling behavior (continue on
-# partial failure) is part of the parallel_tool_calls feature spec.
+# Note: The error handling behavior (continue on partial failure)
+# is part of the parallel_tool_calls feature spec.
 
 name: "TypeScript Parallel Tool Error Handling"
 description: "Test parallel tool execution handles partial failures in TypeScript"
@@ -124,9 +124,9 @@ assertions:
   # Either way, it should NOT crash or hang
   - expr: "${last.exit_code} == 0"
     message: "Agent should handle tool unavailability without crashing"
-  # TDD assertion: parallel mode must be explicitly enabled
+  # Assertion: parallel mode must be explicitly enabled
   - expr: "${captured.consumer_logs} contains 'parallel tool calls enabled'"
-    message: "TDD: Consumer agent should log 'parallel tool calls enabled' when parallelToolCalls=true is set (feature not yet implemented)"
+    message: "Consumer agent should log 'parallel tool calls enabled' when parallelToolCalls=true is set"
 
 post_run:
   - handler: shell

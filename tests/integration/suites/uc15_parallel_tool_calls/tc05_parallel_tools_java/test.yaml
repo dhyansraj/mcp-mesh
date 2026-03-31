@@ -136,9 +136,9 @@ assertions:
     message: "Response should contain stock price data (from get_stock_price)"
   - expr: "${captured.parallel_response} contains 'sentiment'"
     message: "Response should contain sentiment data (from get_market_sentiment)"
-  # TDD assertion: parallel mode must be explicitly enabled in agent
+  # Assertion: parallel mode must be explicitly enabled in agent
   - expr: "${captured.consumer_logs} contains 'parallel tool calls enabled'"
-    message: "TDD: Consumer agent should log 'parallel tool calls enabled' when parallelToolCalls=true is set (feature not yet implemented)"
+    message: "Consumer agent should log 'parallel tool calls enabled' when parallelToolCalls=true is set"
 
 post_run:
   - handler: shell

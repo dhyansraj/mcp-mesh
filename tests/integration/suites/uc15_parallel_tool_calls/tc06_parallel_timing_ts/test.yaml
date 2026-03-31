@@ -112,9 +112,9 @@ assertions:
     message: "Response should reference the MSFT ticker"
   - expr: "${captured.timed_response} contains 'ELAPSED_SECONDS'"
     message: "Should capture elapsed time"
-  # TDD assertion: parallel mode must be enabled
+  # Assertion: parallel mode must be enabled
   - expr: "${captured.consumer_logs} contains 'parallel tool calls enabled'"
-    message: "TDD: Consumer agent should log 'parallel tool calls enabled'"
+    message: "Consumer agent should log 'parallel tool calls enabled'"
 
 post_run:
   - handler: shell
