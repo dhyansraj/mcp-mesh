@@ -309,8 +309,24 @@ fn format_hint_detailed(schema: &Value, schema_name: &str, has_tools: bool) -> S
         }
     }
 
+    // Add example format block (matches old Python handler behavior)
+    result.push_str("}\n\nExample format:\n");
+    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+        let example: serde_json::Map<String, Value> = properties
+            .iter()
+            .map(|(name, prop)| {
+                let type_str = prop.get("type").and_then(|t| t.as_str()).unwrap_or("value");
+                (name.clone(), Value::String(format!("<{}>", type_str)))
+            })
+            .collect();
+        if let Ok(example_str) = serde_json::to_string_pretty(&Value::Object(example)) {
+            result.push_str(&example_str);
+        }
+    }
+    result.push('\n');
+
     result.push_str(
-        "}\n\nCRITICAL: Your response must be ONLY the raw JSON object.\n\
+        "\nCRITICAL: Your response must be ONLY the raw JSON object.\n\
          - DO NOT wrap in markdown code fences (```json or ```)\n\
          - DO NOT include any text before or after the JSON\n\
          - Start directly with { and end with }",
