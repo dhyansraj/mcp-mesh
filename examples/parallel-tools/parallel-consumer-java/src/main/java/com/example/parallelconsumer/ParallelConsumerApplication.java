@@ -141,19 +141,10 @@ public class ParallelConsumerApplication {
         }
 
         try {
-            StockAnalysis result = llm.request()
+            return llm.request()
                 .user(ctx.query())
                 .maxTokens(4096)
                 .generate(StockAnalysis.class);
-
-            var meta = llm.request().lastMeta();
-            if (meta != null) {
-                log.info("Generation completed: {} iterations, {}ms latency",
-                    meta.iterations(), meta.latencyMs());
-            }
-
-            return result;
-
         } catch (Exception e) {
             log.error("Parallel analysis failed: {}", e.getMessage(), e);
             return fallbackAnalysis(ctx);

@@ -224,33 +224,8 @@ class MeshLlmAgent:
             f"🎯 Using provider handler: {self._provider_handler} for vendor: {vendor}"
         )
 
-        # Tool calling instructions injected into system prompt.
-        # When parallel_tool_calls is enabled, the LLM is allowed to return
-        # multiple tool_use blocks in a single response for concurrent execution.
-        if self._parallel_tool_calls:
-            self._cached_tool_instructions = """
-
-IMPORTANT TOOL CALLING RULES:
-- You have access to tools that you can call to gather information
-- You CAN and SHOULD make multiple tool calls at once when the calls are independent
-- Return all independent tool calls in a single response for parallel execution
-- NEVER use XML-style syntax like <invoke name="tool_name"/>
-- Each tool must be called using proper JSON tool_use format
-- After receiving results from tools, you can make additional tool calls if needed
-- Once you have gathered all necessary information, provide your final response
-"""
-        else:
-            self._cached_tool_instructions = """
-
-IMPORTANT TOOL CALLING RULES:
-- You have access to tools that you can call to gather information
-- Make ONE tool call at a time - each tool call must be separate
-- NEVER combine multiple tools in a single tool_use block
-- NEVER use XML-style syntax like <invoke name="tool_name"/>
-- Each tool must be called using proper JSON tool_use format
-- After receiving results from a tool, you can make additional tool calls if needed
-- Once you have gathered all necessary information, provide your final response
-"""
+        # Note: Tool calling instructions are injected in the system prompt
+        # construction (see __call__ method), not cached here.
 
         # Only generate JSON schema for Pydantic models, not for str return type
         if self.output_type is not str and hasattr(
@@ -812,7 +787,10 @@ IMPORTANT TOOL CALLING RULES:
             # Provider will add vendor-specific formatting
             system_content = base_system_prompt
             if self._tool_schemas:
-                system_content += "\n\nYou have access to tools. Use them when needed to gather information."
+                if self._parallel_tool_calls:
+                    system_content += "\n\nYou have access to tools. You CAN and SHOULD call multiple tools simultaneously when the calls are independent."
+                else:
+                    system_content += "\n\nYou have access to tools. Use them when needed to gather information."
         else:
             # Direct path: Use vendor handler for vendor-specific optimizations
             system_content = self._provider_handler.format_system_prompt(
@@ -820,6 +798,9 @@ IMPORTANT TOOL CALLING RULES:
                 tool_schemas=self._tool_schemas,
                 output_type=self.output_type,
             )
+            # Append parallel tool calling instruction for direct mode
+            if self._parallel_tool_calls and self._tool_schemas:
+                system_content += "\n\nYou CAN and SHOULD call multiple tools simultaneously when the calls are independent. Return all independent tool calls in a single response."
 
         # Debug: Log system prompt (truncated for privacy)
         logger.debug(
