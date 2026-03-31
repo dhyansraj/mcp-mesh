@@ -206,16 +206,22 @@ func runCallCommand(cmd *cobra.Command, args []string) error {
 	var agentEndpoint string
 	var agentHostHeader string
 
+	// resolvedToolName is the actual MCP tool name to use for the call.
+	// It may differ from toolName when matched via capability name fallback
+	// (e.g., user calls "get_weather" but MCP tool is registered as "getWeather" on Java agents).
+	resolvedToolName := toolName
+
 	if agentURL != "" {
 		// Use provided agent URL directly
 		agentEndpoint = agentURL
 	} else if ingressDomain != "" {
 		// Ingress mode: use Host headers for routing
-		extractedAgentName, hostHeader, err := findAgentWithToolIngress(httpClient, ingressURL, ingressDomain, agentName, toolName)
+		extractedAgentName, hostHeader, resolved, err := findAgentWithToolIngress(httpClient, ingressURL, ingressDomain, agentName, toolName)
 		if err != nil {
 			return fmt.Errorf("failed to find agent: %w", err)
 		}
 		agentHostHeader = hostHeader
+		resolvedToolName = resolved
 		// In ingress mode, endpoint is the ingress URL, routing done via Host header
 		if ingressURL != "" {
 			agentEndpoint = ingressURL
@@ -225,11 +231,13 @@ func runCallCommand(cmd *cobra.Command, args []string) error {
 	} else {
 		// Direct mode: discover agent via registry
 		finalRegistryURL := determineRegistryURL(config, registryURL, registryHost, registryPort, registryScheme)
+		var resolved string
 		var err error
-		agentEndpoint, err = findAgentWithTool(httpClient, finalRegistryURL, agentName, toolName)
+		agentEndpoint, resolved, err = findAgentWithTool(httpClient, finalRegistryURL, agentName, toolName)
 		if err != nil {
 			return fmt.Errorf("failed to find agent: %w", err)
 		}
+		resolvedToolName = resolved
 
 		// If using proxy mode, route through registry instead of calling agent directly
 		if useProxy {
@@ -243,13 +251,13 @@ func runCallCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Make MCP call
+	// Make MCP call using resolvedToolName (the actual MCP tool name from the registry)
 	var callResult *MCPCallResult
 	if ingressDomain != "" && agentURL == "" {
 		// Ingress mode: need Host header
-		callResult, err = callMCPToolWithHost(httpClient, agentEndpoint, agentHostHeader, toolName, toolArgs, traceCtx, timeout)
+		callResult, err = callMCPToolWithHost(httpClient, agentEndpoint, agentHostHeader, resolvedToolName, toolArgs, traceCtx, timeout)
 	} else {
-		callResult, err = callMCPTool(httpClient, agentEndpoint, toolName, toolArgs, traceCtx, timeout)
+		callResult, err = callMCPTool(httpClient, agentEndpoint, resolvedToolName, toolArgs, traceCtx, timeout)
 	}
 	if err != nil {
 		return fmt.Errorf("MCP call failed: %w", err)
@@ -332,90 +340,15 @@ func resolveAgentPrefix(agents []AgentWithCapabilities, agentName string, health
 	return matchResult.Agent.ID, nil
 }
 
-// findAgentWithTool queries the registry to find an agent with the specified tool
-func findAgentWithTool(client *http.Client, registryURL, agentName, toolName string) (string, error) {
+// findAgentWithTool queries the registry to find an agent with the specified tool.
+// Returns the agent endpoint and the resolved MCP tool name (FunctionName).
+// The resolved name may differ from toolName when matched via capability name fallback
+// (e.g., Java agents where FunctionName is camelCase but capability Name is snake_case).
+func findAgentWithTool(client *http.Client, registryURL, agentName, toolName string) (string, string, error) {
 	// Get all agents from registry
 	resp, err := client.Get(registryURL + "/agents")
 	if err != nil {
-		return "", fmt.Errorf("failed to connect to registry at %s: %w", registryURL, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("registry returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var agentsResp struct {
-		Agents []AgentWithCapabilities `json:"agents"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&agentsResp); err != nil {
-		return "", fmt.Errorf("failed to parse registry response: %w", err)
-	}
-
-	// Resolve agent name/prefix to specific agent ID
-	targetAgentID, err := resolveAgentPrefix(agentsResp.Agents, agentName, true)
-	if err != nil {
-		return "", err
-	}
-
-	// Find agent with matching tool (prefer healthy agents)
-	for _, agent := range agentsResp.Agents {
-		// Skip unhealthy agents
-		if agent.Status != "healthy" {
-			continue
-		}
-
-		// If agent was resolved via prefix, use that specific agent
-		if targetAgentID != "" && agent.ID != targetAgentID {
-			continue
-		}
-
-		// Check if agent has the tool (function_name is the MCP tool name)
-		for _, cap := range agent.Capabilities {
-			if cap.FunctionName == toolName {
-				if agent.Endpoint == "" {
-					return "", fmt.Errorf("agent '%s' has tool '%s' but no endpoint", agent.Name, toolName)
-				}
-				return agent.Endpoint, nil
-			}
-		}
-	}
-
-	if agentName != "" {
-		return "", fmt.Errorf("tool '%s' not found on agent '%s'", toolName, agentName)
-	}
-	return "", fmt.Errorf("no agent found with tool '%s'", toolName)
-}
-
-// findAgentWithToolIngress queries the registry via ingress to find an agent with the specified tool
-// Returns: extracted agent name (for ingress routing), host header for the agent, error
-func findAgentWithToolIngress(client *http.Client, ingressURL, ingressDomain, agentName, toolName string) (string, string, error) {
-	// Build registry URL and host header
-	var registryRequestURL string
-	registryHost := "registry." + ingressDomain
-
-	if ingressURL != "" {
-		registryRequestURL = strings.TrimSuffix(ingressURL, "/") + "/agents"
-	} else {
-		registryRequestURL = "http://" + registryHost + "/agents"
-	}
-
-	// Create request with Host header
-	req, err := http.NewRequest("GET", registryRequestURL, nil)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create request: %w", err)
-	}
-
-	// Set Host header for ingress routing (only needed if using ingressURL)
-	if ingressURL != "" {
-		req.Host = registryHost
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to connect to registry via ingress at %s: %w", registryRequestURL, err)
+		return "", "", fmt.Errorf("failed to connect to registry at %s: %w", registryURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -438,29 +371,42 @@ func findAgentWithToolIngress(client *http.Client, ingressURL, ingressDomain, ag
 		return "", "", err
 	}
 
-	// Find agent with matching tool (prefer healthy agents)
+	// Find agent with matching tool - first by function_name, then by capability name.
+	// Two-pass on same data: no extra registry call.
+
+	// Pass 1: Match by function_name (MCP tool name - exact match)
 	for _, agent := range agentsResp.Agents {
-		// Skip unhealthy agents
 		if agent.Status != "healthy" {
 			continue
 		}
-
-		// If agent was resolved via prefix, use that specific agent
 		if targetAgentID != "" && agent.ID != targetAgentID {
 			continue
 		}
-
-		// Check if agent has the tool (function_name is the MCP tool name)
 		for _, cap := range agent.Capabilities {
 			if cap.FunctionName == toolName {
 				if agent.Endpoint == "" {
 					return "", "", fmt.Errorf("agent '%s' has tool '%s' but no endpoint", agent.Name, toolName)
 				}
-				// Extract agent name from endpoint for ingress routing
-				// Pattern: {agent-name}-mcp-mesh-agent.{namespace}:{port} -> {agent-name}
-				extractedName := extractAgentNameFromEndpoint(agent.Endpoint)
-				agentHost := extractedName + "." + ingressDomain
-				return extractedName, agentHost, nil
+				return agent.Endpoint, cap.FunctionName, nil
+			}
+		}
+	}
+
+	// Pass 2: Fallback to capability name (cross-runtime consistency, e.g. Java camelCase methods)
+	for _, agent := range agentsResp.Agents {
+		if agent.Status != "healthy" {
+			continue
+		}
+		if targetAgentID != "" && agent.ID != targetAgentID {
+			continue
+		}
+		for _, cap := range agent.Capabilities {
+			if cap.Name == toolName {
+				if agent.Endpoint == "" {
+					return "", "", fmt.Errorf("agent '%s' has capability '%s' but no endpoint", agent.Name, toolName)
+				}
+				// Return the actual MCP tool name (FunctionName) for the call
+				return agent.Endpoint, cap.FunctionName, nil
 			}
 		}
 	}
@@ -469,6 +415,105 @@ func findAgentWithToolIngress(client *http.Client, ingressURL, ingressDomain, ag
 		return "", "", fmt.Errorf("tool '%s' not found on agent '%s'", toolName, agentName)
 	}
 	return "", "", fmt.Errorf("no agent found with tool '%s'", toolName)
+}
+
+// findAgentWithToolIngress queries the registry via ingress to find an agent with the specified tool.
+// Returns: extracted agent name (for ingress routing), host header for the agent, resolved MCP tool name, error.
+// The resolved name may differ from toolName when matched via capability name fallback.
+func findAgentWithToolIngress(client *http.Client, ingressURL, ingressDomain, agentName, toolName string) (string, string, string, error) {
+	// Build registry URL and host header
+	var registryRequestURL string
+	registryHost := "registry." + ingressDomain
+
+	if ingressURL != "" {
+		registryRequestURL = strings.TrimSuffix(ingressURL, "/") + "/agents"
+	} else {
+		registryRequestURL = "http://" + registryHost + "/agents"
+	}
+
+	// Create request with Host header
+	req, err := http.NewRequest("GET", registryRequestURL, nil)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set Host header for ingress routing (only needed if using ingressURL)
+	if ingressURL != "" {
+		req.Host = registryHost
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to connect to registry via ingress at %s: %w", registryRequestURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", "", "", fmt.Errorf("registry returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var agentsResp struct {
+		Agents []AgentWithCapabilities `json:"agents"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&agentsResp); err != nil {
+		return "", "", "", fmt.Errorf("failed to parse registry response: %w", err)
+	}
+
+	// Resolve agent name/prefix to specific agent ID
+	targetAgentID, err := resolveAgentPrefix(agentsResp.Agents, agentName, true)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	// Helper to build ingress result from matched agent
+	buildIngressResult := func(agent AgentWithCapabilities, resolvedToolName string) (string, string, string, error) {
+		if agent.Endpoint == "" {
+			return "", "", "", fmt.Errorf("agent '%s' has tool '%s' but no endpoint", agent.Name, resolvedToolName)
+		}
+		extractedName := extractAgentNameFromEndpoint(agent.Endpoint)
+		agentHost := extractedName + "." + ingressDomain
+		return extractedName, agentHost, resolvedToolName, nil
+	}
+
+	// Find agent with matching tool - first by function_name, then by capability name.
+	// Two-pass on same data: no extra registry call.
+
+	// Pass 1: Match by function_name (MCP tool name - exact match)
+	for _, agent := range agentsResp.Agents {
+		if agent.Status != "healthy" {
+			continue
+		}
+		if targetAgentID != "" && agent.ID != targetAgentID {
+			continue
+		}
+		for _, cap := range agent.Capabilities {
+			if cap.FunctionName == toolName {
+				return buildIngressResult(agent, cap.FunctionName)
+			}
+		}
+	}
+
+	// Pass 2: Fallback to capability name (cross-runtime consistency, e.g. Java camelCase methods)
+	for _, agent := range agentsResp.Agents {
+		if agent.Status != "healthy" {
+			continue
+		}
+		if targetAgentID != "" && agent.ID != targetAgentID {
+			continue
+		}
+		for _, cap := range agent.Capabilities {
+			if cap.Name == toolName {
+				return buildIngressResult(agent, cap.FunctionName)
+			}
+		}
+	}
+
+	if agentName != "" {
+		return "", "", "", fmt.Errorf("tool '%s' not found on agent '%s'", toolName, agentName)
+	}
+	return "", "", "", fmt.Errorf("no agent found with tool '%s'", toolName)
 }
 
 // extractAgentNameFromEndpoint extracts the agent name from a K8s service endpoint
