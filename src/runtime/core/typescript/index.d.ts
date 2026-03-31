@@ -45,12 +45,131 @@ export declare class JsAgentHandle {
 }
 
 /**
+ * Add tool execution results to the agentic loop.
+ *
+ * @param stateJson - Serialized loop state from a previous call
+ * @param toolResultsJson - Array of {tool_call_id, content} objects
+ * @returns Action JSON: call_llm or max_iterations
+ */
+export declare function addToolResults(stateJson: string, toolResultsJson: string): string
+
+/**
  * Auto-detect external IP address.
  *
  * Uses UDP socket trick to find the IP that would route to external networks.
  * Falls back to "localhost" if detection fails.
  */
 export declare function autoDetectIp(): string
+
+/**
+ * Build a JSON-RPC 2.0 request envelope.
+ *
+ * @param method - JSON-RPC method name (e.g., "tools/call")
+ * @param paramsJson - JSON string to embed as params
+ * @param requestId - Unique request identifier
+ * @returns Full JSON-RPC request string
+ */
+export declare function buildJsonrpcRequest(method: string, paramsJson: string, requestId: string): string
+
+/**
+ * Build the `response_format` JSON object for structured output.
+ *
+ * Returns null for vendors that do not support response_format.
+ *
+ * @param provider - Vendor name
+ * @param schemaJson - JSON schema string
+ * @param schemaName - Schema name for the response_format
+ * @param hasTools - Whether tools are present
+ * @returns JSON string with response_format, or null
+ */
+export declare function buildResponseFormat(provider: string, schemaJson: string, schemaName: string, hasTools: boolean): string | null
+
+/**
+ * Call a remote MCP tool via HTTP POST with retry.
+ *
+ * @param endpoint - MCP endpoint URL
+ * @param toolName - Name of the tool to call
+ * @param argsJson - Optional JSON string of tool arguments
+ * @param headersJson - Optional JSON object of extra headers
+ * @param timeoutMs - Request timeout in milliseconds
+ * @param maxRetries - Maximum number of retries on network error
+ * @returns Result content string
+ */
+export declare function callTool(endpoint: string, toolName: string, argsJson: string | undefined | null, headersJson: string | undefined | null, timeoutMs: number, maxRetries: number): Promise<string>
+
+/**
+ * Clean up temporary TLS credential files.
+ *
+ * Call during agent shutdown. Safe to call multiple times.
+ */
+export declare function cleanupTls(): void
+
+/**
+ * Create initial agentic loop state.
+ *
+ * @param configJson - JSON config with `messages` array and optional `maxIterations`
+ * @returns Action JSON with `action: "call_llm"` and serialized state
+ */
+export declare function createAgenticLoop(configJson: string): string
+
+/** Check if any tool schema property contains x-media-type. */
+export declare function detectMediaParams(schemaJson: string): boolean
+
+/**
+ * Determine output mode for a vendor given the context.
+ *
+ * @param provider - Vendor name (e.g., "anthropic", "openai", "gemini")
+ * @param isStringType - Whether the output schema is a plain string type
+ * @param hasTools - Whether tools are present in the request
+ * @param overrideMode - Optional override mode
+ * @returns Output mode: "text", "hint", or "strict"
+ */
+export declare function determineOutputMode(provider: string, isStringType: boolean, hasTools: boolean, overrideMode?: string | undefined | null): string
+
+/**
+ * Extract text content from MCP CallToolResult JSON.
+ *
+ * @param resultJson - JSON string of the MCP result
+ * @returns Extracted content string
+ */
+export declare function extractContent(resultJson: string): string
+
+/**
+ * Extract JSON from LLM response text.
+ *
+ * Strategies: code fences -> progressive object parse -> progressive array parse.
+ * Returns null if no JSON found.
+ */
+export declare function extractJson(text: string): string | null
+
+/** Extract trace context from HTTP headers with body fallback. */
+export declare function extractTraceContext(headersJson: string, bodyJson?: string | undefined | null): string
+
+/** Filter headers by propagation allowlist with prefix matching. */
+export declare function filterPropagationHeaders(headersJson: string, allowlistCsv: string): string
+
+/**
+ * Build the complete system prompt with vendor-specific additions.
+ *
+ * @param provider - Vendor name
+ * @param basePrompt - Base system prompt text
+ * @param hasTools - Whether tools are present
+ * @param hasMediaParams - Whether media parameters are present
+ * @param schemaJson - Optional JSON schema string
+ * @param schemaName - Optional schema name
+ * @param outputMode - Output mode: "text", "hint", or "strict"
+ * @returns Complete system prompt string
+ */
+export declare function formatSystemPrompt(provider: string, basePrompt: string, hasTools: boolean, hasMediaParams: boolean, schemaJson: string | undefined | null, schemaName: string | undefined | null, outputMode: string): string
+
+/** Generate a unique request ID (format: req_{millis}_{hex6}). */
+export declare function generateRequestId(): string
+
+/** Generate OpenTelemetry-compliant span ID (16-char hex, 64-bit). */
+export declare function generateSpanId(): string
+
+/** Generate OpenTelemetry-compliant trace ID (32-char hex, 128-bit). */
+export declare function generateTraceId(): string
 
 /**
  * Get the default value for a configuration key.
@@ -71,6 +190,14 @@ export declare function getDefault(keyName: string): string | null
  */
 export declare function getEnvVar(keyName: string): string | null
 
+/**
+ * Get a read-only view of the agentic loop state.
+ *
+ * @param stateJson - Serialized loop state
+ * @returns State info JSON with iteration, token counts, message_count
+ */
+export declare function getLoopState(stateJson: string): string
+
 /** Get Redis URL with fallback to default (redis://localhost:6379). */
 export declare function getRedisUrl(): string
 
@@ -79,8 +206,18 @@ export declare function getRedisUrl(): string
  *
  * Returns JSON string with TLS config including mode, cert paths, and enabled status.
  * SDKs should call this instead of reading TLS env vars directly.
+ * If prepare_tls() was called first, returns the cached resolved config
+ * (including temp file paths from Vault provider).
  */
 export declare function getTlsConfig(): string
+
+/**
+ * Get vendor capabilities as JSON.
+ *
+ * @param provider - Vendor name
+ * @returns JSON string with vendor capabilities
+ */
+export declare function getVendorCapabilities(provider: string): string
 
 /**
  * Initialize the trace publisher.
@@ -91,6 +228,12 @@ export declare function getTlsConfig(): string
  * @returns true if tracing is enabled and Redis is available, false otherwise.
  */
 export declare function initTracePublisher(): Promise<boolean>
+
+/** Inject trace context into JSON-RPC arguments. */
+export declare function injectTraceContext(argsJson: string, traceId: string, spanId: string, propagatedHeadersJson?: string | undefined | null): string
+
+/** Check if a JSON schema is simple enough for hint mode. */
+export declare function isSimpleSchema(schemaJson: string): boolean
 
 /**
  * Check if trace publishing is available.
@@ -268,6 +411,46 @@ export interface JsToolSpec {
 }
 
 /**
+ * Make a JSON schema strict for structured output.
+ *
+ * Adds additionalProperties: false to all object types.
+ * If addAllRequired is true, sets required to include all property keys.
+ */
+export declare function makeSchemaStrict(schemaJson: string, addAllRequired?: boolean | undefined | null): string
+
+/** Check if a header matches the propagation allowlist. */
+export declare function matchesPropagateHeader(headerName: string, allowlistCsv: string): boolean
+
+/**
+ * Parse SSE or plain JSON response and extract JSON data.
+ *
+ * @param responseText - Raw response body (SSE or plain JSON)
+ * @returns Extracted JSON string
+ */
+export declare function parseSseResponse(responseText: string): string
+
+/**
+ * Prepare TLS credentials (fetch from provider, write secure temp files).
+ *
+ * Must be called early in agent startup, before HTTP server starts.
+ * Results are cached globally -- subsequent calls to get_tls_config()
+ * will return the resolved config with temp file paths.
+ *
+ * @param agentName - Agent name for certificate CN
+ * @returns JSON string with TLS config
+ */
+export declare function prepareTls(agentName: string): string
+
+/**
+ * Process an LLM response in the agentic loop.
+ *
+ * @param stateJson - Serialized loop state from a previous call
+ * @param llmResponseJson - LLM response with optional tool_calls, content, usage
+ * @returns Action JSON: execute_tools, done, max_iterations, or error
+ */
+export declare function processLlmResponse(stateJson: string, llmResponseJson: string): string
+
+/**
  * Publish a trace span to Redis.
  *
  * Publishes span data to the `mesh:trace` Redis stream.
@@ -305,6 +488,9 @@ export declare function resolveConfigBool(keyName: string, paramValue?: boolean 
  */
 export declare function resolveConfigInt(keyName: string, paramValue?: number | undefined | null): number | null
 
+/** Sanitize a JSON schema by removing unsupported validation keywords. */
+export declare function sanitizeSchema(schemaJson: string): string
+
 /**
  * Start an agent runtime with the given specification.
  *
@@ -315,3 +501,6 @@ export declare function resolveConfigInt(keyName: string, paramValue?: number | 
  * - Event streaming
  */
 export declare function startAgent(spec: JsAgentSpec): JsAgentHandle
+
+/** Strip markdown code fences from content. */
+export declare function stripCodeFences(text: string): string

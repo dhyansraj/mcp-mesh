@@ -10,8 +10,11 @@
  * This module provides utilities to parse these responses.
  */
 
+import { parseSseResponse as coreParseSseResponse } from "@mcpmesh/core";
+
 /**
  * Parse a response that may be in SSE format or plain JSON.
+ * Delegates to Rust core for SSE/JSON extraction.
  *
  * @param responseText - Raw response text from HTTP request
  * @returns Parsed JSON object
@@ -31,27 +34,8 @@
  * ```
  */
 export function parseSSEResponse<T = unknown>(responseText: string): T {
-  // Check if it's SSE format (starts with "event:")
-  if (responseText.startsWith("event:")) {
-    const lines = responseText.split("\n");
-    let jsonData = "";
-
-    // Extract the last "data:" line (in case of multiple events)
-    for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        jsonData = line.slice(6); // Remove "data: " prefix
-      }
-    }
-
-    if (!jsonData) {
-      throw new Error("No data found in SSE response");
-    }
-
-    return JSON.parse(jsonData) as T;
-  }
-
-  // Plain JSON - parse directly
-  return JSON.parse(responseText) as T;
+  const jsonStr = coreParseSseResponse(responseText);
+  return JSON.parse(jsonStr) as T;
 }
 
 /**

@@ -10,6 +10,11 @@
 
 import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
+import {
+  sanitizeSchema as coreSanitizeSchema,
+  makeSchemaStrict as coreMakeSchemaStrict,
+  detectMediaParams as coreDetectMediaParams,
+} from "@mcpmesh/core";
 
 const debug = createDebug("provider-handler");
 
@@ -284,83 +289,11 @@ DECISION GUIDE:
 // Shared Schema Utilities
 // ============================================================================
 
-/**
- * Keywords that are validation-only and not supported by LLM structured output APIs.
- */
-const UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
-  "minimum",
-  "maximum",
-  "exclusiveMinimum",
-  "exclusiveMaximum",
-  "minLength",
-  "maxLength",
-  "minItems",
-  "maxItems",
-  "pattern",
-  "multipleOf",
-]);
-
-// ---- Shared schema walker ------------------------------------------------
-
-type SchemaVisitor = (node: Record<string, unknown>) => void;
-
-/**
- * Walk a JSON Schema tree, invoking `visitor` on every schema node.
- *
- * Recurses into $defs, properties, items, prefixItems, and anyOf/oneOf/allOf.
- */
-function walkSchemaRecursive(obj: unknown, visitor: SchemaVisitor): void {
-  if (typeof obj !== "object" || obj === null) return;
-  const record = obj as Record<string, unknown>;
-
-  visitor(record);
-
-  // Recurse into $defs
-  if (record.$defs && typeof record.$defs === "object") {
-    for (const def of Object.values(record.$defs as Record<string, unknown>)) {
-      walkSchemaRecursive(def, visitor);
-    }
-  }
-
-  // Recurse into properties
-  if (record.properties && typeof record.properties === "object") {
-    for (const prop of Object.values(record.properties as Record<string, unknown>)) {
-      walkSchemaRecursive(prop, visitor);
-    }
-  }
-
-  // Recurse into items (single schema or legacy array form)
-  if (record.items) {
-    if (Array.isArray(record.items)) {
-      for (const item of record.items as unknown[]) {
-        walkSchemaRecursive(item, visitor);
-      }
-    } else {
-      walkSchemaRecursive(record.items, visitor);
-    }
-  }
-
-  // Recurse into prefixItems (tuple validation in JSON Schema draft 2020-12)
-  if (Array.isArray(record.prefixItems)) {
-    for (const item of record.prefixItems as unknown[]) {
-      walkSchemaRecursive(item, visitor);
-    }
-  }
-
-  // Recurse into anyOf/oneOf/allOf
-  for (const keyword of ["anyOf", "oneOf", "allOf"]) {
-    if (Array.isArray(record[keyword])) {
-      for (const variant of record[keyword] as unknown[]) {
-        walkSchemaRecursive(variant, visitor);
-      }
-    }
-  }
-}
-
-// ---- Public schema utilities ---------------------------------------------
+// ---- Public schema utilities (delegated to Rust core) --------------------
 
 /**
  * Sanitize a JSON schema by removing validation keywords unsupported by LLM APIs.
+ * Delegates to Rust core.
  *
  * LLM structured output APIs (Claude, OpenAI, Gemini) typically only support
  * the structural parts of JSON Schema, not validation constraints. This function
@@ -372,14 +305,8 @@ function walkSchemaRecursive(obj: unknown, visitor: SchemaVisitor): void {
 export function sanitizeSchemaForStructuredOutput(
   schema: Record<string, unknown>
 ): Record<string, unknown> {
-  // Deep clone to avoid mutating original
-  const result = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
-  walkSchemaRecursive(result, (node) => {
-    for (const keyword of UNSUPPORTED_SCHEMA_KEYWORDS) {
-      delete node[keyword];
-    }
-  });
-  return result;
+  const result = coreSanitizeSchema(JSON.stringify(schema));
+  return JSON.parse(result) as Record<string, unknown>;
 }
 
 /**
@@ -396,6 +323,7 @@ export interface MakeSchemaStrictOptions {
 
 /**
  * Make a JSON schema strict for structured output.
+ * Delegates to Rust core.
  *
  * This is a shared utility used by OpenAI, Gemini, and Claude handlers.
  * Adds additionalProperties: false to all object types and optionally
@@ -410,18 +338,23 @@ export function makeSchemaStrict(
   options: MakeSchemaStrictOptions = {}
 ): Record<string, unknown> {
   const { addAllRequired = true } = options;
+  const result = coreMakeSchemaStrict(JSON.stringify(schema), addAllRequired);
+  return JSON.parse(result) as Record<string, unknown>;
+}
 
-  // Deep clone to avoid mutating original
-  const result = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
-  walkSchemaRecursive(result, (node) => {
-    if (node.type === "object") {
-      node.additionalProperties = false;
-      if (addAllRequired && node.properties && typeof node.properties === "object") {
-        node.required = Object.keys(node.properties as Record<string, unknown>);
-      }
-    }
+/**
+ * Check if any tool schema contains media parameters (x-media-type).
+ * Delegates to Rust core.
+ *
+ * @param toolSchemas - Array of tool schemas to check
+ * @returns true if any tool has media parameters
+ */
+export function hasMediaParams(toolSchemas: ToolSchema[] | null): boolean {
+  if (!toolSchemas || toolSchemas.length === 0) return false;
+  return toolSchemas.some((tool) => {
+    if (!tool.function.parameters) return false;
+    return coreDetectMediaParams(JSON.stringify(tool.function.parameters));
   });
-  return result;
 }
 
 /**

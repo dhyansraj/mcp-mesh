@@ -22,15 +22,13 @@
 
 import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
+import { formatSystemPrompt as coreFormatSystemPrompt } from "@mcpmesh/core";
 import {
   sanitizeSchemaForStructuredOutput,
   makeSchemaStrict,
+  hasMediaParams,
   defaultDetermineOutputMode,
   prepareRequestBaseline,
-  buildSchemaPromptContent,
-  BASE_TOOL_INSTRUCTIONS,
-  CLAUDE_ANTI_XML_INSTRUCTION,
-  DECISION_GUIDE,
   type ProviderHandler,
   type VendorCapabilities,
   type ToolSchema,
@@ -126,6 +124,7 @@ export class ClaudeHandler implements ProviderHandler {
 
   /**
    * Format system prompt for Claude with output mode support.
+   * Delegates to Rust core.
    *
    * Output Mode Strategy:
    * - strict: Brief JSON note (response_format handles schema enforcement)
@@ -138,67 +137,16 @@ export class ClaudeHandler implements ProviderHandler {
     outputSchema: OutputSchema | null,
     outputMode?: OutputMode
   ): string {
-    let systemContent = basePrompt;
-    const determinedMode = this.determineOutputMode(outputSchema, outputMode);
-
-    // Add tool calling instructions if tools available
-    // These prevent Claude from using XML-style <invoke> syntax
-    if (toolSchemas && toolSchemas.length > 0) {
-      // Use base instructions but insert anti-XML rule for Claude
-      const instructions = BASE_TOOL_INSTRUCTIONS.replace(
-        "- Make ONE tool call at a time",
-        `- Make ONE tool call at a time\n${CLAUDE_ANTI_XML_INSTRUCTION}`
-      );
-      systemContent += instructions;
-    }
-
-    // Add output format instructions based on mode
-    if (determinedMode === "text") {
-      // Text mode: No JSON instructions
-      return systemContent;
-    }
-
-    // Skip JSON instructions for no schema
-    if (!outputSchema) {
-      return systemContent;
-    }
-
-    // Strict mode: response_format handles enforcement.
-    // When tools are present, add DECISION GUIDE so Claude knows when to
-    // call tools vs return JSON directly (matches Java handler behavior).
-    if (determinedMode === "strict") {
-      if (toolSchemas && toolSchemas.length > 0) {
-        systemContent += DECISION_GUIDE;
-      }
-      systemContent += `\n\nYour final response will be structured as JSON matching the ${outputSchema.name} format.`;
-      return systemContent;
-    }
-
-    // Hint mode: Add detailed JSON schema instructions
-    if (determinedMode === "hint" && outputSchema) {
-      const { fieldsText, exampleJson } = buildSchemaPromptContent(outputSchema);
-
-      // Add DECISION GUIDE when tools are present to help Claude know when NOT to use tools
-      const decisionGuide = (toolSchemas && toolSchemas.length > 0) ? DECISION_GUIDE + "\n" : "";
-
-      systemContent += `
-${decisionGuide}
-RESPONSE FORMAT:
-You MUST respond with valid JSON matching this schema:
-{
-${fieldsText}
-}
-
-Example format:
-${exampleJson}
-
-CRITICAL: Your response must be ONLY the raw JSON object.
-- DO NOT wrap in markdown code fences (\`\`\`json or \`\`\`)
-- DO NOT include any text before or after the JSON
-- Start directly with { and end with }`;
-    }
-
-    return systemContent;
+    const mode = this.determineOutputMode(outputSchema, outputMode);
+    return coreFormatSystemPrompt(
+      "anthropic",
+      basePrompt,
+      !!toolSchemas && toolSchemas.length > 0,
+      hasMediaParams(toolSchemas),
+      outputSchema ? JSON.stringify(outputSchema.schema) : undefined,
+      outputSchema?.name ?? undefined,
+      mode,
+    );
   }
 
   /**

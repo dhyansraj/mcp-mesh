@@ -17,12 +17,16 @@ import {
 } from "../tracing.js";
 
 // Mock the @mcpmesh/core module
-vi.mock("@mcpmesh/core", () => ({
-  isTracingEnabled: vi.fn(() => false),
-  initTracePublisher: vi.fn(async () => true),
-  publishSpan: vi.fn(async () => true),
-  isTracePublisherAvailable: vi.fn(async () => true),
-}));
+vi.mock("@mcpmesh/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@mcpmesh/core")>();
+  return {
+    ...actual,
+    isTracingEnabled: vi.fn(() => false),
+    initTracePublisher: vi.fn(async () => true),
+    publishSpan: vi.fn(async () => true),
+    isTracePublisherAvailable: vi.fn(async () => true),
+  };
+});
 
 describe("generateTraceId", () => {
   it("should generate a 32-character hex string (UUID without dashes)", () => {

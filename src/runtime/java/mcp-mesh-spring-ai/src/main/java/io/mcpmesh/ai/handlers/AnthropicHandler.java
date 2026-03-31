@@ -1,5 +1,6 @@
 package io.mcpmesh.ai.handlers;
 
+import io.mcpmesh.core.MeshCoreBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
@@ -86,24 +87,51 @@ public class AnthropicHandler implements LlmProviderHandler {
             List<ToolDefinition> tools,
             OutputSchema outputSchema) {
 
-        StringBuilder systemContent = new StringBuilder(basePrompt != null ? basePrompt : "");
         String outputMode = determineOutputMode(outputSchema);
+        boolean hasTools = tools != null && !tools.isEmpty();
 
-        // Add tool calling instructions if tools available
+        // Delegate to Rust core
+        String schemaJson = null;
+        String schemaName = null;
+        if (outputSchema != null) {
+            schemaName = outputSchema.name();
+            try {
+                schemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(outputSchema.schema());
+            } catch (Exception e) {
+                log.warn("Failed to serialize schema for Rust core: {}", e.getMessage());
+            }
+        }
+
+        String result = MeshCoreBridge.formatSystemPrompt(
+            "anthropic", basePrompt, hasTools, false, schemaJson, schemaName, outputMode);
+        if (result != null) {
+            return result;
+        }
+
+        // Fallback: Java implementation
+        return formatSystemPromptFallback(basePrompt, tools, outputSchema, outputMode);
+    }
+
+    /**
+     * Fallback Java implementation for formatSystemPrompt.
+     */
+    private String formatSystemPromptFallback(
+            String basePrompt,
+            List<ToolDefinition> tools,
+            OutputSchema outputSchema,
+            String outputMode) {
+
+        StringBuilder systemContent = new StringBuilder(basePrompt != null ? basePrompt : "");
+
         if (tools != null && !tools.isEmpty()) {
             systemContent.append(BASE_TOOL_INSTRUCTIONS);
         }
 
-        // Add output format instructions based on mode
         if (OUTPUT_MODE_TEXT.equals(outputMode)) {
             // Text mode: No JSON instructions
-            // Do nothing
         } else if (OUTPUT_MODE_STRICT.equals(outputMode)) {
-            // Strict mode: Brief note (native output_format handles enforcement)
             if (outputSchema != null) {
                 if (tools != null && !tools.isEmpty()) {
-                    // When tools are present, add DECISION GUIDE so Claude knows
-                    // when to call tools vs return JSON directly
                     systemContent.append("""
 
             DECISION GUIDE:
@@ -117,7 +145,6 @@ public class AnthropicHandler implements LlmProviderHandler {
                     .append(" format.");
             }
         } else if (OUTPUT_MODE_HINT.equals(outputMode)) {
-            // Hint mode: Add detailed JSON schema instructions with DECISION GUIDE
             if (outputSchema != null) {
                 systemContent.append(buildHintModeInstructions(outputSchema, tools));
             }

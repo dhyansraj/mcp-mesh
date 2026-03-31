@@ -5,6 +5,7 @@ import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.PropertyNamingStrategies;
 import tools.jackson.databind.json.JsonMapper;
+import io.mcpmesh.core.MeshCoreBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -151,8 +152,25 @@ public class StructuredOutputParser {
 
     /**
      * Extract JSON from a text response.
+     *
+     * <p>Delegates to Rust core for consistent cross-SDK behavior.
+     * Falls back to Java regex-based extraction if the native library is unavailable.
      */
     private String extractJson(String response, boolean expectArray) {
+        // Delegate to Rust core
+        String extracted = MeshCoreBridge.extractJson(response);
+        if (extracted != null) {
+            return extracted;
+        }
+
+        // Fallback: Java regex-based extraction (used when Rust core unavailable)
+        return extractJsonFallback(response, expectArray);
+    }
+
+    /**
+     * Fallback JSON extraction using Java regex patterns.
+     */
+    private String extractJsonFallback(String response, boolean expectArray) {
         // First, try to extract from code blocks
         Matcher codeBlockMatcher = CODE_BLOCK_PATTERN.matcher(response);
         if (codeBlockMatcher.find()) {

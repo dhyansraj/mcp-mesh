@@ -1,5 +1,6 @@
 package io.mcpmesh.ai.handlers;
 
+import io.mcpmesh.core.MeshCoreBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -82,19 +83,51 @@ public class GeminiHandler implements LlmProviderHandler {
             List<ToolDefinition> tools,
             OutputSchema outputSchema) {
 
+        String outputMode = determineOutputMode(outputSchema);
+        boolean hasTools = tools != null && !tools.isEmpty();
+
+        // Delegate to Rust core
+        String schemaJson = null;
+        String schemaName = null;
+        if (outputSchema != null) {
+            schemaName = outputSchema.name();
+            try {
+                schemaJson = MAPPER.writeValueAsString(outputSchema.schema());
+            } catch (Exception e) {
+                log.warn("Failed to serialize schema for Rust core: {}", e.getMessage());
+            }
+        }
+
+        String result = MeshCoreBridge.formatSystemPrompt(
+            "gemini", basePrompt, hasTools, false, schemaJson, schemaName, outputMode);
+        if (result != null) {
+            return result;
+        }
+
+        // Fallback: Java implementation
+        return formatSystemPromptFallback(basePrompt, tools, outputSchema, hasTools);
+    }
+
+    /**
+     * Fallback Java implementation for formatSystemPrompt.
+     */
+    @SuppressWarnings("unchecked")
+    private String formatSystemPromptFallback(
+            String basePrompt,
+            List<ToolDefinition> tools,
+            OutputSchema outputSchema,
+            boolean hasTools) {
+
         StringBuilder systemContent = new StringBuilder(basePrompt != null ? basePrompt : "");
 
-        // Add tool calling instructions if tools available
-        if (tools != null && !tools.isEmpty()) {
+        if (hasTools) {
             systemContent.append(BASE_TOOL_INSTRUCTIONS);
         }
 
-        // Add output format instructions
         if (outputSchema != null) {
             systemContent.append("\n\n");
 
-            // Add DECISION GUIDE when tools are present (aligned with Python/TypeScript)
-            if (tools != null && !tools.isEmpty()) {
+            if (hasTools) {
                 systemContent.append("DECISION GUIDE:\n")
                     .append("- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.\n")
                     .append("- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.\n")
@@ -105,18 +138,14 @@ public class GeminiHandler implements LlmProviderHandler {
                 .append("Your final response must be ONLY valid JSON (no markdown, no code blocks) with this exact structure:\n")
                 .append("{\n");
 
-            // Sanitize schema to remove unsupported validation keywords (minimum, maximum, etc.)
-            @SuppressWarnings("unchecked")
             Map<String, Object> properties = (Map<String, Object>) outputSchema.sanitize().get("properties");
             if (properties != null) {
                 int i = 0;
                 for (Map.Entry<String, Object> entry : properties.entrySet()) {
                     String propName = entry.getKey();
-                    @SuppressWarnings("unchecked")
                     Map<String, Object> propSchema = (Map<String, Object>) entry.getValue();
                     String propType = (String) propSchema.get("type");
 
-                    // Show example value based on type
                     String exampleValue;
                     if ("string".equals(propType)) {
                         exampleValue = "\"<your " + propName + " here>\"";

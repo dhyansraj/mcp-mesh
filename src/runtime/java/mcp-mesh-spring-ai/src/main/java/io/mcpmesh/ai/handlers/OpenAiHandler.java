@@ -1,5 +1,6 @@
 package io.mcpmesh.ai.handlers;
 
+import io.mcpmesh.core.MeshCoreBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -76,15 +77,34 @@ public class OpenAiHandler implements LlmProviderHandler {
             List<ToolDefinition> tools,
             OutputSchema outputSchema) {
 
+        String outputMode = determineOutputMode(outputSchema);
+        boolean hasTools = tools != null && !tools.isEmpty();
+
+        // Delegate to Rust core
+        String schemaJson = null;
+        String schemaName = null;
+        if (outputSchema != null) {
+            schemaName = outputSchema.name();
+            try {
+                schemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(outputSchema.schema());
+            } catch (Exception e) {
+                log.warn("Failed to serialize schema for Rust core: {}", e.getMessage());
+            }
+        }
+
+        String result = MeshCoreBridge.formatSystemPrompt(
+            "openai", basePrompt, hasTools, false, schemaJson, schemaName, outputMode);
+        if (result != null) {
+            return result;
+        }
+
+        // Fallback: Java implementation
         StringBuilder systemContent = new StringBuilder(basePrompt != null ? basePrompt : "");
 
-        // Add tool calling instructions if tools available
-        if (tools != null && !tools.isEmpty()) {
+        if (hasTools) {
             systemContent.append(BASE_TOOL_INSTRUCTIONS);
         }
 
-        // OpenAI: NO detailed JSON schema in prompt - response_format handles it
-        // Just add a brief note for context
         if (outputSchema != null) {
             systemContent.append("\n\nYour final response will be structured as JSON matching the ")
                 .append(outputSchema.name())

@@ -1,5 +1,7 @@
 package io.mcpmesh.spring.tracing;
 
+import io.mcpmesh.core.MeshCoreBridge;
+
 import java.util.UUID;
 
 /**
@@ -109,18 +111,28 @@ public class TraceInfo {
     /**
      * Generate a new trace ID (OpenTelemetry compliant).
      *
+     * <p>Delegates to Rust core for consistent cross-SDK behavior.
+     * Falls back to Java UUID-based generation if the native library is unavailable.
+     *
      * @return 32-character hex string (128-bit trace ID)
      */
     public static String generateTraceId() {
+        String id = MeshCoreBridge.generateTraceId();
+        if (id != null) return id;
         return UUID.randomUUID().toString().replace("-", "");
     }
 
     /**
      * Generate a new span ID (OpenTelemetry compliant).
      *
+     * <p>Delegates to Rust core for consistent cross-SDK behavior.
+     * Falls back to Java UUID-based generation if the native library is unavailable.
+     *
      * @return 16-character hex string (64-bit span ID)
      */
     public static String generateSpanId() {
+        String id = MeshCoreBridge.generateSpanId();
+        if (id != null) return id;
         return UUID.randomUUID().toString().replace("-", "").substring(0, 16);
     }
 

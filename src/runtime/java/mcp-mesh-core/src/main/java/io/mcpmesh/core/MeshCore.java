@@ -230,4 +230,202 @@ public interface MeshCore {
      * @return Version string (do not free)
      */
     String mesh_version();
+
+    // ==========================================================================
+    // Response Parsing Functions
+    // ==========================================================================
+
+    /**
+     * Extract JSON from text that may contain markdown code fences or mixed content.
+     *
+     * @param text The text to extract JSON from
+     * @return JSON string (caller must free with mesh_free_string), or NULL if no JSON found
+     */
+    Pointer mesh_extract_json(String text);
+
+    /**
+     * Strip markdown code fences from text.
+     *
+     * @param text The text to strip code fences from
+     * @return Stripped text (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_strip_code_fences(String text);
+
+    // ==========================================================================
+    // Schema Normalization Functions
+    // ==========================================================================
+
+    /**
+     * Make a JSON schema strict (add additionalProperties: false, all properties required).
+     *
+     * @param schemaJson JSON schema string
+     * @param addAllRequired 1 to add all properties to required array, 0 otherwise
+     * @return Strict schema JSON (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_make_schema_strict(String schemaJson, int addAllRequired);
+
+    /**
+     * Sanitize a JSON schema by removing validation keywords unsupported by LLM APIs.
+     *
+     * @param schemaJson JSON schema string
+     * @return Sanitized schema JSON (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_sanitize_schema(String schemaJson);
+
+    /**
+     * Detect if a schema contains media-related parameters (image, audio, etc.).
+     *
+     * @param schemaJson JSON schema string
+     * @return 1 if media params detected, 0 otherwise
+     */
+    int mesh_detect_media_params(String schemaJson);
+
+    /**
+     * Check if a schema is simple (few fields, no nesting).
+     *
+     * @param schemaJson JSON schema string
+     * @return 1 if simple, 0 if complex
+     */
+    int mesh_is_simple_schema(String schemaJson);
+
+    // ==========================================================================
+    // Trace Context Functions
+    // ==========================================================================
+
+    /**
+     * Generate an OpenTelemetry-compliant trace ID (32-character hex string).
+     *
+     * @return Trace ID (caller must free with mesh_free_string)
+     */
+    Pointer mesh_generate_trace_id();
+
+    /**
+     * Generate an OpenTelemetry-compliant span ID (16-character hex string).
+     *
+     * @return Span ID (caller must free with mesh_free_string)
+     */
+    Pointer mesh_generate_span_id();
+
+    /**
+     * Inject trace context into tool call arguments.
+     *
+     * @param argsJson JSON string of tool arguments
+     * @param traceId Trace ID to inject
+     * @param spanId Span ID to inject
+     * @param propagatedHeadersJson JSON string of propagated headers (may be null)
+     * @return Updated args JSON (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_inject_trace_context(String argsJson, String traceId, String spanId, String propagatedHeadersJson);
+
+    /**
+     * Extract trace context from headers and body.
+     *
+     * @param headersJson JSON string of HTTP headers
+     * @param bodyJson JSON string of request body
+     * @return JSON with extracted trace context (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_extract_trace_context(String headersJson, String bodyJson);
+
+    /**
+     * Filter headers by propagation allowlist.
+     *
+     * @param headersJson JSON string of headers to filter
+     * @param allowlistCsv Comma-separated list of allowed header prefixes
+     * @return Filtered headers JSON (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_filter_propagation_headers(String headersJson, String allowlistCsv);
+
+    /**
+     * Check if a header name matches any prefix in the propagation allowlist.
+     *
+     * @param headerName Header name to check
+     * @param allowlistCsv Comma-separated list of allowed header prefixes
+     * @return 1 if matches, 0 otherwise
+     */
+    int mesh_matches_propagate_header(String headerName, String allowlistCsv);
+
+    // ==========================================================================
+    // MCP Client Functions
+    // ==========================================================================
+
+    /**
+     * Build a JSON-RPC request string.
+     *
+     * @param method JSON-RPC method name
+     * @param paramsJson JSON string of parameters
+     * @param requestId Request ID string
+     * @return JSON-RPC request string (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_build_jsonrpc_request(String method, String paramsJson, String requestId);
+
+    /**
+     * Generate a unique request ID for JSON-RPC calls.
+     *
+     * @return Request ID string (caller must free with mesh_free_string)
+     */
+    Pointer mesh_generate_request_id();
+
+    /**
+     * Parse SSE (Server-Sent Events) response text to extract JSON content.
+     *
+     * @param responseText The SSE-formatted response text
+     * @return Extracted JSON content (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_parse_sse_response(String responseText);
+
+    /**
+     * Extract content from a JSON-RPC result node.
+     *
+     * @param resultJson JSON string of the result object
+     * @return Extracted content JSON (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_extract_content(String resultJson);
+
+    // ==========================================================================
+    // Provider Functions
+    // ==========================================================================
+
+    /**
+     * Determine the output mode for a provider.
+     *
+     * @param provider Vendor name (e.g., "anthropic", "openai", "gemini")
+     * @param isStringType 1 if the return type is String, 0 otherwise
+     * @param hasTools 1 if tools are present, 0 otherwise
+     * @param overrideMode Optional override mode (may be null)
+     * @return Output mode string (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_determine_output_mode(String provider, int isStringType, int hasTools, String overrideMode);
+
+    /**
+     * Format system prompt with vendor-specific additions.
+     *
+     * @param provider Vendor name (e.g., "anthropic", "openai", "gemini")
+     * @param basePrompt Base system prompt text
+     * @param hasTools 1 if tools are present, 0 otherwise
+     * @param hasMediaParams 1 if media parameters are present, 0 otherwise
+     * @param schemaJson Optional JSON schema string (may be null)
+     * @param schemaName Optional schema name (may be null)
+     * @param outputMode Output mode: "text", "hint", or "strict"
+     * @return Complete system prompt (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_format_system_prompt(String provider, String basePrompt, int hasTools, int hasMediaParams, String schemaJson, String schemaName, String outputMode);
+
+    /**
+     * Build the response_format object for structured output.
+     *
+     * @param provider Vendor name
+     * @param schemaJson JSON schema string
+     * @param schemaName Schema name
+     * @param hasTools 1 if tools are present, 0 otherwise
+     * @return Response format JSON (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_build_response_format(String provider, String schemaJson, String schemaName, int hasTools);
+
+    /**
+     * Get vendor capabilities as JSON.
+     *
+     * @param provider Vendor name
+     * @return Capabilities JSON (caller must free with mesh_free_string), or NULL on error
+     */
+    Pointer mesh_get_vendor_capabilities(String provider);
 }

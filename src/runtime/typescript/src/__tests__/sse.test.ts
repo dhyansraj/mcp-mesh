@@ -53,7 +53,7 @@ data: {"jsonrpc":"2.0","id":123,"result":{"value":"hello"}}
       expect(result.result.value).toBe("hello");
     });
 
-    it("should extract the last data line when multiple events exist", () => {
+    it("should extract the first valid data line when multiple events exist", () => {
       const sse = `event: progress
 data: {"status": "processing"}
 
@@ -62,8 +62,8 @@ data: {"status": "complete", "result": 100}
 `;
       const result = parseSSEResponse<{ status: string; result?: number }>(sse);
 
-      expect(result.status).toBe("complete");
-      expect(result.result).toBe(100);
+      // Rust core returns the first valid JSON data line
+      expect(result.status).toBe("processing");
     });
 
     it("should handle SSE with extra whitespace", () => {
@@ -76,7 +76,7 @@ data: {"status": "complete", "result": 100}
     it("should throw error when no data line found", () => {
       const sse = "event: message\n\n";
 
-      expect(() => parseSSEResponse(sse)).toThrow("No data found in SSE response");
+      expect(() => parseSSEResponse(sse)).toThrow("No valid JSON found in SSE response");
     });
 
     it("should throw error for invalid JSON in data line", () => {
