@@ -52,6 +52,7 @@ import {
 import { llmProvider, getLlmProviderMeta } from "./llm-provider.js";
 import { findAndSetBasePath } from "./template.js";
 import { getTlsOptions, getTlsConfigCached, prepareTls, cleanupTls } from "./tls-config.js";
+import { closeHttpPool } from "./http-pool.js";
 
 // Internal: pending agent for auto-start
 let pendingAgent: MeshAgent | null = null;
@@ -879,6 +880,11 @@ export class MeshAgent {
    * Shutdown the agent gracefully.
    */
   async shutdown(): Promise<void> {
+    try {
+      await closeHttpPool();
+    } catch (err) {
+      console.warn("Error closing HTTP pool:", err);
+    }
     if (this.httpsProxy) {
       this.httpsProxy.close();
       this.httpsProxy = undefined;
