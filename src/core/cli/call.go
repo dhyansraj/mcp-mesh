@@ -89,12 +89,16 @@ func NewCallCommand() *cobra.Command {
 The command discovers the agent endpoint via the registry and makes the MCP call
 with proper headers. Arguments can be provided as JSON string or via --file flag.
 
+Tool lookup matches by MCP tool name first, then falls back to capability name.
+This allows calling tools by either name (e.g., 'get_weather' or 'weather.get_weather').
+
 By default, calls are routed through the registry proxy. This allows external access
 to agents running in Docker/Kubernetes without exposing individual agent ports.
 
 Examples:
   # Most common - auto-discover agent by tool name
   meshctl call get_weather                                # Tool name only (recommended)
+  meshctl call weather.get_weather                        # By capability name
   meshctl call add '{"a": 1, "b": 2}'                     # With JSON arguments
   meshctl call process --file data.json                   # Arguments from file
 
