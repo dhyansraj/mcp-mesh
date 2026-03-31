@@ -284,10 +284,24 @@ fn format_hint_detailed(schema: &Value, schema_name: &str, has_tools: bool) -> S
             .unwrap_or_default();
 
         for (name, prop) in properties {
-            let field_type = prop
+            let base_type = prop
                 .get("type")
                 .and_then(|t| t.as_str())
                 .unwrap_or("any");
+            // For arrays, include item type (e.g., "array of string")
+            let field_type = if base_type == "array" {
+                if let Some(item_type) = prop
+                    .get("items")
+                    .and_then(|i| i.get("type"))
+                    .and_then(|t| t.as_str())
+                {
+                    format!("array of {}", item_type)
+                } else {
+                    base_type.to_string()
+                }
+            } else {
+                base_type.to_string()
+            };
             let req_marker = if required.contains(&name.as_str()) {
                 " (required)"
             } else {
@@ -316,7 +330,24 @@ fn format_hint_detailed(schema: &Value, schema_name: &str, has_tools: bool) -> S
             .iter()
             .map(|(name, prop)| {
                 let type_str = prop.get("type").and_then(|t| t.as_str()).unwrap_or("value");
-                (name.clone(), Value::String(format!("<{}>", type_str)))
+                let example_val = match type_str {
+                    "array" => {
+                        // Show typed array example based on items.type
+                        match prop.get("items").and_then(|i| i.get("type")).and_then(|t| t.as_str()) {
+                            Some("string") => Value::Array(vec![
+                                Value::String("string1".to_string()),
+                                Value::String("string2".to_string()),
+                            ]),
+                            Some("integer") | Some("number") => Value::Array(vec![
+                                Value::Number(serde_json::Number::from(1)),
+                                Value::Number(serde_json::Number::from(2)),
+                            ]),
+                            _ => Value::String(format!("<{}>", type_str)),
+                        }
+                    }
+                    _ => Value::String(format!("<{}>", type_str)),
+                };
+                (name.clone(), example_val)
             })
             .collect();
         if let Ok(example_str) = serde_json::to_string_pretty(&Value::Object(example)) {
