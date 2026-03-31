@@ -27,9 +27,13 @@ function getHttpAgent(): Agent {
 
 function getHttpsAgent(): Agent | null {
   if (!httpsAgent) {
-    const tlsOpts = getTlsOptions();
-    if (tlsOpts) {
-      httpsAgent = new Agent({ ...POOL_CONFIG, connect: tlsOpts });
+    try {
+      const tlsOpts = getTlsOptions();
+      if (tlsOpts) {
+        httpsAgent = new Agent({ ...POOL_CONFIG, connect: tlsOpts });
+      }
+    } catch (err) {
+      console.warn("Failed to create HTTPS agent with mTLS:", err);
     }
   }
   return httpsAgent;
@@ -53,9 +57,9 @@ export function getDispatcher(url: string): Agent | undefined {
 /**
  * Close all pooled HTTP agents. Call during application shutdown.
  */
-export function closeHttpPool(): void {
-  httpAgent?.close();
+export async function closeHttpPool(): Promise<void> {
+  await httpAgent?.close();
   httpAgent = null;
-  httpsAgent?.close();
+  await httpsAgent?.close();
   httpsAgent = null;
 }
