@@ -1362,6 +1362,292 @@ pub unsafe extern "C" fn mesh_matches_propagate_header(
 }
 
 // =============================================================================
+// MCP Client Functions
+// =============================================================================
+
+/// Global tokio runtime for MCP client operations.
+/// Lazily initialized on first call_tool invocation.
+static MCP_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+
+fn get_mcp_runtime() -> &'static tokio::runtime::Runtime {
+    MCP_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("mesh-mcp")
+            .enable_all()
+            .build()
+            .expect("Failed to create MCP runtime")
+    })
+}
+
+/// Build a JSON-RPC 2.0 request envelope.
+///
+/// # Arguments
+/// * `method` - JSON-RPC method name
+/// * `params_json` - JSON string for params
+/// * `request_id` - Unique request identifier
+///
+/// # Returns
+/// JSON-RPC request string (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * All parameters must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn mesh_build_jsonrpc_request(
+    method: *const c_char,
+    params_json: *const c_char,
+    request_id: *const c_char,
+) -> *mut c_char {
+    if method.is_null() {
+        set_last_error("method is null");
+        return ptr::null_mut();
+    }
+    if params_json.is_null() {
+        set_last_error("params_json is null");
+        return ptr::null_mut();
+    }
+    if request_id.is_null() {
+        set_last_error("request_id is null");
+        return ptr::null_mut();
+    }
+
+    let method_str = match CStr::from_ptr(method).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in method: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let params_str = match CStr::from_ptr(params_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in params_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let id_str = match CStr::from_ptr(request_id).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in request_id: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::mcp_client::build_jsonrpc_request(method_str, params_str, id_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Generate a unique request ID.
+///
+/// # Returns
+/// Request ID string (caller must free with `mesh_free_string`)
+#[no_mangle]
+pub extern "C" fn mesh_generate_request_id() -> *mut c_char {
+    let id = crate::mcp_client::generate_request_id();
+    match CString::new(id) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Parse SSE or plain JSON response.
+///
+/// # Arguments
+/// * `response_text` - Raw response body
+///
+/// # Returns
+/// Extracted JSON string (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `response_text` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_parse_sse_response(response_text: *const c_char) -> *mut c_char {
+    if response_text.is_null() {
+        set_last_error("response_text is null");
+        return ptr::null_mut();
+    }
+
+    let text_str = match CStr::from_ptr(response_text).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in response_text: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::mcp_client::parse_sse_response(text_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Extract text content from MCP CallToolResult.
+///
+/// # Arguments
+/// * `result_json` - JSON string of the MCP result
+///
+/// # Returns
+/// Extracted content string (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `result_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_extract_content(result_json: *const c_char) -> *mut c_char {
+    if result_json.is_null() {
+        set_last_error("result_json is null");
+        return ptr::null_mut();
+    }
+
+    let json_str = match CStr::from_ptr(result_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in result_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::mcp_client::extract_content(json_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Call a remote MCP tool via HTTP POST with retry.
+///
+/// # Arguments
+/// * `endpoint` - MCP endpoint URL
+/// * `tool_name` - Name of the tool to call
+/// * `args_json` - Optional JSON string of tool arguments (may be NULL)
+/// * `headers_json` - Optional JSON object of extra headers (may be NULL)
+/// * `timeout_ms` - Request timeout in milliseconds
+/// * `max_retries` - Maximum number of retries on network error
+///
+/// # Returns
+/// Result string (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `endpoint` and `tool_name` must be valid null-terminated C strings
+/// * `args_json` and `headers_json` may be NULL
+#[no_mangle]
+pub unsafe extern "C" fn mesh_call_tool(
+    endpoint: *const c_char,
+    tool_name: *const c_char,
+    args_json: *const c_char,
+    headers_json: *const c_char,
+    timeout_ms: i64,
+    max_retries: i32,
+) -> *mut c_char {
+    if endpoint.is_null() {
+        set_last_error("endpoint is null");
+        return ptr::null_mut();
+    }
+    if tool_name.is_null() {
+        set_last_error("tool_name is null");
+        return ptr::null_mut();
+    }
+
+    let endpoint_str = match CStr::from_ptr(endpoint).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in endpoint: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let tool_str = match CStr::from_ptr(tool_name).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in tool_name: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let args_opt = if args_json.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(args_json).to_str() {
+            Ok(s) => Some(s.to_string()),
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in args_json: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let headers_opt = if headers_json.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(headers_json).to_str() {
+            Ok(s) => Some(s.to_string()),
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in headers_json: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let timeout = if timeout_ms > 0 { timeout_ms as u64 } else { 30000 };
+    let retries = if max_retries >= 0 { max_retries as u32 } else { 1 };
+
+    let rt = get_mcp_runtime();
+    let result = rt.block_on(async {
+        crate::mcp_client::call_tool(
+            endpoint_str,
+            tool_str,
+            args_opt.as_deref(),
+            headers_opt.as_deref(),
+            timeout,
+            retries,
+        ).await
+    });
+
+    match result {
+        Ok(content) => match CString::new(content) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 

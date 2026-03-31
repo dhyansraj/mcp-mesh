@@ -677,6 +677,76 @@ pub fn matches_propagate_header(header_name: String, allowlist_csv: String) -> b
     crate::trace_context::matches_propagate_header(&header_name, &allowlist_csv)
 }
 
+// =============================================================================
+// MCP Client
+// =============================================================================
+
+/// Build a JSON-RPC 2.0 request envelope.
+///
+/// @param method - JSON-RPC method name (e.g., "tools/call")
+/// @param paramsJson - JSON string to embed as params
+/// @param requestId - Unique request identifier
+/// @returns Full JSON-RPC request string
+#[napi]
+pub fn build_jsonrpc_request(method: String, params_json: String, request_id: String) -> napi::Result<String> {
+    crate::mcp_client::build_jsonrpc_request(&method, &params_json, &request_id)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Generate a unique request ID (format: req_{millis}_{hex6}).
+#[napi]
+pub fn generate_request_id() -> String {
+    crate::mcp_client::generate_request_id()
+}
+
+/// Parse SSE or plain JSON response and extract JSON data.
+///
+/// @param responseText - Raw response body (SSE or plain JSON)
+/// @returns Extracted JSON string
+#[napi]
+pub fn parse_sse_response(response_text: String) -> napi::Result<String> {
+    crate::mcp_client::parse_sse_response(&response_text)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Extract text content from MCP CallToolResult JSON.
+///
+/// @param resultJson - JSON string of the MCP result
+/// @returns Extracted content string
+#[napi]
+pub fn extract_content(result_json: String) -> napi::Result<String> {
+    crate::mcp_client::extract_content(&result_json)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Call a remote MCP tool via HTTP POST with retry.
+///
+/// @param endpoint - MCP endpoint URL
+/// @param toolName - Name of the tool to call
+/// @param argsJson - Optional JSON string of tool arguments
+/// @param headersJson - Optional JSON object of extra headers
+/// @param timeoutMs - Request timeout in milliseconds
+/// @param maxRetries - Maximum number of retries on network error
+/// @returns Result content string
+#[napi]
+pub async fn call_tool(
+    endpoint: String,
+    tool_name: String,
+    args_json: Option<String>,
+    headers_json: Option<String>,
+    timeout_ms: i64,
+    max_retries: i32,
+) -> napi::Result<String> {
+    crate::mcp_client::call_tool(
+        &endpoint,
+        &tool_name,
+        args_json.as_deref(),
+        headers_json.as_deref(),
+        timeout_ms as u64,
+        max_retries as u32,
+    ).await.map_err(|e| napi::Error::from_reason(e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -451,6 +451,75 @@ char *mesh_filter_propagation_headers(const char *headers_json, const char *allo
 // * Both parameters must be valid null-terminated C strings
 int32_t mesh_matches_propagate_header(const char *header_name, const char *allowlist_csv);
 
+// Build a JSON-RPC 2.0 request envelope.
+//
+// # Arguments
+// * `method` - JSON-RPC method name
+// * `params_json` - JSON string for params
+// * `request_id` - Unique request identifier
+//
+// # Returns
+// JSON-RPC request string (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * All parameters must be valid null-terminated C strings
+char *mesh_build_jsonrpc_request(const char *method,
+                                 const char *params_json,
+                                 const char *request_id);
+
+// Generate a unique request ID.
+//
+// # Returns
+// Request ID string (caller must free with `mesh_free_string`)
+char *mesh_generate_request_id(void);
+
+// Parse SSE or plain JSON response.
+//
+// # Arguments
+// * `response_text` - Raw response body
+//
+// # Returns
+// Extracted JSON string (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `response_text` must be a valid null-terminated C string
+char *mesh_parse_sse_response(const char *response_text);
+
+// Extract text content from MCP CallToolResult.
+//
+// # Arguments
+// * `result_json` - JSON string of the MCP result
+//
+// # Returns
+// Extracted content string (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `result_json` must be a valid null-terminated C string
+char *mesh_extract_content(const char *result_json);
+
+// Call a remote MCP tool via HTTP POST with retry.
+//
+// # Arguments
+// * `endpoint` - MCP endpoint URL
+// * `tool_name` - Name of the tool to call
+// * `args_json` - Optional JSON string of tool arguments (may be NULL)
+// * `headers_json` - Optional JSON object of extra headers (may be NULL)
+// * `timeout_ms` - Request timeout in milliseconds
+// * `max_retries` - Maximum number of retries on network error
+//
+// # Returns
+// Result string (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `endpoint` and `tool_name` must be valid null-terminated C strings
+// * `args_json` and `headers_json` may be NULL
+char *mesh_call_tool(const char *endpoint,
+                     const char *tool_name,
+                     const char *args_json,
+                     const char *headers_json,
+                     int64_t timeout_ms,
+                     int32_t max_retries);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

@@ -41,6 +41,7 @@ pub mod runtime;
 pub mod schema;
 pub mod spec;
 pub mod tls;
+pub mod mcp_client;
 pub mod trace_context;
 pub mod tracing_publish;
 pub mod vault;
@@ -260,6 +261,68 @@ fn matches_propagate_header_py(header_name: &str, allowlist_csv: &str) -> bool {
     trace_context::matches_propagate_header(header_name, allowlist_csv)
 }
 
+// =============================================================================
+// MCP Client (Python bindings)
+// =============================================================================
+
+/// Build a JSON-RPC 2.0 request envelope (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn build_jsonrpc_request_py(method: &str, params_json: &str, request_id: &str) -> PyResult<String> {
+    mcp_client::build_jsonrpc_request(method, params_json, request_id)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+}
+
+/// Generate a unique request ID (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn generate_request_id_py() -> String {
+    mcp_client::generate_request_id()
+}
+
+/// Parse SSE or plain JSON response (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn parse_sse_response_py(response_text: &str) -> PyResult<String> {
+    mcp_client::parse_sse_response(response_text)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+}
+
+/// Extract text content from MCP CallToolResult (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn extract_content_py(result_json: &str) -> PyResult<String> {
+    mcp_client::extract_content(result_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+}
+
+/// Call a remote MCP tool via HTTP POST with retry (Python binding).
+#[cfg(feature = "python")]
+#[pyfunction]
+#[pyo3(signature = (endpoint, tool_name, args_json=None, headers_json=None, timeout_ms=30000, max_retries=1))]
+fn call_tool_py(
+    py: Python<'_>,
+    endpoint: &str,
+    tool_name: &str,
+    args_json: Option<&str>,
+    headers_json: Option<&str>,
+    timeout_ms: u64,
+    max_retries: u32,
+) -> PyResult<String> {
+    let endpoint = endpoint.to_string();
+    let tool_name = tool_name.to_string();
+    let args = args_json.map(|s| s.to_string());
+    let headers = headers_json.map(|s| s.to_string());
+
+    pyo3_async_runtimes::tokio::get_runtime().block_on(py.allow_threads(|| async {
+        mcp_client::call_tool(
+            &endpoint, &tool_name,
+            args.as_deref(), headers.as_deref(),
+            timeout_ms, max_retries,
+        ).await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
+    }))
+}
+
 /// MCP Mesh Core Python module.
 #[cfg(feature = "python")]
 #[pymodule]
@@ -317,6 +380,13 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_trace_context_py, m)?)?;
     m.add_function(wrap_pyfunction!(filter_propagation_headers_py, m)?)?;
     m.add_function(wrap_pyfunction!(matches_propagate_header_py, m)?)?;
+
+    // MCP Client
+    m.add_function(wrap_pyfunction!(build_jsonrpc_request_py, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_request_id_py, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_sse_response_py, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_content_py, m)?)?;
+    m.add_function(wrap_pyfunction!(call_tool_py, m)?)?;
 
     Ok(())
 }
