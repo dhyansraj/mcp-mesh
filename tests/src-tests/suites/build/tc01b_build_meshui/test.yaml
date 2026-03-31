@@ -1,0 +1,107 @@
+# Test Case: Build mcp-mesh-ui Go Binary
+# Builds the UI server binary with embedded SPA from source
+#
+# IMPORTANT: This test runs on the HOST (standalone mode)
+# Build commands execute inside src-build:latest via docker run
+
+name: "Build meshui"
+description: "Build mcp-mesh-ui Go binary with embedded SPA using docker run"
+tags:
+  - build
+  - go
+  - ui
+timeout: 600
+
+test:
+  # Ensure output directories exist
+  - name: "Create output directories"
+    handler: shell
+    command: |
+      mkdir -p "${run_path}/${config.output.bin}"
+      echo "Output directory ready: ${run_path}/${config.output.bin}"
+    capture: dir_check
+
+  # Check source availability on host
+  - name: "Check source code on host"
+    handler: shell
+    command: |
+      SOURCE_PATH="${suite_path}/${config.source.path}"
+      if [ -d "$SOURCE_PATH/cmd/mcp-mesh-ui" ]; then
+        echo "Found mcp-mesh-ui source at $SOURCE_PATH/cmd/mcp-mesh-ui"
+        ls -la "$SOURCE_PATH/cmd/mcp-mesh-ui/"
+      else
+        echo "ERROR: Source not found at $SOURCE_PATH/cmd/mcp-mesh-ui"
+        exit 1
+      fi
+      if [ -d "$SOURCE_PATH/src/ui" ]; then
+        echo "Found UI source at $SOURCE_PATH/src/ui"
+      else
+        echo "ERROR: UI source not found at $SOURCE_PATH/src/ui"
+        exit 1
+      fi
+    capture: source_check
+
+  # Build meshui using docker run
+  - name: "Build meshui binary"
+    handler: shell
+    command: |
+      SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
+      OUTPUT_ABS=$(cd "${run_path}/${config.output.base}" && pwd)
+
+      echo "Source: $SOURCE_ABS"
+      echo "Output: $OUTPUT_ABS"
+
+      echo "Building meshui inside container (SPA + Go binary)..."
+      # meshui needs: go.mod, go.sum, cmd/mcp-mesh-ui/, src/core/, src/ui/
+      # Steps: 1) npm install + build SPA, 2) copy out/ to embed dir, 3) go build
+      docker run --rm \
+        -v "$SOURCE_ABS:/src-host:ro" \
+        -v "$OUTPUT_ABS:/out" \
+        ${config.build.image} \
+        bash -c "
+          mkdir -p /src/mcp-mesh/cmd /src/mcp-mesh/src && \
+          cp /src-host/go.mod /src-host/go.sum /src/mcp-mesh/ && \
+          cp -r /src-host/cmd/mcp-mesh-ui /src/mcp-mesh/cmd/ && \
+          cp -r /src-host/src/core /src/mcp-mesh/src/ && \
+          cp -r /src-host/src/ui /src/mcp-mesh/src/ && \
+          echo 'Installing UI dependencies...' && \
+          cd /src/mcp-mesh/src/ui && npm install --silent 2>&1 | tail -3 && \
+          echo 'Building SPA...' && \
+          npm run build 2>&1 | tail -5 && \
+          echo 'Copying SPA to embed directory...' && \
+          rm -rf /src/mcp-mesh/cmd/mcp-mesh-ui/out && \
+          cp -r /src/mcp-mesh/src/ui/out /src/mcp-mesh/cmd/mcp-mesh-ui/out && \
+          echo 'Building Go binary...' && \
+          cd /src/mcp-mesh && go build -o /out/bin/meshui ./cmd/mcp-mesh-ui/
+        "
+
+      echo "Build complete"
+    capture: build_output
+    timeout: 480
+
+  # Verify binary was created on host
+  - name: "Verify meshui binary"
+    handler: shell
+    command: |
+      ls -la "${run_path}/${config.output.bin}/meshui"
+      file "${run_path}/${config.output.bin}/meshui"
+    capture: verify_output
+
+  # Test the binary on host
+  - name: "Test meshui binary"
+    handler: shell
+    command: |
+      if "${run_path}/${config.output.bin}/meshui" --help 2>/dev/null; then
+        echo "meshui runs on host"
+      else
+        echo "meshui built but may be for different architecture (expected in cross-platform builds)"
+        echo "Binary exists: $(ls "${run_path}/${config.output.bin}/meshui")"
+      fi
+    capture: test_output
+
+assertions:
+  - expr: ${captured.build_output} contains 'Build complete'
+    message: "meshui build should complete successfully"
+
+  - expr: ${captured.verify_output} contains 'meshui'
+    message: "meshui binary should exist"

@@ -22,14 +22,13 @@ Reference:
 - https://ai.google.dev/gemini-api/docs
 """
 
+import json
 import logging
 from typing import Any, Optional
 
 from pydantic import BaseModel
 
 from .base_provider_handler import (
-    BASE_TOOL_INSTRUCTIONS,
-    MEDIA_PARAM_INSTRUCTIONS,
     BaseProviderHandler,
     has_media_params,
     make_schema_strict,
@@ -178,11 +177,7 @@ class GeminiHandler(BaseProviderHandler):
         """
         Format system prompt for Gemini with structured output support.
 
-        Gemini Strategy:
-        1. Use base prompt as-is
-        2. Add tool calling instructions if tools present
-        3. STRICT mode: Brief note (response_format handles enforcement)
-        4. HINT mode fallback: Detailed JSON output instructions with example structure
+        Delegates to Rust core for prompt construction.
 
         Args:
             base_prompt: Base system prompt
@@ -192,58 +187,49 @@ class GeminiHandler(BaseProviderHandler):
         Returns:
             Formatted system prompt optimized for Gemini
         """
-        system_content = base_prompt
+        import mcp_mesh_core
 
-        # Add tool calling instructions if tools available
-        if tool_schemas:
-            system_content += BASE_TOOL_INSTRUCTIONS
-
-        # Add media parameter instructions if any tools have x-media-type
-        if has_media_params(tool_schemas):
-            system_content += MEDIA_PARAM_INSTRUCTIONS
-
-        # Get the output schema (may have been set by apply_structured_output or prepare_request)
-        # Check pending schema FIRST - it may be set even when output_type is str (delegate path)
+        # Use pending schema if set (from apply_structured_output or prepare_request)
         output_schema = self._pending_output_schema
         output_type_name = self._pending_output_type_name
 
-        # Fall back to output_type if no pending schema AND output_type is Pydantic model
         if output_schema is None:
             if output_type is str:
-                # No schema and str return type - skip JSON instructions
-                return system_content
+                # No schema and str return type — text mode
+                is_string = True
+                schema_json = None
+                schema_name = None
             elif isinstance(output_type, type) and issubclass(output_type, BaseModel):
+                is_string = False
                 output_schema = sanitize_schema_for_structured_output(
                     output_type.model_json_schema()
                 )
                 output_type_name = output_type.__name__
+                schema_json = json.dumps(output_schema)
+                schema_name = output_type_name
+            else:
+                is_string = False
+                schema_json = None
+                schema_name = None
+        else:
+            is_string = False
+            schema_json = json.dumps(output_schema)
+            schema_name = output_type_name
 
-        # Determine output mode
+        # Determine mode: strict when no tools, hint when tools present
         determined_mode = self.determine_output_mode(output_type)
+        if determined_mode == "strict" and tool_schemas:
+            determined_mode = "hint"
 
-        # STRICT mode: Brief note (response_format handles enforcement)
-        # But only when no tools - with tools we use HINT mode
-        if determined_mode == OUTPUT_MODE_STRICT and not tool_schemas:
-            system_content += f"\n\nYour final response will be structured as JSON matching the {output_type_name} format."
-            return system_content
-
-        # HINT mode fallback: Detailed JSON instructions
-        if output_schema is not None:
-            system_content += "\n\nOUTPUT FORMAT:\n"
-
-            # Add DECISION GUIDE if tools are available
-            if tool_schemas:
-                system_content += "DECISION GUIDE:\n"
-                system_content += "- If your answer requires real-time data (weather, calculations, etc.), call the appropriate tool FIRST, then format your response as JSON.\n"
-                system_content += "- If your answer is general knowledge (like facts, explanations, definitions), directly return your response as JSON WITHOUT calling tools.\n\n"
-
-            system_content += "Your FINAL response must be ONLY valid JSON (no markdown, no code blocks) with this exact structure:\n"
-
-            properties = output_schema.get("properties", {})
-            system_content += self.build_json_example(properties) + "\n\n"
-            system_content += "Return ONLY the JSON object with actual values. Do not include the schema definition, markdown formatting, or code blocks."
-
-        return system_content
+        return mcp_mesh_core.format_system_prompt_py(
+            "gemini",
+            base_prompt,
+            bool(tool_schemas),
+            has_media_params(tool_schemas),
+            schema_json,
+            schema_name,
+            determined_mode if not (is_string and output_schema is None) else "text",
+        )
 
     def get_vendor_capabilities(self) -> dict[str, bool]:
         """

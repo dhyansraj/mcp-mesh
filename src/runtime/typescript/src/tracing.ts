@@ -5,12 +5,14 @@
  * Uses the same trace format as Python SDK for interoperability.
  */
 
-import { randomUUID } from "crypto";
 import {
   isTracingEnabled,
   initTracePublisher,
   publishSpan,
   isTracePublisherAvailable,
+  generateTraceId as coreGenerateTraceId,
+  generateSpanId as coreGenerateSpanId,
+  matchesPropagateHeader as coreMatchesPropagateHeader,
 } from "@mcpmesh/core";
 
 /**
@@ -31,11 +33,12 @@ export const PROPAGATE_HEADERS: string[] = parsePropagateHeaders();
  * Check if a header name matches any prefix in the propagate headers allowlist.
  * Uses prefix matching: if PROPAGATE_HEADERS contains 'x-audit', it will match
  * 'x-audit', 'x-audit-id', 'x-audit-source', etc.
+ *
+ * Delegates to Rust core for matching logic.
  */
 export function matchesPropagateHeader(name: string): boolean {
   if (PROPAGATE_HEADERS.length === 0) return false;
-  const lower = name.toLowerCase();
-  return PROPAGATE_HEADERS.some((prefix) => lower.startsWith(prefix));
+  return coreMatchesPropagateHeader(name, PROPAGATE_HEADERS.join(","));
 }
 
 // Trace context passed between agents via headers
@@ -106,20 +109,22 @@ export async function isTracingAvailable(): Promise<boolean> {
 
 /**
  * Generate a new trace ID (OpenTelemetry compliant).
+ * Delegates to Rust core.
  *
  * @returns 32-character hex string (128-bit trace ID per OTel spec)
  */
 export function generateTraceId(): string {
-  return randomUUID().replace(/-/g, "");
+  return coreGenerateTraceId();
 }
 
 /**
  * Generate a new span ID (OpenTelemetry compliant).
+ * Delegates to Rust core.
  *
  * @returns 16-character hex string (64-bit span ID per OTel spec)
  */
 export function generateSpanId(): string {
-  return randomUUID().replace(/-/g, "").slice(0, 16);
+  return coreGenerateSpanId();
 }
 
 /**

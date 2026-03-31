@@ -298,6 +298,354 @@ int32_t mesh_is_trace_publisher_available(void);
 // * `span_json` must be a valid null-terminated C string
 int32_t mesh_publish_span(const char *span_json);
 
+// Extract JSON from LLM response text.
+//
+// Strategies (in order):
+// 1. Find ```json...``` code blocks
+// 2. Progressive JSON object extraction
+// 3. Progressive JSON array extraction
+//
+// # Arguments
+// * `text` - Raw LLM response text
+//
+// # Returns
+// Extracted JSON string (caller must free with `mesh_free_string`), or NULL if no JSON found
+//
+// # Safety
+// * `text` must be a valid null-terminated C string
+char *mesh_extract_json(const char *text);
+
+// Strip markdown code fences from content.
+//
+// # Arguments
+// * `text` - Text with potential code fences
+//
+// # Returns
+// Text with fences removed (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `text` must be a valid null-terminated C string
+char *mesh_strip_code_fences(const char *text);
+
+// Make a JSON schema strict for structured output.
+//
+// Adds additionalProperties: false to all object types and optionally
+// sets required to include all property keys.
+//
+// # Arguments
+// * `schema_json` - JSON schema string
+// * `add_all_required` - 1 to add all properties to required, 0 to skip
+//
+// # Returns
+// Modified schema JSON (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `schema_json` must be a valid null-terminated C string
+char *mesh_make_schema_strict(const char *schema_json, int32_t add_all_required);
+
+// Sanitize a JSON schema by removing unsupported validation keywords.
+//
+// # Arguments
+// * `schema_json` - JSON schema string
+//
+// # Returns
+// Sanitized schema JSON (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `schema_json` must be a valid null-terminated C string
+char *mesh_sanitize_schema(const char *schema_json);
+
+// Check if any tool schema property contains x-media-type.
+//
+// # Arguments
+// * `schema_json` - JSON schema string (OpenAI tool format or bare schema)
+//
+// # Returns
+// 1 if media params found, 0 otherwise
+//
+// # Safety
+// * `schema_json` must be a valid null-terminated C string
+int32_t mesh_detect_media_params(const char *schema_json);
+
+// Check if a JSON schema is simple enough for hint mode.
+//
+// # Arguments
+// * `schema_json` - JSON schema string
+//
+// # Returns
+// 1 if simple, 0 otherwise
+//
+// # Safety
+// * `schema_json` must be a valid null-terminated C string
+int32_t mesh_is_simple_schema(const char *schema_json);
+
+// Generate OpenTelemetry-compliant trace ID (32-char hex, 128-bit).
+//
+// # Returns
+// Trace ID string (caller must free with `mesh_free_string`), or NULL on error
+char *mesh_generate_trace_id(void);
+
+// Generate OpenTelemetry-compliant span ID (16-char hex, 64-bit).
+//
+// # Returns
+// Span ID string (caller must free with `mesh_free_string`), or NULL on error
+char *mesh_generate_span_id(void);
+
+// Inject trace context into JSON-RPC arguments.
+//
+// # Arguments
+// * `args_json` - JSON object string with existing arguments
+// * `trace_id` - Trace ID to inject
+// * `span_id` - Span ID to inject as _parent_span
+// * `propagated_headers_json` - Optional JSON object of headers to propagate (may be NULL)
+//
+// # Returns
+// Modified JSON string (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `args_json`, `trace_id`, and `span_id` must be valid null-terminated C strings
+// * `propagated_headers_json` may be NULL
+char *mesh_inject_trace_context(const char *args_json,
+                                const char *trace_id,
+                                const char *span_id,
+                                const char *propagated_headers_json);
+
+// Extract trace context from HTTP headers with body fallback.
+//
+// # Arguments
+// * `headers_json` - JSON object of HTTP headers
+// * `body_json` - Optional JSON-RPC body (may be NULL)
+//
+// # Returns
+// JSON string with trace_id and parent_span (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `headers_json` must be a valid null-terminated C string
+// * `body_json` may be NULL
+char *mesh_extract_trace_context(const char *headers_json,
+                                 const char *body_json);
+
+// Filter headers by propagation allowlist with prefix matching.
+//
+// # Arguments
+// * `headers_json` - JSON object of HTTP headers
+// * `allowlist_csv` - Comma-separated list of header prefixes
+//
+// # Returns
+// JSON string of matching headers (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * Both parameters must be valid null-terminated C strings
+char *mesh_filter_propagation_headers(const char *headers_json, const char *allowlist_csv);
+
+// Check if a header matches the propagation allowlist.
+//
+// # Arguments
+// * `header_name` - Header name to check
+// * `allowlist_csv` - Comma-separated list of header prefixes
+//
+// # Returns
+// 1 if matches, 0 otherwise
+//
+// # Safety
+// * Both parameters must be valid null-terminated C strings
+int32_t mesh_matches_propagate_header(const char *header_name, const char *allowlist_csv);
+
+// Build a JSON-RPC 2.0 request envelope.
+//
+// # Arguments
+// * `method` - JSON-RPC method name
+// * `params_json` - JSON string for params
+// * `request_id` - Unique request identifier
+//
+// # Returns
+// JSON-RPC request string (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * All parameters must be valid null-terminated C strings
+char *mesh_build_jsonrpc_request(const char *method,
+                                 const char *params_json,
+                                 const char *request_id);
+
+// Generate a unique request ID.
+//
+// # Returns
+// Request ID string (caller must free with `mesh_free_string`)
+char *mesh_generate_request_id(void);
+
+// Parse SSE or plain JSON response.
+//
+// # Arguments
+// * `response_text` - Raw response body
+//
+// # Returns
+// Extracted JSON string (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `response_text` must be a valid null-terminated C string
+char *mesh_parse_sse_response(const char *response_text);
+
+// Extract text content from MCP CallToolResult.
+//
+// # Arguments
+// * `result_json` - JSON string of the MCP result
+//
+// # Returns
+// Extracted content string (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `result_json` must be a valid null-terminated C string
+char *mesh_extract_content(const char *result_json);
+
+// Call a remote MCP tool via HTTP POST with retry.
+//
+// # Arguments
+// * `endpoint` - MCP endpoint URL
+// * `tool_name` - Name of the tool to call
+// * `args_json` - Optional JSON string of tool arguments (may be NULL)
+// * `headers_json` - Optional JSON object of extra headers (may be NULL)
+// * `timeout_ms` - Request timeout in milliseconds
+// * `max_retries` - Maximum number of retries on network error
+//
+// # Returns
+// Result string (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `endpoint` and `tool_name` must be valid null-terminated C strings
+// * `args_json` and `headers_json` may be NULL
+char *mesh_call_tool(const char *endpoint,
+                     const char *tool_name,
+                     const char *args_json,
+                     const char *headers_json,
+                     int64_t timeout_ms,
+                     int32_t max_retries);
+
+// Determine output mode for a vendor given the context.
+//
+// # Arguments
+// * `provider` - Vendor name (e.g., "anthropic", "openai", "gemini")
+// * `is_string_type` - 1 if the output schema is a plain string type
+// * `has_tools` - 1 if tools are present in the request
+// * `override_mode` - Optional override mode (may be NULL)
+//
+// # Returns
+// Output mode string: "text", "hint", or "strict" (caller must free with `mesh_free_string`)
+//
+// # Safety
+// * `provider` must be a valid null-terminated C string
+// * `override_mode` may be NULL
+char *mesh_determine_output_mode(const char *provider,
+                                 int32_t is_string_type,
+                                 int32_t has_tools,
+                                 const char *override_mode);
+
+// Build the complete system prompt with vendor-specific additions.
+//
+// # Arguments
+// * `provider` - Vendor name
+// * `base_prompt` - Base system prompt text
+// * `has_tools` - 1 if tools are present
+// * `has_media_params` - 1 if media parameters are present
+// * `schema_json` - Optional JSON schema string (may be NULL)
+// * `schema_name` - Optional schema name (may be NULL)
+// * `output_mode` - Output mode: "text", "hint", or "strict"
+//
+// # Returns
+// Complete system prompt (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `provider`, `base_prompt`, and `output_mode` must be valid null-terminated C strings
+// * `schema_json` and `schema_name` may be NULL
+char *mesh_format_system_prompt(const char *provider,
+                                const char *base_prompt,
+                                int32_t has_tools,
+                                int32_t has_media_params,
+                                const char *schema_json,
+                                const char *schema_name,
+                                const char *output_mode);
+
+// Build the `response_format` JSON object for vendors that support it.
+//
+// # Arguments
+// * `provider` - Vendor name
+// * `schema_json` - JSON schema string
+// * `schema_name` - Schema name for the response_format
+// * `has_tools` - 1 if tools are present
+//
+// # Returns
+// JSON string with response_format (caller must free with `mesh_free_string`),
+// or NULL if vendor does not support response_format for this scenario
+//
+// # Safety
+// * All parameters must be valid null-terminated C strings
+char *mesh_build_response_format(const char *provider,
+                                 const char *schema_json,
+                                 const char *schema_name,
+                                 int32_t has_tools);
+
+// Get vendor capabilities as JSON.
+//
+// # Arguments
+// * `provider` - Vendor name
+//
+// # Returns
+// JSON string with vendor capabilities (caller must free with `mesh_free_string`),
+// or NULL on error
+//
+// # Safety
+// * `provider` must be a valid null-terminated C string
+char *mesh_get_vendor_capabilities(const char *provider);
+
+// Create initial agentic loop state.
+//
+// # Arguments
+// * `config_json` - JSON config with `messages` array and optional `max_iterations`
+//
+// # Returns
+// Action JSON (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `config_json` must be a valid null-terminated C string
+char *mesh_create_agentic_loop(const char *config_json);
+
+// Process an LLM response in the agentic loop.
+//
+// # Arguments
+// * `state_json` - Serialized loop state from a previous call
+// * `llm_response_json` - LLM response with optional `tool_calls`, `content`, `usage`
+//
+// # Returns
+// Action JSON (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * Both parameters must be valid null-terminated C strings
+char *mesh_process_llm_response(const char *state_json, const char *llm_response_json);
+
+// Add tool execution results to the agentic loop.
+//
+// # Arguments
+// * `state_json` - Serialized loop state from a previous call
+// * `tool_results_json` - Array of `{"tool_call_id": "...", "content": "..."}`
+//
+// # Returns
+// Action JSON (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * Both parameters must be valid null-terminated C strings
+char *mesh_add_tool_results(const char *state_json, const char *tool_results_json);
+
+// Get a read-only view of the agentic loop state.
+//
+// # Arguments
+// * `state_json` - Serialized loop state
+//
+// # Returns
+// State info JSON (caller must free with `mesh_free_string`), or NULL on error
+//
+// # Safety
+// * `state_json` must be a valid null-terminated C string
+char *mesh_get_loop_state(const char *state_json);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

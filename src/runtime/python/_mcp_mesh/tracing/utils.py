@@ -8,7 +8,6 @@ and maintain consistency.
 import json
 import logging
 import time
-import uuid
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -49,6 +48,11 @@ def generate_span_id() -> str:
     Returns:
         16-character hex string (64-bit span ID per OTel spec)
     """
+    if _RUST_CORE_AVAILABLE:
+        return mcp_mesh_core.generate_span_id_py()
+    # Fallback when Rust core unavailable
+    import uuid
+
     return uuid.uuid4().hex[:16]
 
 
@@ -58,6 +62,11 @@ def generate_trace_id() -> str:
     Returns:
         32-character hex string (128-bit trace ID per OTel spec)
     """
+    if _RUST_CORE_AVAILABLE:
+        return mcp_mesh_core.generate_trace_id_py()
+    # Fallback when Rust core unavailable
+    import uuid
+
     return uuid.uuid4().hex
 
 

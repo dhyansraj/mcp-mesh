@@ -41,7 +41,7 @@ test:
       MCP_MESH_TRUST_DIR=$HOME/.mcp_mesh/tls \
       MCP_MESH_TLS_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem \
       MCP_MESH_TLS_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem \
-      mcp-mesh-registry -host localhost -port 8000 &>/tmp/registry-strict.log &
+      mcp-mesh-registry --host localhost --port 8000 &>/tmp/registry-strict.log &
       REGISTRY_PID=$!
       echo "$REGISTRY_PID" > /tmp/tc04_registry.pid
       echo "REGISTRY_PID=$REGISTRY_PID"

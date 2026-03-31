@@ -21,6 +21,7 @@
 
 import type { ZodType, ZodError as ZodErrorType } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { extractJson as coreExtractJson } from "@mcpmesh/core";
 import { ResponseParseError } from "./errors.js";
 
 // Re-export for backwards compatibility
@@ -29,75 +30,13 @@ export { ResponseParseError };
 /**
  * Extract JSON from a string that may contain markdown code blocks.
  *
- * Handles:
+ * Delegates to Rust core for extraction. Handles:
  * - ```json ... ``` code blocks
  * - ``` ... ``` code blocks (no language)
- * - Raw JSON (object or array) using progressive JSON.parse
+ * - Raw JSON (object or array) using progressive parse
  */
 export function extractJson(content: string): string | null {
-  // Strategy 1: Try to extract from markdown code blocks first
-  const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (codeBlockMatch) {
-    return codeBlockMatch[1].trim();
-  }
-
-  // Strategy 2: Try to find JSON object using progressive JSON.parse
-  // This handles braces inside strings correctly
-  const braceStart = content.indexOf("{");
-  if (braceStart !== -1) {
-    const result = tryProgressiveParse(content, braceStart, "{", "}");
-    if (result) return result;
-  }
-
-  // Strategy 3: Try to find JSON array using progressive JSON.parse
-  const bracketStart = content.indexOf("[");
-  if (bracketStart !== -1) {
-    const result = tryProgressiveParse(content, bracketStart, "[", "]");
-    if (result) return result;
-  }
-
-  return null;
-}
-
-/**
- * Try to extract valid JSON by progressively extending the end position.
- * This correctly handles braces/brackets inside string values.
- */
-function tryProgressiveParse(
-  content: string,
-  start: number,
-  openChar: string,
-  closeChar: string
-): string | null {
-  // Quick check: count characters to find potential end positions
-  let depth = 0;
-  const potentialEnds: number[] = [];
-
-  for (let i = start; i < content.length; i++) {
-    const char = content[i];
-    if (char === openChar) {
-      depth++;
-    } else if (char === closeChar) {
-      depth--;
-      if (depth === 0) {
-        potentialEnds.push(i);
-      }
-    }
-  }
-
-  // Try each potential end position (shortest first for efficiency)
-  for (const end of potentialEnds) {
-    const candidate = content.slice(start, end + 1);
-    try {
-      JSON.parse(candidate);
-      return candidate;
-    } catch {
-      // Not valid JSON, try next potential end
-      continue;
-    }
-  }
-
-  return null;
+  return coreExtractJson(content) ?? null;
 }
 
 /**

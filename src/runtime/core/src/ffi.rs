@@ -880,6 +880,1245 @@ pub unsafe extern "C" fn mesh_publish_span(span_json: *const c_char) -> i32 {
 }
 
 // =============================================================================
+// Response Parsing Functions
+// =============================================================================
+
+/// Extract JSON from LLM response text.
+///
+/// Strategies (in order):
+/// 1. Find ```json...``` code blocks
+/// 2. Progressive JSON object extraction
+/// 3. Progressive JSON array extraction
+///
+/// # Arguments
+/// * `text` - Raw LLM response text
+///
+/// # Returns
+/// Extracted JSON string (caller must free with `mesh_free_string`), or NULL if no JSON found
+///
+/// # Safety
+/// * `text` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_extract_json(text: *const c_char) -> *mut c_char {
+    if text.is_null() {
+        set_last_error("text is null");
+        return ptr::null_mut();
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in text: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::response_parser::extract_json(text_str) {
+        Some(json) => match CString::new(json) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        None => ptr::null_mut(),
+    }
+}
+
+/// Strip markdown code fences from content.
+///
+/// # Arguments
+/// * `text` - Text with potential code fences
+///
+/// # Returns
+/// Text with fences removed (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `text` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_strip_code_fences(text: *const c_char) -> *mut c_char {
+    if text.is_null() {
+        set_last_error("text is null");
+        return ptr::null_mut();
+    }
+
+    let text_str = match CStr::from_ptr(text).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in text: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let result = crate::response_parser::strip_code_fences(text_str);
+    match CString::new(result) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+// =============================================================================
+// Schema Normalization Functions
+// =============================================================================
+
+/// Make a JSON schema strict for structured output.
+///
+/// Adds additionalProperties: false to all object types and optionally
+/// sets required to include all property keys.
+///
+/// # Arguments
+/// * `schema_json` - JSON schema string
+/// * `add_all_required` - 1 to add all properties to required, 0 to skip
+///
+/// # Returns
+/// Modified schema JSON (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `schema_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_make_schema_strict(
+    schema_json: *const c_char,
+    add_all_required: i32,
+) -> *mut c_char {
+    if schema_json.is_null() {
+        set_last_error("schema_json is null");
+        return ptr::null_mut();
+    }
+
+    let json_str = match CStr::from_ptr(schema_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in schema_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::schema::make_schema_strict(json_str, add_all_required != 0) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Sanitize a JSON schema by removing unsupported validation keywords.
+///
+/// # Arguments
+/// * `schema_json` - JSON schema string
+///
+/// # Returns
+/// Sanitized schema JSON (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `schema_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_sanitize_schema(schema_json: *const c_char) -> *mut c_char {
+    if schema_json.is_null() {
+        set_last_error("schema_json is null");
+        return ptr::null_mut();
+    }
+
+    let json_str = match CStr::from_ptr(schema_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in schema_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::schema::sanitize_schema(json_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Check if any tool schema property contains x-media-type.
+///
+/// # Arguments
+/// * `schema_json` - JSON schema string (OpenAI tool format or bare schema)
+///
+/// # Returns
+/// 1 if media params found, 0 otherwise
+///
+/// # Safety
+/// * `schema_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_detect_media_params(schema_json: *const c_char) -> i32 {
+    if schema_json.is_null() {
+        return 0;
+    }
+
+    let json_str = match CStr::from_ptr(schema_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    if crate::schema::detect_media_params(json_str) { 1 } else { 0 }
+}
+
+/// Check if a JSON schema is simple enough for hint mode.
+///
+/// # Arguments
+/// * `schema_json` - JSON schema string
+///
+/// # Returns
+/// 1 if simple, 0 otherwise
+///
+/// # Safety
+/// * `schema_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_is_simple_schema(schema_json: *const c_char) -> i32 {
+    if schema_json.is_null() {
+        return 0;
+    }
+
+    let json_str = match CStr::from_ptr(schema_json).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    if crate::schema::is_simple_schema(json_str) { 1 } else { 0 }
+}
+
+// =============================================================================
+// Trace Context Functions
+// =============================================================================
+
+/// Generate OpenTelemetry-compliant trace ID (32-char hex, 128-bit).
+///
+/// # Returns
+/// Trace ID string (caller must free with `mesh_free_string`), or NULL on error
+#[no_mangle]
+pub extern "C" fn mesh_generate_trace_id() -> *mut c_char {
+    let id = crate::trace_context::generate_trace_id();
+    match CString::new(id) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Generate OpenTelemetry-compliant span ID (16-char hex, 64-bit).
+///
+/// # Returns
+/// Span ID string (caller must free with `mesh_free_string`), or NULL on error
+#[no_mangle]
+pub extern "C" fn mesh_generate_span_id() -> *mut c_char {
+    let id = crate::trace_context::generate_span_id();
+    match CString::new(id) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Inject trace context into JSON-RPC arguments.
+///
+/// # Arguments
+/// * `args_json` - JSON object string with existing arguments
+/// * `trace_id` - Trace ID to inject
+/// * `span_id` - Span ID to inject as _parent_span
+/// * `propagated_headers_json` - Optional JSON object of headers to propagate (may be NULL)
+///
+/// # Returns
+/// Modified JSON string (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `args_json`, `trace_id`, and `span_id` must be valid null-terminated C strings
+/// * `propagated_headers_json` may be NULL
+#[no_mangle]
+pub unsafe extern "C" fn mesh_inject_trace_context(
+    args_json: *const c_char,
+    trace_id: *const c_char,
+    span_id: *const c_char,
+    propagated_headers_json: *const c_char,
+) -> *mut c_char {
+    if args_json.is_null() {
+        set_last_error("args_json is null");
+        return ptr::null_mut();
+    }
+    if trace_id.is_null() {
+        set_last_error("trace_id is null");
+        return ptr::null_mut();
+    }
+    if span_id.is_null() {
+        set_last_error("span_id is null");
+        return ptr::null_mut();
+    }
+
+    let args_str = match CStr::from_ptr(args_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in args_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let trace_str = match CStr::from_ptr(trace_id).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in trace_id: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let span_str = match CStr::from_ptr(span_id).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in span_id: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let headers_opt = if propagated_headers_json.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(propagated_headers_json).to_str() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in propagated_headers_json: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    match crate::trace_context::inject_trace_context(args_str, trace_str, span_str, headers_opt) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Extract trace context from HTTP headers with body fallback.
+///
+/// # Arguments
+/// * `headers_json` - JSON object of HTTP headers
+/// * `body_json` - Optional JSON-RPC body (may be NULL)
+///
+/// # Returns
+/// JSON string with trace_id and parent_span (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `headers_json` must be a valid null-terminated C string
+/// * `body_json` may be NULL
+#[no_mangle]
+pub unsafe extern "C" fn mesh_extract_trace_context(
+    headers_json: *const c_char,
+    body_json: *const c_char,
+) -> *mut c_char {
+    if headers_json.is_null() {
+        set_last_error("headers_json is null");
+        return ptr::null_mut();
+    }
+
+    let headers_str = match CStr::from_ptr(headers_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in headers_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let body_opt = if body_json.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(body_json).to_str() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in body_json: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let result = crate::trace_context::extract_trace_context(headers_str, body_opt);
+    match CString::new(result) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Filter headers by propagation allowlist with prefix matching.
+///
+/// # Arguments
+/// * `headers_json` - JSON object of HTTP headers
+/// * `allowlist_csv` - Comma-separated list of header prefixes
+///
+/// # Returns
+/// JSON string of matching headers (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * Both parameters must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn mesh_filter_propagation_headers(
+    headers_json: *const c_char,
+    allowlist_csv: *const c_char,
+) -> *mut c_char {
+    if headers_json.is_null() {
+        set_last_error("headers_json is null");
+        return ptr::null_mut();
+    }
+    if allowlist_csv.is_null() {
+        set_last_error("allowlist_csv is null");
+        return ptr::null_mut();
+    }
+
+    let headers_str = match CStr::from_ptr(headers_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in headers_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let allowlist_str = match CStr::from_ptr(allowlist_csv).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in allowlist_csv: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::trace_context::filter_propagation_headers(headers_str, allowlist_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Check if a header matches the propagation allowlist.
+///
+/// # Arguments
+/// * `header_name` - Header name to check
+/// * `allowlist_csv` - Comma-separated list of header prefixes
+///
+/// # Returns
+/// 1 if matches, 0 otherwise
+///
+/// # Safety
+/// * Both parameters must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn mesh_matches_propagate_header(
+    header_name: *const c_char,
+    allowlist_csv: *const c_char,
+) -> i32 {
+    if header_name.is_null() || allowlist_csv.is_null() {
+        return 0;
+    }
+
+    let name_str = match CStr::from_ptr(header_name).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let allowlist_str = match CStr::from_ptr(allowlist_csv).to_str() {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+
+    if crate::trace_context::matches_propagate_header(name_str, allowlist_str) {
+        1
+    } else {
+        0
+    }
+}
+
+// =============================================================================
+// MCP Client Functions
+// =============================================================================
+
+/// Global tokio runtime for MCP client operations.
+/// Lazily initialized on first call_tool invocation.
+static MCP_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+
+fn get_mcp_runtime() -> &'static tokio::runtime::Runtime {
+    MCP_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("mesh-mcp")
+            .enable_all()
+            .build()
+            .expect("Failed to create MCP runtime")
+    })
+}
+
+/// Build a JSON-RPC 2.0 request envelope.
+///
+/// # Arguments
+/// * `method` - JSON-RPC method name
+/// * `params_json` - JSON string for params
+/// * `request_id` - Unique request identifier
+///
+/// # Returns
+/// JSON-RPC request string (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * All parameters must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn mesh_build_jsonrpc_request(
+    method: *const c_char,
+    params_json: *const c_char,
+    request_id: *const c_char,
+) -> *mut c_char {
+    if method.is_null() {
+        set_last_error("method is null");
+        return ptr::null_mut();
+    }
+    if params_json.is_null() {
+        set_last_error("params_json is null");
+        return ptr::null_mut();
+    }
+    if request_id.is_null() {
+        set_last_error("request_id is null");
+        return ptr::null_mut();
+    }
+
+    let method_str = match CStr::from_ptr(method).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in method: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let params_str = match CStr::from_ptr(params_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in params_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let id_str = match CStr::from_ptr(request_id).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in request_id: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::mcp_client::build_jsonrpc_request(method_str, params_str, id_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Generate a unique request ID.
+///
+/// # Returns
+/// Request ID string (caller must free with `mesh_free_string`)
+#[no_mangle]
+pub extern "C" fn mesh_generate_request_id() -> *mut c_char {
+    let id = crate::mcp_client::generate_request_id();
+    match CString::new(id) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Parse SSE or plain JSON response.
+///
+/// # Arguments
+/// * `response_text` - Raw response body
+///
+/// # Returns
+/// Extracted JSON string (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `response_text` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_parse_sse_response(response_text: *const c_char) -> *mut c_char {
+    if response_text.is_null() {
+        set_last_error("response_text is null");
+        return ptr::null_mut();
+    }
+
+    let text_str = match CStr::from_ptr(response_text).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in response_text: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::mcp_client::parse_sse_response(text_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Extract text content from MCP CallToolResult.
+///
+/// # Arguments
+/// * `result_json` - JSON string of the MCP result
+///
+/// # Returns
+/// Extracted content string (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `result_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_extract_content(result_json: *const c_char) -> *mut c_char {
+    if result_json.is_null() {
+        set_last_error("result_json is null");
+        return ptr::null_mut();
+    }
+
+    let json_str = match CStr::from_ptr(result_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in result_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::mcp_client::extract_content(json_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Call a remote MCP tool via HTTP POST with retry.
+///
+/// # Arguments
+/// * `endpoint` - MCP endpoint URL
+/// * `tool_name` - Name of the tool to call
+/// * `args_json` - Optional JSON string of tool arguments (may be NULL)
+/// * `headers_json` - Optional JSON object of extra headers (may be NULL)
+/// * `timeout_ms` - Request timeout in milliseconds
+/// * `max_retries` - Maximum number of retries on network error
+///
+/// # Returns
+/// Result string (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `endpoint` and `tool_name` must be valid null-terminated C strings
+/// * `args_json` and `headers_json` may be NULL
+#[no_mangle]
+pub unsafe extern "C" fn mesh_call_tool(
+    endpoint: *const c_char,
+    tool_name: *const c_char,
+    args_json: *const c_char,
+    headers_json: *const c_char,
+    timeout_ms: i64,
+    max_retries: i32,
+) -> *mut c_char {
+    if endpoint.is_null() {
+        set_last_error("endpoint is null");
+        return ptr::null_mut();
+    }
+    if tool_name.is_null() {
+        set_last_error("tool_name is null");
+        return ptr::null_mut();
+    }
+
+    let endpoint_str = match CStr::from_ptr(endpoint).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in endpoint: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let tool_str = match CStr::from_ptr(tool_name).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in tool_name: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let args_opt = if args_json.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(args_json).to_str() {
+            Ok(s) => Some(s.to_string()),
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in args_json: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let headers_opt = if headers_json.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(headers_json).to_str() {
+            Ok(s) => Some(s.to_string()),
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in headers_json: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let timeout = if timeout_ms > 0 { timeout_ms as u64 } else { 30000 };
+    let retries = if max_retries >= 0 { max_retries as u32 } else { 1 };
+
+    let rt = get_mcp_runtime();
+    let result = rt.block_on(async {
+        crate::mcp_client::call_tool(
+            endpoint_str,
+            tool_str,
+            args_opt.as_deref(),
+            headers_opt.as_deref(),
+            timeout,
+            retries,
+        ).await
+    });
+
+    match result {
+        Ok(content) => match CString::new(content) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+// =============================================================================
+// Provider Functions
+// =============================================================================
+
+/// Determine output mode for a vendor given the context.
+///
+/// # Arguments
+/// * `provider` - Vendor name (e.g., "anthropic", "openai", "gemini")
+/// * `is_string_type` - 1 if the output schema is a plain string type
+/// * `has_tools` - 1 if tools are present in the request
+/// * `override_mode` - Optional override mode (may be NULL)
+///
+/// # Returns
+/// Output mode string: "text", "hint", or "strict" (caller must free with `mesh_free_string`)
+///
+/// # Safety
+/// * `provider` must be a valid null-terminated C string
+/// * `override_mode` may be NULL
+#[no_mangle]
+pub unsafe extern "C" fn mesh_determine_output_mode(
+    provider: *const c_char,
+    is_string_type: i32,
+    has_tools: i32,
+    override_mode: *const c_char,
+) -> *mut c_char {
+    if provider.is_null() {
+        set_last_error("provider is null");
+        return ptr::null_mut();
+    }
+
+    let provider_str = match CStr::from_ptr(provider).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in provider: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let override_opt = if override_mode.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(override_mode).to_str() {
+            Ok(s) if !s.is_empty() => Some(s),
+            Ok(_) => None,
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in override_mode: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let result = crate::provider::determine_output_mode(
+        provider_str,
+        is_string_type != 0,
+        has_tools != 0,
+        override_opt,
+    );
+
+    match CString::new(result) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Build the complete system prompt with vendor-specific additions.
+///
+/// # Arguments
+/// * `provider` - Vendor name
+/// * `base_prompt` - Base system prompt text
+/// * `has_tools` - 1 if tools are present
+/// * `has_media_params` - 1 if media parameters are present
+/// * `schema_json` - Optional JSON schema string (may be NULL)
+/// * `schema_name` - Optional schema name (may be NULL)
+/// * `output_mode` - Output mode: "text", "hint", or "strict"
+///
+/// # Returns
+/// Complete system prompt (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `provider`, `base_prompt`, and `output_mode` must be valid null-terminated C strings
+/// * `schema_json` and `schema_name` may be NULL
+#[no_mangle]
+pub unsafe extern "C" fn mesh_format_system_prompt(
+    provider: *const c_char,
+    base_prompt: *const c_char,
+    has_tools: i32,
+    has_media_params: i32,
+    schema_json: *const c_char,
+    schema_name: *const c_char,
+    output_mode: *const c_char,
+) -> *mut c_char {
+    if provider.is_null() {
+        set_last_error("provider is null");
+        return ptr::null_mut();
+    }
+    if base_prompt.is_null() {
+        set_last_error("base_prompt is null");
+        return ptr::null_mut();
+    }
+    if output_mode.is_null() {
+        set_last_error("output_mode is null");
+        return ptr::null_mut();
+    }
+
+    let provider_str = match CStr::from_ptr(provider).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in provider: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let base_str = match CStr::from_ptr(base_prompt).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in base_prompt: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let mode_str = match CStr::from_ptr(output_mode).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in output_mode: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let schema_opt = if schema_json.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(schema_json).to_str() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in schema_json: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let name_opt = if schema_name.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(schema_name).to_str() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                set_last_error(format!("Invalid UTF-8 in schema_name: {}", e));
+                return ptr::null_mut();
+            }
+        }
+    };
+
+    let result = crate::provider::format_system_prompt(
+        provider_str,
+        base_str,
+        has_tools != 0,
+        has_media_params != 0,
+        schema_opt,
+        name_opt,
+        mode_str,
+    );
+
+    match CString::new(result) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Build the `response_format` JSON object for vendors that support it.
+///
+/// # Arguments
+/// * `provider` - Vendor name
+/// * `schema_json` - JSON schema string
+/// * `schema_name` - Schema name for the response_format
+/// * `has_tools` - 1 if tools are present
+///
+/// # Returns
+/// JSON string with response_format (caller must free with `mesh_free_string`),
+/// or NULL if vendor does not support response_format for this scenario
+///
+/// # Safety
+/// * All parameters must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn mesh_build_response_format(
+    provider: *const c_char,
+    schema_json: *const c_char,
+    schema_name: *const c_char,
+    has_tools: i32,
+) -> *mut c_char {
+    if provider.is_null() {
+        set_last_error("provider is null");
+        return ptr::null_mut();
+    }
+    if schema_json.is_null() {
+        set_last_error("schema_json is null");
+        return ptr::null_mut();
+    }
+    if schema_name.is_null() {
+        set_last_error("schema_name is null");
+        return ptr::null_mut();
+    }
+
+    let provider_str = match CStr::from_ptr(provider).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in provider: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let schema_str = match CStr::from_ptr(schema_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in schema_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let name_str = match CStr::from_ptr(schema_name).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in schema_name: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::provider::build_response_format(provider_str, schema_str, name_str, has_tools != 0) {
+        Some(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        None => ptr::null_mut(),
+    }
+}
+
+/// Get vendor capabilities as JSON.
+///
+/// # Arguments
+/// * `provider` - Vendor name
+///
+/// # Returns
+/// JSON string with vendor capabilities (caller must free with `mesh_free_string`),
+/// or NULL on error
+///
+/// # Safety
+/// * `provider` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_get_vendor_capabilities(provider: *const c_char) -> *mut c_char {
+    if provider.is_null() {
+        set_last_error("provider is null");
+        return ptr::null_mut();
+    }
+
+    let provider_str = match CStr::from_ptr(provider).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in provider: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    let result = crate::provider::get_vendor_capabilities(provider_str);
+
+    match CString::new(result) {
+        Ok(c_str) => c_str.into_raw(),
+        Err(e) => {
+            set_last_error(format!("Failed to create C string: {}", e));
+            ptr::null_mut()
+        }
+    }
+}
+
+// =============================================================================
+// Agentic Loop Functions
+// =============================================================================
+
+/// Create initial agentic loop state.
+///
+/// # Arguments
+/// * `config_json` - JSON config with `messages` array and optional `max_iterations`
+///
+/// # Returns
+/// Action JSON (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `config_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_create_agentic_loop(config_json: *const c_char) -> *mut c_char {
+    if config_json.is_null() {
+        set_last_error("config_json is null");
+        return ptr::null_mut();
+    }
+
+    let config_str = match CStr::from_ptr(config_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in config_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::agentic_loop::create_loop(config_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Process an LLM response in the agentic loop.
+///
+/// # Arguments
+/// * `state_json` - Serialized loop state from a previous call
+/// * `llm_response_json` - LLM response with optional `tool_calls`, `content`, `usage`
+///
+/// # Returns
+/// Action JSON (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * Both parameters must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn mesh_process_llm_response(
+    state_json: *const c_char,
+    llm_response_json: *const c_char,
+) -> *mut c_char {
+    if state_json.is_null() {
+        set_last_error("state_json is null");
+        return ptr::null_mut();
+    }
+    if llm_response_json.is_null() {
+        set_last_error("llm_response_json is null");
+        return ptr::null_mut();
+    }
+
+    let state_str = match CStr::from_ptr(state_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in state_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let response_str = match CStr::from_ptr(llm_response_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in llm_response_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::agentic_loop::process_response(state_str, response_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Add tool execution results to the agentic loop.
+///
+/// # Arguments
+/// * `state_json` - Serialized loop state from a previous call
+/// * `tool_results_json` - Array of `{"tool_call_id": "...", "content": "..."}`
+///
+/// # Returns
+/// Action JSON (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * Both parameters must be valid null-terminated C strings
+#[no_mangle]
+pub unsafe extern "C" fn mesh_add_tool_results(
+    state_json: *const c_char,
+    tool_results_json: *const c_char,
+) -> *mut c_char {
+    if state_json.is_null() {
+        set_last_error("state_json is null");
+        return ptr::null_mut();
+    }
+    if tool_results_json.is_null() {
+        set_last_error("tool_results_json is null");
+        return ptr::null_mut();
+    }
+
+    let state_str = match CStr::from_ptr(state_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in state_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+    let results_str = match CStr::from_ptr(tool_results_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in tool_results_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::agentic_loop::add_tool_results(state_str, results_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+/// Get a read-only view of the agentic loop state.
+///
+/// # Arguments
+/// * `state_json` - Serialized loop state
+///
+/// # Returns
+/// State info JSON (caller must free with `mesh_free_string`), or NULL on error
+///
+/// # Safety
+/// * `state_json` must be a valid null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn mesh_get_loop_state(state_json: *const c_char) -> *mut c_char {
+    if state_json.is_null() {
+        set_last_error("state_json is null");
+        return ptr::null_mut();
+    }
+
+    let state_str = match CStr::from_ptr(state_json).to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in state_json: {}", e));
+            return ptr::null_mut();
+        }
+    };
+
+    match crate::agentic_loop::get_loop_state(state_str) {
+        Ok(result) => match CString::new(result) {
+            Ok(c_str) => c_str.into_raw(),
+            Err(e) => {
+                set_last_error(format!("Failed to create C string: {}", e));
+                ptr::null_mut()
+            }
+        },
+        Err(e) => {
+            set_last_error(e);
+            ptr::null_mut()
+        }
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 

@@ -40,7 +40,7 @@ test:
       MCP_MESH_TLS_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem \
       MCP_MESH_TLS_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem \
       MCP_MESH_ADMIN_PORT=8001 \
-      mcp-mesh-registry -host localhost -port 8000 &>/tmp/admin-port-registry.log &
+      mcp-mesh-registry --host localhost --port 8000 &>/tmp/admin-port-registry.log &
       REGISTRY_PID=$!
       echo "$REGISTRY_PID" > /tmp/tc11_registry.pid
       echo "REGISTRY_PID=$REGISTRY_PID"

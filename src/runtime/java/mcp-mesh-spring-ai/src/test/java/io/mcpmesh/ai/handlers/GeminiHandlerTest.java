@@ -16,6 +16,16 @@ class GeminiHandlerTest {
 
     private GeminiHandler handler;
 
+    @BeforeAll
+    static void installNativeStub() {
+        FormatSystemPromptStub.install();
+    }
+
+    @AfterAll
+    static void uninstallNativeStub() {
+        FormatSystemPromptStub.uninstall();
+    }
+
     @BeforeEach
     void setUp() {
         handler = new GeminiHandler();
@@ -123,7 +133,7 @@ class GeminiHandlerTest {
         }
 
         @Test
-        @DisplayName("with tools, no schema - contains TOOL CALLING INSTRUCTIONS")
+        @DisplayName("with tools, no schema - contains TOOL CALLING RULES")
         void withTools_containsToolInstructions() {
             String basePrompt = "You are a helpful assistant.";
             List<ToolDefinition> tools = List.of(
@@ -135,15 +145,15 @@ class GeminiHandlerTest {
 
             String result = handler.formatSystemPrompt(basePrompt, tools, null);
 
-            assertTrue(result.contains("TOOL CALLING INSTRUCTIONS:"),
-                "Should contain tool calling instructions");
+            assertTrue(result.contains("TOOL CALLING RULES"),
+                "Should contain tool calling rules");
             assertTrue(result.startsWith(basePrompt),
                 "Should start with the base prompt");
         }
 
         @Test
-        @DisplayName("with schema, no tools - contains RESPONSE FORMAT and example JSON")
-        void withSchema_containsResponseFormat() {
+        @DisplayName("with schema, no tools - contains OUTPUT FORMAT and example JSON")
+        void withSchema_containsOutputFormat() {
             String basePrompt = "You are a helpful assistant.";
             Map<String, Object> schema = new LinkedHashMap<>();
             schema.put("type", "object");
@@ -155,8 +165,8 @@ class GeminiHandlerTest {
 
             String result = handler.formatSystemPrompt(basePrompt, null, outputSchema);
 
-            assertTrue(result.contains("RESPONSE FORMAT"),
-                "Should contain RESPONSE FORMAT section");
+            assertTrue(result.contains("OUTPUT FORMAT"),
+                "Should contain OUTPUT FORMAT section");
             assertTrue(result.contains("\"<your city here>\""),
                 "Should contain string example for city");
             assertTrue(result.contains("0"),
@@ -164,7 +174,7 @@ class GeminiHandlerTest {
         }
 
         @Test
-        @DisplayName("with both tools AND schema - contains TOOL INSTRUCTIONS, DECISION GUIDE, and RESPONSE FORMAT")
+        @DisplayName("with both tools AND schema - contains TOOL CALLING RULES, DECISION GUIDE, and OUTPUT FORMAT")
         void withToolsAndSchema_containsAll() {
             String basePrompt = "You are a helpful assistant.";
             List<ToolDefinition> tools = List.of(
@@ -180,12 +190,12 @@ class GeminiHandlerTest {
 
             String result = handler.formatSystemPrompt(basePrompt, tools, outputSchema);
 
-            assertTrue(result.contains("TOOL CALLING INSTRUCTIONS:"),
-                "Should contain tool calling instructions");
+            assertTrue(result.contains("TOOL CALLING RULES"),
+                "Should contain tool calling rules");
             assertTrue(result.contains("DECISION GUIDE:"),
                 "Should contain DECISION GUIDE");
-            assertTrue(result.contains("RESPONSE FORMAT"),
-                "Should contain RESPONSE FORMAT");
+            assertTrue(result.contains("OUTPUT FORMAT"),
+                "Should contain OUTPUT FORMAT");
         }
 
         @Test
@@ -232,8 +242,8 @@ class GeminiHandlerTest {
         }
 
         @Test
-        @DisplayName("contains anti-wrapping instruction with schema name")
-        void containsAntiWrappingInstruction() {
+        @DisplayName("hint mode instructs to return ONLY the JSON object")
+        void containsReturnOnlyJsonInstruction() {
             Map<String, Object> schema = Map.of(
                 "type", "object",
                 "properties", Map.of("result", Map.of("type", "string"))
@@ -242,18 +252,18 @@ class GeminiHandlerTest {
 
             String result = handler.formatSystemPrompt("Base.", null, outputSchema);
 
-            assertTrue(result.contains("Do NOT wrap the response in a type name key"),
-                "Should contain anti-wrapping instruction");
-            assertTrue(result.contains("\"MyResult\""),
-                "Anti-wrapping instruction should reference the schema name");
+            assertTrue(result.contains("Return ONLY the JSON object"),
+                "Should contain instruction to return only JSON");
+            assertTrue(result.contains("no markdown"),
+                "Should warn against markdown formatting");
         }
 
         @Test
         @DisplayName("text mode (null schema) - no JSON instructions added")
         void textMode_noJsonInstructions() {
             String result = handler.formatSystemPrompt("You are helpful.", List.of(), null);
-            assertFalse(result.contains("RESPONSE FORMAT"),
-                "Text mode should not contain RESPONSE FORMAT");
+            assertFalse(result.contains("OUTPUT FORMAT"),
+                "Text mode should not contain OUTPUT FORMAT");
             assertFalse(result.contains("JSON"),
                 "Text mode should not contain JSON instructions");
         }
@@ -271,8 +281,8 @@ class GeminiHandlerTest {
 
             assertFalse(result.contains("DECISION GUIDE:"),
                 "DECISION GUIDE should NOT be present without tools");
-            assertTrue(result.contains("RESPONSE FORMAT"),
-                "RESPONSE FORMAT should still be present");
+            assertTrue(result.contains("OUTPUT FORMAT"),
+                "OUTPUT FORMAT should still be present");
         }
 
         @Test
@@ -287,15 +297,15 @@ class GeminiHandlerTest {
             String result = handler.formatSystemPrompt(null, null, outputSchema);
 
             assertNotNull(result);
-            assertTrue(result.contains("RESPONSE FORMAT"),
-                "Should still contain RESPONSE FORMAT with null base prompt");
+            assertTrue(result.contains("OUTPUT FORMAT"),
+                "Should still contain OUTPUT FORMAT with null base prompt");
         }
 
         @Test
-        @DisplayName("empty tools list does not add TOOL CALLING INSTRUCTIONS")
+        @DisplayName("empty tools list does not add TOOL CALLING RULES")
         void emptyToolsList_noToolInstructions() {
             String result = handler.formatSystemPrompt("Base.", List.of(), null);
-            assertFalse(result.contains("TOOL CALLING INSTRUCTIONS:"),
+            assertFalse(result.contains("TOOL CALLING RULES"),
                 "Empty tools list should not add tool instructions");
         }
     }

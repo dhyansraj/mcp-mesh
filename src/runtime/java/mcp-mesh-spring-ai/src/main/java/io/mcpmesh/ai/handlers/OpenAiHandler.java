@@ -1,5 +1,6 @@
 package io.mcpmesh.ai.handlers;
 
+import io.mcpmesh.core.MeshCoreBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -39,17 +40,6 @@ public class OpenAiHandler implements LlmProviderHandler {
 
     private static final Logger log = LoggerFactory.getLogger(OpenAiHandler.class);
 
-    /** Base tool instructions for OpenAI */
-    private static final String BASE_TOOL_INSTRUCTIONS = """
-
-
-        TOOL CALLING INSTRUCTIONS:
-        - Use the provided tools when you need to gather information or perform actions
-        - Make ONE tool call at a time and wait for the result
-        - After receiving tool results, incorporate them into your response
-        - If a tool call fails, explain the error and try an alternative approach
-        """;
-
     @Override
     public String getVendor() {
         return "openai";
@@ -76,22 +66,42 @@ public class OpenAiHandler implements LlmProviderHandler {
             List<ToolDefinition> tools,
             OutputSchema outputSchema) {
 
-        StringBuilder systemContent = new StringBuilder(basePrompt != null ? basePrompt : "");
+        String outputMode = determineOutputMode(outputSchema);
+        boolean hasTools = tools != null && !tools.isEmpty();
 
-        // Add tool calling instructions if tools available
-        if (tools != null && !tools.isEmpty()) {
-            systemContent.append(BASE_TOOL_INSTRUCTIONS);
-        }
-
-        // OpenAI: NO detailed JSON schema in prompt - response_format handles it
-        // Just add a brief note for context
+        // Delegate to Rust core
+        String schemaJson = null;
+        String schemaName = null;
         if (outputSchema != null) {
-            systemContent.append("\n\nYour final response will be structured as JSON matching the ")
-                .append(outputSchema.name())
-                .append(" format.");
+            schemaName = outputSchema.name();
+            try {
+                schemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(outputSchema.schema());
+            } catch (Exception e) {
+                log.warn("Failed to serialize schema for Rust core: {}", e.getMessage());
+            }
         }
 
-        return systemContent.toString();
+        boolean hasMediaParams = false;
+        if (tools != null) {
+            for (ToolDefinition tool : tools) {
+                if (tool.inputSchema() != null) {
+                    try {
+                        String toolSchemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(tool.inputSchema());
+                        try {
+                            if (MeshCoreBridge.detectMediaParams(toolSchemaJson)) {
+                                hasMediaParams = true;
+                                break;
+                            }
+                        } catch (UnsatisfiedLinkError e) {
+                            // Native library unavailable (e.g., CI) — safe default
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+        }
+
+        return MeshCoreBridge.formatSystemPrompt(
+            "openai", basePrompt, hasTools, hasMediaParams, schemaJson, schemaName, outputMode);
     }
 
     // =========================================================================

@@ -10,14 +10,13 @@
 
 import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
+import { formatSystemPrompt as coreFormatSystemPrompt } from "@mcpmesh/core";
 import {
   makeSchemaStrict,
   sanitizeSchemaForStructuredOutput,
+  hasMediaParams,
   defaultDetermineOutputMode,
   prepareRequestBaseline,
-  buildSchemaPromptContent,
-  BASE_TOOL_INSTRUCTIONS,
-  DECISION_GUIDE,
   type ProviderHandler,
   type VendorCapabilities,
   type ToolSchema,
@@ -117,15 +116,12 @@ export class OpenAIHandler implements ProviderHandler {
 
   /**
    * Format system prompt for OpenAI with output mode support.
+   * Delegates to Rust core.
    *
    * OpenAI Strategy:
    * - strict mode: Brief JSON note (response_format handles schema)
    * - hint mode: Detailed JSON schema instructions in prompt
    * - text mode: No JSON instructions
-   *
-   * When tools are present, llm-provider forces "hint" mode because
-   * generateObject() doesn't support tools, so we need prompt-based
-   * JSON instructions to ensure structured output.
    */
   formatSystemPrompt(
     basePrompt: string,
@@ -133,51 +129,16 @@ export class OpenAIHandler implements ProviderHandler {
     outputSchema: OutputSchema | null,
     outputMode?: OutputMode
   ): string {
-    let systemContent = basePrompt;
-    const determinedMode = this.determineOutputMode(outputSchema, outputMode);
-
-    // Add tool calling instructions if tools available
-    if (toolSchemas && toolSchemas.length > 0) {
-      systemContent += BASE_TOOL_INSTRUCTIONS;
-    }
-
-    // Skip JSON instructions for text mode or no schema
-    if (determinedMode === "text" || !outputSchema) {
-      return systemContent;
-    }
-
-    // Strict mode: Brief note (response_format handles enforcement)
-    if (determinedMode === "strict") {
-      systemContent += `
-
-Your final response will be structured as JSON matching the ${outputSchema.name} format.`;
-      return systemContent;
-    }
-
-    // Hint mode: Add detailed JSON schema instructions
-    // This is used when tools are present (can't use generateObject)
-    const { fieldsText, exampleJson } = buildSchemaPromptContent(outputSchema);
-
-    // Add DECISION GUIDE when tools are present to help OpenAI know when NOT to use tools
-    const decisionGuide = (toolSchemas && toolSchemas.length > 0) ? DECISION_GUIDE + "\n" : "";
-
-    systemContent += `
-${decisionGuide}
-RESPONSE FORMAT:
-You MUST respond with valid JSON matching this schema:
-{
-${fieldsText}
-}
-
-Example format:
-${exampleJson}
-
-CRITICAL: Your response must be ONLY the raw JSON object.
-- DO NOT wrap in markdown code fences (\`\`\`json or \`\`\`)
-- DO NOT include any text before or after the JSON
-- Start directly with { and end with }`;
-
-    return systemContent;
+    const mode = this.determineOutputMode(outputSchema, outputMode);
+    return coreFormatSystemPrompt(
+      "openai",
+      basePrompt,
+      !!toolSchemas && toolSchemas.length > 0,
+      hasMediaParams(toolSchemas),
+      outputSchema ? JSON.stringify(outputSchema.schema) : undefined,
+      outputSchema?.name ?? undefined,
+      mode,
+    );
   }
 
   /**

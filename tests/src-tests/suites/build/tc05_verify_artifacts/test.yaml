@@ -98,6 +98,11 @@ test:
       else
         echo "  [MISSING] meshctl"
       fi
+      if [ -f "${run_path}/${config.output.bin}/meshui" ]; then
+        echo "  [OK] meshui"
+      else
+        echo "  [MISSING] meshui"
+      fi
       echo ""
       echo "Python wheels:"
       for whl in "${run_path}/${config.output.wheels}"/*.whl; do
@@ -160,6 +165,9 @@ assertions:
 
   - expr: ${captured.packages_check} contains '.tgz'
     message: "npm packages should exist"
+
+  - expr: ${captured.summary} contains '[OK] meshui'
+    message: "meshui binary should exist"
 
   - expr: ${captured.summary} contains 'All artifacts ready'
     message: "All artifacts should be ready"

@@ -5,13 +5,13 @@ Optimized for OpenAI models (GPT-4, GPT-4 Turbo, GPT-3.5-turbo)
 using OpenAI's native structured output capabilities.
 """
 
+import json
 from typing import Any, Optional
 
+import mcp_mesh_core
 from pydantic import BaseModel
 
 from .base_provider_handler import (
-    BASE_TOOL_INSTRUCTIONS,
-    MEDIA_PARAM_INSTRUCTIONS,
     BaseProviderHandler,
     has_media_params,
 )
@@ -119,17 +119,7 @@ class OpenAIHandler(BaseProviderHandler):
         """
         Format system prompt for OpenAI (concise approach).
 
-        OpenAI Strategy:
-        1. Use base prompt as-is
-        2. Add tool calling instructions if tools present
-        3. NO JSON schema instructions (response_format handles this)
-        4. Keep prompt concise - OpenAI works well with shorter prompts
-        5. Skip JSON note for str return type (text mode)
-
-        Key Difference from Claude:
-        - No JSON schema in prompt (response_format ensures compliance)
-        - Shorter, more focused instructions
-        - Let response_format handle output structure
+        Delegates to Rust core for prompt construction.
 
         Args:
             base_prompt: Base system prompt
@@ -139,29 +129,29 @@ class OpenAIHandler(BaseProviderHandler):
         Returns:
             Formatted system prompt optimized for OpenAI
         """
-        system_content = base_prompt
+        # OpenAI uses strict mode (response_format handles output) for schemas, text for str
+        is_string = output_type is str
+        output_mode = "text" if is_string else "strict"
 
-        # Add tool calling instructions if tools available
-        if tool_schemas:
-            system_content += BASE_TOOL_INSTRUCTIONS
+        schema_json = None
+        schema_name = None
+        if (
+            not is_string
+            and isinstance(output_type, type)
+            and issubclass(output_type, BaseModel)
+        ):
+            schema_json = json.dumps(output_type.model_json_schema())
+            schema_name = output_type.__name__
 
-        # Add media parameter instructions if any tools have x-media-type
-        if has_media_params(tool_schemas):
-            system_content += MEDIA_PARAM_INSTRUCTIONS
-
-        # Skip JSON note for str return type (text mode)
-        if output_type is str:
-            return system_content
-
-        # NOTE: We do NOT add JSON schema instructions here!
-        # OpenAI's response_format parameter handles JSON structure automatically.
-        # Adding explicit JSON instructions can actually confuse the model.
-
-        # Optional: Add a brief note that response should be JSON
-        # (though response_format enforces this anyway)
-        system_content += f"\n\nYour final response will be structured as JSON matching the {output_type.__name__} format."
-
-        return system_content
+        return mcp_mesh_core.format_system_prompt_py(
+            "openai",
+            base_prompt,
+            bool(tool_schemas),
+            has_media_params(tool_schemas),
+            schema_json,
+            schema_name,
+            output_mode,
+        )
 
     def get_vendor_capabilities(self) -> dict[str, bool]:
         """

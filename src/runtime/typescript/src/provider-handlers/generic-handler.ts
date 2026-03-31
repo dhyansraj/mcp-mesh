@@ -8,13 +8,15 @@
  */
 
 import type { LlmMessage } from "../types.js";
-import type {
-  ProviderHandler,
-  VendorCapabilities,
-  ToolSchema,
-  OutputSchema,
-  PreparedRequest,
-  OutputMode,
+import { formatSystemPrompt as coreFormatSystemPrompt } from "@mcpmesh/core";
+import {
+  hasMediaParams,
+  type ProviderHandler,
+  type VendorCapabilities,
+  type ToolSchema,
+  type OutputSchema,
+  type PreparedRequest,
+  type OutputMode,
 } from "./provider-handler.js";
 import { ProviderHandlerRegistry } from "./provider-handler-registry.js";
 
@@ -98,6 +100,7 @@ export class GenericHandler implements ProviderHandler {
 
   /**
    * Format system prompt with explicit JSON instructions.
+   * Delegates to Rust core.
    *
    * Generic Strategy:
    * - Use detailed prompt instructions (works with most models)
@@ -112,43 +115,16 @@ export class GenericHandler implements ProviderHandler {
     outputSchema: OutputSchema | null,
     outputMode?: OutputMode
   ): string {
-    let systemContent = basePrompt;
     const mode = this.determineOutputMode(outputSchema, outputMode);
-
-    // Add tool calling instructions if tools available
-    if (toolSchemas && toolSchemas.length > 0) {
-      systemContent += `
-
-TOOL CALLING RULES:
-- You can call tools to gather information
-- Make one tool call at a time
-- Wait for tool results before making additional calls
-- Use standard JSON function calling format
-- Provide your final response after gathering needed information
-`;
-    }
-
-    // Skip JSON schema for text mode
-    if (mode === "text" || !outputSchema) {
-      return systemContent;
-    }
-
-    // Add explicit JSON schema instructions
-    // (since we can't rely on vendor-specific structured output)
-    const schemaStr = JSON.stringify(outputSchema.schema, null, 2);
-    systemContent += `
-
-IMPORTANT: Return your final response as valid JSON matching this exact schema:
-${schemaStr}
-
-Rules:
-- Return ONLY the JSON object, no markdown, no additional text
-- Ensure all required fields are present
-- Match the schema exactly
-- Use double quotes for strings
-- Do not include comments`;
-
-    return systemContent;
+    return coreFormatSystemPrompt(
+      this.vendor,
+      basePrompt,
+      !!toolSchemas && toolSchemas.length > 0,
+      hasMediaParams(toolSchemas),
+      outputSchema ? JSON.stringify(outputSchema.schema) : undefined,
+      outputSchema?.name ?? undefined,
+      mode,
+    );
   }
 
   /**

@@ -3,6 +3,7 @@ package io.mcpmesh.spring;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import io.mcpmesh.core.MeshCoreBridge;
 import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.spring.tracing.TraceContext;
 import io.mcpmesh.spring.tracing.TraceInfo;
@@ -442,21 +443,13 @@ public class McpHttpClient {
      * data: {"jsonrpc":"2.0","id":1,"result":{...}}
      * </pre>
      *
+     * <p>Delegates to Rust core for consistent cross-SDK behavior.
+     *
      * @param sseContent The SSE-formatted response
      * @return The extracted JSON content from the data: line
      */
     private String extractJsonFromSse(String sseContent) {
-        // Find all data: lines and concatenate them (for multi-line data)
-        StringBuilder jsonBuilder = new StringBuilder();
-        for (String line : sseContent.split("\n")) {
-            if (line.startsWith("data: ")) {
-                jsonBuilder.append(line.substring(6)); // Remove "data: " prefix
-            } else if (line.startsWith("data:")) {
-                jsonBuilder.append(line.substring(5)); // Handle "data:" without space
-            }
-        }
-        String json = jsonBuilder.toString().trim();
-        return json.isEmpty() ? sseContent : json;
+        return MeshCoreBridge.parseSseResponse(sseContent);
     }
 
     private static KeyStore loadCaTrustStore(String caPath) throws Exception {

@@ -7,18 +7,12 @@ Separated from MeshLlmAgent for better testability and reusability.
 
 import json
 import logging
-import re
-from typing import Any, TypeVar, Union
+from typing import Any, TypeVar
 
+import mcp_mesh_core
 from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
-
-# Module-level compiled regex for code fence stripping (compile once, use many times)
-_CODE_FENCE_PATTERN = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
-
-# Regex to extract JSON from code fences in mixed content
-_JSON_BLOCK_PATTERN = re.compile(r"```json\s*\n(.+?)\n```", re.DOTALL)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -92,11 +86,8 @@ class ResponseParser:
         """
         Extract JSON from mixed content (narrative + XML + JSON).
 
-        Tries multiple strategies to find JSON in mixed responses:
-        1. Find ```json ... ``` code fence blocks
-        2. Find any JSON object {...} using progressive json.loads
-        3. Find any JSON array [...] using progressive json.loads
-        4. Return original content if no extraction needed
+        Delegates to Rust core for extraction. Returns original content if
+        no JSON is found.
 
         Args:
             content: Raw content that may contain narrative, XML, and JSON
@@ -104,87 +95,15 @@ class ResponseParser:
         Returns:
             Extracted JSON string or original content
         """
-        # Strategy 1: Try to find ```json ... ``` blocks
-        json_match = _JSON_BLOCK_PATTERN.search(content)
-        if json_match:
-            extracted = json_match.group(1).strip()
-            return extracted
-
-        # Strategy 2: Try to find JSON object using progressive json.loads
-        # This correctly handles braces inside string values
-        brace_start = content.find("{")
-        if brace_start != -1:
-            result = ResponseParser._try_progressive_parse(
-                content, brace_start, "{", "}"
-            )
-            if result:
-                return result
-
-        # Strategy 3: Try to find JSON array using progressive json.loads
-        bracket_start = content.find("[")
-        if bracket_start != -1:
-            result = ResponseParser._try_progressive_parse(
-                content, bracket_start, "[", "]"
-            )
-            if result:
-                return result
-
-        # No JSON found, return original
-        return content
-
-    @staticmethod
-    def _try_progressive_parse(
-        content: str, start: int, open_char: str, close_char: str
-    ) -> str | None:
-        """
-        Try to extract valid JSON by progressively extending the end position.
-        This correctly handles braces/brackets inside string values.
-
-        Args:
-            content: The full content string
-            start: Starting index of the JSON
-            open_char: Opening character ('{' or '[')
-            close_char: Closing character ('}' or ']')
-
-        Returns:
-            Extracted JSON string or None if not found
-        """
-        # Find potential end positions based on depth counting
-        depth = 0
-        potential_ends: list[int] = []
-
-        for i in range(start, len(content)):
-            char = content[i]
-            if char == open_char:
-                depth += 1
-            elif char == close_char:
-                depth -= 1
-                if depth == 0:
-                    potential_ends.append(i)
-
-        # Try each potential end position (shortest first for efficiency)
-        for end in potential_ends:
-            candidate = content[start : end + 1]
-            try:
-                json.loads(candidate)
-                return candidate
-            except json.JSONDecodeError:
-                # Not valid JSON, try next potential end
-                continue
-
-        return None
+        result = mcp_mesh_core.extract_json_py(content)
+        return result if result is not None else content
 
     @staticmethod
     def _strip_markdown_fences(content: str) -> str:
         """
-        Strip markdown code fences from content using regex.
+        Strip markdown code fences from content.
 
-        Handles:
-        - ```json ... ``` (with optional whitespace/newlines)
-        - ``` ... ``` (with optional whitespace/newlines)
-        - Mixed whitespace and newline patterns
-
-        Uses compiled regex for optimal performance.
+        Delegates to Rust core for fence stripping.
 
         Args:
             content: Raw content
@@ -192,7 +111,7 @@ class ResponseParser:
         Returns:
             Content with fences removed
         """
-        return _CODE_FENCE_PATTERN.sub("", content).strip()
+        return mcp_mesh_core.strip_code_fences_py(content)
 
     @staticmethod
     def _parse_json_with_fallback(content: str, output_type: type[T]) -> dict[str, Any]:

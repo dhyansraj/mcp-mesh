@@ -478,7 +478,7 @@ describe("ClaudeHandler", () => {
       expect(result).toContain("RESPONSE FORMAT:");
     });
 
-    it("should add DECISION GUIDE in strict mode with tools", () => {
+    it("should add brief JSON note in strict mode with tools (no DECISION GUIDE)", () => {
       const basePrompt = "You are a helpful assistant.";
       const tools: ToolSchema[] = [
         { type: "function", function: { name: "get_weather" } },
@@ -493,7 +493,7 @@ describe("ClaudeHandler", () => {
 
       const result = handler.formatSystemPrompt(basePrompt, tools, schema, "strict");
 
-      expect(result).toContain("DECISION GUIDE:");
+      // Rust core does not add DECISION GUIDE in strict mode
       expect(result).toContain("structured as JSON matching the Output format");
     });
 
@@ -537,7 +537,9 @@ describe("ClaudeHandler", () => {
 
       expect(request.responseFormat).toBeDefined();
       expect(request.responseFormat?.jsonSchema.schema.additionalProperties).toBe(false);
-      expect(request.responseFormat?.jsonSchema.schema.required).toEqual(["user", "a"]);
+      // Rust core sorts property keys alphabetically
+      const requiredArr = request.responseFormat?.jsonSchema.schema.required as string[];
+      expect(requiredArr.sort()).toEqual(["a", "user"]);
       // Nested objects should also have strict constraints
       const userSchema = (request.responseFormat?.jsonSchema.schema.properties as Record<string, Record<string, unknown>>)?.user;
       expect(userSchema?.additionalProperties).toBe(false);

@@ -131,7 +131,8 @@ That's all.`;
       const content = "```json\n\n```";
 
       const result = extractJson(content);
-      expect(result).toBe("");
+      // Rust core returns null for empty code blocks (no valid JSON content)
+      expect(result).toBeNull();
     });
   });
 });

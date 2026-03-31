@@ -42,6 +42,13 @@ test:
       fi
       echo "  mcp-mesh-registry: OK"
 
+      # Check meshui binary
+      if [ ! -f "${run_path}/${config.output.bin}/meshui" ]; then
+        echo "ERROR: meshui binary not found at ${run_path}/${config.output.bin}/meshui"
+        exit 1
+      fi
+      echo "  meshui: OK"
+
       # Check Python wheels
       WHEEL_COUNT=$(ls "${run_path}/${config.output.wheels}"/*.whl 2>/dev/null | wc -l)
       if [ "$WHEEL_COUNT" -lt 2 ]; then
@@ -82,6 +89,7 @@ test:
       mkdir -p $BUILD_DIR/bin $BUILD_DIR/wheels $BUILD_DIR/packages
       cp "${run_path}/${config.output.bin}/meshctl" $BUILD_DIR/bin/
       cp "${run_path}/${config.output.bin}/mcp-mesh-registry" $BUILD_DIR/bin/
+      cp "${run_path}/${config.output.bin}/meshui" $BUILD_DIR/bin/
       cp "${run_path}/${config.output.wheels}"/*.whl $BUILD_DIR/wheels/
       cp "${run_path}/${config.output.packages}"/*.tgz $BUILD_DIR/packages/
 
@@ -216,6 +224,13 @@ test:
       docker run --rm ${config.docker.output_image} mcp-mesh-registry --help 2>&1 | head -5
     capture: registry_check
 
+  # Test the image - verify meshui
+  - name: "Test meshui in image"
+    handler: shell
+    command: |
+      docker run --rm ${config.docker.output_image} meshui --help 2>&1 | head -5
+    capture: meshui_check
+
   # Test the image - verify mesh module
   - name: "Test mesh module in image"
     handler: shell
@@ -327,6 +342,10 @@ assertions:
   # mcp-mesh-registry should work
   - expr: ${captured.registry_check} contains 'registry'
     message: "mcp-mesh-registry should be installed and working"
+
+  # meshui should work
+  - expr: ${captured.meshui_check} contains 'meshui'
+    message: "meshui should be installed and working"
 
   # mesh module should work
   - expr: ${captured.mesh_check} contains 'mesh OK'

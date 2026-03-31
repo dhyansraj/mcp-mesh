@@ -274,7 +274,9 @@ describe("OpenAIHandler", () => {
       const request = handler.prepareRequest(messages, null, schema);
 
       const resultSchema = request.responseFormat?.jsonSchema.schema as Record<string, unknown>;
-      expect(resultSchema.required).toEqual(["name", "age", "active"]);
+      // Rust core sorts property keys alphabetically
+      const requiredArr = (resultSchema.required as string[]).slice().sort();
+      expect(requiredArr).toEqual(["active", "age", "name"]);
     });
 
     it("should add additionalProperties:false to nested objects", () => {

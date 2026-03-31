@@ -570,6 +570,320 @@ pub async fn is_trace_publisher_available() -> Result<bool> {
     Ok(crate::tracing_publish::is_trace_publisher_available().await)
 }
 
+// =============================================================================
+// Response Parsing
+// =============================================================================
+
+/// Extract JSON from LLM response text.
+///
+/// Strategies: code fences -> progressive object parse -> progressive array parse.
+/// Returns null if no JSON found.
+#[napi]
+pub fn extract_json(text: String) -> Option<String> {
+    crate::response_parser::extract_json(&text)
+}
+
+/// Strip markdown code fences from content.
+#[napi]
+pub fn strip_code_fences(text: String) -> String {
+    crate::response_parser::strip_code_fences(&text)
+}
+
+// =============================================================================
+// Schema Normalization
+// =============================================================================
+
+/// Make a JSON schema strict for structured output.
+///
+/// Adds additionalProperties: false to all object types.
+/// If addAllRequired is true, sets required to include all property keys.
+#[napi]
+pub fn make_schema_strict(schema_json: String, add_all_required: Option<bool>) -> napi::Result<String> {
+    crate::schema::make_schema_strict(&schema_json, add_all_required.unwrap_or(true))
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Sanitize a JSON schema by removing unsupported validation keywords.
+#[napi]
+pub fn sanitize_schema(schema_json: String) -> napi::Result<String> {
+    crate::schema::sanitize_schema(&schema_json)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Check if any tool schema property contains x-media-type.
+#[napi]
+pub fn detect_media_params(schema_json: String) -> bool {
+    crate::schema::detect_media_params(&schema_json)
+}
+
+/// Check if a JSON schema is simple enough for hint mode.
+#[napi]
+pub fn is_simple_schema(schema_json: String) -> bool {
+    crate::schema::is_simple_schema(&schema_json)
+}
+
+// =============================================================================
+// Trace Context
+// =============================================================================
+
+/// Generate OpenTelemetry-compliant trace ID (32-char hex, 128-bit).
+#[napi]
+pub fn generate_trace_id() -> String {
+    crate::trace_context::generate_trace_id()
+}
+
+/// Generate OpenTelemetry-compliant span ID (16-char hex, 64-bit).
+#[napi]
+pub fn generate_span_id() -> String {
+    crate::trace_context::generate_span_id()
+}
+
+/// Inject trace context into JSON-RPC arguments.
+#[napi]
+pub fn inject_trace_context(
+    args_json: String,
+    trace_id: String,
+    span_id: String,
+    propagated_headers_json: Option<String>,
+) -> napi::Result<String> {
+    crate::trace_context::inject_trace_context(
+        &args_json,
+        &trace_id,
+        &span_id,
+        propagated_headers_json.as_deref(),
+    )
+    .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Extract trace context from HTTP headers with body fallback.
+#[napi]
+pub fn extract_trace_context(headers_json: String, body_json: Option<String>) -> String {
+    crate::trace_context::extract_trace_context(&headers_json, body_json.as_deref())
+}
+
+/// Filter headers by propagation allowlist with prefix matching.
+#[napi]
+pub fn filter_propagation_headers(
+    headers_json: String,
+    allowlist_csv: String,
+) -> napi::Result<String> {
+    crate::trace_context::filter_propagation_headers(&headers_json, &allowlist_csv)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Check if a header matches the propagation allowlist.
+#[napi]
+pub fn matches_propagate_header(header_name: String, allowlist_csv: String) -> bool {
+    crate::trace_context::matches_propagate_header(&header_name, &allowlist_csv)
+}
+
+// =============================================================================
+// MCP Client
+// =============================================================================
+
+/// Build a JSON-RPC 2.0 request envelope.
+///
+/// @param method - JSON-RPC method name (e.g., "tools/call")
+/// @param paramsJson - JSON string to embed as params
+/// @param requestId - Unique request identifier
+/// @returns Full JSON-RPC request string
+#[napi]
+pub fn build_jsonrpc_request(method: String, params_json: String, request_id: String) -> napi::Result<String> {
+    crate::mcp_client::build_jsonrpc_request(&method, &params_json, &request_id)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Generate a unique request ID (format: req_{millis}_{hex6}).
+#[napi]
+pub fn generate_request_id() -> String {
+    crate::mcp_client::generate_request_id()
+}
+
+/// Parse SSE or plain JSON response and extract JSON data.
+///
+/// @param responseText - Raw response body (SSE or plain JSON)
+/// @returns Extracted JSON string
+#[napi]
+pub fn parse_sse_response(response_text: String) -> napi::Result<String> {
+    crate::mcp_client::parse_sse_response(&response_text)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Extract text content from MCP CallToolResult JSON.
+///
+/// @param resultJson - JSON string of the MCP result
+/// @returns Extracted content string
+#[napi]
+pub fn extract_content(result_json: String) -> napi::Result<String> {
+    crate::mcp_client::extract_content(&result_json)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Call a remote MCP tool via HTTP POST with retry.
+///
+/// @param endpoint - MCP endpoint URL
+/// @param toolName - Name of the tool to call
+/// @param argsJson - Optional JSON string of tool arguments
+/// @param headersJson - Optional JSON object of extra headers
+/// @param timeoutMs - Request timeout in milliseconds
+/// @param maxRetries - Maximum number of retries on network error
+/// @returns Result content string
+#[napi]
+pub async fn call_tool(
+    endpoint: String,
+    tool_name: String,
+    args_json: Option<String>,
+    headers_json: Option<String>,
+    timeout_ms: i64,
+    max_retries: i32,
+) -> napi::Result<String> {
+    if timeout_ms < 0 {
+        return Err(napi::Error::from_reason("timeout_ms must be non-negative"));
+    }
+    if max_retries < 0 {
+        return Err(napi::Error::from_reason("max_retries must be non-negative"));
+    }
+    crate::mcp_client::call_tool(
+        &endpoint,
+        &tool_name,
+        args_json.as_deref(),
+        headers_json.as_deref(),
+        timeout_ms as u64,
+        max_retries as u32,
+    ).await.map_err(|e| napi::Error::from_reason(e))
+}
+
+// =============================================================================
+// Provider
+// =============================================================================
+
+/// Determine output mode for a vendor given the context.
+///
+/// @param provider - Vendor name (e.g., "anthropic", "openai", "gemini")
+/// @param isStringType - Whether the output schema is a plain string type
+/// @param hasTools - Whether tools are present in the request
+/// @param overrideMode - Optional override mode
+/// @returns Output mode: "text", "hint", or "strict"
+#[napi]
+pub fn determine_output_mode(
+    provider: String,
+    is_string_type: bool,
+    has_tools: bool,
+    override_mode: Option<String>,
+) -> String {
+    crate::provider::determine_output_mode(
+        &provider,
+        is_string_type,
+        has_tools,
+        override_mode.as_deref(),
+    )
+}
+
+/// Build the complete system prompt with vendor-specific additions.
+///
+/// @param provider - Vendor name
+/// @param basePrompt - Base system prompt text
+/// @param hasTools - Whether tools are present
+/// @param hasMediaParams - Whether media parameters are present
+/// @param schemaJson - Optional JSON schema string
+/// @param schemaName - Optional schema name
+/// @param outputMode - Output mode: "text", "hint", or "strict"
+/// @returns Complete system prompt string
+#[napi]
+pub fn format_system_prompt(
+    provider: String,
+    base_prompt: String,
+    has_tools: bool,
+    has_media_params: bool,
+    schema_json: Option<String>,
+    schema_name: Option<String>,
+    output_mode: String,
+) -> String {
+    crate::provider::format_system_prompt(
+        &provider,
+        &base_prompt,
+        has_tools,
+        has_media_params,
+        schema_json.as_deref(),
+        schema_name.as_deref(),
+        &output_mode,
+    )
+}
+
+/// Build the `response_format` JSON object for structured output.
+///
+/// Returns null for vendors that do not support response_format.
+///
+/// @param provider - Vendor name
+/// @param schemaJson - JSON schema string
+/// @param schemaName - Schema name for the response_format
+/// @param hasTools - Whether tools are present
+/// @returns JSON string with response_format, or null
+#[napi]
+pub fn build_response_format(
+    provider: String,
+    schema_json: String,
+    schema_name: String,
+    has_tools: bool,
+) -> Option<String> {
+    crate::provider::build_response_format(&provider, &schema_json, &schema_name, has_tools)
+}
+
+/// Get vendor capabilities as JSON.
+///
+/// @param provider - Vendor name
+/// @returns JSON string with vendor capabilities
+#[napi]
+pub fn get_vendor_capabilities(provider: String) -> String {
+    crate::provider::get_vendor_capabilities(&provider)
+}
+
+// =============================================================================
+// Agentic Loop
+// =============================================================================
+
+/// Create initial agentic loop state.
+///
+/// @param configJson - JSON config with `messages` array and optional `maxIterations`
+/// @returns Action JSON with `action: "call_llm"` and serialized state
+#[napi]
+pub fn create_agentic_loop(config_json: String) -> napi::Result<String> {
+    crate::agentic_loop::create_loop(&config_json)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Process an LLM response in the agentic loop.
+///
+/// @param stateJson - Serialized loop state from a previous call
+/// @param llmResponseJson - LLM response with optional tool_calls, content, usage
+/// @returns Action JSON: execute_tools, done, max_iterations, or error
+#[napi]
+pub fn process_llm_response(state_json: String, llm_response_json: String) -> napi::Result<String> {
+    crate::agentic_loop::process_response(&state_json, &llm_response_json)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Add tool execution results to the agentic loop.
+///
+/// @param stateJson - Serialized loop state from a previous call
+/// @param toolResultsJson - Array of {tool_call_id, content} objects
+/// @returns Action JSON: call_llm or max_iterations
+#[napi]
+pub fn add_tool_results(state_json: String, tool_results_json: String) -> napi::Result<String> {
+    crate::agentic_loop::add_tool_results(&state_json, &tool_results_json)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
+/// Get a read-only view of the agentic loop state.
+///
+/// @param stateJson - Serialized loop state
+/// @returns State info JSON with iteration, token counts, message_count
+#[napi]
+pub fn get_loop_state(state_json: String) -> napi::Result<String> {
+    crate::agentic_loop::get_loop_state(&state_json)
+        .map_err(|e| napi::Error::from_reason(e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
