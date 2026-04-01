@@ -955,14 +955,18 @@ class UnifiedMCPProxy:
         name: str,
         arguments: dict = None,
     ) -> AsyncIterator[Any]:
-        """Call a tool with streaming response using FastMCP's streaming support.
+        """Call a tool with streaming response.
+
+        Note: Currently yields the complete result as a single chunk rather than
+        true chunk-level streaming. FastMCP's call_tool() returns the full response.
+        This method exists for API compatibility with the streaming=True kwarg.
 
         Args:
             name: Tool name to call
             arguments: Tool arguments
 
         Yields:
-            Streaming response chunks
+            Tool result (single yield of the complete response)
         """
         if not self.streaming_capable:
             raise ValueError(f"Tool {name} not configured for streaming")
