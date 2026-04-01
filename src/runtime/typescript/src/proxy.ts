@@ -16,6 +16,27 @@ import {
 import { isTimeoutError } from "./timeout-utils.js";
 import { getDispatcher } from "./http-pool.js";
 
+/** Options for callMcpTool, derived from DependencyKwargs. */
+export interface CallOptions {
+  timeout: number;
+  maxAttempts: number;
+  streamTimeout: number;
+  customHeaders?: Record<string, string>;
+  retryDelay: number;
+  retryBackoff: number;
+  maxResponseSize: number;
+}
+
+/** Default CallOptions for internal callers that don't go through createProxy. */
+export const DEFAULT_CALL_OPTIONS: CallOptions = {
+  timeout: 30_000,
+  maxAttempts: 1,
+  streamTimeout: 300_000,
+  retryDelay: 100,
+  retryBackoff: 2.0,
+  maxResponseSize: 10 * 1024 * 1024,
+};
+
 /**
  * AsyncLocalStorage for trace context - provides async-safe context propagation.
  * Unlike module-level variables, this correctly handles concurrent requests
@@ -87,17 +108,28 @@ export function createProxy(
   functionName: string,
   kwargs?: DependencyKwargs
 ): McpMeshTool {
-  const timeout = (kwargs?.timeout ?? 30) * 1000; // Convert to ms
-  const maxAttempts = kwargs?.maxAttempts ?? 1;
+  const options: CallOptions = {
+    timeout: (kwargs?.timeout ?? 30) * 1000,
+    maxAttempts: kwargs?.maxAttempts ?? 1,
+    streamTimeout: (kwargs?.streamTimeout ?? 300) * 1000,
+    customHeaders: kwargs?.customHeaders,
+    retryDelay: (kwargs?.retryDelay ?? 0.1) * 1000,
+    retryBackoff: kwargs?.retryBackoff ?? 2.0,
+    maxResponseSize: kwargs?.maxResponseSize ?? 10 * 1024 * 1024,
+  };
+  // Use streamTimeout when streaming is enabled
+  if (kwargs?.streaming) {
+    options.timeout = options.streamTimeout;
+  }
 
   // The proxy function that calls the bound tool
   // Returns parsed object (like Python) or raw string if not JSON
   // Multi-content results (resource_link, image, etc.) are returned as-is
   const proxyFn = async (
     args?: Record<string, unknown>,
-    options?: { headers?: Record<string, string> }
+    callParams?: { headers?: Record<string, string> }
   ): Promise<unknown> => {
-    const result = await callMcpTool(endpoint, functionName, args, timeout, maxAttempts, capability, options?.headers);
+    const result = await callMcpTool(endpoint, functionName, args, options, capability, callParams?.headers);
     // Multi-content results are returned as structured objects
     if (typeof result === "object") {
       return result;
@@ -120,9 +152,9 @@ export function createProxy(
       value: async (
         toolName: string,
         args?: Record<string, unknown>,
-        options?: { headers?: Record<string, string> }
+        callParams?: { headers?: Record<string, string> }
       ): Promise<unknown> => {
-        const result = await callMcpTool(endpoint, toolName, args, timeout, maxAttempts, capability, options?.headers);
+        const result = await callMcpTool(endpoint, toolName, args, options, capability, callParams?.headers);
         if (typeof result === "object") {
           return result;
         }
@@ -150,8 +182,7 @@ export async function callMcpTool(
   endpoint: string,
   toolName: string,
   args: Record<string, unknown> | undefined,
-  timeout: number,
-  maxAttempts: number,
+  options: CallOptions,
   capability: string,
   extraHeaders?: Record<string, string>
 ): Promise<string | MultiContentResult> {
@@ -201,10 +232,10 @@ export async function callMcpTool(
 
   let lastError: Error | null = null;
 
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  for (let attempt = 0; attempt < options.maxAttempts; attempt++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeout);
+      const timeoutId = setTimeout(() => controller.abort(), options.timeout);
 
       // Build headers with trace context propagation
       const headers: Record<string, string> = {
@@ -212,11 +243,18 @@ export async function callMcpTool(
         Accept: "application/json, text/event-stream",
       };
 
-      // Propagate trace context to downstream agent
+      // Apply custom headers from kwargs (lowest priority)
+      if (options.customHeaders) {
+        for (const [key, value] of Object.entries(options.customHeaders)) {
+          headers[key] = value;
+        }
+      }
+
+      // Propagate trace context (higher priority)
       if (traceCtx && spanId) {
         Object.assign(headers, createTraceHeaders(traceCtx.traceId, spanId));
       }
-      // Inject merged headers as HTTP headers (propagated + per-call)
+      // Inject merged headers (highest priority)
       for (const [key, value] of Object.entries(mergedHeaders)) {
         headers[key] = value;
       }
@@ -243,6 +281,14 @@ export async function callMcpTool(
       if (!response.ok) {
         throw new Error(
           `MCP call failed: ${response.status} ${response.statusText}`
+        );
+      }
+
+      // Check response size against limit
+      const contentLength = parseInt(response.headers.get("content-length") ?? "0", 10);
+      if (contentLength > 0 && contentLength > options.maxResponseSize) {
+        throw new Error(
+          `Response size ${contentLength} bytes exceeds limit of ${options.maxResponseSize} bytes`
         );
       }
 
@@ -280,12 +326,12 @@ export async function callMcpTool(
       // Don't retry on abort (timeout)
       if (isTimeoutError(lastError)) {
         publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, "timeout", "error");
-        throw new Error(`MCP call timed out after ${timeout}ms`);
+        throw new Error(`MCP call timed out after ${options.timeout}ms`);
       }
 
       // Retry on network errors
-      if (attempt < maxAttempts - 1) {
-        await sleep(100 * (attempt + 1)); // Exponential backoff
+      if (attempt < options.maxAttempts - 1) {
+        await sleep(options.retryDelay * Math.pow(options.retryBackoff, attempt));
         continue;
       }
     }

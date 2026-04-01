@@ -33,7 +33,7 @@ import type {
 import { ProviderHandlerRegistry, makeSchemaStrict } from "./provider-handlers/index.js";
 import { generateTraceId, generateSpanId, publishTraceSpan, matchesPropagateHeader } from "./tracing.js";
 import type { TraceContext } from "./tracing.js";
-import { runWithTraceContext, runWithPropagatedHeaders, callMcpTool } from "./proxy.js";
+import { runWithTraceContext, runWithPropagatedHeaders, callMcpTool, DEFAULT_CALL_OPTIONS } from "./proxy.js";
 import { resolveResourceLinks, resolveResourceLinksForToolMessage, hasResourceLink, TOOL_IMAGE_UNSUPPORTED_VENDORS, type ResolvedContent } from "./media/index.js";
 
 const debug = createDebug("llm-provider");
@@ -598,7 +598,7 @@ export function llmProvider(config: LlmProviderConfig): {
               const toolArgs = (args ?? {}) as Record<string, unknown>;
               debug(`Provider executing tool '${toolName}' at ${toolEndpoint}`);
               try {
-                const result = await callMcpTool(toolEndpoint, toolName, toolArgs, 30000, 1, "tool");
+                const result = await callMcpTool(toolEndpoint, toolName, toolArgs, DEFAULT_CALL_OPTIONS, "tool");
                 // Resolve resource_links to provider-native media content
                 if (hasResourceLink(result)) {
                   debug(`Tool '${toolName}' result contains resource_link, resolving for ${vendor}`);
@@ -868,8 +868,7 @@ export function llmProvider(config: LlmProviderConfig): {
                   toolEndpoint,
                   toolName,
                   toolArgs,
-                  30000, // 30s timeout
-                  1,     // 1 attempt
+                  DEFAULT_CALL_OPTIONS,
                   "tool",
                 );
                 rawToolResult = rawResult;

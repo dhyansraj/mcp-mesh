@@ -167,10 +167,20 @@ export interface DependencyKwargs {
   timeout?: number;
   /** Total number of attempts (1 = one attempt with zero retries). Defaults to 1 */
   maxAttempts?: number;
-  /** Enable streaming responses. Defaults to false */
+  /** Enable streaming responses (uses streamTimeout instead of timeout). Defaults to false */
   streaming?: boolean;
   /** Require session affinity. Defaults to false */
   sessionRequired?: boolean;
+  /** Timeout for streaming/LLM responses in seconds. Defaults to 300 */
+  streamTimeout?: number;
+  /** Extra headers to send with every request to this dependency */
+  customHeaders?: Record<string, string>;
+  /** Initial retry delay in seconds. Defaults to 0.1 */
+  retryDelay?: number;
+  /** Retry backoff multiplier. Defaults to 2.0 */
+  retryBackoff?: number;
+  /** Max response body size in bytes. Defaults to 10MB (10485760) */
+  maxResponseSize?: number;
 }
 
 /**
