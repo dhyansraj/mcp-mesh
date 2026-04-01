@@ -1716,6 +1716,16 @@ def llm(
             combined_injection_wrapper._mesh_llm_output_type = output_type
             combined_injection_wrapper.__wrapped__ = func
 
+            # Override signature to hide LLM parameter from FastMCP schema
+            try:
+                _sig = inspect.signature(func)
+                _clean = [p for n, p in _sig.parameters.items() if n != param_name]
+                combined_injection_wrapper.__signature__ = _sig.replace(
+                    parameters=_clean
+                )
+            except Exception:
+                pass
+
             # Create update method for heartbeat that updates the COMBINED wrapper
             def update_llm_agent(agent):
                 combined_injection_wrapper._mesh_llm_agent = agent
@@ -1784,6 +1794,14 @@ def llm(
             llm_injection_wrapper._mesh_llm_config = resolved_config
             llm_injection_wrapper._mesh_llm_output_type = output_type
             llm_injection_wrapper._mesh_update_llm_agent = update_llm_agent
+
+            # Override signature to hide LLM parameter from FastMCP schema
+            try:
+                _sig = inspect.signature(func)
+                _clean = [p for n, p in _sig.parameters.items() if n != param_name]
+                llm_injection_wrapper.__signature__ = _sig.replace(parameters=_clean)
+            except Exception:
+                pass
 
             # Update DecoratorRegistry with the wrapper
             DecoratorRegistry.update_mesh_llm_function(

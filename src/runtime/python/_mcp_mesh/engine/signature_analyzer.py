@@ -14,6 +14,22 @@ except ImportError:
     McpMeshAgent = McpMeshTool  # type: ignore
 
 
+def _get_original_func(func: Any) -> Any:
+    """Follow __wrapped__ chain to get the original function.
+
+    Injection wrappers override __signature__ to hide injectable params
+    from FastMCP. Internal analysis functions need the original signature.
+    """
+    original = func
+    # Follow __wrapped__ (set by @functools.wraps)
+    while hasattr(original, "__wrapped__"):
+        original = original.__wrapped__
+    # Also check _mesh_original_func (set by DI injector)
+    if hasattr(original, "_mesh_original_func"):
+        original = original._mesh_original_func
+    return original
+
+
 def _is_mesh_tool_type(param_type: Any) -> bool:
     """Check if a type is McpMeshTool or deprecated McpMeshAgent."""
     # Direct McpMeshTool type
@@ -54,6 +70,25 @@ def _is_mesh_tool_type(param_type: Any) -> bool:
     return False
 
 
+def _is_mesh_llm_type(param_type: Any) -> bool:
+    """Check if a type is MeshLlmAgent."""
+    # Direct MeshLlmAgent type
+    if param_type == MeshLlmAgent or (
+        hasattr(param_type, "__name__") and param_type.__name__ == "MeshLlmAgent"
+    ):
+        return True
+
+    # Union type (e.g., MeshLlmAgent | None)
+    if hasattr(param_type, "__args__"):
+        for arg in param_type.__args__:
+            if arg == MeshLlmAgent or (
+                hasattr(arg, "__name__") and arg.__name__ == "MeshLlmAgent"
+            ):
+                return True
+
+    return False
+
+
 def get_mesh_agent_positions(func: Any) -> list[int]:
     """
     Get positions of McpMeshTool parameters in function signature.
@@ -71,6 +106,7 @@ def get_mesh_agent_positions(func: Any) -> list[int]:
         get_mesh_agent_positions(greet) → [1, 2]
     """
     try:
+        func = _get_original_func(func)
         # Get type hints for the function
         type_hints = get_type_hints(func)
 
@@ -108,6 +144,7 @@ def get_mesh_agent_parameter_names(func: Any) -> list[str]:
         List of parameter names that are McpMeshTool types
     """
     try:
+        func = _get_original_func(func)
         type_hints = get_type_hints(func)
         sig = inspect.signature(func)
 
@@ -135,6 +172,7 @@ def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[boo
     Returns:
         Tuple of (is_valid, error_message)
     """
+    func = _get_original_func(func)
     mesh_positions = get_mesh_agent_positions(func)
 
     if len(dependencies) != len(mesh_positions):
@@ -164,6 +202,7 @@ def get_llm_agent_positions(func: Any) -> list[int]:
         get_llm_agent_positions(chat) → [1]
     """
     try:
+        func = _get_original_func(func)
         # Get type hints for the function
         type_hints = get_type_hints(func)
 
@@ -177,34 +216,7 @@ def get_llm_agent_positions(func: Any) -> list[int]:
             if param_name in type_hints:
                 param_type = type_hints[param_name]
 
-                # Check if it's MeshLlmAgent type (handle different import paths and Union types)
-                is_llm_agent = False
-
-                # Direct MeshLlmAgent type
-                if (
-                    param_type == MeshLlmAgent
-                    or (
-                        hasattr(param_type, "__name__")
-                        and param_type.__name__ == "MeshLlmAgent"
-                    )
-                    or (
-                        hasattr(param_type, "__origin__")
-                        and param_type.__origin__ == type(MeshLlmAgent)
-                    )
-                ):
-                    is_llm_agent = True
-
-                # Union type (e.g., MeshLlmAgent | None)
-                elif hasattr(param_type, "__args__"):
-                    # Check if any arg in the union is MeshLlmAgent
-                    for arg in param_type.__args__:
-                        if arg == MeshLlmAgent or (
-                            hasattr(arg, "__name__") and arg.__name__ == "MeshLlmAgent"
-                        ):
-                            is_llm_agent = True
-                            break
-
-                if is_llm_agent:
+                if _is_mesh_llm_type(param_type):
                     llm_positions.append(i)
 
         return llm_positions
@@ -229,6 +241,33 @@ def has_llm_agent_parameter(func: Any) -> bool:
         True if function has at least one MeshLlmAgent parameter
     """
     return len(get_llm_agent_positions(func)) > 0
+
+
+def get_llm_agent_parameter_names(func: Any) -> list[str]:
+    """
+    Get names of MeshLlmAgent parameters in function signature.
+
+    Args:
+        func: Function to analyze
+
+    Returns:
+        List of parameter names that are MeshLlmAgent types
+    """
+    try:
+        func = _get_original_func(func)
+        type_hints = get_type_hints(func)
+        sig = inspect.signature(func)
+
+        llm_param_names = []
+        for param_name, param in sig.parameters.items():
+            if param_name in type_hints:
+                param_type = type_hints[param_name]
+                if _is_mesh_llm_type(param_type):
+                    llm_param_names.append(param_name)
+
+        return llm_param_names
+    except Exception:
+        return []
 
 
 def get_context_parameter_name(

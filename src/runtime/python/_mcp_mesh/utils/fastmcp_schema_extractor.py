@@ -277,9 +277,7 @@ class FastMCPSchemaExtractor:
                 existing_desc = prop.get("description", "")
                 media_note = f"(accepts media URI: {media_info.media_type})"
                 if media_note not in existing_desc:
-                    prop["description"] = (
-                        f"{existing_desc} {media_note}".strip()
-                    )
+                    prop["description"] = f"{existing_desc} {media_note}".strip()
 
         return schema
 
@@ -330,7 +328,7 @@ class FastMCPSchemaExtractor:
         schema: dict[str, Any], function: Any
     ) -> dict[str, Any]:
         """
-        Filter out McpMeshTool dependency injection parameters from schema.
+        Filter out injectable parameters (McpMeshTool and MeshLlmAgent) from schema.
 
         Phase 2.5: Remove dependency injection parameters from LLM-facing schemas.
         These parameters are injected at runtime by MCP Mesh and should not be
@@ -364,13 +362,18 @@ class FastMCPSchemaExtractor:
         if not schema or not isinstance(schema, dict):
             return schema
 
-        # Get McpMeshTool parameter names from signature analysis
-        from _mcp_mesh.engine.signature_analyzer import get_mesh_agent_parameter_names
+        # Get injectable parameter names from signature analysis
+        from _mcp_mesh.engine.signature_analyzer import (
+            get_llm_agent_parameter_names,
+            get_mesh_agent_parameter_names,
+        )
 
         mesh_param_names = get_mesh_agent_parameter_names(function)
+        llm_param_names = get_llm_agent_parameter_names(function)
+        injectable_param_names = set(mesh_param_names + llm_param_names)
 
-        if not mesh_param_names:
-            # No dependency parameters to filter
+        if not injectable_param_names:
+            # No injectable parameters to filter
             return schema
 
         # Create a copy to avoid modifying original
@@ -382,13 +385,13 @@ class FastMCPSchemaExtractor:
             filtered_props = {
                 param_name: param_schema
                 for param_name, param_schema in original_props.items()
-                if param_name not in mesh_param_names
+                if param_name not in injectable_param_names
             }
             filtered_schema["properties"] = filtered_props
 
             logger.debug(
-                f"🔧 Filtered {len(original_props) - len(filtered_props)} dependency parameters "
-                f"from schema: {mesh_param_names}"
+                f"🔧 Filtered {len(original_props) - len(filtered_props)} injectable parameters "
+                f"from schema: {injectable_param_names}"
             )
 
         # Filter required array
@@ -397,7 +400,7 @@ class FastMCPSchemaExtractor:
             filtered_required = [
                 param_name
                 for param_name in original_required
-                if param_name not in mesh_param_names
+                if param_name not in injectable_param_names
             ]
             filtered_schema["required"] = filtered_required
 
