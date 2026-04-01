@@ -231,6 +231,45 @@ def has_llm_agent_parameter(func: Any) -> bool:
     return len(get_llm_agent_positions(func)) > 0
 
 
+def get_llm_agent_parameter_names(func: Any) -> list[str]:
+    """
+    Get names of MeshLlmAgent parameters in function signature.
+
+    Args:
+        func: Function to analyze
+
+    Returns:
+        List of parameter names that are MeshLlmAgent types
+    """
+    try:
+        type_hints = get_type_hints(func)
+        sig = inspect.signature(func)
+
+        llm_param_names = []
+        for param_name, param in sig.parameters.items():
+            if param_name in type_hints:
+                param_type = type_hints[param_name]
+                # Check direct MeshLlmAgent type
+                is_llm = param_type == MeshLlmAgent or (
+                    hasattr(param_type, "__name__")
+                    and param_type.__name__ == "MeshLlmAgent"
+                )
+                # Check Union type (e.g., MeshLlmAgent | None)
+                if not is_llm and hasattr(param_type, "__args__"):
+                    for arg in param_type.__args__:
+                        if arg == MeshLlmAgent or (
+                            hasattr(arg, "__name__") and arg.__name__ == "MeshLlmAgent"
+                        ):
+                            is_llm = True
+                            break
+                if is_llm:
+                    llm_param_names.append(param_name)
+
+        return llm_param_names
+    except Exception:
+        return []
+
+
 def get_context_parameter_name(
     func: Any, explicit_name: str | None = None
 ) -> tuple[str, int] | None:
