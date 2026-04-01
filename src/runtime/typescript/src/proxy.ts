@@ -237,18 +237,12 @@ export async function callMcpTool(
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), options.timeout);
 
-      // Build headers with trace context propagation
+      // Build headers: custom headers first, then protocol-required headers override
       const headers: Record<string, string> = {
+        ...(options.customHeaders ?? {}),
         "Content-Type": "application/json",
         Accept: "application/json, text/event-stream",
       };
-
-      // Apply custom headers from kwargs (lowest priority)
-      if (options.customHeaders) {
-        for (const [key, value] of Object.entries(options.customHeaders)) {
-          headers[key] = value;
-        }
-      }
 
       // Propagate trace context (higher priority)
       if (traceCtx && spanId) {
