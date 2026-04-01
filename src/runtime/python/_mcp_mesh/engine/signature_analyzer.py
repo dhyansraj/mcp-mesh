@@ -14,6 +14,22 @@ except ImportError:
     McpMeshAgent = McpMeshTool  # type: ignore
 
 
+def _get_original_func(func: Any) -> Any:
+    """Follow __wrapped__ chain to get the original function.
+
+    Injection wrappers override __signature__ to hide injectable params
+    from FastMCP. Internal analysis functions need the original signature.
+    """
+    original = func
+    # Follow __wrapped__ (set by @functools.wraps)
+    while hasattr(original, "__wrapped__"):
+        original = original.__wrapped__
+    # Also check _mesh_original_func (set by DI injector)
+    if hasattr(original, "_mesh_original_func"):
+        original = original._mesh_original_func
+    return original
+
+
 def _is_mesh_tool_type(param_type: Any) -> bool:
     """Check if a type is McpMeshTool or deprecated McpMeshAgent."""
     # Direct McpMeshTool type
@@ -71,6 +87,7 @@ def get_mesh_agent_positions(func: Any) -> list[int]:
         get_mesh_agent_positions(greet) → [1, 2]
     """
     try:
+        func = _get_original_func(func)
         # Get type hints for the function
         type_hints = get_type_hints(func)
 
@@ -108,6 +125,7 @@ def get_mesh_agent_parameter_names(func: Any) -> list[str]:
         List of parameter names that are McpMeshTool types
     """
     try:
+        func = _get_original_func(func)
         type_hints = get_type_hints(func)
         sig = inspect.signature(func)
 
@@ -135,6 +153,7 @@ def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[boo
     Returns:
         Tuple of (is_valid, error_message)
     """
+    func = _get_original_func(func)
     mesh_positions = get_mesh_agent_positions(func)
 
     if len(dependencies) != len(mesh_positions):
@@ -164,6 +183,7 @@ def get_llm_agent_positions(func: Any) -> list[int]:
         get_llm_agent_positions(chat) → [1]
     """
     try:
+        func = _get_original_func(func)
         # Get type hints for the function
         type_hints = get_type_hints(func)
 
@@ -242,6 +262,7 @@ def get_llm_agent_parameter_names(func: Any) -> list[str]:
         List of parameter names that are MeshLlmAgent types
     """
     try:
+        func = _get_original_func(func)
         type_hints = get_type_hints(func)
         sig = inspect.signature(func)
 

@@ -27,17 +27,19 @@ logger = logging.getLogger(__name__)
 def _build_clean_signature(
     func: Any, mesh_positions: list[int]
 ) -> inspect.Signature | None:
-    """Build a signature excluding all injectable parameters.
+    """Build a signature excluding McpMeshTool parameters at the given positions.
 
-    Excludes McpMeshTool (by position) and MeshLlmAgent (by type detection).
+    Only excludes McpMeshTool parameters here. MeshLlmAgent parameters are
+    excluded later by the @mesh.llm decorator, which runs after @mesh.tool
+    in the decoration chain.
+
     Returns None if signature cannot be built (caller should skip override).
     """
     try:
-        from .signature_analyzer import get_llm_agent_positions
-
+        exclude = set(mesh_positions)
+        if not exclude:
+            return None
         sig = inspect.signature(func)
-        llm_positions = set(get_llm_agent_positions(func))
-        exclude = set(mesh_positions) | llm_positions
         clean_params = [
             param
             for i, (name, param) in enumerate(sig.parameters.items())
