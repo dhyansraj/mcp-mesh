@@ -1,18 +1,24 @@
-# Test Case: Python Schema Filtering
+# Test Case: Python Schema Filtering (comprehensive)
 # Verifies that mesh-injected parameters (McpMeshTool, MeshLlmAgent) are filtered
 # from the MCP tool schema exposed to clients.
 #
-# Scenario:
-#   - py-schema-agent defines 3 tools:
-#     - greet: simple tool with only user parameters
-#     - with_dep: tool with McpMeshTool dependency parameter
-#     - with_llm: tool with MeshLlmAgent parameter (issue #689)
-#   - Start the agent, wait for registration
-#   - Query tool schemas via meshctl list --tools=<name>
-#   - Assert user parameters are present and mesh-injected ones are absent
+# Matrix (13 cases):
+#   t01: no params           -> empty schema
+#   t02: one param           -> name visible
+#   t03: multi params        -> a, b, c visible
+#   t04: with defaults       -> a, b visible
+#   t05: McpMeshTool only    -> empty schema (svc hidden)
+#   t06: normal+McpMeshTool  -> query visible, svc hidden
+#   t07: McpMeshTool+normal  -> query visible, svc hidden
+#   t08: multi McpMeshTool   -> q visible, a/b hidden
+#   t09: normal+McpMeshTool+defaults -> q, n visible, svc hidden
+#   t10: MeshLlmAgent only   -> empty schema (llm hidden)
+#   t11: normal+MeshLlmAgent -> prompt visible, llm hidden
+#   t12: normal+McpMeshTool+MeshLlmAgent -> q visible, svc/llm hidden
+#   t13: Pydantic model+MeshLlmAgent -> model fields visible, llm hidden
 
 name: "Python Schema Filtering"
-description: "Verify McpMeshTool and MeshLlmAgent parameters are filtered from MCP tool schema"
+description: "Verify McpMeshTool and MeshLlmAgent parameters are filtered from MCP tool schema across all parameter combinations"
 tags:
   - schema
   - python
@@ -59,50 +65,174 @@ test:
     command: "meshctl list"
     capture: list_output
 
-  - name: "Get greet tool schema"
-    handler: shell
-    workdir: /workspace
-    command: "meshctl list --tools=greet"
-    capture: greet_schema
+  # --- Get schemas for all 13 tools ---
 
-  - name: "Get with_dep tool schema"
+  - name: "Schema t01_no_params"
     handler: shell
     workdir: /workspace
-    command: "meshctl list --tools=with_dep"
-    capture: dep_schema
+    command: "meshctl list --tools=t01_no_params"
+    capture: t01
 
-  - name: "Get with_llm tool schema"
+  - name: "Schema t02_one_param"
     handler: shell
     workdir: /workspace
-    command: "meshctl list --tools=with_llm"
-    capture: llm_schema
+    command: "meshctl list --tools=t02_one_param"
+    capture: t02
+
+  - name: "Schema t03_multi_params"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t03_multi_params"
+    capture: t03
+
+  - name: "Schema t04_with_defaults"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t04_with_defaults"
+    capture: t04
+
+  - name: "Schema t05_meshtool_only"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t05_meshtool_only"
+    capture: t05
+
+  - name: "Schema t06_normal_then_meshtool"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t06_normal_then_meshtool"
+    capture: t06
+
+  - name: "Schema t07_meshtool_then_normal"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t07_meshtool_then_normal"
+    capture: t07
+
+  - name: "Schema t08_multi_meshtool"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t08_multi_meshtool"
+    capture: t08
+
+  - name: "Schema t09_normal_meshtool_defaults"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t09_normal_meshtool_defaults"
+    capture: t09
+
+  - name: "Schema t10_llm_only"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t10_llm_only"
+    capture: t10
+
+  - name: "Schema t11_normal_then_llm"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t11_normal_then_llm"
+    capture: t11
+
+  - name: "Schema t12_normal_meshtool_llm"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t12_normal_meshtool_llm"
+    capture: t12
+
+  - name: "Schema t13_pydantic_model_llm"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t13_pydantic_model_llm"
+    capture: t13
 
   - name: "Show agent logs"
     handler: shell
     workdir: /workspace
-    command: "meshctl logs py-schema-agent 2>/dev/null | tail -20 || echo 'no logs'"
+    command: "meshctl logs py-schema-agent 2>/dev/null | tail -30 || echo 'no logs'"
     capture: agent_logs
 
 assertions:
-  # Agent registered
+  # --- Agent registration ---
   - expr: "${captured.list_output} contains 'py-schema-agent'"
     message: "Agent should be registered"
 
-  # greet: should have name, no mesh types
-  - expr: "${captured.greet_schema} contains 'name'"
-    message: "greet schema should have name parameter"
+  # --- Case 1: No params -> empty schema ---
+  - expr: '${captured.t01} not contains ''"svc"'''
+    message: "t01: no-param tool should not have svc"
+  - expr: '${captured.t01} not contains ''"llm"'''
+    message: "t01: no-param tool should not have llm"
 
-  # with_dep: should have query, NOT svc (McpMeshTool)
-  - expr: "${captured.dep_schema} contains 'query'"
-    message: "with_dep schema should have query parameter"
-  - expr: "${captured.dep_schema} not contains 'svc'"
-    message: "with_dep schema should NOT have svc (McpMeshTool) parameter"
+  # --- Case 2: One param -> name visible ---
+  - expr: '${captured.t02} contains ''"name"'''
+    message: "t02: should have name parameter"
 
-  # with_llm: should have prompt, NOT llm (MeshLlmAgent) - issue #689
-  - expr: "${captured.llm_schema} contains 'prompt'"
-    message: "with_llm schema should have prompt parameter"
-  - expr: '${captured.llm_schema} not contains ''"llm"'''
-    message: "with_llm schema should NOT have llm (MeshLlmAgent) parameter"
+  # --- Case 3: Multi params -> a, b, c visible ---
+  - expr: '${captured.t03} contains ''"a"'''
+    message: "t03: should have param a"
+  - expr: '${captured.t03} contains ''"b"'''
+    message: "t03: should have param b"
+  - expr: '${captured.t03} contains ''"c"'''
+    message: "t03: should have param c"
+
+  # --- Case 4: With defaults -> a, b visible ---
+  - expr: '${captured.t04} contains ''"a"'''
+    message: "t04: should have param a"
+  - expr: '${captured.t04} contains ''"b"'''
+    message: "t04: should have param b"
+
+  # --- Case 5: McpMeshTool only -> svc hidden ---
+  - expr: '${captured.t05} not contains ''"svc"'''
+    message: "t05: should NOT have svc (McpMeshTool) parameter"
+
+  # --- Case 6: Normal then McpMeshTool -> query visible, svc hidden ---
+  - expr: '${captured.t06} contains ''"query"'''
+    message: "t06: should have query parameter"
+  - expr: '${captured.t06} not contains ''"svc"'''
+    message: "t06: should NOT have svc (McpMeshTool) parameter"
+
+  # --- Case 7: McpMeshTool then normal -> query visible, svc hidden ---
+  - expr: '${captured.t07} contains ''"query"'''
+    message: "t07: should have query parameter"
+  - expr: '${captured.t07} not contains ''"svc"'''
+    message: "t07: should NOT have svc (McpMeshTool) parameter"
+
+  # --- Case 8: Multiple McpMeshTool -> q visible, a/b hidden ---
+  - expr: '${captured.t08} contains ''"q"'''
+    message: "t08: should have q parameter"
+  - expr: '${captured.t08} not contains ''"a"'''
+    message: "t08: should NOT have a (McpMeshTool) parameter"
+  - expr: '${captured.t08} not contains ''"b"'''
+    message: "t08: should NOT have b (McpMeshTool) parameter"
+
+  # --- Case 9: Normal + McpMeshTool + defaults -> q, n visible, svc hidden ---
+  - expr: '${captured.t09} contains ''"q"'''
+    message: "t09: should have q parameter"
+  - expr: '${captured.t09} contains ''"n"'''
+    message: "t09: should have n parameter"
+  - expr: '${captured.t09} not contains ''"svc"'''
+    message: "t09: should NOT have svc (McpMeshTool) parameter"
+
+  # --- Case 10: MeshLlmAgent only -> llm hidden ---
+  - expr: '${captured.t10} not contains ''"llm"'''
+    message: "t10: should NOT have llm (MeshLlmAgent) parameter"
+
+  # --- Case 11: Normal then MeshLlmAgent -> prompt visible, llm hidden ---
+  - expr: '${captured.t11} contains ''"prompt"'''
+    message: "t11: should have prompt parameter"
+  - expr: '${captured.t11} not contains ''"llm"'''
+    message: "t11: should NOT have llm (MeshLlmAgent) parameter"
+
+  # --- Case 12: Normal + McpMeshTool + MeshLlmAgent -> q visible, svc/llm hidden ---
+  - expr: '${captured.t12} contains ''"q"'''
+    message: "t12: should have q parameter"
+  - expr: '${captured.t12} not contains ''"svc"'''
+    message: "t12: should NOT have svc (McpMeshTool) parameter"
+  - expr: '${captured.t12} not contains ''"llm"'''
+    message: "t12: should NOT have llm (MeshLlmAgent) parameter"
+
+  # --- Case 13: Pydantic model + MeshLlmAgent -> model fields visible, llm hidden ---
+  - expr: '${captured.t13} not contains ''"llm"'''
+    message: "t13: should NOT have llm (MeshLlmAgent) parameter"
 
 post_run:
   - handler: shell
