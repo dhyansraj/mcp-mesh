@@ -84,7 +84,7 @@ MCP Mesh uses **automatic dependency injection** based on capability names:
 ```python
 # Declaration
 @mesh.tool(dependencies=["database"])
-async def my_function(database=None):
+async def my_function(database: mesh.McpMeshTool = None):
     # database is automatically injected!
     result = await database(query="SELECT *")
 ```
@@ -102,7 +102,7 @@ def get_user(): pass
 
 # Consumer
 @mesh.tool(dependencies=["user_service"])
-def my_function(user_service=None): pass
+def my_function(user_service: mesh.McpMeshTool = None): pass
 ```
 
 ### Tag-Based Selection
@@ -178,7 +178,7 @@ No manual wiring, no service locators:
 ```python
 # Just declare, mesh handles the rest
 @mesh.tool(dependencies=["service"])
-def my_function(service=None):
+def my_function(service: mesh.McpMeshTool = None):
     return service()
 ```
 

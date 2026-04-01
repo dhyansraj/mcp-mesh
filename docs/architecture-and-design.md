@@ -12,8 +12,8 @@ Key terms used throughout MCP Mesh documentation:
 
 | Term                             | Definition                                                                                                                                                                                                                                                                                 |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Agent**                        | A Python, Java, or TypeScript application that registers with the mesh and provides one or more tools. Each agent runs as an independent service.                                                                                                                                                 |
-| **Tool**                         | A function decorated with `@app.tool()` and `@mesh.tool()` (Python), annotated with `@MeshTool` (Java), or registered with `agent.addTool()` (TypeScript) that can be discovered and called by other agents. Tools are the building blocks of MCP Mesh.                                                                        |
+| **Agent**                        | A Python, Java, or TypeScript application that registers with the mesh and provides one or more tools. Each agent runs as an independent service.                                                                                                                                          |
+| **Tool**                         | A function decorated with `@app.tool()` and `@mesh.tool()` (Python), annotated with `@MeshTool` (Java), or registered with `agent.addTool()` (TypeScript) that can be discovered and called by other agents. Tools are the building blocks of MCP Mesh.                                    |
 | **Capability**                   | A unique identifier (string) that describes what a tool provides. Other tools declare dependencies on capabilities, not specific agents. Example: `"redis_store_memory"`, `"analyze_emotion"`.                                                                                             |
 | **Dependency**                   | A capability that a tool requires. MCP Mesh automatically discovers and injects dependencies at runtime.                                                                                                                                                                                   |
 | **Registry**                     | The central service that tracks all agents, their capabilities, and health status. Agents register on startup and send periodic heartbeats. **Important:** The registry is a _facilitator_, not a proxy—it helps agents find each other, but actual tool calls go directly between agents. |
@@ -882,7 +882,7 @@ class GreetingAgent:
     capability="time_greeting",
     dependencies=["time_service"]
 )
-def time_greeting(name: str, time_service=None) -> str:
+def time_greeting(name: str, time_service: mesh.McpMeshTool = None) -> str:
     current_time = time_service() if time_service else "unknown time"
     return f"Hello, {name}! Current time: {current_time}"
 ```

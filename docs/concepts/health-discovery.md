@@ -93,7 +93,7 @@ def get_user(): pass
 
 # Consumer discovers by capability
 @mesh.tool(dependencies=["user_service"])
-def my_function(user_service=None): pass
+def my_function(user_service: mesh.McpMeshTool = None): pass
 ```
 
 ### Tag-Based Discovery
@@ -217,7 +217,7 @@ async def health():
 
 ```python
 @mesh.tool(dependencies=["optional_service"])
-async def my_function(optional_service=None):
+async def my_function(optional_service: mesh.McpMeshTool = None):
     if optional_service is None:
         # Fallback logic
         return "Fallback response"
