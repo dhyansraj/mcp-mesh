@@ -34,7 +34,7 @@ Use your platform's native auth framework to enforce access control:
     @mesh.route(dependencies=["admin_tool"])
     async def admin_endpoint(
         request: Request,
-        admin_tool=None,
+        admin_tool: mesh.McpMeshTool = None,
         token = Security(security),
     ):
         # Validate token against your OIDC provider
@@ -76,13 +76,13 @@ Use your platform's native auth framework to enforce access control:
 
 ## What MCP Mesh Provides vs. What You Implement
 
-| Concern | MCP Mesh | Your Application |
-|---------|----------|-----------------|
-| **Identity** | mTLS certificates (who is calling) | — |
-| **Authentication** | Cert chain validation | OIDC/JWT token validation |
-| **Header flow** | Propagates auth headers end-to-end | Issues/validates tokens |
-| **Authorization** | — | Access control rules |
-| **Audit trail** | Distributed tracing for every call | Business audit logging |
+| Concern            | MCP Mesh                           | Your Application          |
+| ------------------ | ---------------------------------- | ------------------------- |
+| **Identity**       | mTLS certificates (who is calling) | —                         |
+| **Authentication** | Cert chain validation              | OIDC/JWT token validation |
+| **Header flow**    | Propagates auth headers end-to-end | Issues/validates tokens   |
+| **Authorization**  | —                                  | Access control rules      |
+| **Audit trail**    | Distributed tracing for every call | Business audit logging    |
 
 !!! note "Why not built-in authorization?"
-    Authorization rules are business logic — they vary by organization, compliance regime, and use case. Frameworks like Spring Security, FastAPI middleware, and Express middleware are mature, battle-tested, and already used by your teams. MCP Mesh focuses on the infrastructure layer (identity, routing, mTLS) and lets you own the policy layer.
+Authorization rules are business logic — they vary by organization, compliance regime, and use case. Frameworks like Spring Security, FastAPI middleware, and Express middleware are mature, battle-tested, and already used by your teams. MCP Mesh focuses on the infrastructure layer (identity, routing, mTLS) and lets you own the policy layer.

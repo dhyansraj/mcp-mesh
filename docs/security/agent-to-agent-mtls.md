@@ -35,7 +35,7 @@ Each SDK implements mTLS using its platform's native TLS libraries:
     # with cert/key from prepare_tls()
 
     @mesh.tool(capability="greeting", dependencies=["calculator"])
-    async def greet(calculator=None):
+    async def greet(calculator: mesh.McpMeshTool = None):
         result = await calculator(a=1, b=2)  # mTLS automatically
         return f"Result: {result}"
     ```

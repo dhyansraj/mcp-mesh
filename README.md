@@ -64,13 +64,13 @@ You write the agent logic. The mesh discovers, connects, heals, and traces — a
 # MCP Agent
 @app.tool()
 @mesh.tool(capability="plan_trip", dependencies=["weather_service"])
-def plan_trip(weather_service=None):
+def plan_trip(weather_service: mesh.McpMeshTool = None):
     # Just write business logic - mesh handles the rest
 
 # FastAPI Route with MCP DI
 @api.post("/trip-planning")
 @mesh.route(dependencies=["plan_trip"])
-async def create_trip(trip_data: dict, plan_trip=None):
+async def create_trip(trip_data: dict, plan_trip: mesh.McpMeshTool = None):
     # Use MCP agents directly in your web API
     return plan_trip(trip_data)
 ```

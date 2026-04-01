@@ -1267,18 +1267,18 @@ MCP Mesh auto-detects context parameters in three ways:
     system_prompt="file://prompts/chat.jinja2",
     context_param="my_context"  # Explicitly named
 )
-def chat(msg: str, my_context: dict, llm=None): ...
+def chat(msg: str, my_context: dict, llm: mesh.MeshLlmAgent = None): ...
 
 # 2. Convention (auto-detected)
 @mesh.llm(system_prompt="file://prompts/chat.jinja2")
-def chat(msg: str, ctx: dict, llm=None): ...  # "ctx" detected
+def chat(msg: str, ctx: dict, llm: mesh.MeshLlmAgent = None): ...  # "ctx" detected
 
 @mesh.llm(system_prompt="file://prompts/chat.jinja2")
-def chat(msg: str, prompt_context: dict, llm=None): ...  # "prompt_context" detected
+def chat(msg: str, prompt_context: dict, llm: mesh.MeshLlmAgent = None): ...  # "prompt_context" detected
 
 # 3. Type hint (auto-detected)
 @mesh.llm(system_prompt="file://prompts/chat.jinja2")
-def chat(msg: str, analysis_ctx: AnalysisContext, llm=None): ...
+def chat(msg: str, analysis_ctx: AnalysisContext, llm: mesh.MeshLlmAgent = None): ...
 # ↑ MeshContextModel subclass detected
 ```
 

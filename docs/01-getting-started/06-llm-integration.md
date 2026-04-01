@@ -398,15 +398,15 @@ MCP Mesh auto-detects context parameters using:
 ```python
 # Explicit - recommended for clarity
 @mesh.llm(system_prompt="file://prompts/chat.jinja2", context_param="my_ctx")
-def chat(msg: str, my_ctx: dict, llm=None): ...
+def chat(msg: str, my_ctx: dict, llm: mesh.MeshLlmAgent = None): ...
 
 # Convention - auto-detected
 @mesh.llm(system_prompt="file://prompts/chat.jinja2")
-def chat(msg: str, ctx: dict, llm=None): ...  # "ctx" detected
+def chat(msg: str, ctx: dict, llm: mesh.MeshLlmAgent = None): ...  # "ctx" detected
 
 # Type hint - auto-detected
 @mesh.llm(system_prompt="file://prompts/chat.jinja2")
-def chat(msg: str, analysis_ctx: AnalysisContext, llm=None): ...  # MeshContextModel detected
+def chat(msg: str, analysis_ctx: AnalysisContext, llm: mesh.MeshLlmAgent = None): ...  # MeshContextModel detected
 ```
 
 ### Jinja2 Template Features
@@ -452,19 +452,19 @@ Three context types are supported:
 ```python
 # 1. MeshContextModel (recommended - type safe)
 @mesh.llm(system_prompt="file://prompts/chat.jinja2")
-async def chat(msg: str, ctx: ChatContext, llm=None):
+async def chat(msg: str, ctx: ChatContext, llm: mesh.MeshLlmAgent = None):
     # ctx validated by Pydantic
     pass
 
 # 2. Dict (flexible)
 @mesh.llm(system_prompt="file://prompts/chat.jinja2", context_param="ctx")
-async def chat(msg: str, ctx: dict, llm=None):
+async def chat(msg: str, ctx: dict, llm: mesh.MeshLlmAgent = None):
     # ctx used directly
     pass
 
 # 3. None (static template)
 @mesh.llm(system_prompt="file://prompts/static.jinja2")
-async def chat(msg: str, llm=None):
+async def chat(msg: str, llm: mesh.MeshLlmAgent = None):
     # Template rendered with empty dict {}
     pass
 ```
@@ -542,7 +542,7 @@ class AnalysisContext(MeshContextModel):
     user_level: str = Field(default="beginner")
 
 @mesh.llm(system_prompt="file://prompts/analyst.jinja2", context_param="ctx")
-def analyze(query: str, ctx: AnalysisContext, llm=None):
+def analyze(query: str, ctx: AnalysisContext, llm: mesh.MeshLlmAgent = None):
     pass
 ```
 
@@ -550,7 +550,7 @@ def analyze(query: str, ctx: AnalysisContext, llm=None):
 
 ```python
 @mesh.llm(system_prompt="file://prompts/analyst.jinja2")
-def analyze(query: str, ctx: dict, llm=None):  # No validation
+def analyze(query: str, ctx: dict, llm: mesh.MeshLlmAgent = None):  # No validation
     pass
 ```
 
