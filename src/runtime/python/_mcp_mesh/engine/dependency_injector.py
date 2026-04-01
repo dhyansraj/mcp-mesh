@@ -14,12 +14,38 @@ import weakref
 from collections.abc import Callable
 from typing import Any
 
-from ..shared.logging_config import (format_log_value, format_result_summary,
-                                     get_trace_prefix)
-from .signature_analyzer import (get_mesh_agent_positions,
-                                 has_llm_agent_parameter)
+from ..shared.logging_config import (
+    format_log_value,
+    format_result_summary,
+    get_trace_prefix,
+)
+from .signature_analyzer import get_mesh_agent_positions, has_llm_agent_parameter
 
 logger = logging.getLogger(__name__)
+
+
+def _build_clean_signature(
+    func: Any, mesh_positions: list[int]
+) -> inspect.Signature | None:
+    """Build a signature excluding all injectable parameters.
+
+    Excludes McpMeshTool (by position) and MeshLlmAgent (by type detection).
+    Returns None if signature cannot be built (caller should skip override).
+    """
+    try:
+        from .signature_analyzer import get_llm_agent_positions
+
+        sig = inspect.signature(func)
+        llm_positions = set(get_llm_agent_positions(func))
+        exclude = set(mesh_positions) | llm_positions
+        clean_params = [
+            param
+            for i, (name, param) in enumerate(sig.parameters.items())
+            if i not in exclude
+        ]
+        return sig.replace(parameters=clean_params)
+    except Exception:
+        return None
 
 
 def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[int]:
@@ -178,7 +204,9 @@ def _prepare_injection_kwargs(
 def _log_wrapper_result(func: Callable, result: Any, log: logging.Logger) -> None:
     """Log the result of a dependency-injected function call."""
     tp = get_trace_prefix()
-    log.debug(f"{tp}🔧 Tool '{func.__name__}' returned: {format_result_summary(result)}")
+    log.debug(
+        f"{tp}🔧 Tool '{func.__name__}' returned: {format_result_summary(result)}"
+    )
     log.debug(f"{tp}🔧 Tool '{func.__name__}' result: {format_log_value(result)}")
 
 
@@ -522,6 +550,11 @@ class DependencyInjector:
             minimal_wrapper._mesh_positions = mesh_positions
             minimal_wrapper._mesh_original_func = func
 
+            # Override signature to hide injectable parameters from FastMCP
+            clean_sig = _build_clean_signature(func, mesh_positions)
+            if clean_sig is not None:
+                minimal_wrapper.__signature__ = clean_sig
+
             def update_dependency(dep_index: int, instance: Any | None) -> None:
                 """No-op update for functions without injection positions."""
                 pass
@@ -596,6 +629,11 @@ class DependencyInjector:
 
                 _log_wrapper_result(func, result, wrapper_logger)
                 return result
+
+        # Override signature to hide injectable parameters from FastMCP schema generation
+        clean_sig = _build_clean_signature(func, mesh_positions)
+        if clean_sig is not None:
+            dependency_wrapper.__signature__ = clean_sig
 
         # Store dependency state on wrapper as array (indexed by position)
         dependency_wrapper._mesh_injected_deps = [None] * len(dependencies)
