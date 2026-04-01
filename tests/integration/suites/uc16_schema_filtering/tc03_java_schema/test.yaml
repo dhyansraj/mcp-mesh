@@ -2,15 +2,18 @@
 # Verifies that mesh-injected parameters (McpMeshTool) are filtered from the
 # MCP tool schema exposed to clients when using the Java SDK.
 #
-# Scenario:
-#   - java-schema-agent defines 2 tools:
-#     - greet: simple tool with only user parameters
-#     - withDep: tool with McpMeshTool<String> dependency parameter
-#   - Start the agent, wait for registration (Java needs longer timeouts)
-#   - Query tool schemas via meshctl list --tools=<name>
-#   - Assert user parameters are present and mesh-injected ones are absent
+# Matrix (9 cases):
+#   t01NoParams:              no params -> empty schema
+#   t02OneParam:              one param -> name visible
+#   t03MultiParams:           multi params -> a, b, c visible
+#   t04WithDefaults:          with defaults -> a, b visible
+#   t05MeshtoolOnly:          McpMeshTool only -> empty schema (svc hidden)
+#   t06NormalThenMeshtool:    normal + McpMeshTool -> query visible, svc hidden
+#   t07MeshtoolThenNormal:    McpMeshTool + normal -> query visible, svc hidden
+#   t08MultiMeshtool:         multi McpMeshTool -> q visible, a/b hidden
+#   t09NormalMeshtoolDefaults: mixed with defaults -> q, n visible, svc hidden
 #
-# Note: Java MCP tool names = method names (greet, withDep), NOT capability names.
+# Note: Java MCP tool names = method names (camelCase), NOT capability names.
 
 name: "Java Schema Filtering"
 description: "Verify McpMeshTool parameters are filtered from MCP tool schema in Java SDK"
@@ -64,17 +67,61 @@ test:
     command: "meshctl list"
     capture: list_output
 
-  - name: "Get greet tool schema"
-    handler: shell
-    workdir: /workspace
-    command: "meshctl list --tools=greet"
-    capture: greet_schema
+  # --- Get schemas for all 9 tools ---
 
-  - name: "Get withDep tool schema"
+  - name: "Schema t01NoParams"
     handler: shell
     workdir: /workspace
-    command: "meshctl list --tools=withDep"
-    capture: dep_schema
+    command: "meshctl list --tools=t01NoParams"
+    capture: t01
+
+  - name: "Schema t02OneParam"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t02OneParam"
+    capture: t02
+
+  - name: "Schema t03MultiParams"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t03MultiParams"
+    capture: t03
+
+  - name: "Schema t04WithDefaults"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t04WithDefaults"
+    capture: t04
+
+  - name: "Schema t05MeshtoolOnly"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t05MeshtoolOnly"
+    capture: t05
+
+  - name: "Schema t06NormalThenMeshtool"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t06NormalThenMeshtool"
+    capture: t06
+
+  - name: "Schema t07MeshtoolThenNormal"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t07MeshtoolThenNormal"
+    capture: t07
+
+  - name: "Schema t08MultiMeshtool"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t08MultiMeshtool"
+    capture: t08
+
+  - name: "Schema t09NormalMeshtoolDefaults"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=t09NormalMeshtoolDefaults"
+    capture: t09
 
   - name: "Show agent logs"
     handler: shell
@@ -83,21 +130,71 @@ test:
     capture: agent_logs
 
 assertions:
-  # Agent registered
+  # --- Agent registration ---
   - expr: "${captured.list_output} contains 'java-schema-agent'"
     message: "Agent should be registered"
 
-  # greet: should have name, no mesh types
-  - expr: "${captured.greet_schema} contains 'name'"
-    message: "greet schema should have name parameter"
+  # --- Case 1: No params -> empty schema ---
+  - expr: '${captured.t01} not contains ''"svc"'''
+    message: "t01: no-param tool should not have svc"
+  - expr: '${captured.t01} not contains ''"McpMeshTool"'''
+    message: "t01: no-param tool should not have McpMeshTool"
 
-  # withDep: should have query, NOT svc or McpMeshTool
-  - expr: "${captured.dep_schema} contains 'query'"
-    message: "withDep schema should have query parameter"
-  - expr: "${captured.dep_schema} not contains 'svc'"
-    message: "withDep schema should NOT have svc (McpMeshTool) parameter"
-  - expr: "${captured.dep_schema} not contains 'McpMeshTool'"
-    message: "withDep schema should NOT expose McpMeshTool type"
+  # --- Case 2: One param -> name visible ---
+  - expr: '${captured.t02} contains ''"name"'''
+    message: "t02: should have name parameter"
+
+  # --- Case 3: Multi params -> a, b, c visible ---
+  - expr: '${captured.t03} contains ''"a"'''
+    message: "t03: should have param a"
+  - expr: '${captured.t03} contains ''"b"'''
+    message: "t03: should have param b"
+  - expr: '${captured.t03} contains ''"c"'''
+    message: "t03: should have param c"
+
+  # --- Case 4: With defaults -> a, b visible ---
+  - expr: '${captured.t04} contains ''"a"'''
+    message: "t04: should have param a"
+  - expr: '${captured.t04} contains ''"b"'''
+    message: "t04: should have param b"
+
+  # --- Case 5: McpMeshTool only -> svc hidden ---
+  - expr: '${captured.t05} not contains ''"svc"'''
+    message: "t05: should NOT have svc (McpMeshTool) parameter"
+  - expr: '${captured.t05} not contains ''"McpMeshTool"'''
+    message: "t05: should NOT expose McpMeshTool type"
+
+  # --- Case 6: Normal then McpMeshTool -> query visible, svc hidden ---
+  - expr: '${captured.t06} contains ''"query"'''
+    message: "t06: should have query parameter"
+  - expr: '${captured.t06} not contains ''"svc"'''
+    message: "t06: should NOT have svc (McpMeshTool) parameter"
+  - expr: '${captured.t06} not contains ''"McpMeshTool"'''
+    message: "t06: should NOT expose McpMeshTool type"
+
+  # --- Case 7: McpMeshTool then normal -> query visible, svc hidden ---
+  - expr: '${captured.t07} contains ''"query"'''
+    message: "t07: should have query parameter"
+  - expr: '${captured.t07} not contains ''"svc"'''
+    message: "t07: should NOT have svc (McpMeshTool) parameter"
+  - expr: '${captured.t07} not contains ''"McpMeshTool"'''
+    message: "t07: should NOT expose McpMeshTool type"
+
+  # --- Case 8: Multiple McpMeshTool -> q visible ---
+  - expr: '${captured.t08} contains ''"q"'''
+    message: "t08: should have q parameter"
+  - expr: '${captured.t08} not contains ''"McpMeshTool"'''
+    message: "t08: should NOT expose McpMeshTool type"
+
+  # --- Case 9: Normal + McpMeshTool + defaults -> q, n visible, svc hidden ---
+  - expr: '${captured.t09} contains ''"q"'''
+    message: "t09: should have q parameter"
+  - expr: '${captured.t09} contains ''"n"'''
+    message: "t09: should have n parameter"
+  - expr: '${captured.t09} not contains ''"svc"'''
+    message: "t09: should NOT have svc (McpMeshTool) parameter"
+  - expr: '${captured.t09} not contains ''"McpMeshTool"'''
+    message: "t09: should NOT expose McpMeshTool type"
 
 post_run:
   - handler: shell
