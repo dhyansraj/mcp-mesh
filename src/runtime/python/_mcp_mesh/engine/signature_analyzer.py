@@ -70,6 +70,25 @@ def _is_mesh_tool_type(param_type: Any) -> bool:
     return False
 
 
+def _is_mesh_llm_type(param_type: Any) -> bool:
+    """Check if a type is MeshLlmAgent."""
+    # Direct MeshLlmAgent type
+    if param_type == MeshLlmAgent or (
+        hasattr(param_type, "__name__") and param_type.__name__ == "MeshLlmAgent"
+    ):
+        return True
+
+    # Union type (e.g., MeshLlmAgent | None)
+    if hasattr(param_type, "__args__"):
+        for arg in param_type.__args__:
+            if arg == MeshLlmAgent or (
+                hasattr(arg, "__name__") and arg.__name__ == "MeshLlmAgent"
+            ):
+                return True
+
+    return False
+
+
 def get_mesh_agent_positions(func: Any) -> list[int]:
     """
     Get positions of McpMeshTool parameters in function signature.
@@ -197,34 +216,7 @@ def get_llm_agent_positions(func: Any) -> list[int]:
             if param_name in type_hints:
                 param_type = type_hints[param_name]
 
-                # Check if it's MeshLlmAgent type (handle different import paths and Union types)
-                is_llm_agent = False
-
-                # Direct MeshLlmAgent type
-                if (
-                    param_type == MeshLlmAgent
-                    or (
-                        hasattr(param_type, "__name__")
-                        and param_type.__name__ == "MeshLlmAgent"
-                    )
-                    or (
-                        hasattr(param_type, "__origin__")
-                        and param_type.__origin__ == type(MeshLlmAgent)
-                    )
-                ):
-                    is_llm_agent = True
-
-                # Union type (e.g., MeshLlmAgent | None)
-                elif hasattr(param_type, "__args__"):
-                    # Check if any arg in the union is MeshLlmAgent
-                    for arg in param_type.__args__:
-                        if arg == MeshLlmAgent or (
-                            hasattr(arg, "__name__") and arg.__name__ == "MeshLlmAgent"
-                        ):
-                            is_llm_agent = True
-                            break
-
-                if is_llm_agent:
+                if _is_mesh_llm_type(param_type):
                     llm_positions.append(i)
 
         return llm_positions
@@ -270,20 +262,7 @@ def get_llm_agent_parameter_names(func: Any) -> list[str]:
         for param_name, param in sig.parameters.items():
             if param_name in type_hints:
                 param_type = type_hints[param_name]
-                # Check direct MeshLlmAgent type
-                is_llm = param_type == MeshLlmAgent or (
-                    hasattr(param_type, "__name__")
-                    and param_type.__name__ == "MeshLlmAgent"
-                )
-                # Check Union type (e.g., MeshLlmAgent | None)
-                if not is_llm and hasattr(param_type, "__args__"):
-                    for arg in param_type.__args__:
-                        if arg == MeshLlmAgent or (
-                            hasattr(arg, "__name__") and arg.__name__ == "MeshLlmAgent"
-                        ):
-                            is_llm = True
-                            break
-                if is_llm:
+                if _is_mesh_llm_type(param_type):
                     llm_param_names.append(param_name)
 
         return llm_param_names
