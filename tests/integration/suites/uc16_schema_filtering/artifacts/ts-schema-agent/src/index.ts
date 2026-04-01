@@ -128,4 +128,4 @@ agent.addTool({
   execute: async ({ q, n }, svc: McpMeshTool) => `${q} ${n}`,
 });
 
-agent.start();
+console.log("ts-schema-agent defined. Waiting for auto-start...");
