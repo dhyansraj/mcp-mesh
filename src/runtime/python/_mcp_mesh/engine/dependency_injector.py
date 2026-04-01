@@ -25,24 +25,27 @@ logger = logging.getLogger(__name__)
 
 
 def _build_clean_signature(func: Any) -> inspect.Signature | None:
-    """Build a signature excluding McpMeshTool parameters (detected by type).
+    """Build a signature excluding all injectable parameters (detected by type).
 
     Uses type-based detection (not position-based) to avoid false positives
     from the injector heuristic that treats single/non-typed params as targets.
 
-    Only excludes McpMeshTool parameters here. MeshLlmAgent parameters are
-    excluded later by the @mesh.llm decorator, which runs after @mesh.tool.
+    Excludes both McpMeshTool and MeshLlmAgent parameters. Even though
+    @mesh.llm also overrides __signature__, detecting both here handles
+    the case where MeshLlmAgent is used without @mesh.llm.
 
     Returns None if no parameters need removal.
     """
     try:
         from .signature_analyzer import (
             _get_original_func,
+            get_llm_agent_parameter_names,
             get_mesh_agent_parameter_names,
         )
 
         original = _get_original_func(func)
         injectable_names = set(get_mesh_agent_parameter_names(original))
+        injectable_names.update(get_llm_agent_parameter_names(original))
         if not injectable_names:
             return None
         sig = inspect.signature(original)
