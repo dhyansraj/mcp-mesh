@@ -1,0 +1,11 @@
+server:
+  port: ${MCP_MESH_HTTP_PORT:9061}
+
+spring:
+  application:
+    name: java-schema-agent
+
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG

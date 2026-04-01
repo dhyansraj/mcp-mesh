@@ -1,0 +1,110 @@
+# Test Case: Java Schema Filtering
+# Verifies that mesh-injected parameters (McpMeshTool) are filtered from the
+# MCP tool schema exposed to clients when using the Java SDK.
+#
+# Scenario:
+#   - java-schema-agent defines 2 tools:
+#     - greet: simple tool with only user parameters
+#     - withDep: tool with McpMeshTool<String> dependency parameter
+#   - Start the agent, wait for registration (Java needs longer timeouts)
+#   - Query tool schemas via meshctl list --tools=<name>
+#   - Assert user parameters are present and mesh-injected ones are absent
+#
+# Note: Java MCP tool names = method names (greet, withDep), NOT capability names.
+
+name: "Java Schema Filtering"
+description: "Verify McpMeshTool parameters are filtered from MCP tool schema in Java SDK"
+tags:
+  - schema
+  - java
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-schema-agent /workspace/"
+    capture: copy_output
+
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-schema-agent
+    timeout: 600
+
+  - name: "Start agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/java-schema-agent -d"
+    capture: start_output
+
+  - name: "Wait for agent registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "java-schema-agent"; then
+          echo "java-schema-agent registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: java-schema-agent did not register within 90s"
+      meshctl logs java-schema-agent 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_output
+    timeout: 120
+
+  - name: "Verify agent registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  - name: "Get greet tool schema"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=greet"
+    capture: greet_schema
+
+  - name: "Get withDep tool schema"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=withDep"
+    capture: dep_schema
+
+  - name: "Show agent logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs java-schema-agent 2>/dev/null | tail -30 || echo 'no logs'"
+    capture: agent_logs
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_output} contains 'java-schema-agent'"
+    message: "Agent should be registered"
+
+  # greet: should have name, no mesh types
+  - expr: "${captured.greet_schema} contains 'name'"
+    message: "greet schema should have name parameter"
+
+  # withDep: should have query, NOT svc or McpMeshTool
+  - expr: "${captured.dep_schema} contains 'query'"
+    message: "withDep schema should have query parameter"
+  - expr: "${captured.dep_schema} not contains 'svc'"
+    message: "withDep schema should NOT have svc (McpMeshTool) parameter"
+  - expr: "${captured.dep_schema} not contains 'McpMeshTool'"
+    message: "withDep schema should NOT expose McpMeshTool type"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*schema-agent" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

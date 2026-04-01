@@ -1,0 +1,107 @@
+# Test Case: TypeScript Schema Filtering
+# Verifies that mesh-injected dependencies do not leak into the MCP tool schema
+# exposed to clients when using the TypeScript SDK.
+#
+# Scenario:
+#   - ts-schema-agent defines 2 tools:
+#     - greet: simple tool with only user parameters
+#     - with_dep: tool with McpMeshTool dependency
+#   - Start the agent, wait for registration
+#   - Query tool schemas via meshctl list --tools=<name>
+#   - Assert user parameters are present and mesh types are absent
+#
+# Note: TypeScript SDK separates dependencies from Zod schema, so the leak is
+# less likely - but we test for completeness and regression prevention.
+
+name: "TypeScript Schema Filtering"
+description: "Verify McpMeshTool parameters are filtered from MCP tool schema in TypeScript SDK"
+tags:
+  - schema
+  - typescript
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/ts-schema-agent /workspace/"
+    capture: copy_output
+
+  - name: "Install npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-schema-agent
+
+  - name: "Start agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start ts-schema-agent/src/index.ts --env MCP_MESH_HTTP_PORT=9060 -d"
+    capture: start_output
+
+  - name: "Wait for agent registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "ts-schema-agent"; then
+          echo "ts-schema-agent registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: ts-schema-agent did not register within 40s"
+      meshctl logs ts-schema-agent 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_output
+    timeout: 60
+
+  - name: "Verify agent registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  - name: "Get greet tool schema"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=greet"
+    capture: greet_schema
+
+  - name: "Get with_dep tool schema"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=with_dep"
+    capture: dep_schema
+
+  - name: "Show agent logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs ts-schema-agent 2>/dev/null | tail -20 || echo 'no logs'"
+    capture: agent_logs
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_output} contains 'ts-schema-agent'"
+    message: "Agent should be registered"
+
+  # greet: should have name, no mesh types
+  - expr: "${captured.greet_schema} contains 'name'"
+    message: "greet schema should have name parameter"
+
+  # with_dep: should have query, NOT svc or McpMeshTool
+  - expr: "${captured.dep_schema} contains 'query'"
+    message: "with_dep schema should have query parameter"
+  - expr: "${captured.dep_schema} not contains 'svc'"
+    message: "with_dep schema should NOT have svc (McpMeshTool) parameter"
+  - expr: "${captured.dep_schema} not contains 'McpMeshTool'"
+    message: "with_dep schema should NOT expose McpMeshTool type"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

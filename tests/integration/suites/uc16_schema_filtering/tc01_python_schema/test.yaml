@@ -1,0 +1,112 @@
+# Test Case: Python Schema Filtering
+# Verifies that mesh-injected parameters (McpMeshTool, MeshLlmAgent) are filtered
+# from the MCP tool schema exposed to clients.
+#
+# Scenario:
+#   - py-schema-agent defines 3 tools:
+#     - greet: simple tool with only user parameters
+#     - with_dep: tool with McpMeshTool dependency parameter
+#     - with_llm: tool with MeshLlmAgent parameter (issue #689)
+#   - Start the agent, wait for registration
+#   - Query tool schemas via meshctl list --tools=<name>
+#   - Assert user parameters are present and mesh-injected ones are absent
+
+name: "Python Schema Filtering"
+description: "Verify McpMeshTool and MeshLlmAgent parameters are filtered from MCP tool schema"
+tags:
+  - schema
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-schema-agent /workspace/"
+    capture: copy_output
+
+  - name: "Start agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start py-schema-agent/main.py -d"
+    capture: start_output
+
+  - name: "Wait for agent registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "py-schema-agent"; then
+          echo "py-schema-agent registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: py-schema-agent did not register within 40s"
+      meshctl logs py-schema-agent 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_output
+    timeout: 60
+
+  - name: "Verify agent registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  - name: "Get greet tool schema"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=greet"
+    capture: greet_schema
+
+  - name: "Get with_dep tool schema"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=with_dep"
+    capture: dep_schema
+
+  - name: "Get with_llm tool schema"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools=with_llm"
+    capture: llm_schema
+
+  - name: "Show agent logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs py-schema-agent 2>/dev/null | tail -20 || echo 'no logs'"
+    capture: agent_logs
+
+assertions:
+  # Agent registered
+  - expr: "${captured.list_output} contains 'py-schema-agent'"
+    message: "Agent should be registered"
+
+  # greet: should have name, no mesh types
+  - expr: "${captured.greet_schema} contains 'name'"
+    message: "greet schema should have name parameter"
+
+  # with_dep: should have query, NOT svc (McpMeshTool)
+  - expr: "${captured.dep_schema} contains 'query'"
+    message: "with_dep schema should have query parameter"
+  - expr: "${captured.dep_schema} not contains 'svc'"
+    message: "with_dep schema should NOT have svc (McpMeshTool) parameter"
+
+  # with_llm: should have prompt, NOT llm (MeshLlmAgent) - issue #689
+  - expr: "${captured.llm_schema} contains 'prompt'"
+    message: "with_llm schema should have prompt parameter"
+  - expr: '${captured.llm_schema} not contains ''"llm"'''
+    message: "with_llm schema should NOT have llm (MeshLlmAgent) parameter"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace
