@@ -24,26 +24,32 @@ from .signature_analyzer import get_mesh_agent_positions, has_llm_agent_paramete
 logger = logging.getLogger(__name__)
 
 
-def _build_clean_signature(
-    func: Any, mesh_positions: list[int]
-) -> inspect.Signature | None:
-    """Build a signature excluding McpMeshTool parameters at the given positions.
+def _build_clean_signature(func: Any) -> inspect.Signature | None:
+    """Build a signature excluding McpMeshTool parameters (detected by type).
+
+    Uses type-based detection (not position-based) to avoid false positives
+    from the injector heuristic that treats single/non-typed params as targets.
 
     Only excludes McpMeshTool parameters here. MeshLlmAgent parameters are
-    excluded later by the @mesh.llm decorator, which runs after @mesh.tool
-    in the decoration chain.
+    excluded later by the @mesh.llm decorator, which runs after @mesh.tool.
 
-    Returns None if signature cannot be built (caller should skip override).
+    Returns None if no parameters need removal.
     """
     try:
-        exclude = set(mesh_positions)
-        if not exclude:
+        from .signature_analyzer import (
+            _get_original_func,
+            get_mesh_agent_parameter_names,
+        )
+
+        original = _get_original_func(func)
+        injectable_names = set(get_mesh_agent_parameter_names(original))
+        if not injectable_names:
             return None
-        sig = inspect.signature(func)
+        sig = inspect.signature(original)
         clean_params = [
             param
-            for i, (name, param) in enumerate(sig.parameters.items())
-            if i not in exclude
+            for name, param in sig.parameters.items()
+            if name not in injectable_names
         ]
         return sig.replace(parameters=clean_params)
     except Exception:
@@ -553,7 +559,7 @@ class DependencyInjector:
             minimal_wrapper._mesh_original_func = func
 
             # Override signature to hide injectable parameters from FastMCP
-            clean_sig = _build_clean_signature(func, mesh_positions)
+            clean_sig = _build_clean_signature(func)
             if clean_sig is not None:
                 minimal_wrapper.__signature__ = clean_sig
 
@@ -633,7 +639,7 @@ class DependencyInjector:
                 return result
 
         # Override signature to hide injectable parameters from FastMCP schema generation
-        clean_sig = _build_clean_signature(func, mesh_positions)
+        clean_sig = _build_clean_signature(func)
         if clean_sig is not None:
             dependency_wrapper.__signature__ = clean_sig
 
