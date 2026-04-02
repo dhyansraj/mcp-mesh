@@ -19,7 +19,7 @@ python3 --version || echo "❌ Python not found"
 
 # Check if MCP Mesh is installed
 echo -n "MCP Mesh installed: "
-python3 -c "import mcp_mesh; print('✅ Yes')" 2>/dev/null || echo "❌ No"
+python3 -c "import mesh; print('✅ Yes')" 2>/dev/null || echo "❌ No"
 
 # Check ports
 for port in 8000 8080 8081; do
@@ -43,7 +43,7 @@ curl -s http://localhost:8000/health >/dev/null 2>&1 && echo "✅ Healthy" || ec
 #### Problem
 
 ```
-ImportError: No module named 'mcp_mesh'
+ImportError: No module named 'mesh'
 ```
 
 #### Solutions
@@ -69,7 +69,7 @@ pip install mcp-mesh
 
 ```bash
 pip list | grep mcp-mesh
-python -c "import mcp_mesh; print(mcp_mesh.__version__)"
+python -c "import mesh; print(mesh.__version__)"
 ```
 
 ### 2. Registry Connection Failed
@@ -436,7 +436,7 @@ curl http://localhost:8000/logs?level=error | jq
 ```python
 # test_components.py
 import asyncio
-from mcp_mesh.registry import RegistryClient
+from mesh.registry import RegistryClient
 
 async def test_registry():
     client = RegistryClient("http://localhost:8000")

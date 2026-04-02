@@ -31,7 +31,7 @@ MCP Mesh is a **complete platform** for building and deploying AI agents. You do
 ### Simple Example
 
 ```python
-from mcp_mesh import mesh
+import mesh
 from fastmcp import FastMCP
 
 app = FastMCP("My Agent")
@@ -43,11 +43,6 @@ async def greet(name: str, time_service: mesh.McpMeshTool = None):
     current_time = await time_service() if time_service else "unknown"
     return f"Hello {name}! The time is {current_time}"
 
-# Expose a REST endpoint
-@mesh.route("/api/greet/{name}", methods=["GET"])
-async def greet_api(name: str):
-    return {"message": greet(name)}
-
 # Register as an agent
 @mesh.agent(name="greeting-agent", port=8080)
 class GreetingAgent:
@@ -57,7 +52,6 @@ class GreetingAgent:
 That's a complete agent with:
 
 - Tool that other agents can call
-- REST API for external access
 - Automatic registration with the mesh
 - Dependency injection from other agents
 
