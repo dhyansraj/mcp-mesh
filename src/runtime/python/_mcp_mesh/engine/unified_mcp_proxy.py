@@ -12,7 +12,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Optional
 
-from ..shared.json_fast import dumps as json_dumps
+from ..shared.json_fast import dumps_bytes as json_dumps_bytes
 from ..shared.json_fast import loads as json_loads
 from ..shared.logging_config import (
     format_log_value,
@@ -882,9 +882,9 @@ class UnifiedMCPProxy:
                 "params": {"name": name, "arguments": arguments or {}},
             }
 
-            # Serialize payload to measure exact request byte size
-            request_body = json_dumps(payload)
-            request_bytes = len(request_body.encode("utf-8"))
+            # Serialize payload as bytes — avoids extra str→bytes encode
+            request_body = json_dumps_bytes(payload)
+            request_bytes = len(request_body)
 
             url = f"{self.endpoint}/mcp"
             headers = {
@@ -961,6 +961,16 @@ class UnifiedMCPProxy:
             if result is None:
                 self.logger.warning("⚠️ No result field in response")
                 return {"content": [{"type": "text", "text": "No result returned"}]}
+
+            # Check for CallToolResult.isError (matches FastMCP error handling)
+            if isinstance(result, dict) and result.get("isError"):
+                error_text = ""
+                for item in result.get("content", []):
+                    if isinstance(item, dict) and "text" in item:
+                        error_text = item["text"]
+                        break
+                self.logger.error(f"❌ Remote tool error: {error_text}")
+                raise RuntimeError(f"Tool call error: {error_text}")
 
             # Calculate performance metrics
             end_time = time.time()
