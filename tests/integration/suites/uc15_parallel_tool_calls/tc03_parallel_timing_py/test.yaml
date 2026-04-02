@@ -80,7 +80,7 @@ test:
     workdir: /workspace
     command: |
       cd /workspace
-      meshctl start parallel-consumer-py/main.py --env MCP_MESH_HTTP_PORT=9003 -d
+      meshctl start parallel-consumer-py/main.py --env MCP_MESH_HTTP_PORT=9003 --debug -d
 
   - name: "Wait for consumer and resolution"
     handler: wait

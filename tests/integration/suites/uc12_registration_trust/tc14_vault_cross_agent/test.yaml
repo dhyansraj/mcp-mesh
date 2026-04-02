@@ -99,6 +99,7 @@ test:
     command: |
       meshctl start hello_world.py -d \
         --registry-url https://localhost:8000 \
+        --debug \
         --env MCP_MESH_TLS_MODE=auto \
         --env MCP_MESH_TLS_PROVIDER=vault \
         --env MCP_MESH_VAULT_ADDR=http://127.0.0.1:8200 \
