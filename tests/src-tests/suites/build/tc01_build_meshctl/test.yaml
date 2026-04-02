@@ -5,6 +5,7 @@
 # Build commands execute inside src-build:latest via docker run
 
 name: "Build meshctl CLI"
+depends_on: [tc00_build_environment]
 description: "Build meshctl Go binary from source using docker run"
 tags:
   - build

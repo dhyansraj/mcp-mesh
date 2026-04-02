@@ -225,6 +225,29 @@ def bump_helm_charts(old: str, new: str, dry_run: bool) -> list[str]:
             chart_lock, pattern, rf"\g<1>{new}", dry_run, flags=re.MULTILINE
         ):
             changed.append(str(chart_lock.relative_to(PROJECT_ROOT)))
+
+    # values.yaml image tags (minor version format, only mcp-mesh charts)
+    old_parts = old.split(".")
+    new_parts = new.split(".")
+    old_minor = f"{old_parts[0]}.{old_parts[1]}"
+    new_minor = f"{new_parts[0]}.{new_parts[1]}"
+
+    if old_minor != new_minor:
+        mcp_mesh_charts = [
+            "mcp-mesh-registry",
+            "mcp-mesh-agent",
+            "mcp-mesh-ui",
+            "mcp-mesh-core",
+        ]
+        for chart_name in mcp_mesh_charts:
+            values_yaml = helm_dir / chart_name / "values.yaml"
+            if values_yaml.exists():
+                # Match tag: "OLD_MINOR" (with quotes, indented under image:)
+                pattern = rf'(tag:\s*"){re.escape(old_minor)}(")'
+                replacement = rf"\g<1>{new_minor}\2"
+                if replace_in_file(values_yaml, pattern, replacement, dry_run):
+                    changed.append(str(values_yaml.relative_to(PROJECT_ROOT)))
+
     return changed
 
 

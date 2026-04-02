@@ -99,6 +99,7 @@ test:
     command: |
       meshctl start hello_world.py -d \
         --registry-url https://localhost:8000 \
+        --debug \
         --env MCP_MESH_TLS_MODE=auto \
         --env MCP_MESH_TLS_PROVIDER=vault \
         --env MCP_MESH_VAULT_ADDR=http://127.0.0.1:8200 \
@@ -132,12 +133,12 @@ test:
     workdir: /workspace
     capture: call_typed
 
-  - name: "Check hello-world logs for FastMCP success (not fallback)"
+  - name: "Check hello-world logs for HTTP call success"
     handler: shell
     command: |
-      cat $HOME/.mcp-mesh/logs/hello-world.log 2>/dev/null | grep -i "FastMCP.*successful\|FastMCP.*fail\|falling back" | tail -5
+      cat $HOME/.mcp-mesh/logs/hello-world.log 2>/dev/null | grep -i "HTTP call:\|HTTP.*fail\|falling back\|FastMCP fallback" | tail -5
     workdir: /workspace
-    capture: fastmcp_logs
+    capture: http_call_logs
 
   - name: "Stop all"
     handler: shell
@@ -170,11 +171,11 @@ assertions:
   - expr: "${captured.call_typed} contains 'system-agent'"
     message: "Should get response from system-agent"
 
-  - expr: "${captured.fastmcp_logs} contains 'FastMCP tool call successful'"
-    message: "Cross-agent calls should use FastMCP client (not HTTP fallback)"
+  - expr: "${captured.http_call_logs} contains 'HTTP call:'"
+    message: "Cross-agent calls should use HTTP direct path"
 
-  - expr: "${captured.fastmcp_logs} not contains 'falling back to HTTP'"
-    message: "FastMCP client should not fall back to HTTP"
+  - expr: "${captured.http_call_logs} not contains 'FastMCP fallback'"
+    message: "HTTP direct path should not fall back to FastMCP"
 
 post_run:
   - handler: shell

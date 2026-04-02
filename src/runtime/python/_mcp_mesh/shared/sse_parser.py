@@ -1,10 +1,11 @@
 """Server-Sent Events (SSE) parsing utilities for MCP responses."""
 
-import json
 import logging
 from typing import Any, Optional
 
 import mcp_mesh_core
+
+from .json_fast import loads as json_loads
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +38,11 @@ class SSEParser:
             RuntimeError: If SSE response cannot be parsed
         """
         try:
+            # Use Rust for SSE detection + extraction, orjson for final parse.
+            # Benchmarks show orjson is faster than Rust->PyDict FFI boundary
+            # because building Python dicts from Rust is expensive.
             result_json = mcp_mesh_core.parse_sse_response_py(response_text)
-            return json.loads(result_json)
+            return json_loads(result_json)
         except Exception as e:
             raise RuntimeError(f"Could not parse SSE response from {context}: {e}")
 
@@ -71,8 +75,8 @@ class SSEParser:
             return None
 
         try:
-            return json.loads(chunk_data)
-        except json.JSONDecodeError:
+            return json_loads(chunk_data)
+        except (ValueError, TypeError):
             # Invalid JSON - skip this chunk
             return None
 

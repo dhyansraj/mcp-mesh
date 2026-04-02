@@ -80,7 +80,7 @@ test:
     workdir: /workspace
     command: |
       cd /workspace
-      meshctl start parallel-consumer-py/main.py --env MCP_MESH_HTTP_PORT=9003 -d
+      meshctl start parallel-consumer-py/main.py --env MCP_MESH_HTTP_PORT=9003 --debug -d
 
   - name: "Wait for consumer and resolution"
     handler: wait
@@ -119,8 +119,8 @@ assertions:
   - expr: "${captured.consumer_logs} contains 'parallel tool calls enabled'"
     message: "Consumer agent should log 'parallel tool calls enabled'"
   # Mesh delegation: consumer delegates to provider, verify successful completion
-  - expr: "${captured.consumer_logs} contains 'FastMCP tool call successful'"
-    message: "Parallel consumer should successfully complete the LLM call via mesh delegation"
+  - expr: "${captured.consumer_logs} contains 'HTTP call:'"
+    message: "Parallel consumer should successfully complete cross-agent calls via HTTP direct path"
 
 post_run:
   - handler: shell

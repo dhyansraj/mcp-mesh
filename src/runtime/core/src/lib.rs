@@ -43,6 +43,7 @@ pub mod provider;
 pub mod schema;
 pub mod spec;
 pub mod tls;
+pub mod json_fast;
 pub mod mcp_client;
 pub mod trace_context;
 pub mod tracing_publish;
@@ -324,6 +325,58 @@ fn parse_sse_response_py(response_text: &str) -> PyResult<String> {
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
 }
 
+/// Parse SSE or plain JSON response and return a Python dict directly.
+///
+/// Avoids the double-parse overhead of `parse_sse_response_py` (which returns
+/// a JSON string that Python must then `json.loads`).
+#[cfg(feature = "python")]
+#[pyfunction]
+fn parse_sse_response_to_dict_py(py: Python<'_>, response_text: &str) -> PyResult<Py<PyAny>> {
+    let json_str = mcp_client::parse_sse_response(response_text)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    let value = crate::json_fast::parse(&json_str)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+    json_value_to_pyobject(py, &value)
+}
+
+#[cfg(feature = "python")]
+fn json_value_to_pyobject(py: Python<'_>, val: &serde_json::Value) -> PyResult<Py<PyAny>> {
+    use pyo3::types::{PyDict, PyList};
+    match val {
+        serde_json::Value::Object(map) => {
+            let dict = PyDict::new(py);
+            for (k, v) in map {
+                dict.set_item(k, json_value_to_pyobject(py, v)?)?;
+            }
+            Ok(dict.into_any().unbind())
+        }
+        serde_json::Value::Array(arr) => {
+            let items: Vec<Py<PyAny>> = arr
+                .iter()
+                .map(|v| json_value_to_pyobject(py, v))
+                .collect::<PyResult<_>>()?;
+            Ok(PyList::new(py, &items)?.into_any().unbind())
+        }
+        serde_json::Value::String(s) => Ok(s.into_pyobject(py)?.into_any().unbind()),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Ok(i.into_pyobject(py)?.into_any().unbind())
+            } else if let Some(u) = n.as_u64() {
+                Ok(u.into_pyobject(py)?.into_any().unbind())
+            } else if let Some(f) = n.as_f64() {
+                Ok(f.into_pyobject(py)?.into_any().unbind())
+            } else {
+                Ok(py.None())
+            }
+        }
+        serde_json::Value::Bool(b) => {
+            let obj: Py<PyAny> = (*b).into_pyobject(py)?.to_owned().into_any().unbind();
+            Ok(obj)
+        }
+        serde_json::Value::Null => Ok(py.None()),
+    }
+}
+
 /// Extract text content from MCP CallToolResult (Python binding).
 #[cfg(feature = "python")]
 #[pyfunction]
@@ -457,6 +510,7 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(build_jsonrpc_request_py, m)?)?;
     m.add_function(wrap_pyfunction!(generate_request_id_py, m)?)?;
     m.add_function(wrap_pyfunction!(parse_sse_response_py, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_sse_response_to_dict_py, m)?)?;
     m.add_function(wrap_pyfunction!(extract_content_py, m)?)?;
     m.add_function(wrap_pyfunction!(call_tool_py, m)?)?;
 

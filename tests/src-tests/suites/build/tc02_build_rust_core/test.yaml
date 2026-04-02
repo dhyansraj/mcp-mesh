@@ -5,6 +5,7 @@
 # Build commands execute inside src-build:latest via docker run
 
 name: "Build Rust Core"
+depends_on: [tc00_build_environment]
 description: "Build mcp-mesh-core Python wheel from Rust source using docker run"
 tags:
   - build

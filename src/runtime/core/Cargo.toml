@@ -11,11 +11,12 @@ name = "mcp_mesh_core"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["python"]
+default = ["python", "simd"]
 python = ["dep:pyo3", "dep:pyo3-async-runtimes"]
 typescript = ["dep:napi", "dep:napi-derive"]
 ffi = []  # C FFI support for multi-language SDKs
 spire = ["dep:spiffe"]  # SPIRE/SPIFFE workload identity support
+simd = ["dep:simd-json"]
 
 [dependencies]
 # Python bindings (optional, enabled by default)
@@ -35,6 +36,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+simd-json = { version = "0.14", optional = true }
 
 # Utilities
 async-trait = "0.1"

@@ -34,7 +34,8 @@ docker:
   registry: 192.168.10.1:5000
 defaults:
   timeout: 600 # 10 minutes per test
-  parallel: 1 # Build sequentially
+execution:
+  max_workers: 4 # DAG-based parallel builds
 packages:
   mode: local
 standalone:

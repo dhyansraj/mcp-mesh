@@ -428,6 +428,7 @@ export declare function matchesPropagateHeader(headerName: string, allowlistCsv:
  * @returns Extracted JSON string
  */
 export declare function parseSseResponse(responseText: string): string
+export declare function parseSseResponseToObject(responseText: string): unknown
 
 /**
  * Prepare TLS credentials (fetch from provider, write secure temp files).

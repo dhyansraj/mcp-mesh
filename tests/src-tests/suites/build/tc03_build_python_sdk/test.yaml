@@ -5,6 +5,7 @@
 # Build commands execute inside src-build:latest via docker run
 
 name: "Build Python SDK"
+depends_on: [tc02_build_rust_core]
 description: "Build mcp-mesh Python wheel from source using docker run"
 tags:
   - build

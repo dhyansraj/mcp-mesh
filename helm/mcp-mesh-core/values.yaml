@@ -75,7 +75,7 @@ mcp-mesh-redis:
 mcp-mesh-registry:
   image:
     repository: mcpmesh/registry
-    tag: "0.9" # Minor version tracks latest patch
+    tag: "1.1" # Minor version tracks latest patch
   registry:
     # Database configuration (connects to PostgreSQL)
     # Note: Hostnames use global.coreReleaseName prefix (default: "mcp-core")

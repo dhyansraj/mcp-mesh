@@ -5,6 +5,7 @@
 # Build commands execute inside src-build:latest via docker run
 
 name: "Build TypeScript SDK"
+depends_on: [tc00_build_environment]
 description: "Build @mcpmesh/sdk npm tarball from source using docker run"
 tags:
   - build
