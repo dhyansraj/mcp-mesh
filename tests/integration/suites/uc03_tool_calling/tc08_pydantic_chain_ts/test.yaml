@@ -1,0 +1,159 @@
+# UC03-TC08: TypeScript typed argument serialization in cross-agent calls
+#
+# Ports the Python tc07_pydantic_chain_py test to TypeScript.
+# Verifies that typed (zod-validated) arguments are correctly serialized
+# and passed between TypeScript agents via dependency injection.
+
+name: "TypeScript typed model cross-agent call"
+description: "Verify typed arguments serialize correctly between TypeScript agents"
+tags:
+  - tool_calling
+  - typescript
+  - typed_args
+  - cross_agent
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/* /workspace/"
+
+  # Install npm dependencies for both agents
+  - name: "Install ts-typed-provider npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-typed-provider
+
+  - name: "Install ts-typed-caller npm dependencies"
+    handler: npm-install
+    path: /workspace/ts-typed-caller
+
+  # Start provider first (no dependencies)
+  - name: "Start ts-typed-provider"
+    handler: shell
+    command: "meshctl start ts-typed-provider/src/index.ts --env MCP_MESH_HTTP_PORT=3010 -d"
+    workdir: /workspace
+    capture: start_provider_output
+
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 10
+
+  # Start caller (depends on execute_task from provider)
+  - name: "Start ts-typed-caller"
+    handler: shell
+    command: "meshctl start ts-typed-caller/src/index.ts --env MCP_MESH_HTTP_PORT=3011 --env MCP_MESH_LOG_LEVEL=DEBUG -d 2>&1 || echo 'START_FAILED'"
+    workdir: /workspace
+    capture: start_caller_output
+
+  - name: "Wait for dependency resolution"
+    handler: wait
+    seconds: 15
+
+  # Debug: Check caller startup logs
+  - name: "Debug: Check caller startup logs"
+    handler: shell
+    command: "meshctl logs typed-caller 2>&1 | tail -50 || echo 'NO_CALLER_LOGS'"
+    workdir: /workspace
+    capture: caller_start_logs
+
+  # Verify both agents are running
+  - name: "Verify both agents are running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # List tools
+  - name: "List all available tools"
+    handler: shell
+    command: "meshctl list --tools"
+    workdir: /workspace
+    capture: tools_output
+
+  # Test: Call run_task with typed arguments (default count=1)
+  - name: "Call run_task with typed args (greet, MCP Mesh, count=2)"
+    handler: shell
+    command: 'meshctl call run_task ''{"task": "greet", "name": "MCP Mesh", "count": 2}'' 2>&1 || echo ''CALL_FAILED'''
+    workdir: /workspace
+    capture: task_result
+
+  # Test: Call run_task with default count
+  - name: "Call run_task with default count (greet, World, count=1)"
+    handler: shell
+    command: 'meshctl call run_task ''{"task": "greet", "name": "World", "count": 1}'' 2>&1 || echo ''CALL_FAILED'''
+    workdir: /workspace
+    capture: task_default_result
+
+  # Test: Call run_task with unknown task
+  - name: "Call run_task with unknown task"
+    handler: shell
+    command: 'meshctl call run_task ''{"task": "unknown", "name": "Test", "count": 1}'' 2>&1 || echo ''CALL_FAILED'''
+    workdir: /workspace
+    capture: task_unknown_result
+
+  # Check caller logs for HTTP path usage
+  - name: "Check caller logs for HTTP direct path"
+    handler: shell
+    command: "meshctl logs typed-caller 2>&1 | grep -i 'HTTP call:\\|HTTP transport failed\\|FastMCP fallback' | tail -10 || echo 'NO_HTTP_LOG_LINES'"
+    workdir: /workspace
+    capture: caller_http_logs
+
+  # Get provider logs for debugging
+  - name: "Get provider logs"
+    handler: shell
+    command: "meshctl logs typed-provider 2>/dev/null | tail -20 || echo 'no provider logs'"
+    workdir: /workspace
+    capture: provider_logs
+
+  # Stop all agents
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # Both agents running
+  - expr: ${captured.list_output} contains 'typed-provider'
+    message: "typed-provider should be running"
+
+  - expr: ${captured.list_output} contains 'typed-caller'
+    message: "typed-caller should be running"
+
+  # Tools available
+  - expr: ${captured.tools_output} contains 'run_task'
+    message: "run_task tool should be available"
+
+  - expr: ${captured.tools_output} contains 'execute_task'
+    message: "execute_task tool should be available"
+
+  # Typed argument call should succeed with correct result
+  - expr: ${captured.task_result} contains 'Hello MCP Mesh!'
+    message: "Typed arguments should be passed correctly to provider (greet with count=2)"
+
+  # Default count test
+  - expr: ${captured.task_default_result} contains 'Hello World!'
+    message: "Default count should produce single greeting"
+
+  # Unknown task test
+  - expr: ${captured.task_unknown_result} contains 'unknown task'
+    message: "Unknown task should return error message from provider"
+
+  # HTTP direct path should be used (not FastMCP fallback)
+  - expr: ${captured.caller_http_logs} contains 'HTTP call:'
+    message: "Cross-agent call should use HTTP direct path"
+
+  - expr: ${captured.caller_http_logs} not_contains 'FastMCP fallback'
+    message: "Typed argument serialization should not cause fallback to FastMCP"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

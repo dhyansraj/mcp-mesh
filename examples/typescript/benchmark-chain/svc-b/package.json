@@ -1,0 +1,22 @@
+{
+  "name": "svc-b",
+  "version": "1.0.0",
+  "description": "MCP Mesh agent for svc-b",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "^1.1.0-beta.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}
