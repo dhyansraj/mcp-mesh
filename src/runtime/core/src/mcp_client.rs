@@ -78,7 +78,7 @@ pub fn parse_sse_response(response_text: &str) -> Result<String, String> {
 
     if !is_sse {
         // Try parsing as plain JSON
-        let _: Value = serde_json::from_str(response_text)
+        crate::json_fast::parse(response_text)
             .map_err(|e| format!("Invalid JSON response: {}", e))?;
         return Ok(response_text.to_string());
     }
@@ -98,7 +98,7 @@ pub fn parse_sse_response(response_text: &str) -> Result<String, String> {
             continue;
         }
 
-        if serde_json::from_str::<Value>(trimmed).is_ok() {
+        if crate::json_fast::is_valid(trimmed) {
             return Ok(trimmed.to_string());
         }
     }

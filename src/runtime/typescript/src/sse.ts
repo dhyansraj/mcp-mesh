@@ -10,11 +10,17 @@
  * This module provides utilities to parse these responses.
  */
 
-import { parseSseResponse as coreParseSseResponse } from "@mcpmesh/core";
+import {
+  parseSseResponse as coreParseSseResponse,
+  parseSseResponseToObject as coreParseSseResponseToObject,
+} from "@mcpmesh/core";
 
 /**
  * Parse a response that may be in SSE format or plain JSON.
- * Delegates to Rust core for SSE/JSON extraction.
+ * Delegates to Rust core for SSE/JSON extraction and parsing.
+ *
+ * Uses the direct object-returning variant when available (avoids
+ * double JSON serialization), with fallback to string + JSON.parse.
  *
  * @param responseText - Raw response text from HTTP request
  * @returns Parsed JSON object
@@ -34,6 +40,10 @@ import { parseSseResponse as coreParseSseResponse } from "@mcpmesh/core";
  * ```
  */
 export function parseSSEResponse<T = unknown>(responseText: string): T {
+  if (coreParseSseResponseToObject) {
+    return coreParseSseResponseToObject(responseText) as T;
+  }
+  // Fallback for older core versions without object-returning variant
   const jsonStr = coreParseSseResponse(responseText);
   return JSON.parse(jsonStr) as T;
 }

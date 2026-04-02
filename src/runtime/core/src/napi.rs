@@ -709,6 +709,21 @@ pub fn parse_sse_response(response_text: String) -> napi::Result<String> {
         .map_err(|e| napi::Error::from_reason(e))
 }
 
+/// Parse SSE or plain JSON response and return a JS object directly.
+///
+/// Avoids the double-parse overhead of `parseSseResponse` (which returns
+/// a JSON string that TypeScript must then `JSON.parse`).
+///
+/// @param responseText - Raw response body (SSE or plain JSON)
+/// @returns Parsed JavaScript object
+#[napi]
+pub fn parse_sse_response_to_object(response_text: String) -> napi::Result<serde_json::Value> {
+    let json_str = crate::mcp_client::parse_sse_response(&response_text)
+        .map_err(|e| napi::Error::from_reason(e))?;
+    serde_json::from_str(&json_str)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
 /// Extract text content from MCP CallToolResult JSON.
 ///
 /// @param resultJson - JSON string of the MCP result

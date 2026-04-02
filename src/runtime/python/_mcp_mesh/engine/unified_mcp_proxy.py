@@ -12,6 +12,8 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Optional
 
+from ..shared.json_fast import dumps as json_dumps
+from ..shared.json_fast import loads as json_loads
 from ..shared.logging_config import (
     format_log_value,
     format_result_summary,
@@ -690,7 +692,9 @@ class UnifiedMCPProxy:
         except RuntimeError:
             raise
         except Exception as e:
-            self.logger.warning(f"⚠️ Failed to convert MCP result, returning as-is: {e}")
+            self.logger.warning(
+                f"⚠️ Failed to convert MCP result, returning as-is: {e}"
+            )
             return mcp_result
 
     def _convert_content_item_to_python(self, content_item: Any) -> Any:
@@ -769,6 +773,31 @@ class UnifiedMCPProxy:
         else:
             return {"data": str(structured_content)}
 
+    def _normalize_resource_link(self, item: dict) -> dict:
+        """Normalize a resource_link content item to the nested format consumers expect.
+
+        MCP wire format has fields flat on the object, but the FastMCP client path
+        returns them nested under a "resource" sub-dict. This ensures consistency
+        regardless of transport.
+        """
+        # Support both flat (wire format) and already-nested formats
+        nested = item.get("resource", {}) or {}
+        resource_data = {
+            "type": "resource_link",
+            "resource": {
+                "uri": str(item.get("uri", nested.get("uri", ""))),
+                "name": item.get("name", nested.get("name", "")),
+            },
+        }
+        for field in ("mimeType", "description", "size"):
+            val = item.get(field) or nested.get(field)
+            if val is not None:
+                resource_data["resource"][field] = val
+        annotations = item.get("annotations") or nested.get("annotations")
+        if annotations is not None:
+            resource_data["resource"]["annotations"] = annotations
+        return resource_data
+
     def _normalize_http_result(self, result: Any) -> Any:
         """Normalize HTTP result to match FastMCP format.
 
@@ -788,26 +817,46 @@ class UnifiedMCPProxy:
             # Single content item - extract and parse
             if len(content_list) == 1:
                 content_item = content_list[0]
+                # Normalize resource_link to nested format matching FastMCP path
+                if (
+                    isinstance(content_item, dict)
+                    and content_item.get("type") == "resource_link"
+                ):
+                    return self._normalize_resource_link(content_item)
+                # Preserve other non-text content types (image, etc.) as-is
+                if isinstance(content_item, dict) and content_item.get("type") not in (
+                    None,
+                    "text",
+                ):
+                    return content_item
                 if isinstance(content_item, dict) and "text" in content_item:
-                    # Try to parse JSON text content
+                    text_value = content_item["text"]
+                    if isinstance(text_value, (dict, list)):
+                        return text_value
                     try:
-                        import json
-
-                        return json.loads(content_item["text"])
-                    except (json.JSONDecodeError, TypeError):
-                        return content_item["text"]
+                        return json_loads(text_value)
+                    except (ValueError, TypeError):
+                        return text_value
                 return content_item
 
             # Multiple content items - convert each
             converted_items = []
             for item in content_list:
-                if isinstance(item, dict) and "text" in item:
-                    try:
-                        import json
-
-                        converted_items.append(json.loads(item["text"]))
-                    except (json.JSONDecodeError, TypeError):
-                        converted_items.append(item["text"])
+                # Normalize resource_link to nested format matching FastMCP path
+                if isinstance(item, dict) and item.get("type") == "resource_link":
+                    converted_items.append(self._normalize_resource_link(item))
+                # Preserve other non-text content types as-is
+                elif isinstance(item, dict) and item.get("type") not in (None, "text"):
+                    converted_items.append(item)
+                elif isinstance(item, dict) and "text" in item:
+                    text_value = item["text"]
+                    if isinstance(text_value, (dict, list)):
+                        converted_items.append(text_value)
+                    else:
+                        try:
+                            converted_items.append(json_loads(text_value))
+                        except (ValueError, TypeError):
+                            converted_items.append(text_value)
                 else:
                     converted_items.append(item)
             return {"content": converted_items, "type": "multi_content"}
@@ -822,8 +871,6 @@ class UnifiedMCPProxy:
         start_time = time.time()
 
         try:
-            import json
-
             import httpx
 
             payload = {
@@ -834,7 +881,7 @@ class UnifiedMCPProxy:
             }
 
             # Serialize payload to measure exact request byte size
-            request_body = json.dumps(payload)
+            request_body = json_dumps(payload)
             request_bytes = len(request_body.encode("utf-8"))
 
             url = f"{self.endpoint}/mcp"
