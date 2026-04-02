@@ -1,0 +1,193 @@
+# UC03-TC09: Java typed argument serialization in cross-agent calls
+#
+# Ports the Python tc07_pydantic_chain_py test to Java.
+# Verifies that typed arguments (String, int) are correctly serialized
+# and passed between Java Spring Boot agents via dependency injection.
+
+name: "Java typed model cross-agent call"
+description: "Verify typed arguments serialize correctly between Java agents"
+tags:
+  - tool_calling
+  - java
+  - typed_args
+  - cross_agent
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifacts to workspace
+  - name: "Copy java-typed-provider to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/java-typed-provider /workspace/
+      ls -la /workspace/java-typed-provider/
+    capture: copy_provider
+
+  - name: "Copy java-typed-caller to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/java-typed-caller /workspace/
+      ls -la /workspace/java-typed-caller/
+    capture: copy_caller
+
+  # Install Maven dependencies for both agents
+  - name: "Install Maven dependencies for java-typed-provider"
+    handler: maven-install
+    path: /workspace/java-typed-provider
+    timeout: 600
+
+  - name: "Install Maven dependencies for java-typed-caller"
+    handler: maven-install
+    path: /workspace/java-typed-caller
+    timeout: 600
+
+  # Start provider first (no dependencies)
+  - name: "Start java-typed-provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-typed-provider --env MCP_MESH_HTTP_PORT=9401 -d
+      echo "Java typed provider starting via meshctl on port 9401"
+    capture: start_provider_output
+
+  # Wait for provider to register
+  - name: "Wait for java-typed-provider registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java typed provider to start..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "typed-provider"; then
+          echo "Provider registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Provider did not register within 90s"
+      echo "=== Agent logs ==="
+      meshctl logs typed-provider 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_provider
+    timeout: 120
+
+  # Start caller (depends on execute_task from provider)
+  - name: "Start java-typed-caller"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-typed-caller --env MCP_MESH_HTTP_PORT=9402 -d
+      echo "Java typed caller starting via meshctl on port 9402"
+    capture: start_caller_output
+
+  # Wait for caller to register
+  - name: "Wait for java-typed-caller registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for Java typed caller to start..."
+      for i in $(seq 1 45); do
+        if meshctl list 2>/dev/null | grep -q "typed-caller"; then
+          echo "Caller registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Caller did not register within 90s"
+      echo "=== Agent logs ==="
+      meshctl logs typed-caller 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_caller
+    timeout: 120
+
+  # Verify both agents are registered
+  - name: "Verify both agents are registered"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # Verify tools are listed
+  - name: "Verify tools are listed"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: tools_output
+
+  # Test: Call run_task with typed arguments (greet, MCP Mesh, count=2)
+  - name: "Call run_task with typed args (greet, MCP Mesh, count=2)"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call run_task ''{"task": "greet", "name": "MCP Mesh", "count": 2}'''
+    capture: task_result
+    timeout: 60
+
+  # Test: Call run_task with default count (greet, World, count=1)
+  - name: "Call run_task with default count (greet, World, count=1)"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call run_task ''{"task": "greet", "name": "World", "count": 1}'''
+    capture: task_default_result
+    timeout: 60
+
+  # Test: Call run_task with unknown task
+  - name: "Call run_task with unknown task"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call run_task ''{"task": "unknown", "name": "Test", "count": 1}'''
+    capture: task_unknown_result
+    timeout: 60
+
+  # Get logs for debugging
+  - name: "Get java-typed-provider logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs typed-provider 2>/dev/null | tail -20 || echo 'no provider logs'"
+    capture: provider_logs
+
+  - name: "Get java-typed-caller logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs typed-caller 2>/dev/null | tail -20 || echo 'no caller logs'"
+    capture: caller_logs
+
+assertions:
+  # Both agents running
+  - expr: "${captured.list_output} contains 'typed-provider'"
+    message: "typed-provider should be registered"
+
+  - expr: "${captured.list_output} contains 'typed-caller'"
+    message: "typed-caller should be registered"
+
+  # Tools available
+  - expr: "${captured.tools_output} contains 'run_task'"
+    message: "run_task tool should be available"
+
+  - expr: "${captured.tools_output} contains 'execute_task'"
+    message: "execute_task tool should be available"
+
+  # Typed argument call should succeed with correct result
+  - expr: "${captured.task_result} contains 'Hello MCP Mesh!'"
+    message: "Typed arguments should be passed correctly to provider (greet with count=2)"
+
+  # Default count test
+  - expr: "${captured.task_default_result} contains 'Hello World!'"
+    message: "Default count should produce single greeting"
+
+  # Unknown task test
+  - expr: "${captured.task_unknown_result} contains 'unknown task'"
+    message: "Unknown task should return error message from provider"
+
+post_run:
+  # Stop all agents and kill Java processes
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*typed" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

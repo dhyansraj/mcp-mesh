@@ -866,6 +866,39 @@ class UnifiedMCPProxy:
         # Result is already in clean format
         return result
 
+    def _sanitize_arguments(self, arguments: dict) -> dict:
+        """Convert non-JSON-serializable argument values to plain dicts.
+
+        Handles Pydantic models, dataclasses, and objects with __dict__.
+        """
+        if not arguments:
+            return {}
+        return {k: self._sanitize_value(v) for k, v in arguments.items()}
+
+    def _sanitize_value(self, value):
+        """Recursively convert a value to JSON-serializable form."""
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, dict):
+            return {k: self._sanitize_value(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._sanitize_value(v) for v in value]
+        # Pydantic v2 model
+        if hasattr(value, "model_dump"):
+            return value.model_dump()
+        # Pydantic v1 model
+        if hasattr(value, "dict") and not isinstance(value, type):
+            return value.dict()
+        # Dataclass
+        import dataclasses
+
+        if dataclasses.is_dataclass(value) and not isinstance(value, type):
+            return dataclasses.asdict(value)
+        # Fallback: try __dict__, then str
+        if hasattr(value, "__dict__"):
+            return value.__dict__
+        return str(value)
+
     async def _http_call(self, name: str, arguments: dict = None) -> Any:
         """Direct HTTP call using pooled httpx client with performance tracking."""
         import time
@@ -879,7 +912,7 @@ class UnifiedMCPProxy:
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
-                "params": {"name": name, "arguments": arguments or {}},
+                "params": {"name": name, "arguments": self._sanitize_arguments(arguments)},
             }
 
             # Serialize payload as bytes — avoids extra str→bytes encode
