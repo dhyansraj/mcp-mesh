@@ -122,7 +122,7 @@ export PATH=$PATH:$(pwd)/bin
 
 When you install MCP Mesh, you get:
 
-1. **Python Package** (`mcp_mesh`): The decorators and runtime for your agents
+1. **Python Package** (`mesh`): The decorators and runtime for your agents
 2. **CLI Tool** (`meshctl`): Go-based command-line tool for running agents
 3. **Registry Binary** (`mcp-mesh-registry`): Go-based service registry
 

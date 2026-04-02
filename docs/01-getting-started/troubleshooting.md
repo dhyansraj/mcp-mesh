@@ -87,17 +87,17 @@ Connection refused
 
 ```bash
 # In a separate terminal
-python -m mcp_mesh.registry.server
+meshctl start --registry-only
 
 # Or with custom port
-python -m mcp_mesh.registry.server --port 8001
+meshctl start --registry-only --port 8001
 ```
 
 **Check if registry is running:**
 
 ```bash
 # Check process
-ps aux | grep mcp_mesh.registry
+ps aux | grep mcp-mesh-registry
 
 # Check port
 lsof -i :8000

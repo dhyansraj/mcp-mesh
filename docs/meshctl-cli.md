@@ -284,7 +284,7 @@ meshctl list --registry-url https://prod-registry.company.com
 
 ## Configuration File
 
-meshctl stores configuration in `~/.mcp_mesh/cli_config.json`:
+meshctl stores configuration in `~/.mcp-mesh/cli_config.json`:
 
 ```json
 {

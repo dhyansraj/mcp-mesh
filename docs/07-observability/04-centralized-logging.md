@@ -321,7 +321,7 @@ helm install fluentd bitnami/fluentd \
 Implement structured logging in agents:
 
 ```python
-# mcp_mesh/logging.py
+# mesh logging configuration
 import logging
 import json
 import sys
@@ -397,7 +397,7 @@ def setup_logging(service_name: str, log_level: str = "INFO"):
     """Set up structured logging for MCP Mesh service"""
 
     # Create logger
-    logger = logging.getLogger('mcp_mesh')
+    logger = logging.getLogger('mesh')
     logger.setLevel(getattr(logging, log_level.upper()))
 
     # Remove existing handlers
