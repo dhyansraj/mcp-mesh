@@ -2,7 +2,6 @@ package tracing
 
 import (
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"time"
 )
@@ -162,9 +161,6 @@ func (te *TraceEvent) FromRedisMap(data map[string]interface{}) error {
 				te.DurationMS = &durationInt
 			}
 		}
-	} else {
-		// Debug: log all fields to see what's available
-		fmt.Printf("DEBUG: No duration_ms found. Available fields: %+v\n", data)
 	}
 
 	if successStr := getString(data, "success"); successStr != "" {

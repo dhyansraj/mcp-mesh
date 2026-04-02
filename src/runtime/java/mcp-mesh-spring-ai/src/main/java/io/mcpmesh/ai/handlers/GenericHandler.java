@@ -64,7 +64,8 @@ public class GenericHandler implements LlmProviderHandler {
         // Call the model
         ChatResponse response = model.call(prompt);
 
-        String content = response.getResult().getOutput().getText();
+        String content = response.getResult() != null && response.getResult().getOutput() != null
+            ? response.getResult().getOutput().getText() : null;
         log.debug("GenericHandler: Generated response ({} chars)",
             content != null ? content.length() : 0);
 

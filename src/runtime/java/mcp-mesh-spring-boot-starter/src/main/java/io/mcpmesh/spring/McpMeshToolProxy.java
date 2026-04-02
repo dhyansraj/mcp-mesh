@@ -104,15 +104,16 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
         );
 
         try (SpanScope span = t != null ? t.startSpan("proxy_call_wrapper", spanMeta) : SpanScope.NOOP) {
+            McpHttpClient.clearLastCallMetrics();
             try {
-                McpHttpClient.clearLastCallMetrics();
                 T result = mcpClient.callTool(info.endpoint(), info.functionName(), params, returnType);
-                enrichSpanWithPayloadSizes(span);
                 span.withResult(result);
                 return result;
             } catch (Exception e) {
                 span.withError(e);
                 throw e;
+            } finally {
+                enrichSpanWithPayloadSizes(span);
             }
         }
     }
@@ -135,15 +136,16 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
         );
 
         try (SpanScope span = t != null ? t.startSpan("proxy_call_wrapper", spanMeta) : SpanScope.NOOP) {
+            McpHttpClient.clearLastCallMetrics();
             try {
-                McpHttpClient.clearLastCallMetrics();
                 T result = mcpClient.callTool(info.endpoint(), info.functionName(), params, returnType, headers);
-                enrichSpanWithPayloadSizes(span);
                 span.withResult(result);
                 return result;
             } catch (Exception e) {
                 span.withError(e);
                 throw e;
+            } finally {
+                enrichSpanWithPayloadSizes(span);
             }
         }
     }

@@ -360,6 +360,8 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             if (messages == null || messages.isEmpty()) {
                 // Fallback to simple generation if no messages
                 String content = llmProvider.generate(config.provider(), "", "Hello");
+                // Note: simple generate() doesn't return token usage metadata.
+                // usageMeta remains null — this is expected for non-structured paths.
                 response.put("content", content);
                 response.put("tool_calls", List.of());
             } else if (tools == null || tools.isEmpty()) {
@@ -374,6 +376,8 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                     usageMeta = llmResponse.usage();
                 } else {
                     String content = llmProvider.generateWithMessages(config.provider(), messages);
+                    // Note: generateWithMessages() doesn't return token usage metadata.
+                    // usageMeta remains null — this is expected for non-structured paths.
                     response.put("content", content);
                     response.put("tool_calls", List.of());
                 }

@@ -152,12 +152,12 @@ class ExecutionTracer:
                 )
 
             # Extract payload sizes if set by proxy call_tool()
-            from .context import _payload_sizes
+            from .context import clear_payload_sizes, get_payload_sizes
 
-            sizes = _payload_sizes.get()
+            sizes = get_payload_sizes()
             if sizes:
                 self.execution_metadata.update(sizes)
-                _payload_sizes.set(None)
+                clear_payload_sizes()
 
             # Save execution trace to Redis for distributed tracing storage
             publish_trace_with_fallback(self.execution_metadata, self.logger)

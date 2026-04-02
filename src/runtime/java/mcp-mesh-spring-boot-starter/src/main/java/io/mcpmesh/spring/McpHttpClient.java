@@ -152,6 +152,7 @@ public class McpHttpClient {
      */
     @SuppressWarnings("unchecked")
     public <T> T callTool(String endpoint, String functionName, Map<String, Object> params, Type returnType, Map<String, String> extraHeaders) {
+        LAST_CALL_METRICS.remove(); // Clear stale metrics from any previous call
         try {
             // Build MCP tools/call request
             // Use /mcp endpoint (stateless transport) - not /mcp/v1

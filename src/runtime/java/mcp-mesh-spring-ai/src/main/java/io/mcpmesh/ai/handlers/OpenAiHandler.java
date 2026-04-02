@@ -120,7 +120,8 @@ public class OpenAiHandler implements LlmProviderHandler {
         Prompt prompt = new Prompt(springMessages);
         ChatResponse response = model.call(prompt);
 
-        String content = response.getResult().getOutput().getText();
+        String content = response.getResult() != null && response.getResult().getOutput() != null
+            ? response.getResult().getOutput().getText() : null;
         log.debug("OpenAiHandler: Generated response ({} chars)",
             content != null ? content.length() : 0);
 
@@ -256,7 +257,8 @@ public class OpenAiHandler implements LlmProviderHandler {
 
         // Execute the request
         ChatResponse chatResponse = requestSpec.call().chatResponse();
-        String content = chatResponse.getResult() != null ? chatResponse.getResult().getOutput().getText() : null;
+        String content = chatResponse.getResult() != null && chatResponse.getResult().getOutput() != null
+            ? chatResponse.getResult().getOutput().getText() : null;
 
         log.debug("OpenAiHandler: Generated response ({} chars)",
             content != null ? content.length() : 0);

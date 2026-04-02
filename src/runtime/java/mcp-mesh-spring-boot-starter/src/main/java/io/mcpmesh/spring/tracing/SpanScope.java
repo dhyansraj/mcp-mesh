@@ -32,6 +32,7 @@ public class SpanScope implements AutoCloseable {
     private final String functionName;
     private Map<String, Object> metadata;
     private final ExecutionTracer tracer;
+    private boolean metadataMutable = false;
 
     private Object result;
     private Throwable error;
@@ -130,11 +131,13 @@ public class SpanScope implements AutoCloseable {
      * The map is small (a few entries) so the copy cost is negligible.
      */
     private void ensureMutableMetadata() {
+        if (metadataMutable) return;
         if (this.metadata == null) {
             this.metadata = new LinkedHashMap<>();
         } else {
             this.metadata = new LinkedHashMap<>(this.metadata);
         }
+        metadataMutable = true;
     }
 
     /**

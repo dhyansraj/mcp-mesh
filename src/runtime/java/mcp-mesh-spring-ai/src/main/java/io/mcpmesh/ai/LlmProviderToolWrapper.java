@@ -196,11 +196,17 @@ public class LlmProviderToolWrapper implements McpToolHandler {
             long outputTokens = toLong(usage.get("output_tokens"));
             String model = (String) usage.get("model");
 
-            // Determine provider from the capability or model string
+            // Resolve provider: prefer explicit fields, then derive from model, then capability
             String modelFull = (String) resultMap.get("model");
-            String provider = capability;
-            if (modelFull != null && modelFull.contains("/")) {
+            String provider = "unknown";
+            String explicitProvider = (String) resultMap.get("provider");
+            if (explicitProvider == null) explicitProvider = (String) resultMap.get("llm_provider");
+            if (explicitProvider != null && !explicitProvider.isEmpty()) {
+                provider = explicitProvider;
+            } else if (modelFull != null && modelFull.contains("/")) {
                 provider = modelFull.substring(0, modelFull.indexOf('/'));
+            } else if (capability != null && !"llm".equals(capability)) {
+                provider = capability;
             }
 
             span.withLlmMeta(provider, model != null ? model : (modelFull != null ? modelFull : "unknown"),

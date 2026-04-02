@@ -2,6 +2,7 @@ package ui
 
 import (
 	"sort"
+	"strings"
 	"sync"
 
 	"mcp-mesh/src/core/registry/tracing"
@@ -65,6 +66,13 @@ func NewMetricsProcessor() *MetricsProcessor {
 func (mp *MetricsProcessor) ProcessTraceEvent(event *tracing.TraceEvent) error {
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
+
+	// Only process completed spans (those with duration) to avoid double-counting
+	// span_start/span_end pairs from the Go registry. Python/TypeScript runtimes
+	// send single combined events that always have duration_ms.
+	if event.DurationMS == nil {
+		return nil
+	}
 
 	// Per-agent metrics
 	if event.AgentName != "" {
@@ -140,11 +148,8 @@ func (mp *MetricsProcessor) GetModelMetrics() []ModelMetricsData {
 	result := make([]ModelMetricsData, 0, len(mp.modelMetrics))
 	for model, mm := range mp.modelMetrics {
 		provider := ""
-		for i, c := range model {
-			if c == '/' {
-				provider = model[:i]
-				break
-			}
+		if parts := strings.SplitN(model, "/", 2); len(parts) == 2 {
+			provider = parts[0]
 		}
 
 		result = append(result, ModelMetricsData{

@@ -605,30 +605,16 @@ class UnifiedMCPProxy:
 
                 async with client_instance as client:
 
-                    # Estimate request payload size for tracing
-                    try:
-                        request_bytes = len(json.dumps(args_with_trace).encode("utf-8"))
-                    except Exception:
-                        request_bytes = 0
+                    # Set request bytes before the call so error traces capture it.
+                    # FastMCP abstracts the transport layer so we can't measure
+                    # actual wire bytes here -- use 0 and let the HTTP fallback
+                    # path provide real measurements.
+                    from ..tracing.context import set_payload_sizes
+
+                    set_payload_sizes(request_bytes=0, response_bytes=0)
 
                     # Use FastMCP's call_tool which returns CallToolResult object
                     result = await client.call_tool(name, args_with_trace)
-
-                    # Estimate response payload size for tracing
-                    try:
-                        response_bytes = len(str(result).encode("utf-8"))
-                    except Exception:
-                        response_bytes = 0
-
-                    # Set payload sizes for ExecutionTracer to pick up
-                    from ..tracing.context import _payload_sizes
-
-                    _payload_sizes.set(
-                        {
-                            "request_bytes": request_bytes,
-                            "response_bytes": response_bytes,
-                        }
-                    )
 
                     # Calculate performance metrics
                     end_time = time.time()
@@ -922,13 +908,11 @@ class UnifiedMCPProxy:
             response_bytes = len(response_text.encode("utf-8"))
 
             # Set payload sizes for ExecutionTracer to pick up
-            from ..tracing.context import _payload_sizes
+            from ..tracing.context import set_payload_sizes
 
-            _payload_sizes.set(
-                {
-                    "request_bytes": request_bytes,
-                    "response_bytes": response_bytes,
-                }
+            set_payload_sizes(
+                request_bytes=request_bytes,
+                response_bytes=response_bytes,
             )
 
             if not response_text:

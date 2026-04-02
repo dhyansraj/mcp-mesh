@@ -145,30 +145,27 @@ func (p *TracePoller) poll() {
 		})
 	}
 
-	// Fetch per-agent and per-model stats from the UI metrics processor
+	// Fetch per-agent and per-model stats from the UI metrics processor.
+	// Always publish (even when empty) so the UI clears stale data.
 	if p.metricsProcessor != nil {
 		agentStats := p.metricsProcessor.GetAgentMetrics()
-		if len(agentStats) > 0 {
-			p.hub.Publish(DashboardEvent{
-				Type: "agent_stats",
-				Data: map[string]interface{}{
-					"agents": agentStats,
-					"count":  len(agentStats),
-				},
-				Timestamp: now,
-			})
-		}
+		p.hub.Publish(DashboardEvent{
+			Type: "agent_stats",
+			Data: map[string]interface{}{
+				"agents": agentStats,
+				"count":  len(agentStats),
+			},
+			Timestamp: now,
+		})
 
 		modelStats := p.metricsProcessor.GetModelMetrics()
-		if len(modelStats) > 0 {
-			p.hub.Publish(DashboardEvent{
-				Type: "model_stats",
-				Data: map[string]interface{}{
-					"models": modelStats,
-					"count":  len(modelStats),
-				},
-				Timestamp: now,
-			})
-		}
+		p.hub.Publish(DashboardEvent{
+			Type: "model_stats",
+			Data: map[string]interface{}{
+				"models": modelStats,
+				"count":  len(modelStats),
+			},
+			Timestamp: now,
+		})
 	}
 }
