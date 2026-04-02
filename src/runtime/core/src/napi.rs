@@ -720,8 +720,8 @@ pub fn parse_sse_response(response_text: String) -> napi::Result<String> {
 pub fn parse_sse_response_to_object(response_text: String) -> napi::Result<serde_json::Value> {
     let json_str = crate::mcp_client::parse_sse_response(&response_text)
         .map_err(|e| napi::Error::from_reason(e))?;
-    serde_json::from_str(&json_str)
-        .map_err(|e| napi::Error::from_reason(e.to_string()))
+    crate::json_fast::parse(&json_str)
+        .map_err(|e| napi::Error::from_reason(e))
 }
 
 /// Extract text content from MCP CallToolResult JSON.

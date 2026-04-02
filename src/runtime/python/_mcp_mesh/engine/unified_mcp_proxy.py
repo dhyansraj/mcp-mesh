@@ -601,8 +601,12 @@ class UnifiedMCPProxy:
                 result = await self._http_call(name, args_with_trace)
                 return result
             except Exception as e:
+                error_msg = str(e)
+                # Don't fallback on application-level errors — the remote tool responded
+                if "Tool call error" in error_msg or "JSON-RPC error" in error_msg:
+                    raise
                 self.logger.warning(
-                    f"HTTP direct call failed: {e}, falling back to FastMCP client"
+                    f"HTTP transport failed: {e}, falling back to FastMCP client"
                 )
                 try:
                     # FastMCP client path (FALLBACK)
@@ -790,10 +794,10 @@ class UnifiedMCPProxy:
             },
         }
         for field in ("mimeType", "description", "size"):
-            val = item.get(field) or nested.get(field)
+            val = item.get(field) if field in item else nested.get(field)
             if val is not None:
                 resource_data["resource"][field] = val
-        annotations = item.get("annotations") or nested.get("annotations")
+        annotations = item.get("annotations") if "annotations" in item else nested.get("annotations")
         if annotations is not None:
             resource_data["resource"]["annotations"] = annotations
         return resource_data

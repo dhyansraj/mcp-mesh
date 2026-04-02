@@ -18,7 +18,7 @@ pub fn parse(input: &str) -> Result<Value, String> {
         .map_err(|e| format!("JSON parse error: {}", e))
 }
 
-/// Check if a string is valid JSON without fully parsing it.
+/// Check if a string is valid JSON by attempting to parse it.
 #[cfg(feature = "simd")]
 pub fn is_valid(input: &str) -> bool {
     let mut bytes = input.as_bytes().to_vec();
