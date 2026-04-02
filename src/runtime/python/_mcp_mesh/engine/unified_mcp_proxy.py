@@ -28,7 +28,7 @@ def _create_ssl_context_for_endpoint(endpoint: str):
     """Create SSL context for HTTPS endpoints, or None for HTTP.
 
     Centralises mTLS / SPIRE configuration so that every transport
-    (FastMCP httpx factory, HTTP fallback, etc.) behaves identically.
+    (FastMCP httpx factory, HTTP direct call, etc.) behaves identically.
 
     Returns:
         ssl.SSLContext configured for mTLS, or *None* when the endpoint
@@ -74,19 +74,19 @@ _outbound_headers_var: contextvars.ContextVar[dict[str, str] | None] = (
 # FastMCP Client supports reentrant context managers (ref-counted sessions),
 # so concurrent `async with` blocks on the same pooled client share one session.
 _fastmcp_client_pool: dict[str, Any] = {}
-_fallback_httpx_pool: dict[str, Any] = {}
+_httpx_pool: dict[str, Any] = {}
 _pool_lock = asyncio.Lock()
 
 
-async def _get_fallback_httpx_client(base_endpoint: str) -> "httpx.AsyncClient":
-    """Get or create a pooled httpx client for the HTTP fallback path."""
+async def _get_httpx_client(base_endpoint: str) -> "httpx.AsyncClient":
+    """Get or create a pooled httpx client for the HTTP direct call path."""
     import httpx
 
     async with _pool_lock:
-        if base_endpoint not in _fallback_httpx_pool:
+        if base_endpoint not in _httpx_pool:
             ssl_ctx = _create_ssl_context_for_endpoint(base_endpoint)
             tls_kwargs = {"verify": ssl_ctx} if ssl_ctx is not None else {}
-            _fallback_httpx_pool[base_endpoint] = httpx.AsyncClient(
+            _httpx_pool[base_endpoint] = httpx.AsyncClient(
                 timeout=httpx.Timeout(300.0, read=300.0),
                 limits=httpx.Limits(
                     max_connections=100,
@@ -94,8 +94,8 @@ async def _get_fallback_httpx_client(base_endpoint: str) -> "httpx.AsyncClient":
                 ),
                 **tls_kwargs,
             )
-            logger.debug(f"Created pooled httpx fallback client for: {base_endpoint}")
-        return _fallback_httpx_pool[base_endpoint]
+            logger.debug(f"Created pooled httpx client for: {base_endpoint}")
+        return _httpx_pool[base_endpoint]
 
 
 async def close_connection_pools() -> None:
@@ -113,13 +113,13 @@ async def close_connection_pools() -> None:
                 logger.warning(f"Error closing FastMCP client for {endpoint}: {e}")
         _fastmcp_client_pool.clear()
 
-        for endpoint, client in list(_fallback_httpx_pool.items()):
+        for endpoint, client in list(_httpx_pool.items()):
             try:
                 await client.aclose()
                 logger.debug(f"Closed pooled httpx client for: {endpoint}")
             except Exception as e:
                 logger.warning(f"Error closing httpx client for {endpoint}: {e}")
-        _fallback_httpx_pool.clear()
+        _httpx_pool.clear()
 
 
 class UnifiedMCPProxy:
@@ -206,7 +206,7 @@ class UnifiedMCPProxy:
             parsed = urlparse(mcp_endpoint)
             hostname = parsed.hostname or parsed.netloc.split(":")[0]
 
-            # DNS resolution works perfectly with FastMCP - no need to force HTTP fallback
+            # DNS resolution works perfectly with FastMCP
             logger.debug(f"✅ Using FastMCP client for endpoint: {hostname}")
 
             # Use stream_timeout for read timeout (default 300s for LLM calls)
@@ -279,15 +279,13 @@ class UnifiedMCPProxy:
             return Client(transport)
 
         except ImportError as e:
-            # DNS names or FastMCP not available - this will trigger HTTP fallback
+            # DNS names or FastMCP not available
             logger.debug(f"🔄 FastMCP client unavailable: {e}")
-            raise  # Re-raise to trigger _fallback_http_call
+            raise  # Re-raise ImportError
         except Exception as e:
-            # Any other error - this will trigger HTTP fallback
+            # Any other error building client
             logger.debug(f"🔄 FastMCP client error: {e}")
-            raise ImportError(
-                f"FastMCP client failed: {e}"
-            )  # Convert to ImportError to trigger fallback
+            raise ImportError(f"FastMCP client failed: {e}")
 
     @classmethod
     async def _get_or_create_fastmcp_client(
@@ -490,7 +488,7 @@ class UnifiedMCPProxy:
                     proxy_metadata = {
                         "call_type": "unified_mcp_proxy",
                         "endpoint": self.endpoint,
-                        "proxy_type": "fastmcp_with_fallback",
+                        "proxy_type": "http_with_fastmcp_fallback",
                         "streaming_capable": self.streaming_capable,
                         "timeout": self.timeout,
                         "retry_count": self.retry_count,
@@ -537,7 +535,7 @@ class UnifiedMCPProxy:
         *,
         per_call_headers: dict[str, str] | None = None,
     ) -> Any:
-        """Call a tool using FastMCP client with HTTP transport.
+        """Call a tool using direct HTTP with FastMCP fallback.
 
         Returns CallToolResult object with structured content parsing.
         """
@@ -597,61 +595,34 @@ class UnifiedMCPProxy:
             _outbound_headers_var.set(merged_headers if merged_headers else None)
 
             try:
-                # Use correct FastMCP client endpoint - agents expose MCP on /mcp
-                mcp_endpoint = f"{self.endpoint}/mcp"
-                client_instance = await self._get_or_create_fastmcp_client(
-                    mcp_endpoint, self.endpoint, self.stream_timeout
-                )
-
-                async with client_instance as client:
-
-                    # Set request bytes before the call so error traces capture it.
-                    # FastMCP abstracts the transport layer so we can't measure
-                    # actual wire bytes here -- use 0 and let the HTTP fallback
-                    # path provide real measurements.
-                    from ..tracing.context import set_payload_sizes
-
-                    set_payload_sizes(request_bytes=0, response_bytes=0)
-
-                    # Use FastMCP's call_tool which returns CallToolResult object
-                    result = await client.call_tool(name, args_with_trace)
-
-                    # Calculate performance metrics
-                    end_time = time.time()
-                    duration_ms = round((end_time - start_time) * 1000, 2)
-
-                    # FastMCP client automatically handles:
-                    # - CallToolResult object creation
-                    # - Structured content parsing
-                    # - Error handling
-
-                    # Convert CallToolResult to native Python structures for client simplicity
-                    converted_result = self._convert_mcp_result_to_python(result)
-
-                    # Log success - summary line
-                    self.logger.info(
-                        f"{tp}✅ FastMCP tool call successful: {name} in {duration_ms}ms → {format_result_summary(converted_result)}"
-                    )
-                    # Log full result (will be TRACE later)
-                    self.logger.debug(
-                        f"{tp}🔄 Cross-agent call result: {format_log_value(converted_result)}"
-                    )
-                    return converted_result
-
-            except ImportError as e:
-                self.logger.warning(
-                    f"FastMCP Client not available: {e}, falling back to HTTP"
-                )
-                return await self._fallback_http_call(name, args_with_trace)
+                # HTTP direct path (PRIMARY) — pooled httpx client, no MCP session overhead
+                result = await self._http_call(name, args_with_trace)
+                return result
             except Exception as e:
-                self.logger.warning(f"FastMCP Client failed: {e}, falling back to HTTP")
-                # Try HTTP fallback
+                self.logger.warning(
+                    f"HTTP direct call failed: {e}, falling back to FastMCP client"
+                )
                 try:
-                    result = await self._fallback_http_call(name, args_with_trace)
-                    return result
+                    # FastMCP client path (FALLBACK)
+                    mcp_endpoint = f"{self.endpoint}/mcp"
+                    client_instance = await self._get_or_create_fastmcp_client(
+                        mcp_endpoint, self.endpoint, self.stream_timeout
+                    )
+                    async with client_instance as client:
+                        from ..tracing.context import set_payload_sizes
+
+                        set_payload_sizes(request_bytes=0, response_bytes=0)
+                        result = await client.call_tool(name, args_with_trace)
+                        converted_result = self._convert_mcp_result_to_python(result)
+                        end_time = time.time()
+                        duration_ms = round((end_time - start_time) * 1000, 2)
+                        self.logger.info(
+                            f"{tp}✅ FastMCP fallback successful: {name} in {duration_ms}ms → {format_result_summary(converted_result)}"
+                        )
+                        return converted_result
                 except Exception as fallback_error:
                     raise RuntimeError(
-                        f"Tool call to '{name}' failed: {e}, fallback also failed: {fallback_error}"
+                        f"Tool call to '{name}' failed: HTTP={e}, FastMCP={fallback_error}"
                     )
         finally:
             _outbound_headers_var.set(None)
@@ -799,10 +770,10 @@ class UnifiedMCPProxy:
             return {"data": str(structured_content)}
 
     def _normalize_http_result(self, result: Any) -> Any:
-        """Normalize HTTP fallback result to match FastMCP format.
+        """Normalize HTTP result to match FastMCP format.
 
         Extracts structured content from MCP envelope so callers get consistent
-        response format regardless of transport method (FastMCP vs HTTP fallback).
+        response format regardless of transport method (HTTP direct vs FastMCP).
         """
         if not isinstance(result, dict):
             return result
@@ -844,8 +815,8 @@ class UnifiedMCPProxy:
         # Result is already in clean format
         return result
 
-    async def _fallback_http_call(self, name: str, arguments: dict = None) -> Any:
-        """Enhanced fallback HTTP call using httpx directly with performance tracking."""
+    async def _http_call(self, name: str, arguments: dict = None) -> Any:
+        """Direct HTTP call using pooled httpx client with performance tracking."""
         import time
 
         start_time = time.time()
@@ -886,11 +857,11 @@ class UnifiedMCPProxy:
                 self.timeout, 300
             )  # At least 5 minutes for large files
 
-            self.logger.info(
-                f"🔄 HTTP fallback call to {url} with {request_bytes} byte payload, timeout: {enhanced_timeout}s"
+            self.logger.debug(
+                f"🔄 HTTP call to {url} with {request_bytes} byte payload, timeout: {enhanced_timeout}s"
             )
 
-            client = await _get_fallback_httpx_client(self.endpoint)
+            client = await _get_httpx_client(self.endpoint)
             response = await client.post(
                 url,
                 content=request_body,
@@ -946,18 +917,13 @@ class UnifiedMCPProxy:
             end_time = time.time()
             duration_ms = round((end_time - start_time) * 1000, 2)
 
-            # Log performance metrics
-            self.logger.info(
-                f"📊 HTTP fallback performance: {duration_ms}ms for tool '{name}'"
-            )
-
             # Normalize HTTP response to match FastMCP format
             normalized_result = self._normalize_http_result(result)
-            self.logger.info(f"✅ HTTP fallback successful in {duration_ms}ms")
+            self.logger.debug(f"✅ HTTP call: {name} in {duration_ms}ms")
             return normalized_result
 
         except ImportError:
-            raise RuntimeError("httpx not available for HTTP fallback")
+            raise RuntimeError("httpx not available for HTTP call")
         except httpx.TimeoutException as e:
             self.logger.error(f"⏰ HTTP request timeout after {enhanced_timeout}s: {e}")
             raise RuntimeError(f"HTTP request timeout: {e}")
@@ -969,8 +935,8 @@ class UnifiedMCPProxy:
                 f"HTTP error {e.response.status_code}: {e.response.text[:200]}"
             )
         except Exception as e:
-            self.logger.error(f"❌ HTTP fallback failed: {type(e).__name__}: {e}")
-            raise RuntimeError(f"HTTP fallback failed: {e}")
+            self.logger.error(f"❌ HTTP call failed: {type(e).__name__}: {e}")
+            raise RuntimeError(f"HTTP call failed: {e}")
 
     async def call_tool_streaming(
         self,
@@ -1010,7 +976,7 @@ class UnifiedMCPProxy:
             self.logger.warning(
                 f"FastMCP Client not available for streaming: {e}, falling back to HTTP"
             )
-            result = await self._fallback_http_call(name, arguments or {})
+            result = await self._http_call(name, arguments or {})
             yield result
         except Exception as e:
             self.logger.error(f"❌ Streaming call to '{name}' failed: {e}")
