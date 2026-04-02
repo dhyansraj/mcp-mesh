@@ -739,12 +739,10 @@ class UnifiedMCPProxy:
 
                 # Try to parse as JSON first (for structured responses)
                 try:
-                    import json
-
-                    parsed = json.loads(text_content)
+                    parsed = json_loads(text_content)
                     self.logger.debug(f"📊 Parsed JSON content: {type(parsed)}")
                     return parsed
-                except (json.JSONDecodeError, TypeError):
+                except (ValueError, TypeError):
                     # Return as plain text if not JSON
                     self.logger.debug("📝 Returning text content as-is")
                     return text_content

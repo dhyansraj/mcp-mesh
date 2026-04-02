@@ -21,8 +21,10 @@ repos:
         exclude: '^src/runtime/core/src/tls\.rs$'
       - id: mixed-line-ending
 
-  # Python formatters (black, isort, ruff, mypy, bandit) run in CI.
-  # Removed from pre-commit to avoid commit loops from conflicting auto-fixes.
+  # Python formatters (black, isort, ruff, mypy, bandit) removed from
+  # pre-commit to avoid commit loops from conflicting auto-fixes.
+  # TODO: Re-enable CI lint jobs (currently disabled with if: false) or
+  # add a single ruff hook once black/isort/ruff config is consolidated.
 
   - repo: https://github.com/hadolint/hadolint
     rev: v2.13.1-beta
