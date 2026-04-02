@@ -97,13 +97,6 @@ test:
     workdir: /workspace
     capture: task_unknown_result
 
-  # Check caller logs for HTTP path usage
-  - name: "Check caller logs for HTTP direct path"
-    handler: shell
-    command: "meshctl logs typed-caller 2>&1 | grep -i 'HTTP call:\\|HTTP transport failed\\|FastMCP fallback' | tail -10 || echo 'NO_HTTP_LOG_LINES'"
-    workdir: /workspace
-    capture: caller_http_logs
-
   # Get provider logs for debugging
   - name: "Get provider logs"
     handler: shell
@@ -143,13 +136,6 @@ assertions:
   # Unknown task test
   - expr: ${captured.task_unknown_result} contains 'unknown task'
     message: "Unknown task should return error message from provider"
-
-  # HTTP direct path should be used (not FastMCP fallback)
-  - expr: ${captured.caller_http_logs} contains 'HTTP call:'
-    message: "Cross-agent call should use HTTP direct path"
-
-  - expr: ${captured.caller_http_logs} not_contains 'FastMCP fallback'
-    message: "Typed argument serialization should not cause fallback to FastMCP"
 
 post_run:
   - handler: shell

@@ -78,7 +78,7 @@ test:
   # Check caller logs for HTTP path usage
   - name: "Check caller logs for HTTP direct path"
     handler: shell
-    command: "meshctl logs pydantic-caller 2>&1 | grep -i 'HTTP call:\\|HTTP transport failed\\|FastMCP fallback' | tail -10 || echo 'NO_HTTP_LOG_LINES'"
+    command: "meshctl logs pydantic-caller 2>&1 | grep -i 'HTTP call:\\|HTTP transport failed\\|FastMCP fallback' | tail -10; if [ ${PIPESTATUS[1]} -ne 0 ]; then echo 'NO_HTTP_LOG_LINES'; fi"
     workdir: /workspace
     capture: caller_http_logs
 
