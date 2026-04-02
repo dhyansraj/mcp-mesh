@@ -50,8 +50,8 @@ test:
     handler: shell
     workdir: /workspace
     command: |
-      meshctl start /workspace/java-typed-provider -d
-      echo "Java typed provider starting via meshctl"
+      meshctl start /workspace/java-typed-provider --env MCP_MESH_HTTP_PORT=9401 -d
+      echo "Java typed provider starting via meshctl on port 9401"
     capture: start_provider_output
 
   # Wait for provider to register
@@ -79,8 +79,8 @@ test:
     handler: shell
     workdir: /workspace
     command: |
-      meshctl start /workspace/java-typed-caller -d
-      echo "Java typed caller starting via meshctl"
+      meshctl start /workspace/java-typed-caller --env MCP_MESH_HTTP_PORT=9402 -d
+      echo "Java typed caller starting via meshctl on port 9402"
     capture: start_caller_output
 
   # Wait for caller to register
