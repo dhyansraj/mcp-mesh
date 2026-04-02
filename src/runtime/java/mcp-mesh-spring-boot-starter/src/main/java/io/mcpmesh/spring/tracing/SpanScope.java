@@ -111,7 +111,7 @@ public class SpanScope implements AutoCloseable {
      * @param outputTokens Number of output/completion tokens
      * @return this for chaining
      */
-    public SpanScope withLlmMeta(String provider, String model, int inputTokens, int outputTokens) {
+    public SpanScope withLlmMeta(String provider, String model, long inputTokens, long outputTokens) {
         if (this == NOOP) return this;
         ensureMutableMetadata();
         this.metadata.put("llm_input_tokens", inputTokens);
@@ -126,18 +126,14 @@ public class SpanScope implements AutoCloseable {
      * Ensure the metadata map is mutable.
      *
      * <p>The metadata map may be an unmodifiable map (e.g., from {@code Map.of()}).
-     * This method replaces it with a mutable {@link LinkedHashMap} if needed.
+     * This method replaces it with a mutable {@link LinkedHashMap} copy.
+     * The map is small (a few entries) so the copy cost is negligible.
      */
     private void ensureMutableMetadata() {
         if (this.metadata == null) {
             this.metadata = new LinkedHashMap<>();
         } else {
-            try {
-                this.metadata.put("_probe", null);
-                this.metadata.remove("_probe");
-            } catch (UnsupportedOperationException e) {
-                this.metadata = new LinkedHashMap<>(this.metadata);
-            }
+            this.metadata = new LinkedHashMap<>(this.metadata);
         }
     }
 

@@ -6,6 +6,7 @@ using FastMCP's superior client capabilities with async support.
 
 import asyncio
 import contextvars
+import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -605,12 +606,8 @@ class UnifiedMCPProxy:
                 async with client_instance as client:
 
                     # Estimate request payload size for tracing
-                    import json as _json
-
                     try:
-                        request_bytes = len(
-                            _json.dumps(args_with_trace).encode("utf-8")
-                        )
+                        request_bytes = len(json.dumps(args_with_trace).encode("utf-8"))
                     except Exception:
                         request_bytes = 0
 

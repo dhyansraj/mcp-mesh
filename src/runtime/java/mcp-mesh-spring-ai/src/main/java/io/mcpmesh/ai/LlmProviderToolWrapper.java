@@ -192,8 +192,8 @@ public class LlmProviderToolWrapper implements McpToolHandler {
                 return;
             }
 
-            int inputTokens = toInt(usage.get("input_tokens"));
-            int outputTokens = toInt(usage.get("output_tokens"));
+            long inputTokens = toLong(usage.get("input_tokens"));
+            long outputTokens = toLong(usage.get("output_tokens"));
             String model = (String) usage.get("model");
 
             // Determine provider from the capability or model string
@@ -213,11 +213,11 @@ public class LlmProviderToolWrapper implements McpToolHandler {
         }
     }
 
-    private static int toInt(Object value) {
+    private static long toLong(Object value) {
         if (value instanceof Number n) {
-            return n.intValue();
+            return n.longValue();
         }
-        return 0;
+        return 0L;
     }
 
     // =========================================================================

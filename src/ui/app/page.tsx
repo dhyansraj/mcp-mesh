@@ -118,7 +118,20 @@ export default function DashboardPage() {
                               </span>
                             );
                           }
-                          return null;
+                          return (
+                            <Badge
+                              variant={
+                                agent.status === "healthy"
+                                  ? "default"
+                                  : agent.status === "unhealthy"
+                                    ? "destructive"
+                                    : "secondary"
+                              }
+                              className="text-xs"
+                            >
+                              {agent.status}
+                            </Badge>
+                          );
                         })()}
                       </div>
                     </div>

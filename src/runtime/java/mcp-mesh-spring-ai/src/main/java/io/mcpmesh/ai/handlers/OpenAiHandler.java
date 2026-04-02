@@ -382,31 +382,6 @@ public class OpenAiHandler implements LlmProviderHandler {
         return new LlmResponse(content, toolCalls, extractUsage(response));
     }
 
-    /**
-     * Extract token usage metadata from a ChatResponse.
-     */
-    private UsageMeta extractUsage(ChatResponse response) {
-        if (response == null || response.getMetadata() == null) {
-            return null;
-        }
-        try {
-            var usage = response.getMetadata().getUsage();
-            if (usage == null) {
-                return null;
-            }
-            long input = usage.getPromptTokens();
-            long output = usage.getCompletionTokens();
-            if (input == 0 && output == 0) {
-                return null;
-            }
-            String model = response.getMetadata().getModel();
-            return new UsageMeta((int) input, (int) output, model);
-        } catch (Exception e) {
-            log.debug("Failed to extract usage metadata: {}", e.getMessage());
-            return null;
-        }
-    }
-
     @Override
     public Map<String, Boolean> getCapabilities() {
         return Map.of(

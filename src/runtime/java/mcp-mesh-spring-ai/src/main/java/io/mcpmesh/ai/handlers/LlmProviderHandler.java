@@ -2,6 +2,7 @@ package io.mcpmesh.ai.handlers;
 
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 
@@ -280,6 +281,37 @@ public interface LlmProviderHandler {
         }
 
         return builder.build();
+    }
+
+    // =========================================================================
+    // Usage Extraction
+    // =========================================================================
+
+    /**
+     * Extract token usage metadata from a ChatResponse.
+     *
+     * <p>Default implementation shared across all handlers.
+     */
+    default UsageMeta extractUsage(ChatResponse response) {
+        if (response == null || response.getMetadata() == null) {
+            return null;
+        }
+        try {
+            var usage = response.getMetadata().getUsage();
+            if (usage == null) {
+                return null;
+            }
+            long input = usage.getPromptTokens();
+            long output = usage.getCompletionTokens();
+            if (input == 0 && output == 0) {
+                return null;
+            }
+            String model = response.getMetadata().getModel();
+            return new UsageMeta(input, output, model);
+        } catch (Exception e) {
+            LoggerFactory.getLogger(getClass()).debug("Failed to extract usage metadata: {}", e.getMessage());
+            return null;
+        }
     }
 
     // =========================================================================
@@ -581,11 +613,11 @@ public interface LlmProviderHandler {
      * @param model        Model identifier (may be null if unavailable)
      */
     record UsageMeta(
-        int inputTokens,
-        int outputTokens,
+        long inputTokens,
+        long outputTokens,
         String model
     ) {
-        public int totalTokens() {
+        public long totalTokens() {
             return inputTokens + outputTokens;
         }
     }

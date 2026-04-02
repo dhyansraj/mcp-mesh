@@ -519,31 +519,6 @@ public class AnthropicHandler implements LlmProviderHandler {
     }
 
     /**
-     * Extract token usage metadata from a ChatResponse.
-     */
-    private UsageMeta extractUsage(ChatResponse response) {
-        if (response == null || response.getMetadata() == null) {
-            return null;
-        }
-        try {
-            var usage = response.getMetadata().getUsage();
-            if (usage == null) {
-                return null;
-            }
-            long input = usage.getPromptTokens();
-            long output = usage.getCompletionTokens();
-            if (input == 0 && output == 0) {
-                return null;
-            }
-            String model = response.getMetadata().getModel();
-            return new UsageMeta((int) input, (int) output, model);
-        } catch (Exception e) {
-            log.debug("Failed to extract usage metadata: {}", e.getMessage());
-            return null;
-        }
-    }
-
-    /**
      * Build a fallback system prompt that replaces STRICT-mode native enforcement
      * with detailed HINT-mode JSON schema instructions. Used when the API rejects
      * the native output_format and we need to retry with prompt-based enforcement.
