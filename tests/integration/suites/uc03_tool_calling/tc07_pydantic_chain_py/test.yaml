@@ -121,7 +121,7 @@ assertions:
   - expr: ${captured.caller_http_logs} contains 'HTTP call:'
     message: "Cross-agent call should use HTTP direct path"
 
-  - expr: ${captured.caller_http_logs} not_contains 'FastMCP fallback'
+  - expr: ${captured.caller_http_logs} not contains 'FastMCP fallback'
     message: "Pydantic serialization should not cause fallback to FastMCP"
 
 post_run:
