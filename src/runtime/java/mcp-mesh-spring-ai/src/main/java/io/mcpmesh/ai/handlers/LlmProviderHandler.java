@@ -558,10 +558,35 @@ public interface LlmProviderHandler {
      */
     record LlmResponse(
         String content,
-        List<ToolCall> toolCalls
+        List<ToolCall> toolCalls,
+        UsageMeta usage
     ) {
+        /**
+         * Convenience constructor without usage metadata.
+         */
+        LlmResponse(String content, List<ToolCall> toolCalls) {
+            this(content, toolCalls, null);
+        }
+
         public boolean hasToolCalls() {
             return toolCalls != null && !toolCalls.isEmpty();
+        }
+    }
+
+    /**
+     * Token usage metadata from an LLM call.
+     *
+     * @param inputTokens  Number of input/prompt tokens
+     * @param outputTokens Number of output/completion tokens
+     * @param model        Model identifier (may be null if unavailable)
+     */
+    record UsageMeta(
+        int inputTokens,
+        int outputTokens,
+        String model
+    ) {
+        public int totalTokens() {
+            return inputTokens + outputTokens;
         }
     }
 

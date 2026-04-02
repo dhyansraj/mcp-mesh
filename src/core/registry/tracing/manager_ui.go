@@ -10,7 +10,9 @@ import (
 // trace data in-memory without exporting to any backend. Used by the UI
 // server which needs trace data for dashboard display but doesn't handle
 // the Tempo export pipeline (the registry does that).
-func NewAccumulatorOnlyManager(config *TracingConfig) (*TracingManager, error) {
+// Extra processors (e.g. UI metrics aggregation) are wrapped alongside the
+// accumulator via a MultiProcessor so they receive every span event.
+func NewAccumulatorOnlyManager(config *TracingConfig, extraProcessors ...TraceEventProcessor) (*TracingManager, error) {
 	if config == nil {
 		config = DefaultTracingConfig()
 	}
@@ -27,10 +29,19 @@ func NewAccumulatorOnlyManager(config *TracingConfig) (*TracingManager, error) {
 		return manager, nil
 	}
 
-	// Create accumulator as the sole processor (no OTLP exporter)
+	// Create accumulator as the primary processor (no OTLP exporter)
 	accumulator := NewTraceAccumulator(200, manager.logger)
 	manager.accumulator = accumulator
-	manager.processor = accumulator // accumulator implements TraceEventProcessor
+
+	// Wrap with extra processors if provided (e.g. UI MetricsProcessor)
+	var processor TraceEventProcessor = accumulator
+	if len(extraProcessors) > 0 {
+		allProcessors := make([]TraceEventProcessor, 0, 1+len(extraProcessors))
+		allProcessors = append(allProcessors, accumulator)
+		allProcessors = append(allProcessors, extraProcessors...)
+		processor = NewMultiProcessor(manager.logger, allProcessors...)
+	}
+	manager.processor = processor
 
 	// Create consumer with UI-specific consumer group
 	consumerConfig := &StreamConsumerConfig{

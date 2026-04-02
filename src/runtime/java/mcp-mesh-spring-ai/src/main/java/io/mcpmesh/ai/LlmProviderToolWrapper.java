@@ -96,6 +96,10 @@ public class LlmProviderToolWrapper implements McpToolHandler {
         try (SpanScope span = tracer != null ? tracer.startSpan(traceName, spanMetadata) : SpanScope.NOOP) {
             Object result = processor.handleGenerateRequest(capability, cleanArgs);
             span.withResult(result);
+
+            // Extract LLM usage metadata and enrich span
+            enrichSpanWithLlmMeta(span, result);
+
             return result;
         } catch (Exception e) {
             log.error("LLM provider call failed: {}", e.getMessage(), e);
@@ -171,6 +175,49 @@ public class LlmProviderToolWrapper implements McpToolHandler {
         }
 
         return cleanArgs;
+    }
+
+    /**
+     * Extract LLM usage metadata from the response and enrich the span.
+     */
+    @SuppressWarnings("unchecked")
+    private void enrichSpanWithLlmMeta(SpanScope span, Object result) {
+        if (span.isNoop() || !(result instanceof Map)) {
+            return;
+        }
+        try {
+            Map<String, Object> resultMap = (Map<String, Object>) result;
+            Map<String, Object> usage = (Map<String, Object>) resultMap.get("_usage");
+            if (usage == null) {
+                return;
+            }
+
+            int inputTokens = toInt(usage.get("input_tokens"));
+            int outputTokens = toInt(usage.get("output_tokens"));
+            String model = (String) usage.get("model");
+
+            // Determine provider from the capability or model string
+            String modelFull = (String) resultMap.get("model");
+            String provider = capability;
+            if (modelFull != null && modelFull.contains("/")) {
+                provider = modelFull.substring(0, modelFull.indexOf('/'));
+            }
+
+            span.withLlmMeta(provider, model != null ? model : (modelFull != null ? modelFull : "unknown"),
+                inputTokens, outputTokens);
+
+            // Remove _usage from response so it doesn't leak into MCP response
+            resultMap.remove("_usage");
+        } catch (Exception e) {
+            log.debug("Failed to extract LLM usage for span: {}", e.getMessage());
+        }
+    }
+
+    private static int toInt(Object value) {
+        if (value instanceof Number n) {
+            return n.intValue();
+        }
+        return 0;
     }
 
     // =========================================================================

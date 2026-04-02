@@ -27,6 +27,12 @@ def matches_propagate_header(name: str) -> bool:
     return mcp_mesh_core.matches_propagate_header_py(name, PROPAGATE_HEADERS_CSV)
 
 
+# Payload sizes from proxy calls (set in call_tool, read in ExecutionTracer.end_execution)
+_payload_sizes: contextvars.ContextVar[dict[str, int] | None] = contextvars.ContextVar(
+    "_payload_sizes", default=None
+)
+
+
 class TraceInfo:
     """Container for trace context information"""
 

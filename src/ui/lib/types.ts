@@ -111,7 +111,9 @@ export interface DashboardEvent {
     | "connected"
     | "snapshot"
     | "trace_activity"
-    | "edge_stats";
+    | "edge_stats"
+    | "agent_stats"
+    | "model_stats";
   agent_id?: string;
   agent_name?: string;
   runtime?: string;
@@ -168,6 +170,24 @@ export interface EdgeStat {
   p99_latency_ms: number;
   max_latency_ms: number;
   min_latency_ms: number;
+}
+
+export interface AgentStat {
+  agent_name: string;
+  span_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_request_bytes: number;
+  total_response_bytes: number;
+}
+
+export interface ModelStat {
+  model: string;
+  provider: string;
+  call_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
 }
 
 export interface EdgeStatsResponse {

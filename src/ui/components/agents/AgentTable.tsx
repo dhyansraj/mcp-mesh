@@ -15,6 +15,7 @@ import {
   formatRelativeTime,
   getStatusBgColor,
   getRuntimeLabel,
+  getRuntimeBadgeColor,
   getAgentTypeLabel,
   extractAgentName,
 } from "@/lib/api";
@@ -29,19 +30,6 @@ interface AgentTableProps {
 
 type SortKey = "name" | "type" | "runtime" | "deps" | "last_seen";
 type SortDir = "asc" | "desc";
-
-function getRuntimeBadgeColor(runtime?: string): string {
-  switch (runtime) {
-    case "python":
-      return "bg-blue-600/20 text-blue-400 border-blue-500/30";
-    case "typescript":
-      return "bg-cyan-600/20 text-cyan-400 border-cyan-500/30";
-    case "java":
-      return "bg-orange-600/20 text-orange-400 border-orange-500/30";
-    default:
-      return "";
-  }
-}
 
 function getDepsColor(resolved: number, total: number): string {
   if (total === 0) return "text-muted-foreground";

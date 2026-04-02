@@ -55,6 +55,8 @@ export function useMeshEvents(options: UseMeshEventsOptions = {}): UseMeshEvents
       "dependency_lost",
       "trace_activity",
       "edge_stats",
+      "agent_stats",
+      "model_stats",
     ];
 
     const handleEvent = (e: MessageEvent) => {
@@ -62,6 +64,13 @@ export function useMeshEvents(options: UseMeshEventsOptions = {}): UseMeshEvents
         const data = JSON.parse(e.data) as DashboardEvent;
         // Override type from the SSE event type field
         const event: DashboardEvent = { ...data, type: e.type as DashboardEvent["type"] };
+
+        // Notify context handler first (handles state updates for all event types)
+        onEventRef.current?.(event);
+
+        // Only add agent lifecycle events to the event feed (not metrics/trace updates)
+        const metricsEvents = ["trace_activity", "edge_stats", "agent_stats", "model_stats"];
+        if (metricsEvents.includes(event.type)) return;
 
         const key = `${event.type}:${event.agent_id ?? ""}:${event.timestamp}`;
         if (seenKeys.current.has(key)) return;
@@ -71,8 +80,6 @@ export function useMeshEvents(options: UseMeshEventsOptions = {}): UseMeshEvents
           const next = [event, ...prev];
           return next.slice(0, maxEvents);
         });
-
-        onEventRef.current?.(event);
       } catch (err) {
         console.error("Failed to parse SSE event:", err);
       }

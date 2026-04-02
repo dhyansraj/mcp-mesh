@@ -236,12 +236,13 @@ public class GeminiHandler implements LlmProviderHandler {
         // Structured output is handled via prompt-based hints in formatSystemPrompt()
 
         // Execute the request
-        String content = requestSpec.call().content();
+        ChatResponse chatResponse = requestSpec.call().chatResponse();
+        String content = chatResponse.getResult() != null ? chatResponse.getResult().getOutput().getText() : null;
 
         log.debug("GeminiHandler: Generated response ({} chars)",
             content != null ? content.length() : 0);
 
-        return new LlmResponse(content, List.of());
+        return new LlmResponse(content, List.of(), extractUsage(chatResponse));
     }
 
     /**
@@ -326,7 +327,32 @@ public class GeminiHandler implements LlmProviderHandler {
             content != null ? content.length() : 0,
             toolCalls.size());
 
-        return new LlmResponse(content, toolCalls);
+        return new LlmResponse(content, toolCalls, extractUsage(response));
+    }
+
+    /**
+     * Extract token usage metadata from a ChatResponse.
+     */
+    private UsageMeta extractUsage(ChatResponse response) {
+        if (response == null || response.getMetadata() == null) {
+            return null;
+        }
+        try {
+            var usage = response.getMetadata().getUsage();
+            if (usage == null) {
+                return null;
+            }
+            long input = usage.getPromptTokens();
+            long output = usage.getCompletionTokens();
+            if (input == 0 && output == 0) {
+                return null;
+            }
+            String model = response.getMetadata().getModel();
+            return new UsageMeta((int) input, (int) output, model);
+        } catch (Exception e) {
+            log.debug("Failed to extract usage metadata: {}", e.getMessage());
+            return null;
+        }
     }
 
     /**

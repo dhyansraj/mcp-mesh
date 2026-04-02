@@ -24,14 +24,15 @@ type Server struct {
 	entService     *registry.EntService
 	eventHub       *EventHub
 	eventPoller    *EventPoller
-	tracingManager *tracing.TracingManager
-	tracePoller    *TracePoller
+	tracingManager   *tracing.TracingManager
+	metricsProcessor *MetricsProcessor
+	tracePoller      *TracePoller
 }
 
 // NewServer creates a new UI server that serves the embedded SPA and proxies
 // API requests to the registry at config.RegistryURL. If tracingManager is
 // non-nil, trace endpoints are handled locally instead of being proxied.
-func NewServer(config *UIConfig, entService *registry.EntService, tracingManager *tracing.TracingManager, embeddedFS embed.FS, logLevel string) *Server {
+func NewServer(config *UIConfig, entService *registry.EntService, tracingManager *tracing.TracingManager, metricsProcessor *MetricsProcessor, embeddedFS embed.FS, logLevel string) *Server {
 	// Set Gin mode based on log level
 	upperLevel := strings.ToUpper(logLevel)
 	if upperLevel == "DEBUG" || upperLevel == "TRACE" {
@@ -53,16 +54,17 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
-		startTime:      time.Now().UTC(),
-		entService:     entService,
-		eventHub:       eventHub,
-		eventPoller:    eventPoller,
-		tracingManager: tracingManager,
+		startTime:        time.Now().UTC(),
+		entService:       entService,
+		eventHub:         eventHub,
+		eventPoller:      eventPoller,
+		tracingManager:   tracingManager,
+		metricsProcessor: metricsProcessor,
 	}
 
 	// If tracing is enabled, create a trace poller for dashboard events
 	if tracingManager != nil {
-		s.tracePoller = NewTracePoller(tracingManager, eventHub, 3*time.Second)
+		s.tracePoller = NewTracePoller(tracingManager, metricsProcessor, eventHub, 3*time.Second)
 	}
 
 	// --- API routes (proxied to registry) ---
@@ -75,6 +77,8 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 		api.GET("/events", s.StreamDashboardEvents)
 		api.GET("/trace/recent", s.handleRecentTraces)
 		api.GET("/trace/edge-stats", s.handleEdgeStats)
+		api.GET("/trace/agent-stats", s.handleAgentStats)
+		api.GET("/trace/model-stats", s.handleModelStats)
 		api.GET("/trace/list", s.handleTraceList)
 		api.GET("/trace/search", s.handleTraceSearch)
 		api.GET("/trace/:trace_id", s.handleTraceGet)
@@ -103,6 +107,7 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 
 		// Resolve the file path from the URL
 		filePath := strings.TrimPrefix(path, "/")
+		filePath = strings.TrimRight(filePath, "/") // Normalize trailing slashes
 		if filePath == "" {
 			filePath = "index.html"
 		}
@@ -119,11 +124,21 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 					return
 				}
 				// Directory — check for index.html inside it (Next.js trailingSlash pages)
-				indexPath := strings.TrimRight(filePath, "/") + "/index.html"
+				indexPath := filePath + "/index.html"
 				if data, readErr := fs.ReadFile(subFS, indexPath); readErr == nil {
 					c.Data(http.StatusOK, "text/html; charset=utf-8", data)
 					return
 				}
+			}
+		}
+
+		// Try page-specific index.html before SPA fallback
+		// Handles paths like /traffic, /agents that have their own pre-rendered pages
+		if filePath != "index.html" {
+			indexPath := filePath + "/index.html"
+			if data, readErr := fs.ReadFile(subFS, indexPath); readErr == nil {
+				c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+				return
 			}
 		}
 

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Agent, DashboardEvent, EdgeStat } from "./types";
+import { Agent, AgentStat, DashboardEvent, EdgeStat, ModelStat } from "./types";
 import { getAgents, getEventHistory, mapRegistryEventToDashboardEvent } from "./api";
 import { useMeshEvents } from "./sse";
 
@@ -18,6 +18,8 @@ export interface MeshContextValue {
   refresh: () => Promise<void>;
   traceActivity: Record<string, number>;
   edgeStats: EdgeStat[];
+  agentStats: AgentStat[];
+  modelStats: ModelStat[];
 }
 
 const MeshContext = createContext<MeshContextValue | null>(null);
@@ -31,6 +33,8 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
   const [paused, setPaused] = useState(false);
   const [traceActivity, setTraceActivity] = useState<Record<string, number>>({});
   const [edgeStats, setEdgeStats] = useState<EdgeStat[]>([]);
+  const [agentStats, setAgentStats] = useState<AgentStat[]>([]);
+  const [modelStats, setModelStats] = useState<ModelStat[]>([]);
 
   const fetchAgents = useCallback(async () => {
     try {
@@ -61,6 +65,16 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
       if (event.type === "edge_stats") {
         const edges = event.data?.edges as EdgeStat[] | undefined;
         if (edges) setEdgeStats(edges);
+        return;
+      }
+      if (event.type === "agent_stats") {
+        const agents = event.data?.agents as AgentStat[] | undefined;
+        if (agents) setAgentStats(agents);
+        return;
+      }
+      if (event.type === "model_stats") {
+        const models = event.data?.models as ModelStat[] | undefined;
+        if (models) setModelStats(models);
         return;
       }
 
@@ -144,6 +158,8 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         refresh: fetchAgents,
         traceActivity,
         edgeStats,
+        agentStats,
+        modelStats,
       }}
     >
       {children}

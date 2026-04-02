@@ -604,8 +604,34 @@ class UnifiedMCPProxy:
 
                 async with client_instance as client:
 
+                    # Estimate request payload size for tracing
+                    import json as _json
+
+                    try:
+                        request_bytes = len(
+                            _json.dumps(args_with_trace).encode("utf-8")
+                        )
+                    except Exception:
+                        request_bytes = 0
+
                     # Use FastMCP's call_tool which returns CallToolResult object
                     result = await client.call_tool(name, args_with_trace)
+
+                    # Estimate response payload size for tracing
+                    try:
+                        response_bytes = len(str(result).encode("utf-8"))
+                    except Exception:
+                        response_bytes = 0
+
+                    # Set payload sizes for ExecutionTracer to pick up
+                    from ..tracing.context import _payload_sizes
+
+                    _payload_sizes.set(
+                        {
+                            "request_bytes": request_bytes,
+                            "response_bytes": response_bytes,
+                        }
+                    )
 
                     # Calculate performance metrics
                     end_time = time.time()
@@ -853,6 +879,10 @@ class UnifiedMCPProxy:
                 "params": {"name": name, "arguments": arguments or {}},
             }
 
+            # Serialize payload to measure exact request byte size
+            request_body = json.dumps(payload)
+            request_bytes = len(request_body.encode("utf-8"))
+
             url = f"{self.endpoint}/mcp"
             headers = {
                 "Content-Type": "application/json",
@@ -874,13 +904,13 @@ class UnifiedMCPProxy:
             )  # At least 5 minutes for large files
 
             self.logger.info(
-                f"🔄 HTTP fallback call to {url} with {len(str(payload))} byte payload, timeout: {enhanced_timeout}s"
+                f"🔄 HTTP fallback call to {url} with {request_bytes} byte payload, timeout: {enhanced_timeout}s"
             )
 
             client = await _get_fallback_httpx_client(self.endpoint)
             response = await client.post(
                 url,
-                json=payload,
+                content=request_body,
                 headers=headers,
                 timeout=httpx.Timeout(enhanced_timeout, read=enhanced_timeout),
             )
@@ -892,6 +922,17 @@ class UnifiedMCPProxy:
             response.raise_for_status()
 
             response_text = response.text.strip()
+            response_bytes = len(response_text.encode("utf-8"))
+
+            # Set payload sizes for ExecutionTracer to pick up
+            from ..tracing.context import _payload_sizes
+
+            _payload_sizes.set(
+                {
+                    "request_bytes": request_bytes,
+                    "response_bytes": response_bytes,
+                }
+            )
 
             if not response_text:
                 self.logger.error("❌ Empty response from server")

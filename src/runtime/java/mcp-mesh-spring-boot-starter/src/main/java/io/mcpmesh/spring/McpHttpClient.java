@@ -48,6 +48,32 @@ public class McpHttpClient {
     private static final Logger log = LoggerFactory.getLogger(McpHttpClient.class);
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
+    /**
+     * Payload size metrics from the last call on this thread.
+     *
+     * @param requestBytes  Size of the outgoing HTTP request body in bytes
+     * @param responseBytes Size of the incoming HTTP response body in bytes
+     */
+    public record CallMetrics(int requestBytes, int responseBytes) {}
+
+    private static final ThreadLocal<CallMetrics> LAST_CALL_METRICS = new ThreadLocal<>();
+
+    /**
+     * Get the payload size metrics from the last {@code callTool} invocation on this thread.
+     *
+     * @return CallMetrics, or null if no call has been made on this thread
+     */
+    public static CallMetrics getLastCallMetrics() {
+        return LAST_CALL_METRICS.get();
+    }
+
+    /**
+     * Clear stored call metrics for this thread.
+     */
+    public static void clearLastCallMetrics() {
+        LAST_CALL_METRICS.remove();
+    }
+
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
 
@@ -173,6 +199,7 @@ public class McpHttpClient {
             );
 
             String requestBody = objectMapper.writeValueAsString(request);
+            int requestBytes = requestBody.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
             log.debug("Calling tool {} at {}: {}", functionName, url, requestBody);
 
             // Build request with trace headers for Python/Java agents
@@ -212,6 +239,8 @@ public class McpHttpClient {
                 }
 
                 String responseBody = body.string();
+                int responseBytes = responseBody.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+                LAST_CALL_METRICS.set(new CallMetrics(requestBytes, responseBytes));
                 log.debug("Tool response: {}", responseBody);
 
                 // Handle SSE (Server-Sent Events) format from MCP servers
