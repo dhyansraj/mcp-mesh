@@ -5,6 +5,7 @@
 # Run after tc01-tc05 have built all artifacts
 
 name: "Build tsuite-mesh:local Image"
+depends_on: [tc05_verify_artifacts]
 description: "Build Docker image with locally compiled MCP Mesh packages"
 tags:
   - docker

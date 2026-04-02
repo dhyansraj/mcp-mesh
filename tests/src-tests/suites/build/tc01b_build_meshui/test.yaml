@@ -5,6 +5,7 @@
 # Build commands execute inside src-build:latest via docker run
 
 name: "Build meshui"
+depends_on: [tc00_build_environment]
 description: "Build mcp-mesh-ui Go binary with embedded SPA using docker run"
 tags:
   - build

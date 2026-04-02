@@ -5,6 +5,7 @@
 # Build commands execute inside src-build:latest via docker run
 
 name: "Build Java SDK"
+depends_on: [tc00_build_environment]
 description: "Build MCP Mesh Java SDK JARs and native FFI library from source using docker run"
 tags:
   - build

@@ -5,6 +5,7 @@
 # All artifacts should exist in ${run_path}/${config.output.base}
 
 name: "Verify Build Artifacts"
+depends_on: [tc01_build_meshctl, tc01a_build_registry, tc01b_build_meshui, tc02_build_rust_core, tc02a_build_rust_core_nodejs, tc03_build_python_sdk, tc04_build_typescript_sdk, tc04a_build_java_sdk]
 description: "Verify all build artifacts are present and valid"
 tags:
   - build

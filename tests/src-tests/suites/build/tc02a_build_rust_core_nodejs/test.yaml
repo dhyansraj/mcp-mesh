@@ -5,6 +5,7 @@
 # Build commands execute inside src-build:latest via docker run
 
 name: "Build Rust Core (Node.js)"
+depends_on: [tc02_build_rust_core]
 description: "Build @mcpmesh/core npm tarball with native bindings using napi-rs"
 tags:
   - build
