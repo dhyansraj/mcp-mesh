@@ -216,7 +216,8 @@ public class AnthropicHandler implements LlmProviderHandler {
         Prompt prompt = new Prompt(springMessages);
         ChatResponse response = model.call(prompt);
 
-        String content = response.getResult().getOutput().getText();
+        String content = response.getResult() != null && response.getResult().getOutput() != null
+            ? response.getResult().getOutput().getText() : null;
         log.debug("AnthropicHandler: Generated response ({} chars)",
             content != null ? content.length() : 0);
 
@@ -345,9 +346,9 @@ public class AnthropicHandler implements LlmProviderHandler {
 
         // Execute the request — if outputFormat was applied and the API rejects it,
         // retry with HINT-mode instructions instead of native output_format
-        String content;
+        ChatResponse chatResponse;
         try {
-            content = requestSpec.call().content();
+            chatResponse = requestSpec.call().chatResponse();
         } catch (Exception e) {
             if (outputSchema != null) {
                 log.warn("ChatClient call failed with output_format ({}), retrying with HINT mode: {}",
@@ -365,16 +366,18 @@ public class AnthropicHandler implements LlmProviderHandler {
                     retrySpec.toolCallbacks(toolCallbacks.toArray(new ToolCallback[0]));
                 }
                 // No output_format applied — rely on HINT instructions
-                content = retrySpec.call().content();
+                chatResponse = retrySpec.call().chatResponse();
             } else {
                 throw e;
             }
         }
 
+        String content = chatResponse.getResult() != null && chatResponse.getResult().getOutput() != null
+            ? chatResponse.getResult().getOutput().getText() : null;
         log.debug("AnthropicHandler: Generated response ({} chars)",
             content != null ? content.length() : 0);
 
-        return new LlmResponse(content, List.of());
+        return new LlmResponse(content, List.of(), extractUsage(chatResponse));
     }
 
     /**
@@ -514,7 +517,7 @@ public class AnthropicHandler implements LlmProviderHandler {
             content != null ? content.length() : 0,
             toolCalls.size());
 
-        return new LlmResponse(content, toolCalls);
+        return new LlmResponse(content, toolCalls, extractUsage(response));
     }
 
     /**

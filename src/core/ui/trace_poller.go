@@ -12,21 +12,23 @@ import (
 // TracePoller polls the TracingManager for recent trace data and publishes
 // summary events via the UI EventHub.
 type TracePoller struct {
-	tracingManager *tracing.TracingManager
-	hub            *EventHub
-	interval       time.Duration
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
-	mu             sync.RWMutex
-	running        bool
+	tracingManager   *tracing.TracingManager
+	metricsProcessor *MetricsProcessor
+	hub              *EventHub
+	interval         time.Duration
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
+	mu               sync.RWMutex
+	running          bool
 }
 
 // NewTracePoller creates a new poller that fetches trace data and publishes events
-func NewTracePoller(tracingManager *tracing.TracingManager, hub *EventHub, interval time.Duration) *TracePoller {
+func NewTracePoller(tracingManager *tracing.TracingManager, metricsProcessor *MetricsProcessor, hub *EventHub, interval time.Duration) *TracePoller {
 	return &TracePoller{
-		tracingManager: tracingManager,
-		hub:            hub,
-		interval:       interval,
+		tracingManager:   tracingManager,
+		metricsProcessor: metricsProcessor,
+		hub:              hub,
+		interval:         interval,
 	}
 }
 
@@ -138,6 +140,30 @@ func (p *TracePoller) poll() {
 			Data: map[string]interface{}{
 				"edges":      edges,
 				"edge_count": len(edges),
+			},
+			Timestamp: now,
+		})
+	}
+
+	// Fetch per-agent and per-model stats from the UI metrics processor.
+	// Always publish (even when empty) so the UI clears stale data.
+	if p.metricsProcessor != nil {
+		agentStats := p.metricsProcessor.GetAgentMetrics()
+		p.hub.Publish(DashboardEvent{
+			Type: "agent_stats",
+			Data: map[string]interface{}{
+				"agents": agentStats,
+				"count":  len(agentStats),
+			},
+			Timestamp: now,
+		})
+
+		modelStats := p.metricsProcessor.GetModelMetrics()
+		p.hub.Publish(DashboardEvent{
+			Type: "model_stats",
+			Data: map[string]interface{}{
+				"models": modelStats,
+				"count":  len(modelStats),
 			},
 			Timestamp: now,
 		})

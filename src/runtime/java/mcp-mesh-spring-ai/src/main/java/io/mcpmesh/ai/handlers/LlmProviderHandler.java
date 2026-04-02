@@ -2,6 +2,7 @@ package io.mcpmesh.ai.handlers;
 
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 
@@ -283,6 +284,37 @@ public interface LlmProviderHandler {
     }
 
     // =========================================================================
+    // Usage Extraction
+    // =========================================================================
+
+    /**
+     * Extract token usage metadata from a ChatResponse.
+     *
+     * <p>Default implementation shared across all handlers.
+     */
+    default UsageMeta extractUsage(ChatResponse response) {
+        if (response == null || response.getMetadata() == null) {
+            return null;
+        }
+        try {
+            var usage = response.getMetadata().getUsage();
+            if (usage == null) {
+                return null;
+            }
+            long input = usage.getPromptTokens();
+            long output = usage.getCompletionTokens();
+            if (input == 0 && output == 0) {
+                return null;
+            }
+            String model = response.getMetadata().getModel();
+            return new UsageMeta(input, output, model);
+        } catch (Exception e) {
+            LoggerFactory.getLogger(getClass()).debug("Failed to extract usage metadata: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    // =========================================================================
     // Data Types
     // =========================================================================
 
@@ -558,10 +590,35 @@ public interface LlmProviderHandler {
      */
     record LlmResponse(
         String content,
-        List<ToolCall> toolCalls
+        List<ToolCall> toolCalls,
+        UsageMeta usage
     ) {
+        /**
+         * Convenience constructor without usage metadata.
+         */
+        LlmResponse(String content, List<ToolCall> toolCalls) {
+            this(content, toolCalls, null);
+        }
+
         public boolean hasToolCalls() {
             return toolCalls != null && !toolCalls.isEmpty();
+        }
+    }
+
+    /**
+     * Token usage metadata from an LLM call.
+     *
+     * @param inputTokens  Number of input/prompt tokens
+     * @param outputTokens Number of output/completion tokens
+     * @param model        Model identifier (may be null if unavailable)
+     */
+    record UsageMeta(
+        long inputTokens,
+        long outputTokens,
+        String model
+    ) {
+        public long totalTokens() {
+            return inputTokens + outputTokens;
         }
     }
 

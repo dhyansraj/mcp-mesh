@@ -355,23 +355,32 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
         Map<String, Object> response = new LinkedHashMap<>();
 
         try {
+            LlmProviderHandler.UsageMeta usageMeta = null;
+
             if (messages == null || messages.isEmpty()) {
                 // Fallback to simple generation if no messages
                 String content = llmProvider.generate(config.provider(), "", "Hello");
+                // Note: simple generate() doesn't return token usage metadata.
+                // usageMeta remains null — this is expected for non-structured paths.
                 response.put("content", content);
                 response.put("tool_calls", List.of());
             } else if (tools == null || tools.isEmpty()) {
                 // No tools - use simple message generation with optional structured output
-                String content;
                 if (outputSchemaData != null) {
                     // Format system prompt with output schema
                     OutputSchema outputSchema = parseOutputSchema(outputSchemaData, outputTypeName);
-                    content = generateWithOutputSchema(handler, model, messages, outputSchema);
+                    LlmProviderHandler.LlmResponse llmResponse = generateWithOutputSchemaFull(
+                        handler, model, messages, outputSchema);
+                    response.put("content", llmResponse.content());
+                    response.put("tool_calls", List.of());
+                    usageMeta = llmResponse.usage();
                 } else {
-                    content = llmProvider.generateWithMessages(config.provider(), messages);
+                    String content = llmProvider.generateWithMessages(config.provider(), messages);
+                    // Note: generateWithMessages() doesn't return token usage metadata.
+                    // usageMeta remains null — this is expected for non-structured paths.
+                    response.put("content", content);
+                    response.put("tool_calls", List.of());
                 }
-                response.put("content", content);
-                response.put("tool_calls", List.of());
             } else {
                 // Tools present - extract _mesh_endpoint for provider-side execution
                 Map<String, String> toolEndpoints = new HashMap<>();
@@ -400,6 +409,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
 
                     response.put("content", llmResponse.content());
                     response.put("tool_calls", List.of()); // No tool_calls — all executed provider-side
+                    usageMeta = llmResponse.usage();
                 } else {
                     // Legacy path: no endpoints — return tool_calls to consumer
                     log.debug("Using tool-aware generation with {} tools (no auto-execution)", cleanTools.size());
@@ -410,7 +420,20 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
 
                     response.put("content", llmResponse.content());
                     response.put("tool_calls", convertToolCalls(llmResponse.toolCalls()));
+                    usageMeta = llmResponse.usage();
                 }
+            }
+
+            // Include usage metadata in response for span enrichment
+            if (usageMeta != null) {
+                Map<String, Object> usageMap = new LinkedHashMap<>();
+                usageMap.put("input_tokens", usageMeta.inputTokens());
+                usageMap.put("output_tokens", usageMeta.outputTokens());
+                usageMap.put("total_tokens", usageMeta.totalTokens());
+                if (usageMeta.model() != null) {
+                    usageMap.put("model", usageMeta.model());
+                }
+                response.put("_usage", usageMap);
             }
         } catch (Exception e) {
             log.error("LLM generation failed: {}", e.getMessage(), e);
@@ -472,12 +495,12 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
     }
 
     /**
-     * Generate response with output schema (no tools).
+     * Generate response with output schema (no tools), returning full LlmResponse.
      *
      * <p>Delegates to handler's generateWithTools() with empty tools list
      * to leverage the handler's proper response_format support.
      */
-    private String generateWithOutputSchema(
+    private LlmProviderHandler.LlmResponse generateWithOutputSchemaFull(
             LlmProviderHandler handler,
             ChatModel model,
             List<Map<String, Object>> messages,
@@ -485,11 +508,9 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
 
         // Delegate to handler which has proper vendor-specific response_format
         // Pass empty tools list and null executor (no tool execution needed)
-        LlmProviderHandler.LlmResponse response = handler.generateWithTools(
+        return handler.generateWithTools(
             model, messages, List.of(), null, outputSchema, Map.of()
         );
-
-        return response.content();
     }
 
     /**

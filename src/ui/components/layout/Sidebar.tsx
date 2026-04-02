@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { LayoutDashboard, Bot, Network, Radio } from "lucide-react";
+import { LayoutDashboard, Bot, Network, BarChart3, Radio } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMesh } from "@/lib/mesh-context";
 
@@ -11,6 +11,7 @@ const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Agents", href: "/agents", icon: Bot },
   { name: "Topology", href: "/topology", icon: Network },
+  { name: "Traffic", href: "/traffic", icon: BarChart3 },
   { name: "Live", href: "/live", icon: Radio },
 ];
 
@@ -57,9 +58,11 @@ export function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 space-y-1 px-3 py-4">
         {navigation.map((item) => {
+          const normalizedPath = pathname.replace(/\/+$/, "") || "/";
+          const normalizedHref = item.href.replace(/\/+$/, "") || "/";
           const isActive =
-            pathname === item.href ||
-            (item.href !== "/" && pathname.startsWith(item.href));
+            normalizedPath === normalizedHref ||
+            (normalizedHref !== "/" && normalizedPath.startsWith(normalizedHref));
 
           return (
             <Link

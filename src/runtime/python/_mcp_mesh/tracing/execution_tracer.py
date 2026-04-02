@@ -138,6 +138,27 @@ class ExecutionTracer:
                 }
             )
 
+            # Extract LLM metadata if present (from mesh.llm calls)
+            if result is not None and hasattr(result, "_mesh_meta"):
+                meta = result._mesh_meta
+                self.execution_metadata.update(
+                    {
+                        "llm_input_tokens": getattr(meta, "input_tokens", 0),
+                        "llm_output_tokens": getattr(meta, "output_tokens", 0),
+                        "llm_total_tokens": getattr(meta, "total_tokens", 0),
+                        "llm_model": getattr(meta, "model", ""),
+                        "llm_provider": getattr(meta, "provider", ""),
+                    }
+                )
+
+            # Extract payload sizes if set by proxy call_tool()
+            from .context import clear_payload_sizes, get_payload_sizes
+
+            sizes = get_payload_sizes()
+            if sizes:
+                self.execution_metadata.update(sizes)
+                clear_payload_sizes()
+
             # Save execution trace to Redis for distributed tracing storage
             publish_trace_with_fallback(self.execution_metadata, self.logger)
 

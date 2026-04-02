@@ -115,6 +115,7 @@ func main() {
 
 	// Initialize distributed tracing (accumulator-only, no OTLP export)
 	var tracingManager *tracing.TracingManager
+	var metricsProc *ui.MetricsProcessor
 	tracingEnabled := strings.ToLower(getEnvDefault("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "false")) == "true"
 	if tracingEnabled {
 		hostname, _ := os.Hostname()
@@ -130,7 +131,8 @@ func main() {
 			TempoQueryURL: resolveTempoURL(tempoURL),
 		}
 
-		tm, err := tracing.NewAccumulatorOnlyManager(tracingConfig)
+		metricsProc = ui.NewMetricsProcessor()
+		tm, err := tracing.NewAccumulatorOnlyManager(tracingConfig, metricsProc)
 		if err != nil {
 			log.Printf("Warning: failed to initialize tracing: %v", err)
 		} else {
@@ -140,7 +142,7 @@ func main() {
 	}
 
 	// Create UI server
-	server := ui.NewServer(uiConfig, entService, tracingManager, EmbeddedSPA, logLevel)
+	server := ui.NewServer(uiConfig, entService, tracingManager, metricsProc, EmbeddedSPA, logLevel)
 
 	// Graceful shutdown
 	go func() {

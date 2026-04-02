@@ -41,7 +41,20 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 
 	// Check if registry is already running via HTTP (primary check)
 	registryURL := config.GetRegistryURL()
+	startUI, _ := cmd.Flags().GetBool("ui")
 	if IsRegistryRunning(registryURL) {
+		if startUI {
+			// Registry already running — skip registry startup but still start UI (#694)
+			if !quiet {
+				fmt.Printf("Registry already running at %s, starting UI server only\n", registryURL)
+			}
+			maybeStartUIServer(cmd, config, registryURL)
+
+			// Block in foreground so the UI server keeps running
+			signalHandler := GetGlobalSignalHandler()
+			signalHandler.WaitForShutdown()
+			return nil
+		}
 		if !quiet {
 			fmt.Printf("Registry is already running at %s\n", registryURL)
 		}

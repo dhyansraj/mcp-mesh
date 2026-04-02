@@ -86,6 +86,44 @@ func (s *Server) handleEdgeStats(c *gin.Context) {
 	})
 }
 
+// handleAgentStats returns per-agent aggregated metrics
+func (s *Server) handleAgentStats(c *gin.Context) {
+	if s.metricsProcessor == nil {
+		c.JSON(200, map[string]interface{}{
+			"enabled": false,
+			"agents":  []interface{}{},
+			"count":   0,
+		})
+		return
+	}
+
+	stats := s.metricsProcessor.GetAgentMetrics()
+	c.JSON(200, map[string]interface{}{
+		"enabled": true,
+		"agents":  stats,
+		"count":   len(stats),
+	})
+}
+
+// handleModelStats returns per-model token usage metrics
+func (s *Server) handleModelStats(c *gin.Context) {
+	if s.metricsProcessor == nil {
+		c.JSON(200, map[string]interface{}{
+			"enabled": false,
+			"models":  []interface{}{},
+			"count":   0,
+		})
+		return
+	}
+
+	stats := s.metricsProcessor.GetModelMetrics()
+	c.JSON(200, map[string]interface{}{
+		"enabled": true,
+		"models":  stats,
+		"count":   len(stats),
+	})
+}
+
 // handleTraceGet retrieves a specific trace by ID
 func (s *Server) handleTraceGet(c *gin.Context) {
 	if s.tracingManager == nil {

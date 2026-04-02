@@ -104,6 +104,7 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
         );
 
         try (SpanScope span = t != null ? t.startSpan("proxy_call_wrapper", spanMeta) : SpanScope.NOOP) {
+            McpHttpClient.clearLastCallMetrics();
             try {
                 T result = mcpClient.callTool(info.endpoint(), info.functionName(), params, returnType);
                 span.withResult(result);
@@ -111,6 +112,8 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
             } catch (Exception e) {
                 span.withError(e);
                 throw e;
+            } finally {
+                enrichSpanWithPayloadSizes(span);
             }
         }
     }
@@ -133,6 +136,7 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
         );
 
         try (SpanScope span = t != null ? t.startSpan("proxy_call_wrapper", spanMeta) : SpanScope.NOOP) {
+            McpHttpClient.clearLastCallMetrics();
             try {
                 T result = mcpClient.callTool(info.endpoint(), info.functionName(), params, returnType, headers);
                 span.withResult(result);
@@ -140,6 +144,8 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
             } catch (Exception e) {
                 span.withError(e);
                 throw e;
+            } finally {
+                enrichSpanWithPayloadSizes(span);
             }
         }
     }
@@ -217,6 +223,16 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
     public boolean isAvailable() {
         EndpointInfo info = endpointRef.get();
         return info != null && info.available();
+    }
+
+    /**
+     * Enrich the span with payload sizes from the last HTTP call.
+     */
+    private void enrichSpanWithPayloadSizes(SpanScope span) {
+        McpHttpClient.CallMetrics metrics = McpHttpClient.getLastCallMetrics();
+        if (metrics != null) {
+            span.withPayloadSizes(metrics.requestBytes(), metrics.responseBytes());
+        }
     }
 
     private record EndpointInfo(String endpoint, String functionName, boolean available) {}

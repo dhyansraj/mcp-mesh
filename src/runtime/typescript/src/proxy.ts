@@ -231,6 +231,8 @@ export async function callMcpTool(
   };
 
   let lastError: Error | null = null;
+  const bodyStr = JSON.stringify(payload);
+  const requestBytes = Buffer.byteLength(bodyStr, "utf8");
 
   for (let attempt = 0; attempt < options.maxAttempts; attempt++) {
     try {
@@ -253,12 +255,11 @@ export async function callMcpTool(
         headers[key] = value;
       }
 
-      // Build fetch options
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const fetchOptions: Record<string, any> = {
         method: "POST",
         headers,
-        body: JSON.stringify(payload),
+        body: bodyStr,
         signal: controller.signal,
       };
 
@@ -291,13 +292,17 @@ export async function callMcpTool(
       // Handle SSE streaming response
       if (contentType.includes("text/event-stream")) {
         const sseResult = await parseSSEResponse(response);
+        // Estimate response size from content-length header (exact size not available for SSE)
+        const sseResponseBytes = contentLength > 0 ? contentLength : undefined;
         // Publish success span
-        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, true, null, typeof sseResult);
+        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, true, null, typeof sseResult, requestBytes, sseResponseBytes);
         return sseResult;
       }
 
-      // Handle JSON response
-      const result = (await response.json()) as {
+      // Handle JSON response — read as text to measure byte size
+      const responseText = await response.text();
+      const responseBytes = Buffer.byteLength(responseText, "utf8");
+      const result = JSON.parse(responseText) as {
         error?: { message?: string };
         result?: unknown;
       };
@@ -305,21 +310,21 @@ export async function callMcpTool(
       if (result.error) {
         const errorMsg = result.error.message ?? JSON.stringify(result.error);
         // Publish error span
-        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, errorMsg, "error");
+        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, errorMsg, "error", requestBytes, responseBytes);
         throw new Error(`MCP error: ${errorMsg}`);
       }
 
       // Extract content from result
       const content = extractContent(result.result);
       // Publish success span
-      publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, true, null, typeof content);
+      publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, true, null, typeof content, requestBytes, responseBytes);
       return content;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
 
       // Don't retry on abort (timeout)
       if (isTimeoutError(lastError)) {
-        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, "timeout", "error");
+        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, "timeout", "error", requestBytes);
         throw new Error(`MCP call timed out after ${options.timeout}ms`);
       }
 
@@ -332,7 +337,7 @@ export async function callMcpTool(
   }
 
   // All retries failed
-  publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, lastError?.message ?? "unknown", "error");
+  publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, lastError?.message ?? "unknown", "error", requestBytes);
   throw lastError ?? new Error("MCP call failed");
 }
 
@@ -348,7 +353,9 @@ function publishProxySpan(
   endpoint: string,
   success: boolean,
   error: string | null,
-  resultType: string
+  resultType: string,
+  requestBytes?: number,
+  responseBytes?: number,
 ): void {
   if (!traceCtx || !spanId) return;
 
@@ -372,6 +379,8 @@ function publishProxySpan(
     dependencies: [endpoint],
     injectedDependencies: 0,
     meshPositions: [],
+    requestBytes,
+    responseBytes,
   }).catch(() => {
     // Silently ignore publish errors
   });

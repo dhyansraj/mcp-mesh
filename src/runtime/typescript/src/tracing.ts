@@ -180,6 +180,17 @@ export interface SpanData {
   dependencies: string[];
   injectedDependencies: number;
   meshPositions: number[];
+
+  // Payload sizes (bytes)
+  requestBytes?: number;
+  responseBytes?: number;
+
+  // LLM token metadata
+  llmInputTokens?: number;
+  llmOutputTokens?: number;
+  llmTotalTokens?: number;
+  llmModel?: string;
+  llmProvider?: string;
 }
 
 /**
@@ -221,6 +232,28 @@ export async function publishTraceSpan(span: SpanData): Promise<boolean> {
       runtime: "typescript",
     };
 
+    if (span.requestBytes !== undefined) {
+      spanMap.request_bytes = String(span.requestBytes);
+    }
+    if (span.responseBytes !== undefined) {
+      spanMap.response_bytes = String(span.responseBytes);
+    }
+    if (span.llmInputTokens !== undefined) {
+      spanMap.llm_input_tokens = String(span.llmInputTokens);
+    }
+    if (span.llmOutputTokens !== undefined) {
+      spanMap.llm_output_tokens = String(span.llmOutputTokens);
+    }
+    if (span.llmTotalTokens !== undefined) {
+      spanMap.llm_total_tokens = String(span.llmTotalTokens);
+    }
+    if (span.llmModel) {
+      spanMap.llm_model = span.llmModel;
+    }
+    if (span.llmProvider) {
+      spanMap.llm_provider = span.llmProvider;
+    }
+
     return await publishSpan(spanMap);
   } catch (err) {
     // Non-blocking - never fail agent operations due to trace publishing
@@ -237,7 +270,8 @@ export function createTracedExecutor<TArgs, TResult>(
   functionName: string,
   dependencies: string[],
   injectedDependencies: number,
-  executor: (args: TArgs, traceContext: TraceContext | null) => Promise<TResult>
+  executor: (args: TArgs, traceContext: TraceContext | null) => Promise<TResult>,
+  enrichSpan?: (result: TResult) => Partial<Pick<SpanData, 'llmInputTokens' | 'llmOutputTokens' | 'llmTotalTokens' | 'llmModel' | 'llmProvider'>>,
 ): (args: TArgs, traceContext: TraceContext | null) => Promise<TResult> {
   return async (args: TArgs, traceContext: TraceContext | null): Promise<TResult> => {
     if (!tracingEnabled) {
@@ -253,12 +287,14 @@ export function createTracedExecutor<TArgs, TResult>(
     let success = true;
     let error: string | null = null;
     let resultType = "unknown";
+    let executorResult: TResult | undefined;
 
     try {
       // Execute with trace context for propagation
       const newContext: TraceContext = { traceId, parentSpanId: spanId };
       const result = await executor(args, newContext);
       resultType = typeof result;
+      executorResult = result;
       return result;
     } catch (err) {
       success = false;
@@ -267,6 +303,15 @@ export function createTracedExecutor<TArgs, TResult>(
     } finally {
       const endTime = Date.now() / 1000;
       const durationMs = (endTime - startTime) * 1000;
+
+      let extraFields: Partial<SpanData> = {};
+      if (success && enrichSpan && executorResult !== undefined) {
+        try {
+          extraFields = enrichSpan(executorResult);
+        } catch {
+          // Silently ignore enrichment errors
+        }
+      }
 
       // Publish span asynchronously (fire and forget)
       publishTraceSpan({
@@ -285,6 +330,7 @@ export function createTracedExecutor<TArgs, TResult>(
         dependencies,
         injectedDependencies,
         meshPositions: [],
+        ...extraFields,
       }).catch(() => {
         // Silently ignore publish errors
       });

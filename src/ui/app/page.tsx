@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { Header } from "@/components/layout/Header";
 import { StatsCards } from "@/components/dashboard/StatsCards";
 import { EventFeed } from "@/components/dashboard/EventFeed";
@@ -8,11 +9,21 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ConnectionError } from "@/components/layout/ConnectionError";
 import { useMesh } from "@/lib/mesh-context";
-import { getStatusBgColor, getRuntimeLabel } from "@/lib/api";
+import { getStatusBgColor, getRuntimeLabel, getRuntimeBadgeColor } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { Loader2, Bot } from "lucide-react";
+import { AgentStat } from "@/lib/types";
 
 export default function DashboardPage() {
-  const { agents, events, loading, error, refresh } = useMesh();
+  const { agents, events, loading, error, refresh, agentStats } = useMesh();
+
+  const agentStatsMap = useMemo(() => {
+    const map = new Map<string, AgentStat>();
+    for (const stat of agentStats) {
+      map.set(stat.agent_name, stat);
+    }
+    return map;
+  }, [agentStats]);
 
   if (loading) {
     return (
@@ -94,22 +105,34 @@ export default function DashboardPage() {
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         {agent.runtime && (
-                          <Badge variant="outline" className="text-xs">
+                          <Badge variant="outline" className={cn("text-xs", getRuntimeBadgeColor(agent.runtime))}>
                             {getRuntimeLabel(agent.runtime)}
                           </Badge>
                         )}
-                        <Badge
-                          variant={
-                            agent.status === "healthy"
-                              ? "default"
-                              : agent.status === "unhealthy"
-                                ? "destructive"
-                                : "secondary"
+                        {(() => {
+                          const stat = agentStatsMap.get(agent.name);
+                          if (stat && stat.span_count > 0) {
+                            return (
+                              <span className="text-xs font-mono text-muted-foreground">
+                                {stat.span_count} calls
+                              </span>
+                            );
                           }
-                          className="text-xs"
-                        >
-                          {agent.status}
-                        </Badge>
+                          return (
+                            <Badge
+                              variant={
+                                agent.status === "healthy"
+                                  ? "default"
+                                  : agent.status === "unhealthy"
+                                    ? "destructive"
+                                    : "secondary"
+                              }
+                              className="text-xs"
+                            >
+                              {agent.status}
+                            </Badge>
+                          );
+                        })()}
                       </div>
                     </div>
                   ))}

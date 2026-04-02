@@ -2,7 +2,6 @@ package tracing
 
 import (
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"time"
 )
@@ -26,6 +25,17 @@ type TraceEvent struct {
 	Capability   *string `json:"capability,omitempty"`
 	TargetAgent  *string `json:"target_agent,omitempty"`
 	Runtime      string  `json:"runtime"`
+
+	// Payload sizes (bytes)
+	RequestBytes  *int64 `json:"request_bytes,omitempty"`
+	ResponseBytes *int64 `json:"response_bytes,omitempty"`
+
+	// LLM token metadata
+	LlmInputTokens  *int64  `json:"llm_input_tokens,omitempty"`
+	LlmOutputTokens *int64  `json:"llm_output_tokens,omitempty"`
+	LlmTotalTokens  *int64  `json:"llm_total_tokens,omitempty"`
+	LlmModel        *string `json:"llm_model,omitempty"`
+	LlmProvider     *string `json:"llm_provider,omitempty"`
 }
 
 // ToRedisMap converts TraceEvent to Redis-compatible map[string]interface{}
@@ -67,6 +77,31 @@ func (te *TraceEvent) ToRedisMap() map[string]interface{} {
 	}
 	if te.TargetAgent != nil {
 		result["target_agent"] = *te.TargetAgent
+	}
+
+	// Payload sizes
+	if te.RequestBytes != nil {
+		result["request_bytes"] = strconv.FormatInt(*te.RequestBytes, 10)
+	}
+	if te.ResponseBytes != nil {
+		result["response_bytes"] = strconv.FormatInt(*te.ResponseBytes, 10)
+	}
+
+	// LLM token metadata
+	if te.LlmInputTokens != nil {
+		result["llm_input_tokens"] = strconv.FormatInt(*te.LlmInputTokens, 10)
+	}
+	if te.LlmOutputTokens != nil {
+		result["llm_output_tokens"] = strconv.FormatInt(*te.LlmOutputTokens, 10)
+	}
+	if te.LlmTotalTokens != nil {
+		result["llm_total_tokens"] = strconv.FormatInt(*te.LlmTotalTokens, 10)
+	}
+	if te.LlmModel != nil {
+		result["llm_model"] = *te.LlmModel
+	}
+	if te.LlmProvider != nil {
+		result["llm_provider"] = *te.LlmProvider
 	}
 
 	return result
@@ -126,9 +161,6 @@ func (te *TraceEvent) FromRedisMap(data map[string]interface{}) error {
 				te.DurationMS = &durationInt
 			}
 		}
-	} else {
-		// Debug: log all fields to see what's available
-		fmt.Printf("DEBUG: No duration_ms found. Available fields: %+v\n", data)
 	}
 
 	if successStr := getString(data, "success"); successStr != "" {
@@ -147,6 +179,41 @@ func (te *TraceEvent) FromRedisMap(data map[string]interface{}) error {
 
 	if targetAgent := getString(data, "target_agent"); targetAgent != "" {
 		te.TargetAgent = &targetAgent
+	}
+
+	// Payload sizes
+	if requestBytesStr := getString(data, "request_bytes"); requestBytesStr != "" {
+		if v, err := strconv.ParseInt(requestBytesStr, 10, 64); err == nil {
+			te.RequestBytes = &v
+		}
+	}
+	if responseBytesStr := getString(data, "response_bytes"); responseBytesStr != "" {
+		if v, err := strconv.ParseInt(responseBytesStr, 10, 64); err == nil {
+			te.ResponseBytes = &v
+		}
+	}
+
+	// LLM token metadata
+	if v := getString(data, "llm_input_tokens"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			te.LlmInputTokens = &n
+		}
+	}
+	if v := getString(data, "llm_output_tokens"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			te.LlmOutputTokens = &n
+		}
+	}
+	if v := getString(data, "llm_total_tokens"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			te.LlmTotalTokens = &n
+		}
+	}
+	if v := getString(data, "llm_model"); v != "" {
+		te.LlmModel = &v
+	}
+	if v := getString(data, "llm_provider"); v != "" {
+		te.LlmProvider = &v
 	}
 
 	return nil

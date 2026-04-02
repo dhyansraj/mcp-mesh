@@ -114,6 +114,15 @@ export function getRuntimeLabel(runtime?: string): string {
   }
 }
 
+export function getRuntimeBadgeColor(runtime?: string): string {
+  switch (runtime) {
+    case "python": return "bg-blue-600/20 text-blue-400 border-blue-500/30";
+    case "typescript": return "bg-cyan-600/20 text-cyan-400 border-cyan-500/30";
+    case "java": return "bg-orange-600/20 text-orange-400 border-orange-500/30";
+    default: return "";
+  }
+}
+
 export function getAgentTypeLabel(type: string): string {
   switch (type) {
     case "mcp_agent": return "MCP Agent";
@@ -159,6 +168,22 @@ export function extractAgentName(agentId: string): string {
     return parts.slice(0, -1).join("-");
   }
   return agentId;
+}
+
+export function formatBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const idx = Math.min(i, sizes.length - 1);
+  return `${(bytes / Math.pow(k, idx)).toFixed(1)} ${sizes[idx]}`;
+}
+
+export function formatTokenCount(count: number): string {
+  if (!count || count === 0) return "0";
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
+  return count.toLocaleString();
 }
 
 export { API_BASE };

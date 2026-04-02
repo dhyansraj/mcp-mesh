@@ -87,13 +87,13 @@ type activeTrace struct {
 const maxEdgeLatencies = 10000
 
 type edgeAccum struct {
-	CallCount    int
-	ErrorCount   int
-	Latencies    []int64
-	latencyHead  int // ring buffer write position (used once Latencies reaches cap)
-	TotalMs      int64
-	MaxMs        int64
-	MinMs        int64
+	CallCount   int
+	ErrorCount  int
+	Latencies   []int64
+	latencyHead int // ring buffer write position (used once Latencies reaches cap)
+	TotalMs     int64
+	MaxMs       int64
+	MinMs       int64
 }
 
 // NewTraceAccumulator creates a new accumulator with the given ring buffer size.
