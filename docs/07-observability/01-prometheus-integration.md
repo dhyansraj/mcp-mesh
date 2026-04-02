@@ -695,7 +695,7 @@ def test_metrics_registration():
 
 def test_metrics_format():
     """Test metrics are in correct format"""
-    from mcp_mesh.metrics import generate_latest
+    from prometheus_client import generate_latest
 
     output = generate_latest(REGISTRY).decode('utf-8')
 

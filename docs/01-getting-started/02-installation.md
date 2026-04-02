@@ -122,7 +122,7 @@ export PATH=$PATH:$(pwd)/bin
 
 When you install MCP Mesh, you get:
 
-1. **Python Package** (`mcp_mesh`): The decorators and runtime for your agents
+1. **Python Package** (`mesh`): The decorators and runtime for your agents
 2. **CLI Tool** (`meshctl`): Go-based command-line tool for running agents
 3. **Registry Binary** (`mcp-mesh-registry`): Go-based service registry
 
@@ -159,7 +159,7 @@ source .venv/bin/activate
 meshctl --version
 
 # Test Python import
-python -c "from mcp_mesh import mesh_agent; print('✅ MCP Mesh is installed!')"
+python -c "import mesh; print('✅ MCP Mesh is installed!')"
 
 # Start the registry (in one terminal)
 meshctl start --registry-only
@@ -236,13 +236,13 @@ export PATH="$(npm config get prefix)/bin:$PATH"
 meshctl --version
 ```
 
-### 2. ImportError: No module named 'mcp_mesh'
+### 2. ImportError: No module named 'mesh'
 
 **Solution**: Activate the virtual environment:
 
 ```bash
 source .venv/bin/activate  # or your custom venv
-python -c "import mcp_mesh"
+python -c "import mesh"
 ```
 
 ### 3. Port 8080 already in use
