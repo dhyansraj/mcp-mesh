@@ -136,6 +136,8 @@ func (pm *PIDManager) ListRunningProcesses() ([]PIDInfo, error) {
 			procType = "registry"
 		} else if name == "ui" {
 			procType = "ui"
+		} else if strings.HasSuffix(name, "_watcher-parent") {
+			procType = "watcher-parent"
 		}
 
 		processes = append(processes, PIDInfo{
@@ -183,7 +185,7 @@ func (pm *PIDManager) GetRunningAgents() ([]PIDInfo, error) {
 
 	var agents []PIDInfo
 	for _, proc := range processes {
-		if proc.Running && proc.Type == "agent" {
+		if proc.Running && proc.Type == "agent" && !strings.HasSuffix(proc.Name, "_watcher-parent") {
 			agents = append(agents, proc)
 		}
 	}
