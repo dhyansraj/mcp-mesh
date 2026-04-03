@@ -98,7 +98,7 @@ spec:
     - metadata:
         name: postgres-data
         labels:
-          {{- include "mcp-mesh-postgres.labels" . | nindent 10 }}
+          {{- include "mcp-mesh-postgres.selectorLabels" . | nindent 10 }}
         {{- with .Values.persistence.annotations }}
         annotations:
           {{- toYaml . | nindent 10 }}
