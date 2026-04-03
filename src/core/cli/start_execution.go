@@ -572,6 +572,19 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 		}
 	}
 
+	// Track the watcher parent process (this meshctl CLI process) so meshctl stop can kill it.
+	// Without this, stopping a watched agent kills only the agent subprocess, leaving
+	// the watcher parent alive to potentially respawn or hold resources (#706).
+	if len(watchers) > 0 && pmErr == nil {
+		parentPID := os.Getpid()
+		for _, w := range watchers {
+			watcherPIDName := w.config.AgentName + "_watcher-parent"
+			if err := pm.WritePID(watcherPIDName, parentPID); err != nil && !quiet {
+				fmt.Printf("Warning: failed to write watcher parent PID for %s: %v\n", w.config.AgentName, err)
+			}
+		}
+	}
+
 	// Wait for signal
 	<-sigChan
 	if !quiet {
@@ -586,10 +599,11 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 		w.Wait()
 	}
 
-	// Clean up watcher PID files
+	// Clean up watcher PID files and watcher-parent PID files
 	if pmErr == nil {
 		for _, w := range watchers {
 			pm.RemovePID(w.config.AgentName)
+			pm.RemovePID(w.config.AgentName + "_watcher-parent")
 		}
 	}
 
@@ -646,10 +660,11 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 		}
 	}
 
-	// Clean up all PID files for tracked agents
+	// Clean up all PID files for tracked agents (including watcher-parent PID files)
 	if pmErr == nil {
 		for _, name := range agentNames {
 			pm.RemovePID(name)
+			pm.RemovePID(name + "_watcher-parent")
 		}
 	}
 

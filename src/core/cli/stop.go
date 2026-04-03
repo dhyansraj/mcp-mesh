@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -14,21 +15,22 @@ import (
 // NewStopCommand creates the stop command
 func NewStopCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "stop [name]",
+		Use:   "stop [name ...]",
 		Short: "Stop detached agents and registry",
 		Long: `Stop agents and/or registry running in detached mode.
 
 Without arguments, stops all agents and the registry.
-With a name argument, stops only that specific agent.
+With name argument(s), stops only those specific agent(s).
 
 Examples:
   meshctl stop                    # Stop all agents + registry
   meshctl stop my-agent           # Stop specific agent
+  meshctl stop agent1 agent2      # Stop multiple agents
   meshctl stop --registry         # Stop only registry
   meshctl stop --agents           # Stop all agents, keep registry
   meshctl stop --keep-registry    # Stop all agents, keep registry (alias)
   meshctl stop --clean            # Stop all + delete db, logs, pids`,
-		Args: cobra.MaximumNArgs(1),
+		Args: cobra.ArbitraryArgs,
 		RunE: runStopCommand,
 	}
 
@@ -63,7 +65,7 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	// --clean only works when stopping all (no args, not with --registry or --agents)
-	if clean && (len(args) == 1 || registryOnly || agentsOnly) {
+	if clean && (len(args) > 0 || registryOnly || agentsOnly) {
 		return fmt.Errorf("--clean can only be used when stopping all processes (no agent name, --registry, or --agents)")
 	}
 
@@ -83,10 +85,21 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 
 	shutdownTimeout := time.Duration(timeout) * time.Second
 
-	// Handle specific agent stop
-	if len(args) == 1 {
-		agentName := args[0]
-		return stopSpecificAgent(pm, agentName, shutdownTimeout, force, quiet)
+	// Handle specific agent stop (one or more names)
+	if len(args) > 0 {
+		var failures []string
+		for _, name := range args {
+			if err := stopSpecificAgent(pm, name, shutdownTimeout, force, quiet); err != nil {
+				failures = append(failures, fmt.Sprintf("%s: %v", name, err))
+				if !quiet {
+					fmt.Printf("Warning: failed to stop %s: %v\n", name, err)
+				}
+			}
+		}
+		if len(failures) > 0 {
+			return fmt.Errorf("failed to stop %d agent(s): %s", len(failures), strings.Join(failures, "; "))
+		}
+		return nil
 	}
 
 	// Handle --registry flag
@@ -130,6 +143,8 @@ func stopSpecificAgent(pm *PIDManager, name string, timeout time.Duration, force
 		if !quiet {
 			fmt.Printf("Agent '%s' is not running (cleaned stale PID file)\n", name)
 		}
+		// Still try to clean up watcher parent if it exists
+		stopWatcherParent(pm, name, timeout, force, quiet)
 		return nil
 	}
 
@@ -147,7 +162,85 @@ func stopSpecificAgent(pm *PIDManager, name string, timeout time.Duration, force
 		fmt.Printf("Agent '%s' stopped\n", name)
 	}
 
+	// Also stop the watcher parent process if this agent was running in watch mode
+	stopWatcherParent(pm, name, timeout, force, quiet)
+
 	return nil
+}
+
+// stopWatcherParent stops the watcher parent process for a watched agent.
+// This kills the meshctl CLI process that hosts the watcher goroutine,
+// preventing it from respawning the agent or holding resources (#706).
+//
+// When multiple agents share the same watcher parent (e.g. meshctl start a b c -w),
+// the parent is only killed when the last agent using it is stopped.
+func stopWatcherParent(pm *PIDManager, agentName string, timeout time.Duration, force, quiet bool) {
+	watcherPIDName := agentName + "_watcher-parent"
+	watcherPID, err := pm.ReadPID(watcherPIDName)
+	if err != nil {
+		return // No watcher parent PID file — agent was not in watch mode
+	}
+
+	// Always remove this agent's watcher-parent PID file first
+	pm.RemovePID(watcherPIDName)
+
+	if !IsProcessAlive(watcherPID) {
+		return
+	}
+
+	// Check if other agents still share the same watcher parent PID.
+	// Only kill the parent if no other watcher-parent PID files reference it.
+	otherWatchers := countWatcherParentsWithPID(pm, watcherPID)
+	if otherWatchers > 0 {
+		if !quiet {
+			fmt.Printf("Watcher parent (PID: %d) still has %d other agent(s), keeping alive\n", watcherPID, otherWatchers)
+		}
+		return
+	}
+
+	if !quiet {
+		fmt.Printf("Stopping watcher for '%s' (PID: %d)...\n", agentName, watcherPID)
+	}
+
+	// Send SIGTERM to the watcher parent process only (not its process group).
+	// The watcher parent may share a process group with the registry or other
+	// components started in the same meshctl session. Using stopProcess() would
+	// kill the entire group, taking down unrelated services.
+	if proc, err := os.FindProcess(watcherPID); err == nil {
+		if err := proc.Signal(syscall.SIGTERM); err != nil && !quiet {
+			fmt.Printf("Warning: failed to signal watcher for '%s': %v\n", agentName, err)
+		}
+		// Wait briefly for graceful exit
+		time.Sleep(500 * time.Millisecond)
+		if IsProcessAlive(watcherPID) {
+			proc.Kill()
+		}
+	}
+
+	if !IsProcessAlive(watcherPID) {
+		if !quiet {
+			fmt.Printf("Watcher for '%s' stopped\n", agentName)
+		}
+	} else if !quiet {
+		fmt.Printf("Warning: watcher for '%s' (PID: %d) may still be running\n", agentName, watcherPID)
+	}
+}
+
+// countWatcherParentsWithPID counts how many remaining watcher-parent PID files
+// reference the given PID. Used to avoid killing a shared parent process when
+// other watched agents are still running.
+func countWatcherParentsWithPID(pm *PIDManager, targetPID int) int {
+	procs, err := pm.ListRunningProcesses()
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, proc := range procs {
+		if proc.Type == "watcher-parent" && proc.PID == targetPID {
+			count++
+		}
+	}
+	return count
 }
 
 // stopRegistry stops only the registry
@@ -236,6 +329,12 @@ func stopAllAgents(pm *PIDManager, timeout time.Duration, force, quiet bool) err
 
 	wg.Wait()
 
+	// Stop watcher parent processes sequentially after all agents are stopped.
+	// This avoids races when multiple agents share a watcher parent (#706).
+	for _, agent := range agents {
+		stopWatcherParent(pm, agent.Name, timeout, force, quiet)
+	}
+
 	if !quiet {
 		fmt.Printf("\nStopped %d agent(s)", stopped)
 		if failed > 0 {
@@ -258,8 +357,9 @@ func stopAll(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
 		return fmt.Errorf("failed to list processes: %w", err)
 	}
 
-	// Separate agents, UI, and registry
+	// Separate agents, watcher parents, UI, and registry
 	var agents []PIDInfo
+	var watcherParents []PIDInfo
 	var uiProc *PIDInfo
 	var registry *PIDInfo
 	for _, proc := range processes {
@@ -271,12 +371,14 @@ func stopAll(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
 			registry = &proc
 		case "ui":
 			uiProc = &proc
+		case "watcher-parent":
+			watcherParents = append(watcherParents, proc)
 		default:
 			agents = append(agents, proc)
 		}
 	}
 
-	if len(agents) == 0 && uiProc == nil && registry == nil {
+	if len(agents) == 0 && len(watcherParents) == 0 && uiProc == nil && registry == nil {
 		if !quiet {
 			fmt.Println("No agents running in background. Use 'meshctl start --detach' to run agents in background.")
 		}
@@ -321,6 +423,45 @@ func stopAll(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
 				}
 				mu.Unlock()
 			}(agent)
+		}
+		wg.Wait()
+	}
+
+	// Stop watcher parent processes after agents are stopped.
+	// These are meshctl CLI processes that host watcher goroutines (#706).
+	// In stopAll, we intentionally kill all watcher parents in parallel since
+	// we're tearing everything down — no need for the shared-parent counting
+	// logic used by stopAllAgents/stopWatcherParent.
+	if len(watcherParents) > 0 {
+		var wg sync.WaitGroup
+		for _, wp := range watcherParents {
+			wg.Add(1)
+			go func(proc PIDInfo) {
+				defer wg.Done()
+
+				if !quiet {
+					fmt.Printf("Stopping watcher '%s' (PID: %d)...\n", proc.Name, proc.PID)
+				}
+
+				if err := stopProcess(proc.PID, timeout, force); err != nil {
+					mu.Lock()
+					if !quiet {
+						fmt.Printf("Failed to stop watcher '%s': %v\n", proc.Name, err)
+					}
+					failed++
+					mu.Unlock()
+					return
+				}
+
+				pm.RemovePIDFile(proc.PIDFile)
+
+				mu.Lock()
+				stopped++
+				if !quiet {
+					fmt.Printf("Watcher '%s' stopped\n", proc.Name)
+				}
+				mu.Unlock()
+			}(wp)
 		}
 		wg.Wait()
 	}

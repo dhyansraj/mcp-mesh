@@ -49,9 +49,10 @@ async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistRes
 | `max_iterations` | int  | Max agentic loop iterations (default: 1)          |
 | `system_prompt`  | str  | Inline prompt or `file://path` to Jinja2 template |
 | `context_param`  | str  | Parameter name receiving context object           |
-| `filter`         | list | Tool filter criteria                              |
-| `filter_mode`    | str  | `"all"`, `"best_match"`, or `"*"`                 |
-| `<llm_params>`   | any  | LiteLLM params (max_tokens, temperature, etc.)    |
+| `filter`              | list | Tool filter criteria                              |
+| `filter_mode`         | str  | `"all"`, `"best_match"`, or `"*"`                 |
+| `parallel_tool_calls` | bool | Enable parallel tool execution (default: `False`)  |
+| `<llm_params>`        | any  | LiteLLM params (max_tokens, temperature, etc.)    |
 
 **Note**: `provider` and `filter` use the capability selector syntax (`capability`, `tags`, `version`). See `meshctl man capabilities` for details.
 
@@ -259,6 +260,24 @@ The LLM will:
 2. Call discovered tools as needed
 3. Use tool results for further reasoning
 4. Return final response
+
+### Parallel Tool Calls
+
+Enable `parallel_tool_calls` to let the LLM call multiple tools simultaneously:
+
+```python
+@mesh.llm(
+    parallel_tool_calls=True,
+    max_iterations=10,
+    filter=[{"tags": ["data"]}],
+)
+async def gather_data(query: str, llm: mesh.MeshLlmAgent = None):
+    return await llm(f"Gather all data for: {query}")
+```
+
+When enabled, the LLM can request multiple tool calls in a single iteration,
+and the runtime executes them concurrently. This reduces latency for tasks
+that involve independent data fetches or parallel processing.
 
 ## Runtime Context Injection
 

@@ -104,6 +104,13 @@ func InitializeEnt(config *Config, enableDebugLogging bool) (*EntDatabase, error
 	db.SetMaxIdleConns(config.MaxIdleConnections)
 	db.SetConnMaxLifetime(time.Duration(config.ConnMaxLifetime) * time.Second)
 
+	// SQLite requires a single writer connection to prevent corruption
+	// under concurrent heartbeat load from multiple agents.
+	if driverName == "sqlite3" {
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+	}
+
 	// Test the connection
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
