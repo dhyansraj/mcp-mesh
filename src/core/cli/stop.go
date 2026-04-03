@@ -14,21 +14,22 @@ import (
 // NewStopCommand creates the stop command
 func NewStopCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "stop [name]",
+		Use:   "stop [name ...]",
 		Short: "Stop detached agents and registry",
 		Long: `Stop agents and/or registry running in detached mode.
 
 Without arguments, stops all agents and the registry.
-With a name argument, stops only that specific agent.
+With name argument(s), stops only those specific agent(s).
 
 Examples:
   meshctl stop                    # Stop all agents + registry
   meshctl stop my-agent           # Stop specific agent
+  meshctl stop agent1 agent2      # Stop multiple agents
   meshctl stop --registry         # Stop only registry
   meshctl stop --agents           # Stop all agents, keep registry
   meshctl stop --keep-registry    # Stop all agents, keep registry (alias)
   meshctl stop --clean            # Stop all + delete db, logs, pids`,
-		Args: cobra.MaximumNArgs(1),
+		Args: cobra.ArbitraryArgs,
 		RunE: runStopCommand,
 	}
 
@@ -63,7 +64,7 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	// --clean only works when stopping all (no args, not with --registry or --agents)
-	if clean && (len(args) == 1 || registryOnly || agentsOnly) {
+	if clean && (len(args) > 0 || registryOnly || agentsOnly) {
 		return fmt.Errorf("--clean can only be used when stopping all processes (no agent name, --registry, or --agents)")
 	}
 
@@ -83,10 +84,18 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 
 	shutdownTimeout := time.Duration(timeout) * time.Second
 
-	// Handle specific agent stop
-	if len(args) == 1 {
-		agentName := args[0]
-		return stopSpecificAgent(pm, agentName, shutdownTimeout, force, quiet)
+	// Handle specific agent stop (one or more names)
+	if len(args) > 0 {
+		var lastErr error
+		for _, name := range args {
+			if err := stopSpecificAgent(pm, name, shutdownTimeout, force, quiet); err != nil {
+				lastErr = err
+				if !quiet {
+					fmt.Printf("Warning: failed to stop %s: %v\n", name, err)
+				}
+			}
+		}
+		return lastErr
 	}
 
 	// Handle --registry flag
@@ -130,6 +139,8 @@ func stopSpecificAgent(pm *PIDManager, name string, timeout time.Duration, force
 		if !quiet {
 			fmt.Printf("Agent '%s' is not running (cleaned stale PID file)\n", name)
 		}
+		// Still try to clean up watcher parent if it exists
+		stopWatcherParent(pm, name, timeout, force, quiet)
 		return nil
 	}
 
@@ -147,7 +158,40 @@ func stopSpecificAgent(pm *PIDManager, name string, timeout time.Duration, force
 		fmt.Printf("Agent '%s' stopped\n", name)
 	}
 
+	// Also stop the watcher parent process if this agent was running in watch mode
+	stopWatcherParent(pm, name, timeout, force, quiet)
+
 	return nil
+}
+
+// stopWatcherParent stops the watcher parent process for a watched agent.
+// This kills the meshctl CLI process that hosts the watcher goroutine,
+// preventing it from respawning the agent or holding resources (#706).
+func stopWatcherParent(pm *PIDManager, agentName string, timeout time.Duration, force, quiet bool) {
+	watcherPIDName := agentName + "_watcher-parent"
+	watcherPID, err := pm.ReadPID(watcherPIDName)
+	if err != nil {
+		return // No watcher parent PID file — agent was not in watch mode
+	}
+
+	if !IsProcessAlive(watcherPID) {
+		pm.RemovePID(watcherPIDName)
+		return
+	}
+
+	if !quiet {
+		fmt.Printf("Stopping watcher for '%s' (PID: %d)...\n", agentName, watcherPID)
+	}
+
+	if err := stopProcess(watcherPID, timeout, force); err != nil && !quiet {
+		fmt.Printf("Warning: failed to stop watcher for '%s': %v\n", agentName, err)
+	}
+
+	pm.RemovePID(watcherPIDName)
+
+	if !quiet {
+		fmt.Printf("Watcher for '%s' stopped\n", agentName)
+	}
 }
 
 // stopRegistry stops only the registry
@@ -225,6 +269,9 @@ func stopAllAgents(pm *PIDManager, timeout time.Duration, force, quiet bool) err
 
 			pm.RemovePIDFile(agent.PIDFile)
 
+			// Also stop associated watcher parent process (#706)
+			stopWatcherParent(pm, agent.Name, timeout, force, quiet)
+
 			mu.Lock()
 			stopped++
 			if !quiet {
@@ -258,8 +305,9 @@ func stopAll(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
 		return fmt.Errorf("failed to list processes: %w", err)
 	}
 
-	// Separate agents, UI, and registry
+	// Separate agents, watcher parents, UI, and registry
 	var agents []PIDInfo
+	var watcherParents []PIDInfo
 	var uiProc *PIDInfo
 	var registry *PIDInfo
 	for _, proc := range processes {
@@ -271,12 +319,14 @@ func stopAll(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
 			registry = &proc
 		case "ui":
 			uiProc = &proc
+		case "watcher-parent":
+			watcherParents = append(watcherParents, proc)
 		default:
 			agents = append(agents, proc)
 		}
 	}
 
-	if len(agents) == 0 && uiProc == nil && registry == nil {
+	if len(agents) == 0 && len(watcherParents) == 0 && uiProc == nil && registry == nil {
 		if !quiet {
 			fmt.Println("No agents running in background. Use 'meshctl start --detach' to run agents in background.")
 		}
@@ -321,6 +371,42 @@ func stopAll(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
 				}
 				mu.Unlock()
 			}(agent)
+		}
+		wg.Wait()
+	}
+
+	// Stop watcher parent processes after agents are stopped.
+	// These are meshctl CLI processes that host watcher goroutines (#706).
+	if len(watcherParents) > 0 {
+		var wg sync.WaitGroup
+		for _, wp := range watcherParents {
+			wg.Add(1)
+			go func(proc PIDInfo) {
+				defer wg.Done()
+
+				if !quiet {
+					fmt.Printf("Stopping watcher '%s' (PID: %d)...\n", proc.Name, proc.PID)
+				}
+
+				if err := stopProcess(proc.PID, timeout, force); err != nil {
+					mu.Lock()
+					if !quiet {
+						fmt.Printf("Failed to stop watcher '%s': %v\n", proc.Name, err)
+					}
+					failed++
+					mu.Unlock()
+					return
+				}
+
+				pm.RemovePIDFile(proc.PIDFile)
+
+				mu.Lock()
+				stopped++
+				if !quiet {
+					fmt.Printf("Watcher '%s' stopped\n", proc.Name)
+				}
+				mu.Unlock()
+			}(wp)
 		}
 		wg.Wait()
 	}
