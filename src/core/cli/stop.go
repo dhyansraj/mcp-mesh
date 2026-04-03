@@ -213,8 +213,12 @@ func stopWatcherParent(pm *PIDManager, agentName string, timeout time.Duration, 
 		}
 	}
 
-	if !quiet {
-		fmt.Printf("Watcher for '%s' stopped\n", agentName)
+	if !IsProcessAlive(watcherPID) {
+		if !quiet {
+			fmt.Printf("Watcher for '%s' stopped\n", agentName)
+		}
+	} else if !quiet {
+		fmt.Printf("Warning: watcher for '%s' (PID: %d) may still be running\n", agentName, watcherPID)
 	}
 }
 
@@ -310,9 +314,6 @@ func stopAllAgents(pm *PIDManager, timeout time.Duration, force, quiet bool) err
 
 			pm.RemovePIDFile(agent.PIDFile)
 
-			// Also stop associated watcher parent process (#706)
-			stopWatcherParent(pm, agent.Name, timeout, force, quiet)
-
 			mu.Lock()
 			stopped++
 			if !quiet {
@@ -323,6 +324,12 @@ func stopAllAgents(pm *PIDManager, timeout time.Duration, force, quiet bool) err
 	}
 
 	wg.Wait()
+
+	// Stop watcher parent processes sequentially after all agents are stopped.
+	// This avoids races when multiple agents share a watcher parent (#706).
+	for _, agent := range agents {
+		stopWatcherParent(pm, agent.Name, timeout, force, quiet)
+	}
 
 	if !quiet {
 		fmt.Printf("\nStopped %d agent(s)", stopped)
