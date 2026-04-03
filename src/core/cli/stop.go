@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -86,16 +87,19 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 
 	// Handle specific agent stop (one or more names)
 	if len(args) > 0 {
-		var lastErr error
+		var failures []string
 		for _, name := range args {
 			if err := stopSpecificAgent(pm, name, shutdownTimeout, force, quiet); err != nil {
-				lastErr = err
+				failures = append(failures, fmt.Sprintf("%s: %v", name, err))
 				if !quiet {
 					fmt.Printf("Warning: failed to stop %s: %v\n", name, err)
 				}
 			}
 		}
-		return lastErr
+		if len(failures) > 0 {
+			return fmt.Errorf("failed to stop %d agent(s): %s", len(failures), strings.Join(failures, "; "))
+		}
+		return nil
 	}
 
 	// Handle --registry flag
@@ -425,6 +429,9 @@ func stopAll(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
 
 	// Stop watcher parent processes after agents are stopped.
 	// These are meshctl CLI processes that host watcher goroutines (#706).
+	// In stopAll, we intentionally kill all watcher parents in parallel since
+	// we're tearing everything down — no need for the shared-parent counting
+	// logic used by stopAllAgents/stopWatcherParent.
 	if len(watcherParents) > 0 {
 		var wg sync.WaitGroup
 		for _, wp := range watcherParents {
