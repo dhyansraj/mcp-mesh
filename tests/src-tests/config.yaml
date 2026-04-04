@@ -34,12 +34,17 @@ docker:
   registry: 192.168.10.1:5000
 defaults:
   timeout: 600 # 10 minutes per test
+# DO NOT CHANGE execution or ssh sections - managed by tsuite orchestrator (DAG scheduler)
 execution:
   max_workers: 4 # DAG-based parallel builds
 packages:
   mode: local
 standalone:
   type: remote
+# DO NOT CHANGE - beelink4 is used to avoid CPU contention with k3s control plane on beelink1
 ssh:
-  host: beelink1
+  host: beelink4
   runner_dir: /tmp/tsuite
+  api_url: http://192.168.10.50:9999
+  local_path: /Users/dhyanraj/workspace
+  mount_path: /mnt/workspace
