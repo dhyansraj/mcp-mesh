@@ -14,5 +14,8 @@ dependencies:
 - name: mcp-mesh-tempo
   repository: file://../mcp-mesh-tempo
   version: 1.1.0-beta.3
-digest: sha256:f6dbf090e2afa66e971e10fe7e210019ff2974fdee70890e252f2d91f4477104
-generated: "2026-04-02T17:45:38.204849-04:00"
+- name: mcp-mesh-ui
+  repository: file://../mcp-mesh-ui
+  version: 1.1.0-beta.3
+digest: sha256:e961d8981868075c5b2c3ccaabf3825bbeba2c44e160fe6cf49edb9c8116c3e6
+generated: "2026-04-04T10:31:21.989601-04:00"

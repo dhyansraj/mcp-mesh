@@ -9,6 +9,12 @@ Host-based routing is enabled:
 {{- if .Values.core.redis.enabled }}
 - Redis: http://{{ include "mcp-mesh-ingress.hostname" (dict "host" .Values.core.redis.host "domain" .Values.global.domain) }}
 {{- end }}
+{{- if .Values.core.ui.enabled }}
+- Dashboard: http://{{ include "mcp-mesh-ingress.hostname" (dict "host" .Values.core.ui.host "domain" .Values.global.domain) }}
+{{- end }}
+{{- if .Values.core.grafana.enabled }}
+- Grafana: http://{{ include "mcp-mesh-ingress.hostname" (dict "host" .Values.core.grafana.host "domain" .Values.global.domain) }}
+{{- end }}
 {{- range .Values.agents }}
 {{- if .enabled }}
 - {{ .name | title }}: http://{{ include "mcp-mesh-ingress.hostname" (dict "host" .host "domain" $.Values.global.domain) }}
@@ -25,6 +31,12 @@ Add these entries to your /etc/hosts file (for local development):
   echo "$(minikube ip) {{ include "mcp-mesh-ingress.hostname" (dict "host" .host "domain" $.Values.global.domain) }}" | sudo tee -a /etc/hosts
 {{- end }}
 {{- end }}
+{{- if .Values.core.ui.enabled }}
+  echo "$(minikube ip) {{ include "mcp-mesh-ingress.hostname" (dict "host" .Values.core.ui.host "domain" .Values.global.domain) }}" | sudo tee -a /etc/hosts
+{{- end }}
+{{- if .Values.core.grafana.enabled }}
+  echo "$(minikube ip) {{ include "mcp-mesh-ingress.hostname" (dict "host" .Values.core.grafana.host "domain" .Values.global.domain) }}" | sudo tee -a /etc/hosts
+{{- end }}
 
 {{- end }}
 
@@ -37,9 +49,15 @@ Path-based routing is enabled on {{ .Values.patterns.pathBased.host }}:
 {{- if .Values.core.redis.enabled }}
 - Redis: http://{{ .Values.patterns.pathBased.host }}/redis/
 {{- end }}
+{{- if .Values.core.ui.enabled }}
+- Dashboard: http://{{ .Values.patterns.pathBased.host }}/ops/dashboard/
+{{- end }}
+{{- if .Values.core.grafana.enabled }}
+- Grafana: http://{{ .Values.patterns.pathBased.host }}/ops/grafana/
+{{- end }}
 {{- range .Values.agents }}
 {{- if .enabled }}
-- {{ .name | title }}: http://{{ .Values.patterns.pathBased.host }}/{{ .name }}/
+- {{ .name | title }}: http://{{ $.Values.patterns.pathBased.host }}/{{ .name }}/
 {{- end }}
 {{- end }}
 

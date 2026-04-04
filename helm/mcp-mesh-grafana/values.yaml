@@ -28,6 +28,9 @@ grafana:
     adminPassword: "admin"
     allowSignUp: false
     installPlugins: "grafana-piechart-panel"
+    # Base path for serving Grafana behind a path prefix
+    # When set, configures root_url and serve_from_sub_path in grafana.ini
+    basePath: ""
 
   datasources:
     tempo:

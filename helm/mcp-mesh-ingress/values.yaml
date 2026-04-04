@@ -50,6 +50,22 @@ core:
     port: 6379
     path: "/redis(/|$)(.*)"
 
+  # Dashboard UI server
+  ui:
+    enabled: false
+    host: "dashboard"
+    service: "{{ .Release.Name }}-mcp-mesh-ui"
+    port: 3080
+    path: "/ops/dashboard(/|$)(.*)"
+
+  # Grafana monitoring dashboard
+  grafana:
+    enabled: false
+    host: "grafana"
+    service: "{{ .Release.Name }}-mcp-mesh-grafana"
+    port: 3000
+    path: "/ops/grafana(/|$)(.*)"
+
 # Agent services (dynamic list)
 agents:
   # Example agents - users can override this list
@@ -107,6 +123,14 @@ commonAnnotations: {}
 # Common labels for all ingress resources
 commonLabels:
   app.kubernetes.io/part-of: mcp-mesh-ingress
+
+# Network policy for ops tools (dashboard, Grafana, Tempo)
+networkPolicy:
+  ops:
+    enabled: false
+    # Labels that allowed namespaces must have
+    allowedNamespaceLabels:
+      mcp-mesh.io/ops-access: "true"
 
 # Resource limits (optional)
 resources: {}

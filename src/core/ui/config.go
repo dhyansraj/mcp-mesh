@@ -6,6 +6,7 @@ import "crypto/tls"
 type UIConfig struct {
 	Port           int
 	RegistryURL    string
+	BasePath       string
 	LogLevel       string
 	TracingEnabled bool
 	RedisURL       string
