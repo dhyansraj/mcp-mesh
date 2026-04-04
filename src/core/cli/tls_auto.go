@@ -153,6 +153,8 @@ func (tc *TLSAutoConfig) GetRegistryTLSEnv() []string {
 func (tc *TLSAutoConfig) GetAgentTLSEnv(agentCertPath, agentKeyPath string) []string {
 	return []string{
 		"MCP_MESH_TLS_MODE=auto",
+		"MCP_MESH_TRUST_BACKEND=localca",
+		fmt.Sprintf("MCP_MESH_TRUST_DIR=%s", tc.TLSDir),
 		fmt.Sprintf("MCP_MESH_TLS_CERT=%s", agentCertPath),
 		fmt.Sprintf("MCP_MESH_TLS_KEY=%s", agentKeyPath),
 		fmt.Sprintf("MCP_MESH_TLS_CA=%s", tc.RootCAPEM),
