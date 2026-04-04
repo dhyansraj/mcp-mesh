@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -83,8 +84,17 @@ func NewTracingManager(config *TracingConfig) (*TracingManager, error) {
 
 		// Create Tempo client for trace querying (Issue #310)
 		if config.TempoQueryURL != "" {
-			manager.tempoClient = NewTempoClient(config.TempoQueryURL)
-			manager.logger.Printf("Tempo query client initialized: %s", config.TempoQueryURL)
+			tc, err := NewTempoClient(config.TempoQueryURL)
+			if err != nil {
+				manager.logger.Printf("Warning: Tempo client disabled: %v", err)
+			} else {
+				manager.tempoClient = tc
+				if u, parseErr := url.Parse(config.TempoQueryURL); parseErr == nil {
+					manager.logger.Printf("Tempo query client initialized: %s://%s", u.Scheme, u.Host)
+				} else {
+					manager.logger.Printf("Tempo query client initialized")
+				}
+			}
 		}
 
 		// Create stream-through processor and wrap with accumulator

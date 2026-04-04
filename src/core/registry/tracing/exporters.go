@@ -2,6 +2,7 @@ package tracing
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"mcp-mesh/src/core/tlsutil"
+
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -23,6 +26,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	// Direct OTLP protobuf dependencies
@@ -351,12 +355,27 @@ type JaegerExporter struct {
 func NewJaegerExporter(endpoint string) (*JaegerExporter, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Load TLS configuration from TELEMETRY_TLS_* env vars
+	telemetryTLS, tlsErr := tlsutil.LoadFromEnv("TELEMETRY_TLS")
+	if tlsErr != nil {
+		cancel()
+		return nil, fmt.Errorf("invalid telemetry TLS config: %w", tlsErr)
+	}
+
 	// Create OTLP gRPC exporter for Jaeger
-	exporter, err := otlptracegrpc.New(ctx,
-		otlptracegrpc.WithEndpoint(endpoint),
-		otlptracegrpc.WithTLSCredentials(insecure.NewCredentials()),
-		otlptracegrpc.WithDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
-	)
+	var exporter sdktrace.SpanExporter
+	var err error
+	if telemetryTLS != nil {
+		exporter, err = otlptracegrpc.New(ctx,
+			otlptracegrpc.WithEndpoint(endpoint),
+			otlptracegrpc.WithTLSCredentials(credentials.NewTLS(telemetryTLS)),
+		)
+	} else {
+		exporter, err = otlptracegrpc.New(ctx,
+			otlptracegrpc.WithEndpoint(endpoint),
+			otlptracegrpc.WithTLSCredentials(insecure.NewCredentials()),
+		)
+	}
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to create OTLP exporter: %w", err)
@@ -792,6 +811,9 @@ type OTLPExporter struct {
 	directClient     tracecollectorv1.TraceServiceClient
 	directConn       *grpc.ClientConn
 
+	// TLS config (loaded once at construction)
+	tlsConfig       *tls.Config
+
 	// Connection management (matches Redis StreamConsumer pattern)
 	connMu          sync.RWMutex
 	connectionState string
@@ -813,6 +835,12 @@ func NewOTLPExporter(endpoint, protocol string) (*OTLPExporter, error) {
 		return nil, fmt.Errorf("unsupported OTLP protocol: %s (supported: grpc, http)", protocol)
 	}
 
+	// Load telemetry TLS config once at construction time
+	telemetryTLS, err := tlsutil.LoadFromEnv("TELEMETRY_TLS")
+	if err != nil {
+		return nil, fmt.Errorf("invalid telemetry TLS config: %w", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	otlpExporter := &OTLPExporter{
@@ -832,6 +860,9 @@ func NewOTLPExporter(endpoint, protocol string) (*OTLPExporter, error) {
 		bufferMutex:      sync.RWMutex{},
 		bufferTimeout:    1 * time.Second,
 		flushTicker:      time.NewTicker(500 * time.Millisecond),
+
+		// TLS config (loaded once)
+		tlsConfig: telemetryTLS,
 
 		// Connection state starts disconnected
 		connectionState: otlpStateDisconnected,
@@ -912,22 +943,35 @@ func (oe *OTLPExporter) attemptConnection() {
 
 	oe.logger.Printf("Attempting to connect to OTLP endpoint %s (attempt %d)...", oe.endpoint, oe.retryCount+1)
 
-	// Create OTLP SDK exporter
+	// Create OTLP SDK exporter (uses cached TLS config from construction)
 	var exporter sdktrace.SpanExporter
 	var err error
 
 	switch strings.ToLower(oe.protocol) {
 	case "http", "http/protobuf":
-		exporter, err = otlptracehttp.New(oe.ctx,
-			otlptracehttp.WithEndpointURL("http://"+oe.endpoint),
-			otlptracehttp.WithInsecure(),
-		)
+		if oe.tlsConfig != nil {
+			exporter, err = otlptracehttp.New(oe.ctx,
+				otlptracehttp.WithEndpointURL("https://"+oe.endpoint),
+				otlptracehttp.WithTLSClientConfig(oe.tlsConfig),
+			)
+		} else {
+			exporter, err = otlptracehttp.New(oe.ctx,
+				otlptracehttp.WithEndpointURL("http://"+oe.endpoint),
+				otlptracehttp.WithInsecure(),
+			)
+		}
 	case "grpc", "":
-		exporter, err = otlptracegrpc.New(oe.ctx,
-			otlptracegrpc.WithEndpoint(oe.endpoint),
-			otlptracegrpc.WithTLSCredentials(insecure.NewCredentials()),
-			otlptracegrpc.WithDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
-		)
+		if oe.tlsConfig != nil {
+			exporter, err = otlptracegrpc.New(oe.ctx,
+				otlptracegrpc.WithEndpoint(oe.endpoint),
+				otlptracegrpc.WithTLSCredentials(credentials.NewTLS(oe.tlsConfig)),
+			)
+		} else {
+			exporter, err = otlptracegrpc.New(oe.ctx,
+				otlptracegrpc.WithEndpoint(oe.endpoint),
+				otlptracegrpc.WithTLSCredentials(insecure.NewCredentials()),
+			)
+		}
 	}
 
 	if err != nil {
@@ -939,9 +983,13 @@ func (oe *OTLPExporter) attemptConnection() {
 	var directClient tracecollectorv1.TraceServiceClient
 	var directConn *grpc.ClientConn
 	if strings.ToLower(oe.protocol) == "grpc" || oe.protocol == "" {
-		directConn, err = grpc.NewClient(oe.endpoint,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
+		var dialOpt grpc.DialOption
+		if oe.tlsConfig != nil {
+			dialOpt = grpc.WithTransportCredentials(credentials.NewTLS(oe.tlsConfig))
+		} else {
+			dialOpt = grpc.WithTransportCredentials(insecure.NewCredentials())
+		}
+		directConn, err = grpc.NewClient(oe.endpoint, dialOpt)
 		if err != nil {
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			exporter.Shutdown(shutdownCtx)

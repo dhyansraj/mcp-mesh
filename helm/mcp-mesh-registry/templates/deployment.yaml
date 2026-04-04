@@ -147,6 +147,54 @@ spec:
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+            {{- if .Values.serviceTLS.redis.secretName }}
+            - name: REDIS_TLS_CA
+              value: /etc/service-tls/redis/{{ .Values.serviceTLS.redis.caKey }}
+            {{- if .Values.serviceTLS.redis.certKey }}
+            - name: REDIS_TLS_CERT
+              value: /etc/service-tls/redis/{{ .Values.serviceTLS.redis.certKey }}
+            {{- end }}
+            {{- if .Values.serviceTLS.redis.keyKey }}
+            - name: REDIS_TLS_KEY
+              value: /etc/service-tls/redis/{{ .Values.serviceTLS.redis.keyKey }}
+            {{- end }}
+            {{- if .Values.serviceTLS.redis.skipVerify }}
+            - name: REDIS_TLS_SKIP_VERIFY
+              value: "true"
+            {{- end }}
+            {{- end }}
+            {{- if .Values.serviceTLS.tempo.secretName }}
+            - name: TEMPO_TLS_CA
+              value: /etc/service-tls/tempo/{{ .Values.serviceTLS.tempo.caKey }}
+            {{- if .Values.serviceTLS.tempo.certKey }}
+            - name: TEMPO_TLS_CERT
+              value: /etc/service-tls/tempo/{{ .Values.serviceTLS.tempo.certKey }}
+            {{- end }}
+            {{- if .Values.serviceTLS.tempo.keyKey }}
+            - name: TEMPO_TLS_KEY
+              value: /etc/service-tls/tempo/{{ .Values.serviceTLS.tempo.keyKey }}
+            {{- end }}
+            {{- if .Values.serviceTLS.tempo.skipVerify }}
+            - name: TEMPO_TLS_SKIP_VERIFY
+              value: "true"
+            {{- end }}
+            {{- end }}
+            {{- if .Values.serviceTLS.telemetry.secretName }}
+            - name: TELEMETRY_TLS_CA
+              value: /etc/service-tls/telemetry/{{ .Values.serviceTLS.telemetry.caKey }}
+            {{- if .Values.serviceTLS.telemetry.certKey }}
+            - name: TELEMETRY_TLS_CERT
+              value: /etc/service-tls/telemetry/{{ .Values.serviceTLS.telemetry.certKey }}
+            {{- end }}
+            {{- if .Values.serviceTLS.telemetry.keyKey }}
+            - name: TELEMETRY_TLS_KEY
+              value: /etc/service-tls/telemetry/{{ .Values.serviceTLS.telemetry.keyKey }}
+            {{- end }}
+            {{- if .Values.serviceTLS.telemetry.skipVerify }}
+            - name: TELEMETRY_TLS_SKIP_VERIFY
+              value: "true"
+            {{- end }}
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "mcp-mesh-registry.fullname" . }}-config
@@ -195,6 +243,21 @@ spec:
               mountPath: /run/spire/agent/sockets
               readOnly: true
             {{- end }}
+            {{- if .Values.serviceTLS.redis.secretName }}
+            - name: tls-redis
+              mountPath: /etc/service-tls/redis
+              readOnly: true
+            {{- end }}
+            {{- if .Values.serviceTLS.tempo.secretName }}
+            - name: tls-tempo
+              mountPath: /etc/service-tls/tempo
+              readOnly: true
+            {{- end }}
+            {{- if .Values.serviceTLS.telemetry.secretName }}
+            - name: tls-telemetry
+              mountPath: /etc/service-tls/telemetry
+              readOnly: true
+            {{- end }}
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -231,6 +294,24 @@ spec:
           hostPath:
             path: /run/spire/agent/sockets
             type: DirectoryOrCreate
+        {{- end }}
+        {{- if .Values.serviceTLS.redis.secretName }}
+        - name: tls-redis
+          secret:
+            secretName: {{ .Values.serviceTLS.redis.secretName }}
+            defaultMode: 0400
+        {{- end }}
+        {{- if .Values.serviceTLS.tempo.secretName }}
+        - name: tls-tempo
+          secret:
+            secretName: {{ .Values.serviceTLS.tempo.secretName }}
+            defaultMode: 0400
+        {{- end }}
+        {{- if .Values.serviceTLS.telemetry.secretName }}
+        - name: tls-telemetry
+          secret:
+            secretName: {{ .Values.serviceTLS.telemetry.secretName }}
+            defaultMode: 0400
         {{- end }}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}

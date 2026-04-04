@@ -17,6 +17,7 @@ import (
 	"mcp-mesh/src/core/logger"
 	"mcp-mesh/src/core/registry"
 	"mcp-mesh/src/core/registry/tracing"
+	"mcp-mesh/src/core/tlsutil"
 	"mcp-mesh/src/core/ui"
 )
 
@@ -82,12 +83,19 @@ func main() {
 	// Trim trailing slash for consistent URL joining
 	regURL = strings.TrimRight(regURL, "/")
 
+	// Load TLS config for registry proxy
+	registryTLS, err := tlsutil.LoadFromEnv("MCP_MESH_REGISTRY_TLS")
+	if err != nil {
+		log.Fatalf("Failed to load registry TLS config: %v", err)
+	}
+
 	logLevel := getEnvDefault("MCP_MESH_LOG_LEVEL", "INFO")
 
 	uiConfig := &ui.UIConfig{
 		Port:        uiPort,
 		RegistryURL: regURL,
 		LogLevel:    logLevel,
+		RegistryTLS: registryTLS,
 	}
 
 	log.Printf("Starting MCP Mesh UI Server | port=%d registry=%s", uiPort, regURL)

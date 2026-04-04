@@ -211,6 +211,31 @@ registry:
         - "*"
       allowCredentials: true
 
+# Per-service TLS configuration for external service connections
+# Each service connection can use its own CA, client cert, and key
+serviceTLS:
+  # TLS for Redis connection
+  redis:
+    secretName: ""
+    caKey: "ca.crt"
+    certKey: "tls.crt"
+    keyKey: "tls.key"
+    skipVerify: false
+  # TLS for Tempo HTTP query connection
+  tempo:
+    secretName: ""
+    caKey: "ca.crt"
+    certKey: "tls.crt"
+    keyKey: "tls.key"
+    skipVerify: false
+  # TLS for OTLP/telemetry exporter connection
+  telemetry:
+    secretName: ""
+    caKey: "ca.crt"
+    certKey: "tls.crt"
+    keyKey: "tls.key"
+    skipVerify: false
+
 # Persistence configuration (disabled for stateless registry)
 persistence:
   enabled: false # Registry is stateless and uses external database
