@@ -709,6 +709,17 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 	cmd.Env = os.Environ()
 
+	// Inject TLS-related --env values into the forked process environment.
+	// The forked meshctl needs these for its own registry health checks
+	// (e.g., MCP_MESH_TLS_CA for SPIRE/Vault setups where the registry runs HTTPS).
+	if envVals, err := cobraCmd.Flags().GetStringArray("env"); err == nil {
+		for _, envVar := range envVals {
+			if strings.HasPrefix(envVar, "MCP_MESH_TLS_") {
+				cmd.Env = append(cmd.Env, envVar)
+			}
+		}
+	}
+
 	// Determine log name (agent name or "registry")
 	registryOnly, _ := cobraCmd.Flags().GetBool("registry-only")
 	var logName string
