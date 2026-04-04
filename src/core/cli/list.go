@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1392,9 +1393,18 @@ func configureHTTPClient(timeoutSeconds int) {
 // configureHTTPClientWithTLS sets up the registry HTTP client with TLS and timeout.
 func configureHTTPClientWithTLS(timeoutSeconds int, insecure bool) {
 	base := getCLIClient()
+	transport := base.Transport
+	if insecure {
+		transport = &http.Transport{
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+			MaxIdleConns:        20,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		}
+	}
 	registryHTTPClient = &http.Client{
 		Timeout:   time.Duration(timeoutSeconds) * time.Second,
-		Transport: base.Transport,
+		Transport: transport,
 	}
 }
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -302,10 +303,23 @@ func parseToolSpecifier(spec string) (agentName, toolName string) {
 // Uses the shared TLS config from getCLIClient but with a custom timeout.
 func createHTTPClient(timeoutSeconds int, insecure bool) *http.Client {
 	base := getCLIClient()
-	if timeoutSeconds > 0 && time.Duration(timeoutSeconds)*time.Second != base.Timeout {
+	timeout := base.Timeout
+	if timeoutSeconds > 0 {
+		timeout = time.Duration(timeoutSeconds) * time.Second
+	}
+	transport := base.Transport
+	if insecure {
+		transport = &http.Transport{
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+			MaxIdleConns:        20,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+		}
+	}
+	if timeout != base.Timeout || transport != base.Transport {
 		return &http.Client{
-			Timeout:   time.Duration(timeoutSeconds) * time.Second,
-			Transport: base.Transport,
+			Timeout:   timeout,
+			Transport: transport,
 		}
 	}
 	return base
