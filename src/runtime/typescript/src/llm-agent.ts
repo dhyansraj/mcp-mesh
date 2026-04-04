@@ -232,6 +232,7 @@ export class VercelDirectProvider implements LlmProvider {
   private cachedProvider: ((modelId: string) => unknown) | null = null;
   private providerLoadAttempted = false;
   private toolProxies: Map<string, LlmToolProxy> = new Map();
+  private maxSteps = 10;
 
   constructor(providerSpec: string) {
     this.providerSpec = providerSpec;
@@ -242,11 +243,12 @@ export class VercelDirectProvider implements LlmProvider {
    * When set, tools are created with execute callbacks and maxSteps is enabled,
    * letting the SDK handle the tool execution loop internally.
    */
-  setToolProxies(tools: LlmToolProxy[]): void {
+  setToolProxies(tools: LlmToolProxy[], maxIterations?: number): void {
     this.toolProxies.clear();
     for (const tool of tools) {
       this.toolProxies.set(tool.name, tool);
     }
+    this.maxSteps = maxIterations ?? 10;
   }
 
   /**
@@ -388,7 +390,7 @@ export class VercelDirectProvider implements LlmProvider {
       // When tool proxies are set, the SDK handles the agentic loop via execute callbacks.
       // maxSteps allows the SDK to call tools and feed results back to the LLM automatically.
       if (this.toolProxies.size > 0) {
-        requestOptions.maxSteps = 10;
+        requestOptions.maxSteps = this.maxSteps;
       }
     }
 
@@ -850,7 +852,7 @@ export class MeshLlmAgent<T = string> {
     // Set tool proxies on direct-mode providers so the Vercel AI SDK
     // can execute tools internally via maxSteps (agentic loop in the SDK).
     if (provider instanceof VercelDirectProvider && context.tools.length > 0) {
-      provider.setToolProxies(context.tools);
+      provider.setToolProxies(context.tools, this.config.maxIterations);
     }
 
     // Agentic loop

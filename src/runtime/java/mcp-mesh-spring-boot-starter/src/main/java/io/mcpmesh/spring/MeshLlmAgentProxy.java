@@ -860,7 +860,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             functionDef.put("parameters", schema);
 
             // Enrich with _mesh_endpoint for provider-side tool execution
-            if (tool.endpoint() != null && !tool.endpoint().isEmpty()) {
+            if (tool.available() && tool.endpoint() != null && !tool.endpoint().isEmpty()) {
                 functionDef.put("_mesh_endpoint", tool.endpoint());
             }
 

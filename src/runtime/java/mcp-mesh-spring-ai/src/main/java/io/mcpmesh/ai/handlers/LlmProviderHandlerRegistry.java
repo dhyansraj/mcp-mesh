@@ -117,7 +117,7 @@ public class LlmProviderHandlerRegistry {
         if (vendor == null || vendor.isEmpty()) {
             return false;
         }
-        return handlers.containsKey(vendor.toLowerCase().trim());
+        return handlers.containsKey(extractVendor(vendor).toLowerCase().trim());
     }
 
     /**

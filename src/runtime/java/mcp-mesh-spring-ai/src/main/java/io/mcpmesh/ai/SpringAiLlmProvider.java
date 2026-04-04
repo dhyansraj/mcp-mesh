@@ -282,7 +282,10 @@ public class SpringAiLlmProvider {
      * E.g., "anthropic/claude-sonnet-4-5" -> "anthropic", "claude" -> "claude".
      */
     private static String normalizeProvider(String provider) {
-        String lower = provider.toLowerCase();
+        if (provider == null || provider.trim().isEmpty()) {
+            return "unknown";
+        }
+        String lower = provider.toLowerCase().trim();
         if (lower.contains("/")) {
             return lower.substring(0, lower.indexOf('/'));
         }
