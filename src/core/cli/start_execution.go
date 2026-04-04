@@ -688,6 +688,12 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 					cmdArgs = append(cmdArgs, "--"+flag.Name)
 				}
 				// If false, don't pass the flag at all
+			} else if flag.Value.Type() == "stringArray" {
+				// StringArray flags need each value as a separate --flag argument
+				vals, _ := cobraCmd.Flags().GetStringArray(flag.Name)
+				for _, v := range vals {
+					cmdArgs = append(cmdArgs, "--"+flag.Name, v)
+				}
 			} else {
 				cmdArgs = append(cmdArgs, "--"+flag.Name, flag.Value.String())
 			}
