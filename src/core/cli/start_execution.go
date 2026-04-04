@@ -694,6 +694,12 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 				for _, v := range vals {
 					cmdArgs = append(cmdArgs, "--"+flag.Name, v)
 				}
+			} else if flag.Value.Type() == "stringSlice" {
+				// StringSlice has the same bracket-serialization issue as StringArray
+				vals, _ := cobraCmd.Flags().GetStringSlice(flag.Name)
+				for _, v := range vals {
+					cmdArgs = append(cmdArgs, "--"+flag.Name, v)
+				}
 			} else {
 				cmdArgs = append(cmdArgs, "--"+flag.Name, flag.Value.String())
 			}

@@ -60,13 +60,17 @@ func getCLIClient() *http.Client {
 				autoCA := filepath.Join(homeDir, ".mcp_mesh", "tls", "ca.pem")
 				if _, statErr := os.Stat(autoCA); statErr == nil {
 					caCert, readErr := os.ReadFile(autoCA)
-					if readErr == nil {
+					if readErr != nil {
+						fmt.Fprintf(os.Stderr, "Warning: TLS auto CA found at %s but unreadable: %v\n", autoCA, readErr)
+					} else {
 						pool := x509.NewCertPool()
 						if pool.AppendCertsFromPEM(caCert) {
 							tlsConfig = &tls.Config{
 								RootCAs:    pool,
 								MinVersion: tls.VersionTLS12,
 							}
+						} else {
+							fmt.Fprintf(os.Stderr, "Warning: TLS auto CA at %s contains invalid PEM data\n", autoCA)
 						}
 					}
 				}
