@@ -47,3 +47,7 @@ dependencies:
     version: "1.1.0-beta.3"
     repository: "file://../mcp-mesh-tempo"
     condition: tempo.enabled
+  - name: mcp-mesh-ui
+    version: "1.1.0-beta.3"
+    repository: "file://../mcp-mesh-ui"
+    condition: ui.enabled

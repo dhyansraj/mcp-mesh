@@ -34,6 +34,9 @@ grafana:
 tempo:
   enabled: true
 
+ui:
+  enabled: false
+
 # PostgreSQL configuration
 mcp-mesh-postgres:
   postgres:
@@ -224,6 +227,19 @@ mcp-mesh-tempo:
       limits:
         memory: "1Gi"
         cpu: "500m"
+
+# UI Server configuration
+mcp-mesh-ui:
+  ui:
+    registryURL: "http://mcp-core-mcp-mesh-registry:8000"
+    basePath: ""  # Set to "/ops/dashboard" for path-based ingress
+    database:
+      url: "postgresql://mcp_mesh_readonly:changeme@mcp-core-mcp-mesh-postgres:5432/mcpmesh?sslmode=disable"
+    redis:
+      url: "redis://mcp-core-mcp-mesh-redis:6379"
+    tempo:
+      url: "http://mcp-core-mcp-mesh-tempo:3200"
+      telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
 
 # Namespace creation
 namespaceCreate: true

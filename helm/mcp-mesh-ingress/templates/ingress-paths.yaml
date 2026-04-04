@@ -45,6 +45,26 @@ spec:
                   number: {{ .Values.core.redis.port }}
           {{- end }}
 
+          {{- if .Values.core.ui.enabled }}
+          - path: {{ .Values.core.ui.path }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.ui.service "serviceNamespace" .Values.global.serviceNamespace "root" $) }}
+                port:
+                  number: {{ .Values.core.ui.port }}
+          {{- end }}
+
+          {{- if .Values.core.grafana.enabled }}
+          - path: {{ .Values.core.grafana.path }}
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ include "mcp-mesh-ingress.serviceName" (dict "service" .Values.core.grafana.service "serviceNamespace" .Values.global.serviceNamespace "root" $) }}
+                port:
+                  number: {{ .Values.core.grafana.port }}
+          {{- end }}
+
           {{- /* Agent services */ -}}
           {{- range .Values.agents }}
           {{- if .enabled }}

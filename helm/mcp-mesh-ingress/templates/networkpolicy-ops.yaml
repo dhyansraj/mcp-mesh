@@ -1,0 +1,32 @@
+{{- if .Values.networkPolicy.ops.enabled -}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mcp-mesh-ingress.fullname" . }}-ops-access
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mcp-mesh-ingress.labels" . | nindent 4 }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: mcp-mesh-ops
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ops.allowedNamespaceLabels | nindent 14 }}
+      ports:
+        {{- if .Values.core.ui.enabled }}
+        - protocol: TCP
+          port: {{ .Values.core.ui.port }}
+        {{- end }}
+        {{- if .Values.core.grafana.enabled }}
+        - protocol: TCP
+          port: {{ .Values.core.grafana.port }}
+        {{- end }}
+{{- end }}

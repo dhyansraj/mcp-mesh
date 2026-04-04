@@ -12,3 +12,6 @@ data:
   MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ .Values.ui.tracing.enabled | default "true" | quote }}
   TEMPO_URL: {{ .Values.ui.tempo.url | quote }}
   TELEMETRY_ENDPOINT: {{ .Values.ui.tempo.telemetryEndpoint | quote }}
+  {{- if .Values.ui.basePath }}
+  MCP_MESH_UI_BASE_PATH: {{ .Values.ui.basePath | quote }}
+  {{- end }}

@@ -11,6 +11,10 @@ data:
     [server]
     http_port = 3000
     enable_gzip = true
+    {{- if .Values.grafana.config.basePath }}
+    root_url = %(protocol)s://%(domain)s{{ .Values.grafana.config.basePath }}/
+    serve_from_sub_path = true
+    {{- end }}
 
     [security]
     admin_password = {{ .Values.grafana.config.adminPassword | quote }}

@@ -18,6 +18,7 @@ ui:
   port: "3080"
   registryURL: "http://mcp-mesh-registry:8000"
   logLevel: "INFO"
+  basePath: ""  # Set to "/ops/dashboard" for path-based ingress routing
   database:
     # Override with a read-only database credential for production
     url: "postgresql://mcp_mesh_readonly:changeme@mcp-mesh-postgres:5432/mcp_mesh_registry?sslmode=disable"
