@@ -1,4 +1,4 @@
-{{- if .Values.networkPolicy.ops.enabled -}}
+{{- if and .Values.networkPolicy.ops.enabled (or .Values.core.ui.enabled .Values.core.grafana.enabled) -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
