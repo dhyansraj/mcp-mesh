@@ -124,21 +124,25 @@ spec:
         - name: tls-registry
           secret:
             secretName: {{ .Values.ui.tls.registry.secretName }}
+            defaultMode: 0400
         {{- end }}
         {{- if .Values.ui.tls.redis.secretName }}
         - name: tls-redis
           secret:
             secretName: {{ .Values.ui.tls.redis.secretName }}
+            defaultMode: 0400
         {{- end }}
         {{- if .Values.ui.tls.tempo.secretName }}
         - name: tls-tempo
           secret:
             secretName: {{ .Values.ui.tls.tempo.secretName }}
+            defaultMode: 0400
         {{- end }}
         {{- if .Values.ui.tls.telemetry.secretName }}
         - name: tls-telemetry
           secret:
             secretName: {{ .Values.ui.tls.telemetry.secretName }}
+            defaultMode: 0400
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

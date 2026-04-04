@@ -2,6 +2,7 @@ package tracing
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"os"
@@ -45,6 +46,9 @@ type StreamConsumer struct {
 	lastError       error
 	lastErrorTime   time.Time
 	retryCount      int
+
+	// TLS config (loaded once at construction)
+	tlsConfig *tls.Config
 
 	// Runtime
 	logger       *log.Logger
@@ -136,6 +140,12 @@ func NewStreamConsumer(config *StreamConsumerConfig, processor TraceEventProcess
 		consumerName = fmt.Sprintf("registry-%s-%d", hostname, pid)
 	}
 
+	// Load Redis TLS config once at construction time
+	redisTLS, err := tlsutil.LoadFromEnv("REDIS_TLS")
+	if err != nil {
+		logger.Printf("Warning: invalid Redis TLS config: %v (TLS disabled)", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	consumer := &StreamConsumer{
@@ -145,6 +155,7 @@ func NewStreamConsumer(config *StreamConsumerConfig, processor TraceEventProcess
 		consumerName:    consumerName,
 		enabled:         true,
 		connectionState: StateDisconnected,
+		tlsConfig:       redisTLS,
 		logger:          logger,
 		batchSize:       config.BatchSize,
 		blockTimeout:    config.BlockTimeout,
@@ -268,14 +279,9 @@ func (sc *StreamConsumer) attemptConnection() {
 		return
 	}
 
-	// Apply custom TLS config from REDIS_TLS_* env vars
-	redisTLS, tlsErr := tlsutil.LoadFromEnv("REDIS_TLS")
-	if tlsErr != nil {
-		sc.handleConnectionError(fmt.Errorf("invalid Redis TLS config: %w", tlsErr))
-		return
-	}
-	if redisTLS != nil {
-		opts.TLSConfig = redisTLS
+	// Apply cached TLS config from REDIS_TLS_* env vars (loaded at construction)
+	if sc.tlsConfig != nil {
+		opts.TLSConfig = sc.tlsConfig
 	}
 
 	client := redis.NewClient(opts)
