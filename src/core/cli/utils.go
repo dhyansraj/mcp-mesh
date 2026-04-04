@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -50,9 +52,26 @@ func getCLIClient() *http.Client {
 			os.Exit(1)
 		}
 
-		// tlsConfig is nil when no MCP_MESH_TLS_* env vars are set.
-		// This uses default Go TLS verification (system CA pool).
-		// For self-signed certs, set MCP_MESH_TLS_CA or MCP_MESH_TLS_SKIP_VERIFY=true.
+		// When no MCP_MESH_TLS_* env vars are set, check for TLS auto CA.
+		// TLS auto mode generates a local CA at ~/.mcp_mesh/tls/ca.pem.
+		// Auto-detecting it lets `meshctl call` work without manual env setup.
+		if tlsConfig == nil {
+			if homeDir, err := os.UserHomeDir(); err == nil {
+				autoCA := filepath.Join(homeDir, ".mcp_mesh", "tls", "ca.pem")
+				if _, statErr := os.Stat(autoCA); statErr == nil {
+					caCert, readErr := os.ReadFile(autoCA)
+					if readErr == nil {
+						pool := x509.NewCertPool()
+						if pool.AppendCertsFromPEM(caCert) {
+							tlsConfig = &tls.Config{
+								RootCAs:    pool,
+								MinVersion: tls.VersionTLS12,
+							}
+						}
+					}
+				}
+			}
+		}
 
 		defaultCLIClient = &http.Client{
 			Timeout: 10 * time.Second,
