@@ -28,7 +28,9 @@ func LoadFromEnv(prefix string) (*tls.Config, error) {
 		return nil, nil
 	}
 
-	tlsConfig := &tls.Config{}
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
 
 	if caPath != "" {
 		caCert, err := os.ReadFile(caPath)

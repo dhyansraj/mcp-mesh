@@ -3,6 +3,7 @@ package tracing
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 )
 
@@ -67,7 +68,11 @@ func NewAccumulatorOnlyManager(config *TracingConfig, extraProcessors ...TraceEv
 			manager.logger.Printf("Warning: Tempo client disabled: %v", err)
 		} else {
 			manager.tempoClient = tc
-			manager.logger.Printf("Tempo query client initialized: %s", config.TempoQueryURL)
+			if u, parseErr := url.Parse(config.TempoQueryURL); parseErr == nil {
+				manager.logger.Printf("Tempo query client initialized: %s://%s", u.Scheme, u.Host)
+			} else {
+				manager.logger.Printf("Tempo query client initialized")
+			}
 		}
 	}
 

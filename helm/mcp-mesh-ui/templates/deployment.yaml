@@ -22,6 +22,8 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      securityContext:
+        fsGroup: 1000
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -38,10 +40,14 @@ spec:
             {{- if .Values.ui.tls.registry.secretName }}
             - name: MCP_MESH_REGISTRY_TLS_CA
               value: /etc/service-tls/registry/{{ .Values.ui.tls.registry.caKey }}
+            {{- if .Values.ui.tls.registry.certKey }}
             - name: MCP_MESH_REGISTRY_TLS_CERT
               value: /etc/service-tls/registry/{{ .Values.ui.tls.registry.certKey }}
+            {{- end }}
+            {{- if .Values.ui.tls.registry.keyKey }}
             - name: MCP_MESH_REGISTRY_TLS_KEY
               value: /etc/service-tls/registry/{{ .Values.ui.tls.registry.keyKey }}
+            {{- end }}
             {{- if .Values.ui.tls.registry.skipVerify }}
             - name: MCP_MESH_REGISTRY_TLS_SKIP_VERIFY
               value: "true"
@@ -50,10 +56,14 @@ spec:
             {{- if .Values.ui.tls.redis.secretName }}
             - name: REDIS_TLS_CA
               value: /etc/service-tls/redis/{{ .Values.ui.tls.redis.caKey }}
+            {{- if .Values.ui.tls.redis.certKey }}
             - name: REDIS_TLS_CERT
               value: /etc/service-tls/redis/{{ .Values.ui.tls.redis.certKey }}
+            {{- end }}
+            {{- if .Values.ui.tls.redis.keyKey }}
             - name: REDIS_TLS_KEY
               value: /etc/service-tls/redis/{{ .Values.ui.tls.redis.keyKey }}
+            {{- end }}
             {{- if .Values.ui.tls.redis.skipVerify }}
             - name: REDIS_TLS_SKIP_VERIFY
               value: "true"
@@ -62,18 +72,34 @@ spec:
             {{- if .Values.ui.tls.tempo.secretName }}
             - name: TEMPO_TLS_CA
               value: /etc/service-tls/tempo/{{ .Values.ui.tls.tempo.caKey }}
+            {{- if .Values.ui.tls.tempo.certKey }}
             - name: TEMPO_TLS_CERT
               value: /etc/service-tls/tempo/{{ .Values.ui.tls.tempo.certKey }}
+            {{- end }}
+            {{- if .Values.ui.tls.tempo.keyKey }}
             - name: TEMPO_TLS_KEY
               value: /etc/service-tls/tempo/{{ .Values.ui.tls.tempo.keyKey }}
+            {{- end }}
+            {{- if .Values.ui.tls.tempo.skipVerify }}
+            - name: TEMPO_TLS_SKIP_VERIFY
+              value: "true"
+            {{- end }}
             {{- end }}
             {{- if .Values.ui.tls.telemetry.secretName }}
             - name: TELEMETRY_TLS_CA
               value: /etc/service-tls/telemetry/{{ .Values.ui.tls.telemetry.caKey }}
+            {{- if .Values.ui.tls.telemetry.certKey }}
             - name: TELEMETRY_TLS_CERT
               value: /etc/service-tls/telemetry/{{ .Values.ui.tls.telemetry.certKey }}
+            {{- end }}
+            {{- if .Values.ui.tls.telemetry.keyKey }}
             - name: TELEMETRY_TLS_KEY
               value: /etc/service-tls/telemetry/{{ .Values.ui.tls.telemetry.keyKey }}
+            {{- end }}
+            {{- if .Values.ui.tls.telemetry.skipVerify }}
+            - name: TELEMETRY_TLS_SKIP_VERIFY
+              value: "true"
+            {{- end }}
             {{- end }}
           envFrom:
             - configMapRef:
@@ -124,25 +150,25 @@ spec:
         - name: tls-registry
           secret:
             secretName: {{ .Values.ui.tls.registry.secretName }}
-            defaultMode: 0400
+            defaultMode: 0440
         {{- end }}
         {{- if .Values.ui.tls.redis.secretName }}
         - name: tls-redis
           secret:
             secretName: {{ .Values.ui.tls.redis.secretName }}
-            defaultMode: 0400
+            defaultMode: 0440
         {{- end }}
         {{- if .Values.ui.tls.tempo.secretName }}
         - name: tls-tempo
           secret:
             secretName: {{ .Values.ui.tls.tempo.secretName }}
-            defaultMode: 0400
+            defaultMode: 0440
         {{- end }}
         {{- if .Values.ui.tls.telemetry.secretName }}
         - name: tls-telemetry
           secret:
             secretName: {{ .Values.ui.tls.telemetry.secretName }}
-            defaultMode: 0400
+            defaultMode: 0440
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

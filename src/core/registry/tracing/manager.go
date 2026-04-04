@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -88,7 +89,11 @@ func NewTracingManager(config *TracingConfig) (*TracingManager, error) {
 				manager.logger.Printf("Warning: Tempo client disabled: %v", err)
 			} else {
 				manager.tempoClient = tc
-				manager.logger.Printf("Tempo query client initialized: %s", config.TempoQueryURL)
+				if u, parseErr := url.Parse(config.TempoQueryURL); parseErr == nil {
+					manager.logger.Printf("Tempo query client initialized: %s://%s", u.Scheme, u.Host)
+				} else {
+					manager.logger.Printf("Tempo query client initialized")
+				}
 			}
 		}
 

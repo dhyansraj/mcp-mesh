@@ -150,10 +150,14 @@ spec:
             {{- if .Values.serviceTLS.redis.secretName }}
             - name: REDIS_TLS_CA
               value: /etc/service-tls/redis/{{ .Values.serviceTLS.redis.caKey }}
+            {{- if .Values.serviceTLS.redis.certKey }}
             - name: REDIS_TLS_CERT
               value: /etc/service-tls/redis/{{ .Values.serviceTLS.redis.certKey }}
+            {{- end }}
+            {{- if .Values.serviceTLS.redis.keyKey }}
             - name: REDIS_TLS_KEY
               value: /etc/service-tls/redis/{{ .Values.serviceTLS.redis.keyKey }}
+            {{- end }}
             {{- if .Values.serviceTLS.redis.skipVerify }}
             - name: REDIS_TLS_SKIP_VERIFY
               value: "true"
@@ -162,18 +166,34 @@ spec:
             {{- if .Values.serviceTLS.tempo.secretName }}
             - name: TEMPO_TLS_CA
               value: /etc/service-tls/tempo/{{ .Values.serviceTLS.tempo.caKey }}
+            {{- if .Values.serviceTLS.tempo.certKey }}
             - name: TEMPO_TLS_CERT
               value: /etc/service-tls/tempo/{{ .Values.serviceTLS.tempo.certKey }}
+            {{- end }}
+            {{- if .Values.serviceTLS.tempo.keyKey }}
             - name: TEMPO_TLS_KEY
               value: /etc/service-tls/tempo/{{ .Values.serviceTLS.tempo.keyKey }}
+            {{- end }}
+            {{- if .Values.serviceTLS.tempo.skipVerify }}
+            - name: TEMPO_TLS_SKIP_VERIFY
+              value: "true"
+            {{- end }}
             {{- end }}
             {{- if .Values.serviceTLS.telemetry.secretName }}
             - name: TELEMETRY_TLS_CA
               value: /etc/service-tls/telemetry/{{ .Values.serviceTLS.telemetry.caKey }}
+            {{- if .Values.serviceTLS.telemetry.certKey }}
             - name: TELEMETRY_TLS_CERT
               value: /etc/service-tls/telemetry/{{ .Values.serviceTLS.telemetry.certKey }}
+            {{- end }}
+            {{- if .Values.serviceTLS.telemetry.keyKey }}
             - name: TELEMETRY_TLS_KEY
               value: /etc/service-tls/telemetry/{{ .Values.serviceTLS.telemetry.keyKey }}
+            {{- end }}
+            {{- if .Values.serviceTLS.telemetry.skipVerify }}
+            - name: TELEMETRY_TLS_SKIP_VERIFY
+              value: "true"
+            {{- end }}
             {{- end }}
           envFrom:
             - configMapRef:

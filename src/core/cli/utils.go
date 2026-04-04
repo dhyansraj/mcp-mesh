@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -43,7 +42,6 @@ var cliClientOnce sync.Once
 // getCLIClient returns a shared HTTP client for CLI-to-registry communication.
 // Uses sync.Once to create the client lazily and cache it.
 // TLS is configured from MCP_MESH_TLS_* env vars (CA, CERT, KEY, SKIP_VERIFY).
-// When no TLS env vars are set, defaults to InsecureSkipVerify for local development.
 func getCLIClient() *http.Client {
 	cliClientOnce.Do(func() {
 		tlsConfig, err := tlsutil.LoadFromEnv("MCP_MESH_TLS")
@@ -52,10 +50,9 @@ func getCLIClient() *http.Client {
 			os.Exit(1)
 		}
 
-		// No TLS env vars set — default to skip verify for local development
-		if tlsConfig == nil {
-			tlsConfig = &tls.Config{InsecureSkipVerify: true}
-		}
+		// tlsConfig is nil when no MCP_MESH_TLS_* env vars are set.
+		// This uses default Go TLS verification (system CA pool).
+		// For self-signed certs, set MCP_MESH_TLS_CA or MCP_MESH_TLS_SKIP_VERIFY=true.
 
 		defaultCLIClient = &http.Client{
 			Timeout: 10 * time.Second,

@@ -143,7 +143,7 @@ func NewStreamConsumer(config *StreamConsumerConfig, processor TraceEventProcess
 	// Load Redis TLS config once at construction time
 	redisTLS, err := tlsutil.LoadFromEnv("REDIS_TLS")
 	if err != nil {
-		logger.Printf("Warning: invalid Redis TLS config: %v (TLS disabled)", err)
+		return nil, fmt.Errorf("invalid Redis TLS config: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

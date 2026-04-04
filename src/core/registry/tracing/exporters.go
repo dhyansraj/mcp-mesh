@@ -366,17 +366,14 @@ func NewJaegerExporter(endpoint string) (*JaegerExporter, error) {
 	var exporter sdktrace.SpanExporter
 	var err error
 	if telemetryTLS != nil {
-		grpcTLSCreds := credentials.NewTLS(telemetryTLS)
 		exporter, err = otlptracegrpc.New(ctx,
 			otlptracegrpc.WithEndpoint(endpoint),
-			otlptracegrpc.WithTLSCredentials(grpcTLSCreds),
-			otlptracegrpc.WithDialOption(grpc.WithTransportCredentials(grpcTLSCreds)),
+			otlptracegrpc.WithTLSCredentials(credentials.NewTLS(telemetryTLS)),
 		)
 	} else {
 		exporter, err = otlptracegrpc.New(ctx,
 			otlptracegrpc.WithEndpoint(endpoint),
 			otlptracegrpc.WithTLSCredentials(insecure.NewCredentials()),
-			otlptracegrpc.WithDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
 		)
 	}
 	if err != nil {
@@ -965,17 +962,14 @@ func (oe *OTLPExporter) attemptConnection() {
 		}
 	case "grpc", "":
 		if oe.tlsConfig != nil {
-			grpcTLSCreds := credentials.NewTLS(oe.tlsConfig)
 			exporter, err = otlptracegrpc.New(oe.ctx,
 				otlptracegrpc.WithEndpoint(oe.endpoint),
-				otlptracegrpc.WithTLSCredentials(grpcTLSCreds),
-				otlptracegrpc.WithDialOption(grpc.WithTransportCredentials(grpcTLSCreds)),
+				otlptracegrpc.WithTLSCredentials(credentials.NewTLS(oe.tlsConfig)),
 			)
 		} else {
 			exporter, err = otlptracegrpc.New(oe.ctx,
 				otlptracegrpc.WithEndpoint(oe.endpoint),
 				otlptracegrpc.WithTLSCredentials(insecure.NewCredentials()),
-				otlptracegrpc.WithDialOption(grpc.WithTransportCredentials(insecure.NewCredentials())),
 			)
 		}
 	}

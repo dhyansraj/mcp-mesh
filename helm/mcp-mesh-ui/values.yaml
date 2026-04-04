@@ -54,12 +54,14 @@ ui:
       caKey: "ca.crt"
       certKey: "tls.crt"
       keyKey: "tls.key"
+      skipVerify: false
     # TLS for OTLP/telemetry exporter connection
     telemetry:
       secretName: ""
       caKey: "ca.crt"
       certKey: "tls.crt"
       keyKey: "tls.key"
+      skipVerify: false
 
 resources:
   limits:

@@ -227,12 +227,14 @@ serviceTLS:
     caKey: "ca.crt"
     certKey: "tls.crt"
     keyKey: "tls.key"
+    skipVerify: false
   # TLS for OTLP/telemetry exporter connection
   telemetry:
     secretName: ""
     caKey: "ca.crt"
     certKey: "tls.crt"
     keyKey: "tls.key"
+    skipVerify: false
 
 # Persistence configuration (disabled for stateless registry)
 persistence:
