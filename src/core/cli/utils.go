@@ -90,10 +90,16 @@ func getCLIClient() *http.Client {
 	return defaultCLIClient
 }
 
-// newTLSSkipVerifyClient returns the shared CLI HTTP client.
-// Kept as alias for backward compatibility with existing callers.
+// newTLSSkipVerifyClient returns an HTTP client that skips TLS verification.
+// Used for internal health checks (IsRegistryRunning, WaitForRegistry) where
+// the registry may use a self-signed cert from TLS auto or SPIRE mode.
 func newTLSSkipVerifyClient() *http.Client {
-	return getCLIClient()
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 }
 
 // newTLSClientWithOptionalCert returns the shared CLI HTTP client.
