@@ -62,8 +62,13 @@ func NewAccumulatorOnlyManager(config *TracingConfig, extraProcessors ...TraceEv
 
 	// Create Tempo client for historical trace queries
 	if config.TempoQueryURL != "" {
-		manager.tempoClient = NewTempoClient(config.TempoQueryURL)
-		manager.logger.Printf("Tempo query client initialized: %s", config.TempoQueryURL)
+		tc, err := NewTempoClient(config.TempoQueryURL)
+		if err != nil {
+			manager.logger.Printf("Warning: Tempo client disabled: %v", err)
+		} else {
+			manager.tempoClient = tc
+			manager.logger.Printf("Tempo query client initialized: %s", config.TempoQueryURL)
+		}
 	}
 
 	manager.logger.Printf("UI tracing: enabled (accumulator-only), redis=%s, group=%s",

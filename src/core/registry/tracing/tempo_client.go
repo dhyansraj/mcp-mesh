@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"mcp-mesh/src/core/tlsutil"
 )
 
 // TempoClient queries traces from Grafana Tempo
@@ -79,16 +81,25 @@ type TempoStatus struct {
 }
 
 // NewTempoClient creates a new Tempo client
-func NewTempoClient(endpoint string) *TempoClient {
-	// Ensure endpoint doesn't have trailing slash
+func NewTempoClient(endpoint string) (*TempoClient, error) {
 	endpoint = strings.TrimSuffix(endpoint, "/")
+
+	transport := &http.Transport{}
+	tempoTLS, err := tlsutil.LoadFromEnv("TEMPO_TLS")
+	if err != nil {
+		return nil, fmt.Errorf("invalid Tempo TLS config: %w", err)
+	}
+	if tempoTLS != nil {
+		transport.TLSClientConfig = tempoTLS
+	}
 
 	return &TempoClient{
 		endpoint: endpoint,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout:   30 * time.Second,
+			Transport: transport,
 		},
-	}
+	}, nil
 }
 
 // GetTempoURLFromEnv returns the Tempo query URL from environment variables

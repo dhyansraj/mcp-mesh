@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"mcp-mesh/src/core/tlsutil"
+
 	"github.com/redis/go-redis/v9"
 )
 
@@ -264,6 +266,16 @@ func (sc *StreamConsumer) attemptConnection() {
 	if err != nil {
 		sc.handleConnectionError(fmt.Errorf("invalid Redis URL: %w", err))
 		return
+	}
+
+	// Apply custom TLS config from REDIS_TLS_* env vars
+	redisTLS, tlsErr := tlsutil.LoadFromEnv("REDIS_TLS")
+	if tlsErr != nil {
+		sc.handleConnectionError(fmt.Errorf("invalid Redis TLS config: %w", tlsErr))
+		return
+	}
+	if redisTLS != nil {
+		opts.TLSConfig = redisTLS
 	}
 
 	client := redis.NewClient(opts)

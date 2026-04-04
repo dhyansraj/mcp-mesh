@@ -10,6 +10,7 @@ import (
 
 	"mcp-mesh/src/core/registry"
 	"mcp-mesh/src/core/registry/tracing"
+	"mcp-mesh/src/core/tlsutil"
 
 	"github.com/gin-gonic/gin"
 )
@@ -52,7 +53,8 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 		engine: engine,
 		config: config,
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:   10 * time.Second,
+			Transport: tlsutil.NewHTTPTransport(config.RegistryTLS),
 		},
 		startTime:        time.Now().UTC(),
 		entService:       entService,

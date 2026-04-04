@@ -29,6 +29,38 @@ ui:
     url: "http://mcp-mesh-tempo:3200"
     telemetryEndpoint: "mcp-mesh-tempo:4317"
 
+  # Per-service TLS configuration
+  # Each service connection can use its own CA, client cert, and key
+  tls:
+    # TLS for UI → Registry proxy connection
+    registry:
+      # Existing secret containing TLS certificates
+      # Secret should contain ca.crt, tls.crt, tls.key as applicable
+      secretName: ""
+      caKey: "ca.crt"
+      certKey: "tls.crt"
+      keyKey: "tls.key"
+      skipVerify: false
+    # TLS for Redis connection
+    redis:
+      secretName: ""
+      caKey: "ca.crt"
+      certKey: "tls.crt"
+      keyKey: "tls.key"
+      skipVerify: false
+    # TLS for Tempo HTTP query connection
+    tempo:
+      secretName: ""
+      caKey: "ca.crt"
+      certKey: "tls.crt"
+      keyKey: "tls.key"
+    # TLS for OTLP/telemetry exporter connection
+    telemetry:
+      secretName: ""
+      caKey: "ca.crt"
+      certKey: "tls.crt"
+      keyKey: "tls.key"
+
 resources:
   limits:
     cpu: 200m

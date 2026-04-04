@@ -83,8 +83,13 @@ func NewTracingManager(config *TracingConfig) (*TracingManager, error) {
 
 		// Create Tempo client for trace querying (Issue #310)
 		if config.TempoQueryURL != "" {
-			manager.tempoClient = NewTempoClient(config.TempoQueryURL)
-			manager.logger.Printf("Tempo query client initialized: %s", config.TempoQueryURL)
+			tc, err := NewTempoClient(config.TempoQueryURL)
+			if err != nil {
+				manager.logger.Printf("Warning: Tempo client disabled: %v", err)
+			} else {
+				manager.tempoClient = tc
+				manager.logger.Printf("Tempo query client initialized: %s", config.TempoQueryURL)
+			}
 		}
 
 		// Create stream-through processor and wrap with accumulator

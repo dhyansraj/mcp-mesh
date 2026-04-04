@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"mcp-mesh/src/core/tlsutil"
 )
 
 // RegistryAgent represents an agent in the registry
@@ -38,22 +40,21 @@ type RegistryResponse struct {
 var defaultCLIClient *http.Client
 var cliClientOnce sync.Once
 
-// getCLIClient returns a shared HTTP client that skips TLS cert verification.
+// getCLIClient returns a shared HTTP client for CLI-to-registry communication.
 // Uses sync.Once to create the client lazily and cache it.
+// TLS is configured from MCP_MESH_TLS_* env vars (CA, CERT, KEY, SKIP_VERIFY).
+// When no TLS env vars are set, defaults to InsecureSkipVerify for local development.
 func getCLIClient() *http.Client {
 	cliClientOnce.Do(func() {
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
+		tlsConfig, err := tlsutil.LoadFromEnv("MCP_MESH_TLS")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: invalid TLS configuration: %v\n", err)
+			os.Exit(1)
 		}
 
-		// Load client certs if configured (for strict TLS mode)
-		certFile := os.Getenv("MCP_MESH_TLS_CERT")
-		keyFile := os.Getenv("MCP_MESH_TLS_KEY")
-		if certFile != "" && keyFile != "" {
-			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-			if err == nil {
-				tlsConfig.Certificates = []tls.Certificate{cert}
-			}
+		// No TLS env vars set — default to skip verify for local development
+		if tlsConfig == nil {
+			tlsConfig = &tls.Config{InsecureSkipVerify: true}
 		}
 
 		defaultCLIClient = &http.Client{
