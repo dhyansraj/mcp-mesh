@@ -688,6 +688,18 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 					cmdArgs = append(cmdArgs, "--"+flag.Name)
 				}
 				// If false, don't pass the flag at all
+			} else if flag.Value.Type() == "stringArray" {
+				// StringArray flags need each value as a separate --flag argument
+				vals, _ := cobraCmd.Flags().GetStringArray(flag.Name)
+				for _, v := range vals {
+					cmdArgs = append(cmdArgs, "--"+flag.Name, v)
+				}
+			} else if flag.Value.Type() == "stringSlice" {
+				// StringSlice has the same bracket-serialization issue as StringArray
+				vals, _ := cobraCmd.Flags().GetStringSlice(flag.Name)
+				for _, v := range vals {
+					cmdArgs = append(cmdArgs, "--"+flag.Name, v)
+				}
 			} else {
 				cmdArgs = append(cmdArgs, "--"+flag.Name, flag.Value.String())
 			}
@@ -696,6 +708,17 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 	cmd.Env = os.Environ()
+
+	// Inject TLS-related --env values into the forked process environment.
+	// The forked meshctl needs these for its own registry health checks
+	// (e.g., MCP_MESH_TLS_CA for SPIRE/Vault setups where the registry runs HTTPS).
+	if envVals, err := cobraCmd.Flags().GetStringArray("env"); err == nil {
+		for _, envVar := range envVals {
+			if strings.HasPrefix(envVar, "MCP_MESH_TLS_") {
+				cmd.Env = append(cmd.Env, envVar)
+			}
+		}
+	}
 
 	// Determine log name (agent name or "registry")
 	registryOnly, _ := cobraCmd.Flags().GetBool("registry-only")

@@ -33,6 +33,6 @@ Repository = "https://github.com/dhyansraj/mcp-mesh"
 Issues = "https://github.com/dhyansraj/mcp-mesh/issues"
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["pyo3/extension-module", "spire"]
 python-source = "python"
 module-name = "mcp_mesh_core"

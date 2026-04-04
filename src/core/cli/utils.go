@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -50,9 +52,30 @@ func getCLIClient() *http.Client {
 			os.Exit(1)
 		}
 
-		// tlsConfig is nil when no MCP_MESH_TLS_* env vars are set.
-		// This uses default Go TLS verification (system CA pool).
-		// For self-signed certs, set MCP_MESH_TLS_CA or MCP_MESH_TLS_SKIP_VERIFY=true.
+		// When no MCP_MESH_TLS_* env vars are set, check for TLS auto CA.
+		// TLS auto mode generates a local CA at ~/.mcp_mesh/tls/ca.pem.
+		// Auto-detecting it lets `meshctl call` work without manual env setup.
+		if tlsConfig == nil {
+			if homeDir, err := os.UserHomeDir(); err == nil {
+				autoCA := filepath.Join(homeDir, ".mcp_mesh", "tls", "ca.pem")
+				if _, statErr := os.Stat(autoCA); statErr == nil {
+					caCert, readErr := os.ReadFile(autoCA)
+					if readErr != nil {
+						fmt.Fprintf(os.Stderr, "Warning: TLS auto CA found at %s but unreadable: %v\n", autoCA, readErr)
+					} else {
+						pool := x509.NewCertPool()
+						if pool.AppendCertsFromPEM(caCert) {
+							tlsConfig = &tls.Config{
+								RootCAs:    pool,
+								MinVersion: tls.VersionTLS12,
+							}
+						} else {
+							fmt.Fprintf(os.Stderr, "Warning: TLS auto CA at %s contains invalid PEM data\n", autoCA)
+						}
+					}
+				}
+			}
+		}
 
 		defaultCLIClient = &http.Client{
 			Timeout: 10 * time.Second,
@@ -67,10 +90,16 @@ func getCLIClient() *http.Client {
 	return defaultCLIClient
 }
 
-// newTLSSkipVerifyClient returns the shared CLI HTTP client.
-// Kept as alias for backward compatibility with existing callers.
+// newTLSSkipVerifyClient returns an HTTP client that skips TLS verification.
+// Used for internal health checks (IsRegistryRunning, WaitForRegistry) where
+// the registry may use a self-signed cert from TLS auto or SPIRE mode.
 func newTLSSkipVerifyClient() *http.Client {
-	return getCLIClient()
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 }
 
 // newTLSClientWithOptionalCert returns the shared CLI HTTP client.

@@ -9,6 +9,7 @@
 
 name: "TypeScript Direct Gemini Parallel Tool Calls"
 description: "Test parallelToolCalls=true in TypeScript direct-mode LLM agent with Gemini and 3 slow financial tools"
+disabled: true # Vercel AI SDK maxSteps response capture issue — doesn't reliably return final text after tool execution
 # SKIP: Vercel AI SDK maxSteps doesn't reliably return final text after tool execution
 tags:
   - parallel
