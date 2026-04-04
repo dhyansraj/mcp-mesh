@@ -177,8 +177,15 @@ func (s *Server) Run(addr string) error {
 	if s.tracePoller != nil {
 		s.tracePoller.Start()
 	}
-	err := s.engine.Run(addr)
-	// engine.Run returned — clean up background components
+
+	var handler http.Handler = s.engine
+	if s.config.BasePath != "" {
+		handler = http.StripPrefix(s.config.BasePath, s.engine)
+	}
+
+	err := http.ListenAndServe(addr, handler)
+
+	// ListenAndServe returned — clean up background components
 	if s.tracePoller != nil {
 		s.tracePoller.Stop()
 	}

@@ -55,6 +55,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  REDIS_URL                - Redis URL for trace streaming (default: redis://localhost:6379)\n")
 		fmt.Fprintf(os.Stderr, "  TEMPO_URL              - Tempo HTTP query URL (default: http://localhost:3200)\n")
 		fmt.Fprintf(os.Stderr, "  TELEMETRY_ENDPOINT     - OTLP endpoint; Tempo URL auto-derived if TEMPO_URL not set\n")
+		fmt.Fprintf(os.Stderr, "  MCP_MESH_UI_BASE_PATH    - Base path for path-based ingress (default: empty)\n")
 	}
 
 	flag.Parse()
@@ -83,6 +84,16 @@ func main() {
 	// Trim trailing slash for consistent URL joining
 	regURL = strings.TrimRight(regURL, "/")
 
+	// Load basePath for path-based ingress routing
+	basePath := os.Getenv("MCP_MESH_UI_BASE_PATH")
+	if basePath != "" {
+		// Normalize: must start with /, no trailing slash
+		if !strings.HasPrefix(basePath, "/") {
+			basePath = "/" + basePath
+		}
+		basePath = strings.TrimRight(basePath, "/")
+	}
+
 	// Load TLS config for registry proxy
 	registryTLS, err := tlsutil.LoadFromEnv("MCP_MESH_REGISTRY_TLS")
 	if err != nil {
@@ -94,11 +105,16 @@ func main() {
 	uiConfig := &ui.UIConfig{
 		Port:        uiPort,
 		RegistryURL: regURL,
+		BasePath:    basePath,
 		LogLevel:    logLevel,
 		RegistryTLS: registryTLS,
 	}
 
-	log.Printf("Starting MCP Mesh UI Server | port=%d registry=%s", uiPort, regURL)
+	if basePath != "" {
+		log.Printf("Starting MCP Mesh UI Server | port=%d registry=%s basePath=%s", uiPort, regURL, basePath)
+	} else {
+		log.Printf("Starting MCP Mesh UI Server | port=%d registry=%s", uiPort, regURL)
+	}
 
 	// Initialize database (read-only, shared with registry)
 	dbURL := getEnvDefault("DATABASE_URL", "mcp_mesh_registry.db")
