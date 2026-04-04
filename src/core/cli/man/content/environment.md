@@ -88,6 +88,11 @@ export ANTHROPIC_API_KEY=sk-ant-your-key-here
 
 # OpenAI
 export OPENAI_API_KEY=sk-your-key-here
+
+# Google Gemini
+export GOOGLE_API_KEY=your-gemini-key              # Python (via LiteLLM)
+export GOOGLE_GENERATIVE_AI_API_KEY=your-key       # TypeScript (Vercel AI SDK)
+export GOOGLE_AI_GEMINI_API_KEY=your-key           # Java (Spring AI)
 ```
 
 ## LLM Agent Configuration
@@ -133,8 +138,17 @@ export TEMPO_URL=http://localhost:3200          # Tempo HTTP query API
 export TELEMETRY_ENDPOINT=localhost:4317        # OTLP gRPC endpoint (registry → Tempo)
 export TELEMETRY_PROTOCOL=grpc                  # OTLP protocol: grpc or http
 
+# Trace exporter type: otlp, console, json (default: otlp)
+export TRACE_EXPORTER_TYPE=otlp
+
+# Header propagation across agents (comma-separated prefixes)
+export MCP_MESH_PROPAGATE_HEADERS=x-request-id,x-trace
+
 # UI server
 export MCP_MESH_UI_PORT=3080                    # Dashboard server port
+
+# UI base path for path-based ingress routing
+export MCP_MESH_UI_BASE_PATH=/ops/dashboard
 ```
 
 ## Media Storage
@@ -207,6 +221,28 @@ export MCP_MESH_TLS_PROVIDER=spire
 export MCP_MESH_SPIRE_SOCKET=/run/spire/agent/sockets/agent.sock
 ```
 
+### Per-Service TLS
+
+Configure TLS independently for each external service connection:
+
+```bash
+# UI → Registry proxy
+export MCP_MESH_REGISTRY_TLS_CA=/path/to/ca.pem
+export MCP_MESH_REGISTRY_TLS_CERT=/path/to/cert.pem
+export MCP_MESH_REGISTRY_TLS_KEY=/path/to/key.pem
+
+# Redis
+export REDIS_TLS_CA=/path/to/redis-ca.pem
+export REDIS_TLS_CERT=/path/to/redis-cert.pem
+export REDIS_TLS_KEY=/path/to/redis-key.pem
+
+# Tempo (HTTP query)
+export TEMPO_TLS_CA=/path/to/tempo-ca.pem
+
+# OTLP/Telemetry (gRPC exporter)
+export TELEMETRY_TLS_CA=/path/to/otlp-ca.pem
+```
+
 ### Registry Trust Backends
 
 ```bash
@@ -248,6 +284,8 @@ export ENABLE_RESPONSE_CACHE=true
 # CORS
 export ENABLE_CORS=true
 export ALLOWED_ORIGINS="*"
+# CORS origin override (alternative to ALLOWED_ORIGINS)
+export MCP_MESH_CORS_ORIGIN="http://localhost:3000"
 
 # Features
 export ENABLE_METRICS=true
@@ -405,6 +443,12 @@ export MCP_MESH_REGISTRY_URL=http://backup-registry:8000
 export MCP_MESH_AGENT_NAME=my-unique-agent-$(date +%s)
 meshctl list
 ```
+
+## Full Reference
+
+For the complete list of all environment variables (50+ additional vars for database tuning, Kubernetes, internal settings, and more), see the full documentation:
+
+> https://mcp-mesh.ai/environment-variables
 
 ## See Also
 

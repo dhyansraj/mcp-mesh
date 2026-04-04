@@ -45,6 +45,26 @@ export MCP_MESH_AUTO_RUN=true
 export MCP_MESH_AUTO_RUN_INTERVAL=30
 ```
 
+### Agent Identity & Version
+
+```bash
+# Agent semantic version (default: "1.0.0")
+# Typically set in source code via @mesh.agent decorator, not env var
+export MCP_MESH_AGENT_VERSION=1.2.0
+
+# Runtime-assigned agent ID (set by registry, read-only)
+# MCP_MESH_AGENT_ID — assigned at registration
+
+# Override agent capabilities
+export MCP_MESH_AGENT_CAPABILITIES=greeting,translation
+
+# Heartbeat interval in seconds (Java runtime, default: 5)
+export MCP_MESH_HEARTBEAT_INTERVAL=5
+
+# Session time-to-live in seconds (default: 3600)
+export MCP_MESH_SESSION_TTL=3600
+```
+
 ### HTTP Server Settings
 
 ```bash
@@ -126,6 +146,35 @@ export MCP_MESH_VAULT_ADDR=https://vault.example.com:8200
 export MCP_MESH_VAULT_PKI_PATH=pki/issue/mcp-mesh
 ```
 
+### Per-Service TLS
+
+Configure TLS independently for each external service connection.
+Each service reads `{PREFIX}_CA`, `{PREFIX}_CERT`, `{PREFIX}_KEY`, `{PREFIX}_SKIP_VERIFY`.
+
+```bash
+# UI → Registry proxy
+export MCP_MESH_REGISTRY_TLS_CA=/path/to/ca.pem
+export MCP_MESH_REGISTRY_TLS_CERT=/path/to/cert.pem
+export MCP_MESH_REGISTRY_TLS_KEY=/path/to/key.pem
+export MCP_MESH_REGISTRY_TLS_SKIP_VERIFY=false
+
+# Redis
+export REDIS_TLS_CA=/path/to/redis-ca.pem
+export REDIS_TLS_CERT=/path/to/redis-cert.pem
+export REDIS_TLS_KEY=/path/to/redis-key.pem
+export REDIS_TLS_SKIP_VERIFY=false
+
+# Tempo (HTTP query)
+export TEMPO_TLS_CA=/path/to/tempo-ca.pem
+export TEMPO_TLS_CERT=/path/to/tempo-cert.pem
+export TEMPO_TLS_KEY=/path/to/tempo-key.pem
+
+# OTLP/Telemetry (gRPC or HTTP exporter)
+export TELEMETRY_TLS_CA=/path/to/otlp-ca.pem
+export TELEMETRY_TLS_CERT=/path/to/otlp-cert.pem
+export TELEMETRY_TLS_KEY=/path/to/otlp-key.pem
+```
+
 ### Fast Heartbeat & Health Monitoring
 
 ```bash
@@ -174,6 +223,9 @@ export ALLOWED_METHODS="GET,POST,PUT,DELETE,OPTIONS"
 
 # Allowed headers
 export ALLOWED_HEADERS="*"
+
+# Override CORS for a specific origin
+export MCP_MESH_CORS_ORIGIN="http://localhost:3000"
 ```
 
 ### Feature Flags
@@ -187,6 +239,170 @@ export ENABLE_PROMETHEUS=true
 
 # Enable event system
 export ENABLE_EVENTS=true
+
+# Enable access logging
+export ACCESS_LOG=true
+```
+
+## Tracing & Observability
+
+### Distributed Tracing
+
+```bash
+# Enable distributed tracing
+export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+
+# Redis URL for trace span streaming
+export REDIS_URL=redis://localhost:6379
+
+# Tempo HTTP query URL
+export TEMPO_URL=http://localhost:3200
+
+# OTLP endpoint (registry → Tempo)
+export TELEMETRY_ENDPOINT=localhost:4317
+export TELEMETRY_PROTOCOL=grpc          # grpc or http
+
+# Trace exporter type: otlp, console, json
+export TRACE_EXPORTER_TYPE=otlp
+
+# Trace batching
+export TRACE_BATCH_SIZE=100
+export TRACE_TIMEOUT=5m
+
+# Trace output options
+export TRACE_PRETTY_OUTPUT=false
+export TRACE_ENABLE_STATS=true
+export TRACE_JSON_OUTPUT_DIR=/tmp/traces
+
+# Alternative OTLP endpoint name
+export OTLP_ENDPOINT=localhost:4317
+
+# Redis trace publishing (agents)
+export MCP_MESH_REDIS_TRACE_PUBLISHING=true
+export MCP_MESH_TELEMETRY_ENABLED=true
+```
+
+### Header Propagation
+
+```bash
+# Comma-separated header prefixes to propagate across agent calls
+export MCP_MESH_PROPAGATE_HEADERS=x-request-id,x-trace,x-correlation
+```
+
+### Stream Consumer
+
+```bash
+# Redis stream name for trace events
+export STREAM_NAME=mesh:trace
+
+# Consumer group name
+export CONSUMER_GROUP=mcp-mesh-registry-processors
+```
+
+## UI Server
+
+```bash
+# UI server port
+export MCP_MESH_UI_PORT=3080
+
+# Registry URL for API proxy
+export MCP_MESH_REGISTRY_URL=http://localhost:8000
+
+# Base path for path-based ingress routing
+export MCP_MESH_UI_BASE_PATH=/ops/dashboard
+
+# Log level
+export MCP_MESH_LOG_LEVEL=INFO
+```
+
+## LLM Configuration
+
+### API Keys
+
+```bash
+# Anthropic Claude
+export ANTHROPIC_API_KEY=sk-ant-your-key
+
+# OpenAI
+export OPENAI_API_KEY=sk-your-key
+
+# Google Gemini (varies by runtime)
+export GOOGLE_API_KEY=your-key                     # Python (via LiteLLM)
+export GOOGLE_GENERATIVE_AI_API_KEY=your-key       # TypeScript (Vercel AI SDK)
+export GOOGLE_AI_GEMINI_API_KEY=your-key           # Java (Spring AI)
+export GOOGLE_PROJECT_ID=my-gcp-project            # Java (Vertex AI)
+```
+
+### LLM Agent Overrides
+
+```bash
+# Override LLM provider at runtime
+export MESH_LLM_PROVIDER=openai          # claude, openai, anthropic
+export MESH_LLM_MODEL=gpt-4o
+export MESH_LLM_MAX_ITERATIONS=5
+export MESH_LLM_FILTER_MODE=all          # all, include, exclude
+```
+
+### LLM Timeouts
+
+```bash
+# Provider call timeout (TypeScript, default: 300000ms)
+export MESH_PROVIDER_TIMEOUT_MS=300000
+
+# Individual tool timeout (TypeScript, default: 30000ms)
+export MESH_TOOL_TIMEOUT_MS=30000
+
+# LiteLLM proxy settings (Python)
+export LITELLM_URL=http://localhost:4000
+export LITELLM_TIMEOUT_MS=300000
+```
+
+## CLI & Development
+
+```bash
+# Watch mode settings
+export MCP_MESH_RELOAD_DEBOUNCE=500       # File change debounce (ms)
+export MCP_MESH_RELOAD_PORT_DELAY=500     # Port release delay after stop (ms)
+export MCP_MESH_RELOAD_PRECHECK=true      # Syntax pre-check on reload
+
+# Process management
+export MCP_MESH_DB_PATH=mcp_mesh_registry.db
+export MCP_MESH_STARTUP_TIMEOUT=30s
+export MCP_MESH_SHUTDOWN_TIMEOUT=30s
+export MCP_MESH_ENABLE_BACKGROUND=false
+export MCP_MESH_PID_FILE=/path/to/pid
+
+# Scaffold templates
+export MESHCTL_TEMPLATE_DIR=/path/to/templates
+```
+
+## Database Tuning
+
+```bash
+# Connection pool
+export DB_MAX_OPEN_CONNECTIONS=25
+export DB_MAX_IDLE_CONNECTIONS=5
+export DB_CONN_MAX_LIFETIME=30m
+export DB_CONNECTION_TIMEOUT=30s
+
+# SQLite-specific
+export DB_BUSY_TIMEOUT=5000               # Busy timeout (ms)
+export DB_JOURNAL_MODE=WAL
+export DB_SYNCHRONOUS=NORMAL
+export DB_CACHE_SIZE=-2000                # Negative = KB
+export DB_ENABLE_FOREIGN_KEYS=true
+```
+
+## Internal
+
+These variables are typically set automatically and rarely need manual configuration:
+
+```bash
+# Runtime version (for trace metadata)
+export MCP_MESH_VERSION=1.1.0
+
+# Native library path (Java)
+export MESH_NATIVE_LIB_PATH=/usr/lib/mcp-mesh
 ```
 
 ## Media Storage
@@ -391,6 +607,14 @@ export NAMESPACE=production
 export POD_NAME=my-service-abc123
 export POD_IP=10.244.1.5
 export NODE_NAME=worker-node-1
+
+# Namespace for trust backend (K8s secrets)
+export MCP_MESH_K8S_NAMESPACE=mcp-mesh
+export MCP_MESH_K8S_LABEL_SELECTOR="mcp-mesh.io/trust=entity-ca"
+
+# Pod identity (injected by K8s downward API)
+export POD_NAMESPACE=mcp-mesh
+export HOSTNAME=my-agent-pod-abc123
 ```
 
 ### Docker Compose Environment
