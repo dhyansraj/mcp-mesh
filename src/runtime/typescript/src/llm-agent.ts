@@ -231,9 +231,22 @@ export class VercelDirectProvider implements LlmProvider {
   private providerSpec: string;
   private cachedProvider: ((modelId: string) => unknown) | null = null;
   private providerLoadAttempted = false;
+  private toolProxies: Map<string, LlmToolProxy> = new Map();
 
   constructor(providerSpec: string) {
     this.providerSpec = providerSpec;
+  }
+
+  /**
+   * Set tool proxies for execute callbacks in the Vercel AI SDK agentic loop.
+   * When set, tools are created with execute callbacks and maxSteps is enabled,
+   * letting the SDK handle the tool execution loop internally.
+   */
+  setToolProxies(tools: LlmToolProxy[]): void {
+    this.toolProxies.clear();
+    for (const tool of tools) {
+      this.toolProxies.set(tool.name, tool);
+    }
   }
 
   /**
@@ -316,6 +329,7 @@ export class VercelDirectProvider implements LlmProvider {
     const aiModule = (await import("ai")) as any;
     const generateText = aiModule.generateText;
     const jsonSchema = aiModule.jsonSchema;
+    const aiTool = aiModule.tool;
 
     // Convert tools to Vercel AI SDK format
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -336,10 +350,17 @@ export class VercelDirectProvider implements LlmProvider {
           type: "object",
           ...schemaWithoutMeta,
         };
-        vercelTools[tool.function.name] = {
+        const proxy = this.toolProxies.get(tool.function.name);
+        vercelTools[tool.function.name] = aiTool({
           description: tool.function.description ?? "",
-          parameters: jsonSchema(cleanSchema),
-        };
+          inputSchema: jsonSchema(cleanSchema),
+          ...(proxy ? {
+            execute: async (args: Record<string, unknown>) => {
+              const result = await proxy(args);
+              return typeof result === "string" ? result : JSON.stringify(result);
+            },
+          } : {}),
+        });
       }
     }
 
@@ -364,6 +385,11 @@ export class VercelDirectProvider implements LlmProvider {
 
     if (vercelTools && Object.keys(vercelTools).length > 0) {
       requestOptions.tools = vercelTools;
+      // When tool proxies are set, the SDK handles the agentic loop via execute callbacks.
+      // maxSteps allows the SDK to call tools and feed results back to the LLM automatically.
+      if (this.toolProxies.size > 0) {
+        requestOptions.maxSteps = 10;
+      }
     }
 
     if (options?.maxOutputTokens) {
@@ -379,7 +405,10 @@ export class VercelDirectProvider implements LlmProvider {
     try {
       const result = await generateText(requestOptions);
 
-      // Convert Vercel AI SDK response to LlmCompletionResponse format
+      // Convert Vercel AI SDK response to LlmCompletionResponse format.
+      // When maxSteps is active, the SDK executed tools internally — don't
+      // expose intermediate tool_calls to the consumer's outer loop.
+      const sdkHandledLoop = requestOptions.maxSteps != null;
       const response: LlmCompletionResponse = {
         id: `vercel-${Date.now()}`,
         object: "chat.completion",
@@ -391,7 +420,7 @@ export class VercelDirectProvider implements LlmProvider {
             message: {
               role: "assistant",
               content: result.text || null,
-              tool_calls: result.toolCalls?.map(
+              tool_calls: sdkHandledLoop ? undefined : result.toolCalls?.map(
                 (tc: { toolCallId: string; toolName: string; args: unknown }) => ({
                   id: tc.toolCallId,
                   type: "function" as const,
@@ -429,10 +458,12 @@ export class VercelDirectProvider implements LlmProvider {
 export class MeshDelegatedProvider implements LlmProvider {
   private endpoint: string;
   private functionName: string;
+  private parallelToolCalls: boolean;
 
-  constructor(endpoint: string, functionName: string) {
+  constructor(endpoint: string, functionName: string, parallelToolCalls: boolean = false) {
     this.endpoint = endpoint;
     this.functionName = functionName;
+    this.parallelToolCalls = parallelToolCalls;
   }
 
   async complete(
@@ -463,6 +494,12 @@ export class MeshDelegatedProvider implements LlmProvider {
     if (options?.outputSchema) {
       modelParams.output_schema = options.outputSchema.schema;
       modelParams.output_type_name = options.outputSchema.name;
+    }
+    // Issue #713: Include parallel_tool_calls for provider-side parallel execution.
+    // Provider handlers strip this from LLM API params (e.g., Claude doesn't accept it),
+    // but the provider's agentic loop needs it to decide parallel vs sequential execution.
+    if (this.parallelToolCalls) {
+      modelParams.parallel_tool_calls = true;
     }
 
     const request: Record<string, unknown> = {
@@ -810,6 +847,12 @@ export class MeshLlmAgent<T = string> {
       }
     }
 
+    // Set tool proxies on direct-mode providers so the Vercel AI SDK
+    // can execute tools internally via maxSteps (agentic loop in the SDK).
+    if (provider instanceof VercelDirectProvider && context.tools.length > 0) {
+      provider.setToolProxies(context.tools);
+    }
+
     // Agentic loop
     let iteration = 0;
     let finalContent: string = "";
@@ -993,7 +1036,8 @@ export class MeshLlmAgent<T = string> {
     if (context.meshProvider) {
       return new MeshDelegatedProvider(
         context.meshProvider.endpoint,
-        context.meshProvider.functionName
+        context.meshProvider.functionName,
+        this.config.parallelToolCalls ?? false
       );
     }
 
@@ -1055,10 +1099,11 @@ export class MeshLlmAgent<T = string> {
    */
   private buildToolDefinitions(tools: LlmToolProxy[], isMeshDelegated = false): LlmToolDefinition[] {
     return tools.map((tool) => {
+      const rawSchema = (tool.inputSchema ?? { type: "object", properties: {} }) as Record<string, unknown>;
       const funcDef: Record<string, unknown> = {
         name: tool.name,
         description: tool.description,
-        parameters: tool.inputSchema ?? { type: "object", properties: {} },
+        parameters: { type: "object", ...rawSchema },
       };
       if (isMeshDelegated && tool.endpoint) {
         funcDef._mesh_endpoint = tool.endpoint;

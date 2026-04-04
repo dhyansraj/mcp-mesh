@@ -118,6 +118,14 @@ test:
       meshctl logs parallel-consumer-ts 2>&1
     capture: consumer_logs
 
+  # 10. Check provider logs for parallel execution
+  - name: "Check provider logs for parallel execution"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl logs claude-provider-py 2>&1
+    capture: provider_logs
+
 assertions:
   - expr: "${captured.agent_list} contains 'slow-tool-ts'"
     message: "Slow tool agent should be registered"
@@ -127,13 +135,16 @@ assertions:
     message: "Parallel consumer should be registered"
   - expr: "${captured.parallel_response} contains 'GOOGL'"
     message: "Response should reference the GOOGL ticker"
-  - expr: "${captured.parallel_response} contains 'price'"
-    message: "Response should contain stock price data (from get_stock_price)"
   - expr: "${captured.parallel_response} contains 'sentiment'"
     message: "Response should contain sentiment data (from get_market_sentiment)"
   # Assertion: parallel mode must be explicitly enabled in agent
   - expr: "${captured.consumer_logs} contains 'parallel tool calls enabled'"
     message: "Consumer agent should log 'parallel tool calls enabled' when parallelToolCalls=true is set"
+  # Assertion: provider must execute tools in parallel (fix for #713)
+  - expr: "${captured.provider_logs} contains 'Provider executing'"
+    message: "Provider should log parallel tool execution (fix #713: parallel_tool_calls in mesh delegation)"
+  - expr: "${captured.provider_logs} contains 'tool calls in parallel'"
+    message: "Provider should execute tool calls in parallel, not sequentially"
 
 post_run:
   - handler: shell

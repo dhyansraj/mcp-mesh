@@ -74,7 +74,7 @@ public class SpringAiLlmProvider {
      * @throws IllegalArgumentException if the provider is unknown or not configured
      */
     public ChatClient getClient(String provider) {
-        return clients.computeIfAbsent(provider.toLowerCase(), this::createClient);
+        return clients.computeIfAbsent(normalizeProvider(provider), this::createClient);
     }
 
     /**
@@ -84,7 +84,7 @@ public class SpringAiLlmProvider {
      * @return true if the provider is configured and available
      */
     public boolean isProviderAvailable(String provider) {
-        String normalizedProvider = provider.toLowerCase();
+        String normalizedProvider = normalizeProvider(provider);
         return switch (normalizedProvider) {
             case "claude", "anthropic" -> anthropicChatModel != null;
             case "openai", "gpt" -> openAiChatModel != null;
@@ -227,7 +227,7 @@ public class SpringAiLlmProvider {
      * @throws IllegalStateException if the model is not configured
      */
     public ChatModel getModelForProvider(String provider) {
-        return switch (provider.toLowerCase()) {
+        return switch (normalizeProvider(provider)) {
             case "claude", "anthropic" -> {
                 if (anthropicChatModel == null) {
                     throw new IllegalStateException("Anthropic ChatModel not configured. " +
@@ -275,6 +275,18 @@ public class SpringAiLlmProvider {
                 throw new IllegalArgumentException("No ChatModel available for provider: " + provider);
             }
         };
+    }
+
+    /**
+     * Normalize provider string: extract vendor prefix from full model paths.
+     * E.g., "anthropic/claude-sonnet-4-5" -> "anthropic", "claude" -> "claude".
+     */
+    private static String normalizeProvider(String provider) {
+        String lower = provider.toLowerCase();
+        if (lower.contains("/")) {
+            return lower.substring(0, lower.indexOf('/'));
+        }
+        return lower;
     }
 
     private ChatClient createClient(String provider) {

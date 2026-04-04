@@ -63,7 +63,7 @@ public class LlmProviderHandlerRegistry {
             vendor = "unknown";
         }
 
-        String normalizedVendor = vendor.toLowerCase().trim();
+        String normalizedVendor = extractVendor(vendor).toLowerCase().trim();
 
         // Check cache first
         LlmProviderHandler cached = instances.get(normalizedVendor);

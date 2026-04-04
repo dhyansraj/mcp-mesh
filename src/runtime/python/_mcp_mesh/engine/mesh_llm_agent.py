@@ -954,6 +954,13 @@ class MeshLlmAgent:
                             )
                             model_params["output_type_name"] = self.output_type.__name__
 
+                        # Issue #713: Re-inject parallel_tool_calls for provider-side execution.
+                        # Provider handlers strip this from request_params (e.g., Claude handler
+                        # pops it since the Claude API doesn't accept it), but the provider's
+                        # agentic loop needs it to decide parallel vs sequential execution.
+                        if self._parallel_tool_calls:
+                            model_params["parallel_tool_calls"] = True
+
                         logger.debug(
                             f"📤 Delegating to mesh provider with handler-prepared params: "
                             f"keys={list(model_params.keys())}"

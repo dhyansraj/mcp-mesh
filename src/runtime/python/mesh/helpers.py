@@ -60,6 +60,159 @@ async def _provider_agentic_loop(
     iteration = 0
     current_messages = list(messages)
 
+    # Pop parallel_tool_calls before it reaches completion_args
+    # (Claude handler strips it, but OpenAI would pass it to API)
+    parallel = model_params.pop("parallel_tool_calls", False)
+    if parallel and loop_logger:
+        loop_logger.info("🔀 Provider parallel tool calls enabled — tools will execute concurrently via asyncio.gather()")
+
+    async def _execute_single_tool(tc) -> tuple[dict, list[dict]]:
+        """Execute a single tool call and return (tool_message, image_parts)."""
+        tool_name = tc.function.name
+        endpoint = tool_endpoints.get(tool_name)
+
+        if not endpoint:
+            if loop_logger:
+                loop_logger.warning(
+                    f"No endpoint for tool {tool_name}, returning error"
+                )
+            return (
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(
+                        {"error": f"Tool {tool_name} not available"}
+                    ),
+                },
+                [],
+            )
+
+        try:
+            args = (
+                json.loads(tc.function.arguments)
+                if tc.function.arguments
+                else {}
+            )
+            proxy = UnifiedMCPProxy(
+                endpoint=endpoint, function_name=tool_name
+            )
+            result = await proxy.call_tool(tool_name, args)
+
+            # Resolve resource_link items to multimodal content.
+            # Always use OpenAI-compatible format (image_url with
+            # data URIs) — LiteLLM converts to provider-native.
+            if vendor and _has_resource_link(result):
+                try:
+                    # Always use OpenAI format — LiteLLM converts to
+                    # provider-native format internally.
+                    resolved_parts = await resolve_resource_links(
+                        result, "openai"
+                    )
+                except Exception as resolve_err:
+                    if loop_logger:
+                        loop_logger.error(f"Media resolution failed: {resolve_err}")
+                    resolved_parts = []
+
+                image_types = ("image", "image_url")
+                has_image = any(
+                    p.get("type") in image_types
+                    for p in resolved_parts
+                )
+
+                if has_image:
+                    if vendor in _tool_image_unsupported:
+                        # OpenAI/Gemini: images NOT allowed in tool messages.
+                        # Put text-only parts in the tool message, accumulate
+                        # images for a single user message after all tool results.
+                        text_parts = [
+                            p for p in resolved_parts
+                            if p.get("type") not in image_types
+                        ]
+                        image_parts = [
+                            p for p in resolved_parts
+                            if p.get("type") in image_types
+                        ]
+
+                        # Ensure tool message has at least some content
+                        if not text_parts:
+                            text_parts = [{"type": "text", "text": "[Image from tool result]"}]
+
+                        # OpenAI requires tool message content to be a string
+                        if len(text_parts) == 1:
+                            tool_content = text_parts[0].get("text", "")
+                        else:
+                            tool_content = json.dumps(text_parts)
+
+                        if loop_logger:
+                            loop_logger.debug(
+                                f"Tool {tool_name} result: {len(text_parts)} text parts in tool msg, "
+                                f"{len(image_parts)} images accumulated (vendor={vendor})"
+                            )
+                        return (
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": tool_content,
+                            },
+                            image_parts,
+                        )
+                    else:
+                        # Claude/Anthropic via LiteLLM: inline images in tool message.
+                        # LiteLLM converts image_url data URIs to the provider's native
+                        # format (Claude base64 blocks, etc.).
+                        if loop_logger:
+                            loop_logger.debug(
+                                f"Tool {tool_name} result: resolved {len(resolved_parts)} "
+                                f"multimodal parts inline (vendor={vendor})"
+                            )
+                        return (
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": resolved_parts,
+                            },
+                            [],
+                        )
+                else:
+                    # Non-image resource_links resolved to text — use resolved text
+                    text_content = "\n".join(
+                        p.get("text", "") for p in resolved_parts if p.get("type") == "text"
+                    )
+                    if text_content:
+                        tool_result = text_content
+                    else:
+                        tool_result = json.dumps(result)
+                    if loop_logger:
+                        loop_logger.debug(
+                            f"Tool {tool_name} result: resolved non-image resource_link to text "
+                            f"({len(text_content)} chars, vendor={vendor})"
+                        )
+                    # Fall through to normal message append
+            elif isinstance(result, (dict, list)):
+                tool_result = json.dumps(result)
+            elif result is None:
+                tool_result = ""
+            else:
+                tool_result = str(result)
+
+            if loop_logger:
+                loop_logger.debug(
+                    f"Tool {tool_name} result: {tool_result[:200]}"
+                )
+        except Exception as e:
+            if loop_logger:
+                loop_logger.error(f"Tool {tool_name} execution failed: {e}")
+            tool_result = json.dumps({"error": str(e)})
+
+        return (
+            {
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": tool_result,
+            },
+            [],
+        )
+
     while iteration < max_iterations:
         iteration += 1
 
@@ -100,146 +253,26 @@ async def _provider_agentic_loop(
             }
             current_messages.append(assistant_msg)
 
-            # Collect images that cannot go in tool messages (OpenAI/Gemini).
-            # After ALL tool results, we inject ONE user message with all images.
             accumulated_images: list[dict] = []
 
-            # Execute each tool call via MCP proxy
-            for tc in message.tool_calls:
-                tool_name = tc.function.name
-                endpoint = tool_endpoints.get(tool_name)
-
-                if not endpoint:
-                    if loop_logger:
-                        loop_logger.warning(
-                            f"No endpoint for tool {tool_name}, returning error"
-                        )
-                    tool_result = json.dumps(
-                        {"error": f"Tool {tool_name} not available"}
+            if parallel and len(message.tool_calls) > 1:
+                # Parallel execution via asyncio.gather
+                if loop_logger:
+                    loop_logger.info(
+                        f"⚡ Provider executing {len(message.tool_calls)} tool calls in parallel"
                     )
-                else:
-                    try:
-                        args = (
-                            json.loads(tc.function.arguments)
-                            if tc.function.arguments
-                            else {}
-                        )
-                        proxy = UnifiedMCPProxy(
-                            endpoint=endpoint, function_name=tool_name
-                        )
-                        result = await proxy.call_tool(tool_name, args)
-
-                        # Resolve resource_link items to multimodal content.
-                        # Always use OpenAI-compatible format (image_url with
-                        # data URIs) — LiteLLM converts to provider-native.
-                        if vendor and _has_resource_link(result):
-                            try:
-                                # Always use OpenAI format — LiteLLM converts to
-                                # provider-native format internally.
-                                resolved_parts = await resolve_resource_links(
-                                    result, "openai"
-                                )
-                            except Exception as resolve_err:
-                                if loop_logger:
-                                    loop_logger.error(f"Media resolution failed: {resolve_err}")
-                                resolved_parts = []
-
-                            image_types = ("image", "image_url")
-                            has_image = any(
-                                p.get("type") in image_types
-                                for p in resolved_parts
-                            )
-
-                            if has_image:
-                                if vendor in _tool_image_unsupported:
-                                    # OpenAI/Gemini: images NOT allowed in tool messages.
-                                    # Put text-only parts in the tool message, accumulate
-                                    # images for a single user message after all tool results.
-                                    text_parts = [
-                                        p for p in resolved_parts
-                                        if p.get("type") not in image_types
-                                    ]
-                                    image_parts = [
-                                        p for p in resolved_parts
-                                        if p.get("type") in image_types
-                                    ]
-
-                                    # Ensure tool message has at least some content
-                                    if not text_parts:
-                                        text_parts = [{"type": "text", "text": "[Image from tool result]"}]
-
-                                    # OpenAI requires tool message content to be a string
-                                    if len(text_parts) == 1:
-                                        tool_content = text_parts[0].get("text", "")
-                                    else:
-                                        tool_content = json.dumps(text_parts)
-
-                                    current_messages.append({
-                                        "role": "tool",
-                                        "tool_call_id": tc.id,
-                                        "content": tool_content,
-                                    })
-                                    accumulated_images.extend(image_parts)
-
-                                    if loop_logger:
-                                        loop_logger.debug(
-                                            f"Tool {tool_name} result: {len(text_parts)} text parts in tool msg, "
-                                            f"{len(image_parts)} images accumulated (vendor={vendor})"
-                                        )
-                                    continue
-                                else:
-                                    # Claude/Anthropic via LiteLLM: inline images in tool message.
-                                    # LiteLLM converts image_url data URIs to the provider's native
-                                    # format (Claude base64 blocks, etc.).
-                                    current_messages.append({
-                                        "role": "tool",
-                                        "tool_call_id": tc.id,
-                                        "content": resolved_parts,
-                                    })
-                                    if loop_logger:
-                                        loop_logger.debug(
-                                            f"Tool {tool_name} result: resolved {len(resolved_parts)} "
-                                            f"multimodal parts inline (vendor={vendor})"
-                                        )
-                                continue
-                            else:
-                                # Non-image resource_links resolved to text — use resolved text
-                                text_content = "\n".join(
-                                    p.get("text", "") for p in resolved_parts if p.get("type") == "text"
-                                )
-                                if text_content:
-                                    tool_result = text_content
-                                else:
-                                    tool_result = json.dumps(result)
-                                if loop_logger:
-                                    loop_logger.debug(
-                                        f"Tool {tool_name} result: resolved non-image resource_link to text "
-                                        f"({len(text_content)} chars, vendor={vendor})"
-                                    )
-                                # Fall through to normal message append
-                        elif isinstance(result, (dict, list)):
-                            tool_result = json.dumps(result)
-                        elif result is None:
-                            tool_result = ""
-                        else:
-                            tool_result = str(result)
-
-                        if loop_logger:
-                            loop_logger.debug(
-                                f"Tool {tool_name} result: {tool_result[:200]}"
-                            )
-                    except Exception as e:
-                        if loop_logger:
-                            loop_logger.error(f"Tool {tool_name} execution failed: {e}")
-                        tool_result = json.dumps({"error": str(e)})
-
-                current_messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": tool_result,
-                    }
+                results = await asyncio.gather(
+                    *[_execute_single_tool(tc) for tc in message.tool_calls]
                 )
+                for tool_msg, images in results:
+                    current_messages.append(tool_msg)
+                    accumulated_images.extend(images)
+            else:
+                # Sequential execution (original behavior)
+                for tc in message.tool_calls:
+                    tool_msg, images = await _execute_single_tool(tc)
+                    current_messages.append(tool_msg)
+                    accumulated_images.extend(images)
 
             # After ALL tool results: inject accumulated images as one user message.
             # Sequence: assistant(tool_calls) -> tool -> tool -> ... -> user(images)

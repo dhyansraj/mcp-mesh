@@ -107,6 +107,14 @@ test:
       meshctl logs parallel-consumer-py 2>&1
     capture: consumer_logs
 
+  # 7. Check provider logs for parallel execution
+  - name: "Check provider logs for parallel execution"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl logs claude-provider-py 2>&1
+    capture: provider_logs
+
 assertions:
   # With parallel execution: 3s tool time + LLM overhead (~10-30s)
   # With sequential execution: 9s+ tool time + LLM overhead (~20-40s+)
@@ -121,6 +129,11 @@ assertions:
   # Mesh delegation: consumer delegates to provider, verify successful completion
   - expr: "${captured.consumer_logs} contains 'HTTP call:'"
     message: "Parallel consumer should successfully complete cross-agent calls via HTTP direct path"
+  # Assertion: provider must execute tools in parallel (fix for #713)
+  - expr: "${captured.provider_logs} contains 'Provider executing'"
+    message: "Provider should log parallel tool execution (fix #713)"
+  - expr: "${captured.provider_logs} contains 'tool calls in parallel'"
+    message: "Provider should execute tool calls in parallel, not sequentially"
 
 post_run:
   - handler: shell
