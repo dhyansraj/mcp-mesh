@@ -11,8 +11,16 @@ metadata:
     {{- end }}
 spec:
   podSelector:
-    matchLabels:
-      app.kubernetes.io/part-of: mcp-mesh-ops
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          {{- if .Values.core.ui.enabled }}
+          - mcp-mesh-ui
+          {{- end }}
+          {{- if .Values.core.grafana.enabled }}
+          - mcp-mesh-grafana
+          {{- end }}
   policyTypes:
     - Ingress
   ingress:

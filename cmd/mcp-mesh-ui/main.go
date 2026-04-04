@@ -84,7 +84,10 @@ func main() {
 	// Trim trailing slash for consistent URL joining
 	regURL = strings.TrimRight(regURL, "/")
 
-	// Load basePath for path-based ingress routing
+	// Load basePath for path-based ingress routing.
+	// IMPORTANT: basePath must match the NEXT_PUBLIC_UI_BASE_PATH used at Next.js
+	// build time. The SPA's asset URLs and API paths are baked in at build time.
+	// Changing basePath at runtime requires rebuilding the embedded SPA.
 	basePath := os.Getenv("MCP_MESH_UI_BASE_PATH")
 	if basePath != "" {
 		// Normalize: must start with /, no trailing slash

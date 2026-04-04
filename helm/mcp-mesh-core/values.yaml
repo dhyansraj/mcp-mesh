@@ -232,7 +232,7 @@ mcp-mesh-tempo:
 mcp-mesh-ui:
   ui:
     registryURL: "http://mcp-core-mcp-mesh-registry:8000"
-    basePath: ""  # Set to "/ops/dashboard" for path-based ingress
+    basePath: ""  # Set to "/ops/dashboard" for path-based ingress. Requires SPA rebuild with matching NEXT_PUBLIC_UI_BASE_PATH.
     database:
       url: "postgresql://mcp_mesh_readonly:changeme@mcp-core-mcp-mesh-postgres:5432/mcpmesh?sslmode=disable"
     redis:
