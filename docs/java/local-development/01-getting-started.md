@@ -45,7 +45,7 @@ The recommended way is to use `meshctl scaffold` (see next page). If you prefer 
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>1.1.0-beta.3</version>
+        <version>1.1.0-beta.4</version>
     </dependency>
     <dependency>
         <groupId>org.springframework.boot</groupId>
