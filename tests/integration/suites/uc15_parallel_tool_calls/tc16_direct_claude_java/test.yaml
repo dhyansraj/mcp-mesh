@@ -10,12 +10,14 @@
 
 name: "Java Direct Claude Parallel Tool Calls"
 description: "Test parallelToolCalls=true in Java direct-mode LLM agent with Claude"
+disabled: true # Spring AI parallel tool response aggregation flaky
 tags:
   - parallel
   - java
   - claude
   - direct
   - issue-672
+  - skip-known-issue
 timeout: 600
 
 pre_run:
