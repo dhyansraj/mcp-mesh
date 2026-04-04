@@ -413,6 +413,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                     List<Map<String, Object>> currentMessages = new ArrayList<>(messages);
                     LlmProviderHandler.LlmResponse lastResponse = null;
                     int maxIterations = 10;
+                    boolean completed = false;
 
                     for (int iteration = 0; iteration < maxIterations; iteration++) {
                         // Call LLM WITHOUT auto-execution (toolExecutor=null returns tool_calls)
@@ -423,6 +424,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                         if (llmResponse.toolCalls() == null || llmResponse.toolCalls().isEmpty()) {
                             lastResponse = llmResponse;
                             log.debug("Provider parallel loop completed in {} iterations", iteration + 1);
+                            completed = true;
                             break;
                         }
 
@@ -442,7 +444,8 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                                 String endpoint = toolEndpoints.get(tc.name());
                                 String toolResult;
                                 if (endpoint == null) {
-                                    toolResult = "{\"error\": \"Tool " + tc.name() + " not available\"}";
+                                    String safeName = tc.name().replace("\"", "\\\"");
+                                    toolResult = "{\"error\": \"Tool " + safeName + " not available\"}";
                                 } else {
                                     try {
                                         @SuppressWarnings("unchecked")
@@ -465,7 +468,8 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                                         }
                                     } catch (Exception e) {
                                         log.error("Tool {} execution failed: {}", tc.name(), e.getMessage());
-                                        toolResult = "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
+                                        String errMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getName();
+                                        toolResult = "{\"error\": \"" + errMsg.replace("\"", "\\\"") + "\"}";
                                     }
                                 }
 
@@ -486,7 +490,12 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                         lastResponse = llmResponse;
                     }
 
-                    if (lastResponse != null) {
+                    if (!completed) {
+                        log.warn("Provider parallel loop hit max iterations ({}) without final response", maxIterations);
+                        response.put("content", "Maximum tool call iterations reached");
+                        response.put("tool_calls", List.of());
+                        usageMeta = lastResponse != null ? lastResponse.usage() : null;
+                    } else if (lastResponse != null) {
                         response.put("content", lastResponse.content());
                         response.put("tool_calls", List.of());
                         usageMeta = lastResponse.usage();
@@ -712,7 +721,8 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             String endpoint = toolEndpoints.get(toolName);
             if (endpoint == null) {
                 log.warn("No endpoint for tool {}, returning error", toolName);
-                return "{\"error\": \"Tool " + toolName + " not available\"}";
+                String safeName = toolName.replace("\"", "\\\"");
+                return "{\"error\": \"Tool " + safeName + " not available\"}";
             }
 
             try {
@@ -743,7 +753,8 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                 return resultStr;
             } catch (Exception e) {
                 log.error("Tool {} execution failed at {}: {}", toolName, endpoint, e.getMessage());
-                return "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
+                String errMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getName();
+                return "{\"error\": \"" + errMsg.replace("\"", "\\\"") + "\"}";
             }
         };
     }
