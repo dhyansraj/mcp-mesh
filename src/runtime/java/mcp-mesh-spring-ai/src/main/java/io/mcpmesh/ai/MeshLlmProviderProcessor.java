@@ -23,6 +23,7 @@ import org.springframework.context.ApplicationContextAware;
 import org.springframework.core.annotation.AnnotationUtils;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Processes @MeshLlmProvider annotations and registers LLM capabilities.
@@ -337,6 +338,16 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             outputSchemaData = (Map<String, Object>) requestData.get("output_schema");
         }
 
+        // Extract parallel_tool_calls from model_params
+        boolean parallelToolCalls = false;
+        if (modelParams != null) {
+            Object ptc = modelParams.remove("parallel_tool_calls");
+            parallelToolCalls = Boolean.TRUE.equals(ptc) || "true".equals(String.valueOf(ptc));
+        }
+        if (parallelToolCalls) {
+            log.info("Provider parallel tool calls enabled — tools will execute concurrently via CompletableFuture");
+        }
+
         log.debug("Generating response with provider={}, messageCount={}, toolCount={}, hasOutputSchema={}, outputTypeName={}",
             config.provider(),
             messages != null ? messages.size() : 0,
@@ -393,11 +404,106 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                 OutputSchema outputSchema = outputSchemaData != null ?
                     parseOutputSchema(outputSchemaData, outputTypeName) : null;
 
-                if (!toolEndpoints.isEmpty()) {
-                    // Provider-managed agentic loop: execute tools internally via MCP
-                    log.info("Provider-managed loop: {} tools with endpoints", toolEndpoints.size());
+                if (!toolEndpoints.isEmpty() && parallelToolCalls) {
+                    // Parallel mode: manual agentic loop with CompletableFuture
+                    log.info("Provider-managed parallel loop: {} tools with endpoints", toolEndpoints.size());
 
-                    // Get MediaStore for resolving resource_link URIs in tool results
+                    McpHttpClient mcpClient = new McpHttpClient(objectMapper);
+                    MediaStore mediaStore = getMediaStore();
+                    List<Map<String, Object>> currentMessages = new ArrayList<>(messages);
+                    LlmProviderHandler.LlmResponse lastResponse = null;
+                    int maxIterations = 10;
+                    boolean completed = false;
+
+                    for (int iteration = 0; iteration < maxIterations; iteration++) {
+                        // Call LLM WITHOUT auto-execution (toolExecutor=null returns tool_calls)
+                        LlmProviderHandler.LlmResponse llmResponse = handler.generateWithTools(
+                            model, currentMessages, toolDefs, null, outputSchema, Map.of()
+                        );
+
+                        if (llmResponse.toolCalls() == null || llmResponse.toolCalls().isEmpty()) {
+                            lastResponse = llmResponse;
+                            log.debug("Provider parallel loop completed in {} iterations", iteration + 1);
+                            completed = true;
+                            break;
+                        }
+
+                        log.info("Provider executing {} tool calls in parallel", llmResponse.toolCalls().size());
+
+                        // Add assistant message with tool calls to conversation
+                        Map<String, Object> assistantMsg = new LinkedHashMap<>();
+                        assistantMsg.put("role", "assistant");
+                        assistantMsg.put("content", llmResponse.content() != null ? llmResponse.content() : "");
+                        assistantMsg.put("tool_calls", convertToolCalls(llmResponse.toolCalls()));
+                        currentMessages.add(assistantMsg);
+
+                        // Execute tool calls in parallel via CompletableFuture
+                        List<CompletableFuture<Map<String, Object>>> futures = new ArrayList<>();
+                        for (LlmProviderHandler.ToolCall tc : llmResponse.toolCalls()) {
+                            futures.add(CompletableFuture.supplyAsync(() -> {
+                                String endpoint = toolEndpoints.get(tc.name());
+                                String toolResult;
+                                if (endpoint == null) {
+                                    String safeName = tc.name().replace("\"", "\\\"");
+                                    toolResult = "{\"error\": \"Tool " + safeName + " not available\"}";
+                                } else {
+                                    try {
+                                        @SuppressWarnings("unchecked")
+                                        Map<String, Object> args = (tc.arguments() != null && !tc.arguments().isEmpty())
+                                            ? objectMapper.readValue(tc.arguments(), Map.class) : Map.of();
+                                        Object result = mcpClient.callTool(endpoint, tc.name(), args);
+                                        if (result != null && mediaStore != null) {
+                                            List<Map<String, Object>> resolved = MediaResolver.resolveResourceLinks(
+                                                result, config.provider(), mediaStore);
+                                            if (resolved != null) {
+                                                toolResult = MediaResolver.serializeForToolResult(resolved);
+                                            } else {
+                                                toolResult = objectMapper.writeValueAsString(result);
+                                            }
+                                        } else if (result != null) {
+                                            toolResult = result instanceof String ? (String) result
+                                                : objectMapper.writeValueAsString(result);
+                                        } else {
+                                            toolResult = "";
+                                        }
+                                    } catch (Exception e) {
+                                        log.error("Tool {} execution failed: {}", tc.name(), e.getMessage());
+                                        String errMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getName();
+                                        toolResult = "{\"error\": \"" + errMsg.replace("\"", "\\\"") + "\"}";
+                                    }
+                                }
+
+                                Map<String, Object> toolMsg = new LinkedHashMap<>();
+                                toolMsg.put("role", "tool");
+                                toolMsg.put("tool_call_id", tc.id());
+                                toolMsg.put("content", toolResult);
+                                return toolMsg;
+                            }));
+                        }
+
+                        // Wait for all parallel tool calls to complete
+                        CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+                        for (CompletableFuture<Map<String, Object>> future : futures) {
+                            currentMessages.add(future.join());
+                        }
+
+                        lastResponse = llmResponse;
+                    }
+
+                    if (!completed) {
+                        log.warn("Provider parallel loop hit max iterations ({}) without final response", maxIterations);
+                        response.put("content", "Maximum tool call iterations reached");
+                        response.put("tool_calls", List.of());
+                        usageMeta = lastResponse != null ? lastResponse.usage() : null;
+                    } else if (lastResponse != null) {
+                        response.put("content", lastResponse.content());
+                        response.put("tool_calls", List.of());
+                        usageMeta = lastResponse.usage();
+                    }
+                } else if (!toolEndpoints.isEmpty()) {
+                    // Sequential mode: provider-managed agentic loop with auto-execution
+                    log.info("Provider-managed sequential loop: {} tools with endpoints", toolEndpoints.size());
+
                     MediaStore mediaStore = getMediaStore();
 
                     LlmProviderHandler.ToolExecutorCallback executorCallback = createMcpToolExecutor(
@@ -408,7 +514,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                     );
 
                     response.put("content", llmResponse.content());
-                    response.put("tool_calls", List.of()); // No tool_calls — all executed provider-side
+                    response.put("tool_calls", List.of());
                     usageMeta = llmResponse.usage();
                 } else {
                     // Legacy path: no endpoints — return tool_calls to consumer
@@ -615,7 +721,8 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             String endpoint = toolEndpoints.get(toolName);
             if (endpoint == null) {
                 log.warn("No endpoint for tool {}, returning error", toolName);
-                return "{\"error\": \"Tool " + toolName + " not available\"}";
+                String safeName = toolName.replace("\"", "\\\"");
+                return "{\"error\": \"Tool " + safeName + " not available\"}";
             }
 
             try {
@@ -646,7 +753,8 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                 return resultStr;
             } catch (Exception e) {
                 log.error("Tool {} execution failed at {}: {}", toolName, endpoint, e.getMessage());
-                return "{\"error\": \"" + e.getMessage().replace("\"", "\\\"") + "\"}";
+                String errMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getName();
+                return "{\"error\": \"" + errMsg.replace("\"", "\\\"") + "\"}";
             }
         };
     }

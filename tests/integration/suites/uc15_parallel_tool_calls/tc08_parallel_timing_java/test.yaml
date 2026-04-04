@@ -109,6 +109,14 @@ test:
       meshctl logs parallel-consumer-java 2>&1
     capture: consumer_logs
 
+  # 7. Check provider logs for parallel execution
+  - name: "Check provider logs for parallel execution"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl logs claude-provider-py 2>&1
+    capture: provider_logs
+
 assertions:
   - expr: "${captured.timed_response} contains 'AMZN'"
     message: "Response should reference the AMZN ticker"
@@ -117,6 +125,11 @@ assertions:
   # Assertion: parallel mode must be enabled
   - expr: "${captured.consumer_logs} contains 'parallel tool calls enabled'"
     message: "Consumer agent should log 'parallel tool calls enabled'"
+  # Assertion: provider must execute tools in parallel (fix for #713)
+  - expr: "${captured.provider_logs} contains 'Provider executing'"
+    message: "Provider should log parallel tool execution (fix #713)"
+  - expr: "${captured.provider_logs} contains 'tool calls in parallel'"
+    message: "Provider should execute tool calls in parallel, not sequentially"
 
 post_run:
   - handler: shell

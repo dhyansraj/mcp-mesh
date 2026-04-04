@@ -1572,7 +1572,10 @@ def llm(
                 rule=ValidationRule.STRING_RULE,
             ),
             "provider": resolved_provider,
-            "model": resolved_model,
+            "model": resolved_model if resolved_model else (
+                resolved_provider if isinstance(resolved_provider, str) and "/" in resolved_provider
+                else None
+            ),
             "api_key": api_key,  # Will be resolved from provider-specific env vars later
             "max_iterations": get_config_value(
                 "MESH_LLM_MAX_ITERATIONS",

@@ -486,6 +486,12 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                         log.debug("Added output_schema for structured output: {}", responseType.getSimpleName());
                     }
                 }
+                // Issue #713: Include parallel_tool_calls for provider-side parallel execution.
+                // Provider handlers strip this from LLM API params (e.g., Claude doesn't accept it),
+                // but the provider's agentic loop needs it to decide parallel vs sequential execution.
+                if (parallelToolCalls) {
+                    modelParams.put("parallel_tool_calls", true);
+                }
 
                 // Build request wrapper (matches Python/TypeScript SDK format)
                 Map<String, Object> request = new LinkedHashMap<>();
@@ -852,6 +858,11 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 schema = Map.of("type", "object", "properties", Map.of());
             }
             functionDef.put("parameters", schema);
+
+            // Enrich with _mesh_endpoint for provider-side tool execution
+            if (tool.available() && tool.endpoint() != null && !tool.endpoint().isEmpty()) {
+                functionDef.put("_mesh_endpoint", tool.endpoint());
+            }
 
             tools.add(Map.of("type", "function", "function", functionDef));
         }

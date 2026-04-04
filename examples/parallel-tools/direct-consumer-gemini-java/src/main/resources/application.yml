@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: direct-consumer-gemini-java
+  ai:
+    google:
+      gemini:
+        api-key: ${GOOGLE_API_KEY:}
+        chat:
+          options:
+            model: gemini-2.0-flash
+            max-tokens: 4096
+            temperature: 0.7
+
+server:
+  port: ${MCP_MESH_HTTP_PORT:9002}
+
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:direct-consumer-gemini-java}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG

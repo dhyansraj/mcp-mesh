@@ -430,6 +430,13 @@ export function llmProvider(config: LlmProviderConfig): {
     delete modelParams.output_schema;
     delete modelParams.output_type_name;
 
+    // Extract parallel_tool_calls — controls concurrent tool execution in provider-managed loop
+    const parallelToolCalls = !!modelParams.parallel_tool_calls;
+    delete modelParams.parallel_tool_calls;
+    if (parallelToolCalls) {
+      debug("🔀 Provider parallel tool calls enabled — tools will execute concurrently via Promise.all()");
+    }
+
     // Build OutputSchema object for handler (prompt formatting) - generateObject uses it directly
     const outputSchemaObj = outputSchema ? {
       schema: outputSchema,
@@ -852,12 +859,12 @@ export function llmProvider(config: LlmProviderConfig): {
           // assistant(tool_calls) -> tool -> tool -> ... -> user(images)
           const accumulatedImageParts: ResolvedContent[] = [];
 
-          // Execute each tool call and add results as tool messages
-          for (const tc of result.toolCalls) {
+          // Helper: execute a single tool call and return its message + image parts.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const executeSingleTool = async (tc: any): Promise<{ toolMessage: any; imageParts: ResolvedContent[] }> => {
             const toolName = tc.toolName;
             const toolEndpoint = toolEndpoints[toolName];
             let toolResultStr: string;
-            // Track raw result for resource_link resolution
             let rawToolResult: unknown = null;
 
             if (toolEndpoint) {
@@ -892,17 +899,13 @@ export function llmProvider(config: LlmProviderConfig): {
               debug(`Tool '${toolName}' result contains resource_link, resolving for ${vendor}`);
               const allParts = await resolveResourceLinks(rawToolResult, vendor);
 
-              // Build tool result message with text-only content for OpenAI/Gemini,
-              // or full multimodal content for Claude.
               const imageTypes = new Set(["image", "image_url"]);
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
               let toolResultOutput: any;
               if (TOOL_IMAGE_UNSUPPORTED_VENDORS.has(vendor)) {
-                // OpenAI/Gemini: text-only in tool message, images accumulated separately
                 const textParts = allParts.filter(p => !imageTypes.has(p.type));
                 toolResultOutput = { type: "text", value: textParts.map(p => (p.text as string) || "[image]").join("\n") };
               } else {
-                // Claude/Anthropic: preserve full multimodal content in tool message
                 toolResultOutput = { type: "json", value: allParts };
               }
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -912,21 +915,19 @@ export function llmProvider(config: LlmProviderConfig): {
                 toolName,
                 output: toolResultOutput,
               }];
-              currentMessages.push({
+              const toolMessage = {
                 role: "tool",
                 content: toolResultContent,
-              });
+              };
 
-              // Accumulate images for a single user message after ALL tool results.
-              // For vendors that don't support images in tool messages, extract image
-              // parts from the already-resolved content (no second fetch needed).
+              const imageParts: ResolvedContent[] = [];
               if (TOOL_IMAGE_UNSUPPORTED_VENDORS.has(vendor)) {
-                const imageParts = allParts.filter(p => imageTypes.has(p.type));
-                accumulatedImageParts.push(...imageParts);
+                imageParts.push(...allParts.filter(p => imageTypes.has(p.type)));
                 debug(`Tool '${toolName}' resolved multimodal (vendor=${vendor}, images_accumulated=${imageParts.length})`);
               } else {
                 debug(`Tool '${toolName}' resolved multimodal (vendor=${vendor}, inline in tool message)`);
               }
+              return { toolMessage, imageParts };
             } else {
               // No resource_links — standard tool result
               let toolOutput: { type: string; value: unknown };
@@ -936,16 +937,36 @@ export function llmProvider(config: LlmProviderConfig): {
                 toolOutput = { type: "text", value: toolResultStr };
               }
 
-              // Add tool result message in Vercel AI SDK format
-              currentMessages.push({
-                role: "tool",
-                content: [{
-                  type: "tool-result",
-                  toolCallId: tc.toolCallId,
-                  toolName,
-                  output: toolOutput,
-                }],
-              });
+              return {
+                toolMessage: {
+                  role: "tool",
+                  content: [{
+                    type: "tool-result",
+                    toolCallId: tc.toolCallId,
+                    toolName,
+                    output: toolOutput,
+                  }],
+                },
+                imageParts: [],
+              };
+            }
+          };
+
+          // Execute tool calls (parallel or sequential)
+          if (parallelToolCalls && result.toolCalls.length > 1) {
+            debug(`⚡ Provider executing ${result.toolCalls.length} tool calls in parallel`);
+            const results = await Promise.all(
+              result.toolCalls.map(tc => executeSingleTool(tc))
+            );
+            for (const { toolMessage, imageParts } of results) {
+              currentMessages.push(toolMessage);
+              accumulatedImageParts.push(...imageParts);
+            }
+          } else {
+            for (const tc of result.toolCalls) {
+              const { toolMessage, imageParts } = await executeSingleTool(tc);
+              currentMessages.push(toolMessage);
+              accumulatedImageParts.push(...imageParts);
             }
           }
 
