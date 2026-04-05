@@ -46,7 +46,7 @@ ARG UI_BASE_PATH=""
 ENV MCP_MESH_UI_BASE_PATH=${UI_BASE_PATH}
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3080/api/ui-health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3080${UI_BASE_PATH}/api/ui-health || exit 1
 
 EXPOSE 3080
 ENTRYPOINT ["/usr/local/bin/meshui"]

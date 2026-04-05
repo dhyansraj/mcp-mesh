@@ -232,7 +232,8 @@ mcp-mesh-tempo:
 mcp-mesh-ui:
   ui:
     registryURL: "http://mcp-core-mcp-mesh-registry:8000"
-    basePath: ""  # Set to "/ops/dashboard" for path-based ingress. Requires custom image: see packaging/docker/ui-custom.Dockerfile
+    # See helm/mcp-mesh-ui/values.yaml for basePath documentation
+    basePath: ""
     database:
       url: "postgresql://mcp_mesh_readonly:changeme@mcp-core-mcp-mesh-postgres:5432/mcpmesh?sslmode=disable"
     redis:
