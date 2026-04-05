@@ -18,7 +18,14 @@ ui:
   port: "3080"
   registryURL: "http://mcp-mesh-registry:8000"
   logLevel: "INFO"
-  basePath: ""  # Set to "/ops/dashboard" for path-based ingress. Requires SPA rebuild with matching NEXT_PUBLIC_UI_BASE_PATH.
+  # Base path for path-based ingress routing.
+  # Default: /ops/dashboard (matches the published mcpmesh/ui image).
+  # To use a different path, build a custom image:
+  #   docker build --build-arg UI_BASE_PATH=/my/path
+  #     -f packaging/docker/ui-custom.Dockerfile -t mcpmesh/ui:custom .
+  # Your reverse proxy must forward the full path (no prefix stripping):
+  #   proxy_pass http://ui-service:3080;  (NOT http://ui-service:3080/)
+  basePath: "/ops/dashboard"
   database:
     # Override with a read-only database credential for production
     url: "postgresql://mcp_mesh_readonly:changeme@mcp-mesh-postgres:5432/mcp_mesh_registry?sslmode=disable"

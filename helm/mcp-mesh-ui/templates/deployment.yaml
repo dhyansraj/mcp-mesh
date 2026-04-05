@@ -108,13 +108,13 @@ spec:
                 name: {{ include "mcp-mesh-ui.fullname" . }}-secret
           livenessProbe:
             httpGet:
-              path: /api/ui-health
+              path: {{ .Values.ui.basePath }}/api/ui-health
               port: http
             initialDelaySeconds: 5
             periodSeconds: 30
           readinessProbe:
             httpGet:
-              path: /api/ui-health
+              path: {{ .Values.ui.basePath }}/api/ui-health
               port: http
             initialDelaySeconds: 3
             periodSeconds: 10

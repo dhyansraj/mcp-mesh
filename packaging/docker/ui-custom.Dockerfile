@@ -1,15 +1,17 @@
-# MCP Mesh UI Server - Source build with /ops/dashboard basePath
-# Default basePath: /ops/dashboard (most k8s deployments serve at a sub-path)
+# MCP Mesh UI Server - Source build with custom basePath
+# Use this to override the default basePath (/ops/dashboard)
 #
-# Override basePath:
-#   docker build --build-arg UI_BASE_PATH=/my/path ...    # custom path
-#   docker build --build-arg UI_BASE_PATH="" ...           # root path (/)
+# Build:
+#   docker build -f packaging/docker/ui-custom.Dockerfile \
+#     --build-arg UI_BASE_PATH=/my/custom/path \
+#     -t mcpmesh/ui:custom .
 #
-# Supports linux/amd64, linux/arm64
+# The default image (mcpmesh/ui) uses basePath="/ops/dashboard".
+# Use this Dockerfile for a different path or root ("/").
 
 # Stage 1: Build Next.js SPA with basePath
 FROM node:22-alpine AS ui-builder
-ARG UI_BASE_PATH="/ops/dashboard"
+ARG UI_BASE_PATH=""
 WORKDIR /src/ui
 COPY src/ui/package.json src/ui/package-lock.json ./
 RUN npm ci --silent
@@ -19,11 +21,13 @@ RUN npm run build
 
 # Stage 2: Build Go binary with embedded SPA
 FROM golang:1.25-alpine AS go-builder
+ARG UI_BASE_PATH=""
 RUN apk add --no-cache git gcc musl-dev sqlite-dev build-base
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+# Replace embedded SPA with basePath-configured build
 COPY --from=ui-builder /src/ui/out cmd/mcp-mesh-ui/out/
 ENV CGO_ENABLED=1
 ENV CGO_CFLAGS="-D_LARGEFILE64_SOURCE"
@@ -38,7 +42,7 @@ COPY --from=go-builder /src/cmd/mcp-mesh-ui/meshui /usr/local/bin/
 USER appuser
 WORKDIR /data
 
-ARG UI_BASE_PATH="/ops/dashboard"
+ARG UI_BASE_PATH=""
 ENV MCP_MESH_UI_BASE_PATH=${UI_BASE_PATH}
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
