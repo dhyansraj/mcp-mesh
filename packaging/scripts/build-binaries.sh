@@ -289,6 +289,34 @@ build_all_binaries() {
         fi
     done
 
+    # Build dashboard variant (meshui-dashboard with basePath=/ops/dashboard)
+    # This is used by the Docker image for Kubernetes deployments
+    if command -v npm &> /dev/null; then
+        log "Building dashboard variant (basePath=/ops/dashboard)..."
+        (cd "$PROJECT_ROOT/src/ui" && NEXT_PUBLIC_UI_BASE_PATH=/ops/dashboard npm run build)
+        rm -rf "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
+        cp -r "$PROJECT_ROOT/src/ui/out" "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
+
+        for platform in "${built_platforms[@]}"; do
+            IFS='_' read -ra PARTS <<< "$platform"
+            local goos="${PARTS[0]}"
+            local goarch="${PARTS[1]}"
+            if ! build_binary "meshui" "$goos" "$goarch" "meshui-dashboard"; then
+                error "Failed to build meshui-dashboard for ${goos}/${goarch}"
+                exit 1
+            fi
+        done
+
+        # Restore default SPA for any subsequent use
+        (cd "$PROJECT_ROOT/src/ui" && npm run build)
+        rm -rf "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
+        cp -r "$PROJECT_ROOT/src/ui/out" "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
+        success "Dashboard variant built for all platforms"
+    else
+        error "npm not available — cannot build meshui-dashboard. Node.js is required."
+        exit 1
+    fi
+
     # Create archives if compression is enabled
     if [[ "$COMPRESS" == "true" ]]; then
         for platform in "${built_platforms[@]}"; do

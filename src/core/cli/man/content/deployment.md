@@ -10,9 +10,12 @@ MCP Mesh supports multiple deployment patterns from local development to product
 
 | Image                              | Description                                        |
 | ---------------------------------- | -------------------------------------------------- |
-| `mcpmesh/registry:1.0.0`           | Registry service for agent discovery               |
-| `mcpmesh/python-runtime:1.0.0`     | Python runtime with mcp-mesh SDK pre-installed     |
-| `mcpmesh/typescript-runtime:1.0.0` | TypeScript runtime with @mcpmesh/sdk pre-installed |
+| `mcpmesh/registry:1.1`             | Registry service for agent discovery               |
+| `mcpmesh/python-runtime:1.1`       | Python runtime with mcp-mesh SDK pre-installed     |
+| `mcpmesh/typescript-runtime:1.1`   | TypeScript runtime with @mcpmesh/sdk pre-installed |
+| `mcpmesh/java-runtime:1.1`         | Java runtime with mcp-mesh Spring Boot starter     |
+| `mcpmesh/ui:1.1`                   | Dashboard UI server (basePath: /ops/dashboard)     |
+| `mcpmesh/cli:1.1`                  | meshctl CLI for management                         |
 
 ## Local Development
 
@@ -101,7 +104,7 @@ meshctl scaffold --name my-agent --agent-type tool
 The generated Dockerfile uses the official runtime:
 
 ```dockerfile
-FROM mcpmesh/python-runtime:1.0.0
+FROM mcpmesh/python-runtime:1.1
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -129,7 +132,7 @@ meshctl scaffold --compose --observability
 Generated docker-compose.yml includes:
 
 - PostgreSQL database for registry
-- Registry service (`mcpmesh/registry:1.0.0`)
+- Registry service (`mcpmesh/registry:1.1`)
 - All detected agents with proper networking
 - Health checks and dependency ordering
 - Optional: Redis, Tempo, Grafana (with `--observability`)
@@ -379,6 +382,72 @@ meshctl start my_agent.py --env MCP_MESH_TLS_PROVIDER=vault --env MCP_MESH_VAULT
 ```
 
 See `meshctl man security` for full TLS configuration, trust backends, and credential providers.
+
+## Dashboard UI Deployment
+
+### Local Development
+
+```bash
+# Start registry + UI + agents (UI serves at http://localhost:3080)
+meshctl start --ui my_agent.py
+
+# Or with browser auto-open
+meshctl start --ui --dashboard my_agent.py
+```
+
+No basePath needed — the dashboard serves at root `/`.
+
+### Kubernetes
+
+The published `mcpmesh/ui` image serves at `/ops/dashboard` by default.
+
+**Minimum setup** (everything included by default):
+
+```bash
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --set ui.enabled=true
+```
+
+This deploys the dashboard with database access (event history), distributed tracing, and Redis (live streaming) — all enabled by default.
+
+**Ingress routing** — your reverse proxy must forward the full path:
+
+```nginx
+# Correct: forward full path, let the UI server handle basePath
+location /ops/dashboard/ {
+    proxy_pass http://mcp-core-mcp-mesh-ui:3080;
+}
+
+# Wrong: trailing / strips prefix, breaks asset loading
+location /ops/dashboard/ {
+    proxy_pass http://mcp-core-mcp-mesh-ui:3080/;
+}
+```
+
+Or use the `mcp-mesh-ingress` chart which handles routing automatically.
+
+**Custom basePath** — to serve at a different path:
+
+```bash
+# Build custom image
+docker build --build-arg UI_BASE_PATH=/my/custom/path \
+  -f packaging/docker/ui-custom.Dockerfile -t mcpmesh/ui:custom .
+
+# Deploy with matching basePath
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --set ui.enabled=true \
+  --set mcp-mesh-ui.image.tag=custom \
+  --set mcp-mesh-ui.ui.basePath=/my/custom/path
+```
+
+### Beta Releases
+
+For prerelease versions, override the image tag (the `1.1` floating tag only exists for stable releases):
+
+```bash
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+  --set ui.enabled=true \
+  --set mcp-mesh-ui.image.tag=1.1.0-beta.6
+```
 
 ## See Also
 
