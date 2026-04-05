@@ -79,7 +79,7 @@ func (h *JavaHandler) GenerateAgent(config ScaffoldConfig) error {
 // GenerateDockerfile returns Java Dockerfile content
 func (h *JavaHandler) GenerateDockerfile() string {
 	return `# Dockerfile for MCP Mesh Java agent
-FROM mcpmesh/java-runtime:0.9
+FROM mcpmesh/java-runtime:1.1
 
 WORKDIR /app
 
@@ -111,7 +111,7 @@ func (h *JavaHandler) GenerateHelmValues() map[string]interface{} {
 		"runtime": "java",
 		"image": map[string]interface{}{
 			"repository": "mcpmesh/java-runtime",
-			"tag":        "0.9",
+			"tag":        "1.1",
 		},
 		"command": []string{"target/agent-1.0.0-SNAPSHOT.jar"},
 	}
@@ -156,7 +156,7 @@ func (h *JavaHandler) ParseAgentFile(path string) (*AgentInfo, error) {
 
 // GetDockerImage returns the Java runtime Docker image
 func (h *JavaHandler) GetDockerImage() string {
-	return "mcpmesh/java-runtime:0.9"
+	return "mcpmesh/java-runtime:1.1"
 }
 
 // ValidatePrerequisites checks Java environment
@@ -304,7 +304,7 @@ const javaPomTemplate = `<?xml version="1.0" encoding="UTF-8"?>
         <dependency>
             <groupId>io.mcp-mesh</groupId>
             <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-            <version>1.1.0-beta.5</version>
+            <version>1.1.0-beta.6</version>
         </dependency>
     </dependencies>
 

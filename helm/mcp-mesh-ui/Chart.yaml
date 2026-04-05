@@ -2,8 +2,8 @@ apiVersion: v2
 name: mcp-mesh-ui
 description: MCP Mesh Dashboard UI Server - Web dashboard for monitoring MCP agents
 type: application
-version: 1.1.0-beta.5
-appVersion: "1.1.0-beta.5"
+version: 1.1.0-beta.6
+appVersion: "1.1.0-beta.6"
 keywords:
   - mcp
   - mesh

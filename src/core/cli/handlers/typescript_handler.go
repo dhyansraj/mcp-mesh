@@ -92,7 +92,7 @@ func (h *TypeScriptHandler) GenerateAgent(config ScaffoldConfig) error {
 // GenerateDockerfile returns TypeScript Dockerfile content
 func (h *TypeScriptHandler) GenerateDockerfile() string {
 	return `# Dockerfile for MCP Mesh TypeScript agent
-FROM mcpmesh/typescript-runtime:0.9
+FROM mcpmesh/typescript-runtime:1.1
 
 WORKDIR /app
 
@@ -124,7 +124,7 @@ func (h *TypeScriptHandler) GenerateHelmValues() map[string]interface{} {
 		"runtime": "typescript",
 		"image": map[string]interface{}{
 			"repository": "mcpmesh/typescript-runtime",
-			"tag":        "0.9",
+			"tag":        "1.1",
 		},
 		"command": []string{"src/index.ts"},
 	}
@@ -167,7 +167,7 @@ func (h *TypeScriptHandler) ParseAgentFile(path string) (*AgentInfo, error) {
 
 // GetDockerImage returns the TypeScript runtime Docker image
 func (h *TypeScriptHandler) GetDockerImage() string {
-	return "mcpmesh/typescript-runtime:0.9"
+	return "mcpmesh/typescript-runtime:1.1"
 }
 
 // ValidatePrerequisites checks TypeScript environment
@@ -269,7 +269,7 @@ const typescriptPackageTemplate = `{
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@mcpmesh/sdk": "^1.1.0-beta.5",
+    "@mcpmesh/sdk": "^1.1.0-beta.6",
     "fastmcp": "^3.26.0",
     "zod": "^3.23.0"
   },

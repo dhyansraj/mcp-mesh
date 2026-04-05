@@ -137,12 +137,12 @@ Available from OCI registry (no `helm repo add` needed):
 ```bash
 # Install core infrastructure
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.1.0-beta.5 \
+  --version 1.1.0-beta.6 \
   -n mcp-mesh --create-namespace
 
 # Deploy an agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.1.0-beta.5 \
+  --version 1.1.0-beta.6 \
   -n mcp-mesh \
   -f helm-values.yaml
 ```

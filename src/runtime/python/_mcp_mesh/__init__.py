@@ -31,7 +31,7 @@ from .engine.decorator_registry import (
     get_decorator_stats,
 )
 
-__version__ = "1.1.0b5"
+__version__ = "1.1.0b6"
 
 # Store reference to runtime processor if initialized
 _runtime_processor = None
