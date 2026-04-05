@@ -1204,6 +1204,9 @@ jobs:
 
             CLI_TAGS="${REGISTRY}/cli:${VERSION}"
             CLI_TAGS="${CLI_TAGS},${GHCR_REPO}/cli:${VERSION}"
+
+            UI_TAGS="${REGISTRY}/ui:${VERSION}"
+            UI_TAGS="${UI_TAGS},${GHCR_REPO}/ui:${VERSION}"
           else
             # For stable releases, include all semantic version tags + latest
             MAJOR="${{ steps.meta.outputs.major_version }}"
@@ -1254,6 +1257,15 @@ jobs:
             CLI_TAGS="${CLI_TAGS},${GHCR_REPO}/cli:${MINOR}"
             CLI_TAGS="${CLI_TAGS},${GHCR_REPO}/cli:${MAJOR}"
             CLI_TAGS="${CLI_TAGS},${GHCR_REPO}/cli:latest"
+
+            UI_TAGS="${REGISTRY}/ui:${PATCH}"
+            UI_TAGS="${UI_TAGS},${REGISTRY}/ui:${MINOR}"
+            UI_TAGS="${UI_TAGS},${REGISTRY}/ui:${MAJOR}"
+            UI_TAGS="${UI_TAGS},${REGISTRY}/ui:latest"
+            UI_TAGS="${UI_TAGS},${GHCR_REPO}/ui:${PATCH}"
+            UI_TAGS="${UI_TAGS},${GHCR_REPO}/ui:${MINOR}"
+            UI_TAGS="${UI_TAGS},${GHCR_REPO}/ui:${MAJOR}"
+            UI_TAGS="${UI_TAGS},${GHCR_REPO}/ui:latest"
           fi
 
           echo "registry_tags=${REGISTRY_TAGS}" >> $GITHUB_OUTPUT
@@ -1261,12 +1273,14 @@ jobs:
           echo "typescript_tags=${TYPESCRIPT_TAGS}" >> $GITHUB_OUTPUT
           echo "java_tags=${JAVA_TAGS}" >> $GITHUB_OUTPUT
           echo "cli_tags=${CLI_TAGS}" >> $GITHUB_OUTPUT
+          echo "ui_tags=${UI_TAGS}" >> $GITHUB_OUTPUT
 
           echo "Registry tags: ${REGISTRY_TAGS}"
           echo "Python runtime tags: ${PYTHON_TAGS}"
           echo "TypeScript runtime tags: ${TYPESCRIPT_TAGS}"
           echo "Java runtime tags: ${JAVA_TAGS}"
           echo "CLI tags: ${CLI_TAGS}"
+          echo "UI tags: ${UI_TAGS}"
 
       - name: Build and push Registry image
         uses: docker/build-push-action@v5
@@ -1342,6 +1356,19 @@ jobs:
             VERSION=${{ steps.meta.outputs.version_with_v }}
           push: true
           tags: ${{ steps.docker_tags.outputs.cli_tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and push UI image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./packaging/docker/ui.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version_with_v }}
+          push: true
+          tags: ${{ steps.docker_tags.outputs.ui_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
