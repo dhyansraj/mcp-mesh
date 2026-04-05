@@ -302,7 +302,8 @@ build_all_binaries() {
             local goos="${PARTS[0]}"
             local goarch="${PARTS[1]}"
             if ! build_binary "meshui" "$goos" "$goarch" "meshui-dashboard"; then
-                warn "Failed to build meshui-dashboard for ${goos}/${goarch}"
+                error "Failed to build meshui-dashboard for ${goos}/${goarch}"
+                exit 1
             fi
         done
 
@@ -311,6 +312,9 @@ build_all_binaries() {
         rm -rf "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
         cp -r "$PROJECT_ROOT/src/ui/out" "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
         success "Dashboard variant built for all platforms"
+    else
+        error "npm not available — cannot build meshui-dashboard. Node.js is required."
+        exit 1
     fi
 
     # Create archives if compression is enabled

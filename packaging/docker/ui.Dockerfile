@@ -14,8 +14,8 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     tzdata \
     wget \
-    && groupadd -g 1001 mcp-mesh \
-    && useradd -u 1001 -g mcp-mesh mcp-mesh \
+    && groupadd -g 1000 mcp-mesh \
+    && useradd -u 1000 -g mcp-mesh mcp-mesh \
     && rm -rf /var/lib/apt/lists/*
 
 # Download and extract dashboard UI binary based on platform

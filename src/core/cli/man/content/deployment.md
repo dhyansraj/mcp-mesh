@@ -104,7 +104,7 @@ meshctl scaffold --name my-agent --agent-type tool
 The generated Dockerfile uses the official runtime:
 
 ```dockerfile
-FROM mcpmesh/python-runtime:1.0.0
+FROM mcpmesh/python-runtime:1.1
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -132,7 +132,7 @@ meshctl scaffold --compose --observability
 Generated docker-compose.yml includes:
 
 - PostgreSQL database for registry
-- Registry service (`mcpmesh/registry:1.0.0`)
+- Registry service (`mcpmesh/registry:1.1`)
 - All detected agents with proper networking
 - Health checks and dependency ordering
 - Optional: Redis, Tempo, Grafana (with `--observability`)
@@ -404,7 +404,7 @@ The published `mcpmesh/ui` image serves at `/ops/dashboard` by default.
 **Minimum setup** (everything included by default):
 
 ```bash
-helm install mcp-core mcp-mesh-core --set ui.enabled=true
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --set ui.enabled=true
 ```
 
 This deploys the dashboard with database access (event history), distributed tracing, and Redis (live streaming) — all enabled by default.
@@ -433,7 +433,7 @@ docker build --build-arg UI_BASE_PATH=/my/custom/path \
   -f packaging/docker/ui-custom.Dockerfile -t mcpmesh/ui:custom .
 
 # Deploy with matching basePath
-helm install mcp-core mcp-mesh-core \
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --set ui.enabled=true \
   --set mcp-mesh-ui.image.tag=custom \
   --set mcp-mesh-ui.ui.basePath=/my/custom/path
@@ -444,7 +444,7 @@ helm install mcp-core mcp-mesh-core \
 For prerelease versions, override the image tag (the `1.1` floating tag only exists for stable releases):
 
 ```bash
-helm install mcp-core mcp-mesh-core \
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --set ui.enabled=true \
   --set mcp-mesh-ui.image.tag=1.1.0-beta.6
 ```

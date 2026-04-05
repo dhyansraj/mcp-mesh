@@ -17,7 +17,7 @@ Opens the dashboard at [http://localhost:3080](http://localhost:3080).
 The published `mcpmesh/ui` image serves at `/ops/dashboard` by default. Enable it in your Helm values:
 
 ```bash
-helm install mcp-core mcp-mesh-core --set ui.enabled=true
+helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core --set ui.enabled=true
 ```
 
 See `meshctl man deployment` for ingress routing and custom basePath configuration.
