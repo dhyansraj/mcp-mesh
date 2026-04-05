@@ -3,63 +3,42 @@
 import { Header } from "@/components/layout/Header";
 import { LiveTraceView } from "@/components/live/LiveTraceView";
 import { useLiveTraces } from "@/lib/live-trace";
-import { Button } from "@/components/ui/button";
-import { Play, Square, Radio } from "lucide-react";
+import { Radio } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export default function LivePage() {
-  const { traces, connected, active, setActive } = useLiveTraces();
+  const { traces, connected } = useLiveTraces();
 
   return (
     <div className="flex flex-col h-full">
       <Header title="Live" subtitle="Real-time call flow" />
 
-      {/* Controls bar */}
+      {/* Status bar */}
       <div className="flex items-center gap-3 border-b border-border px-6 py-3">
-        <Button
-          variant={active ? "destructive" : "default"}
-          size="sm"
-          onClick={() => setActive(!active)}
-        >
-          {active ? (
-            <>
-              <Square className="h-3.5 w-3.5 mr-1" />
-              Stop
-            </>
-          ) : (
-            <>
-              <Play className="h-3.5 w-3.5 mr-1" />
-              Start
-            </>
-          )}
-        </Button>
-
-        {active && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span
-              className={cn(
-                "flex h-2 w-2 rounded-full",
-                connected ? "bg-green-500" : "bg-destructive"
-              )}
-            />
-            <span>{connected ? "Connected" : "Connecting..."}</span>
-            {traces.length > 0 && (
-              <span className="ml-2">
-                {traces.length} trace{traces.length !== 1 ? "s" : ""}
-              </span>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span
+            className={cn(
+              "flex h-2 w-2 rounded-full",
+              connected ? "bg-green-500" : "bg-destructive"
             )}
-          </div>
-        )}
+          />
+          <span>{connected ? "Streaming" : "Connecting..."}</span>
+          {traces.length > 0 && (
+            <span className="ml-2">
+              {traces.length} trace{traces.length !== 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {!active ? (
+        {traces.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-4">
             <Radio className="h-12 w-12 text-muted-foreground/50" />
             <div className="text-center">
               <p className="text-sm text-muted-foreground">
-                Click Start to begin streaming traces
+                Waiting for traces
               </p>
               <p className="text-xs text-muted-foreground/60 mt-1">
                 Live spans will appear as agents process requests

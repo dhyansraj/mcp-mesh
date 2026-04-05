@@ -260,6 +260,8 @@ nav:
           - Overview: 04-kubernetes-basics.md
           - Troubleshooting: 04-kubernetes-basics/05-troubleshooting.md
 
+  - Dashboard: dashboard.md
+
   - Observability: 07-observability.md
 
   - Security:

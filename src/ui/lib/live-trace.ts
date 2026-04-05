@@ -39,7 +39,7 @@ export interface UseLiveTracesResult {
 export function useLiveTraces(): UseLiveTracesResult {
   const [traces, setTraces] = useState<LiveTrace[]>([]);
   const [connected, setConnected] = useState(false);
-  const [active, setActive] = useState(false);
+  const [active, setActive] = useState(true);
   const tracesRef = useRef<Map<string, LiveTrace>>(new Map());
 
   const handleSnapshot = useCallback((snapshot: LiveTrace) => {
