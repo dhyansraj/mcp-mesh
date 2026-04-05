@@ -97,7 +97,7 @@ graph LR
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>1.1.0-beta.4</version>
+        <version>1.1.0-beta.5</version>
     </dependency>
     ```
 
