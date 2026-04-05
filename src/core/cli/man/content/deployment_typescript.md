@@ -145,12 +145,12 @@ For production Kubernetes deployment:
 ```bash
 # Install core infrastructure
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.1.0-beta.6 \
+  --version 1.1.0 \
   -n mcp-mesh --create-namespace
 
 # Deploy TypeScript agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.1.0-beta.6 \
+  --version 1.1.0 \
   -n mcp-mesh \
   -f my-agent/helm-values.yaml
 ```
@@ -192,15 +192,15 @@ meshctl scaffold --name my-agent --agent-type tool --lang typescript
 
 # 2. Build and push Docker image
 cd my-agent
-docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.1.0-beta.6 --push .
+docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.1.0 --push .
 
 # 3. Deploy with Helm
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.1.0-beta.6 \
+  --version 1.1.0 \
   -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
-  --set image.tag=v1.1.0-beta.6
+  --set image.tag=v1.1.0
 ```
 
 ## Port Strategy
