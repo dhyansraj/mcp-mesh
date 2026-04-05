@@ -49,7 +49,7 @@ export function Sidebar() {
       {/* Logo */}
       <div className="flex h-16 items-center gap-3 border-b border-border px-6">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/logo.svg" alt="MCP Mesh" width={40} height={40} />
+        <img src={`${process.env.NEXT_PUBLIC_UI_BASE_PATH || ""}/logo.svg`} alt="MCP Mesh" width={40} height={40} />
         <span className="text-xl font-semibold text-sidebar-foreground">
           MCP Mesh
         </span>
