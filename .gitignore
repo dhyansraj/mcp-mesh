@@ -291,3 +291,4 @@ src/ui/out/
 src/ui/node_modules/
 .next/
 mcp-mesh-ui
+uisample/

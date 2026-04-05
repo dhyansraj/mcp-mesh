@@ -1,5 +1,57 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.0.1...v1.1.0)
+
+## v1.1.0 (2026-04-05)
+
+The dashboard release. Real-time monitoring, parallel tool execution, per-service TLS, and production-grade Kubernetes deployment with Helm charts.
+
+### 🖥️ Web Dashboard
+
+- **Dashboard UI** (#665, #668, #669, #673, #677, #695): Real-time agent monitoring with 5 pages — Dashboard overview (stats, traffic, events), Agents (table with capabilities), Topology (dependency graph), Traffic (per-edge metrics, token usage, latency), and Live (trace streaming)
+- **Docker image** (`mcpmesh/ui`) (#722, #723, #727, #731): Published to Docker Hub and GHCR, serves at `/ops/dashboard` by default for Kubernetes ingress routing
+- **basePath support** (#711, #717): Configurable path prefix for ingress routing. Custom paths via `ui-custom.Dockerfile`
+- **`meshctl start --ui`**: Embedded UI server for local development with auto-open via `--dashboard`
+
+### ⚡ Performance
+
+- **Parallel tool execution** (#672, #715): Provider-side parallel tool calls across all 3 runtimes — Python (`asyncio.gather`), TypeScript (`Promise.all`), Java (`CompletableFuture.allOf`)
+- **HTTP-first transport** (#697): orjson + simd-json for faster serialization across Python and Rust runtimes
+- **Connection pooling** (#674, #676): Shared HTTP clients for inter-agent calls in Python and TypeScript SDKs
+
+### 🔒 Security & TLS
+
+- **Per-service TLS** (#704, #716): Independent TLS configuration for Redis, Tempo, OTLP, and UI-to-Registry connections via `{SERVICE}_TLS_CA/CERT/KEY` environment variables
+- **CLI TLS hardening** (#719): Auto-detect TLS auto CA, `--insecure` flag wired up, MinVersion TLS 1.2
+- **SPIRE in published wheel** (#719): `pip install mcp-mesh-core` now includes SPIRE workload identity support
+- **Reproducible Rust builds** (#719): Cargo.lock tracked in git to prevent dependency drift
+
+### 🏗️ Helm & Infrastructure
+
+- **mcp-mesh-ui chart**: Optional dependency in mcp-mesh-core with basePath-aware health probes
+- **Ingress chart**: UI + Grafana routing (host-based and path-based), ops NetworkPolicy template
+- **Grafana sub-path**: `serve_from_sub_path` support for basePath-based ingress
+- **Per-service TLS secrets**: Conditional cert/key env vars and volume mounts in registry and UI charts
+
+### 🛠️ SDK & Runtime
+
+- **Rust core extraction** (#679): Duplicated SDK logic (TLS, config, heartbeat) moved to shared Rust core
+- **DependencyKwargs parity** (#689): Schema filtering fix across all runtimes
+- **Pydantic serialization** (#700): Model serialization fix in HTTP direct path
+
+### 🐛 Bug Fixes
+
+- **Detach mode** (#719): StringArray/StringSlice flags and TLS env vars properly forwarded to forked processes
+- **meshctl stability** (#714): SQLite locking, watch mode stop, process management fixes
+- **meshctl call** (#686): Falls back to capability name for tool lookup
+- **Ingress NOTES.txt**: Fixed nil pointer in `range` loop
+
+### 📚 Documentation
+
+- **Dashboard docs**: Production screenshots, deployment guide, architecture overview
+- **Environment variables** (#705): 50+ missing vars added to docs page, man page updated with key vars and footer link
+- **UI deployment** in `meshctl man deployment`: Local dev, Kubernetes, ingress routing, custom basePath, beta tag overrides
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.0.0...v1.0.1)
 
 ## v1.0.1 (2026-03-28)
