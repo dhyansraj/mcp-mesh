@@ -1,13 +1,13 @@
 # MCP Mesh UI Server - Source build with custom basePath
-# Use this when you need path-based ingress routing (e.g., /ops/dashboard)
+# Use this to override the default basePath (/ops/dashboard)
 #
 # Build:
 #   docker build -f packaging/docker/ui-custom.Dockerfile \
-#     --build-arg UI_BASE_PATH=/ops/dashboard \
+#     --build-arg UI_BASE_PATH=/my/custom/path \
 #     -t mcpmesh/ui:custom .
 #
-# The default image (mcpmesh/ui) serves at root "/".
-# This Dockerfile rebuilds the SPA with a custom basePath baked in.
+# The default image (mcpmesh/ui) uses basePath="/ops/dashboard".
+# Use this Dockerfile for a different path or root ("/").
 
 # Stage 1: Build Next.js SPA with basePath
 FROM node:22-alpine AS ui-builder

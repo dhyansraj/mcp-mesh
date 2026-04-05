@@ -1366,7 +1366,7 @@ jobs:
           file: ./packaging/docker/ui.Dockerfile
           platforms: linux/amd64,linux/arm64
           build-args: |
-            VERSION=${{ steps.meta.outputs.version_with_v }}
+            UI_BASE_PATH=/ops/dashboard
           push: true
           tags: ${{ steps.docker_tags.outputs.ui_tags }}
           cache-from: type=gha
