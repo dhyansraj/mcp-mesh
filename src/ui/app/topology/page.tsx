@@ -1,5 +1,3 @@
-"use client";
-
 import { Header } from "@/components/layout/Header";
 import { ConnectionError } from "@/components/layout/ConnectionError";
 import { TopologyGraph } from "@/components/topology/TopologyGraph";

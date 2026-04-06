@@ -1,5 +1,3 @@
-"use client";
-
 import { X, Globe, Hash, Clock, Cpu, Tag, GitBranch, Puzzle, Zap, BrainCircuit } from "lucide-react";
 import { Agent } from "@/lib/types";
 import { formatRelativeTime, getRuntimeLabel, getAgentTypeLabel, getDepStatusColor } from "@/lib/api";

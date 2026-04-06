@@ -235,23 +235,23 @@ build_all_binaries() {
     rm -rf "$OUTPUT_DIR"
     mkdir -p "$OUTPUT_DIR"
 
-    # Build Next.js SPA for meshui (must happen before Go cross-compilation)
-    log "Building Next.js dashboard SPA..."
+    # Build SPA for meshui (must happen before Go cross-compilation)
+    log "Building dashboard SPA..."
     if command -v npm &> /dev/null; then
         (cd "$PROJECT_ROOT/src/ui" && npm ci --silent && npm run build)
-        rm -rf "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
-        cp -r "$PROJECT_ROOT/src/ui/out" "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
-        success "Next.js SPA built and copied to cmd/mcp-mesh-ui/out/"
+        rm -rf "$PROJECT_ROOT/cmd/mcp-mesh-ui/dist"
+        cp -r "$PROJECT_ROOT/src/ui/dist" "$PROJECT_ROOT/cmd/mcp-mesh-ui/dist"
+        success "Dashboard SPA built and copied to cmd/mcp-mesh-ui/dist/"
     else
         if [[ "${MESHUI_USE_PREBUILT:-}" == "true" ]]; then
-            if [[ -d "$PROJECT_ROOT/cmd/mcp-mesh-ui/out" ]]; then
-                warn "Using prebuilt SPA from cmd/mcp-mesh-ui/out/"
+            if [[ -d "$PROJECT_ROOT/cmd/mcp-mesh-ui/dist" ]]; then
+                warn "Using prebuilt SPA from cmd/mcp-mesh-ui/dist/"
             else
-                error "MESHUI_USE_PREBUILT=true but cmd/mcp-mesh-ui/out/ does not exist"
+                error "MESHUI_USE_PREBUILT=true but cmd/mcp-mesh-ui/dist/ does not exist"
                 exit 1
             fi
         else
-            error "npm not available — cannot build Next.js SPA for meshui. Install Node.js or set MESHUI_USE_PREBUILT=true"
+            error "npm not available — cannot build dashboard SPA for meshui. Install Node.js or set MESHUI_USE_PREBUILT=true"
             exit 1
         fi
     fi
@@ -289,33 +289,6 @@ build_all_binaries() {
         fi
     done
 
-    # Build dashboard variant (meshui-dashboard with basePath=/ops/dashboard)
-    # This is used by the Docker image for Kubernetes deployments
-    if command -v npm &> /dev/null; then
-        log "Building dashboard variant (basePath=/ops/dashboard)..."
-        (cd "$PROJECT_ROOT/src/ui" && NEXT_PUBLIC_UI_BASE_PATH=/ops/dashboard npm run build)
-        rm -rf "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
-        cp -r "$PROJECT_ROOT/src/ui/out" "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
-
-        for platform in "${built_platforms[@]}"; do
-            IFS='_' read -ra PARTS <<< "$platform"
-            local goos="${PARTS[0]}"
-            local goarch="${PARTS[1]}"
-            if ! build_binary "meshui" "$goos" "$goarch" "meshui-dashboard"; then
-                error "Failed to build meshui-dashboard for ${goos}/${goarch}"
-                exit 1
-            fi
-        done
-
-        # Restore default SPA for any subsequent use
-        (cd "$PROJECT_ROOT/src/ui" && npm run build)
-        rm -rf "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
-        cp -r "$PROJECT_ROOT/src/ui/out" "$PROJECT_ROOT/cmd/mcp-mesh-ui/out"
-        success "Dashboard variant built for all platforms"
-    else
-        error "npm not available — cannot build meshui-dashboard. Node.js is required."
-        exit 1
-    fi
 
     # Create archives if compression is enabled
     if [[ "$COMPRESS" == "true" ]]; then

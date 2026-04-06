@@ -1,9 +1,8 @@
-"use client";
-
 import { useState, useEffect, useCallback, useRef } from "react";
 import { DashboardEvent } from "./types";
+import { getApiBase } from "./config";
 
-const API_BASE = process.env.NEXT_PUBLIC_REGISTRY_URL || `${process.env.NEXT_PUBLIC_UI_BASE_PATH || ""}/api`;
+const API_BASE = getApiBase();
 
 export interface UseMeshEventsOptions {
   maxEvents?: number;

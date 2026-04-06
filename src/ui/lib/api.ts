@@ -1,6 +1,7 @@
 import { AgentsResponse, DashboardEvent, EdgeStatsResponse, EventsHistoryResponse, HealthResponse, RecentTracesResponse, RegistryEventInfo, TraceDetail } from "./types";
+import { getApiBase } from "./config";
 
-const API_BASE = process.env.NEXT_PUBLIC_REGISTRY_URL || `${process.env.NEXT_PUBLIC_UI_BASE_PATH || ""}/api`;
+const API_BASE = getApiBase();
 
 export async function getHealth(): Promise<HealthResponse> {
   const res = await fetch(`${API_BASE}/health`, { cache: "no-store" });

@@ -1,5 +1,3 @@
-"use client";
-
 import { Bot, HeartPulse, AlertTriangle, Puzzle } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Agent } from "@/lib/types";

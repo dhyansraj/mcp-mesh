@@ -1,5 +1,3 @@
-"use client";
-
 import { AlertCircle, Container, RefreshCw, Server, Terminal, Wifi, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -116,7 +114,7 @@ export function ConnectionError({ error, onRetry }: ConnectionErrorProps) {
 
         {/* Registry URL */}
         <p className="text-[10px] text-muted-foreground/60">
-          Connecting to: {API_BASE} (set via NEXT_PUBLIC_REGISTRY_URL)
+          Connecting to: {API_BASE} (set via MCP_MESH_REGISTRY_URL)
         </p>
       </div>
     </div>

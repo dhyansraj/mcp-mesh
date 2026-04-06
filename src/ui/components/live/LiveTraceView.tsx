@@ -1,5 +1,3 @@
-"use client";
-
 import { useState } from "react";
 import { LiveTrace, SnapshotSpan } from "@/lib/live-trace";
 import { formatRelativeTime, formatDuration } from "@/lib/api";

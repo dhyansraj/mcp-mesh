@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Server is the MCP Mesh UI HTTP server. It serves the embedded Next.js
+// Server is the MCP Mesh UI HTTP server. It serves the embedded Vite
 // dashboard SPA and proxies /api/* requests to the registry.
 type Server struct {
 	engine         *gin.Engine
@@ -25,9 +25,10 @@ type Server struct {
 	entService     *registry.EntService
 	eventHub       *EventHub
 	eventPoller    *EventPoller
-	tracingManager   *tracing.TracingManager
-	metricsProcessor *MetricsProcessor
-	tracePoller      *TracePoller
+	tracingManager      *tracing.TracingManager
+	metricsProcessor    *MetricsProcessor
+	tracePoller         *TracePoller
+	configuredIndexHTML []byte
 }
 
 // NewServer creates a new UI server that serves the embedded SPA and proxies
@@ -91,10 +92,35 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 	engine.GET("/api/ui-health", s.handleUIHealth)
 
 	// --- SPA static file serving ---
-	subFS, err := fs.Sub(embeddedFS, "out")
+	subFS, err := fs.Sub(embeddedFS, "dist")
 	if err != nil {
-		log.Fatalf("ui: failed to open embedded out/ directory: %v", err)
+		log.Fatalf("ui: failed to open embedded dist/ directory: %v", err)
 	}
+
+	// Read index.html and inject runtime base path so users can customize
+	// the serving path at deploy-time without rebuilding.
+	// Note: __MESH_REGISTRY_URL__ is NOT injected here — the browser uses
+	// same-origin /api requests, and the Go server proxies them to the registry.
+	rawIndex, err := fs.ReadFile(subFS, "index.html")
+	if err != nil {
+		log.Fatalf("ui: failed to read embedded index.html: %v", err)
+	}
+	configuredIndex := string(rawIndex)
+	// Inject <base> tag so relative asset paths (./assets/...) resolve correctly
+	// even when the browser URL is a deep SPA route like /traffic or /topology.
+	baseHref := "/"
+	if config.BasePath != "" {
+		baseHref = config.BasePath + "/"
+		configuredIndex = strings.Replace(configuredIndex,
+			`window.__MESH_BASE_PATH__ = window.__MESH_BASE_PATH__ || ""`,
+			`window.__MESH_BASE_PATH__ = "`+config.BasePath+`"`,
+			1)
+	}
+	configuredIndex = strings.Replace(configuredIndex,
+		`<meta charset="UTF-8" />`,
+		`<meta charset="UTF-8" /><base href="`+baseHref+`" />`,
+		1)
+	s.configuredIndexHTML = []byte(configuredIndex)
 
 	fileServer := http.FileServer(http.FS(subFS))
 
@@ -107,50 +133,25 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 			return
 		}
 
-		// Resolve the file path from the URL
+		// Try to serve the file directly (JS, CSS, assets)
 		filePath := strings.TrimPrefix(path, "/")
-		filePath = strings.TrimRight(filePath, "/") // Normalize trailing slashes
 		if filePath == "" {
-			filePath = "index.html"
+			c.Data(http.StatusOK, "text/html; charset=utf-8", s.configuredIndexHTML)
+			return
 		}
 
-		// Try to serve the file directly
 		f, err := subFS.Open(filePath)
 		if err == nil {
 			stat, statErr := f.Stat()
 			f.Close()
-			if statErr == nil {
-				if !stat.IsDir() {
-					// Regular file — serve it (handles _next/static/*, favicon, etc.)
-					fileServer.ServeHTTP(c.Writer, c.Request)
-					return
-				}
-				// Directory — check for index.html inside it (Next.js trailingSlash pages)
-				indexPath := filePath + "/index.html"
-				if data, readErr := fs.ReadFile(subFS, indexPath); readErr == nil {
-					c.Data(http.StatusOK, "text/html; charset=utf-8", data)
-					return
-				}
-			}
-		}
-
-		// Try page-specific index.html before SPA fallback
-		// Handles paths like /traffic, /agents that have their own pre-rendered pages
-		if filePath != "index.html" {
-			indexPath := filePath + "/index.html"
-			if data, readErr := fs.ReadFile(subFS, indexPath); readErr == nil {
-				c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+			if statErr == nil && !stat.IsDir() {
+				fileServer.ServeHTTP(c.Writer, c.Request)
 				return
 			}
 		}
 
-		// SPA fallback: serve root index.html for unresolved paths
-		data, readErr := fs.ReadFile(subFS, "index.html")
-		if readErr != nil {
-			c.String(http.StatusInternalServerError, "index.html not found in embedded assets")
-			return
-		}
-		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+		// SPA fallback: serve configured index.html for client-side routing
+		c.Data(http.StatusOK, "text/html; charset=utf-8", s.configuredIndexHTML)
 	})
 
 	return s

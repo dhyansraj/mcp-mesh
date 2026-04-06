@@ -1,5 +1,3 @@
-"use client";
-
 import { useMemo, useEffect, useRef, useState } from "react";
 import { Header } from "@/components/layout/Header";
 import { ConnectionError } from "@/components/layout/ConnectionError";

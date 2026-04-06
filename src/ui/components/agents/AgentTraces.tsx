@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState } from "react";
 import { RecentTrace, TraceDetail, TraceSpan } from "@/lib/types";
 import { getRecentTraces, getTraceDetail, formatRelativeTime, formatDuration } from "@/lib/api";

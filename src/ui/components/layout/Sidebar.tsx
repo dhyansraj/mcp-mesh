@@ -1,10 +1,9 @@
-"use client";
-
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { Link } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import { LayoutDashboard, Bot, Network, BarChart3, Radio } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getBasePath } from "@/lib/config";
 import { useMesh } from "@/lib/mesh-context";
 
 const navigation = [
@@ -16,7 +15,7 @@ const navigation = [
 ];
 
 export function Sidebar() {
-  const pathname = usePathname();
+  const { pathname } = useLocation();
   const { connected, traceActivity } = useMesh();
 
   // Pulse the Live dot only when new agent names appear in trace activity
@@ -48,8 +47,7 @@ export function Sidebar() {
     <aside className="flex h-screen w-64 flex-col border-r border-border bg-sidebar">
       {/* Logo */}
       <div className="flex h-16 items-center gap-3 border-b border-border px-6">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={`${process.env.NEXT_PUBLIC_UI_BASE_PATH || ""}/logo.svg`} alt="MCP Mesh" width={40} height={40} />
+        <img src={`${getBasePath()}/logo.svg`} alt="MCP Mesh" width={40} height={40} />
         <span className="text-xl font-semibold text-sidebar-foreground">
           MCP Mesh
         </span>
@@ -67,7 +65,7 @@ export function Sidebar() {
           return (
             <Link
               key={item.name}
-              href={item.href}
+              to={item.href}
               className={cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2 text-base font-medium transition-colors",
                 isActive
