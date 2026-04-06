@@ -1,5 +1,3 @@
-"use client";
-
 import { Header } from "@/components/layout/Header";
 import { LiveTraceView } from "@/components/live/LiveTraceView";
 import { useLiveTraces } from "@/lib/live-trace";

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -43,7 +44,7 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "MCP Mesh UI Server\n\n")
-		fmt.Fprintf(os.Stderr, "Serves the embedded Next.js dashboard and proxies API requests to the registry.\n\n")
+		fmt.Fprintf(os.Stderr, "Serves the embedded dashboard and proxies API requests to the registry.\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nEnvironment Variables:\n")
@@ -85,9 +86,8 @@ func main() {
 	regURL = strings.TrimRight(regURL, "/")
 
 	// Load basePath for path-based ingress routing.
-	// IMPORTANT: basePath must match the NEXT_PUBLIC_UI_BASE_PATH used at Next.js
-	// build time. The SPA's asset URLs and API paths are baked in at build time.
-	// Changing basePath at runtime requires rebuilding the embedded SPA.
+	// The base path is injected into the SPA at serve-time, so it can be changed
+	// at runtime without rebuilding.
 	basePath := os.Getenv("MCP_MESH_UI_BASE_PATH")
 	if basePath != "" {
 		// Normalize: must start with /, no trailing slash
@@ -95,6 +95,15 @@ func main() {
 			basePath = "/" + basePath
 		}
 		basePath = strings.TrimRight(basePath, "/")
+		// After normalization, "/" becomes "" (root path) — skip validation
+		if basePath != "" {
+			// Validate: only allow safe URL path characters to prevent injection
+			// when the value is embedded in HTML/JavaScript at serve-time.
+			matched := regexp.MustCompile(`^[a-zA-Z0-9/_-]+$`).MatchString(basePath)
+			if !matched {
+				log.Fatalf("Invalid MCP_MESH_UI_BASE_PATH %q: only alphanumeric, '/', '_', and '-' characters are allowed", basePath)
+			}
+		}
 	}
 
 	// Load TLS config for registry proxy

@@ -1,5 +1,3 @@
-"use client";
-
 import { Header } from "@/components/layout/Header";
 import { AgentTable } from "@/components/agents/AgentTable";
 import { Button } from "@/components/ui/button";

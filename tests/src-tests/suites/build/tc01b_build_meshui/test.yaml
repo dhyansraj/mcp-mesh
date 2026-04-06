@@ -54,7 +54,7 @@ test:
 
       echo "Building meshui inside container (SPA + Go binary)..."
       # meshui needs: go.mod, go.sum, cmd/mcp-mesh-ui/, src/core/, src/ui/
-      # Steps: 1) npm install + build SPA, 2) copy out/ to embed dir, 3) go build
+      # Steps: 1) npm install + build SPA, 2) copy dist/ to embed dir, 3) go build
       docker run --rm \
         -v "$SOURCE_ABS:/src-host:ro" \
         -v "$OUTPUT_ABS:/out" \
@@ -70,8 +70,8 @@ test:
           echo 'Building SPA...' && \
           npm run build 2>&1 | tail -5 && \
           echo 'Copying SPA to embed directory...' && \
-          rm -rf /src/mcp-mesh/cmd/mcp-mesh-ui/out && \
-          cp -r /src/mcp-mesh/src/ui/out /src/mcp-mesh/cmd/mcp-mesh-ui/out && \
+          rm -rf /src/mcp-mesh/cmd/mcp-mesh-ui/dist && \
+          cp -r /src/mcp-mesh/src/ui/dist /src/mcp-mesh/cmd/mcp-mesh-ui/dist && \
           echo 'Building Go binary...' && \
           cd /src/mcp-mesh && go build -o /out/bin/meshui ./cmd/mcp-mesh-ui/
         "

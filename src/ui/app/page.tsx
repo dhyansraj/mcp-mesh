@@ -1,5 +1,3 @@
-"use client";
-
 import { useMemo } from "react";
 import { Header } from "@/components/layout/Header";
 import { StatsCards } from "@/components/dashboard/StatsCards";

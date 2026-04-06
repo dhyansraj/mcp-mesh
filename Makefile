@@ -512,14 +512,14 @@ ui-build:
 	cd src/ui && npm run build
 
 ui-clean:
-	rm -rf src/ui/.next src/ui/out
+	rm -rf src/ui/dist
 
 # UI Server (builds SPA + Go binary)
 .PHONY: ui-server-build
 ui-server-build: ui-build
 	@echo "📦 Copying SPA to embed directory..."
-	@rm -rf cmd/mcp-mesh-ui/out
-	@cp -r src/ui/out cmd/mcp-mesh-ui/out
+	@rm -rf cmd/mcp-mesh-ui/dist
+	@cp -r src/ui/dist cmd/mcp-mesh-ui/dist
 	@echo "🔨 Building $(UI_SERVER_NAME) with embedded SPA..."
 	@mkdir -p $(BUILD_DIR)
 	go build $(BUILD_FLAGS) -o $(BUILD_DIR)/$(UI_SERVER_NAME) ./$(UI_SERVER_CMD_DIR)

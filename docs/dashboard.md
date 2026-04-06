@@ -64,7 +64,7 @@ A table of all registered agents showing name, type, runtime, version, dependenc
 
 ## Architecture
 
-The dashboard is a Next.js static export embedded in a Go server (`meshui`). The Go server:
+The dashboard is a Vite SPA embedded in a Go server (`meshui`). The Go server:
 
 - Serves the SPA and static assets
 - Proxies `/api/*` requests to the registry

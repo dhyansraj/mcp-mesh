@@ -425,19 +425,19 @@ location /ops/dashboard/ {
 
 Or use the `mcp-mesh-ingress` chart which handles routing automatically.
 
-**Custom basePath** — to serve at a different path:
+**Custom basePath** — to serve at a different path, set the environment variable:
 
 ```bash
-# Build custom image
-docker build --build-arg UI_BASE_PATH=/my/custom/path \
-  -f packaging/docker/ui-custom.Dockerfile -t mcpmesh/ui:custom .
+# Docker
+docker run -e MCP_MESH_UI_BASE_PATH=/my/custom/path mcpmesh/ui:1.1
 
-# Deploy with matching basePath
+# Helm
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --set ui.enabled=true \
-  --set mcp-mesh-ui.image.tag=custom \
   --set mcp-mesh-ui.ui.basePath=/my/custom/path
 ```
+
+No rebuild needed — the base path is injected at serve-time.
 
 ### Beta Releases
 

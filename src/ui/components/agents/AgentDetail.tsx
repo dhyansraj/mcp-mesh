@@ -1,5 +1,3 @@
-"use client";
-
 import { Agent } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";

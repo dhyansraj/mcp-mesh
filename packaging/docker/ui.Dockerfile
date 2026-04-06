@@ -1,7 +1,8 @@
 # MCP Mesh UI Server - Downloads pre-built binary from GitHub releases
 # Default basePath: /ops/dashboard (for Kubernetes deployments)
 #
-# Override basePath: use packaging/docker/ui-custom.Dockerfile
+# Override basePath at runtime:
+#   docker run -e MCP_MESH_UI_BASE_PATH=/custom/path mcpmesh/ui
 # Supports linux/amd64, linux/arm64
 
 FROM --platform=$TARGETPLATFORM debian:12-slim
@@ -27,7 +28,7 @@ RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; f
     esac && \
     wget -O mcp-mesh.tar.gz "https://github.com/dhyansraj/mcp-mesh/releases/download/${VERSION}/mcp-mesh_${VERSION}_linux_${ARCH}.tar.gz" && \
     tar -xzf mcp-mesh.tar.gz && \
-    cp linux_${ARCH}/meshui-dashboard /usr/local/bin/meshui && \
+    cp linux_${ARCH}/meshui /usr/local/bin/meshui && \
     chmod +x /usr/local/bin/meshui && \
     rm -rf mcp-mesh.tar.gz linux_${ARCH}
 
@@ -41,7 +42,7 @@ ENV MCP_MESH_UI_BASE_PATH=/ops/dashboard
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3080/ops/dashboard/api/ui-health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3080${MCP_MESH_UI_BASE_PATH}/api/ui-health || exit 1
 
 EXPOSE 3080
 

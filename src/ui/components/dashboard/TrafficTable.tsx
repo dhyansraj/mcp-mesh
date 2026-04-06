@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EdgeStat } from "@/lib/types";
 import { useMesh } from "@/lib/mesh-context";

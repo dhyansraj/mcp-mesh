@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import {
   ReactFlow,
@@ -213,10 +211,10 @@ export function TopologyGraph({ agents }: TopologyGraphProps) {
           className="!bg-card !border-border !rounded-lg !shadow-lg [&>button]:!bg-card [&>button]:!border-border [&>button]:!text-foreground [&>button:hover]:!bg-muted"
         />
         <MiniMap
-          nodeStrokeColor="#264a6e"
-          nodeColor="#112d4e"
+          nodeStrokeColor="#22d3ee"
+          nodeColor="#22d3ee"
           nodeBorderRadius={8}
-          maskColor="rgba(10, 22, 40, 0.8)"
+          maskColor="rgba(10, 22, 40, 0.4)"
           className="!bg-background !border-border !rounded-lg"
           pannable
           zoomable
