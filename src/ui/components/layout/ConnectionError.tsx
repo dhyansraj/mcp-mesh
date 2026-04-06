@@ -114,7 +114,7 @@ export function ConnectionError({ error, onRetry }: ConnectionErrorProps) {
 
         {/* Registry URL */}
         <p className="text-[10px] text-muted-foreground/60">
-          Connecting to: {API_BASE} (set via MCP_MESH_REGISTRY_URL)
+          Connecting to: {API_BASE}
         </p>
       </div>
     </div>

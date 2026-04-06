@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -94,6 +95,12 @@ func main() {
 			basePath = "/" + basePath
 		}
 		basePath = strings.TrimRight(basePath, "/")
+		// Validate: only allow safe URL path characters to prevent injection
+		// when the value is embedded in HTML/JavaScript at serve-time.
+		matched := regexp.MustCompile(`^[a-zA-Z0-9/_-]+$`).MatchString(basePath)
+		if !matched {
+			log.Fatalf("Invalid MCP_MESH_UI_BASE_PATH %q: only alphanumeric, '/', '_', and '-' characters are allowed", basePath)
+		}
 	}
 
 	// Load TLS config for registry proxy
