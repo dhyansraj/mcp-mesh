@@ -95,11 +95,14 @@ func main() {
 			basePath = "/" + basePath
 		}
 		basePath = strings.TrimRight(basePath, "/")
-		// Validate: only allow safe URL path characters to prevent injection
-		// when the value is embedded in HTML/JavaScript at serve-time.
-		matched := regexp.MustCompile(`^[a-zA-Z0-9/_-]+$`).MatchString(basePath)
-		if !matched {
-			log.Fatalf("Invalid MCP_MESH_UI_BASE_PATH %q: only alphanumeric, '/', '_', and '-' characters are allowed", basePath)
+		// After normalization, "/" becomes "" (root path) — skip validation
+		if basePath != "" {
+			// Validate: only allow safe URL path characters to prevent injection
+			// when the value is embedded in HTML/JavaScript at serve-time.
+			matched := regexp.MustCompile(`^[a-zA-Z0-9/_-]+$`).MatchString(basePath)
+			if !matched {
+				log.Fatalf("Invalid MCP_MESH_UI_BASE_PATH %q: only alphanumeric, '/', '_', and '-' characters are allowed", basePath)
+			}
 		}
 	}
 
