@@ -83,8 +83,13 @@ func InitializeEnt(config *Config, enableDebugLogging bool) (*EntDatabase, error
 		// Build DSN with PRAGMAs as query parameters so they apply to every
 		// new connection (go-sqlite3 executes _pragma params on connect).
 		// This prevents corruption from connection pool recycling losing PRAGMAs.
-		dataSourceName = fmt.Sprintf("%s?_fk=1&_journal_mode=%s&_busy_timeout=%d&_synchronous=%s&_cache_size=-%d",
+		fk := 0
+		if config.EnableForeignKeys {
+			fk = 1
+		}
+		dataSourceName = fmt.Sprintf("%s?_fk=%d&_journal_mode=%s&_busy_timeout=%d&_synchronous=%s&_cache_size=-%d",
 			sqlitePath,
+			fk,
 			config.JournalMode,
 			config.BusyTimeout,
 			config.Synchronous,
