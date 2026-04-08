@@ -17,7 +17,7 @@ const server = new FastMCP({
 // Wrap with MCP Mesh
 const agent = mesh(server, {
   name: "ts-math-agent",
-  httpPort: 9013,  // Auto-assign port
+  httpPort: 9013,
 });
 
 // ===== TOOLS =====

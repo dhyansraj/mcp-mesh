@@ -880,6 +880,9 @@ class MeshLlmAgent:
             log_msg = message if isinstance(message, str) else str(message)
             logger.info(f"🚀 Starting agentic loop for message: {log_msg[:100]}...")
 
+        # Import once before loop (avoid per-iteration import overhead)
+        from _mcp_mesh.tracing.context import set_llm_metadata
+
         # Agentic loop
         while self._iteration_count < self.max_iterations:
             self._iteration_count += 1
@@ -1002,8 +1005,6 @@ class MeshLlmAgent:
                     effective_model = response.model
 
                 # Publish token data to trace context for ExecutionTracer
-                from _mcp_mesh.tracing.context import set_llm_metadata
-
                 set_llm_metadata(
                     model=effective_model,
                     provider=str(self.provider) if self.provider else "",

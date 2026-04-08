@@ -261,9 +261,6 @@ assertions:
 
   # ===== UI TRACES =====
   - expr: ${jq:captured.ui_trace_recent_output:.enabled} == true
-    message: "Tracing should be enabled"
-
-  - expr: ${jq:captured.ui_trace_recent_output:.enabled} == true
     message: "Recent traces endpoint should be enabled"
 
   - expr: ${jq:captured.ui_agent_stats_output:.enabled} == true

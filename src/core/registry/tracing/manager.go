@@ -334,6 +334,9 @@ func (tm *TracingManager) ListTraces(limit, offset int) []*CompletedTrace {
 		}
 		summaries := tm.accumulator.GetRecentTraces(0) // 0 = all
 		// Apply offset and limit
+		if offset < 0 {
+			offset = 0
+		}
 		if offset >= len(summaries) {
 			return []*CompletedTrace{}
 		}
@@ -777,8 +780,11 @@ func matchesCriteria(s RecentTraceSummary, c TraceSearchCriteria) bool {
 	if c.StartTime != nil && s.StartTime.Before(*c.StartTime) {
 		return false
 	}
-	if c.EndTime != nil && s.StartTime.After(*c.EndTime) {
-		return false
+	if c.EndTime != nil {
+		endTime := s.StartTime.Add(time.Duration(s.DurationMs) * time.Millisecond)
+		if endTime.After(*c.EndTime) {
+			return false
+		}
 	}
 	if c.MinDuration != nil && s.DurationMs < *c.MinDuration {
 		return false

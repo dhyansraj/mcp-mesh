@@ -47,7 +47,7 @@ async def add(a: float, b: float) -> float:
     enable_http=True,
     auto_run=True,
 )
-class PyMathAgentAgent:
+class PyMathAgent:
     """
     Agent class that configures how mesh should run the FastMCP server.
 
