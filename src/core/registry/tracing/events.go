@@ -3,6 +3,7 @@ package tracing
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -146,9 +147,14 @@ func (te *TraceEvent) FromRedisMap(data map[string]interface{}) error {
 		}
 	}
 
-	// Optional fields
+	// Optional fields — treat "null"/"None"/empty/whitespace as no parent (root span)
+	te.ParentSpan = nil
 	if parentSpan := getString(data, "parent_span"); parentSpan != "" {
-		te.ParentSpan = &parentSpan
+		trimmed := strings.TrimSpace(parentSpan)
+		lower := strings.ToLower(trimmed)
+		if lower != "" && lower != "null" && lower != "none" {
+			te.ParentSpan = &trimmed
+		}
 	}
 
 	if durationStr := getString(data, "duration_ms"); durationStr != "" {

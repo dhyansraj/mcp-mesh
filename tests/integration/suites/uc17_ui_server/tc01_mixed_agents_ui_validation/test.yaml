@@ -1,0 +1,516 @@
+# Test Case: Mixed Agent UI Server Validation
+# Verifies the mesh UI server API endpoints with agents across all 3 runtimes,
+# an API route agent, and LLM provider/consumer for tracing metrics.
+#
+# Agent Setup:
+#   - py-math-agent (Python, port 9000): Tool agent providing "add"
+#   - ts-math-agent (TypeScript, port 9013): Tool agent providing "add", "multiply"
+#   - java-math-agent (Java, port 9010): Tool agent providing "add", "multiply"
+#   - py-mesh-api (Python, port 8080): API route agent with POST /api/add
+#   - py-llm-provider (Python, port 9030): LLM provider (Claude)
+#   - py-llm-consumer (Python, port 9031): LLM consumer with mesh delegation
+#
+# Flow:
+#   1. Start observability (Redis + Tempo) and UI server with tracing
+#   2. Start all agents, generate tool/API/LLM traffic
+#   3. Query UI server endpoints and validate responses
+
+name: "Mixed Agent UI Server Validation"
+description: "Verify UI server API endpoints with mixed Python/TypeScript/Java agents, API routes, and LLM tracing"
+tags:
+  - ui-server
+  - mixed-language
+  - python
+  - typescript
+  - java
+  - llm
+  - api
+  - tracing
+timeout: 480
+
+pre_run:
+  - routine: global.start_observability
+
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # ===== SETUP =====
+
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -rL /uc-artifacts/py-math-agent /workspace/
+      cp -rL /uc-artifacts/ts-math-agent /workspace/
+      cp -rL /uc-artifacts/java-math-agent /workspace/
+      cp -rL /uc-artifacts/py-mesh-api /workspace/
+      cp -rL /uc-artifacts/py-llm-provider /workspace/
+      cp -rL /uc-artifacts/py-llm-consumer /workspace/
+      echo "Artifacts copied"
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Create env file with secrets and tracing config"
+    handler: secrets
+    source: /uc-artifacts/env.template
+    target: /workspace/.env
+
+  - name: "Install ts-math-agent dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  - name: "Install java-math-agent dependencies"
+    handler: maven-install
+    path: /workspace/java-math-agent
+    timeout: 600
+
+  # ===== START AGENTS =====
+
+  - name: "Start py-math-agent"
+    handler: shell
+    command: "meshctl start py-math-agent/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_py_math
+
+  - name: "Start ts-math-agent"
+    handler: shell
+    command: "meshctl start ts-math-agent/src/index.ts --env-file .env -d"
+    workdir: /workspace
+    capture: start_ts_math
+
+  - name: "Start java-math-agent"
+    handler: shell
+    command: "meshctl start /workspace/java-math-agent --env-file .env -d"
+    workdir: /workspace
+    capture: start_java_math
+
+  - name: "Start py-mesh-api"
+    handler: shell
+    command: "meshctl start py-mesh-api/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_api
+
+  - name: "Start py-llm-provider"
+    handler: shell
+    command: "meshctl start py-llm-provider/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_provider
+
+  # Wait for tool/API/provider agents to register
+  - name: "Wait for tool, API, and provider agents"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for py-math-agent, ts-math-agent, java-math-agent, py-llm-provider, and API agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        HAS_PY=$(echo "$AGENTS" | grep -c "py-math-agent" || true)
+        HAS_TS=$(echo "$AGENTS" | grep -c "ts-math-agent" || true)
+        HAS_JAVA=$(echo "$AGENTS" | grep -c "java-math-agent" || true)
+        HAS_PROVIDER=$(echo "$AGENTS" | grep -c "py-llm-provider" || true)
+        HAS_API=$(echo "$AGENTS" | grep -c "API" || true)
+        if [ "$HAS_PY" -ge 1 ] && [ "$HAS_TS" -ge 1 ] && [ "$HAS_JAVA" -ge 1 ] && [ "$HAS_PROVIDER" -ge 1 ] && [ "$HAS_API" -ge 1 ]; then
+          echo "All 5 agents registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Not all agents registered within 90s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_agents
+    timeout: 120
+
+  # Start LLM consumer (depends on llm + add capabilities)
+  - name: "Start py-llm-consumer"
+    handler: shell
+    command: "meshctl start py-llm-consumer/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_consumer
+
+  - name: "Wait for py-llm-consumer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for py-llm-consumer to register and resolve deps..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "py-llm-consumer"; then
+          echo "py-llm-consumer registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: py-llm-consumer did not register within 30s"
+      meshctl list 2>/dev/null || true
+      meshctl logs py-llm-consumer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_consumer
+    timeout: 60
+
+  # ===== START UI SERVER =====
+
+  - name: "Start UI server with tracing"
+    handler: shell
+    workdir: /workspace
+    command: |
+      MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true \
+      REDIS_URL=redis://localhost:6379 \
+      TEMPO_URL=http://localhost:3200 \
+      MCP_MESH_REGISTRY_URL=http://localhost:8000 \
+      nohup meshui -p 3080 > /workspace/meshui.log 2>&1 &
+      echo "UI_PID=$!"
+      # Wait for UI server to be ready
+      for i in $(seq 1 15); do
+        if curl -s http://localhost:3080/api/ui-health 2>/dev/null | grep -q "healthy"; then
+          echo "UI_READY=true"
+          break
+        fi
+        sleep 2
+      done
+      if ! curl -s http://localhost:3080/api/ui-health 2>/dev/null | grep -q "healthy"; then
+        echo "ERROR: UI server did not become healthy within 30s"
+        cat /workspace/meshui.log 2>/dev/null | tail -20 || true
+        exit 1
+      fi
+    capture: ui_start_output
+    timeout: 60
+
+  # ===== VERIFY AGENTS =====
+
+  - name: "List agents"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  - name: "List tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # ===== GENERATE TRAFFIC =====
+
+  # Tool call 1: add
+  - name: "Call add with tracing"
+    handler: shell
+    command: |
+      meshctl call py-math-agent:add '{"a": 5, "b": 3}' --trace 2>&1
+    workdir: /workspace
+    capture: add_call_output
+    timeout: 60
+
+  - name: "Extract add trace ID"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.add_call_output}" | grep "Trace ID:" | awk '{print $3}')
+      if [ -z "$TRACE_ID" ]; then
+        echo "WARNING: Could not extract add trace ID"
+        echo "Output was: ${captured.add_call_output}"
+      fi
+      echo "TRACE_ID=$TRACE_ID"
+    workdir: /workspace
+    capture: add_trace_id
+
+  # Tool call 2: multiply
+  - name: "Call multiply with tracing"
+    handler: shell
+    command: |
+      meshctl call java-math-agent:multiply '{"a": 7, "b": 6}' --trace 2>&1
+    workdir: /workspace
+    capture: multiply_call_output
+    timeout: 60
+
+  - name: "Extract multiply trace ID"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.multiply_call_output}" | grep "Trace ID:" | awk '{print $3}')
+      if [ -z "$TRACE_ID" ]; then
+        echo "WARNING: Could not extract multiply trace ID"
+      fi
+      echo "TRACE_ID=$TRACE_ID"
+    workdir: /workspace
+    capture: multiply_trace_id
+
+  # API call
+  - name: "Call API add endpoint"
+    handler: shell
+    command: |
+      curl -s -X POST http://localhost:8080/api/add \
+        -H 'Content-Type: application/json' \
+        -d '{"a": 10, "b": 20}' 2>&1
+    workdir: /workspace
+    capture: api_call_output
+    timeout: 30
+
+  # LLM call (generates model stats + token counts)
+  - name: "Call analyze with tracing (LLM)"
+    handler: shell
+    command: |
+      meshctl call analyze '{"question": "What is 5 plus 3? Use the add tool."}' --trace 2>&1
+    workdir: /workspace
+    capture: llm_call_output
+    timeout: 120
+
+  - name: "Extract LLM trace ID"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.llm_call_output}" | grep "Trace ID:" | awk '{print $3}')
+      if [ -z "$TRACE_ID" ]; then
+        echo "WARNING: Could not extract LLM trace ID"
+      fi
+      echo "TRACE_ID=$TRACE_ID"
+    workdir: /workspace
+    capture: llm_trace_id
+
+  # Wait for traces to flush to Tempo and UI metrics to process
+  - name: "Wait for trace flush and UI metrics processing"
+    handler: wait
+    seconds: 15
+
+  # ===== QUERY UI SERVER ENDPOINTS =====
+
+  # 1. UI Health
+  - name: "Query UI health"
+    handler: shell
+    command: "curl -s http://localhost:3080/api/ui-health"
+    capture: ui_health_output
+
+  # 2. Agents via UI proxy
+  - name: "Query UI agents endpoint"
+    handler: shell
+    command: |
+      RESPONSE=$(curl -s http://localhost:3080/api/agents)
+      echo "$RESPONSE"
+      # Extract agent count
+      COUNT=$(echo "$RESPONSE" | jq '.count // (.agents | length)')
+      echo "UI_AGENT_COUNT=$COUNT"
+      # Extract unique runtimes
+      RUNTIMES=$(echo "$RESPONSE" | jq -r '[.agents[].runtime // empty] | unique | sort | join(",")')
+      echo "UI_RUNTIMES=$RUNTIMES"
+      # Count API-type agents
+      API_COUNT=$(echo "$RESPONSE" | jq '[.agents[] | select(.agent_type == "api")] | length')
+      echo "UI_API_AGENT_COUNT=$API_COUNT"
+      # Extract all capability names
+      CAPS=$(echo "$RESPONSE" | jq -r '[.agents[].capabilities[].name] | unique | sort | join(",")')
+      echo "UI_CAPABILITIES=$CAPS"
+    capture: ui_agents_output
+
+  # 3. Events history
+  - name: "Query UI events history"
+    handler: shell
+    command: "curl -s http://localhost:3080/api/events/history"
+    capture: ui_events_output
+
+  # 4. Events history filtered by register
+  - name: "Query UI events history (register only)"
+    handler: shell
+    command: "curl -s 'http://localhost:3080/api/events/history?event_type=register'"
+    capture: ui_events_register_output
+
+  # 5. Trace recent
+  - name: "Query UI trace recent"
+    handler: shell
+    command: "curl -s http://localhost:3080/api/trace/recent"
+    capture: ui_trace_recent_output
+
+  # 6. Trace agent-stats
+  - name: "Query UI trace agent-stats"
+    handler: shell
+    command: "curl -s http://localhost:3080/api/trace/agent-stats"
+    capture: ui_agent_stats_output
+
+  # 7. Trace model-stats
+  - name: "Query UI trace model-stats"
+    handler: shell
+    command: "curl -s http://localhost:3080/api/trace/model-stats"
+    capture: ui_model_stats_output
+
+  # 8. Trace edge-stats
+  - name: "Query UI trace edge-stats"
+    handler: shell
+    command: "curl -s http://localhost:3080/api/trace/edge-stats"
+    capture: ui_edge_stats_output
+
+  # 9. Trace list with pagination
+  - name: "Query UI trace list"
+    handler: shell
+    command: "curl -s 'http://localhost:3080/api/trace/list?limit=5'"
+    capture: ui_trace_list_output
+
+  # 10. Trace search by agent name
+  - name: "Query UI trace search by agent"
+    handler: shell
+    command: "curl -s 'http://localhost:3080/api/trace/search?agent_name=py-math-agent'"
+    capture: ui_trace_search_output
+
+  # 11. Specific trace by ID (use add trace ID, retry for Tempo ingestion)
+  - name: "Query UI specific trace by ID"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.add_trace_id}" | grep "TRACE_ID=" | cut -d= -f2)
+      if [ -z "$TRACE_ID" ]; then
+        echo '{"error": "no trace ID available"}'
+        exit 0
+      fi
+      for i in $(seq 1 6); do
+        RESPONSE=$(curl -s "http://localhost:3080/api/trace/$TRACE_ID")
+        if echo "$RESPONSE" | grep -q "$TRACE_ID"; then
+          echo "$RESPONSE"
+          exit 0
+        fi
+        sleep 3
+      done
+      # Trace never appeared — fail explicitly
+      echo '{"error": "trace not found after retries", "trace_id": "'$TRACE_ID'"}'
+    capture: ui_trace_by_id_output
+    timeout: 30
+
+  # Stop all agents
+  - name: "Stop agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # ===== AGENT REGISTRATION =====
+  - expr: "${captured.list_output} contains 'py-math-agent'"
+    message: "py-math-agent (Python) should be registered"
+
+  - expr: "${captured.list_output} contains 'ts-math-agent'"
+    message: "ts-math-agent (TypeScript) should be registered"
+
+  - expr: "${captured.list_output} contains 'java-math-agent'"
+    message: "java-math-agent (Java) should be registered"
+
+  - expr: "${captured.list_output} contains 'py-llm-provider'"
+    message: "py-llm-provider should be registered"
+
+  - expr: "${captured.list_output} contains 'py-llm-consumer'"
+    message: "py-llm-consumer should be registered"
+
+  - expr: "${captured.list_output} contains 'API'"
+    message: "API agent (py-mesh-api) should be registered"
+
+  # ===== TOOLS =====
+  - expr: "${captured.tools_output} contains 'add'"
+    message: "add tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'multiply'"
+    message: "multiply tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'analyze'"
+    message: "analyze tool should be listed"
+
+  # ===== TRAFFIC RESULTS =====
+  - expr: "${captured.add_call_output} contains 'Trace ID:'"
+    message: "add call should return a trace ID"
+
+  - expr: "${captured.multiply_call_output} contains 'Trace ID:'"
+    message: "multiply call should return a trace ID"
+
+  - expr: "${captured.api_call_output} contains 'result'"
+    message: "API call should return a result field"
+
+  - expr: "${captured.llm_call_output} contains 'Trace ID:'"
+    message: "LLM call should return a trace ID"
+
+  # ===== UI HEALTH =====
+  - expr: ${jq:captured.ui_health_output:.status} == "healthy"
+    message: "UI server health status should be healthy"
+
+  # ===== UI AGENTS =====
+  - expr: "${captured.ui_agents_output} contains 'py-math-agent'"
+    message: "UI agents endpoint should list py-math-agent"
+
+  - expr: "${captured.ui_agents_output} contains 'ts-math-agent'"
+    message: "UI agents endpoint should list ts-math-agent"
+
+  - expr: "${captured.ui_agents_output} contains 'java-math-agent'"
+    message: "UI agents endpoint should list java-math-agent"
+
+  - expr: "${captured.ui_agents_output} contains 'UI_AGENT_COUNT=6'"
+    message: "UI should report 6 agents"
+
+  - expr: "${captured.ui_agents_output} contains 'UI_API_AGENT_COUNT=1'"
+    message: "UI should detect 1 API-type agent"
+
+  - expr: "${captured.ui_agents_output} contains 'python'"
+    message: "UI should show python runtime"
+
+  - expr: "${captured.ui_agents_output} contains 'typescript'"
+    message: "UI should show typescript runtime"
+
+  - expr: "${captured.ui_agents_output} contains 'java'"
+    message: "UI should show java runtime"
+
+  # ===== UI EVENTS HISTORY =====
+  - expr: ${jq:captured.ui_events_output:.count} >= 5
+    message: "Events history should have at least 5 events (API agents do not emit lifecycle events)"
+
+  - expr: "${captured.ui_events_register_output} contains 'register'"
+    message: "Filtered events should contain register event type"
+
+  # ===== UI TRACE RECENT =====
+  - expr: ${jq:captured.ui_trace_recent_output:.enabled} == true
+    message: "Recent traces endpoint should be enabled"
+
+  # ===== UI TRACE AGENT-STATS =====
+  - expr: ${jq:captured.ui_agent_stats_output:.enabled} == true
+    message: "Agent stats should report tracing enabled"
+
+  - expr: ${jq:captured.ui_agent_stats_output:.count} >= 1
+    message: "Agent stats should have at least 1 agent with metrics"
+
+  # ===== UI TRACE MODEL-STATS =====
+  - expr: ${jq:captured.ui_model_stats_output:.enabled} == true
+    message: "Model stats should report tracing enabled"
+
+  - expr: ${jq:captured.ui_model_stats_output:.count} >= 1
+    message: "Model stats should have at least 1 model (from LLM call)"
+
+  # ===== UI TRACE EDGE-STATS =====
+  - expr: ${jq:captured.ui_edge_stats_output:.enabled} == true
+    message: "Edge stats endpoint should be enabled"
+
+  # ===== UI TRACE LIST =====
+  - expr: ${jq:captured.ui_trace_list_output:.enabled} == true
+    message: "Trace list endpoint should be enabled"
+
+  - expr: ${jq:captured.ui_trace_list_output:.total} >= 1
+    message: "Trace list should contain at least 1 trace"
+
+  # ===== UI TRACE SEARCH =====
+  - expr: ${jq:captured.ui_trace_search_output:.enabled} == true
+    message: "Trace search endpoint should be enabled"
+
+  - expr: ${jq:captured.ui_trace_search_output:.count} >= 1
+    message: "Trace search for py-math-agent should return at least 1 result"
+
+  # ===== UI TRACE BY ID =====
+  - expr: "${captured.ui_trace_by_id_output} not contains '\"error\"'"
+    message: "Specific trace retrieval should not return an error"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f meshui 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*math" 2>/dev/null || true
+      pkill -f "uvicorn" 2>/dev/null || true
+      pkill -f "tsx" 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.stop_observability
+  - routine: global.cleanup_workspace

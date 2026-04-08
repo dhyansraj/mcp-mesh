@@ -1,0 +1,284 @@
+# Test Case: TypeScript Agent UI Validation
+# Verifies UI server works with TypeScript agents and meshctl call routes correctly
+#
+# Agent Setup:
+#   - ts-math-agent (TypeScript, port 9013): Tool agent providing "add", "multiply"
+#
+# Flow:
+#   1. Start observability and ts-math-agent with tracing
+#   2. Start UI server, make tool calls
+#   3. Query UI server endpoints and validate responses
+
+name: "TypeScript Agent UI Validation"
+description: "Verify UI server API endpoints with a TypeScript agent - add and multiply tool calls"
+tags:
+  - ui-server
+  - typescript
+  - tracing
+timeout: 180
+
+pre_run:
+  - routine: global.start_observability
+
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # ===== SETUP =====
+
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -rL /uc-artifacts/ts-math-agent /workspace/
+      echo "Artifacts copied"
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Create env file with tracing config"
+    handler: secrets
+    source: /uc-artifacts/env.template
+    target: /workspace/.env
+
+  - name: "Install ts-math-agent dependencies"
+    handler: npm-install
+    path: /workspace/ts-math-agent
+
+  # ===== START AGENT =====
+
+  - name: "Start ts-math-agent"
+    handler: shell
+    command: "meshctl start ts-math-agent/src/index.ts --env-file .env -d"
+    workdir: /workspace
+    capture: start_ts_math
+
+  - name: "Wait for ts-math-agent registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for ts-math-agent..."
+      for i in $(seq 1 15); do
+        if meshctl list 2>/dev/null | grep -q "ts-math-agent"; then
+          echo "ts-math-agent registered after ${i} iterations"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: ts-math-agent did not register within 30s"
+      meshctl list 2>/dev/null || true
+      meshctl logs ts-math-agent 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_agent
+    timeout: 60
+
+  # ===== START UI SERVER =====
+
+  - name: "Start UI server with tracing"
+    handler: shell
+    workdir: /workspace
+    command: |
+      MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true \
+      REDIS_URL=redis://localhost:6379 \
+      TEMPO_URL=http://localhost:3200 \
+      MCP_MESH_REGISTRY_URL=http://localhost:8000 \
+      nohup meshui -p 3080 > /workspace/meshui.log 2>&1 &
+      echo "UI_PID=$!"
+      for i in $(seq 1 15); do
+        if curl -s http://localhost:3080/api/ui-health 2>/dev/null | grep -q "healthy"; then
+          echo "UI_READY=true"
+          break
+        fi
+        sleep 2
+      done
+      if ! curl -s http://localhost:3080/api/ui-health 2>/dev/null | grep -q "healthy"; then
+        echo "ERROR: UI server did not become healthy within 30s"
+        cat /workspace/meshui.log 2>/dev/null | tail -20 || true
+        exit 1
+      fi
+    capture: ui_start_output
+    timeout: 60
+
+  # ===== VERIFY AGENT =====
+
+  - name: "List agents"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  - name: "List tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # ===== TOOL CALLS =====
+
+  - name: "Call add with tracing"
+    handler: shell
+    command: |
+      meshctl call add '{"a": 5, "b": 3}' --trace 2>&1
+    workdir: /workspace
+    capture: add_call_output
+    timeout: 60
+
+  - name: "Extract add trace ID"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.add_call_output}" | grep "Trace ID:" | awk '{print $3}')
+      if [ -z "$TRACE_ID" ]; then
+        echo "ERROR: Could not extract add trace ID"
+        echo "Output was: ${captured.add_call_output}"
+        exit 1
+      fi
+      echo "TRACE_ID=$TRACE_ID"
+    workdir: /workspace
+    capture: add_trace_id
+
+  - name: "Call multiply with tracing"
+    handler: shell
+    command: |
+      meshctl call multiply '{"a": 7, "b": 6}' --trace 2>&1
+    workdir: /workspace
+    capture: multiply_call_output
+    timeout: 60
+
+  - name: "Extract multiply trace ID"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.multiply_call_output}" | grep "Trace ID:" | awk '{print $3}')
+      if [ -z "$TRACE_ID" ]; then
+        echo "ERROR: Could not extract multiply trace ID"
+        echo "Output was: ${captured.multiply_call_output}"
+        exit 1
+      fi
+      echo "TRACE_ID=$TRACE_ID"
+    workdir: /workspace
+    capture: multiply_trace_id
+
+  # Wait for traces to flush and UI metrics to process
+  - name: "Wait for trace flush"
+    handler: wait
+    seconds: 10
+
+  # ===== QUERY UI SERVER ENDPOINTS =====
+
+  - name: "Query UI health"
+    handler: shell
+    command: "curl -s http://localhost:3080/api/ui-health"
+    capture: ui_health_output
+
+  - name: "Query UI agents endpoint"
+    handler: shell
+    command: |
+      RESPONSE=$(curl -s http://localhost:3080/api/agents)
+      echo "$RESPONSE"
+      COUNT=$(echo "$RESPONSE" | jq '.count // (.agents | length)')
+      echo "UI_AGENT_COUNT=$COUNT"
+      RUNTIMES=$(echo "$RESPONSE" | jq -r '[.agents[].runtime // empty] | unique | join(",")')
+      echo "UI_RUNTIMES=$RUNTIMES"
+    capture: ui_agents_output
+
+  - name: "Query UI events history"
+    handler: shell
+    command: "curl -s http://localhost:3080/api/events/history"
+    capture: ui_events_output
+
+  - name: "Query UI trace recent"
+    handler: shell
+    command: "curl -s http://localhost:3080/api/trace/recent"
+    capture: ui_trace_recent_output
+
+  - name: "Query UI trace agent-stats"
+    handler: shell
+    command: "curl -s http://localhost:3080/api/trace/agent-stats"
+    capture: ui_agent_stats_output
+
+  - name: "Query UI trace edge-stats"
+    handler: shell
+    command: "curl -s http://localhost:3080/api/trace/edge-stats"
+    capture: ui_edge_stats_output
+
+  - name: "Query UI specific trace by ID"
+    handler: shell
+    command: |
+      TRACE_ID=$(echo "${captured.add_trace_id}" | grep "TRACE_ID=" | cut -d= -f2)
+      if [ -n "$TRACE_ID" ]; then
+        curl -s "http://localhost:3080/api/trace/$TRACE_ID"
+      else
+        echo '{"error": "no trace ID available"}'
+      fi
+    capture: ui_trace_by_id_output
+
+  # Stop agents
+  - name: "Stop agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+
+assertions:
+  # ===== AGENT REGISTRATION =====
+  - expr: "${captured.list_output} contains 'ts-math-agent'"
+    message: "ts-math-agent should be registered"
+
+  # ===== TOOLS =====
+  - expr: "${captured.tools_output} contains 'add'"
+    message: "add tool should be listed"
+
+  - expr: "${captured.tools_output} contains 'multiply'"
+    message: "multiply tool should be listed"
+
+  # ===== TOOL CALL RESULTS =====
+  - expr: "${captured.add_call_output} contains 'Trace ID:'"
+    message: "add call should succeed and return a trace ID"
+
+  - expr: "${captured.add_trace_id} contains 'TRACE_ID='"
+    message: "add trace ID should be extracted"
+
+  - expr: "${captured.multiply_call_output} contains 'Trace ID:'"
+    message: "multiply call should succeed and return a trace ID"
+
+  - expr: "${captured.multiply_trace_id} contains 'TRACE_ID='"
+    message: "multiply trace ID should be extracted"
+
+  # ===== UI HEALTH =====
+  - expr: ${jq:captured.ui_health_output:.status} == "healthy"
+    message: "UI server should be healthy"
+
+  # ===== UI AGENTS =====
+  - expr: "${captured.ui_agents_output} contains 'ts-math-agent'"
+    message: "UI agents endpoint should list ts-math-agent"
+
+  - expr: "${captured.ui_agents_output} contains 'UI_AGENT_COUNT=1'"
+    message: "UI should report 1 agent"
+
+  - expr: "${captured.ui_agents_output} contains 'typescript'"
+    message: "UI should show typescript runtime"
+
+  # ===== UI EVENTS =====
+  - expr: ${jq:captured.ui_events_output:.count} >= 1
+    message: "Events history should have at least 1 event"
+
+  # ===== UI TRACES =====
+  - expr: ${jq:captured.ui_trace_recent_output:.enabled} == true
+    message: "Recent traces endpoint should be enabled"
+
+  - expr: ${jq:captured.ui_agent_stats_output:.enabled} == true
+    message: "Agent stats should report tracing enabled"
+
+  - expr: ${jq:captured.ui_agent_stats_output:.count} >= 1
+    message: "Agent stats should have at least 1 agent"
+
+  - expr: "${captured.ui_trace_by_id_output} not contains '\"error\"'"
+    message: "Specific trace retrieval should not return an error"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f meshui 2>/dev/null || true
+      pkill -f "tsx" 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.stop_observability
+  - routine: global.cleanup_workspace
