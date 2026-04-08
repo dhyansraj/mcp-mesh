@@ -364,6 +364,11 @@ func (tm *TracingManager) SearchTraces(criteria TraceSearchCriteria) []*Complete
 		if tm.accumulator == nil {
 			return []*CompletedTrace{}
 		}
+		// Accumulator stores trace summaries, not span-level data —
+		// cannot filter by ParentSpanID. Fail closed.
+		if criteria.ParentSpanID != nil {
+			return []*CompletedTrace{}
+		}
 		summaries := tm.accumulator.GetRecentTraces(0) // 0 = all
 		var filtered []RecentTraceSummary
 		for _, s := range summaries {

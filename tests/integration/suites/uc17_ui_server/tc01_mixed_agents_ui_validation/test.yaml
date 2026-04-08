@@ -354,17 +354,27 @@ test:
     command: "curl -s 'http://localhost:3080/api/trace/search?agent_name=py-math-agent'"
     capture: ui_trace_search_output
 
-  # 11. Specific trace by ID (use add trace ID)
+  # 11. Specific trace by ID (use add trace ID, retry for Tempo ingestion)
   - name: "Query UI specific trace by ID"
     handler: shell
     command: |
       TRACE_ID=$(echo "${captured.add_trace_id}" | grep "TRACE_ID=" | cut -d= -f2)
-      if [ -n "$TRACE_ID" ]; then
-        curl -s "http://localhost:3080/api/trace/$TRACE_ID"
-      else
+      if [ -z "$TRACE_ID" ]; then
         echo '{"error": "no trace ID available"}'
+        exit 0
       fi
+      for i in $(seq 1 6); do
+        RESPONSE=$(curl -s "http://localhost:3080/api/trace/$TRACE_ID")
+        if echo "$RESPONSE" | grep -q "$TRACE_ID"; then
+          echo "$RESPONSE"
+          exit 0
+        fi
+        sleep 3
+      done
+      # Return last response even if trace not found
+      echo "$RESPONSE"
     capture: ui_trace_by_id_output
+    timeout: 30
 
   # Stop all agents
   - name: "Stop agents"
@@ -477,9 +487,15 @@ assertions:
   - expr: ${jq:captured.ui_trace_list_output:.enabled} == true
     message: "Trace list endpoint should be enabled"
 
+  - expr: ${jq:captured.ui_trace_list_output:.total} >= 1
+    message: "Trace list should contain at least 1 trace"
+
   # ===== UI TRACE SEARCH =====
   - expr: ${jq:captured.ui_trace_search_output:.enabled} == true
     message: "Trace search endpoint should be enabled"
+
+  - expr: ${jq:captured.ui_trace_search_output:.count} >= 1
+    message: "Trace search for py-math-agent should return at least 1 result"
 
   # ===== UI TRACE BY ID =====
   - expr: "${captured.ui_trace_by_id_output} not contains '\"error\"'"
