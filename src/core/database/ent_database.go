@@ -80,16 +80,34 @@ func InitializeEnt(config *Config, enableDebugLogging bool) (*EntDatabase, error
 			}
 		}
 
-		dataSourceName = sqlitePath
-
-		// Add foreign key support for SQLite if not already present
-		if !strings.Contains(dataSourceName, "_fk=") {
-			if strings.Contains(dataSourceName, "?") {
-				dataSourceName += "&_fk=1"
-			} else {
-				dataSourceName += "?_fk=1"
-			}
+		// Build DSN with PRAGMAs as query parameters so they apply to every
+		// new connection (go-sqlite3 executes _pragma params on connect).
+		// This prevents corruption from connection pool recycling losing PRAGMAs.
+		// Apply defaults for zero-valued PRAGMA fields (e.g., partial Config from tests)
+		journalMode := config.JournalMode
+		if journalMode == "" {
+			journalMode = "WAL"
 		}
+		busyTimeout := config.BusyTimeout
+		if busyTimeout == 0 {
+			busyTimeout = 5000
+		}
+		synchronous := config.Synchronous
+		if synchronous == "" {
+			synchronous = "NORMAL"
+		}
+		cacheSize := config.CacheSize
+		if cacheSize == 0 {
+			cacheSize = 10000
+		}
+		// Foreign keys are always enabled for SQLite — Ent requires _fk=1 for schema migration.
+		dataSourceName = fmt.Sprintf("%s?_fk=1&_journal_mode=%s&_busy_timeout=%d&_synchronous=%s&_cache_size=-%d",
+			sqlitePath,
+			journalMode,
+			busyTimeout,
+			synchronous,
+			cacheSize,
+		)
 	}
 
 	// Create Ent driver with connection pool configuration
@@ -104,40 +122,18 @@ func InitializeEnt(config *Config, enableDebugLogging bool) (*EntDatabase, error
 	db.SetMaxIdleConns(config.MaxIdleConnections)
 	db.SetConnMaxLifetime(time.Duration(config.ConnMaxLifetime) * time.Second)
 
-	// SQLite requires a single writer connection to prevent corruption
-	// under concurrent heartbeat load from multiple agents.
+	// SQLite: single connection, never recycled. This prevents:
+	// 1. Concurrent write corruption (single writer)
+	// 2. PRAGMA loss on connection recycle (PRAGMAs are per-connection)
 	if driverName == "sqlite3" {
 		db.SetMaxOpenConns(1)
 		db.SetMaxIdleConns(1)
+		db.SetConnMaxLifetime(0) // never expire the connection
 	}
 
 	// Test the connection
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
-	}
-
-	// SQLite-specific configuration (matches original PRAGMA settings)
-	if driverName == "sqlite3" {
-		ctx := context.Background()
-
-		if config.EnableForeignKeys {
-			if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
-				log.Printf("Warning: Failed to enable foreign keys: %v", err)
-			}
-		}
-
-		pragmas := []string{
-			fmt.Sprintf("PRAGMA busy_timeout = %d", config.BusyTimeout),
-			fmt.Sprintf("PRAGMA journal_mode = %s", config.JournalMode),
-			fmt.Sprintf("PRAGMA synchronous = %s", config.Synchronous),
-			fmt.Sprintf("PRAGMA cache_size = -%d", config.CacheSize),
-		}
-
-		for _, pragma := range pragmas {
-			if _, err := db.ExecContext(ctx, pragma); err != nil {
-				log.Printf("Warning: Failed to execute %s: %v", pragma, err)
-			}
-		}
 	}
 
 	// Create Ent client with the configured driver
