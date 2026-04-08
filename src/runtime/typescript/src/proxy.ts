@@ -12,6 +12,7 @@ import {
   publishTraceSpan,
   createTraceHeaders,
   matchesPropagateHeader,
+  injectTraceContext,
 } from "./tracing.js";
 import { isTimeoutError } from "./timeout-utils.js";
 import { getDispatcher } from "./http-pool.js";
@@ -197,15 +198,6 @@ export async function callMcpTool(
   const spanId = traceCtx ? generateSpanId() : null;
   const startTime = Date.now() / 1000;
 
-  // Build arguments with trace context injection (for downstream agents)
-  // This is the fallback mechanism since fastmcp doesn't expose HTTP headers
-  const argsWithTrace: Record<string, unknown> = { ...(args ?? {}) };
-  if (traceCtx && spanId) {
-    // Inject trace context into arguments - downstream agent will extract these
-    // spanId is the proxy span we're about to publish, which becomes child's parent
-    argsWithTrace._trace_id = traceCtx.traceId;
-    argsWithTrace._parent_span = spanId;
-  }
   // Build merged headers: session propagated + per-call (per-call wins, filtered by allowlist)
   const propagatedHeaders = getCurrentPropagatedHeaders();
   const mergedHeaders: Record<string, string> = { ...propagatedHeaders };
@@ -216,8 +208,30 @@ export async function callMcpTool(
       }
     }
   }
-  if (Object.keys(mergedHeaders).length > 0) {
-    argsWithTrace._mesh_headers = mergedHeaders;
+
+  // Build arguments with trace context injection via Rust core
+  let argsWithTrace: Record<string, unknown>;
+  if (traceCtx && spanId) {
+    try {
+      const argsJson = JSON.stringify(args ?? {});
+      const headersJson = Object.keys(mergedHeaders).length > 0 ? JSON.stringify(mergedHeaders) : undefined;
+      const injectedJson = injectTraceContext(argsJson, traceCtx.traceId, spanId, headersJson);
+      argsWithTrace = JSON.parse(injectedJson);
+    } catch {
+      // Fallback to manual injection
+      argsWithTrace = { ...(args ?? {}) };
+      argsWithTrace._trace_id = traceCtx.traceId;
+      argsWithTrace._parent_span = spanId;
+      if (Object.keys(mergedHeaders).length > 0) {
+        argsWithTrace._mesh_headers = mergedHeaders;
+      }
+    }
+  } else {
+    argsWithTrace = { ...(args ?? {}) };
+    // Still inject propagated headers even without trace context
+    if (Object.keys(mergedHeaders).length > 0) {
+      argsWithTrace._mesh_headers = mergedHeaders;
+    }
   }
 
   const payload = {

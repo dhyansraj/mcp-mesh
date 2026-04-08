@@ -161,19 +161,6 @@ public class McpHttpClient {
             // Get current trace context for propagation
             TraceInfo traceInfo = TraceContext.get();
 
-            // Inject trace context into arguments for TypeScript agents
-            // (FastMCP doesn't expose HTTP headers to tool handlers)
-            Map<String, Object> argsWithTrace = params != null ? new LinkedHashMap<>(params) : new LinkedHashMap<>();
-            if (traceInfo != null) {
-                argsWithTrace.put("_trace_id", traceInfo.getTraceId());
-                if (traceInfo.getSpanId() != null) {
-                    argsWithTrace.put("_parent_span", traceInfo.getSpanId());
-                }
-                log.trace("Injecting trace context into args: trace={}, parent={}",
-                    traceInfo.getTraceId().substring(0, 8),
-                    traceInfo.getSpanId() != null ? traceInfo.getSpanId().substring(0, 8) : "null");
-            }
-
             // Build merged headers: session propagated + per-call (per-call wins, filtered by allowlist)
             Map<String, String> propagatedHeaders = TraceContext.getPropagatedHeaders();
             Map<String, String> mergedHeaders = new LinkedHashMap<>(propagatedHeaders);
@@ -184,9 +171,52 @@ public class McpHttpClient {
                     }
                 }
             }
-            if (!mergedHeaders.isEmpty()) {
-                argsWithTrace.put("_mesh_headers", new LinkedHashMap<>(mergedHeaders));
-                log.trace("Injecting {} merged headers into args", mergedHeaders.size());
+
+            // Inject trace context into arguments via Rust core bridge
+            // (FastMCP doesn't expose HTTP headers to tool handlers)
+            Map<String, Object> argsWithTrace;
+            if (traceInfo != null) {
+                try {
+                    String argsJson = objectMapper.writeValueAsString(params != null ? params : Map.of());
+                    String headersJson = mergedHeaders.isEmpty() ? null : objectMapper.writeValueAsString(mergedHeaders);
+                    String injectedJson = MeshCoreBridge.injectTraceContext(
+                        argsJson,
+                        traceInfo.getTraceId(),
+                        traceInfo.getSpanId(),
+                        headersJson
+                    );
+                    if (injectedJson != null) {
+                        argsWithTrace = objectMapper.readValue(injectedJson, new TypeReference<LinkedHashMap<String, Object>>() {});
+                    } else {
+                        argsWithTrace = params != null ? new LinkedHashMap<>(params) : new LinkedHashMap<>();
+                        argsWithTrace.put("_trace_id", traceInfo.getTraceId());
+                        if (traceInfo.getSpanId() != null) {
+                            argsWithTrace.put("_parent_span", traceInfo.getSpanId());
+                        }
+                        if (!mergedHeaders.isEmpty()) {
+                            argsWithTrace.put("_mesh_headers", new LinkedHashMap<>(mergedHeaders));
+                        }
+                    }
+                    log.trace("Injecting trace context via Rust core: trace={}, parent={}",
+                        traceInfo.getTraceId().substring(0, 8),
+                        traceInfo.getSpanId() != null ? traceInfo.getSpanId().substring(0, 8) : "null");
+                } catch (Exception e) {
+                    log.debug("Rust inject_trace_context failed, using fallback: {}", e.getMessage());
+                    argsWithTrace = params != null ? new LinkedHashMap<>(params) : new LinkedHashMap<>();
+                    argsWithTrace.put("_trace_id", traceInfo.getTraceId());
+                    if (traceInfo.getSpanId() != null) {
+                        argsWithTrace.put("_parent_span", traceInfo.getSpanId());
+                    }
+                    if (!mergedHeaders.isEmpty()) {
+                        argsWithTrace.put("_mesh_headers", new LinkedHashMap<>(mergedHeaders));
+                    }
+                }
+            } else {
+                argsWithTrace = params != null ? new LinkedHashMap<>(params) : new LinkedHashMap<>();
+                // Still inject propagated headers even without trace context
+                if (!mergedHeaders.isEmpty()) {
+                    argsWithTrace.put("_mesh_headers", new LinkedHashMap<>(mergedHeaders));
+                }
             }
 
             Map<String, Object> request = Map.of(

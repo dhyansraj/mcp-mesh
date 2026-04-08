@@ -68,6 +68,7 @@ import {
   generateSpanId,
   publishTraceSpan,
   createTraceHeaders,
+  injectTraceContext,
 } from "./tracing.js";
 import { fetchWithTimeout, isTimeoutError } from "./timeout-utils.js";
 import { getDispatcher } from "./http-pool.js";
@@ -527,14 +528,24 @@ export class MeshDelegatedProvider implements LlmProvider {
     const traceSpanId = traceCtx ? generateSpanId() : null;
     const traceStartTime = Date.now() / 1000;
 
-    // Inject trace context into args for fastmcp fallback
-    if (traceCtx && traceSpanId) {
-      args._trace_id = traceCtx.traceId;
-      args._parent_span = traceSpanId;
-    }
-    // Inject propagated headers
+    // Inject trace context and propagated headers into args via Rust core
     const delegatedPropHeaders = getCurrentPropagatedHeaders();
-    if (Object.keys(delegatedPropHeaders).length > 0) {
+    if (traceCtx && traceSpanId) {
+      try {
+        const argsJson = JSON.stringify(args);
+        const headersJson = Object.keys(delegatedPropHeaders).length > 0 ? JSON.stringify(delegatedPropHeaders) : undefined;
+        const injectedJson = injectTraceContext(argsJson, traceCtx.traceId, traceSpanId, headersJson);
+        const injected = JSON.parse(injectedJson) as Record<string, unknown>;
+        Object.assign(args, injected);
+      } catch {
+        // Fallback to manual injection
+        args._trace_id = traceCtx.traceId;
+        args._parent_span = traceSpanId;
+        if (Object.keys(delegatedPropHeaders).length > 0) {
+          args._mesh_headers = { ...delegatedPropHeaders };
+        }
+      }
+    } else if (Object.keys(delegatedPropHeaders).length > 0) {
       args._mesh_headers = { ...delegatedPropHeaders };
     }
 
@@ -1228,6 +1239,31 @@ export function createLlmToolProxy(
     let traceError: string | null = null;
     let resultType = "unknown";
 
+    // Build arguments with trace context injection via Rust core
+    const toolPropHeaders = getCurrentPropagatedHeaders();
+    let toolArgsWithTrace: Record<string, unknown>;
+    if (traceCtx && traceSpanId) {
+      try {
+        const argsJson = JSON.stringify(args);
+        const headersJson = Object.keys(toolPropHeaders).length > 0 ? JSON.stringify(toolPropHeaders) : undefined;
+        const injectedJson = injectTraceContext(argsJson, traceCtx.traceId, traceSpanId, headersJson);
+        toolArgsWithTrace = JSON.parse(injectedJson);
+      } catch {
+        // Fallback to manual injection
+        toolArgsWithTrace = {
+          ...args,
+          _trace_id: traceCtx.traceId,
+          _parent_span: traceSpanId,
+          ...(Object.keys(toolPropHeaders).length > 0 ? { _mesh_headers: toolPropHeaders } : {}),
+        };
+      }
+    } else {
+      toolArgsWithTrace = {
+        ...args,
+        ...(Object.keys(toolPropHeaders).length > 0 ? { _mesh_headers: toolPropHeaders } : {}),
+      };
+    }
+
     try {
       // Make MCP call to the tool
       let response: Response;
@@ -1238,7 +1274,7 @@ export function createLlmToolProxy(
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
             ...(traceCtx && traceSpanId ? createTraceHeaders(traceCtx.traceId, traceSpanId) : {}),
-            ...getCurrentPropagatedHeaders(),
+            ...toolPropHeaders,
           },
           body: JSON.stringify({
             jsonrpc: "2.0",
@@ -1246,11 +1282,7 @@ export function createLlmToolProxy(
             method: "tools/call",
             params: {
               name: toolInfo.functionName,
-              arguments: {
-                ...args,
-                ...(traceCtx && traceSpanId ? { _trace_id: traceCtx.traceId, _parent_span: traceSpanId } : {}),
-                ...(Object.keys(getCurrentPropagatedHeaders()).length > 0 ? { _mesh_headers: getCurrentPropagatedHeaders() } : {}),
-              },
+              arguments: toolArgsWithTrace,
             },
           }),
           timeout: timeoutMs,

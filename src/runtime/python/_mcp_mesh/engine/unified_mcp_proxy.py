@@ -550,16 +550,7 @@ class UnifiedMCPProxy:
 
         # Inject trace context into arguments for downstream agents
         # This is the fallback mechanism for agents that can't access HTTP headers (e.g., TypeScript)
-        args_with_trace = dict(arguments) if arguments else {}
         current_trace = TraceContext.get_current()
-        if current_trace:
-            # Use current function's span_id as parent for downstream call
-            # Don't generate a new span - that creates unpublished "ghost" spans that break the tree
-            args_with_trace["_trace_id"] = current_trace.trace_id
-            args_with_trace["_parent_span"] = current_trace.span_id
-            self.logger.debug(
-                f"{tp}🔗 Injecting trace context: trace_id={current_trace.trace_id[:8]}..., parent_span={current_trace.span_id[:8]}..."
-            )
 
         # Build merged headers: session propagated + custom_headers + per-call (per-call wins)
         from ..tracing.context import matches_propagate_header
@@ -578,9 +569,36 @@ class UnifiedMCPProxy:
                 if matches_propagate_header(k):
                     merged_headers[k.lower()] = v
 
-        # Inject merged headers into args for TypeScript agents
-        if merged_headers:
-            args_with_trace["_mesh_headers"] = merged_headers
+        # Delegate injection to Rust core for cross-runtime consistency
+        if current_trace:
+            try:
+                import mcp_mesh_core
+
+                args_json = json.dumps(arguments or {})
+                headers_json = json.dumps(merged_headers) if merged_headers else None
+                injected_json = mcp_mesh_core.inject_trace_context_py(
+                    args_json,
+                    current_trace.trace_id,
+                    current_trace.span_id,
+                    headers_json,
+                )
+                args_with_trace = json.loads(injected_json)
+                self.logger.debug(
+                    f"{tp}🔗 Injecting trace context via Rust core: trace_id={current_trace.trace_id[:8]}..., parent_span={current_trace.span_id[:8]}..."
+                )
+            except Exception as e:
+                # Fallback to manual injection if Rust core fails
+                self.logger.debug(f"{tp}Rust inject_trace_context failed, using fallback: {e}")
+                args_with_trace = dict(arguments) if arguments else {}
+                args_with_trace["_trace_id"] = current_trace.trace_id
+                args_with_trace["_parent_span"] = current_trace.span_id
+                if merged_headers:
+                    args_with_trace["_mesh_headers"] = merged_headers
+        else:
+            args_with_trace = dict(arguments) if arguments else {}
+            # Still inject propagated headers even without trace context
+            if merged_headers:
+                args_with_trace["_mesh_headers"] = merged_headers
 
         # Log cross-agent call - summary line
         arg_keys = list(arguments.keys()) if arguments else []
