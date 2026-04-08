@@ -7,6 +7,7 @@ Inspired by the dev branch implementation but simplified for this feature branch
 
 import contextvars
 import os
+from typing import Any
 
 import mcp_mesh_core
 
@@ -48,6 +49,38 @@ def set_payload_sizes(request_bytes: int = 0, response_bytes: int = 0) -> None:
 def clear_payload_sizes() -> None:
     """Clear payload sizes from context."""
     _payload_sizes.set(None)
+
+
+# LLM metadata from mesh.llm calls (set in MeshLlmAgent, read in ExecutionTracer.end_execution)
+_llm_metadata: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "_llm_metadata", default=None
+)
+
+
+def get_llm_metadata() -> dict[str, Any] | None:
+    """Get current LLM metadata from context."""
+    return _llm_metadata.get()
+
+
+def set_llm_metadata(
+    model: str = "",
+    provider: str = "",
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+) -> None:
+    """Set LLM metadata in context for ExecutionTracer to pick up."""
+    _llm_metadata.set({
+        "llm_model": model,
+        "llm_provider": provider,
+        "llm_input_tokens": input_tokens,
+        "llm_output_tokens": output_tokens,
+        "llm_total_tokens": input_tokens + output_tokens,
+    })
+
+
+def clear_llm_metadata() -> None:
+    """Clear LLM metadata from context."""
+    _llm_metadata.set(None)
 
 
 class TraceInfo:

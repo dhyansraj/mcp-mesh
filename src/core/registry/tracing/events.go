@@ -146,8 +146,8 @@ func (te *TraceEvent) FromRedisMap(data map[string]interface{}) error {
 		}
 	}
 
-	// Optional fields
-	if parentSpan := getString(data, "parent_span"); parentSpan != "" {
+	// Optional fields — treat "null"/"None"/empty as no parent (root span)
+	if parentSpan := getString(data, "parent_span"); parentSpan != "" && parentSpan != "null" && parentSpan != "None" {
 		te.ParentSpan = &parentSpan
 	}
 

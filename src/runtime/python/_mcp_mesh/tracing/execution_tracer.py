@@ -68,16 +68,20 @@ class ExecutionTracer:
 
             if self.trace_context:
                 # Have trace context - use existing trace_id, create child span
-                # Current trace's span_id becomes this function's parent_span
+                # Published parent is the CALLER's span (from X-Parent-Span header),
+                # not the local request span. This ensures root spans from meshctl
+                # (which sends no X-Parent-Span) have parent_span=None, enabling
+                # immediate trace finalization in the accumulator.
                 self.execution_metadata.update(
                     {
                         "trace_id": self.trace_context.trace_id,
-                        "span_id": function_span_id,  # New child span for this function
-                        "parent_span": self.trace_context.span_id,  # Parent's span becomes our parent
+                        "span_id": function_span_id,
+                        "parent_span": self.trace_context.parent_span,
                     }
                 )
 
-                # Update TraceContext for nested calls - this span becomes the new current span
+                # Update TraceContext for nested calls - this function's span becomes
+                # the current span so outgoing cross-agent calls reference it as parent
                 TraceContext.set_current(
                     trace_id=self.trace_context.trace_id,
                     span_id=function_span_id,
@@ -138,18 +142,13 @@ class ExecutionTracer:
                 }
             )
 
-            # Extract LLM metadata if present (from mesh.llm calls)
-            if result is not None and hasattr(result, "_mesh_meta"):
-                meta = result._mesh_meta
-                self.execution_metadata.update(
-                    {
-                        "llm_input_tokens": getattr(meta, "input_tokens", 0),
-                        "llm_output_tokens": getattr(meta, "output_tokens", 0),
-                        "llm_total_tokens": getattr(meta, "total_tokens", 0),
-                        "llm_model": getattr(meta, "model", ""),
-                        "llm_provider": getattr(meta, "provider", ""),
-                    }
-                )
+            # Extract LLM metadata from context (set by MeshLlmAgent at the source)
+            from .context import clear_llm_metadata, get_llm_metadata
+
+            llm_meta = get_llm_metadata()
+            if llm_meta:
+                self.execution_metadata.update(llm_meta)
+                clear_llm_metadata()
 
             # Extract payload sizes if set by proxy call_tool()
             from .context import clear_payload_sizes, get_payload_sizes

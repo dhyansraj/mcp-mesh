@@ -1001,6 +1001,16 @@ class MeshLlmAgent:
                 if hasattr(response, "model") and response.model:
                     effective_model = response.model
 
+                # Publish token data to trace context for ExecutionTracer
+                from _mcp_mesh.tracing.context import set_llm_metadata
+
+                set_llm_metadata(
+                    model=effective_model,
+                    provider=str(self.provider) if self.provider else "",
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
+                )
+
                 # Extract response content
                 assistant_message = response.choices[0].message
 

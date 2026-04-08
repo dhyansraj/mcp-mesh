@@ -527,7 +527,23 @@ func (ta *TraceAccumulator) cleanupStaleTraces() {
 				EventType: "trace_completed",
 				Snapshot:  at.buildSnapshot(true),
 			})
-			delete(ta.activeTraces, id)
+			// Finalize into ring buffer so GetRecentTraces() returns them.
+			// Find the best "root" span: prefer one without a parent, fall back to the first span.
+			var rootSpan *TraceEvent
+			for _, s := range at.Spans {
+				if s.ParentSpan == nil {
+					rootSpan = s
+					break
+				}
+			}
+			if rootSpan == nil && len(at.Spans) > 0 {
+				rootSpan = at.Spans[0]
+			}
+			if rootSpan != nil {
+				ta.finalizeTrace(at, rootSpan)
+			} else {
+				delete(ta.activeTraces, id)
+			}
 			delete(ta.dirtyTraces, id)
 			stale++
 		}

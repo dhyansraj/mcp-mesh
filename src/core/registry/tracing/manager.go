@@ -321,31 +321,78 @@ func (tm *TracingManager) GetTrace(traceID string) (*CompletedTrace, bool) {
 	return nil, false
 }
 
-// ListTraces returns a list of completed traces with pagination (only available in correlation mode)
+// ListTraces returns a list of completed traces with pagination
 func (tm *TracingManager) ListTraces(limit, offset int) []*CompletedTrace {
-	if !tm.enabled || tm.streamThroughMode {
+	if !tm.enabled {
 		return []*CompletedTrace{}
 	}
+
+	// Stream-through mode: use accumulator's recent traces
+	if tm.streamThroughMode {
+		if tm.accumulator == nil {
+			return []*CompletedTrace{}
+		}
+		summaries := tm.accumulator.GetRecentTraces(0) // 0 = all
+		// Apply offset and limit
+		if offset >= len(summaries) {
+			return []*CompletedTrace{}
+		}
+		summaries = summaries[offset:]
+		if limit > 0 && limit < len(summaries) {
+			summaries = summaries[:limit]
+		}
+		return summariesToCompletedTraces(summaries)
+	}
+
 	if correlator, ok := tm.processor.(*SpanCorrelator); ok {
 		return correlator.ListTraces(limit, offset)
 	}
 	return []*CompletedTrace{}
 }
 
-// SearchTraces searches for traces matching specific criteria (only available in correlation mode)
+// SearchTraces searches for traces matching specific criteria
 func (tm *TracingManager) SearchTraces(criteria TraceSearchCriteria) []*CompletedTrace {
-	if !tm.enabled || tm.streamThroughMode {
+	if !tm.enabled {
 		return []*CompletedTrace{}
 	}
+
+	// Stream-through mode: filter accumulator's recent traces
+	if tm.streamThroughMode {
+		if tm.accumulator == nil {
+			return []*CompletedTrace{}
+		}
+		summaries := tm.accumulator.GetRecentTraces(0) // 0 = all
+		var filtered []RecentTraceSummary
+		for _, s := range summaries {
+			if matchesCriteria(s, criteria) {
+				filtered = append(filtered, s)
+			}
+		}
+		limit := criteria.Limit
+		if limit <= 0 {
+			limit = 20
+		}
+		if limit < len(filtered) {
+			filtered = filtered[:limit]
+		}
+		return summariesToCompletedTraces(filtered)
+	}
+
 	if correlator, ok := tm.processor.(*SpanCorrelator); ok {
 		return correlator.SearchTraces(criteria)
 	}
 	return []*CompletedTrace{}
 }
 
-// GetTraceCount returns the number of stored completed traces (only available in correlation mode)
+// GetTraceCount returns the number of stored completed traces
 func (tm *TracingManager) GetTraceCount() int {
-	if !tm.enabled || tm.streamThroughMode {
+	if !tm.enabled {
+		return 0
+	}
+	if tm.streamThroughMode {
+		if tm.accumulator != nil {
+			return len(tm.accumulator.GetRecentTraces(0))
+		}
 		return 0
 	}
 	if correlator, ok := tm.processor.(*SpanCorrelator); ok {
@@ -687,4 +734,57 @@ func (tm *TracingManager) GetAgentActivity() map[string]int {
 		return tm.accumulator.GetAgentActivity()
 	}
 	return map[string]int{}
+}
+
+// summariesToCompletedTraces converts RecentTraceSummary slice to CompletedTrace slice
+func summariesToCompletedTraces(summaries []RecentTraceSummary) []*CompletedTrace {
+	result := make([]*CompletedTrace, len(summaries))
+	for i, s := range summaries {
+		result[i] = &CompletedTrace{
+			TraceID:    s.TraceID,
+			StartTime:  s.StartTime,
+			EndTime:    s.StartTime.Add(time.Duration(s.DurationMs) * time.Millisecond),
+			Duration:   time.Duration(s.DurationMs) * time.Millisecond,
+			Success:    s.Success,
+			SpanCount:  s.SpanCount,
+			AgentCount: s.AgentCount,
+			Agents:     s.Agents,
+		}
+	}
+	return result
+}
+
+// matchesCriteria checks if a RecentTraceSummary matches search criteria
+func matchesCriteria(s RecentTraceSummary, c TraceSearchCriteria) bool {
+	if c.AgentName != nil {
+		found := false
+		for _, a := range s.Agents {
+			if a == *c.AgentName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	if c.Operation != nil && s.RootOperation != *c.Operation {
+		return false
+	}
+	if c.Success != nil && s.Success != *c.Success {
+		return false
+	}
+	if c.StartTime != nil && s.StartTime.Before(*c.StartTime) {
+		return false
+	}
+	if c.EndTime != nil && s.StartTime.After(*c.EndTime) {
+		return false
+	}
+	if c.MinDuration != nil && s.DurationMs < *c.MinDuration {
+		return false
+	}
+	if c.MaxDuration != nil && s.DurationMs > *c.MaxDuration {
+		return false
+	}
+	return true
 }
