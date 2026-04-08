@@ -371,8 +371,8 @@ test:
         fi
         sleep 3
       done
-      # Return last response even if trace not found
-      echo "$RESPONSE"
+      # Trace never appeared — fail explicitly
+      echo '{"error": "trace not found after retries", "trace_id": "'$TRACE_ID'"}'
     capture: ui_trace_by_id_output
     timeout: 30
 

@@ -376,12 +376,8 @@ func (tm *TracingManager) SearchTraces(criteria TraceSearchCriteria) []*Complete
 				filtered = append(filtered, s)
 			}
 		}
-		limit := criteria.Limit
-		if limit <= 0 {
-			limit = 20
-		}
-		if limit < len(filtered) {
-			filtered = filtered[:limit]
+		if criteria.Limit > 0 && len(filtered) > criteria.Limit {
+			filtered = filtered[:criteria.Limit]
 		}
 		return summariesToCompletedTraces(filtered)
 	}
