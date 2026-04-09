@@ -155,12 +155,12 @@ For production Kubernetes deployment, use the official Helm charts from the MCP 
 # Install core infrastructure (registry + database + observability)
 # No "helm repo add" needed - uses OCI registry directly
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.1.0 \
+  --version 1.2.0 \
   -n mcp-mesh --create-namespace
 
 # Deploy agent using scaffold-generated helm-values.yaml
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.1.0 \
+  --version 1.2.0 \
   -n mcp-mesh \
   -f my-agent/helm-values.yaml
 ```
@@ -171,12 +171,12 @@ Deploy into any namespace — just match `-n` with `--set global.namespace`:
 
 ```bash
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.1.0 \
+  --version 1.2.0 \
   -n my-namespace --create-namespace \
   --set global.namespace=my-namespace
 
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.1.0 \
+  --version 1.2.0 \
   -n my-namespace \
   -f helm-values.yaml
 ```
@@ -195,19 +195,19 @@ its own namespace. Short service names resolve independently within each namespa
 ```bash
 # Team A
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.1.0 \
+  --version 1.2.0 \
   -n team-a --create-namespace --set global.namespace=team-a
 
 helm install greeter oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.1.0 -n team-a -f greeter/helm-values.yaml
+  --version 1.2.0 -n team-a -f greeter/helm-values.yaml
 
 # Team B — same helm-values.yaml, different namespace
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.1.0 \
+  --version 1.2.0 \
   -n team-b --create-namespace --set global.namespace=team-b
 
 helm install greeter oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.1.0 -n team-b -f greeter/helm-values.yaml
+  --version 1.2.0 -n team-b -f greeter/helm-values.yaml
 ```
 
 ### Available Helm Charts
@@ -256,16 +256,16 @@ meshctl scaffold --name my-agent --agent-type tool
 
 # 2. Build and push Docker image (works on all platforms)
 cd my-agent
-docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.1.0 --push .
+docker buildx build --platform linux/amd64 -t your-registry/my-agent:v1.2.0 --push .
 
 # 3. Update helm-values.yaml with your image repository
 # 4. Deploy with Helm
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 1.1.0 \
+  --version 1.2.0 \
   -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
-  --set image.tag=v1.1.0
+  --set image.tag=v1.2.0
 ```
 
 ### Disable Optional Components
@@ -273,14 +273,14 @@ helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
 ```bash
 # Core without observability
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.1.0 \
+  --version 1.2.0 \
   -n mcp-mesh --create-namespace \
   --set grafana.enabled=false \
   --set tempo.enabled=false
 
 # Core without PostgreSQL (in-memory registry)
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 1.1.0 \
+  --version 1.2.0 \
   -n mcp-mesh --create-namespace \
   --set postgres.enabled=false
 ```

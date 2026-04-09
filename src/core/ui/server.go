@@ -29,12 +29,13 @@ type Server struct {
 	metricsProcessor    *MetricsProcessor
 	tracePoller         *TracePoller
 	configuredIndexHTML []byte
+	version             string
 }
 
 // NewServer creates a new UI server that serves the embedded SPA and proxies
 // API requests to the registry at config.RegistryURL. If tracingManager is
 // non-nil, trace endpoints are handled locally instead of being proxied.
-func NewServer(config *UIConfig, entService *registry.EntService, tracingManager *tracing.TracingManager, metricsProcessor *MetricsProcessor, embeddedFS embed.FS, logLevel string) *Server {
+func NewServer(config *UIConfig, entService *registry.EntService, tracingManager *tracing.TracingManager, metricsProcessor *MetricsProcessor, embeddedFS embed.FS, logLevel string, version string) *Server {
 	// Set Gin mode based on log level
 	upperLevel := strings.ToUpper(logLevel)
 	if upperLevel == "DEBUG" || upperLevel == "TRACE" {
@@ -58,6 +59,7 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 			Transport: tlsutil.NewHTTPTransport(config.RegistryTLS),
 		},
 		startTime:        time.Now().UTC(),
+		version:          version,
 		entService:       entService,
 		eventHub:         eventHub,
 		eventPoller:      eventPoller,
@@ -164,6 +166,7 @@ func (s *Server) handleUIHealth(c *gin.Context) {
 		"service":      "mcp-mesh-ui",
 		"uptime_secs":  int(time.Since(s.startTime).Seconds()),
 		"registry_url": s.config.RegistryURL,
+		"version":      s.version,
 	})
 }
 
