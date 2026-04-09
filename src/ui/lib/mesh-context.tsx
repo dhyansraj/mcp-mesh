@@ -15,6 +15,8 @@ export interface MeshContextValue {
   setPaused: (paused: boolean) => void;
   refresh: () => Promise<void>;
   traceActivity: Record<string, number>;
+  totalCalls: number;
+  totalErrors: number;
   edgeStats: EdgeStat[];
   agentStats: AgentStat[];
   modelStats: ModelStat[];
@@ -30,6 +32,8 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
   const [showAll, setShowAll] = useState(false);
   const [paused, setPaused] = useState(false);
   const [traceActivity, setTraceActivity] = useState<Record<string, number>>({});
+  const [totalCalls, setTotalCalls] = useState<number>(0);
+  const [totalErrors, setTotalErrors] = useState<number>(0);
   const [edgeStats, setEdgeStats] = useState<EdgeStat[]>([]);
   const [agentStats, setAgentStats] = useState<AgentStat[]>([]);
   const [modelStats, setModelStats] = useState<ModelStat[]>([]);
@@ -58,6 +62,10 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
       if (event.type === "trace_activity") {
         const agents = event.data?.agents as Record<string, number> | undefined;
         if (agents) setTraceActivity(agents);
+        const total = event.data?.total_calls as number | undefined;
+        if (total !== undefined) setTotalCalls(total);
+        const errors = event.data?.total_errors as number | undefined;
+        if (errors !== undefined) setTotalErrors(errors);
         return;
       }
       if (event.type === "edge_stats") {
@@ -155,6 +163,8 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         setPaused,
         refresh: fetchAgents,
         traceActivity,
+        totalCalls,
+        totalErrors,
         edgeStats,
         agentStats,
         modelStats,

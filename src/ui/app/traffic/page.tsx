@@ -87,7 +87,7 @@ function Sparkline({
 }
 
 export default function TrafficPage() {
-  const { edgeStats, agentStats, modelStats, loading, error, refresh } = useMesh();
+  const { edgeStats, agentStats, modelStats, loading, error, refresh, totalCalls: totalCallsFromContext, totalErrors: totalErrorsFromContext } = useMesh();
 
   // Sparkline history ring buffer
   const historyRef = useRef<Map<string, number[]>>(new Map());
@@ -107,8 +107,8 @@ export default function TrafficPage() {
 
   // Aggregated stats for overview cards
   const overview = useMemo(() => {
-    const totalCalls = edgeStats.reduce((sum, e) => sum + (e.call_count || 0), 0);
-    const totalErrors = edgeStats.reduce((sum, e) => sum + (e.error_count || 0), 0);
+    const totalCalls = totalCallsFromContext;
+    const totalErrors = totalErrorsFromContext;
     const successRate = totalCalls > 0 ? ((1 - totalErrors / totalCalls) * 100) : 100;
 
     const totalTokens = agentStats.reduce(
@@ -122,7 +122,7 @@ export default function TrafficPage() {
     );
 
     return { totalCalls, successRate, totalTokens, totalData };
-  }, [edgeStats, agentStats]);
+  }, [edgeStats, agentStats, totalCallsFromContext, totalErrorsFromContext]);
 
   // Sorted edges by route name
   const sortedEdges = useMemo(() => {
