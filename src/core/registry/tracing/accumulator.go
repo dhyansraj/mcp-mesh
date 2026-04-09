@@ -78,8 +78,10 @@ type activeTrace struct {
 	SpanAgent map[string]string // spanID -> agentName for edge detection
 	RootAgent string
 	RootOp    string
+	RootSpan  *TraceEvent // root span event (for deferred finalization)
 	StartTime time.Time
 	LastSeen  time.Time
+	RootSeen  *time.Time // when root span arrived (nil = not yet seen)
 	Agents    map[string]bool
 	HasError  bool
 }
@@ -164,27 +166,15 @@ func (ta *TraceAccumulator) ProcessTraceEvent(event *TraceEvent) error {
 		})
 	}
 
-	// 4. On root span completion (span_end with no parent), finalize trace + detect edges
+	// 4. On root span completion (span_end with no parent), mark for deferred finalization.
+	// Don't finalize immediately — wait a short grace period for remaining in-flight
+	// spans from other processes to arrive via Redis consumer.
 	if event.DurationMS != nil && event.ParentSpan == nil {
-		// Root span completed — publish trace_completed BEFORE finalizing
-		ta.publishLive(&LiveTraceEvent{
-			EventType: "trace_completed",
-			Snapshot:  at.buildSnapshot(true),
-		})
-		// Remove from dirty set since we just published the completed snapshot
-		delete(ta.dirtyTraces, event.TraceID)
-
-		// Detect cross-agent edges from all spans in this trace
-		for _, s := range at.Spans {
-			if s.ParentSpan == nil || s.DurationMS == nil {
-				continue
-			}
-			parentAgent, ok := at.SpanAgent[*s.ParentSpan]
-			if ok && parentAgent != s.AgentName {
-				ta.recordEdge(parentAgent, s.AgentName, *s.DurationMS, s.Success)
-			}
-		}
-		ta.finalizeTrace(at, event)
+		now := time.Now()
+		at.RootSeen = &now
+		at.RootSpan = event
+		// Mark dirty so debounce loop picks it up for finalization
+		ta.dirtyTraces[event.TraceID] = true
 	} else if exists {
 		// Existing trace with a new span — mark dirty for debounced update
 		ta.dirtyTraces[event.TraceID] = true
@@ -515,6 +505,58 @@ func (ta *TraceAccumulator) cleanupLoop() {
 	}
 }
 
+// traceGracePeriod is the time to wait after seeing a root span before finalizing,
+// allowing in-flight spans from other processes to arrive via Redis consumer.
+const traceGracePeriod = 3 * time.Second
+
+// finalizeReadyTraces finalizes traces that have seen their root span and waited
+// the grace period. Called from the debounce loop every 500ms.
+func (ta *TraceAccumulator) finalizeReadyTraces() {
+	ta.mu.Lock()
+
+	now := time.Now()
+	var completedEvents []*LiveTraceEvent
+	for id, at := range ta.activeTraces {
+		if at.RootSeen != nil && now.Sub(*at.RootSeen) >= traceGracePeriod {
+			// Grace period elapsed — finalize this trace
+
+			// Detect cross-agent edges from all spans
+			for _, s := range at.Spans {
+				if s.ParentSpan == nil || s.DurationMS == nil {
+					continue
+				}
+				parentAgent, ok := at.SpanAgent[*s.ParentSpan]
+				if ok && parentAgent != s.AgentName {
+					ta.recordEdge(parentAgent, s.AgentName, *s.DurationMS, s.Success)
+				}
+			}
+
+			// Publish trace_completed event
+			completedEvents = append(completedEvents, &LiveTraceEvent{
+				EventType: "trace_completed",
+				Snapshot:  at.buildSnapshot(true),
+			})
+
+			// Finalize into ring buffer
+			if at.RootSpan != nil {
+				ta.finalizeTrace(at, at.RootSpan)
+			} else if len(at.Spans) > 0 {
+				ta.finalizeTrace(at, at.Spans[0])
+			} else {
+				delete(ta.activeTraces, id)
+			}
+			delete(ta.dirtyTraces, id)
+		}
+	}
+
+	ta.mu.Unlock()
+
+	// Publish outside of mu lock
+	for _, evt := range completedEvents {
+		ta.publishLive(evt)
+	}
+}
+
 func (ta *TraceAccumulator) cleanupStaleTraces() {
 	ta.mu.Lock()
 
@@ -570,6 +612,7 @@ func (ta *TraceAccumulator) debounceLoop() {
 		case <-ta.cancel:
 			return
 		case <-ticker.C:
+			ta.finalizeReadyTraces()
 			ta.publishDirtyTraces()
 		}
 	}
