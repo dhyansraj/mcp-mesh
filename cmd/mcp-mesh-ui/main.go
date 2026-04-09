@@ -152,7 +152,10 @@ func main() {
 	// Initialize distributed tracing (accumulator-only, no OTLP export)
 	var tracingManager *tracing.TracingManager
 	var metricsProc *ui.MetricsProcessor
-	tracingEnabled := strings.ToLower(getEnvDefault("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "false")) == "true"
+	// Default to true — the UI server handles Redis unavailability gracefully
+	// (logs warning, continues without tracing). This ensures the dashboard shows
+	// trace data without requiring users to explicitly set the env var.
+	tracingEnabled := strings.ToLower(getEnvDefault("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "true")) == "true"
 	if tracingEnabled {
 		hostname, _ := os.Hostname()
 		tracingConfig := &tracing.TracingConfig{
