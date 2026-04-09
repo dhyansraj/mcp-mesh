@@ -273,10 +273,10 @@ test:
     workdir: /workspace
     capture: llm_trace_id
 
-  # Wait for traces to flush to Tempo and UI metrics to process
+  # Wait for traces to flush to Tempo and UI accumulator grace period (3s) to complete
   - name: "Wait for trace flush and UI metrics processing"
     handler: wait
-    seconds: 15
+    seconds: 20
 
   # ===== QUERY UI SERVER ENDPOINTS =====
 
@@ -465,6 +465,9 @@ assertions:
   - expr: ${jq:captured.ui_trace_recent_output:.enabled} == true
     message: "Recent traces endpoint should be enabled"
 
+  - expr: ${jq:captured.ui_trace_recent_output:.count} >= 1
+    message: "Recent traces should contain at least 1 completed trace"
+
   # ===== UI TRACE AGENT-STATS =====
   - expr: ${jq:captured.ui_agent_stats_output:.enabled} == true
     message: "Agent stats should report tracing enabled"
@@ -482,6 +485,9 @@ assertions:
   # ===== UI TRACE EDGE-STATS =====
   - expr: ${jq:captured.ui_edge_stats_output:.enabled} == true
     message: "Edge stats endpoint should be enabled"
+
+  - expr: ${jq:captured.ui_edge_stats_output:.edge_count} >= 1
+    message: "Edge stats should detect at least 1 cross-agent edge"
 
   # ===== UI TRACE LIST =====
   - expr: ${jq:captured.ui_trace_list_output:.enabled} == true

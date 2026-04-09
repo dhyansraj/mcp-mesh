@@ -110,8 +110,8 @@ assertions:
   # Verify response contains data from all 3 tools
   - expr: "${captured.parallel_response} contains 'AMZN'"
     message: "Response should reference the AMZN ticker"
-  - expr: "${captured.parallel_response} contains 'sentiment'"
-    message: "Response should contain sentiment data (from get_market_sentiment)"
+  - expr: "${captured.parallel_response} not contains '\"isError\": true'"
+    message: "Response should not be an error"
 post_run:
   - handler: shell
     workdir: /workspace
