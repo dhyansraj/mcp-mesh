@@ -102,8 +102,10 @@ func (p *TracePoller) poll() {
 		p.hub.Publish(DashboardEvent{
 			Type: "trace_activity",
 			Data: map[string]interface{}{
-				"agents":      agentCounts,
-				"trace_count": totalSpans,
+				"agents":       agentCounts,
+				"trace_count":  totalSpans,
+				"total_calls":  p.tracingManager.GetTotalFinalized(),
+				"total_errors": p.tracingManager.GetTotalErrors(),
 			},
 			Timestamp: now,
 		})
@@ -119,11 +121,19 @@ func (p *TracePoller) poll() {
 					fallbackCounts[agent]++
 				}
 			}
+			fallbackErrors := 0
+			for _, t := range traces {
+				if !t.Success {
+					fallbackErrors++
+				}
+			}
 			p.hub.Publish(DashboardEvent{
 				Type: "trace_activity",
 				Data: map[string]interface{}{
-					"agents":      fallbackCounts,
-					"trace_count": len(traces),
+					"agents":       fallbackCounts,
+					"trace_count":  len(traces),
+					"total_calls":  len(traces),
+					"total_errors": fallbackErrors,
 				},
 				Timestamp: now,
 			})

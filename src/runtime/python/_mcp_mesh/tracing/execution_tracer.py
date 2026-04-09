@@ -68,15 +68,15 @@ class ExecutionTracer:
 
             if self.trace_context:
                 # Have trace context - use existing trace_id, create child span
-                # Published parent is the CALLER's span (from X-Parent-Span header),
-                # not the local request span. This ensures root spans from meshctl
-                # (which sends no X-Parent-Span) have parent_span=None, enabling
-                # immediate trace finalization in the accumulator.
+                # Published parent is the caller's span_id (from X-Parent-Span header
+                # or the containing function's span). For root spans (meshctl with no
+                # X-Parent-Span), span_id is empty → or None ensures parent_span=None,
+                # enabling immediate trace finalization in the accumulator.
                 self.execution_metadata.update(
                     {
                         "trace_id": self.trace_context.trace_id,
                         "span_id": function_span_id,
-                        "parent_span": self.trace_context.parent_span,
+                        "parent_span": self.trace_context.span_id or None,
                     }
                 )
 

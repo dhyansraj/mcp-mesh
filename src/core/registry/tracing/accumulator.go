@@ -60,6 +60,12 @@ type TraceAccumulator struct {
 	// Per-agent activity count (spans seen per agent)
 	agentActivity map[string]int
 
+	// Total number of finalized traces (never resets)
+	totalFinalized int
+
+	// Total number of finalized traces that had errors (never resets)
+	totalErrors int
+
 	// Live subscribers for SSE streaming
 	liveMu      sync.RWMutex
 	liveClients map[chan *LiveTraceEvent]struct{}
@@ -236,6 +242,11 @@ func (ta *TraceAccumulator) finalizeTrace(at *activeTrace, rootSpan *TraceEvent)
 		AgentCount:    len(at.Agents),
 		Success:       !at.HasError,
 		Agents:        agents,
+	}
+
+	ta.totalFinalized++
+	if !summary.Success {
+		ta.totalErrors++
 	}
 
 	// Push to ring buffer
@@ -427,6 +438,20 @@ func (ta *TraceAccumulator) GetEdgeStats() []EdgeStats {
 	})
 
 	return edges
+}
+
+// GetTotalFinalized returns the total number of finalized traces.
+func (ta *TraceAccumulator) GetTotalFinalized() int {
+	ta.mu.RLock()
+	defer ta.mu.RUnlock()
+	return ta.totalFinalized
+}
+
+// GetTotalErrors returns the total number of finalized traces that had errors.
+func (ta *TraceAccumulator) GetTotalErrors() int {
+	ta.mu.RLock()
+	defer ta.mu.RUnlock()
+	return ta.totalErrors
 }
 
 // GetAgentActivity returns a copy of the agent activity map.

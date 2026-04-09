@@ -732,6 +732,22 @@ func (tm *TracingManager) GetAccumulator() *TraceAccumulator {
 	return tm.accumulator
 }
 
+// GetTotalFinalized returns the total number of finalized traces from the accumulator.
+func (tm *TracingManager) GetTotalFinalized() int {
+	if tm.accumulator != nil {
+		return tm.accumulator.GetTotalFinalized()
+	}
+	return 0
+}
+
+// GetTotalErrors returns the total number of error traces from the accumulator.
+func (tm *TracingManager) GetTotalErrors() int {
+	if tm.accumulator != nil {
+		return tm.accumulator.GetTotalErrors()
+	}
+	return 0
+}
+
 // GetAgentActivity returns per-agent span counts from the accumulator.
 func (tm *TracingManager) GetAgentActivity() map[string]int {
 	if tm.accumulator != nil {
