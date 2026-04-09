@@ -1,6 +1,28 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.0.1...v1.1.0)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.1.0...v1.2.0)
+
+## v1.2.0 (2026-04-09)
+
+Observability and dashboard reliability release. Distributed tracing now works end-to-end across all runtimes, the dashboard is faster and lighter, and SQLite stability is improved.
+
+### Observability
+
+- **Fix parent_span linkage** (#745): Python `ExecutionTracer` was publishing all spans as root spans, breaking cross-agent edge detection. Per-Edge Traffic and Total Calls now work correctly on the dashboard
+- **Total Calls metric** (#745): Counts every finalized trace once (single-agent and cross-agent), replacing the edge-stats-only count
+- **Trace context injection in Rust core** (#742): Consolidated `_trace_id`, `_parent_span`, and `_mesh_headers` injection from Python/TypeScript into a single Rust implementation for cross-runtime consistency
+- **Deferred trace finalization** (#743): 3-second grace period after root span arrival allows in-flight spans from other agents to arrive before finalizing. UI server tracing enabled by default
+
+### Dashboard
+
+- **Vite + React Router migration** (#735): Replaced Next.js with Vite + React Router for faster builds and smaller bundle. CSR-only with `go:embed` for the UI server binary
+- **UI server integration tests** (#740): Comprehensive test coverage for dashboard API endpoints (agents, traces, edge stats, model stats, trace search)
+
+### Bug Fixes
+
+- **SQLite connection pool PRAGMA loss** (#737): PRAGMAs set on initial connection were lost when the pool recycled connections, causing corruption under load with 7+ agents
+
+---
 
 ## v1.1.0 (2026-04-05)
 

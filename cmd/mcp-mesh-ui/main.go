@@ -181,7 +181,7 @@ func main() {
 	}
 
 	// Create UI server
-	server := ui.NewServer(uiConfig, entService, tracingManager, metricsProc, EmbeddedSPA, logLevel)
+	server := ui.NewServer(uiConfig, entService, tracingManager, metricsProc, EmbeddedSPA, logLevel, version)
 
 	// Graceful shutdown
 	go func() {

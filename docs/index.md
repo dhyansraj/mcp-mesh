@@ -45,7 +45,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>1.1.0</version>
+        <version>1.2.0</version>
     </dependency>
     ```
 
@@ -108,7 +108,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     });
     ```
 
-**That's it!** No manual server setup, no connection management, no networking code.
+**That's it!** Define `date_service` the same way — in this agent or another, in Python, Java, or TypeScript. MCP Mesh discovers it anywhere on the network, across agents, across runtimes. No server setup, no connection management, no networking code.
 
 ---
 
@@ -271,7 +271,7 @@ Pass images, PDFs, and files between agents and LLMs. Claude, OpenAI, and Gemini
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>1.1.0</version>
+        <version>1.2.0</version>
     </dependency>
     ```
 
@@ -319,7 +319,7 @@ Pass images, PDFs, and files between agents and LLMs. Claude, OpenAI, and Gemini
 
 ## :star: Project Status
 
-- **Latest Release**: v1.1.0 (March 2026)
+- **Latest Release**: v1.2.0 (March 2026)
 - **License**: MIT
 - **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed
