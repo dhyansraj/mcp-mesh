@@ -13,6 +13,7 @@ import {
   generateTraceId as coreGenerateTraceId,
   generateSpanId as coreGenerateSpanId,
   matchesPropagateHeader as coreMatchesPropagateHeader,
+  injectTraceContext as coreInjectTraceContext,
 } from "@mcpmesh/core";
 
 /**
@@ -125,6 +126,25 @@ export function generateTraceId(): string {
  */
 export function generateSpanId(): string {
   return coreGenerateSpanId();
+}
+
+/**
+ * Inject trace context into JSON-RPC arguments.
+ * Delegates to Rust core. Sets _trace_id, _parent_span, and optionally _mesh_headers.
+ *
+ * @param argsJson - JSON string of the arguments object
+ * @param traceId - Trace ID to inject
+ * @param spanId - Span ID to inject as _parent_span
+ * @param propagatedHeadersJson - Optional JSON string of propagated headers
+ * @returns JSON string with trace context injected
+ */
+export function injectTraceContext(
+  argsJson: string,
+  traceId: string,
+  spanId: string,
+  propagatedHeadersJson?: string | null,
+): string {
+  return coreInjectTraceContext(argsJson, traceId, spanId, propagatedHeadersJson);
 }
 
 /**

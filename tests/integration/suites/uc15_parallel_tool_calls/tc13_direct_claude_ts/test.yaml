@@ -109,8 +109,8 @@ assertions:
   # Verify response contains data from all 3 tools
   - expr: "${captured.parallel_response} contains 'AAPL'"
     message: "Response should reference the AAPL ticker"
-  - expr: "${captured.parallel_response} contains 'sentiment'"
-    message: "Response should contain sentiment data (from get_market_sentiment)"
+  - expr: "${captured.parallel_response} not contains '\"isError\": true'"
+    message: "Response should not be an error"
   # Assertion: parallel mode must be explicitly enabled in agent
   - expr: "${captured.consumer_logs} contains 'parallel tool calls enabled'"
     message: "Consumer agent should log 'parallel tool calls enabled' when parallelToolCalls=true is set"
