@@ -15,20 +15,14 @@ import (
 	"syscall"
 	"time"
 
-	"mcp-mesh/src/core/cli/handlers"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"mcp-mesh/src/core/cli/handlers"
 )
 
 // agentNameCache caches extracted agent names to avoid repeated parsing
 // Uses sync.Map for thread-safe concurrent access when starting multiple agents
 var agentNameCache sync.Map
-
-// locallyStartedRegistryPID records the PID of a registry that was started by this meshctl
-// invocation. Set by startStandardMode when it started the registry itself, read by
-// runAgentsInForeground at shutdown to decide whether to kill it. 0 means this meshctl
-// did not start a registry (e.g., it was already running, started by another meshctl).
-var locallyStartedRegistryPID int
 
 // Standard mode
 func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) error {
@@ -38,6 +32,13 @@ func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) err
 
 	// Determine registry URL from flags or config
 	registryURL := determineStartRegistryURL(cmd, config)
+
+	// locallyStartedRegistryPID records the PID of a registry that was started by
+	// THIS meshctl invocation. It's threaded through to runAgentsInForeground via
+	// startAgentsWithEnv so shutdown can decide whether to kill the registry.
+	// 0 means this meshctl did not start a registry (e.g., it was already running,
+	// started by another meshctl) and shutdown will leave it alone.
+	var locallyStartedRegistryPID int
 
 	// Check if registry is running
 	if !IsRegistryRunning(registryURL) {
@@ -73,8 +74,8 @@ func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) err
 			// Capture the PID of the registry we just started so that runAgentsInForeground
 			// can clean it up at shutdown. We deliberately only set this when this meshctl
 			// instance started the registry itself — if an existing registry was already
-			// running, locallyStartedRegistryPID stays 0 and shutdown will leave it alone
-			// (another meshctl instance likely owns it).
+			// running, the PID stays 0 and shutdown will leave it alone (another meshctl
+			// instance likely owns it).
 			if pm, err := NewPIDManager(); err == nil {
 				if rpid, err := pm.ReadPID("registry"); err == nil && IsProcessAlive(rpid) {
 					locallyStartedRegistryPID = rpid
@@ -92,7 +93,7 @@ func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) err
 	// Build environment for agents
 	agentEnv := buildAgentEnvironment(cmd, registryURL, config)
 
-	return startAgentsWithEnv(args, agentEnv, cmd, config)
+	return startAgentsWithEnv(args, agentEnv, cmd, config, locallyStartedRegistryPID)
 }
 
 // Connect-only mode
@@ -117,8 +118,10 @@ func startConnectOnlyMode(cmd *cobra.Command, args []string, registryURL string,
 	// Build environment for agents
 	agentEnv := buildAgentEnvironment(cmd, registryURL, config)
 
-	// Start agents with external registry
-	return startAgentsWithEnv(args, agentEnv, cmd, config)
+	// Start agents with external registry. Pass 0 for locallyStartedRegistryPID
+	// because connect-only mode never starts a registry — the external one must
+	// remain running after this meshctl exits.
+	return startAgentsWithEnv(args, agentEnv, cmd, config, 0)
 }
 
 // Background mode
@@ -129,137 +132,6 @@ func startBackgroundMode(cmd *cobra.Command, args []string, config *CLIConfig) e
 
 	// Fork to detach
 	return forkToBackground(cmd, args, config)
-}
-
-func startAgents(agentPaths []string, config *CLIConfig, detach bool) error {
-	// Ensure registry is running
-	if !IsRegistryRunning(config.GetRegistryURL()) {
-		fmt.Printf("Registry not found, starting local registry on %s:%d\n", config.RegistryHost, config.RegistryPort)
-
-		// Find available port if needed
-		if !IsPortAvailable(config.RegistryHost, config.RegistryPort) {
-			availablePort, err := FindAvailablePort(config.RegistryHost, config.RegistryPort)
-			if err != nil {
-				return fmt.Errorf("no available port found: %w", err)
-			}
-			fmt.Printf("Port %d in use, using port %d instead\n", config.RegistryPort, availablePort)
-			config.RegistryPort = availablePort
-		}
-
-		// Start registry in detach
-		registryCmd, err := startRegistryService(config)
-		if err != nil {
-			return fmt.Errorf("failed to start registry: %w", err)
-		}
-
-		if err := registryCmd.Start(); err != nil {
-			return fmt.Errorf("failed to start registry: %w", err)
-		}
-
-		// Record registry process
-		registryProc := ProcessInfo{
-			PID:       registryCmd.Process.Pid,
-			Name:      "mcp-mesh-registry",
-			Type:      "registry",
-			Command:   registryCmd.String(),
-			StartTime: time.Now(),
-			Status:    "running",
-		}
-		if err := AddRunningProcess(registryProc); err != nil {
-			fmt.Printf("Warning: failed to record registry process: %v\n", err)
-		}
-
-		// Wait for registry to be ready
-		fmt.Print("Waiting for registry to be ready...")
-		if err := WaitForRegistry(config.GetRegistryURL(), time.Duration(config.StartupTimeout)*time.Second); err != nil {
-			return fmt.Errorf("registry failed to start: %w", err)
-		}
-		fmt.Println(" ✓")
-	}
-
-	// Start all agents
-	var agentCmds []*exec.Cmd
-	for _, agentPath := range agentPaths {
-		// Convert to absolute path
-		absPath, err := AbsolutePath(agentPath)
-		if err != nil {
-			return fmt.Errorf("invalid agent path %s: %w", agentPath, err)
-		}
-
-		fmt.Printf("Starting agent: %s\n", absPath)
-
-		cmd, err := StartPythonAgent(absPath, config)
-		if err != nil {
-			return fmt.Errorf("failed to prepare agent %s: %w", agentPath, err)
-		}
-
-		if detach {
-			if err := cmd.Start(); err != nil {
-				return fmt.Errorf("failed to start agent %s: %w", agentPath, err)
-			}
-
-			// Record agent process (only after Start so cmd.Process is available)
-			agentProc := ProcessInfo{
-				PID:       cmd.Process.Pid,
-				Name:      filepath.Base(agentPath),
-				Type:      "agent",
-				Command:   cmd.String(),
-				StartTime: time.Now(),
-				Status:    "running",
-				FilePath:  absPath,
-			}
-			if err := AddRunningProcess(agentProc); err != nil {
-				fmt.Printf("Warning: failed to record agent process: %v\n", err)
-			}
-
-			fmt.Printf("Agent %s started (PID: %d)\n", filepath.Base(agentPath), cmd.Process.Pid)
-		} else {
-			agentCmds = append(agentCmds, cmd)
-			fmt.Printf("Agent %s prepared for foreground\n", filepath.Base(agentPath))
-		}
-	}
-
-	if detach {
-		fmt.Printf("All agents started in detach\n")
-		fmt.Printf("Registry URL: %s\n", config.GetRegistryURL())
-		return nil
-	}
-
-	// If running in foreground, start agents and wait
-	if len(agentCmds) > 0 {
-		// Setup signal handling
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-		fmt.Println("Agents are running. Press Ctrl+C to stop all services.")
-
-		// Start all agents
-		for _, cmd := range agentCmds {
-			go func(c *exec.Cmd) {
-				if err := c.Run(); err != nil {
-					fmt.Printf("Agent exited with error: %v\n", err)
-				}
-			}(cmd)
-		}
-
-		// Wait for signal
-		<-sigChan
-		fmt.Println("\nShutting down all services...")
-
-		// Stop all processes
-		processes, err := GetRunningProcesses()
-		if err == nil {
-			for _, proc := range processes {
-				fmt.Printf("Stopping %s (PID: %d)\n", proc.Name, proc.PID)
-				if err := KillProcess(proc.PID, time.Duration(config.ShutdownTimeout)*time.Second); err != nil {
-					fmt.Printf("Failed to stop %s: %v\n", proc.Name, err)
-				}
-				RemoveRunningProcess(proc.PID)
-			}
-		}
-	}
-
-	return nil
 }
 
 // Build agent environment with all flag support
@@ -304,8 +176,11 @@ func buildAgentEnvironment(cmd *cobra.Command, registryURL string, config *CLICo
 	return env
 }
 
-// Start agents with environment
-func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, config *CLIConfig) error {
+// Start agents with environment.
+// locallyStartedRegistryPID is the PID of a registry that this meshctl invocation
+// started itself (0 if it did not start one); it's threaded through to
+// runAgentsInForeground so shutdown can decide whether to kill the registry.
+func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, config *CLIConfig, locallyStartedRegistryPID int) error {
 	var agentCmds []*exec.Cmd
 	var watchers []*AgentWatcher
 	workingDir, _ := cmd.Flags().GetString("working-dir")
@@ -464,13 +339,13 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 
 	// If running in foreground, start agents and wait
 	if len(agentCmds) > 0 || len(watchers) > 0 {
-		return runAgentsInForeground(agentCmds, watchers, cmd, config)
+		return runAgentsInForeground(agentCmds, watchers, cmd, config, locallyStartedRegistryPID)
 	}
 
 	return nil
 }
 
-func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd *cobra.Command, config *CLIConfig) error {
+func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd *cobra.Command, config *CLIConfig, locallyStartedRegistryPID int) error {
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -139,28 +140,43 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 // decide whether to kill the parent process based on whether any watch-mode
 // agents still live under it.
 func stopSpecificAgent(pm *PIDManager, name string, timeout time.Duration, force, quiet bool) error {
+	foundAny := false
 	stoppedAny := false
 
 	// 1. Flat/non-watch mode instance (if any)
 	if pid, err := pm.ReadPID(name); err == nil {
-		if IsProcessAlive(pid) {
+		foundAny = true
+		if !IsProcessAlive(pid) {
+			// Already dead at enumeration time — safe to remove the stale PID file.
+			if !quiet {
+				fmt.Printf("Agent '%s' is not running (cleaning stale PID file)\n", name)
+			}
+			pm.RemovePID(name)
+		} else {
 			if !quiet {
 				fmt.Printf("Stopping agent '%s' (PID: %d)...\n", name, pid)
 			}
-			if err := stopProcess(pid, timeout, force); err != nil {
-				if !quiet {
-					fmt.Printf("Warning: failed to stop agent '%s' (PID %d): %v\n", name, pid, err)
-				}
-			} else {
+			stopErr := stopProcess(pid, timeout, force)
+			// Re-check liveness after stopProcess regardless of its return value — the
+			// SIGKILL path can succeed even when the graceful path returned an error.
+			if !IsProcessAlive(pid) {
 				if !quiet {
 					fmt.Printf("Agent '%s' stopped\n", name)
 				}
 				stoppedAny = true
+				pm.RemovePID(name)
+			} else {
+				// Process survived — preserve the PID file so the user can retry with
+				// `meshctl stop <name>` (otherwise name-based lookup would fail).
+				if !quiet {
+					if stopErr != nil {
+						fmt.Printf("Warning: agent '%s' (PID %d) is still running after stop attempt (%v); tracking file preserved for retry\n", name, pid, stopErr)
+					} else {
+						fmt.Printf("Warning: agent '%s' (PID %d) is still running after stop attempt; tracking file preserved for retry\n", name, pid)
+					}
+				}
 			}
-		} else if !quiet {
-			fmt.Printf("Agent '%s' is not running (cleaning stale PID file)\n", name)
 		}
-		pm.RemovePID(name)
 	}
 
 	// 2. All watch-mode instances of this name (may be multiple across different parent PIDs)
@@ -169,36 +185,60 @@ func stopSpecificAgent(pm *PIDManager, name string, timeout time.Duration, force
 		return fmt.Errorf("failed to enumerate watch-mode instances: %w", err)
 	}
 
-	// Track which parents we touched so we can run shared-watcher cleanup once per parent afterwards.
+	// Track which parents we successfully cleaned up so we can run shared-watcher
+	// cleanup once per parent afterwards. We deliberately only add a parent here
+	// after the agent under it dies — if ANY agent under a parent failed to die,
+	// the parent should NOT be considered for stopWatcherParentIfEmpty so the
+	// watcher stays alive to potentially recover or report the state.
 	touchedParents := make(map[int]bool)
 
 	for _, match := range watchMatches {
+		foundAny = true
 		if !quiet {
 			fmt.Printf("Stopping agent '%s' (PID: %d, watcher parent: %d)...\n", name, match.PID, match.ParentPID)
 		}
-		if err := stopProcess(match.PID, timeout, force); err != nil {
-			if !quiet {
-				fmt.Printf("Warning: failed to stop agent '%s' (PID %d): %v\n", name, match.PID, err)
-			}
-		} else {
+		stopErr := stopProcess(match.PID, timeout, force)
+		// Re-check liveness after stopProcess regardless of its return value.
+		if !IsProcessAlive(match.PID) {
 			if !quiet {
 				fmt.Printf("Agent '%s' stopped\n", name)
 			}
 			stoppedAny = true
+			pm.RemoveWatchAgentPID(name, match.ParentPID)
+			touchedParents[match.ParentPID] = true
+		} else {
+			// Process survived — do NOT remove the watch-mode PID file, and do NOT
+			// add this parent to touchedParents (so the watcher parent is not killed).
+			if !quiet {
+				if stopErr != nil {
+					fmt.Printf("Warning: agent '%s' (PID %d) is still running after stop attempt (%v); tracking file preserved for retry\n", name, match.PID, stopErr)
+				} else {
+					fmt.Printf("Warning: agent '%s' (PID %d) is still running after stop attempt; tracking file preserved for retry\n", name, match.PID)
+				}
+			}
 		}
-		pm.RemoveWatchAgentPID(name, match.ParentPID)
-		touchedParents[match.ParentPID] = true
 	}
 
 	// 3. For each parent we touched, decide whether to stop its watcher process.
 	//    Rule: if the parent has no remaining watch-mode agents alive, stop it.
+	//    Sort parent PIDs before iterating so log output is deterministic across runs.
+	sortedParents := make([]int, 0, len(touchedParents))
 	for parentPID := range touchedParents {
+		sortedParents = append(sortedParents, parentPID)
+	}
+	sort.Ints(sortedParents)
+	for _, parentPID := range sortedParents {
 		stopWatcherParentIfEmpty(pm, name, parentPID, timeout, force, quiet)
 	}
 
-	if !stoppedAny {
+	if !foundAny {
 		return fmt.Errorf("agent '%s' is not running", name)
 	}
+	if !stoppedAny {
+		return fmt.Errorf("agent '%s' could not be stopped (still running, tracking preserved for retry)", name)
+	}
+	// Partial success (some instances died, others survived) is reported via the
+	// per-instance warnings above and returns nil so the overall CLI flow continues.
 	return nil
 }
 

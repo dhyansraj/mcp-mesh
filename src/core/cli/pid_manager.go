@@ -40,6 +40,15 @@ func NewPIDManager() (*PIDManager, error) {
 	return &PIDManager{pidsDir: pidsDir}, nil
 }
 
+// newPIDManagerWithDir creates a PIDManager rooted at a specific directory.
+// Used primarily for testing to avoid touching ~/.mcp-mesh/pids.
+func newPIDManagerWithDir(pidsDir string) (*PIDManager, error) {
+	if err := os.MkdirAll(pidsDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create pids directory: %w", err)
+	}
+	return &PIDManager{pidsDir: pidsDir}, nil
+}
+
 // GetPIDsDir returns the pids directory path
 func (pm *PIDManager) GetPIDsDir() string {
 	return pm.pidsDir
@@ -205,6 +214,15 @@ func (pm *PIDManager) ListRunningProcesses() ([]PIDInfo, error) {
 		}
 
 		base := strings.TrimSuffix(entry.Name(), ".pid")
+
+		// Legacy watcher-parent format: "<name>_watcher-parent.pid" (underscore separator).
+		// Pre-namespacing versions of meshctl wrote these; they're unparseable in the
+		// current scheme and would otherwise be mis-parsed as flat agents. Skip them.
+		// Users can clean them up with `meshctl stop --clean`.
+		if strings.HasSuffix(base, "_watcher-parent") {
+			continue
+		}
+
 		pidFile := filepath.Join(pm.pidsDir, entry.Name())
 
 		pid, err := pm.ReadPIDFromFile(pidFile)
