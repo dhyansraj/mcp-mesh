@@ -163,7 +163,15 @@ func (pm *PIDManager) FindWatchAgentsByName(name string) ([]PIDInfo, error) {
 
 // FindWatchAgentsByParent returns all watch-mode agent entries under a given parent meshctl PID.
 // Returns only entries whose agent process is alive.
+//
+// parentPID must be > 0. Passing 0 or negative returns nil (no matches) — the
+// method's semantic is "agents under a watch-mode parent", and parent 0 is
+// not a valid watch-mode parent (flat entries also have ParentPID == 0, and
+// they are not watch-mode agents).
 func (pm *PIDManager) FindWatchAgentsByParent(parentPID int) ([]PIDInfo, error) {
+	if parentPID <= 0 {
+		return nil, nil
+	}
 	all, err := pm.ListRunningProcesses()
 	if err != nil {
 		return nil, err
@@ -171,6 +179,30 @@ func (pm *PIDManager) FindWatchAgentsByParent(parentPID int) ([]PIDInfo, error) 
 	var matches []PIDInfo
 	for _, p := range all {
 		if p.Type == "agent" && p.ParentPID == parentPID && p.Running {
+			matches = append(matches, p)
+		}
+	}
+	return matches, nil
+}
+
+// FindWatchParentsByPID returns all watcher-parent tracking entries whose
+// parent meshctl PID matches. Unlike FindWatchAgentsByParent, this returns
+// tracking file metadata regardless of whether the parent process itself
+// is still alive — used by stop to clean up stale tracking files when the
+// parent has already exited.
+//
+// parentPID must be > 0; passing 0 or negative returns nil.
+func (pm *PIDManager) FindWatchParentsByPID(parentPID int) ([]PIDInfo, error) {
+	if parentPID <= 0 {
+		return nil, nil
+	}
+	all, err := pm.ListRunningProcesses()
+	if err != nil {
+		return nil, err
+	}
+	var matches []PIDInfo
+	for _, p := range all {
+		if p.Type == "watcher-parent" && p.ParentPID == parentPID {
 			matches = append(matches, p)
 		}
 	}
@@ -215,6 +247,11 @@ func (pm *PIDManager) ListRunningProcesses() ([]PIDInfo, error) {
 
 		base := strings.TrimSuffix(entry.Name(), ".pid")
 
+		// Skip empty base (filename was just ".pid").
+		if base == "" {
+			continue
+		}
+
 		// Legacy watcher-parent format: "<name>_watcher-parent.pid" (underscore separator).
 		// Pre-namespacing versions of meshctl wrote these; they're unparseable in the
 		// current scheme and would otherwise be mis-parsed as flat agents. Skip them.
@@ -245,25 +282,35 @@ func (pm *PIDManager) ListRunningProcesses() ([]PIDInfo, error) {
 				continue
 			}
 			parsedPID, perr := strconv.Atoi(rest[idx+1:])
-			if perr != nil {
+			if perr != nil || parsedPID <= 0 {
 				continue
 			}
 			name = rest[:idx]
 			parentPID = parsedPID
 			procType = "watcher-parent"
 		} else {
-			// Case 2 or 3: has a trailing .<parent_pid> (watch-mode agent) or not (flat/legacy)
+			// Case 2 or 3: has a trailing .<parent_pid> (watch-mode agent) or not (flat/legacy).
+			//
+			// Invariant: sanitizeName strips dots from legitimate agent names, so any
+			// dot in the base must come from one of the documented <name>.<parent_pid>
+			// or <name>.<parent_pid>.watcher-parent patterns. If a dot is present but
+			// the trailing segment isn't a positive integer parent PID, the file was
+			// not written by a current meshctl version — skip rather than fall back to
+			// flat, because "flat fallback with a dotted name" would yield a name that
+			// no other code path can ever re-derive (sanitizeName would never produce
+			// it), leaving a permanent stale entry.
 			idx := strings.LastIndex(base, ".")
 			if idx > 0 {
-				// Try to parse as <name>.<parent_pid>
-				if parsedPID, perr := strconv.Atoi(base[idx+1:]); perr == nil {
-					name = base[:idx]
-					parentPID = parsedPID
-					procType = "agent"
+				parsedPID, perr := strconv.Atoi(base[idx+1:])
+				if perr != nil || parsedPID <= 0 {
+					// Dotted but unparseable — skip.
+					continue
 				}
-			}
-			if procType == "" {
-				// Case 3: flat — <name>.pid
+				name = base[:idx]
+				parentPID = parsedPID
+				procType = "agent"
+			} else {
+				// No dot: flat — <name>.pid
 				name = base
 				parentPID = 0
 				switch name {

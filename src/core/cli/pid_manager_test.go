@@ -3,10 +3,12 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newTestPIDManager returns a PIDManager rooted at a fresh per-test temp directory.
@@ -442,22 +444,28 @@ func TestFindWatchAgentsByParent(t *testing.T) {
 
 func TestFindWatchAgentsByParentZero(t *testing.T) {
 	pm := newTestPIDManager(t)
-	// Flat entries have ParentPID=0; FindWatchAgentsByParent(0) should return
-	// nothing (the method only finds watch-mode entries, which have parent>0 in
-	// practice, and a flat entry's ParentPID==0 matches the filter but then the
-	// "watch-mode agent" semantics aren't meaningful — current behavior returns
-	// them because the implementation filters on parent PID equality).
+	// FindWatchAgentsByParent(0) must return no matches. The method's semantic
+	// is "agents under a watch-mode parent"; parent 0 is not a valid watch-mode
+	// parent, even though flat entries internally carry ParentPID == 0. The
+	// guard at the top of the method short-circuits parentPID <= 0 to prevent
+	// flat entries from being mistakenly surfaced as watch-mode agents.
 	writePIDFile(t, pm, "flat.pid", os.Getpid())
 
 	matches, err := pm.FindWatchAgentsByParent(0)
 	if err != nil {
-		t.Fatalf("FindWatchAgentsByParent: %v", err)
+		t.Fatalf("FindWatchAgentsByParent(0): %v", err)
 	}
-	// Current behavior: the filter p.ParentPID == parentPID matches flat entries
-	// when parentPID == 0. Assert what the code actually does so future changes
-	// are flagged.
-	if len(matches) != 1 {
-		t.Errorf("expected 1 match (flat entry, ParentPID=0), got %d: %+v", len(matches), matches)
+	if len(matches) != 0 {
+		t.Errorf("expected 0 matches for parent 0, got %d: %+v", len(matches), matches)
+	}
+
+	// Also verify the guard handles negative PIDs.
+	matches, err = pm.FindWatchAgentsByParent(-1)
+	if err != nil {
+		t.Fatalf("FindWatchAgentsByParent(-1): %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("expected 0 matches for parent -1, got %d: %+v", len(matches), matches)
 	}
 }
 
@@ -546,5 +554,256 @@ func TestWriteReadRemoveWatchParent(t *testing.T) {
 	}
 	if _, err := os.Stat(expectedPath); !os.IsNotExist(err) {
 		t.Errorf("expected file %s to be gone, got err=%v", expectedPath, err)
+	}
+}
+
+// --- Dead PID helper (F1) ---
+
+// reapedPID returns a PID that was just reaped and is (with very high probability)
+// no longer alive. Used to test the `p.Running` filter in enumeration helpers.
+// PID reuse in the microseconds after Wait returns is extraordinarily unlikely,
+// but we still poll IsProcessAlive briefly to confirm the kernel has actually
+// reflected the exit before the caller uses the value.
+func reapedPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("failed to start throwaway process: %v", err)
+	}
+	pid := cmd.Process.Pid
+	_ = cmd.Wait() // reap
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if !IsProcessAlive(pid) {
+			return pid
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("reaped PID %d still reports as alive after 200ms", pid)
+	return 0
+}
+
+// --- Dead-PID filter tests (F1) ---
+
+func TestFindWatchAgentsByNameFiltersDeadAgent(t *testing.T) {
+	pm := newTestPIDManager(t)
+	dead := reapedPID(t)
+	// Write a watch-mode entry referring to the dead PID under parent 111.
+	writePIDFile(t, pm, "ghost.111.pid", dead)
+
+	matches, err := pm.FindWatchAgentsByName("ghost")
+	if err != nil {
+		t.Fatalf("FindWatchAgentsByName: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("expected 0 matches (agent dead), got %d: %+v", len(matches), matches)
+	}
+}
+
+func TestFindWatchAgentsByParentFiltersDeadAgent(t *testing.T) {
+	pm := newTestPIDManager(t)
+	dead := reapedPID(t)
+	writePIDFile(t, pm, "ghost.222.pid", dead)
+	// Mix in a live agent under the same parent so we can verify the filter is
+	// selective (alive pass through, dead filtered out).
+	writePIDFile(t, pm, "alive.222.pid", os.Getpid())
+
+	matches, err := pm.FindWatchAgentsByParent(222)
+	if err != nil {
+		t.Fatalf("FindWatchAgentsByParent: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match (only the live agent), got %d: %+v", len(matches), matches)
+	}
+	if matches[0].Name != "alive" {
+		t.Errorf("expected alive agent, got %+v", matches[0])
+	}
+}
+
+// --- FindWatchParentsByPID tests (F3) ---
+
+func TestFindWatchParentsByPID(t *testing.T) {
+	pm := newTestPIDManager(t)
+	pid := os.Getpid()
+
+	// Two watcher-parent entries under parent 111, one under 222.
+	writePIDFile(t, pm, "alpha.111.watcher-parent.pid", 111)
+	writePIDFile(t, pm, "beta.111.watcher-parent.pid", 111)
+	writePIDFile(t, pm, "gamma.222.watcher-parent.pid", 222)
+	// Plus some watch-mode agent entries under the same parents (must NOT be returned).
+	writePIDFile(t, pm, "alpha.111.pid", pid)
+	writePIDFile(t, pm, "gamma.222.pid", pid)
+
+	matches, err := pm.FindWatchParentsByPID(111)
+	if err != nil {
+		t.Fatalf("FindWatchParentsByPID(111): %v", err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 watcher-parent entries under 111, got %d: %+v", len(matches), matches)
+	}
+	names := []string{}
+	for _, m := range matches {
+		if m.Type != "watcher-parent" {
+			t.Errorf("non-watcher-parent returned: %+v", m)
+		}
+		if m.ParentPID != 111 {
+			t.Errorf("wrong ParentPID: %+v", m)
+		}
+		names = append(names, m.Name)
+	}
+	sort.Strings(names)
+	if names[0] != "alpha" || names[1] != "beta" {
+		t.Errorf("expected [alpha beta], got %v", names)
+	}
+}
+
+func TestFindWatchParentsByPIDNoMatch(t *testing.T) {
+	pm := newTestPIDManager(t)
+	writePIDFile(t, pm, "alpha.111.watcher-parent.pid", 111)
+
+	matches, err := pm.FindWatchParentsByPID(999)
+	if err != nil {
+		t.Fatalf("FindWatchParentsByPID: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("expected 0 matches, got %d: %+v", len(matches), matches)
+	}
+}
+
+func TestFindWatchParentsByPIDZero(t *testing.T) {
+	pm := newTestPIDManager(t)
+	// Even if we had a watcher-parent entry with ParentPID 0 (which is not a
+	// legitimate shape), the guard should short-circuit and return nothing.
+	writePIDFile(t, pm, "alpha.111.watcher-parent.pid", 111)
+
+	matches, err := pm.FindWatchParentsByPID(0)
+	if err != nil {
+		t.Fatalf("FindWatchParentsByPID(0): %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("expected 0 matches for parent 0, got %d: %+v", len(matches), matches)
+	}
+	matches, err = pm.FindWatchParentsByPID(-1)
+	if err != nil {
+		t.Fatalf("FindWatchParentsByPID(-1): %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("expected 0 matches for parent -1, got %d", len(matches))
+	}
+}
+
+// TestFindWatchParentsByPIDReturnsDeadParent pins the intentional non-filtering
+// behavior: unlike FindWatchAgentsByParent (which excludes dead PIDs),
+// FindWatchParentsByPID returns tracking file metadata regardless of whether the
+// parent is alive, because it is used to clean up stale files after a parent has
+// already exited.
+func TestFindWatchParentsByPIDReturnsDeadParent(t *testing.T) {
+	pm := newTestPIDManager(t)
+	dead := reapedPID(t)
+	// Use the dead PID both as the parent PID in the filename AND as the file
+	// contents so ListRunningProcesses reads the same dead PID.
+	filename := fmt.Sprintf("alpha.%d.watcher-parent.pid", dead)
+	writePIDFile(t, pm, filename, dead)
+
+	matches, err := pm.FindWatchParentsByPID(dead)
+	if err != nil {
+		t.Fatalf("FindWatchParentsByPID: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match (dead parent still returned for cleanup), got %d: %+v",
+			len(matches), matches)
+	}
+	if matches[0].Running {
+		// Expected: p.Running reports false for a dead PID, but the helper
+		// still surfaces the entry.
+	}
+	if matches[0].Name != "alpha" || matches[0].ParentPID != dead {
+		t.Errorf("unexpected entry: %+v", matches[0])
+	}
+}
+
+// --- Parser malformed-filename edge cases (F2) ---
+
+// TestListRunningProcessesMalformedFilenames documents and pins the parser's
+// behavior for edge-case filenames. The goal is to prevent accidental resurfacing
+// of malformed entries as "flat agents with dotted names", which would be
+// un-recreatable by any code path (sanitizeName strips dots).
+func TestListRunningProcessesMalformedFilenames(t *testing.T) {
+	pm := newTestPIDManager(t)
+	pid := os.Getpid()
+
+	// Case A: empty base — ".pid" — skipped.
+	if err := os.WriteFile(filepath.Join(pm.pidsDir, ".pid"), []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
+		t.Fatalf("write .pid: %v", err)
+	}
+	// Case B: double dot — "foo..pid" — base "foo.", trailing segment empty,
+	// Atoi fails, dotted-unparseable → skipped (not flat fallback).
+	writePIDFile(t, pm, "foo..pid", pid)
+	// Case C: non-numeric trailing segment — "foo.bar.pid" — base "foo.bar",
+	// trailing "bar" not a number, dotted-unparseable → skipped.
+	writePIDFile(t, pm, "foo.bar.pid", pid)
+	// Case D: zero parent — "foo.0.pid" — base "foo.0", parsed parent 0 which
+	// is not a valid watch-mode parent → skipped (not flat fallback).
+	writePIDFile(t, pm, "foo.0.pid", pid)
+	// Case E: negative parent — "foo.-1.pid" — Atoi returns -1, <= 0 → skipped.
+	writePIDFile(t, pm, "foo.-1.pid", pid)
+	// Case F: purely numeric name — "123.pid" — no dot → flat agent "123".
+	writePIDFile(t, pm, "123.pid", pid)
+	// Case G: valid watch-mode alongside the malformed ones, as a sanity check
+	// that the parser still processes the good files.
+	writePIDFile(t, pm, "ok-agent.999.pid", pid)
+
+	processes, err := pm.ListRunningProcesses()
+	if err != nil {
+		t.Fatalf("ListRunningProcesses: %v", err)
+	}
+
+	// Expected survivors: "123.pid" (flat, name "123") and "ok-agent.999.pid"
+	// (watch-mode, parent 999). All dotted-but-unparseable files are skipped.
+	if len(processes) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %+v", len(processes), processes)
+	}
+
+	if p := findByFile(processes, "123.pid"); p == nil || p.Name != "123" || p.Type != "agent" || p.ParentPID != 0 {
+		t.Errorf("123.pid entry wrong or missing: %+v", p)
+	}
+	if p := findByFile(processes, "ok-agent.999.pid"); p == nil || p.Name != "ok-agent" || p.Type != "agent" || p.ParentPID != 999 {
+		t.Errorf("ok-agent.999.pid entry wrong or missing: %+v", p)
+	}
+
+	// Explicitly assert the skipped files are NOT present.
+	for _, skipped := range []string{".pid", "foo..pid", "foo.bar.pid", "foo.0.pid", "foo.-1.pid"} {
+		if p := findByFile(processes, skipped); p != nil {
+			t.Errorf("expected %s to be skipped, got entry: %+v", skipped, p)
+		}
+	}
+}
+
+// TestListRunningProcessesMalformedWatcherParent pins parser behavior for
+// watcher-parent files whose parent PID segment is malformed.
+func TestListRunningProcessesMalformedWatcherParent(t *testing.T) {
+	pm := newTestPIDManager(t)
+	pid := os.Getpid()
+
+	// "foo.watcher-parent.pid" — missing parent PID segment → rest = "foo",
+	// LastIndex returns -1 → skipped.
+	writePIDFile(t, pm, "foo.watcher-parent.pid", pid)
+	// "foo.0.watcher-parent.pid" — parent PID is 0 → skipped.
+	writePIDFile(t, pm, "foo.0.watcher-parent.pid", pid)
+	// "foo.bar.watcher-parent.pid" — non-numeric parent PID → skipped.
+	writePIDFile(t, pm, "foo.bar.watcher-parent.pid", pid)
+	// Sanity check: one valid watcher-parent file.
+	writePIDFile(t, pm, "good.42.watcher-parent.pid", 42)
+
+	processes, err := pm.ListRunningProcesses()
+	if err != nil {
+		t.Fatalf("ListRunningProcesses: %v", err)
+	}
+
+	if len(processes) != 1 {
+		t.Fatalf("expected 1 valid entry, got %d: %+v", len(processes), processes)
+	}
+	if p := findByFile(processes, "good.42.watcher-parent.pid"); p == nil || p.Type != "watcher-parent" || p.ParentPID != 42 {
+		t.Errorf("good watcher-parent entry wrong or missing: %+v", p)
 	}
 }
