@@ -229,19 +229,23 @@ func stopSpecificAgent(pm *PIDManager, name string, timeout time.Duration, force
 	return nil
 }
 
-// stopWatcherParentIfEmpty stops the watcher-parent meshctl process with the given PID
-// only if it has no remaining live watch-mode agents under it. The name argument is used
-// purely for log messages.
+// stopWatcherParentIfEmpty stops the watcher-parent meshctl process with the
+// given PID only if it has no remaining live watch-mode agents under it.
 //
-// This replaces the old countWatcherParentsWithPID-based approach: instead of counting
-// sibling watcher-parent PID files (which collided under the old naming scheme), we now
-// enumerate the actual agent entries that reference this parent_pid in their filename,
-// which is the authoritative source of truth.
+// Tracking file cleanup is driven by enumeration and invariant-safe:
+//   - Case 1 (live agents remain): prune stale tracking files whose agents
+//     are gone, keep the parent alive, return.
+//   - Case 2 (no live agents, parent already dead): prune all tracking files.
+//   - Case 3 (no live agents, parent still alive, kill succeeds): prune after
+//     kill is confirmed.
+//   - Case 4 (no live agents, parent still alive, kill FAILS): preserve ALL
+//     tracking files so `meshctl stop` can retry later.
 //
-// File cleanup is driven by enumeration, not by the specific name the caller passed:
-// the function prunes every stale `<x>.<parent_pid>.watcher-parent.pid` whose `<x>` no
-// longer has a live agent file, regardless of whether the caller targeted that name.
-// This means multiple agents sharing one parent are all cleaned up on a single call.
+// The invariant is: tracking files for a parent are pruned ONLY when we can
+// prove the parent either didn't need killing (keep-alive) or was successfully
+// killed. A failed kill must leave tracking intact for retry.
+//
+// The `name` argument is used purely for log messages.
 func stopWatcherParentIfEmpty(pm *PIDManager, name string, parentPID int, timeout time.Duration, force, quiet bool) {
 	// Enumerate all watcher-parent tracking entries for this parent PID. Unlike
 	// FindWatchAgentsByParent, this returns entries regardless of whether the
@@ -264,34 +268,38 @@ func stopWatcherParentIfEmpty(pm *PIDManager, name string, parentPID int, timeou
 		return
 	}
 
-	// Build the set of names whose agent is still live.
-	liveNames := make(map[string]bool, len(remaining))
-	for _, r := range remaining {
-		liveNames[r.Name] = true
-	}
-
-	// Prune watcher-parent tracking files whose agent is no longer live.
-	// This handles both the stopAllAgents "multiple agents share one parent"
-	// case and the stopSpecificAgent "keep alive" case — in both, the caller
-	// has already removed the dead agents' <name>.<parent_pid>.pid files, so
-	// any watcher-parent file whose name is not in liveNames is stale.
-	for _, wp := range allParents {
-		if !liveNames[wp.Name] {
-			pm.RemovePIDFile(wp.PIDFile)
-		}
-	}
-
-	// If any live agents remain under this parent, keep it alive.
+	// Case 1: live agents remain under this parent — keep it alive and
+	// prune any stale watcher-parent tracking files whose agents are gone.
+	// Safe to prune here because we are NOT attempting to kill the parent;
+	// the parent stays alive and the remaining live agents are tracked by
+	// their own entries.
 	if len(remaining) > 0 {
+		liveNames := make(map[string]bool, len(remaining))
+		for _, r := range remaining {
+			liveNames[r.Name] = true
+		}
+		for _, wp := range allParents {
+			if !liveNames[wp.Name] {
+				pm.RemovePIDFile(wp.PIDFile)
+			}
+		}
 		if !quiet {
 			fmt.Printf("Watcher parent (PID: %d) still has %d agent(s), keeping alive\n", parentPID, len(remaining))
 		}
 		return
 	}
 
-	// No live agents under this parent — stop it.
+	// Case 2: no live agents under this parent — attempt to kill it.
+	// CRITICAL: do NOT prune tracking files yet. If the kill fails, the
+	// user needs those files intact to retry `meshctl stop`. We prune
+	// ONLY after confirming the parent is dead.
+
 	if !IsProcessAlive(parentPID) {
-		// Already dead; nothing to kill. Tracking files were cleaned above.
+		// Parent is already dead (e.g., exited on its own between
+		// enumeration and now). Safe to prune all its tracking files.
+		for _, wp := range allParents {
+			pm.RemovePIDFile(wp.PIDFile)
+		}
 		return
 	}
 
@@ -316,24 +324,26 @@ func stopWatcherParentIfEmpty(pm *PIDManager, name string, parentPID int, timeou
 		}
 		if IsProcessAlive(parentPID) {
 			proc.Kill()
-			time.Sleep(50 * time.Millisecond) // let SIGKILL propagate
+			// Bounded poll for zombie reap — see waitForProcessDeath.
+			waitForProcessDeath(parentPID, 500*time.Millisecond)
 		}
 	}
 
 	if IsProcessAlive(parentPID) {
+		// Kill failed — PRESERVE all tracking files so the user can retry.
 		if !quiet {
 			fmt.Printf("Warning: watcher for '%s' (PID: %d) may still be running — tracking files preserved\n", name, parentPID)
 		}
-		return // DO NOT clean up tracking files; the parent is still running.
+		return
 	}
 
 	if !quiet {
 		fmt.Printf("Watcher for '%s' stopped\n", name)
 	}
 
-	// Parent confirmed dead. Re-enumerate and clean up any remaining tracking
-	// files (there shouldn't be any after the prune above unless a race
-	// occurred between the enumeration and the kill, but be defensive).
+	// Parent confirmed dead. Now safe to prune every watcher-parent tracking
+	// file for it. Re-enumerate to catch any file that may have appeared since
+	// the first enumeration (rare but defensive).
 	leftovers, _ := pm.FindWatchParentsByPID(parentPID)
 	for _, wp := range leftovers {
 		pm.RemovePIDFile(wp.PIDFile)
@@ -443,8 +453,15 @@ func stopAllAgents(pm *PIDManager, timeout time.Duration, force, quiet bool) err
 			}
 		}
 	}
-	for parentPID, repName := range parentPIDs {
-		stopWatcherParentIfEmpty(pm, repName, parentPID, timeout, force, quiet)
+	// Sort parent PIDs before iterating so log output is deterministic across
+	// runs (matches the pattern in stopSpecificAgent).
+	sortedParents := make([]int, 0, len(parentPIDs))
+	for pid := range parentPIDs {
+		sortedParents = append(sortedParents, pid)
+	}
+	sort.Ints(sortedParents)
+	for _, parentPID := range sortedParents {
+		stopWatcherParentIfEmpty(pm, parentPIDs[parentPID], parentPID, timeout, force, quiet)
 	}
 
 	if !quiet {
@@ -633,6 +650,25 @@ func stopAll(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
 	return nil
 }
 
+// waitForProcessDeath polls IsProcessAlive for up to `limit` after a kill
+// signal, returning true if the process died within the window. Used to let
+// zombies be reaped across process boundaries — IsProcessAlive returns true
+// for unreaped zombies because signal 0 only fails with ESRCH after the
+// kernel fully reclaims the PID. A fixed short sleep is not enough when the
+// killing meshctl is not the agent's parent: reaping depends on the spawning
+// meshctl's exec.Cmd.Wait goroutine being scheduled, which may take longer
+// than a handful of milliseconds on a loaded system.
+func waitForProcessDeath(pid int, limit time.Duration) bool {
+	deadline := time.Now().Add(limit)
+	for time.Now().Before(deadline) {
+		if !IsProcessAlive(pid) {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return !IsProcessAlive(pid)
+}
+
 // stopProcess gracefully stops a process and its entire process group
 // (SIGTERM to process group, then SIGKILL after timeout).
 // This ensures child processes (e.g., npx -> tsx -> node) are also terminated.
@@ -656,8 +692,7 @@ func stopProcess(pid int, timeout time.Duration, force bool) error {
 			}
 		}
 		// Let the kernel propagate the SIGKILL before the final liveness check.
-		time.Sleep(50 * time.Millisecond)
-		if IsProcessAlive(pid) {
+		if !waitForProcessDeath(pid, 500*time.Millisecond) {
 			return fmt.Errorf("process %d still alive after SIGKILL", pid)
 		}
 		return nil
@@ -693,14 +728,13 @@ func stopProcess(pid int, timeout time.Duration, force bool) error {
 		}
 	}
 
-	// Give the kernel a brief moment to propagate SIGKILL and tear the
-	// process down. Then verify. SIGKILL usually succeeds, but there are
-	// edge cases (D-state uninterruptible sleep, unreaped zombie with a
-	// hung parent, permission denial, PID reuse, etc.) where the process
-	// may still appear alive; we must report that to the caller so it can
-	// preserve tracking files for a retry instead of silently losing them.
-	time.Sleep(50 * time.Millisecond)
-	if IsProcessAlive(pid) {
+	// Give the kernel a brief window to propagate SIGKILL and tear the
+	// process down. SIGKILL usually succeeds, but there are edge cases
+	// (D-state uninterruptible sleep, unreaped zombie with a hung parent,
+	// permission denial, PID reuse, etc.) where the process may still
+	// appear alive; we must report that to the caller so it can preserve
+	// tracking files for a retry instead of silently losing them.
+	if !waitForProcessDeath(pid, 500*time.Millisecond) {
 		return fmt.Errorf("process %d still alive after SIGKILL", pid)
 	}
 

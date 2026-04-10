@@ -564,6 +564,9 @@ func TestWriteReadRemoveWatchParent(t *testing.T) {
 // PID reuse in the microseconds after Wait returns is extraordinarily unlikely,
 // but we still poll IsProcessAlive briefly to confirm the kernel has actually
 // reflected the exit before the caller uses the value.
+//
+// Uses waitForProcessDeath (from stop.go) as the single source of truth for
+// polling logic.
 func reapedPID(t *testing.T) int {
 	t.Helper()
 	cmd := exec.Command("sh", "-c", "exit 0")
@@ -572,15 +575,10 @@ func reapedPID(t *testing.T) int {
 	}
 	pid := cmd.Process.Pid
 	_ = cmd.Wait() // reap
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if !IsProcessAlive(pid) {
-			return pid
-		}
-		time.Sleep(5 * time.Millisecond)
+	if !waitForProcessDeath(pid, 500*time.Millisecond) {
+		t.Fatalf("reaped PID %d still reports as alive after 500ms", pid)
 	}
-	t.Fatalf("reaped PID %d still reports as alive after 200ms", pid)
-	return 0
+	return pid
 }
 
 // --- Dead-PID filter tests (F1) ---
@@ -805,5 +803,95 @@ func TestListRunningProcessesMalformedWatcherParent(t *testing.T) {
 	}
 	if p := findByFile(processes, "good.42.watcher-parent.pid"); p == nil || p.Type != "watcher-parent" || p.ParentPID != 42 {
 		t.Errorf("good watcher-parent entry wrong or missing: %+v", p)
+	}
+}
+
+// --- GetRegistry edge cases ---
+
+// TestGetRegistryPrefersFlatOverWatchMode verifies that GetRegistry returns
+// the flat "registry.pid" entry and NOT a watch-mode entry that happens to
+// carry the same agent name. Under the current parser, a file literally named
+// "registry.12345.pid" is parsed as Type="agent" with Name="registry", so the
+// tightened match on BOTH Name AND Type is what prevents a false positive.
+func TestGetRegistryPrefersFlatOverWatchMode(t *testing.T) {
+	pm := newTestPIDManager(t)
+	pid := os.Getpid()
+
+	// Flat registry — the legitimate entry.
+	writePIDFile(t, pm, "registry.pid", pid)
+	// Watch-mode entry whose name also happens to be "registry". This is
+	// contrived but the parser treats it as Type="agent", ParentPID=12345,
+	// Name="registry" — and the old GetRegistry (Name-only match) would
+	// surface it as the registry process on systems where the flat file
+	// was missing.
+	writePIDFile(t, pm, "registry.12345.pid", pid)
+
+	reg, err := pm.GetRegistry()
+	if err != nil {
+		t.Fatalf("GetRegistry: %v", err)
+	}
+	if reg == nil {
+		t.Fatal("expected flat registry to be returned")
+	}
+	if reg.Type != "registry" {
+		t.Errorf("expected Type=registry, got %q", reg.Type)
+	}
+	if filepath.Base(reg.PIDFile) != "registry.pid" {
+		t.Errorf("expected flat registry.pid, got %s", filepath.Base(reg.PIDFile))
+	}
+}
+
+// TestGetRegistryWatchModeOnlyReturnsNil verifies that when ONLY a watch-mode
+// entry named "registry" exists (and no flat registry.pid), GetRegistry
+// returns nil rather than mistakenly surfacing the watch-mode agent.
+func TestGetRegistryWatchModeOnlyReturnsNil(t *testing.T) {
+	pm := newTestPIDManager(t)
+	pid := os.Getpid()
+
+	writePIDFile(t, pm, "registry.12345.pid", pid)
+
+	reg, err := pm.GetRegistry()
+	if err != nil {
+		t.Fatalf("GetRegistry: %v", err)
+	}
+	if reg != nil {
+		t.Errorf("expected nil (no flat registry.pid), got %+v", reg)
+	}
+}
+
+// --- waitForProcessDeath (stop.go helper) ---
+
+// TestWaitForProcessDeathDeadPIDReturnsTrue verifies that waitForProcessDeath
+// returns true quickly for a PID that is already reaped before the call.
+func TestWaitForProcessDeathDeadPIDReturnsTrue(t *testing.T) {
+	dead := reapedPID(t)
+	start := time.Now()
+	if !waitForProcessDeath(dead, 500*time.Millisecond) {
+		t.Errorf("waitForProcessDeath(%d) returned false for a reaped PID", dead)
+	}
+	// Fast path: should return almost immediately because the first poll
+	// already sees the process as dead. 100ms is a generous ceiling.
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Errorf("waitForProcessDeath fast path took %v, expected under 100ms", elapsed)
+	}
+}
+
+// TestWaitForProcessDeathLivePIDReturnsFalse verifies that waitForProcessDeath
+// exhausts its polling window and returns false for a PID that stays alive.
+// We use os.Getpid() (the test process itself) which is guaranteed to outlive
+// the polling window.
+func TestWaitForProcessDeathLivePIDReturnsFalse(t *testing.T) {
+	alive := os.Getpid()
+	limit := 100 * time.Millisecond
+	start := time.Now()
+	if waitForProcessDeath(alive, limit) {
+		t.Errorf("waitForProcessDeath(%d) returned true for a live PID", alive)
+	}
+	// Sanity check: the call should have actually waited for approximately
+	// the limit before giving up (polling at 20ms intervals means it might
+	// be slightly less than limit on the last iteration, so allow a small
+	// grace window).
+	if elapsed := time.Since(start); elapsed < limit-30*time.Millisecond {
+		t.Errorf("waitForProcessDeath returned too quickly: %v (limit was %v)", elapsed, limit)
 	}
 }

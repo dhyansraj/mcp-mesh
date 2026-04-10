@@ -377,7 +377,13 @@ func (pm *PIDManager) GetRunningAgents() ([]PIDInfo, error) {
 	return agents, nil
 }
 
-// GetRegistry returns the registry process info if running
+// GetRegistry returns the registry process info if running.
+//
+// Matches on BOTH Name=="registry" and Type=="registry" to avoid confusing a
+// watch-mode agent named "registry" (e.g. "registry.12345.pid") with the real
+// flat registry.pid. Under the current parser, only the flat "registry.pid"
+// file produces Type="registry"; any dotted "registry.<ppid>.pid" file is
+// parsed as Type="agent".
 func (pm *PIDManager) GetRegistry() (*PIDInfo, error) {
 	processes, err := pm.ListRunningProcesses()
 	if err != nil {
@@ -385,7 +391,7 @@ func (pm *PIDManager) GetRegistry() (*PIDInfo, error) {
 	}
 
 	for _, proc := range processes {
-		if proc.Name == "registry" && proc.Running {
+		if proc.Name == "registry" && proc.Type == "registry" && proc.Running {
 			return &proc, nil
 		}
 	}
