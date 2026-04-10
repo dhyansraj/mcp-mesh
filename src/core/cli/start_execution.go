@@ -24,6 +24,12 @@ import (
 // Uses sync.Map for thread-safe concurrent access when starting multiple agents
 var agentNameCache sync.Map
 
+// locallyStartedRegistryPID records the PID of a registry that was started by this meshctl
+// invocation. Set by startStandardMode when it started the registry itself, read by
+// runAgentsInForeground at shutdown to decide whether to kill it. 0 means this meshctl
+// did not start a registry (e.g., it was already running, started by another meshctl).
+var locallyStartedRegistryPID int
+
 // Standard mode
 func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) error {
 	quiet, _ := cmd.Flags().GetBool("quiet")
@@ -62,6 +68,17 @@ func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) err
 			}
 			if err := WaitForRegistry(registryURL, time.Duration(startupTimeout)*time.Second); err != nil {
 				return fmt.Errorf("registry startup timeout: %w", err)
+			}
+
+			// Capture the PID of the registry we just started so that runAgentsInForeground
+			// can clean it up at shutdown. We deliberately only set this when this meshctl
+			// instance started the registry itself — if an existing registry was already
+			// running, locallyStartedRegistryPID stays 0 and shutdown will leave it alone
+			// (another meshctl instance likely owns it).
+			if pm, err := NewPIDManager(); err == nil {
+				if rpid, err := pm.ReadPID("registry"); err == nil && IsProcessAlive(rpid) {
+					locallyStartedRegistryPID = rpid
+				}
 			}
 		} else {
 			// Remote registry - cannot start, must connect to existing
@@ -466,8 +483,20 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 	// Initialize PID manager for tracking
 	pm, pmErr := NewPIDManager()
 
-	// Track agent names for cleanup
-	var agentNames []string
+	// Capture parent meshctl PID once — used for watch-mode PID file namespacing.
+	parentPID := os.Getpid()
+
+	// Track agent names for cleanup, split by flow:
+	//   nonWatchNames -> flat <name>.pid files written via pm.WritePID
+	//   watchNames    -> watch-mode <name>.<parentPID>.pid + watcher-parent files
+	var nonWatchNames []string
+	var watchNames []string
+
+	// localNonWatchAgentPIDs tracks the PIDs of non-watch agents started by THIS runAgentsInForeground
+	// invocation. Used at shutdown to kill only our own children — we deliberately do NOT use
+	// GetRunningProcesses() for cleanup, because ~/.mcp_mesh/processes.json is a globally shared
+	// file across all meshctl instances, and reading it would cause cross-instance cascade kills.
+	var localNonWatchAgentPIDs []int
 
 	// Start all agents
 	for i, agentCmd := range agentCmds {
@@ -485,9 +514,10 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 				break
 			}
 		}
-		agentNames = append(agentNames, agentName)
+		nonWatchNames = append(nonWatchNames, agentName)
+		localNonWatchAgentPIDs = append(localNonWatchAgentPIDs, agentCmd.Process.Pid)
 
-		// Write PID file for this agent
+		// Write PID file for this agent (non-watch: flat layout)
 		if pmErr == nil {
 			if err := pm.WritePID(agentName, agentCmd.Process.Pid); err != nil && !quiet {
 				fmt.Printf("Warning: failed to write PID file for %s: %v\n", agentName, err)
@@ -522,11 +552,14 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 
 	// Set PID update callbacks for watchers so PID files track the actual agent process.
 	// The callback fires on initial start and on every file-change restart.
+	// Watch-mode PID files are namespaced per parent meshctl PID to avoid collisions
+	// between independent `meshctl start -d -w` invocations that track agents with the
+	// same name (see #706 cascading-shutdown bug).
 	for _, w := range watchers {
 		name := w.config.AgentName // capture for closure
 		w.config.PIDUpdateCallback = func(pid int) {
 			if pmErr == nil {
-				if err := pm.WritePID(name, pid); err != nil && !quiet {
+				if err := pm.WriteWatchAgentPID(name, parentPID, pid); err != nil && !quiet {
 					fmt.Printf("Warning: failed to update PID file for %s: %v\n", name, err)
 				}
 			}
@@ -549,11 +582,11 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 	// The callback is the primary mechanism; this is best-effort for the initial startup window.
 	for _, w := range watchers {
 		agentName := w.config.AgentName
-		agentNames = append(agentNames, agentName)
+		watchNames = append(watchNames, agentName)
 
 		pid := w.GetPID()
 		if pmErr == nil && pid > 0 {
-			if err := pm.WritePID(agentName, pid); err != nil && !quiet {
+			if err := pm.WriteWatchAgentPID(agentName, parentPID, pid); err != nil && !quiet {
 				fmt.Printf("Warning: failed to write PID file for %s: %v\n", agentName, err)
 			}
 		}
@@ -575,11 +608,11 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 	// Track the watcher parent process (this meshctl CLI process) so meshctl stop can kill it.
 	// Without this, stopping a watched agent kills only the agent subprocess, leaving
 	// the watcher parent alive to potentially respawn or hold resources (#706).
+	// Files are namespaced per parent PID so independent `meshctl start -d -w` invocations
+	// that track same-named agents don't collide.
 	if len(watchers) > 0 && pmErr == nil {
-		parentPID := os.Getpid()
 		for _, w := range watchers {
-			watcherPIDName := w.config.AgentName + "_watcher-parent"
-			if err := pm.WritePID(watcherPIDName, parentPID); err != nil && !quiet {
+			if err := pm.WriteWatchParentPID(w.config.AgentName, parentPID); err != nil && !quiet {
 				fmt.Printf("Warning: failed to write watcher parent PID for %s: %v\n", w.config.AgentName, err)
 			}
 		}
@@ -602,69 +635,67 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 	// Clean up watcher PID files and watcher-parent PID files
 	if pmErr == nil {
 		for _, w := range watchers {
-			pm.RemovePID(w.config.AgentName)
-			pm.RemovePID(w.config.AgentName + "_watcher-parent")
+			pm.RemoveWatchAgentPID(w.config.AgentName, parentPID)
+			pm.RemoveWatchParentPID(w.config.AgentName, parentPID)
 		}
 	}
 
-	// Stop all processes - agents first, registry last (issue #442)
-	processes, err := GetRunningProcesses()
-	if err == nil {
-		shutdownTimeout, _ := cmd.Flags().GetInt("shutdown-timeout")
-		if shutdownTimeout == 0 {
-			shutdownTimeout = config.ShutdownTimeout
-		}
+	// Stop non-watch agents started by this meshctl invocation.
+	// We intentionally do NOT call GetRunningProcesses() here — that reads
+	// ~/.mcp_mesh/processes.json which is globally shared across all meshctl
+	// instances, and killing entries from it would cascade into unrelated
+	// instances' agents and registries (the #706-related cascading-shutdown bug).
+	shutdownTimeout, _ := cmd.Flags().GetInt("shutdown-timeout")
+	if shutdownTimeout == 0 {
+		shutdownTimeout = config.ShutdownTimeout
+	}
+	shutdownDuration := time.Duration(shutdownTimeout) * time.Second
 
-		// Separate agents from registry
-		var agents []ProcessInfo
-		var registry *ProcessInfo
-		for i := range processes {
-			if processes[i].Type == "registry" {
-				registry = &processes[i]
-			} else {
-				agents = append(agents, processes[i])
-			}
+	if len(localNonWatchAgentPIDs) > 0 {
+		var wg sync.WaitGroup
+		for _, pid := range localNonWatchAgentPIDs {
+			wg.Add(1)
+			go func(agentPID int) {
+				defer wg.Done()
+				if !quiet {
+					fmt.Printf("Stopping non-watch agent (PID: %d)\n", agentPID)
+				}
+				if err := KillProcess(agentPID, shutdownDuration); err != nil && !quiet {
+					fmt.Printf("Failed to stop agent (PID %d): %v\n", agentPID, err)
+				}
+				RemoveRunningProcess(agentPID)
+			}(pid)
 		}
+		wg.Wait()
 
-		// Stop agents first (in parallel)
-		if len(agents) > 0 {
-			var wg sync.WaitGroup
-			for _, proc := range agents {
-				wg.Add(1)
-				go func(p ProcessInfo) {
-					defer wg.Done()
-					if !quiet {
-						fmt.Printf("Stopping %s (PID: %d)\n", p.Name, p.PID)
-					}
-					if err := KillProcess(p.PID, time.Duration(shutdownTimeout)*time.Second); err != nil && !quiet {
-						fmt.Printf("Failed to stop %s: %v\n", p.Name, err)
-					}
-					RemoveRunningProcess(p.PID)
-				}(proc)
-			}
-			wg.Wait()
-
-			// Grace period for agents to complete unregister HTTP calls
-			time.Sleep(500 * time.Millisecond)
-		}
-
-		// Stop registry last
-		if registry != nil {
-			if !quiet {
-				fmt.Printf("Stopping %s (PID: %d)\n", registry.Name, registry.PID)
-			}
-			if err := KillProcess(registry.PID, time.Duration(shutdownTimeout)*time.Second); err != nil && !quiet {
-				fmt.Printf("Failed to stop %s: %v\n", registry.Name, err)
-			}
-			RemoveRunningProcess(registry.PID)
-		}
+		// Grace period for agents to complete unregister HTTP calls before the
+		// registry goes away (matches the existing behavior).
+		time.Sleep(500 * time.Millisecond)
 	}
 
-	// Clean up all PID files for tracked agents (including watcher-parent PID files)
+	// Stop the registry ONLY if this meshctl instance started it.
+	// If locallyStartedRegistryPID is 0, the registry was either already running
+	// when we started or was started by a different meshctl instance — leaving
+	// it alone is correct because stopping it would break other instances.
+	if locallyStartedRegistryPID > 0 && IsProcessAlive(locallyStartedRegistryPID) {
+		if !quiet {
+			fmt.Printf("Stopping registry (PID: %d)\n", locallyStartedRegistryPID)
+		}
+		if err := KillProcess(locallyStartedRegistryPID, shutdownDuration); err != nil && !quiet {
+			fmt.Printf("Failed to stop registry: %v\n", err)
+		}
+		RemoveRunningProcess(locallyStartedRegistryPID)
+	}
+
+	// Clean up all PID files for tracked agents.
+	// Non-watch agents use flat layout; watch agents use per-parent-PID namespacing.
 	if pmErr == nil {
-		for _, name := range agentNames {
+		for _, name := range nonWatchNames {
 			pm.RemovePID(name)
-			pm.RemovePID(name + "_watcher-parent")
+		}
+		for _, name := range watchNames {
+			pm.RemoveWatchAgentPID(name, parentPID)
+			pm.RemoveWatchParentPID(name, parentPID)
 		}
 	}
 
