@@ -147,14 +147,22 @@ func (pm *PIDManager) RemoveWatchParentPID(name string, parentPID int) error {
 
 // FindWatchAgentsByName returns all watch-mode agent entries for a given name
 // (one per distinct parent_pid). Returns only entries whose agent process is alive.
+//
+// The lookup name is normalized via sanitizeName before comparison, matching the
+// normalization applied by the write path (GetWatchAgentPIDFile). This means
+// callers can pass the original unsanitized agent name (e.g., "my agent") and
+// it will match the on-disk sanitized form ("my_agent"). Passing an already
+// sanitized name also works, because sanitizeName is idempotent for names that
+// only contain characters it allows.
 func (pm *PIDManager) FindWatchAgentsByName(name string) ([]PIDInfo, error) {
 	all, err := pm.ListRunningProcesses()
 	if err != nil {
 		return nil, err
 	}
+	sanitized := sanitizeName(name)
 	var matches []PIDInfo
 	for _, p := range all {
-		if p.Type == "agent" && p.Name == name && p.ParentPID > 0 && p.Running {
+		if p.Type == "agent" && p.Name == sanitized && p.ParentPID > 0 && p.Running {
 			matches = append(matches, p)
 		}
 	}

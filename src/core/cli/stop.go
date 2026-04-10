@@ -147,11 +147,15 @@ func stopSpecificAgent(pm *PIDManager, name string, timeout time.Duration, force
 	if pid, err := pm.ReadPID(name); err == nil {
 		foundAny = true
 		if !IsProcessAlive(pid) {
-			// Already dead at enumeration time — safe to remove the stale PID file.
+			// Already dead at enumeration time — safe to remove the stale PID
+			// file. Treat this as a successful no-op: the user's intent was
+			// "stop this agent" and the agent is confirmed not running, so the
+			// outer "could not be stopped" error would actively mislead them.
 			if !quiet {
 				fmt.Printf("Agent '%s' is not running (cleaning stale PID file)\n", name)
 			}
 			pm.RemovePID(name)
+			stoppedAny = true
 		} else {
 			if !quiet {
 				fmt.Printf("Stopping agent '%s' (PID: %d)...\n", name, pid)

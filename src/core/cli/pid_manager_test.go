@@ -416,6 +416,62 @@ func TestFindWatchAgentsByNameFlatOnly(t *testing.T) {
 	}
 }
 
+// TestFindWatchAgentsByNameNormalizesLookup verifies that FindWatchAgentsByName
+// applies the same sanitizeName normalization to its lookup input that the
+// write path (GetWatchAgentPIDFile) applies to the on-disk filename. Without
+// this, looking up an agent whose original name contained characters
+// sanitizeName rewrites (e.g., a space) would silently return no matches even
+// when the agent is running.
+func TestFindWatchAgentsByNameNormalizesLookup(t *testing.T) {
+	pm := newTestPIDManager(t)
+	pid := os.Getpid()
+
+	// Write a watch-mode entry using WriteWatchAgentPID with the original
+	// unsanitized name — this mirrors what actually happens at runtime when
+	// a watcher writes its PID file. The file on disk will be
+	// "foo_bar.12345.pid" because GetWatchAgentPIDFile sanitizes the name.
+	const parent = 12345
+	if err := pm.WriteWatchAgentPID("foo bar", parent, pid); err != nil {
+		t.Fatalf("WriteWatchAgentPID: %v", err)
+	}
+
+	// Sanity check that the file is on disk under the sanitized name.
+	expectedPath := filepath.Join(pm.pidsDir, fmt.Sprintf("foo_bar.%d.pid", parent))
+	if _, err := os.Stat(expectedPath); err != nil {
+		t.Fatalf("expected sanitized file %s to exist: %v", expectedPath, err)
+	}
+
+	// Lookup with the ORIGINAL unsanitized name must resolve to the sanitized
+	// on-disk entry. This is the bug fix: the lookup name is normalized before
+	// comparison with PIDInfo.Name (which holds the sanitized form).
+	matches, err := pm.FindWatchAgentsByName("foo bar")
+	if err != nil {
+		t.Fatalf("FindWatchAgentsByName(%q): %v", "foo bar", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match for unsanitized lookup %q, got %d: %+v",
+			"foo bar", len(matches), matches)
+	}
+	if matches[0].Name != "foo_bar" || matches[0].ParentPID != parent {
+		t.Errorf("unexpected entry: %+v", matches[0])
+	}
+
+	// Lookup with the ALREADY-SANITIZED name must also resolve to the same
+	// entry — both spellings collapse to the same sanitized key, and
+	// sanitizeName is idempotent for already-safe inputs.
+	matches, err = pm.FindWatchAgentsByName("foo_bar")
+	if err != nil {
+		t.Fatalf("FindWatchAgentsByName(%q): %v", "foo_bar", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match for sanitized lookup %q, got %d: %+v",
+			"foo_bar", len(matches), matches)
+	}
+	if matches[0].Name != "foo_bar" || matches[0].ParentPID != parent {
+		t.Errorf("unexpected entry: %+v", matches[0])
+	}
+}
+
 func TestFindWatchAgentsByParent(t *testing.T) {
 	pm := newTestPIDManager(t)
 	pid := os.Getpid()
@@ -712,8 +768,7 @@ func TestFindWatchParentsByPIDReturnsDeadParent(t *testing.T) {
 			len(matches), matches)
 	}
 	if matches[0].Running {
-		// Expected: p.Running reports false for a dead PID, but the helper
-		// still surfaces the entry.
+		t.Errorf("expected dead parent entry to report Running=false, got Running=true for %+v", matches[0])
 	}
 	if matches[0].Name != "alpha" || matches[0].ParentPID != dead {
 		t.Errorf("unexpected entry: %+v", matches[0])

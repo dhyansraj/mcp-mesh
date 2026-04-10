@@ -55,12 +55,16 @@ func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) err
 				return fmt.Errorf("cannot start registry: port %d is already in use on %s", registryPort, registryHost)
 			}
 
-			// Start registry in detach
-			go func() {
-				if err := startRegistryWithOptions(config, true, cmd); err != nil {
-					fmt.Printf("Registry startup failed: %v\n", err)
-				}
-			}()
+			// Start registry in detach. startRegistryWithOptions returns the child
+			// PID directly once registryCmd.Start() succeeds, so we don't need a
+			// goroutine wrapper here — and deriving ownership from the explicit
+			// return value is safer than re-reading the globally shared
+			// registry.pid file (which is vulnerable to cross-instance races and
+			// stale entries from unrelated meshctl processes).
+			registryPID, err := startRegistryWithOptions(config, true, cmd)
+			if err != nil {
+				return fmt.Errorf("failed to start registry: %w", err)
+			}
 
 			// Wait for registry to be ready
 			startupTimeout, _ := cmd.Flags().GetInt("startup-timeout")
@@ -71,16 +75,13 @@ func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) err
 				return fmt.Errorf("registry startup timeout: %w", err)
 			}
 
-			// Capture the PID of the registry we just started so that runAgentsInForeground
-			// can clean it up at shutdown. We deliberately only set this when this meshctl
-			// instance started the registry itself — if an existing registry was already
-			// running, the PID stays 0 and shutdown will leave it alone (another meshctl
-			// instance likely owns it).
-			if pm, err := NewPIDManager(); err == nil {
-				if rpid, err := pm.ReadPID("registry"); err == nil && IsProcessAlive(rpid) {
-					locallyStartedRegistryPID = rpid
-				}
-			}
+			// This meshctl instance started the registry — capture ownership
+			// directly from the explicit return value so shutdown can clean it up.
+			// We deliberately avoid pm.ReadPID("registry") here: registry.pid is a
+			// globally shared file and reading it would let a stale or racing
+			// entry from another meshctl instance look like ownership, which is
+			// exactly the cross-instance tracking bug this PR fixes for agents.
+			locallyStartedRegistryPID = registryPID
 		} else {
 			// Remote registry - cannot start, must connect to existing
 			return fmt.Errorf("cannot connect to remote registry at %s - please ensure the registry is running", registryURL)
@@ -367,11 +368,22 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 	var nonWatchNames []string
 	var watchNames []string
 
-	// localNonWatchAgentPIDs tracks the PIDs of non-watch agents started by THIS runAgentsInForeground
-	// invocation. Used at shutdown to kill only our own children — we deliberately do NOT use
-	// GetRunningProcesses() for cleanup, because ~/.mcp_mesh/processes.json is a globally shared
-	// file across all meshctl instances, and reading it would cause cross-instance cascade kills.
-	var localNonWatchAgentPIDs []int
+	// localNonWatchAgentPIDs tracks the PIDs of non-watch agents started by THIS
+	// runAgentsInForeground invocation. Used at shutdown to kill only our own
+	// children — we deliberately do NOT use GetRunningProcesses() for cleanup,
+	// because ~/.mcp_mesh/processes.json is a globally shared file across all
+	// meshctl instances, and reading it would cause cross-instance cascade kills.
+	//
+	// A set (map[int]struct{}) is used rather than a slice so entries can be
+	// REMOVED when a child exits naturally (via the c.Wait() goroutine below).
+	// Without removal, a child that dies before shutdown would leave its PID in
+	// the slice, and shutdown's KillProcess loop would target a PID the OS may
+	// have since reused for an unrelated process — killing the wrong thing.
+	//
+	// The mutex guards all reads and writes because the Wait goroutine runs on a
+	// different goroutine from the signal-driven shutdown path.
+	var localNonWatchAgentPIDsMu sync.Mutex
+	localNonWatchAgentPIDs := make(map[int]struct{})
 
 	// Start all agents
 	for i, agentCmd := range agentCmds {
@@ -390,7 +402,9 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 			}
 		}
 		nonWatchNames = append(nonWatchNames, agentName)
-		localNonWatchAgentPIDs = append(localNonWatchAgentPIDs, agentCmd.Process.Pid)
+		localNonWatchAgentPIDsMu.Lock()
+		localNonWatchAgentPIDs[agentCmd.Process.Pid] = struct{}{}
+		localNonWatchAgentPIDsMu.Unlock()
 
 		// Write PID file for this agent (non-watch: flat layout)
 		if pmErr == nil {
@@ -417,6 +431,11 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 			if err := c.Wait(); err != nil && !quiet {
 				fmt.Printf("Agent exited with error: %v\n", err)
 			}
+			// Drop this PID from the live shutdown set so the shutdown loop
+			// doesn't target a PID the OS may have since reused.
+			localNonWatchAgentPIDsMu.Lock()
+			delete(localNonWatchAgentPIDs, c.Process.Pid)
+			localNonWatchAgentPIDsMu.Unlock()
 			RemoveRunningProcess(c.Process.Pid)
 			// Clean up PID file when agent exits
 			if pmErr == nil {
@@ -526,9 +545,18 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 	}
 	shutdownDuration := time.Duration(shutdownTimeout) * time.Second
 
-	if len(localNonWatchAgentPIDs) > 0 {
+	// Snapshot the live PID set under the mutex. Iterating the map directly
+	// while the Wait goroutine may still be deleting entries would race.
+	localNonWatchAgentPIDsMu.Lock()
+	pidsToKill := make([]int, 0, len(localNonWatchAgentPIDs))
+	for pid := range localNonWatchAgentPIDs {
+		pidsToKill = append(pidsToKill, pid)
+	}
+	localNonWatchAgentPIDsMu.Unlock()
+
+	if len(pidsToKill) > 0 {
 		var wg sync.WaitGroup
-		for _, pid := range localNonWatchAgentPIDs {
+		for _, pid := range pidsToKill {
 			wg.Add(1)
 			go func(agentPID int) {
 				defer wg.Done()

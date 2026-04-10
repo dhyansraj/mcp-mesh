@@ -126,18 +126,29 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 	return nil
 }
 
-func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command) error {
+// startRegistryWithOptions starts the registry service and returns its PID.
+//
+// In detach mode it returns immediately after registryCmd.Start() with the
+// child's PID; the caller can use this PID directly to track ownership instead
+// of re-reading the globally shared registry.pid file (which is vulnerable to
+// cross-instance races or stale files from unrelated meshctl processes).
+//
+// In foreground mode it owns the full signal lifecycle and only returns after
+// the user sends SIGINT/SIGTERM and the child has been killed. The returned
+// PID in that mode isn't meaningful to the caller (the function already cleaned
+// up) — it is returned only for signature consistency with the detach path.
+func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command) (int, error) {
 	// Start the registry service
 	registryCmd, err := startRegistryService(config)
 	if err != nil {
-		return fmt.Errorf("failed to start registry: %w", err)
+		return 0, fmt.Errorf("failed to start registry: %w", err)
 	}
 
 	if detach {
 		// Set up log file for detached registry
 		lm, err := NewLogManager()
 		if err != nil {
-			return fmt.Errorf("failed to initialize log manager: %w", err)
+			return 0, fmt.Errorf("failed to initialize log manager: %w", err)
 		}
 
 		// Rotate existing logs
@@ -149,7 +160,7 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 		// Create log file and redirect output
 		logFile, err := lm.CreateLogFile("registry")
 		if err != nil {
-			return fmt.Errorf("failed to create log file for registry: %w", err)
+			return 0, fmt.Errorf("failed to create log file for registry: %w", err)
 		}
 		registryCmd.Stdout = logFile
 		registryCmd.Stderr = logFile
@@ -157,7 +168,7 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 		// Start in detach
 		if err := registryCmd.Start(); err != nil {
 			logFile.Close()
-			return fmt.Errorf("failed to start registry in detach: %w", err)
+			return 0, fmt.Errorf("failed to start registry in detach: %w", err)
 		}
 		// Close parent's copy of log file — child process has its own file descriptor
 		logFile.Close()
@@ -188,12 +199,12 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 			fmt.Printf("Registry URL: %s\n", config.GetRegistryURL())
 			fmt.Printf("Logs: ~/.mcp-mesh/logs/registry.log\n")
 		}
-		return nil
+		return registryCmd.Process.Pid, nil
 	}
 
 	// Start in foreground
 	if err := registryCmd.Start(); err != nil {
-		return fmt.Errorf("failed to start registry: %w", err)
+		return 0, fmt.Errorf("failed to start registry: %w", err)
 	}
 
 	// Record the process
@@ -218,7 +229,7 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 
 	// Wait for registry to be ready
 	if err := WaitForRegistry(config.GetRegistryURL(), time.Duration(config.StartupTimeout)*time.Second); err != nil {
-		return fmt.Errorf("registry failed to start: %w", err)
+		return registryCmd.Process.Pid, fmt.Errorf("registry failed to start: %w", err)
 	}
 
 	if !quiet {
@@ -244,7 +255,7 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 	if shutdownTimeout == 0 {
 		shutdownTimeout = config.ShutdownTimeout
 	}
-	return KillProcess(registryCmd.Process.Pid, time.Duration(shutdownTimeout)*time.Second)
+	return registryCmd.Process.Pid, KillProcess(registryCmd.Process.Pid, time.Duration(shutdownTimeout)*time.Second)
 }
 
 func startRegistryService(config *CLIConfig) (*exec.Cmd, error) {
