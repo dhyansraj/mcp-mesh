@@ -65,6 +65,24 @@ agent.addTool({
 | `filterMode`    | `string`          | How to select tools: "all", "best_match", "\*"   |
 | `returns`       | `ZodType`         | Optional: Schema for structured output           |
 
+## Calling llm()
+
+The injected `llm` is an async callable: `llm(message, options?)`.
+
+| Parameter           | Type                                         | Description                                                        |
+| ------------------- | -------------------------------------------- | ------------------------------------------------------------------ |
+| `message`           | `string` \| `Array<{role, content}>`         | User text, or message array for multi-turn history                 |
+| `options.context`   | `Record<string, unknown>`                    | Runtime context merged with `contextParam` for template rendering  |
+| `options.contextMode` | `"merge"` \| `"replace"`                   | How `context` merges with auto-populated (default: `merge`)        |
+| `options.media`     | `Array<string \| {data, mimeType}>`          | Images/files to attach — see `meshctl man multimodal`              |
+| `options.maxOutputTokens` | `number`                               | Override decorator `maxOutputTokens`                               |
+| `options.temperature`     | `number`                               | Override decorator `temperature`                                   |
+| `options.maxIterations`   | `number`                               | Override decorator `maxIterations`                                 |
+
+**Multi-turn chat**: pass `message` as an array of `{role: "user" | "assistant", content: string}` objects. The decorator's `systemPrompt` is auto-prepended.
+
+**Context vs. messages**: `options.context` feeds the Handlebars system prompt template — use it for background knowledge, user profile, per-call config. The `message` array is the conversation — use it for turn-by-turn history.
+
 ## Provider Selector
 
 Select LLM providers using capability and tag matching:
