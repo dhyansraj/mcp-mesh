@@ -32,7 +32,11 @@ repos:
       - id: hadolint-docker
         entry: hadolint
         language: docker_image
-        files: Dockerfile
+        # Match real Dockerfiles only — anchoring with $ prevents the hook
+        # from trying to lint scaffold templates like `Dockerfile.tmpl`
+        # which contain Go template syntax (`{{ .Port }}`) and aren't valid
+        # Dockerfiles on their own.
+        files: Dockerfile$
 
   # 🤖 CONTRACT-FIRST DEVELOPMENT HOOKS
   # These hooks enforce OpenAPI-first development

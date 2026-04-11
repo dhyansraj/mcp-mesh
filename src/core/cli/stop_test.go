@@ -118,3 +118,46 @@ func TestStopWatcherParentIfEmptyDeadParentCleansFiles(t *testing.T) {
 		}
 	}
 }
+
+// TestSuggestAgentNames exercises the fuzzy "Did you mean?" helper used by
+// stopSpecificAgent when the requested name isn't tracked. Matching is
+// substring-in-either-direction against running agent names.
+func TestSuggestAgentNames(t *testing.T) {
+	pm := newTestPIDManager(t)
+	// Create three running agent PID files.
+	for _, name := range []string{"digest-api", "portfolio-worker", "market-data"} {
+		if err := pm.WritePID(name, os.Getpid()); err != nil {
+			t.Fatalf("WritePID(%s): %v", name, err)
+		}
+	}
+
+	tests := []struct {
+		query string
+		want  []string
+	}{
+		{"api", []string{"digest-api"}},          // suffix of digest-api
+		{"digest", []string{"digest-api"}},       // prefix of digest-api
+		{"market", []string{"market-data"}},      // prefix of market-data
+		{"mkt", nil},                             // no substring match
+		{"digest-api", []string{"digest-api"}},   // exact match (trivially contains)
+		{"worker", []string{"portfolio-worker"}}, // suffix
+	}
+	for _, tc := range tests {
+		got := suggestAgentNames(pm, tc.query)
+		if !equalStringSlices(got, tc.want) {
+			t.Errorf("suggestAgentNames(%q) = %v, want %v", tc.query, got, tc.want)
+		}
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

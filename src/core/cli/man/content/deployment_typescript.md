@@ -87,8 +87,8 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 
 # Copy agent source code and set permissions
-COPY --chmod=755 . .
-RUN chown -R mcp-mesh:mcp-mesh /app
+COPY . .
+RUN chown -R mcp-mesh:mcp-mesh /app && chmod -R 755 /app
 
 # Switch back to non-root user for security
 USER mcp-mesh
@@ -103,7 +103,7 @@ CMD ["npx", "tsx", "src/index.ts"]
 **Security notes:**
 
 - **USER root / USER mcp-mesh**: The base image runs as the non-root `mcp-mesh` user by default. We temporarily switch to root for file operations, then drop privileges back to `mcp-mesh` for runtime security.
-- **COPY --chmod=755 / chown**: Ensures files have correct permissions and ownership for the `mcp-mesh` user to execute.
+- **COPY + RUN chown/chmod**: Ensures files have correct permissions and ownership for the `mcp-mesh` user to execute, without requiring BuildKit.
 - **EXPOSE**: The port is configured via `--port` flag during scaffold (defaults to 8080).
 
 ### Generate Docker Compose

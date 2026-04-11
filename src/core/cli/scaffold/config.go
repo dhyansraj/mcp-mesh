@@ -182,7 +182,7 @@ func ContextFromConfig(config *ScaffoldConfig) *ScaffoldContext {
 
 		// Set defaults
 		if ctx.MaxIterations == 0 {
-			ctx.MaxIterations = 1
+			ctx.MaxIterations = 5
 		}
 		if ctx.ContextParam == "" {
 			ctx.ContextParam = "ctx"

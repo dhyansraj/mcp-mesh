@@ -98,8 +98,8 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy agent source code
-COPY --chmod=755 . .
-RUN chown -R mcp-mesh:mcp-mesh /app
+COPY . .
+RUN chown -R mcp-mesh:mcp-mesh /app && chmod -R 755 /app
 
 # Switch back to non-root user
 USER mcp-mesh

@@ -108,7 +108,7 @@ func NewScaffoldContext() *ScaffoldContext {
 		Port:                8080,
 		Template:            "basic",
 		AgentType:           "tool",
-		MaxIterations:       1,
+		MaxIterations:       5,
 		ContextParam:        "ctx",
 		ResponseFormat:      "text",
 		LLMProviderSelector: "claude",
