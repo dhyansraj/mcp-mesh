@@ -31,7 +31,13 @@ registry:
   host: "mcp-core-mcp-mesh-registry"
   port: "8000"
 
-# LLM provider needs API keys for the backend LLM service
+# LLM provider needs API keys for the backend LLM service.
+# The refs below point to a secret named `llm-secrets` — update the `name:` values
+# below to match your cluster's secret, or create the secret:
+#   kubectl create secret generic llm-secrets \
+#     --from-literal=anthropic-api-key=sk-ant-... \
+#     --from-literal=openai-api-key=sk-... \
+#     --from-literal=google-api-key=...
 env:
   - name: ANTHROPIC_API_KEY
     valueFrom:

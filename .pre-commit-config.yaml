@@ -32,7 +32,13 @@ repos:
       - id: hadolint-docker
         entry: hadolint
         language: docker_image
+        # Match real Dockerfiles including extension variants like
+        # `Dockerfile.dev`, `Dockerfile.base`, `Dockerfile.debian`.
+        # Exclude `.tmpl` files, which are scaffold templates containing
+        # Go template syntax (`{{ .Port }}`) and aren't valid Dockerfiles
+        # on their own — hadolint would try to exec them and fail.
         files: Dockerfile
+        exclude: \.tmpl$
 
   # 🤖 CONTRACT-FIRST DEVELOPMENT HOOKS
   # These hooks enforce OpenAPI-first development

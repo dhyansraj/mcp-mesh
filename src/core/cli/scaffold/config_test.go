@@ -297,7 +297,7 @@ func TestContextFromConfig_LLMAgentDefaults(t *testing.T) {
 	ctx := ContextFromConfig(config)
 
 	// Check defaults are applied
-	assert.Equal(t, 1, ctx.MaxIterations)
+	assert.Equal(t, 5, ctx.MaxIterations)
 	assert.Equal(t, "ctx", ctx.ContextParam)
 	assert.Equal(t, "text", ctx.ResponseFormat)
 	assert.Equal(t, []string{"llm", "+gpt"}, ctx.ProviderTags)

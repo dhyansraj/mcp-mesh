@@ -118,3 +118,79 @@ func TestStopWatcherParentIfEmptyDeadParentCleansFiles(t *testing.T) {
 		}
 	}
 }
+
+// TestSuggestAgentNames exercises the fuzzy "Did you mean?" helper used by
+// stopSpecificAgent when the requested name isn't tracked. Matching is
+// substring-in-either-direction against running agent names.
+func TestSuggestAgentNames(t *testing.T) {
+	pm := newTestPIDManager(t)
+	// Create three running agent PID files.
+	for _, name := range []string{"digest-api", "portfolio-worker", "market-data"} {
+		if err := pm.WritePID(name, os.Getpid()); err != nil {
+			t.Fatalf("WritePID(%s): %v", name, err)
+		}
+	}
+
+	tests := []struct {
+		query string
+		want  []string
+	}{
+		{"api", []string{"digest-api"}},          // suffix of digest-api
+		{"digest", []string{"digest-api"}},       // prefix of digest-api
+		{"market", []string{"market-data"}},      // prefix of market-data
+		{"mkt", nil},                             // no substring match
+		{"digest-api", []string{"digest-api"}},   // exact match (trivially contains)
+		{"worker", []string{"portfolio-worker"}}, // suffix
+		{"", nil},                                // empty query must not match everything
+	}
+	for _, tc := range tests {
+		got := suggestAgentNames(pm, tc.query)
+		if !equalStringSlices(got, tc.want) {
+			t.Errorf("suggestAgentNames(%q) = %v, want %v", tc.query, got, tc.want)
+		}
+	}
+}
+
+// TestSuggestAgentNamesCapped verifies that suggestAgentNames returns at most
+// 3 results even when more agents match the query, and that the returned
+// subset is deterministic (sorted alphabetically, not dependent on
+// ListRunningProcesses iteration order).
+func TestSuggestAgentNamesCapped(t *testing.T) {
+	pm := newTestPIDManager(t)
+	// Use 5 agent names that all contain the substring "agent" so a single
+	// query matches all of them. With suggestAgentNames' cap of 3, the
+	// result should be the alphabetically first three.
+	names := []string{
+		"zeta-agent",
+		"beta-agent",
+		"delta-agent",
+		"alpha-agent",
+		"gamma-agent",
+	}
+	for _, n := range names {
+		if err := pm.WritePID(n, os.Getpid()); err != nil {
+			t.Fatalf("WritePID(%s): %v", n, err)
+		}
+	}
+
+	got := suggestAgentNames(pm, "agent")
+	if len(got) != 3 {
+		t.Fatalf("suggestAgentNames(\"agent\") returned %d results, want exactly 3: %v", len(got), got)
+	}
+	want := []string{"alpha-agent", "beta-agent", "delta-agent"}
+	if !equalStringSlices(got, want) {
+		t.Errorf("suggestAgentNames(\"agent\") = %v, want %v (sorted and capped)", got, want)
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -86,7 +86,7 @@ func (h *PythonHandler) GenerateAgent(config ScaffoldConfig) error {
 // GenerateDockerfile returns Python Dockerfile content
 func (h *PythonHandler) GenerateDockerfile() string {
 	return `# Dockerfile for MCP Mesh Python agent
-FROM mcpmesh/python-runtime:1.1
+FROM mcpmesh/python-runtime:1.2.0
 
 WORKDIR /app
 
@@ -98,8 +98,8 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy agent source code
-COPY --chmod=755 . .
-RUN chown -R mcp-mesh:mcp-mesh /app
+COPY . .
+RUN chown -R mcp-mesh:mcp-mesh /app && chmod -R 755 /app
 
 # Switch back to non-root user
 USER mcp-mesh
@@ -118,7 +118,7 @@ func (h *PythonHandler) GenerateHelmValues() map[string]interface{} {
 		"runtime": "python",
 		"image": map[string]interface{}{
 			"repository": "mcpmesh/python-runtime",
-			"tag":        "1.1",
+			"tag":        "1.2.0",
 		},
 		"command": []string{"main.py"},
 	}
@@ -170,7 +170,7 @@ func (h *PythonHandler) ParseAgentFile(path string) (*AgentInfo, error) {
 
 // GetDockerImage returns the Python runtime Docker image
 func (h *PythonHandler) GetDockerImage() string {
-	return "mcpmesh/python-runtime:1.1"
+	return "mcpmesh/python-runtime:1.2.0"
 }
 
 // ValidatePrerequisites checks Python environment

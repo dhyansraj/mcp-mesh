@@ -223,6 +223,11 @@ func stopSpecificAgent(pm *PIDManager, name string, timeout time.Duration, force
 	}
 
 	if !foundAny {
+		suggestions := suggestAgentNames(pm, name)
+		if len(suggestions) > 0 {
+			return fmt.Errorf("agent '%s' is not running. Did you mean: %s?",
+				name, strings.Join(quoteStrings(suggestions), ", "))
+		}
 		return fmt.Errorf("agent '%s' is not running", name)
 	}
 	if !stoppedAny {
@@ -804,4 +809,57 @@ func cleanupAllFiles(pm *PIDManager, quiet bool) error {
 	}
 
 	return nil
+}
+
+// suggestAgentNames returns up to 3 names of running agents that look similar
+// to the queried name. Used by stopSpecificAgent to provide "Did you mean?"
+// hints when the exact name isn't tracked — covers the common case where a
+// user types a partial or mesh-registered name instead of the script-derived
+// one (or vice versa).
+//
+// Matching is heuristic: substring match in either direction (query contains
+// candidate, or candidate contains query). Good enough for typical typos and
+// the digest-api/api class of mismatches. Not a full edit-distance implementation.
+func suggestAgentNames(pm *PIDManager, query string) []string {
+	processes, err := pm.ListRunningProcesses()
+	if err != nil {
+		return nil
+	}
+	q := strings.ToLower(query)
+	if q == "" {
+		return nil
+	}
+	// Collect all matching candidates first, then sort deterministically
+	// before capping. This decouples the function's output order from
+	// ListRunningProcesses' iteration order.
+	var candidates []string
+	seen := make(map[string]bool)
+	for _, p := range processes {
+		if p.Type != "agent" || !p.Running {
+			continue
+		}
+		if seen[p.Name] {
+			continue
+		}
+		n := strings.ToLower(p.Name)
+		if strings.Contains(n, q) || strings.Contains(q, n) {
+			candidates = append(candidates, p.Name)
+			seen[p.Name] = true
+		}
+	}
+	sort.Strings(candidates)
+	// Cap to 3 suggestions after sorting so the returned set is stable.
+	if len(candidates) > 3 {
+		candidates = candidates[:3]
+	}
+	return candidates
+}
+
+// quoteStrings wraps each string in single quotes for user-facing messages.
+func quoteStrings(ss []string) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = "'" + s + "'"
+	}
+	return out
 }

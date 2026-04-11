@@ -46,7 +46,7 @@ async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistRes
 | Parameter        | Type | Description                                       |
 | ---------------- | ---- | ------------------------------------------------- |
 | `provider`       | dict | LLM provider selector (capability + tags)         |
-| `max_iterations` | int  | Max agentic loop iterations (default: 1)          |
+| `max_iterations` | int  | Max agentic loop iterations (default: 5)          |
 | `system_prompt`  | str  | Inline prompt or `file://path` to Jinja2 template |
 | `context_param`  | str  | Parameter name receiving context object           |
 | `filter`              | list | Tool filter criteria                              |
@@ -226,6 +226,28 @@ class AssistContext(BaseModel):
 async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None):
     return await llm(f"Help with: {ctx.input_text}")
 ```
+
+### Why the Context Param Looks Unused
+
+You'll often see the context parameter declared in the function signature but
+never read in the body:
+
+```python
+@mesh.llm(context_param="ctx", system_prompt="file://prompts/assistant.jinja2")
+async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> str:
+    return await llm("Help the user")  # ctx never read here — is it unused?
+```
+
+It's not unused — it's a **marker parameter**. The decorator's `context_param="ctx"`
+tells the framework "when you render the system prompt Jinja2 template, use the
+value passed to this parameter as the template context." The parameter is
+consumed by the template renderer, not by your function body. Think of it as
+"here's the data, framework — you figure out where to put it in the prompt."
+
+This is why you don't need to pass `ctx` to `llm()` — the decorator already
+knows about it. If you want to **augment** or **override** the template context
+at call time, use the `context=` argument on `llm()` — see
+[Runtime Context Injection](#runtime-context-injection).
 
 ## Response Formats
 
