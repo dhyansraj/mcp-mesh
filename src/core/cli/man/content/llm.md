@@ -233,7 +233,7 @@ You'll often see the context parameter declared in the function signature but
 never read in the body:
 
 ```python
-@mesh.llm(context_param="ctx", system_prompt_file="file://prompts/assistant.jinja2")
+@mesh.llm(context_param="ctx", system_prompt="file://prompts/assistant.jinja2")
 async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> str:
     return await llm("Help the user")  # ctx never read here — is it unused?
 ```

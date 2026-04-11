@@ -829,7 +829,10 @@ func suggestAgentNames(pm *PIDManager, query string) []string {
 	if q == "" {
 		return nil
 	}
-	var suggestions []string
+	// Collect all matching candidates first, then sort deterministically
+	// before capping. This decouples the function's output order from
+	// ListRunningProcesses' iteration order.
+	var candidates []string
 	seen := make(map[string]bool)
 	for _, p := range processes {
 		if p.Type != "agent" || !p.Running {
@@ -840,14 +843,16 @@ func suggestAgentNames(pm *PIDManager, query string) []string {
 		}
 		n := strings.ToLower(p.Name)
 		if strings.Contains(n, q) || strings.Contains(q, n) {
-			suggestions = append(suggestions, p.Name)
+			candidates = append(candidates, p.Name)
 			seen[p.Name] = true
-			if len(suggestions) >= 3 {
-				break
-			}
 		}
 	}
-	return suggestions
+	sort.Strings(candidates)
+	// Cap to 3 suggestions after sorting so the returned set is stable.
+	if len(candidates) > 3 {
+		candidates = candidates[:3]
+	}
+	return candidates
 }
 
 // quoteStrings wraps each string in single quotes for user-facing messages.

@@ -151,6 +151,38 @@ func TestSuggestAgentNames(t *testing.T) {
 	}
 }
 
+// TestSuggestAgentNamesCapped verifies that suggestAgentNames returns at most
+// 3 results even when more agents match the query, and that the returned
+// subset is deterministic (sorted alphabetically, not dependent on
+// ListRunningProcesses iteration order).
+func TestSuggestAgentNamesCapped(t *testing.T) {
+	pm := newTestPIDManager(t)
+	// Use 5 agent names that all contain the substring "agent" so a single
+	// query matches all of them. With suggestAgentNames' cap of 3, the
+	// result should be the alphabetically first three.
+	names := []string{
+		"zeta-agent",
+		"beta-agent",
+		"delta-agent",
+		"alpha-agent",
+		"gamma-agent",
+	}
+	for _, n := range names {
+		if err := pm.WritePID(n, os.Getpid()); err != nil {
+			t.Fatalf("WritePID(%s): %v", n, err)
+		}
+	}
+
+	got := suggestAgentNames(pm, "agent")
+	if len(got) != 3 {
+		t.Fatalf("suggestAgentNames(\"agent\") returned %d results, want exactly 3: %v", len(got), got)
+	}
+	want := []string{"alpha-agent", "beta-agent", "delta-agent"}
+	if !equalStringSlices(got, want) {
+		t.Errorf("suggestAgentNames(\"agent\") = %v, want %v (sorted and capped)", got, want)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
