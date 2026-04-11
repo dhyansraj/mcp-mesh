@@ -141,6 +141,7 @@ func TestSuggestAgentNames(t *testing.T) {
 		{"mkt", nil},                             // no substring match
 		{"digest-api", []string{"digest-api"}},   // exact match (trivially contains)
 		{"worker", []string{"portfolio-worker"}}, // suffix
+		{"", nil},                                // empty query must not match everything
 	}
 	for _, tc := range tests {
 		got := suggestAgentNames(pm, tc.query)

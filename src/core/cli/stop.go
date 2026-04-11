@@ -826,6 +826,9 @@ func suggestAgentNames(pm *PIDManager, query string) []string {
 		return nil
 	}
 	q := strings.ToLower(query)
+	if q == "" {
+		return nil
+	}
 	var suggestions []string
 	seen := make(map[string]bool)
 	for _, p := range processes {

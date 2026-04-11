@@ -78,7 +78,7 @@ Other agents can use this provider with the `@mesh.llm` decorator:
 ```python
 @mesh.llm(
     provider={"capability": "llm", "tags": {{ toJSON .Tags }}},
-    max_iterations=1,
+    max_iterations=5,
     system_prompt="You are a helpful assistant.",
     context_param="ctx",
 )
