@@ -58,6 +58,24 @@ async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistRes
 
 **Note**: Response format is determined by the function's return type annotation, not a parameter. See [Response Formats](#response-formats).
 
+## Calling llm()
+
+The injected `llm` is an async callable. All arguments after `message` are keyword-only.
+
+| Parameter      | Type                                 | Description                                                         |
+| -------------- | ------------------------------------ | ------------------------------------------------------------------- |
+| `message`      | `str` \| `list[dict]`                | User text, or OpenAI-format messages array for multi-turn history   |
+| `media`        | `list`                               | Images/files to attach — see `meshctl man multimodal`               |
+| `context`      | `dict`                               | Runtime context merged with `context_param` for template rendering  |
+| `context_mode` | `"append"` \| `"prepend"` \| `"replace"` | How `context` merges with auto-populated (default: `append`)    |
+| `**kwargs`     | any                                  | LiteLLM call-time params (`max_tokens`, `temperature`, …)           |
+
+**Multi-turn chat**: pass `message` as a list of `{"role": "user"\|"assistant"\|"system"\|"tool", "content": ...}` dicts. The decorator's `system_prompt` is auto-inserted at `messages[0]` (or replaces an existing system message).
+
+**Context vs. messages**: `context=` feeds the Jinja2 system prompt template — use it for background knowledge, user profile, per-call config. The `messages` list is the conversation — use it for turn-by-turn history. See [Runtime Context Injection](#runtime-context-injection) below for merge semantics.
+
+**LiteLLM overrides**: call-time `**kwargs` override decorator defaults. See [LLM Model Parameters](#llm-model-parameters) below.
+
 ## LLM Model Parameters
 
 Pass any LiteLLM parameter in the decorator as defaults:

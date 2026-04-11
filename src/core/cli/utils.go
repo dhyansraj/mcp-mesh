@@ -263,7 +263,13 @@ func RemoveRunningProcess(pid int) error {
 	return SaveRunningProcesses(filtered)
 }
 
-// IsProcessAlive checks if a process is still running
+// IsProcessAlive checks if a process is still running.
+//
+// signal(0) returns nil for any process the kernel still has an entry for —
+// including zombies that have been killed but not yet reaped by their parent.
+// For meshctl's purposes a zombie is "effectively dead" (the process cannot
+// do any more work and is only waiting to be reaped), so we filter them out
+// via a platform-specific check. See utils_linux.go / utils_other.go.
 func IsProcessAlive(pid int) bool {
 	if pid <= 0 {
 		return false
@@ -275,8 +281,10 @@ func IsProcessAlive(pid int) bool {
 	}
 
 	// On Unix-like systems, we can send signal 0 to check if process exists
-	err = process.Signal(syscall.Signal(0))
-	return err == nil
+	if err := process.Signal(syscall.Signal(0)); err != nil {
+		return false
+	}
+	return !isProcessZombie(pid)
 }
 
 // KillProcess attempts to gracefully kill a process
