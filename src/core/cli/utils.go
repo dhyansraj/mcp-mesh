@@ -174,8 +174,9 @@ func GetRunningProcesses() ([]ProcessInfo, error) {
 		if _, err := os.Stat(legacyPath); err == nil {
 			os.MkdirAll(filepath.Dir(processFile), 0755)
 			if data, readErr := os.ReadFile(legacyPath); readErr == nil {
-				os.WriteFile(processFile, data, 0644)
-				os.Remove(legacyPath)
+				if writeErr := os.WriteFile(processFile, data, 0644); writeErr == nil {
+					os.Remove(legacyPath)
+				}
 			}
 		}
 	}
