@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -82,6 +83,7 @@ Examples:
 
 	// Development flags
 	cmd.Flags().BoolP("watch", "w", false, "Watch files and restart on changes")
+	cmd.Flags().Bool("dte", false, "Enable distributed tracing (sets MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true)")
 
 	// UI server flags
 	cmd.Flags().Bool("ui", false, "Start the dashboard UI server alongside agents")
@@ -104,6 +106,11 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 		if err := loadEnvironmentFile(envFile); err != nil {
 			return fmt.Errorf("failed to load environment file %s: %w", envFile, err)
 		}
+	}
+
+	// Enable distributed tracing if --dte flag is set
+	if dte, _ := cmd.Flags().GetBool("dte"); dte {
+		os.Setenv("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "true")
 	}
 
 	// Apply additional environment variables
