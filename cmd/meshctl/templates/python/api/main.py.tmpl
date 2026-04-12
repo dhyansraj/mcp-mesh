@@ -6,7 +6,7 @@
 """
 
 import mesh
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from mesh.types import McpMeshTool
 
 app = FastAPI(
@@ -37,7 +37,7 @@ async def hello_endpoint(request: Request, hello: McpMeshTool = None):
     it as a McpMeshTool parameter (matched by parameter name).
     """
     if not hello:
-        return {"error": "hello capability unavailable"}
+        raise HTTPException(status_code=503, detail="hello capability unavailable")
     result = await hello()
     return {"result": result}
 
@@ -74,7 +74,7 @@ async def hello_endpoint(request: Request, hello: McpMeshTool = None):
 # ):
 #     body = await request.json()
 #     if not calculator:
-#         return {"error": "calculator capability unavailable"}
+#         raise HTTPException(status_code=503, detail="calculator capability unavailable")
 #     result = await calculator(body)
 #     return {"result": result}
 

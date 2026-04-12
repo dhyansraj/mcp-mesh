@@ -66,6 +66,7 @@ export function useLiveTraces(): UseLiveTracesResult {
   useEffect(() => {
     if (!active) {
       setConnected(false);
+      setError(null);
       tracesRef.current.clear();
       setTraces([]);
       return;

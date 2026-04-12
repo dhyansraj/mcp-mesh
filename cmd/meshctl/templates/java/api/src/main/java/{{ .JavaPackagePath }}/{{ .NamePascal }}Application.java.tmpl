@@ -10,7 +10,6 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDateTime;
@@ -48,7 +47,6 @@ public class {{ .NamePascal }}Application {
 }
 
 @RestController
-@RequestMapping("/api")
 class ApiController {
 
     private static final Logger log = LoggerFactory.getLogger(ApiController.class);
@@ -60,7 +58,7 @@ class ApiController {
      * At request time, the framework resolves the dependency and injects it as a
      * McpMeshTool parameter (matched by @MeshInject name).
      */
-    @GetMapping("/hello")
+    @GetMapping("/api/hello")
     @MeshRoute(dependencies = @MeshDependency(capability = "hello"))
     public ResponseEntity<Map<String, Object>> hello(
             @MeshInject("hello") McpMeshTool<Map<String, Object>> helloTool) {

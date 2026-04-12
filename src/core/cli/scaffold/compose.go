@@ -143,50 +143,70 @@ func ScanForAgents(dir string) ([]DetectedAgent, error) {
 // extractBalancedParen finds a marker (e.g. "@mesh.agent") in content,
 // then returns everything from the marker through the matching closing ')'.
 // It handles nested parentheses inside string literals correctly.
+// If the first occurrence of marker doesn't yield a balanced paren block
+// (e.g. it appears in a comment or string), the function tries subsequent
+// occurrences until one succeeds or the content is exhausted.
 func extractBalancedParen(content, marker string) string {
-	idx := strings.Index(content, marker)
-	if idx == -1 {
-		return ""
-	}
-
-	// Find the opening '('
-	start := idx + len(marker)
-	for start < len(content) && content[start] != '(' {
-		if content[start] != ' ' && content[start] != '\t' && content[start] != '\n' && content[start] != '\r' {
-			return "" // unexpected character before '('
+	searchFrom := 0
+	for {
+		idx := strings.Index(content[searchFrom:], marker)
+		if idx == -1 {
+			return ""
 		}
-		start++
-	}
-	if start >= len(content) {
-		return ""
-	}
+		idx += searchFrom // adjust to absolute position
 
-	// Walk forward counting balanced parens, skipping string literals
-	depth := 0
-	inString := byte(0) // 0 = not in string, '"' or '\'' = in that string
-	for i := start; i < len(content); i++ {
-		ch := content[i]
-		if inString != 0 {
-			if ch == '\\' {
-				i++ // skip escaped character
-			} else if ch == inString {
-				inString = 0
+		// Find the opening '('
+		start := idx + len(marker)
+		valid := true
+		for start < len(content) && content[start] != '(' {
+			if content[start] != ' ' && content[start] != '\t' && content[start] != '\n' && content[start] != '\r' {
+				valid = false
+				break
 			}
+			start++
+		}
+		if !valid || start >= len(content) {
+			searchFrom = idx + len(marker)
 			continue
 		}
-		switch ch {
-		case '"', '\'':
-			inString = ch
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				return content[idx : i+1]
+
+		// Walk forward counting balanced parens, skipping string literals
+		depth := 0
+		inString := byte(0) // 0 = not in string, '"' or '\'' = in that string
+		found := false
+		end := 0
+		for i := start; i < len(content); i++ {
+			ch := content[i]
+			if inString != 0 {
+				if ch == '\\' {
+					i++ // skip escaped character
+				} else if ch == inString {
+					inString = 0
+				}
+				continue
+			}
+			switch ch {
+			case '"', '\'':
+				inString = ch
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 {
+					end = i + 1
+					found = true
+				}
+			}
+			if found {
+				break
 			}
 		}
+		if found {
+			return content[idx:end]
+		}
+		// Unbalanced at this occurrence — try the next one
+		searchFrom = idx + len(marker)
 	}
-	return "" // unbalanced
 }
 
 // parseAgentDecorator extracts name and port from @mesh.agent decorator

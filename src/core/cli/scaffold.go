@@ -530,7 +530,11 @@ func runObservabilityGeneration(cmd *cobra.Command) error {
 	cmd.Println("  - grafana (3000)")
 	cmd.Println()
 	cmd.Println("Start with:")
-	cmd.Println("  docker compose -f docker-compose.observability.yml up -d")
+	if output != "." {
+		cmd.Printf("  docker compose -f %s/docker-compose.observability.yml up -d\n", output)
+	} else {
+		cmd.Println("  docker compose -f docker-compose.observability.yml up -d")
+	}
 
 	return nil
 }

@@ -770,6 +770,7 @@ func cleanupAllFiles(pm *PIDManager, quiet bool) error {
 	for _, suffix := range []string{"-wal", "-shm"} {
 		companion := registryDBFile + suffix
 		if err := os.Remove(companion); err == nil {
+			deletedDB++
 			if !quiet {
 				fmt.Printf("  Deleted: %s\n", companion)
 			}

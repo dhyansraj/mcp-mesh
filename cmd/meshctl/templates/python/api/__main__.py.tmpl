@@ -1,5 +1,8 @@
 """Entry point for {{ .Name }} module."""
 
+from main import app  # noqa: F401
 
 if __name__ == "__main__":
-    pass  # MCP Mesh handles startup via @mesh.route auto-detection
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port={{ .Port }}, log_level="info")

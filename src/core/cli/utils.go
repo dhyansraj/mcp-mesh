@@ -167,6 +167,19 @@ func GetRunningProcesses() ([]ProcessInfo, error) {
 	}
 
 	processFile := filepath.Join(homeDir, ".mcp-mesh", "processes.json")
+
+	// One-time migration from legacy path (~/.mcp_mesh/ -> ~/.mcp-mesh/)
+	if _, err := os.Stat(processFile); os.IsNotExist(err) {
+		legacyPath := filepath.Join(homeDir, ".mcp_mesh", "processes.json")
+		if _, err := os.Stat(legacyPath); err == nil {
+			os.MkdirAll(filepath.Dir(processFile), 0755)
+			if data, readErr := os.ReadFile(legacyPath); readErr == nil {
+				os.WriteFile(processFile, data, 0644)
+				os.Remove(legacyPath)
+			}
+		}
+	}
+
 	data, err := os.ReadFile(processFile)
 	if err != nil {
 		if os.IsNotExist(err) {
