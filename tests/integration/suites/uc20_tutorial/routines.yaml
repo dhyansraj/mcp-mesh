@@ -1,0 +1,31 @@
+# uc20_tutorial Routines
+# Tutorial integration tests share global routines for Python setup and cleanup.
+# Suite-local routines can be added here as the tutorial grows (e.g., multi-agent
+# setup patterns for Day 2+).
+
+routines:
+  # Setup for tutorial Python agents — thin wrapper over the global routine
+  setup_tutorial_python:
+    description: "Setup Python venv for tutorial agents"
+    steps:
+      - handler: shell
+        command: |
+          # Verify prerequisites
+          if ! command -v meshctl &> /dev/null; then
+            echo "ERROR: meshctl not found - use tsuite-mesh image"
+            exit 1
+          fi
+          python -c "import mesh" 2>/dev/null || {
+            echo "ERROR: mesh module not found - use tsuite-mesh image"
+            exit 1
+          }
+          # Create venv linked to system mesh
+          cd /workspace
+          python -m venv .venv
+          echo "import sys; sys.path.insert(0, '/usr/local/lib/python3.11/site-packages')" > /workspace/.venv/lib/python3.11/site-packages/mesh.pth
+          /workspace/.venv/bin/python -c "import mesh; print('Tutorial setup complete: mesh module available')"
+        capture: setup_result
+        timeout: 60
+      - handler: shell
+        command: "meshctl --version"
+        capture: meshctl_version

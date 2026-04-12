@@ -1,0 +1,183 @@
+# Test Case: Day 2 — More Tools and Dependency Injection
+# Validates the Day 2 tutorial narrative: start 5 agents, verify DI resolution,
+# call flight_search (triggers user_prefs DI call), call search_pois (triggers
+# weather DI call), verify response shapes.
+#
+# Uses tc-level artifacts from /artifacts
+
+name: "Tutorial Day 2: Dependency Injection"
+description: "Verify 5 agents start, DI resolves, cross-agent calls work via flight_search and search_pois"
+tags:
+  - tutorial
+  - day02
+  - python
+  - tools
+  - dependency-injection
+  - meshctl
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy all 5 agents to workspace
+  - name: "Copy agents to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/flight-agent /workspace/
+      cp -r /artifacts/hotel-agent /workspace/
+      cp -r /artifacts/weather-agent /workspace/
+      cp -r /artifacts/poi-agent /workspace/
+      cp -r /artifacts/user-prefs-agent /workspace/
+    capture: copy_output
+
+  # Start all 5 agents in detached mode
+  - name: "Start all agents"
+    handler: shell
+    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for registration and DI resolution
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 15
+
+  # Verify all 5 agents are registered
+  - name: "Verify all agents are registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Verify all 5 tools are listed
+  - name: "Verify all tools are listed"
+    handler: shell
+    command: "meshctl list --tools"
+    workdir: /workspace
+    capture: list_tools
+
+  # Verify DI resolution for flight-agent
+  - name: "Verify flight-agent DI resolution"
+    handler: shell
+    command: |
+      STATUS=$(meshctl status flight-agent 2>&1)
+      echo "$STATUS"
+      if echo "$STATUS" | grep -q "Dependencies"; then
+        echo "PASS: flight-agent has dependencies section"
+      else
+        echo "FAIL: flight-agent missing dependencies section"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: flight_status
+
+  # Verify DI resolution for poi-agent
+  - name: "Verify poi-agent DI resolution"
+    handler: shell
+    command: |
+      STATUS=$(meshctl status poi-agent 2>&1)
+      echo "$STATUS"
+      if echo "$STATUS" | grep -q "Dependencies"; then
+        echo "PASS: poi-agent has dependencies section"
+      else
+        echo "FAIL: poi-agent missing dependencies section"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: poi_status
+
+  # Call flight_search — triggers DI call to user-prefs-agent
+  - name: "Call flight_search with DI"
+    handler: shell
+    command: |
+      echo "=== Calling flight_search (triggers user_prefs DI call) ==="
+      RESULT=$(meshctl call flight_search '{"origin":"SFO","destination":"NRT","date":"2026-06-01"}' 2>&1)
+      echo "$RESULT"
+      # Verify response contains expected fields and personalization
+      if echo "$RESULT" | grep -q '"origin": "SFO"' && \
+         echo "$RESULT" | grep -q '"destination": "NRT"' && \
+         echo "$RESULT" | grep -q '"carrier"'; then
+        echo "PASS: flight_search returned correct data"
+      else
+        echo "FAIL: Response missing expected fields"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: flight_call_result
+
+  # Call search_pois — triggers DI call to weather-agent
+  - name: "Call search_pois with DI"
+    handler: shell
+    command: |
+      echo "=== Calling search_pois (triggers weather DI call) ==="
+      RESULT=$(meshctl call search_pois '{"location":"Tokyo"}' 2>&1)
+      echo "$RESULT"
+      # Verify response contains weather-adjusted POI data
+      if echo "$RESULT" | grep -q '"location": "Tokyo"' && \
+         echo "$RESULT" | grep -q '"recommendation"' && \
+         echo "$RESULT" | grep -q '"pois"'; then
+        echo "PASS: search_pois returned weather-adjusted POI data"
+      else
+        echo "FAIL: Response missing expected fields"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: poi_call_result
+
+assertions:
+  # All 5 agents registered and visible
+  - expr: "${captured.list_output} contains 'flight-agent'"
+    message: "flight-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'hotel-agent'"
+    message: "hotel-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'weather-agent'"
+    message: "weather-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'poi-agent'"
+    message: "poi-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'user-prefs-agent'"
+    message: "user-prefs-agent should appear in meshctl list"
+
+  # All 5 tools are registered
+  - expr: "${captured.list_tools} contains 'flight_search'"
+    message: "flight_search tool should appear in meshctl list --tools"
+
+  - expr: "${captured.list_tools} contains 'hotel_search'"
+    message: "hotel_search tool should appear in meshctl list --tools"
+
+  - expr: "${captured.list_tools} contains 'get_weather'"
+    message: "get_weather tool should appear in meshctl list --tools"
+
+  - expr: "${captured.list_tools} contains 'search_pois'"
+    message: "search_pois tool should appear in meshctl list --tools"
+
+  - expr: "${captured.list_tools} contains 'get_user_prefs'"
+    message: "get_user_prefs tool should appear in meshctl list --tools"
+
+  # DI status verified
+  - expr: "${captured.flight_status} contains 'PASS'"
+    message: "flight-agent should have dependencies resolved"
+
+  - expr: "${captured.poi_status} contains 'PASS'"
+    message: "poi-agent should have dependencies resolved"
+
+  # DI tool calls returned expected data
+  - expr: "${captured.flight_call_result} contains 'PASS'"
+    message: "flight_search should return personalized flight data via DI"
+
+  - expr: "${captured.poi_call_result} contains 'PASS'"
+    message: "search_pois should return weather-adjusted POI data via DI"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

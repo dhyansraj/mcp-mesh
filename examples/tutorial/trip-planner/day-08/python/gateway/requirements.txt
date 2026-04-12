@@ -1,0 +1,4 @@
+# gateway dependencies (Day 6)
+# mcp-mesh is provided by the runtime environment (local venv or Docker base image).
+fastapi
+uvicorn

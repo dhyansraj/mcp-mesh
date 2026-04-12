@@ -1,0 +1,27 @@
+# Helm values for deploying openai-provider with mcp-mesh-agent chart
+# Usage: helm install openai-provider oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent -f helm-values.yaml
+# Check latest version: helm show chart oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent
+
+image:
+  repository: your-registry/openai-provider
+  tag: "v1.0.0"
+  pullPolicy: IfNotPresent
+
+agent:
+  name: openai-provider
+  runtime: python
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+mesh:
+  enabled: true
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"

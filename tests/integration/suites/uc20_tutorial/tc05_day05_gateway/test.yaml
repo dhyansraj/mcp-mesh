@@ -1,0 +1,185 @@
+# Test Case: Day 5 — HTTP Gateway
+# Validates the Day 5 tutorial narrative: start 9 agents (8 from Day 4 + gateway),
+# verify registration, call plan_trip via HTTP gateway (curl), verify response,
+# also call via meshctl for comparison.
+#
+# Requires ANTHROPIC_API_KEY and OPENAI_API_KEY — tagged with 'llm' so CI can skip.
+# Uses tc-level artifacts from /artifacts
+
+name: "Tutorial Day 5: HTTP Gateway"
+description: "Verify 9 agents start, gateway serves HTTP, curl returns itinerary, meshctl call also works"
+tags:
+  - tutorial
+  - day05
+  - python
+  - llm
+  - meshctl
+  - gateway
+  - fastapi
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - handler: shell
+    command: "pip install fastapi uvicorn"
+
+test:
+  # Copy all 9 agents to workspace
+  - name: "Copy agents to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/flight-agent /workspace/
+      cp -r /artifacts/hotel-agent /workspace/
+      cp -r /artifacts/weather-agent /workspace/
+      cp -r /artifacts/poi-agent /workspace/
+      cp -r /artifacts/user-prefs-agent /workspace/
+      cp -r /artifacts/claude-provider /workspace/
+      cp -r /artifacts/openai-provider /workspace/
+      cp -r /artifacts/planner-agent /workspace/
+      cp -r /artifacts/gateway /workspace/
+    capture: copy_output
+
+  # Start all 8 tool/provider/planner agents in detached mode
+  - name: "Start tool and provider agents"
+    handler: shell
+    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py openai-provider/main.py planner-agent/main.py -d"
+    workdir: /workspace
+    capture: start_agents_output
+
+  # Wait for registration and DI resolution
+  - name: "Wait for agent registration"
+    handler: wait
+    seconds: 20
+
+  # Start the gateway
+  - name: "Start gateway"
+    handler: shell
+    command: "meshctl start gateway/main.py -d"
+    workdir: /workspace
+    capture: start_gateway_output
+
+  # Wait for gateway to register and resolve dependencies
+  - name: "Wait for gateway registration"
+    handler: wait
+    seconds: 10
+
+  # Verify all 9 agents are registered
+  - name: "Verify all agents are registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Verify tools are listed
+  - name: "Verify tools are listed"
+    handler: shell
+    command: "meshctl list --tools"
+    workdir: /workspace
+    capture: list_tools
+
+  # Verify gateway is healthy
+  - name: "Verify gateway health endpoint"
+    handler: shell
+    command: |
+      RESPONSE=$(curl -s http://localhost:8080/health 2>&1)
+      echo "$RESPONSE"
+      if echo "$RESPONSE" | grep -q '"healthy"'; then
+        echo "PASS: gateway health check passed"
+      else
+        echo "FAIL: gateway health check failed"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: health_check
+
+  # Call the gateway via curl
+  - name: "Call plan via HTTP gateway"
+    handler: shell
+    command: |
+      echo "=== Calling POST /plan via gateway ==="
+      RESPONSE=$(curl -s -X POST http://localhost:8080/plan \
+        -H "Content-Type: application/json" \
+        -d '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' 2>&1)
+      echo "$RESPONSE"
+      if echo "$RESPONSE" | grep -qi 'result\|Kyoto\|itinerary\|day'; then
+        echo "PASS: gateway returned trip plan"
+      else
+        echo "FAIL: gateway response missing expected fields"
+        exit 1
+      fi
+    workdir: /workspace
+    timeout: 120
+    capture: curl_result
+
+  # Call via meshctl for comparison
+  - name: "Call plan_trip via meshctl"
+    handler: shell
+    command: |
+      echo "=== Calling plan_trip via meshctl ==="
+      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace 2>&1)
+      echo "$RESULT"
+      if echo "$RESULT" | grep -qi 'Kyoto\|itinerary\|day' && \
+         echo "$RESULT" | grep -q 'Trace ID'; then
+        echo "PASS: meshctl call returned itinerary with trace ID"
+      else
+        echo "FAIL: meshctl response missing expected fields"
+        exit 1
+      fi
+    workdir: /workspace
+    timeout: 120
+    capture: meshctl_result
+
+assertions:
+  # All 9 agents registered
+  - expr: "${captured.list_output} contains 'flight-agent'"
+    message: "flight-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'hotel-agent'"
+    message: "hotel-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'weather-agent'"
+    message: "weather-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'poi-agent'"
+    message: "poi-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'user-prefs-agent'"
+    message: "user-prefs-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'claude-provider'"
+    message: "claude-provider should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'openai-provider'"
+    message: "openai-provider should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'planner-agent'"
+    message: "planner-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'gateway'"
+    message: "gateway should appear in meshctl list"
+
+  # Tools registered
+  - expr: "${captured.list_tools} contains 'plan_trip'"
+    message: "plan_trip tool should appear"
+
+  # Gateway health check passed
+  - expr: "${captured.health_check} contains 'PASS'"
+    message: "gateway health endpoint should return healthy"
+
+  # HTTP gateway call succeeded
+  - expr: "${captured.curl_result} contains 'PASS'"
+    message: "POST /plan should return a trip plan via gateway"
+
+  # meshctl call also succeeded
+  - expr: "${captured.meshctl_result} contains 'PASS'"
+    message: "meshctl call plan_trip should return an itinerary"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -1,0 +1,33 @@
+# Helm values for chat-history-agent — scaffolded by meshctl, adapted for k8s
+# Added: REDIS_HOST env var pointing to the core Redis service
+
+image:
+  repository: trip-planner/chat-history-agent
+  tag: "latest"
+  pullPolicy: IfNotPresent  # Use Never for minikube local builds
+
+agent:
+  name: chat-history-agent
+  runtime: python
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+mesh:
+  enabled: true
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
+
+# chat-history-agent reads REDIS_HOST to connect to Redis
+env:
+  - name: REDIS_HOST
+    value: "mcp-core-mcp-mesh-redis"
+  - name: REDIS_PORT
+    value: "6379"

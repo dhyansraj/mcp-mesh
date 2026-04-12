@@ -1,0 +1,165 @@
+# Test Case: Day 3 — Observability and LLM Integration
+# Validates the Day 3 tutorial narrative: start 7 agents (5 tools + LLM provider
+# + planner), verify registration, call plan_trip (triggers LLM delegation to
+# claude-provider), verify response shape and trace output.
+#
+# Requires ANTHROPIC_API_KEY — tagged with 'llm' so CI can skip without a key.
+# Uses tc-level artifacts from /artifacts
+
+name: "Tutorial Day 3: Observability and LLM Integration"
+description: "Verify 7 agents start, LLM provider registers, planner generates itinerary via mesh delegation, tracing works"
+tags:
+  - tutorial
+  - day03
+  - python
+  - llm
+  - meshctl
+  - observability
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy all 7 agents to workspace
+  - name: "Copy agents to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/flight-agent /workspace/
+      cp -r /artifacts/hotel-agent /workspace/
+      cp -r /artifacts/weather-agent /workspace/
+      cp -r /artifacts/poi-agent /workspace/
+      cp -r /artifacts/user-prefs-agent /workspace/
+      cp -r /artifacts/claude-provider /workspace/
+      cp -r /artifacts/planner-agent /workspace/
+    capture: copy_output
+
+  # Start all 7 agents in detached mode
+  - name: "Start all agents"
+    handler: shell
+    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py planner-agent/main.py -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for registration and DI resolution
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 15
+
+  # Verify all 7 agents are registered
+  - name: "Verify all agents are registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Verify all 7 tools are listed
+  - name: "Verify all tools are listed"
+    handler: shell
+    command: "meshctl list --tools"
+    workdir: /workspace
+    capture: list_tools
+
+  # Verify claude-provider registered with llm capability
+  - name: "Verify claude-provider registration"
+    handler: shell
+    command: |
+      STATUS=$(meshctl status claude-provider 2>&1)
+      echo "$STATUS"
+      if echo "$STATUS" | grep -q "healthy"; then
+        echo "PASS: claude-provider is healthy"
+      else
+        echo "FAIL: claude-provider not healthy"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: provider_status
+
+  # Verify planner-agent registered
+  - name: "Verify planner-agent registration"
+    handler: shell
+    command: |
+      STATUS=$(meshctl status planner-agent 2>&1)
+      echo "$STATUS"
+      if echo "$STATUS" | grep -q "healthy"; then
+        echo "PASS: planner-agent is healthy"
+      else
+        echo "FAIL: planner-agent not healthy"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: planner_status
+
+  # Call plan_trip — triggers LLM delegation to claude-provider
+  - name: "Call plan_trip with LLM delegation"
+    handler: shell
+    command: |
+      echo "=== Calling plan_trip (triggers LLM delegation) ==="
+      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace 2>&1)
+      echo "$RESULT"
+      # Verify response contains itinerary content
+      if echo "$RESULT" | grep -q '"result"' && \
+         echo "$RESULT" | grep -q 'Kyoto' && \
+         echo "$RESULT" | grep -q 'Trace ID'; then
+        echo "PASS: plan_trip returned itinerary with trace ID"
+      else
+        echo "FAIL: Response missing expected fields"
+        exit 1
+      fi
+    workdir: /workspace
+    timeout: 120
+    capture: planner_call_result
+
+assertions:
+  # All 7 agents registered and visible
+  - expr: "${captured.list_output} contains 'flight-agent'"
+    message: "flight-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'hotel-agent'"
+    message: "hotel-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'weather-agent'"
+    message: "weather-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'poi-agent'"
+    message: "poi-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'user-prefs-agent'"
+    message: "user-prefs-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'claude-provider'"
+    message: "claude-provider should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'planner-agent'"
+    message: "planner-agent should appear in meshctl list"
+
+  # All 7 tools are registered
+  - expr: "${captured.list_tools} contains 'claude_provider'"
+    message: "claude_provider tool should appear in meshctl list --tools"
+
+  - expr: "${captured.list_tools} contains 'plan_trip'"
+    message: "plan_trip tool should appear in meshctl list --tools"
+
+  - expr: "${captured.list_tools} contains 'flight_search'"
+    message: "flight_search tool should appear in meshctl list --tools"
+
+  # Provider and planner healthy
+  - expr: "${captured.provider_status} contains 'PASS'"
+    message: "claude-provider should be healthy"
+
+  - expr: "${captured.planner_status} contains 'PASS'"
+    message: "planner-agent should be healthy"
+
+  # LLM call returned expected data
+  - expr: "${captured.planner_call_result} contains 'PASS'"
+    message: "plan_trip should return an itinerary via LLM delegation"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

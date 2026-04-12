@@ -1,0 +1,58 @@
+# Test Case: Day 10 — What You Built and Where to Go
+# Validates that Day 10 example files exist and the bonus-ui placeholder is
+# present. Day 10 is a wrap-up chapter with no new agents to start.
+
+name: "Tutorial Day 10: What You Built and Where to Go"
+description: "Verify day-10 example directory structure and bonus-ui placeholder"
+tags:
+  - tutorial
+  - day10
+  - python
+timeout: 30
+
+test:
+  # Verify day-10 directory exists and has expected structure
+  - name: "Verify day-10 example directory"
+    handler: shell
+    command: |
+      EXAMPLE_DIR="/artifacts"
+      ERRORS=0
+
+      # Check key subdirectories exist
+      for dir in python helm k8s bonus-ui; do
+        if [ -d "$EXAMPLE_DIR/$dir" ]; then
+          echo "OK: $dir/ exists"
+        else
+          echo "FAIL: $dir/ missing"
+          ERRORS=$((ERRORS + 1))
+        fi
+      done
+
+      # Check bonus-ui README exists
+      if [ -f "$EXAMPLE_DIR/bonus-ui/README.md" ]; then
+        echo "OK: bonus-ui/README.md exists"
+      else
+        echo "FAIL: bonus-ui/README.md missing"
+        ERRORS=$((ERRORS + 1))
+      fi
+
+      # Check at least 13 agent directories exist in python/
+      AGENT_COUNT=$(ls -d "$EXAMPLE_DIR/python"/*/ 2>/dev/null | wc -l | tr -d ' ')
+      if [ "$AGENT_COUNT" -ge 13 ]; then
+        echo "OK: $AGENT_COUNT agent directories in python/"
+      else
+        echo "FAIL: expected >= 13 agent directories, found $AGENT_COUNT"
+        ERRORS=$((ERRORS + 1))
+      fi
+
+      if [ "$ERRORS" -eq 0 ]; then
+        echo "PASS: day-10 example structure is complete"
+      else
+        echo "FAIL: $ERRORS errors found"
+        exit 1
+      fi
+    capture: structure_check
+
+assertions:
+  - expr: "${captured.structure_check} contains 'PASS'"
+    message: "Day 10 example directory should have all expected files and subdirectories"

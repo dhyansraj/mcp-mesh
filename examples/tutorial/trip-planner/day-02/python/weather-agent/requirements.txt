@@ -1,0 +1,3 @@
+# weather-agent dependencies (Day 2)
+# mcp-mesh is provided by the runtime environment (local venv or Docker base image).
+# Add any third-party dependencies your tool needs below.
