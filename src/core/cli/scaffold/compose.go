@@ -140,12 +140,61 @@ func ScanForAgents(dir string) ([]DetectedAgent, error) {
 	return agents, nil
 }
 
+// extractBalancedParen finds a marker (e.g. "@mesh.agent") in content,
+// then returns everything from the marker through the matching closing ')'.
+// It handles nested parentheses inside string literals correctly.
+func extractBalancedParen(content, marker string) string {
+	idx := strings.Index(content, marker)
+	if idx == -1 {
+		return ""
+	}
+
+	// Find the opening '('
+	start := idx + len(marker)
+	for start < len(content) && content[start] != '(' {
+		if content[start] != ' ' && content[start] != '\t' && content[start] != '\n' && content[start] != '\r' {
+			return "" // unexpected character before '('
+		}
+		start++
+	}
+	if start >= len(content) {
+		return ""
+	}
+
+	// Walk forward counting balanced parens, skipping string literals
+	depth := 0
+	inString := byte(0) // 0 = not in string, '"' or '\'' = in that string
+	for i := start; i < len(content); i++ {
+		ch := content[i]
+		if inString != 0 {
+			if ch == '\\' {
+				i++ // skip escaped character
+			} else if ch == inString {
+				inString = 0
+			}
+			continue
+		}
+		switch ch {
+		case '"', '\'':
+			inString = ch
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return content[idx : i+1]
+			}
+		}
+	}
+	return "" // unbalanced
+}
+
 // parseAgentDecorator extracts name and port from @mesh.agent decorator
 func parseAgentDecorator(content string) (*DetectedAgent, error) {
-	// Pattern to match @mesh.agent decorator (handles multiline)
-	// We need to match the decorator and its contents, handling newlines
-	agentPattern := regexp.MustCompile(`@mesh\.agent\s*\([\s\S]*?\)`)
-	match := agentPattern.FindString(content)
+	// Find @mesh.agent( and then match balanced parentheses.
+	// A simple lazy regex like [\s\S]*?\) fails when string values
+	// contain ')' — e.g. description="planner (Day 7)".
+	match := extractBalancedParen(content, `@mesh.agent`)
 	if match == "" {
 		return nil, nil // Not an agent file
 	}
@@ -224,9 +273,8 @@ func parseJavaAgent(dir string) (*DetectedAgent, error) {
 
 		contentStr := string(content)
 
-		// Look for @MeshAgent annotation
-		agentPattern := regexp.MustCompile(`@MeshAgent\s*\([\s\S]*?\)`)
-		match := agentPattern.FindString(contentStr)
+		// Look for @MeshAgent annotation (balanced parens to handle strings with ')')
+		match := extractBalancedParen(contentStr, `@MeshAgent`)
 		if match == "" {
 			return nil
 		}
