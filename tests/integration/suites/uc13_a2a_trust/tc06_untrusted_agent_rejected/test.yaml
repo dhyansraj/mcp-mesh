@@ -129,17 +129,17 @@ test:
               break
       ")
       # Find legitimate agent cert
-      CERT_DIR=$HOME/.mcp_mesh/tls/local-dev/agents
+      CERT_DIR=$HOME/.mcp-mesh/tls/local-dev/agents
       LEGIT_CERT=$(ls $CERT_DIR/*-cert.pem 2>/dev/null | head -1)
       LEGIT_KEY=$(ls $CERT_DIR/*-key.pem 2>/dev/null | head -1)
       if [ -z "$LEGIT_CERT" ]; then
-        LEGIT_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem
-        LEGIT_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem
+        LEGIT_CERT=$HOME/.mcp-mesh/tls/local-dev/registry-cert.pem
+        LEGIT_KEY=$HOME/.mcp-mesh/tls/local-dev/registry-key.pem
       fi
       LEGIT_CODE=$(curl -sk -o /tmp/legit_body -w "%{http_code}" \
         --cert "$LEGIT_CERT" \
         --key "$LEGIT_KEY" \
-        --cacert $HOME/.mcp_mesh/tls/ca.pem \
+        --cacert $HOME/.mcp-mesh/tls/ca.pem \
         ${AGENT_URL}/health 2>&1)
       LEGIT_BODY=$(cat /tmp/legit_body 2>/dev/null || true)
       echo "LEGIT_CODE=$LEGIT_CODE"

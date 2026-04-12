@@ -105,7 +105,7 @@ test:
       echo "Testing HTTPS without client cert to $AGENT_URL..."
       # Use the CA to trust the server, but provide no client cert
       NO_CERT_RESULT=$(curl -s -o /tmp/nocert_body -w "%{http_code}" \
-        --cacert $HOME/.mcp_mesh/tls/ca.pem \
+        --cacert $HOME/.mcp-mesh/tls/ca.pem \
         --connect-timeout 5 \
         ${AGENT_URL}/health 2>&1 || echo "CONNECTION_FAILED")
       NO_CERT_BODY=$(cat /tmp/nocert_body 2>/dev/null || true)
@@ -134,20 +134,20 @@ test:
       ")
       echo "Testing HTTPS with valid client cert to $AGENT_URL..."
       # Find agent cert and key
-      CERT_DIR=$HOME/.mcp_mesh/tls/local-dev/agents
+      CERT_DIR=$HOME/.mcp-mesh/tls/local-dev/agents
       AGENT_CERT=$(ls $CERT_DIR/*-cert.pem 2>/dev/null | head -1)
       AGENT_KEY=$(ls $CERT_DIR/*-key.pem 2>/dev/null | head -1)
       if [ -z "$AGENT_CERT" ]; then
         # Fallback to registry cert (same CA)
-        AGENT_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem
-        AGENT_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem
+        AGENT_CERT=$HOME/.mcp-mesh/tls/local-dev/registry-cert.pem
+        AGENT_KEY=$HOME/.mcp-mesh/tls/local-dev/registry-key.pem
       fi
       echo "Using cert: $AGENT_CERT"
       echo "Using key: $AGENT_KEY"
       WITH_CERT_CODE=$(curl -sk -o /tmp/withcert_body -w "%{http_code}" \
         --cert "$AGENT_CERT" \
         --key "$AGENT_KEY" \
-        --cacert $HOME/.mcp_mesh/tls/ca.pem \
+        --cacert $HOME/.mcp-mesh/tls/ca.pem \
         ${AGENT_URL}/health 2>&1)
       WITH_CERT_BODY=$(cat /tmp/withcert_body 2>/dev/null || true)
       echo "WITH_CERT_CODE=$WITH_CERT_CODE"

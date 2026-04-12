@@ -22,14 +22,14 @@ test:
       meshctl stop
       sleep 2
       echo "CERTS_READY=true"
-      ls $HOME/.mcp_mesh/tls/ca.pem
+      ls $HOME/.mcp-mesh/tls/ca.pem
     workdir: /workspace
     capture: cert_gen
 
   - name: "Register entity"
     handler: shell
     command: |
-      meshctl entity register test-corp --ca-cert $HOME/.mcp_mesh/tls/ca.pem
+      meshctl entity register test-corp --ca-cert $HOME/.mcp-mesh/tls/ca.pem
       echo "EXIT_CODE=$?"
     capture: register_output
 
@@ -46,13 +46,13 @@ test:
   - name: "Register duplicate should fail"
     handler: shell
     command: |
-      meshctl entity register test-corp --ca-cert $HOME/.mcp_mesh/tls/ca.pem 2>&1 || true
+      meshctl entity register test-corp --ca-cert $HOME/.mcp-mesh/tls/ca.pem 2>&1 || true
     capture: duplicate_output
 
   - name: "Register duplicate with force"
     handler: shell
     command: |
-      meshctl entity register test-corp --ca-cert $HOME/.mcp_mesh/tls/ca.pem --force
+      meshctl entity register test-corp --ca-cert $HOME/.mcp-mesh/tls/ca.pem --force
       echo "FORCE_EXIT=$?"
     capture: force_output
 

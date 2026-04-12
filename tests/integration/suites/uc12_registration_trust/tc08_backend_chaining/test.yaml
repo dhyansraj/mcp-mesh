@@ -31,8 +31,8 @@ test:
 
       # Create a separate CA to simulate an external entity
       # We'll use the existing LocalCA's root cert as a "filestore" entity
-      mkdir -p $HOME/.mcp_mesh/tls/entities
-      cp $HOME/.mcp_mesh/tls/ca.pem $HOME/.mcp_mesh/tls/entities/external-corp.pem
+      mkdir -p $HOME/.mcp-mesh/tls/entities
+      cp $HOME/.mcp-mesh/tls/ca.pem $HOME/.mcp-mesh/tls/entities/external-corp.pem
       echo "SETUP_DONE=true"
     workdir: /workspace
     capture: setup
@@ -42,9 +42,9 @@ test:
     command: |
       MCP_MESH_TLS_MODE=auto \
       MCP_MESH_TRUST_BACKEND=localca,filestore \
-      MCP_MESH_TRUST_DIR=$HOME/.mcp_mesh/tls \
-      MCP_MESH_TLS_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem \
-      MCP_MESH_TLS_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem \
+      MCP_MESH_TRUST_DIR=$HOME/.mcp-mesh/tls \
+      MCP_MESH_TLS_CERT=$HOME/.mcp-mesh/tls/local-dev/registry-cert.pem \
+      MCP_MESH_TLS_KEY=$HOME/.mcp-mesh/tls/local-dev/registry-key.pem \
       mcp-mesh-registry --host localhost --port 8000 &>/tmp/chained-registry.log &
       REGISTRY_PID=$!
       echo "$REGISTRY_PID" > /tmp/tc08_registry.pid
@@ -60,9 +60,9 @@ test:
     command: |
       MCP_MESH_REGISTRY_URL=https://localhost:8000 \
       MCP_MESH_TLS_MODE=auto \
-      MCP_MESH_TLS_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem \
-      MCP_MESH_TLS_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem \
-      MCP_MESH_TLS_CA=$HOME/.mcp_mesh/tls/ca.pem \
+      MCP_MESH_TLS_CERT=$HOME/.mcp-mesh/tls/local-dev/registry-cert.pem \
+      MCP_MESH_TLS_KEY=$HOME/.mcp-mesh/tls/local-dev/registry-key.pem \
+      MCP_MESH_TLS_CA=$HOME/.mcp-mesh/tls/ca.pem \
       python system_agent.py > /tmp/agent-chained.log 2>&1 &
       AGENT_PID=$!
       echo "$AGENT_PID" > /tmp/tc08_agent.pid

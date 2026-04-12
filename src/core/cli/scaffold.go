@@ -61,7 +61,6 @@ Examples:
   # Generate docker-compose with custom project name
   meshctl scaffold --compose --project-name my-project
 
-  # Preview generated code without creating files
   # Generate API gateway agent
   meshctl scaffold --name my-gateway --agent-type api
 

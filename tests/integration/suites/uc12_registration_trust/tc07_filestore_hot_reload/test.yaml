@@ -38,7 +38,7 @@ test:
   - name: "Register entity while registry running"
     handler: shell
     command: |
-      meshctl entity register live-entity --ca-cert $HOME/.mcp_mesh/tls/ca.pem
+      meshctl entity register live-entity --ca-cert $HOME/.mcp-mesh/tls/ca.pem
       sleep 2
       meshctl entity list
     capture: register_live
