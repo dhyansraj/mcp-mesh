@@ -457,7 +457,7 @@ func (s *Server) handleListEntities(c *gin.Context) {
 	if trustDir == "" {
 		home, _ := os.UserHomeDir()
 		if home != "" {
-			trustDir = home + "/.mcp_mesh/tls"
+			trustDir = home + "/.mcp-mesh/tls"
 		}
 	}
 

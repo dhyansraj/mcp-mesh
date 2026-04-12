@@ -41,7 +41,7 @@ type CLIConfig struct {
 	PIDFile          string `json:"pid_file"`          // default: "./mcp_mesh_dev.pid"
 
 	// State management
-	StateDir string `json:"state_dir"` // default: "~/.mcp_mesh"
+	StateDir string `json:"state_dir"` // default: "~/.mcp-mesh"
 
 	// Configuration metadata
 	Version      string    `json:"version"`       // Configuration version for migration
@@ -62,7 +62,7 @@ const ConfigVersion = "1.0.0"
 // MUST match Python CLI default values exactly
 func DefaultConfig() *CLIConfig {
 	homeDir, _ := os.UserHomeDir()
-	stateDir := filepath.Join(homeDir, ".mcp_mesh")
+	stateDir := filepath.Join(homeDir, ".mcp-mesh")
 
 	return &CLIConfig{
 		RegistryPort:        8000,
@@ -187,25 +187,25 @@ func getConfigFilePath() string {
 	case "windows":
 		// Windows: Use APPDATA or fallback to user home
 		if appData := os.Getenv("APPDATA"); appData != "" {
-			configDir = filepath.Join(appData, "mcp_mesh")
+			configDir = filepath.Join(appData, "mcp-mesh")
 		} else if homeDir, err := os.UserHomeDir(); err == nil {
-			configDir = filepath.Join(homeDir, ".mcp_mesh")
+			configDir = filepath.Join(homeDir, ".mcp-mesh")
 		} else {
 			return ".\\cli_config.json"
 		}
 	case "darwin":
 		// macOS: Use ~/Library/Application Support
 		if homeDir, err := os.UserHomeDir(); err == nil {
-			configDir = filepath.Join(homeDir, "Library", "Application Support", "mcp_mesh")
+			configDir = filepath.Join(homeDir, "Library", "Application Support", "mcp-mesh")
 		} else {
 			return "./cli_config.json"
 		}
 	default:
 		// Linux and other Unix-like systems: Use XDG_CONFIG_HOME or ~/.config
 		if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
-			configDir = filepath.Join(xdgConfig, "mcp_mesh")
+			configDir = filepath.Join(xdgConfig, "mcp-mesh")
 		} else if homeDir, err := os.UserHomeDir(); err == nil {
-			configDir = filepath.Join(homeDir, ".config", "mcp_mesh")
+			configDir = filepath.Join(homeDir, ".config", "mcp-mesh")
 		} else {
 			return "./cli_config.json"
 		}

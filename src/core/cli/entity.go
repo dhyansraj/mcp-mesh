@@ -58,7 +58,7 @@ Examples:
 	}
 
 	cmd.Flags().String("ca-cert", "", "Path to entity CA PEM file (required)")
-	cmd.Flags().String("trust-dir", "", "Override trust directory (default: ~/.mcp_mesh/tls)")
+	cmd.Flags().String("trust-dir", "", "Override trust directory (default: ~/.mcp-mesh/tls)")
 	cmd.Flags().Bool("force", false, "Overwrite if entity already registered")
 	_ = cmd.MarkFlagRequired("ca-cert")
 
@@ -79,7 +79,7 @@ Examples:
 		RunE: runEntityList,
 	}
 
-	cmd.Flags().String("trust-dir", "", "Override trust directory (default: ~/.mcp_mesh/tls)")
+	cmd.Flags().String("trust-dir", "", "Override trust directory (default: ~/.mcp-mesh/tls)")
 	cmd.Flags().Bool("json", false, "Output as JSON")
 
 	return cmd
@@ -100,7 +100,7 @@ Examples:
 		RunE: runEntityRevoke,
 	}
 
-	cmd.Flags().String("trust-dir", "", "Override trust directory (default: ~/.mcp_mesh/tls)")
+	cmd.Flags().String("trust-dir", "", "Override trust directory (default: ~/.mcp-mesh/tls)")
 	cmd.Flags().Bool("force", false, "Skip confirmation warning")
 
 	return cmd
@@ -127,7 +127,7 @@ func getDefaultTrustDir() string {
 		return envDir
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".mcp_mesh", "tls")
+	return filepath.Join(home, ".mcp-mesh", "tls")
 }
 
 func getEntitiesDir(trustDir string) string {

@@ -1,11 +1,13 @@
 import { Header } from "@/components/layout/Header";
 import { LiveTraceView } from "@/components/live/LiveTraceView";
 import { useLiveTraces } from "@/lib/live-trace";
-import { Radio } from "lucide-react";
+import { Radio, WifiOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export default function LivePage() {
-  const { traces, connected } = useLiveTraces();
+  const { traces, connected, error } = useLiveTraces();
+
+  const showDisconnected = !connected && error !== null;
 
   return (
     <div className="flex flex-col h-full">
@@ -20,7 +22,7 @@ export default function LivePage() {
               connected ? "bg-green-500" : "bg-destructive"
             )}
           />
-          <span>{connected ? "Streaming" : "Connecting..."}</span>
+          <span>{connected ? "Streaming" : showDisconnected ? "Disconnected" : "Connecting..."}</span>
           {traces.length > 0 && (
             <span className="ml-2">
               {traces.length} trace{traces.length !== 1 ? "s" : ""}
@@ -31,7 +33,20 @@ export default function LivePage() {
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {traces.length === 0 ? (
+        {showDisconnected && traces.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-4">
+            <WifiOff className="h-12 w-12 text-muted-foreground/50" />
+            <div className="text-center">
+              <p className="text-sm font-medium text-muted-foreground">
+                Distributed tracing is not available
+              </p>
+              <p className="text-xs text-muted-foreground/60 mt-1 max-w-sm">
+                The observability stack (Tempo) is not running or not reachable.
+                Start it to see live traces here.
+              </p>
+            </div>
+          </div>
+        ) : traces.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-4">
             <Radio className="h-12 w-12 text-muted-foreground/50" />
             <div className="text-center">

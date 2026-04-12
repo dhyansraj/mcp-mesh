@@ -766,6 +766,15 @@ func cleanupAllFiles(pm *PIDManager, quiet bool) error {
 			fmt.Printf("  Deleted: %s\n", registryDBFile)
 		}
 	}
+	// Remove SQLite WAL and SHM companion files
+	for _, suffix := range []string{"-wal", "-shm"} {
+		companion := registryDBFile + suffix
+		if err := os.Remove(companion); err == nil {
+			if !quiet {
+				fmt.Printf("  Deleted: %s\n", companion)
+			}
+		}
+	}
 
 	// Delete log files
 	lm, err := NewLogManager()

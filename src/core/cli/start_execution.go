@@ -371,7 +371,7 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 	// localNonWatchAgentPIDs tracks the PIDs of non-watch agents started by THIS
 	// runAgentsInForeground invocation. Used at shutdown to kill only our own
 	// children — we deliberately do NOT use GetRunningProcesses() for cleanup,
-	// because ~/.mcp_mesh/processes.json is a globally shared file across all
+	// because ~/.mcp-mesh/processes.json is a globally shared file across all
 	// meshctl instances, and reading it would cause cross-instance cascade kills.
 	//
 	// A set (map[int]struct{}) is used rather than a slice so entries can be
@@ -536,7 +536,7 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 
 	// Stop non-watch agents started by this meshctl invocation.
 	// We intentionally do NOT call GetRunningProcesses() here — that reads
-	// ~/.mcp_mesh/processes.json which is globally shared across all meshctl
+	// ~/.mcp-mesh/processes.json which is globally shared across all meshctl
 	// instances, and killing entries from it would cascade into unrelated
 	// instances' agents and registries (the #706-related cascading-shutdown bug).
 	shutdownTimeout, _ := cmd.Flags().GetInt("shutdown-timeout")

@@ -88,11 +88,11 @@ export function Sidebar() {
           <span
             className={cn(
               "flex h-2 w-2 rounded-full",
-              connected ? "bg-green-500" : "bg-destructive"
+              connected ? "bg-green-500" : "bg-yellow-500 animate-pulse"
             )}
           />
           <span className="text-xs text-muted-foreground">
-            {connected ? "Connected" : "Disconnected"}
+            {connected ? "Connected" : "Reconnecting..."}
           </span>
         </div>
       </div>

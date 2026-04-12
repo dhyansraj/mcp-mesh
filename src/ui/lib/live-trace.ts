@@ -31,6 +31,7 @@ const MAX_TRACES = 20;
 export interface UseLiveTracesResult {
   traces: LiveTrace[];
   connected: boolean;
+  error: Error | null;
   active: boolean;
   setActive: (active: boolean) => void;
 }
@@ -38,6 +39,7 @@ export interface UseLiveTracesResult {
 export function useLiveTraces(): UseLiveTracesResult {
   const [traces, setTraces] = useState<LiveTrace[]>([]);
   const [connected, setConnected] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
   const [active, setActive] = useState(true);
   const tracesRef = useRef<Map<string, LiveTrace>>(new Map());
 
@@ -73,14 +75,17 @@ export function useLiveTraces(): UseLiveTracesResult {
 
     eventSource.onopen = () => {
       setConnected(true);
+      setError(null);
     };
 
     eventSource.onerror = () => {
       setConnected(false);
+      setError(new Error("Live trace connection lost. Reconnecting..."));
     };
 
     eventSource.addEventListener("connected", () => {
       setConnected(true);
+      setError(null);
     });
 
     eventSource.addEventListener("trace_started", (e: MessageEvent) => {
@@ -107,5 +112,5 @@ export function useLiveTraces(): UseLiveTracesResult {
     };
   }, [active, handleSnapshot]);
 
-  return { traces, connected, active, setActive };
+  return { traces, connected, error, active, setActive };
 }
