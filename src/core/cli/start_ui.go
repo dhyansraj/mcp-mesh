@@ -35,6 +35,7 @@ func maybeStartUIServer(cmd *cobra.Command, config *CLIConfig, registryURL strin
 
 	if !quiet {
 		fmt.Printf("Dashboard UI available at http://localhost:%d\n", actualPort)
+		fmt.Printf("Dashboard logs: ~/.mcp-mesh/logs/meshui.log\n")
 	}
 
 	// Write PID file for UI process

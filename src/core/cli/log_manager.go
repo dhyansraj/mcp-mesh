@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -155,6 +156,7 @@ func (lm *LogManager) ListAgentLogs() ([]string, error) {
 	for agent := range agentSet {
 		agents = append(agents, agent)
 	}
+	sort.Strings(agents)
 	return agents, nil
 }
 

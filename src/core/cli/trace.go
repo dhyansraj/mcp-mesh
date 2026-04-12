@@ -144,9 +144,15 @@ func runTraceCommand(cmd *cobra.Command, args []string) error {
 			}
 			return fmt.Errorf("trace '%s' not found\n\n"+
 				"Possible reasons:\n"+
-				"  - Trace ID may be incorrect or expired\n"+
-				"  - Distributed tracing may not be enabled\n"+
-				"  - Observability stack (Tempo) may not be deployed\n\n"+
+				"  - Distributed tracing is not enabled. Either:\n"+
+				"      export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true\n"+
+				"    or use the --dte flag with meshctl start:\n"+
+				"      meshctl start --dte -d -w <agents...>\n"+
+				"  - Observability stack (Redis + Tempo) is not running.\n"+
+				"    Start it with:\n"+
+				"      meshctl scaffold --observability\n"+
+				"      docker compose -f docker-compose.observability.yml up -d\n"+
+				"  - The trace may have expired or the ID may be incorrect\n\n"+
 				"Run 'meshctl man observability' for setup instructions.", traceID)
 		}
 		break

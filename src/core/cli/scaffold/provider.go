@@ -14,7 +14,7 @@ import (
 var supportedLanguages = []string{"python", "typescript", "java"}
 
 // supportedAgentTypes defines the agent types that can be scaffolded
-var supportedAgentTypes = []string{"tool", "llm-agent", "llm-provider"}
+var supportedAgentTypes = []string{"tool", "llm-agent", "llm-provider", "api"}
 
 // validNamePattern defines the regex for valid agent names
 // Must start with a letter, can contain letters, numbers, hyphens, and underscores

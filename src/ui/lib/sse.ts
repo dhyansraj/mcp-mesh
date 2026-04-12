@@ -40,6 +40,7 @@ export function useMeshEvents(options: UseMeshEventsOptions = {}): UseMeshEvents
 
     eventSource.onerror = () => {
       setConnected(false);
+      setError(new Error("Connection to registry lost. Reconnecting..."));
       // EventSource auto-reconnects, just track the state
     };
 

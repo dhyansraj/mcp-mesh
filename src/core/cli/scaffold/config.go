@@ -155,6 +155,8 @@ func ContextFromConfig(config *ScaffoldConfig) *ScaffoldContext {
 		ctx.Template = "llm-agent"
 	case "llm-provider":
 		ctx.Template = "llm-provider"
+	case "api":
+		ctx.Template = "api"
 	}
 
 	// LLM agent configuration

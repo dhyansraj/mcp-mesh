@@ -140,12 +140,81 @@ func ScanForAgents(dir string) ([]DetectedAgent, error) {
 	return agents, nil
 }
 
+// extractBalancedParen finds a marker (e.g. "@mesh.agent") in content,
+// then returns everything from the marker through the matching closing ')'.
+// It handles nested parentheses inside string literals correctly.
+// If the first occurrence of marker doesn't yield a balanced paren block
+// (e.g. it appears in a comment or string), the function tries subsequent
+// occurrences until one succeeds or the content is exhausted.
+func extractBalancedParen(content, marker string) string {
+	searchFrom := 0
+	for {
+		idx := strings.Index(content[searchFrom:], marker)
+		if idx == -1 {
+			return ""
+		}
+		idx += searchFrom // adjust to absolute position
+
+		// Find the opening '('
+		start := idx + len(marker)
+		valid := true
+		for start < len(content) && content[start] != '(' {
+			if content[start] != ' ' && content[start] != '\t' && content[start] != '\n' && content[start] != '\r' {
+				valid = false
+				break
+			}
+			start++
+		}
+		if !valid || start >= len(content) {
+			searchFrom = idx + len(marker)
+			continue
+		}
+
+		// Walk forward counting balanced parens, skipping string literals
+		depth := 0
+		inString := byte(0) // 0 = not in string, '"' or '\'' = in that string
+		found := false
+		end := 0
+		for i := start; i < len(content); i++ {
+			ch := content[i]
+			if inString != 0 {
+				if ch == '\\' {
+					i++ // skip escaped character
+				} else if ch == inString {
+					inString = 0
+				}
+				continue
+			}
+			switch ch {
+			case '"', '\'':
+				inString = ch
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 {
+					end = i + 1
+					found = true
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if found {
+			return content[idx:end]
+		}
+		// Unbalanced at this occurrence — try the next one
+		searchFrom = idx + len(marker)
+	}
+}
+
 // parseAgentDecorator extracts name and port from @mesh.agent decorator
 func parseAgentDecorator(content string) (*DetectedAgent, error) {
-	// Pattern to match @mesh.agent decorator (handles multiline)
-	// We need to match the decorator and its contents, handling newlines
-	agentPattern := regexp.MustCompile(`@mesh\.agent\s*\([\s\S]*?\)`)
-	match := agentPattern.FindString(content)
+	// Find @mesh.agent( and then match balanced parentheses.
+	// A simple lazy regex like [\s\S]*?\) fails when string values
+	// contain ')' — e.g. description="planner (Day 7)".
+	match := extractBalancedParen(content, `@mesh.agent`)
 	if match == "" {
 		return nil, nil // Not an agent file
 	}
@@ -224,9 +293,8 @@ func parseJavaAgent(dir string) (*DetectedAgent, error) {
 
 		contentStr := string(content)
 
-		// Look for @MeshAgent annotation
-		agentPattern := regexp.MustCompile(`@MeshAgent\s*\([\s\S]*?\)`)
-		match := agentPattern.FindString(contentStr)
+		// Look for @MeshAgent annotation (balanced parens to handle strings with ')')
+		match := extractBalancedParen(contentStr, `@MeshAgent`)
 		if match == "" {
 			return nil
 		}
@@ -317,6 +385,50 @@ func GenerateDockerCompose(config *ComposeConfig, outputDir string) (*GenerateRe
 
 	// File exists and force is false - merge new agents
 	return mergeAgentsIntoCompose(config, outputPath, existingContent)
+}
+
+// GenerateObservabilityCompose generates a standalone docker-compose.observability.yml
+// with only the observability stack (redis, tempo, grafana) and supporting config files
+func GenerateObservabilityCompose(config *ComposeConfig, outputDir string) error {
+	// Set defaults
+	if config.ProjectName == "" {
+		absPath, err := filepath.Abs(outputDir)
+		if err == nil {
+			config.ProjectName = filepath.Base(absPath)
+		} else {
+			config.ProjectName = "mcp-mesh"
+		}
+	}
+	if config.NetworkName == "" {
+		config.NetworkName = config.ProjectName + "-network"
+	}
+
+	outputPath := filepath.Join(outputDir, "docker-compose.observability.yml")
+
+	tmpl, err := template.New("docker-compose-observability").Parse(observabilityComposeTemplate)
+	if err != nil {
+		return fmt.Errorf("failed to parse template: %w", err)
+	}
+
+	file, err := os.Create(outputPath)
+	if err != nil {
+		return fmt.Errorf("failed to create docker-compose.observability.yml: %w", err)
+	}
+	defer file.Close()
+
+	if err := tmpl.Execute(file, config); err != nil {
+		return fmt.Errorf("failed to render template: %w", err)
+	}
+
+	// Generate supporting config files
+	if err := generateTempoConfig(outputDir); err != nil {
+		return fmt.Errorf("failed to generate tempo.yaml: %w", err)
+	}
+	if err := generateGrafanaConfig(outputDir); err != nil {
+		return fmt.Errorf("failed to generate grafana configs: %w", err)
+	}
+
+	return nil
 }
 
 // generateFreshCompose generates a new docker-compose.yml from template
@@ -1575,6 +1687,95 @@ func generateGrafanaConfig(outputDir string) error {
 
 	return nil
 }
+
+// observabilityComposeTemplate is the template for the standalone observability compose file
+const observabilityComposeTemplate = `# MCP Mesh Observability Stack
+# Generated by: meshctl scaffold --observability
+#
+# Usage:
+#   docker compose -f docker-compose.observability.yml up -d
+#
+# Services:
+#   - redis: Redis for distributed tracing state
+#   - tempo: Distributed tracing backend (OTLP receiver)
+#   - grafana: Observability dashboard (admin/admin)
+#
+# To enable distributed tracing in your agents, set:
+#   export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
+#   export REDIS_URL=redis://localhost:6379
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: {{ .ProjectName }}-redis
+    hostname: redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - {{ .NetworkName }}
+
+  tempo:
+    image: grafana/tempo:2.9.0
+    container_name: {{ .ProjectName }}-tempo
+    hostname: tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
+      - "4317:4317"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3200/ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - {{ .NetworkName }}
+
+  grafana:
+    image: grafana/grafana:12.3.1
+    container_name: {{ .ProjectName }}-grafana
+    hostname: grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
+    volumes:
+      - ./grafana/grafana.ini:/etc/grafana/grafana.ini:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      tempo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - {{ .NetworkName }}
+
+volumes:
+  tempo-data:
+  grafana-data:
+
+networks:
+  {{ .NetworkName }}:
+    name: {{ .NetworkName }}
+    driver: bridge
+`
 
 // dockerComposeTemplate is the embedded template for docker-compose.yml
 const dockerComposeTemplate = `# MCP Mesh Development Docker Compose

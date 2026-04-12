@@ -1,0 +1,61 @@
+# {{ .Name }}
+
+{{ if .Description }}{{ .Description }}{{ else }}MCP Mesh API gateway generated using meshctl scaffold.{{ end }}
+
+## Overview
+
+This is an Express-based HTTP API gateway that consumes mesh capabilities via `mesh.route()`.
+Unlike tool agents, this gateway does not provide tools — it exposes REST endpoints
+that call tools on other agents in the mesh.
+
+## Quick Start
+
+```bash
+# Install dependencies
+npm install
+
+# Run the agent (development)
+npm run dev
+
+# Run the agent (production)
+npm start
+```
+
+## Project Structure
+
+```
+{{ .Name }}/
+├── src/
+│   └── index.ts      # API gateway implementation
+├── package.json      # Dependencies
+├── tsconfig.json     # TypeScript config
+├── Dockerfile        # Container build
+└── helm-values.yaml  # Kubernetes deployment
+```
+
+## Docker
+
+```bash
+# Build the image
+docker build -t {{ .Name }}:latest .
+
+# Run the container
+docker run -p {{ .Port }}:{{ .Port }} {{ .Name }}:latest
+```
+
+## Kubernetes
+
+```bash
+# Deploy using Helm
+helm install {{ .Name }} oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  -n mcp-mesh \
+  -f helm-values.yaml \
+  --set image.repository=your-registry/{{ .Name }} \
+  --set image.tag=v1.0.0
+```
+
+## Documentation
+
+- [MCP Mesh Documentation](https://github.com/dhyansraj/mcp-mesh)
+- [TypeScript SDK Reference](https://github.com/dhyansraj/mcp-mesh/tree/main/src/runtime/typescript)
+- Run `meshctl man decorators --typescript` for decorator reference

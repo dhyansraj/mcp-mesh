@@ -9,6 +9,7 @@ export interface MeshContextValue {
   connected: boolean;
   loading: boolean;
   error: Error | null;
+  sseError: Error | null;
   showAll: boolean;
   setShowAll: (show: boolean) => void;
   paused: boolean;
@@ -156,7 +157,8 @@ export function MeshProvider({ children }: { children: React.ReactNode }) {
         events: allEvents,
         connected,
         loading,
-        error: fetchError || sseError,
+        error: fetchError,
+        sseError,
         showAll,
         setShowAll,
         paused,

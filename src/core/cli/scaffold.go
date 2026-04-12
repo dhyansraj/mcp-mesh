@@ -26,6 +26,7 @@ Agent types:
   - tool: Basic tool agent with @mesh.tool decorator
   - llm-agent: LLM-powered agent with @mesh.llm decorator
   - llm-provider: Zero-code LLM provider with @mesh.llm_provider decorator
+  - api: HTTP API gateway that consumes mesh capabilities via @mesh.route
 
 Examples:
   # Interactive mode (recommended for first-time users)
@@ -54,8 +55,14 @@ Examples:
   # Generate docker-compose with observability stack (redis, tempo, grafana)
   meshctl scaffold --compose --observability
 
+  # Generate standalone observability stack (redis, tempo, grafana)
+  meshctl scaffold --observability
+
   # Generate docker-compose with custom project name
   meshctl scaffold --compose --project-name my-project
+
+  # Generate API gateway agent
+  meshctl scaffold --name my-gateway --agent-type api
 
   # Preview generated code without creating files
   meshctl scaffold --name my-agent --agent-type tool --dry-run
@@ -92,7 +99,7 @@ Infrastructure:
 	cmd.Flags().String("package", "", "Java package name (default: com.example.<agent-name>)")
 
 	// Agent type flag
-	cmd.Flags().String("agent-type", "", "Agent type: tool, llm-agent, llm-provider")
+	cmd.Flags().String("agent-type", "", "Agent type: tool, llm-agent, llm-provider, api")
 
 	// LLM-agent specific flags
 	cmd.Flags().String("llm-selector", "claude", "LLM provider selector: claude, openai")
@@ -133,8 +140,14 @@ func runScaffoldCommand(cmd *cobra.Command, args []string) error {
 
 	// Check if generating docker-compose
 	compose, _ := cmd.Flags().GetBool("compose")
+	observability, _ := cmd.Flags().GetBool("observability")
 	if compose {
 		return runComposeGeneration(cmd)
+	}
+
+	// Standalone observability: --observability without --compose
+	if observability {
+		return runObservabilityGeneration(cmd)
 	}
 
 	var ctx *scaffold.ScaffoldContext
@@ -488,6 +501,40 @@ func runComposeGeneration(cmd *cobra.Command) error {
 	cmd.Println()
 	cmd.Println("To start all services:")
 	cmd.Println("  docker compose up -d")
+
+	return nil
+}
+
+// runObservabilityGeneration handles the --observability flag (without --compose)
+// to generate a standalone docker-compose.observability.yml with only the observability stack
+func runObservabilityGeneration(cmd *cobra.Command) error {
+	output, _ := cmd.Flags().GetString("output")
+	projectName, _ := cmd.Flags().GetString("project-name")
+
+	config := &scaffold.ComposeConfig{
+		Agents:        nil,
+		Observability: true,
+		ProjectName:   projectName,
+		NetworkName:   "",
+	}
+
+	if err := scaffold.GenerateObservabilityCompose(config, output); err != nil {
+		return fmt.Errorf("failed to generate observability compose: %w", err)
+	}
+
+	cmd.Println("Generated docker-compose.observability.yml with Redis, Tempo, and Grafana")
+	cmd.Println()
+	cmd.Println("Services included:")
+	cmd.Println("  - redis (6379)")
+	cmd.Println("  - tempo (3200, 4317)")
+	cmd.Println("  - grafana (3000)")
+	cmd.Println()
+	cmd.Println("Start with:")
+	if output != "." {
+		cmd.Printf("  docker compose -f %s/docker-compose.observability.yml up -d\n", output)
+	} else {
+		cmd.Println("  docker compose -f docker-compose.observability.yml up -d")
+	}
 
 	return nil
 }

@@ -24,13 +24,14 @@ func SetEmbeddedTemplates(fs embed.FS) {
 }
 
 // supportedTemplates defines the templates available for static generation
-var supportedTemplates = []string{"basic", "llm-agent", "llm-provider"}
+var supportedTemplates = []string{"basic", "llm-agent", "llm-provider", "api"}
 
 // agentTypeToTemplate maps agent types to their corresponding template names
 var agentTypeToTemplate = map[string]string{
 	"tool":         "basic",
 	"llm-agent":    "llm-agent",
 	"llm-provider": "llm-provider",
+	"api":          "api",
 }
 
 // StaticProvider implements ScaffoldProvider for template-based generation.
@@ -54,7 +55,7 @@ func (p *StaticProvider) Description() string {
 
 // RegisterFlags adds static-specific flags to the command
 func (p *StaticProvider) RegisterFlags(cmd *cobra.Command) {
-	cmd.Flags().StringP("template", "t", "basic", "Template: basic, llm-agent, llm-provider")
+	cmd.Flags().StringP("template", "t", "basic", "Template: basic, llm-agent, llm-provider, api")
 	cmd.Flags().String("template-dir", "", "Custom template directory")
 	cmd.Flags().String("config", "", "Config file (YAML) for complex scaffolding")
 	cmd.Flags().String("tool-name", "", "Tool name for the agent")

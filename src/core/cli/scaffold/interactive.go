@@ -80,6 +80,7 @@ func RunInteractiveScaffold(outputDir string) (*InteractiveResult, error) {
 			"tool - Basic tool agent with capability registration",
 			"llm-agent - LLM-powered agent with agentic loop",
 			"llm-provider - Zero-code LLM provider (wraps LiteLLM)",
+			"api - HTTP API gateway that consumes mesh capabilities",
 		},
 		Default: "tool - Basic tool agent with capability registration",
 	}
@@ -546,6 +547,8 @@ func ContextFromInteractive(ic *InteractiveConfig) *ScaffoldContext {
 		ctx.Template = "llm-agent"
 	case "llm-provider":
 		ctx.Template = "llm-provider"
+	case "api":
+		ctx.Template = "api"
 	}
 
 	return ctx

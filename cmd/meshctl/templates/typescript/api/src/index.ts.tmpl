@@ -1,0 +1,99 @@
+/**
+ * {{ .Name }} - MCP Mesh API Gateway
+ *
+ * {{ if .Description }}{{ .Description }}{{ else }}An HTTP API gateway that consumes mesh capabilities via mesh.route().{{ end }}
+ */
+
+import express, { Request, Response } from "express";
+import { mesh } from "@mcpmesh/sdk";
+
+const app = express();
+app.use(express.json());
+
+const PORT = process.env.PORT || {{ .Port }};
+
+// ===== HEALTH & INFO ENDPOINTS =====
+
+app.get("/", (req: Request, res: Response) => {
+  res.json({
+    service: "{{ .Name }}",
+    endpoints: [
+      "GET  /health     - Health check",
+      "GET  /api/hello  - Call hello capability",
+    ],
+  });
+});
+
+app.get("/health", (req: Request, res: Response) => {
+  res.json({ status: "healthy", service: "{{ .Name }}" });
+});
+
+// ===== API ENDPOINTS =====
+
+/**
+ * GET /api/hello
+ *
+ * Example endpoint that calls the "hello" mesh capability.
+ * The mesh.route() middleware resolves the dependency and injects
+ * it into the handler via the deps object.
+ */
+app.get(
+  "/api/hello",
+  mesh.route([{ capability: "hello" }], async (req, res, { hello }) => {
+    if (!hello) {
+      return res.status(503).json({ error: "hello capability unavailable" });
+    }
+
+    try {
+      const result = await hello({});
+      res.json({ result });
+    } catch (err) {
+      console.error("Call failed:", err);
+      res.status(500).json({ error: "Call failed" });
+    }
+  })
+);
+
+// ===== MULTI-DEPENDENCY EXAMPLE (uncomment and adapt) =====
+//
+// Declare multiple dependencies on a single route.
+// Each dependency is available on the deps object by capability name.
+//
+// app.get(
+//   "/api/combined",
+//   mesh.route(
+//     [{ capability: "time_service" }, { capability: "system_info" }],
+//     async (req, res, deps) => {
+//       const results: Record<string, unknown> = {};
+//       if (deps.time_service) {
+//         results.time = await deps.time_service({});
+//       }
+//       if (deps.system_info) {
+//         results.system = await deps.system_info({});
+//       }
+//       res.json(results);
+//     }
+//   )
+// );
+
+// ===== POST ENDPOINT EXAMPLE (uncomment and adapt) =====
+//
+// Pass request body data as arguments to the mesh tool.
+//
+// app.post(
+//   "/api/calculate",
+//   mesh.route([{ capability: "add" }], async (req, res, { add }) => {
+//     if (!add) {
+//       return res.status(503).json({ error: "Calculator unavailable" });
+//     }
+//     const { a, b } = req.body;
+//     const result = await add({ a, b });
+//     res.json({ operation: "add", a, b, result: parseFloat(result) });
+//   })
+// );
+
+// ===== START SERVER =====
+
+app.listen(PORT, () => {
+  console.log(`{{ .Name }} API listening on http://localhost:${PORT}`);
+});

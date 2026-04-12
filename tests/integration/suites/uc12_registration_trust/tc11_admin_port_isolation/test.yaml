@@ -29,7 +29,7 @@ test:
       meshctl stop
       sleep 2
       echo "CERTS_READY=true"
-      ls $HOME/.mcp_mesh/tls/ca.pem
+      ls $HOME/.mcp-mesh/tls/ca.pem
     workdir: /workspace
     capture: cert_gen
 
@@ -37,8 +37,8 @@ test:
     handler: shell
     command: |
       MCP_MESH_TLS_MODE=auto \
-      MCP_MESH_TLS_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem \
-      MCP_MESH_TLS_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem \
+      MCP_MESH_TLS_CERT=$HOME/.mcp-mesh/tls/local-dev/registry-cert.pem \
+      MCP_MESH_TLS_KEY=$HOME/.mcp-mesh/tls/local-dev/registry-key.pem \
       MCP_MESH_ADMIN_PORT=8001 \
       mcp-mesh-registry --host localhost --port 8000 &>/tmp/admin-port-registry.log &
       REGISTRY_PID=$!

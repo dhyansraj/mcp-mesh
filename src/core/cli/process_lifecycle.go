@@ -500,12 +500,30 @@ func (pm *ProcessManager) StartUIProcess(port int, registryURL string, dbPath st
 
 	workingDir, _ := os.Getwd()
 	cmd.Dir = workingDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	// Set up log file for UI server
+	lm, err := NewLogManager()
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize log manager: %w", err)
+	}
+
+	if err := lm.RotateLogs("meshui"); err != nil {
+		pm.logger.Printf("Warning: failed to rotate logs for meshui: %v", err)
+	}
+
+	logFile, err := lm.CreateLogFile("meshui")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create log file for meshui: %w", err)
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 
 	if err := cmd.Start(); err != nil {
+		logFile.Close()
 		return nil, fmt.Errorf("failed to start UI server process: %w", err)
 	}
+	// Close parent's copy of log file — child process has its own file descriptor
+	logFile.Close()
 
 	metadata := map[string]interface{}{
 		"port":         port,

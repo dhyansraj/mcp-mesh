@@ -53,11 +53,11 @@ func getCLIClient() *http.Client {
 		}
 
 		// When no MCP_MESH_TLS_* env vars are set, check for TLS auto CA.
-		// TLS auto mode generates a local CA at ~/.mcp_mesh/tls/ca.pem.
+		// TLS auto mode generates a local CA at ~/.mcp-mesh/tls/ca.pem.
 		// Auto-detecting it lets `meshctl call` work without manual env setup.
 		if tlsConfig == nil {
 			if homeDir, err := os.UserHomeDir(); err == nil {
-				autoCA := filepath.Join(homeDir, ".mcp_mesh", "tls", "ca.pem")
+				autoCA := filepath.Join(homeDir, ".mcp-mesh", "tls", "ca.pem")
 				if _, statErr := os.Stat(autoCA); statErr == nil {
 					caCert, readErr := os.ReadFile(autoCA)
 					if readErr != nil {
@@ -166,7 +166,21 @@ func GetRunningProcesses() ([]ProcessInfo, error) {
 		return nil, err
 	}
 
-	processFile := filepath.Join(homeDir, ".mcp_mesh", "processes.json")
+	processFile := filepath.Join(homeDir, ".mcp-mesh", "processes.json")
+
+	// One-time migration from legacy path (~/.mcp_mesh/ -> ~/.mcp-mesh/)
+	if _, err := os.Stat(processFile); os.IsNotExist(err) {
+		legacyPath := filepath.Join(homeDir, ".mcp_mesh", "processes.json")
+		if _, err := os.Stat(legacyPath); err == nil {
+			os.MkdirAll(filepath.Dir(processFile), 0755)
+			if data, readErr := os.ReadFile(legacyPath); readErr == nil {
+				if writeErr := os.WriteFile(processFile, data, 0644); writeErr == nil {
+					os.Remove(legacyPath)
+				}
+			}
+		}
+	}
+
 	data, err := os.ReadFile(processFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -213,7 +227,7 @@ func SaveRunningProcesses(processes []ProcessInfo) error {
 		return err
 	}
 
-	mcpDir := filepath.Join(homeDir, ".mcp_mesh")
+	mcpDir := filepath.Join(homeDir, ".mcp-mesh")
 	if err := os.MkdirAll(mcpDir, 0755); err != nil {
 		return err
 	}

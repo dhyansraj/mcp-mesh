@@ -37,7 +37,7 @@ test:
   - name: "Register external entity"
     handler: shell
     command: |
-      meshctl entity register test-entity --ca-cert $HOME/.mcp_mesh/tls/ca.pem
+      meshctl entity register test-entity --ca-cert $HOME/.mcp-mesh/tls/ca.pem
       echo "EXIT_CODE=$?"
     capture: entity_register
 
@@ -52,9 +52,9 @@ test:
     command: |
       MCP_MESH_REGISTRY_URL=https://localhost:8000 \
       MCP_MESH_TLS_MODE=auto \
-      MCP_MESH_TLS_CERT=$HOME/.mcp_mesh/tls/local-dev/registry-cert.pem \
-      MCP_MESH_TLS_KEY=$HOME/.mcp_mesh/tls/local-dev/registry-key.pem \
-      MCP_MESH_TLS_CA=$HOME/.mcp_mesh/tls/ca.pem \
+      MCP_MESH_TLS_CERT=$HOME/.mcp-mesh/tls/local-dev/registry-cert.pem \
+      MCP_MESH_TLS_KEY=$HOME/.mcp-mesh/tls/local-dev/registry-key.pem \
+      MCP_MESH_TLS_CA=$HOME/.mcp-mesh/tls/ca.pem \
       python system_agent.py > /tmp/agent-eviction.log 2>&1 &
       AGENT_PID=$!
       echo "$AGENT_PID" > /tmp/tc10_agent.pid

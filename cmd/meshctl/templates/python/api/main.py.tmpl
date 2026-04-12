@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""
+{{ .Name }} - MCP Mesh API Gateway
+
+{{ if .Description }}{{ .Description }}{{ else }}An HTTP API gateway that consumes mesh capabilities via @mesh.route.{{ end }}
+"""
+
+import mesh
+from fastapi import FastAPI, HTTPException, Request
+from mesh.types import McpMeshTool
+
+app = FastAPI(
+    title="{{ toPascalCase .Name }}",
+    description="{{ if .Description }}{{ .Description }}{{ else }}MCP Mesh API gateway for {{ .Name }}{{ end }}",
+    version="1.0.0",
+)
+
+
+# ===== HEALTH CHECK =====
+
+@app.get("/health")
+async def health():
+    """Health check endpoint."""
+    return {"status": "healthy", "service": "{{ .Name }}"}
+
+
+# ===== API ENDPOINTS =====
+
+@app.get("/api/hello")
+@mesh.route(dependencies=["hello"])
+async def hello_endpoint(request: Request, hello: McpMeshTool = None):
+    """
+    Example API endpoint that calls the "hello" mesh capability.
+
+    The @mesh.route decorator declares dependencies on mesh capabilities.
+    At request time, the framework resolves each dependency and injects
+    it as a McpMeshTool parameter (matched by parameter name).
+    """
+    if not hello:
+        raise HTTPException(status_code=503, detail="hello capability unavailable")
+    result = await hello()
+    return {"result": result}
+
+
+# ===== MULTI-DEPENDENCY EXAMPLE (uncomment and adapt) =====
+#
+# Declare multiple dependencies on a single route.
+# Each dependency is injected as a separate McpMeshTool parameter.
+#
+# @app.get("/api/combined")
+# @mesh.route(dependencies=["time_service", "system_info"])
+# async def combined(
+#     request: Request,
+#     time_service: McpMeshTool = None,
+#     system_info: McpMeshTool = None,
+# ):
+#     results = {}
+#     if time_service:
+#         results["time"] = await time_service()
+#     if system_info:
+#         results["system"] = await system_info()
+#     return results
+
+
+# ===== POST ENDPOINT EXAMPLE (uncomment and adapt) =====
+#
+# Pass request body data as arguments to the mesh tool.
+#
+# @app.post("/api/calculate")
+# @mesh.route(dependencies=["calculator"])
+# async def calculate(
+#     request: Request,
+#     calculator: McpMeshTool = None,
+# ):
+#     body = await request.json()
+#     if not calculator:
+#         raise HTTPException(status_code=503, detail="calculator capability unavailable")
+#     result = await calculator(body)
+#     return {"result": result}
+
+
+@app.get("/")
+async def root():
+    """Root endpoint listing available API routes."""
+    return {
+        "service": "{{ .Name }}",
+        "endpoints": [
+            "GET  /health     - Health check",
+            "GET  /api/hello  - Call hello capability",
+        ],
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port={{ .Port }}, log_level="info")
