@@ -48,7 +48,8 @@ app.get(
       const result = await hello({});
       res.json({ result });
     } catch (err) {
-      res.status(500).json({ error: `Call failed: ${err}` });
+      console.error("Call failed:", err);
+      res.status(500).json({ error: "Call failed" });
     }
   })
 );
