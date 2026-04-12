@@ -1,0 +1,109 @@
+package {{ .JavaPackage }};
+
+import io.mcpmesh.spring.web.MeshDependency;
+import io.mcpmesh.spring.web.MeshInject;
+import io.mcpmesh.spring.web.MeshRoute;
+import io.mcpmesh.types.McpMeshTool;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * {{ .NamePascal }} - MCP Mesh API Gateway
+ *
+ * <p>{{ default "An HTTP API gateway that consumes mesh capabilities via @MeshRoute." .Description }}
+ *
+ * <p>This app has no @MeshAgent annotation — it uses @MeshRoute to declare
+ * dependencies on mesh capabilities, and the framework automatically starts
+ * in consumer-only mode (agent_type="api").
+ *
+ * <h2>Running</h2>
+ * <pre>
+ * # 1. Start the registry
+ * meshctl start --registry-only -d
+ *
+ * # 2. Start an agent that provides the "hello" capability
+ * meshctl start hello-agent -d
+ *
+ * # 3. Start this API gateway
+ * cd {{ .Name }}
+ * mvn spring-boot:run
+ * </pre>
+ */
+@SpringBootApplication
+public class {{ .NamePascal }}Application {
+
+    public static void main(String[] args) {
+        SpringApplication.run({{ .NamePascal }}Application.class, args);
+    }
+}
+
+@RestController
+@RequestMapping("/api")
+class ApiController {
+
+    private static final Logger log = LoggerFactory.getLogger(ApiController.class);
+
+    /**
+     * Call the "hello" mesh capability.
+     *
+     * <p>The @MeshRoute annotation declares a dependency on the "hello" capability.
+     * At request time, the framework resolves the dependency and injects it as a
+     * McpMeshTool parameter (matched by @MeshInject name).
+     */
+    @GetMapping("/hello")
+    @MeshRoute(dependencies = @MeshDependency(capability = "hello"))
+    public ResponseEntity<Map<String, Object>> hello(
+            @MeshInject("hello") McpMeshTool<Map<String, Object>> helloTool) {
+
+        log.info("Calling hello capability via mesh");
+        Map<String, Object> result = helloTool.call(Map.of());
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("source", "mesh-agent");
+        response.put("result", result);
+        response.put("timestamp", LocalDateTime.now().toString());
+        return ResponseEntity.ok(response);
+    }
+
+    // ===== GRACEFUL FALLBACK EXAMPLE (uncomment and adapt) =====
+    //
+    // Use failOnMissingDependency = false to handle unavailable capabilities.
+    //
+    // @GetMapping("/hello-fallback")
+    // @MeshRoute(
+    //     dependencies = @MeshDependency(capability = "hello"),
+    //     failOnMissingDependency = false
+    // )
+    // public ResponseEntity<Map<String, Object>> helloFallback(
+    //         @MeshInject("hello") McpMeshTool<Map<String, Object>> helloTool) {
+    //     Map<String, Object> response = new LinkedHashMap<>();
+    //     if (helloTool != null && helloTool.isAvailable()) {
+    //         response.put("source", "mesh-agent");
+    //         response.put("result", helloTool.call(Map.of()));
+    //     } else {
+    //         response.put("source", "local-fallback");
+    //         response.put("result", Map.of("message", "Hello from fallback!"));
+    //     }
+    //     response.put("timestamp", LocalDateTime.now().toString());
+    //     return ResponseEntity.ok(response);
+    // }
+
+    @GetMapping("/health")
+    public ResponseEntity<Map<String, Object>> health() {
+        return ResponseEntity.ok(Map.of(
+            "status", "healthy",
+            "service", "{{ .Name }}",
+            "timestamp", LocalDateTime.now().toString()
+        ));
+    }
+}

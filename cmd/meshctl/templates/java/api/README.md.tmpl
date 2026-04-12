@@ -1,0 +1,73 @@
+# {{ .Name }}
+
+{{ if .Description }}{{ .Description }}{{ else }}An MCP Mesh API gateway generated using `meshctl scaffold`.{{ end }}
+
+## Overview
+
+This is a Java/Spring Boot HTTP API gateway that consumes mesh capabilities via `@MeshRoute`.
+Unlike tool agents, this gateway does not provide tools — it exposes REST endpoints
+that call tools on other agents in the mesh.
+
+## Getting Started
+
+### Prerequisites
+
+- Java 17+
+- Maven 3.9+
+- MCP Mesh SDK
+
+### Running the Agent
+
+```bash
+mvn spring-boot:run
+```
+
+Or with meshctl:
+
+```bash
+meshctl start {{ .Name }}
+```
+
+The API gateway will start on port {{ .Port }} by default.
+
+## Project Structure
+
+```
+{{ .Name }}/
+├── pom.xml
+├── Dockerfile
+├── helm-values.yaml
+└── src/main/java/{{ .JavaPackagePath }}/
+    └── {{ .NamePascal }}Application.java
+```
+
+## Docker
+
+```bash
+# Build the image
+docker build -t {{ .Name }}:latest .
+
+# Run the container
+docker run -p {{ .Port }}:{{ .Port }} {{ .Name }}:latest
+```
+
+## Kubernetes
+
+```bash
+# Deploy using Helm
+helm install {{ .Name }} oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  -n mcp-mesh \
+  -f helm-values.yaml \
+  --set image.repository=your-registry/{{ .Name }} \
+  --set image.tag=v1.0.0
+```
+
+## Documentation
+
+- [MCP Mesh Documentation](https://github.com/dhyansraj/mcp-mesh)
+- [Java SDK Reference](https://github.com/dhyansraj/mcp-mesh/tree/main/src/runtime/java)
+- Run `meshctl man decorators --java` for decorator reference
+
+## License
+
+MIT

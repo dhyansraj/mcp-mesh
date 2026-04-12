@@ -26,6 +26,7 @@ Agent types:
   - tool: Basic tool agent with @mesh.tool decorator
   - llm-agent: LLM-powered agent with @mesh.llm decorator
   - llm-provider: Zero-code LLM provider with @mesh.llm_provider decorator
+  - api: HTTP API gateway that consumes mesh capabilities via @mesh.route
 
 Examples:
   # Interactive mode (recommended for first-time users)
@@ -59,6 +60,10 @@ Examples:
 
   # Generate docker-compose with custom project name
   meshctl scaffold --compose --project-name my-project
+
+  # Preview generated code without creating files
+  # Generate API gateway agent
+  meshctl scaffold --name my-gateway --agent-type api
 
   # Preview generated code without creating files
   meshctl scaffold --name my-agent --agent-type tool --dry-run
@@ -95,7 +100,7 @@ Infrastructure:
 	cmd.Flags().String("package", "", "Java package name (default: com.example.<agent-name>)")
 
 	// Agent type flag
-	cmd.Flags().String("agent-type", "", "Agent type: tool, llm-agent, llm-provider")
+	cmd.Flags().String("agent-type", "", "Agent type: tool, llm-agent, llm-provider, api")
 
 	// LLM-agent specific flags
 	cmd.Flags().String("llm-selector", "claude", "LLM provider selector: claude, openai")

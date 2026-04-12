@@ -341,13 +341,15 @@ func TestStaticProvider_SupportedTemplates(t *testing.T) {
 	assert.Contains(t, templates, "basic")
 	assert.Contains(t, templates, "llm-agent")
 	assert.Contains(t, templates, "llm-provider")
-	assert.Len(t, templates, 3)
+	assert.Contains(t, templates, "api")
+	assert.Len(t, templates, 4)
 }
 
 func TestStaticProvider_IsValidTemplate(t *testing.T) {
 	assert.True(t, IsValidTemplate("basic"))
 	assert.True(t, IsValidTemplate("llm-agent"))
 	assert.True(t, IsValidTemplate("llm-provider"))
+	assert.True(t, IsValidTemplate("api"))
 	assert.False(t, IsValidTemplate("multi-tool"))
 	assert.False(t, IsValidTemplate("gateway"))
 	assert.False(t, IsValidTemplate("nonexistent"))
