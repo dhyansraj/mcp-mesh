@@ -1,0 +1,134 @@
+# Test Case: X-Mesh-Timeout Chain Propagation
+# Validates that X-Mesh-Timeout header propagates through a 3-agent chain
+# across Python, TypeScript, and Java runtimes. Each agent sleeps 70s
+# before calling the next — total chain time ~210s. Without timeout
+# propagation, the default 60s proxy timeout would kill the first hop.
+
+name: "X-Mesh-Timeout Chain Propagation"
+description: "Verify timeout header propagates through py->ts->java chain (70s sleep each, 210s total)"
+tags:
+  - tool_calling
+  - timeout
+  - python
+  - typescript
+  - java
+  - chain
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/py-slow-agent /workspace/
+      cp -r /artifacts/ts-slow-agent /workspace/
+      cp -r /artifacts/java-slow-agent /workspace/
+
+  - name: "Install TypeScript dependencies"
+    handler: npm-install
+    path: /workspace/ts-slow-agent
+
+  - name: "Install Java dependencies"
+    handler: maven-install
+    path: /workspace/java-slow-agent
+    timeout: 600
+
+  # Start agents in reverse order (Java first, then TS, then Python)
+  # so dependencies resolve before the calling agent starts
+  - name: "Start Java slow agent"
+    handler: shell
+    command: "meshctl start /workspace/java-slow-agent -d"
+    workdir: /workspace
+    capture: start_java
+
+  - name: "Start TypeScript slow agent"
+    handler: shell
+    command: "meshctl start ts-slow-agent/src/index.ts --env MCP_MESH_HTTP_PORT=4002 -d"
+    workdir: /workspace
+    capture: start_ts
+
+  - name: "Start Python slow agent"
+    handler: shell
+    command: "meshctl start py-slow-agent/main.py -d"
+    workdir: /workspace
+    capture: start_py
+
+  - name: "Wait for all agents to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="py-slow-agent ts-slow-agent java-slow-agent"
+      EXPECTED_COUNT=3
+      echo "Waiting for $EXPECTED_COUNT agents to register..."
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        COUNT=0
+        for agent in $EXPECTED; do
+          if echo "$AGENTS" | grep -q "$agent"; then
+            COUNT=$((COUNT + 1))
+          fi
+        done
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "All $EXPECTED_COUNT agents registered after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        echo "  $COUNT/$EXPECTED_COUNT agents registered (attempt $i/30)..."
+        sleep 2
+      done
+      echo "ERROR: Only $COUNT/$EXPECTED_COUNT agents registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_output
+    timeout: 90
+
+  # Call with --timeout 300 (5 min). The chain needs ~210s.
+  # Without X-Mesh-Timeout propagation, the 60s proxy default would kill it.
+  - name: "Call slow chain with sufficient timeout"
+    handler: shell
+    command: |
+      echo "=== Calling slow_chain_py with --timeout 300 (chain sleeps 210s total) ==="
+      RESULT=$(meshctl call slow_chain_py '{"message":"start"}' --timeout 300 2>&1)
+      echo "$RESULT"
+      if echo "$RESULT" | grep -q 'timeout_chain_complete'; then
+        echo "PASS: Full chain completed — timeout propagated through all 3 hops"
+      else
+        echo "FAIL: Chain did not complete"
+        exit 1
+      fi
+    workdir: /workspace
+    timeout: 360
+    capture: chain_result
+
+assertions:
+  # All 3 agents registered
+  - expr: "${captured.wait_output} contains 'py-slow-agent'"
+    message: "Python slow agent should be registered"
+  - expr: "${captured.wait_output} contains 'ts-slow-agent'"
+    message: "TypeScript slow agent should be registered"
+  - expr: "${captured.wait_output} contains 'java-slow-agent'"
+    message: "Java slow agent should be registered"
+
+  # Chain completed end-to-end
+  - expr: "${captured.chain_result} contains 'timeout_chain_complete'"
+    message: "Chain should complete — X-Mesh-Timeout propagated through py->ts->java"
+  - expr: "${captured.chain_result} contains 'PASS'"
+    message: "Full chain should pass with propagated timeout"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

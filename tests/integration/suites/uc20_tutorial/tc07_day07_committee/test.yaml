@@ -149,13 +149,15 @@ test:
     workdir: /workspace
     capture: health_check
 
-  # Call planner via meshctl (bypasses gateway's 60s proxy timeout — the
-  # committee fan-out with 4 LLM calls needs more time than the default)
+  # Call planner via HTTP gateway — X-Mesh-Timeout propagates automatically
   - name: "Call planner with specialist committee"
     handler: shell
     command: |
       echo "=== Calling planner with committee of specialists ==="
-      RESPONSE=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000","session_id":"test-session-day7"}' --timeout 300 2>&1)
+      RESPONSE=$(curl -s --max-time 300 -X POST http://localhost:8080/plan \
+        -H "Content-Type: application/json" \
+        -H "X-Session-Id: test-session-day7" \
+        -d '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' 2>&1)
       echo "$RESPONSE"
       if echo "$RESPONSE" | grep -qi 'specialist\|budget.*analysis\|adventure\|logistics\|savings_tips\|unique_experiences\|daily_schedule'; then
         echo "PASS: Response includes specialist insights"
