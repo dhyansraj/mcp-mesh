@@ -1,0 +1,31 @@
+# --8<-- [start:full_file]
+# Helm values for flight-agent — scaffolded by meshctl, adapted for k8s
+# Usage: helm install flight-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+#          --version 1.2.0 -n trip-planner -f values-flight-agent.yaml
+
+image:
+  repository: trip-planner/flight-agent
+  tag: "latest"
+  pullPolicy: IfNotPresent  # Use Never for minikube local builds
+
+agent:
+  name: flight-agent
+  runtime: python
+  # K8s uses port 8080 by default (each pod has its own IP, no conflicts)
+  # The Helm chart sets MCP_MESH_HTTP_PORT=8080, overriding the decorator's http_port=9101
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+mesh:
+  enabled: true
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
+# --8<-- [end:full_file]

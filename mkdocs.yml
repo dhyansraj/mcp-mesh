@@ -123,6 +123,7 @@ markdown_extensions:
   - pymdownx.mark
   - pymdownx.smartsymbols
   - pymdownx.snippets:
+      base_path: [docs, .]
       auto_append:
         - includes/abbreviations.md
   - pymdownx.superfences:
@@ -156,6 +157,22 @@ nav:
   - Why MCP Mesh?: 00-why-mcp-mesh/index.md
 
   - From Dev to Production: dev-to-production.md
+
+  - Tutorial:
+      - tutorial/index.md
+      - Prerequisites: tutorial/prerequisites.md
+      - "Part 1 — Build and Run":
+          - "Day 1 — Scaffold & first tool": tutorial/day-01-scaffold.md
+          - "Day 2 — More tools & DI": tutorial/day-02-dependency-injection.md
+          - "Day 3 — Observability & LLM": tutorial/day-03-llm-provider.md
+          - "Day 4 — Providers & Tiers": tutorial/day-04-provider-tiers.md
+          - "Day 5 — HTTP Gateway": tutorial/day-05-http-gateway.md
+      - "Part 2 — Production Patterns":
+          - "Day 6 — Chat History": tutorial/day-06-chat-history.md
+          - "Day 7 — Committee of Specialists": tutorial/day-07-committee.md
+          - "Day 8 — Docker Compose": tutorial/day-08-docker-compose.md
+          - "Day 9 — Kubernetes": tutorial/day-09-kubernetes.md
+          - "Day 10 — What's Next": tutorial/day-10-whats-next.md
 
   # Python SDK - Generated from meshctl man pages
   - Python SDK:

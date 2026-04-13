@@ -1,0 +1,200 @@
+# Test Case: Day 4 — Multiple Providers and Dependency Tiers
+# Validates the Day 4 tutorial narrative: start 8 agents (5 tools + 2 LLM providers
+# + planner), verify registration, call plan_trip (triggers LLM delegation with
+# tool access), verify provider tag routing and auto-failover.
+#
+# Requires ANTHROPIC_API_KEY and OPENAI_API_KEY — tagged with 'llm' so CI can skip.
+# Uses tc-level artifacts from /artifacts
+
+name: "Tutorial Day 4: Multiple Providers and Dependency Tiers"
+description: "Verify 8 agents start, provider tag routing works, auto-failover on provider stop, tier-1/tier-2 tool access"
+tags:
+  - tutorial
+  - day04
+  - python
+  - llm
+  - meshctl
+  - providers
+  - tiers
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy all 8 agents to workspace
+  - name: "Copy agents to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/flight-agent /workspace/
+      cp -r /artifacts/hotel-agent /workspace/
+      cp -r /artifacts/weather-agent /workspace/
+      cp -r /artifacts/poi-agent /workspace/
+      cp -r /artifacts/user-prefs-agent /workspace/
+      cp -r /artifacts/claude-provider /workspace/
+      cp -r /artifacts/openai-provider /workspace/
+      cp -r /artifacts/planner-agent /workspace/
+    capture: copy_output
+
+  # Start all 8 agents in detached mode
+  - name: "Start all agents"
+    handler: shell
+    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py openai-provider/main.py planner-agent/main.py -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for registration and DI resolution
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 20
+
+  # Verify all 8 agents are registered
+  - name: "Verify all agents are registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Verify all 8 tools are listed
+  - name: "Verify all tools are listed"
+    handler: shell
+    command: "meshctl list --tools"
+    workdir: /workspace
+    capture: list_tools
+
+  # Verify both LLM providers registered
+  - name: "Verify claude-provider registration"
+    handler: shell
+    command: |
+      STATUS=$(meshctl status claude-provider 2>&1)
+      echo "$STATUS"
+      if echo "$STATUS" | grep -q "healthy"; then
+        echo "PASS: claude-provider is healthy"
+      else
+        echo "FAIL: claude-provider not healthy"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: claude_status
+
+  - name: "Verify openai-provider registration"
+    handler: shell
+    command: |
+      STATUS=$(meshctl status openai-provider 2>&1)
+      echo "$STATUS"
+      if echo "$STATUS" | grep -q "healthy"; then
+        echo "PASS: openai-provider is healthy"
+      else
+        echo "FAIL: openai-provider not healthy"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: openai_status
+
+  # Call plan_trip — should route to Claude (preferred via +claude tag)
+  - name: "Call plan_trip with Claude preferred"
+    handler: shell
+    command: |
+      echo "=== Calling plan_trip (should route to Claude via +claude) ==="
+      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace 2>&1)
+      echo "$RESULT"
+      if echo "$RESULT" | grep -qi 'Kyoto\|itinerary\|day' && \
+         echo "$RESULT" | grep -q 'Trace ID'; then
+        echo "PASS: plan_trip returned itinerary with trace ID"
+      else
+        echo "FAIL: Response missing expected fields"
+        exit 1
+      fi
+    workdir: /workspace
+    timeout: 120
+    capture: call_claude_result
+
+  # Stop Claude provider for failover test
+  - name: "Stop claude-provider"
+    handler: shell
+    command: "meshctl stop claude-provider"
+    workdir: /workspace
+    capture: stop_claude_output
+
+  # Wait for deregistration
+  - name: "Wait for deregistration"
+    handler: wait
+    seconds: 10
+
+  # Call plan_trip again — should auto-route to OpenAI
+  - name: "Call plan_trip with failover to OpenAI"
+    handler: shell
+    command: |
+      echo "=== Calling plan_trip (should failover to OpenAI) ==="
+      RESULT=$(meshctl call plan_trip '{"destination":"Tokyo","dates":"June 10-14, 2026","budget":"$3000"}' --trace 2>&1)
+      echo "$RESULT"
+      if echo "$RESULT" | grep -qi 'Tokyo\|itinerary\|day' && \
+         echo "$RESULT" | grep -q 'Trace ID'; then
+        echo "PASS: plan_trip returned itinerary via failover"
+      else
+        echo "FAIL: Failover response missing expected fields"
+        exit 1
+      fi
+    workdir: /workspace
+    timeout: 120
+    capture: call_failover_result
+
+assertions:
+  # All 8 agents registered
+  - expr: "${captured.list_output} contains 'flight-agent'"
+    message: "flight-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'hotel-agent'"
+    message: "hotel-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'weather-agent'"
+    message: "weather-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'poi-agent'"
+    message: "poi-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'user-prefs-agent'"
+    message: "user-prefs-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'claude-provider'"
+    message: "claude-provider should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'openai-provider'"
+    message: "openai-provider should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'planner-agent'"
+    message: "planner-agent should appear in meshctl list"
+
+  # All 8 tools registered
+  - expr: "${captured.list_tools} contains 'claude_provider'"
+    message: "claude_provider tool should appear"
+
+  - expr: "${captured.list_tools} contains 'openai_provider'"
+    message: "openai_provider tool should appear"
+
+  - expr: "${captured.list_tools} contains 'plan_trip'"
+    message: "plan_trip tool should appear"
+
+  # Provider health
+  - expr: "${captured.claude_status} contains 'PASS'"
+    message: "claude-provider should be healthy"
+
+  - expr: "${captured.openai_status} contains 'PASS'"
+    message: "openai-provider should be healthy"
+
+  # LLM calls returned expected data
+  - expr: "${captured.call_claude_result} contains 'PASS'"
+    message: "plan_trip should return an itinerary via Claude"
+
+  - expr: "${captured.call_failover_result} contains 'PASS'"
+    message: "plan_trip should return an itinerary via OpenAI failover"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

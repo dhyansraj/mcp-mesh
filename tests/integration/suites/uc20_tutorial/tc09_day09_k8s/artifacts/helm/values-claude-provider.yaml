@@ -1,0 +1,37 @@
+# --8<-- [start:full_file]
+# Helm values for claude-provider — scaffolded by meshctl, adapted for k8s
+# Added: API key from Kubernetes Secret
+
+image:
+  repository: trip-planner/claude-provider
+  tag: "latest"
+  pullPolicy: IfNotPresent  # Use Never for minikube local builds
+
+agent:
+  name: claude-provider
+  runtime: python
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+mesh:
+  enabled: true
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
+
+# API key injected from the llm-keys Secret created in the namespace
+env:
+  - name: ANTHROPIC_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: llm-keys
+        key: ANTHROPIC_API_KEY
+        optional: true
+# --8<-- [end:full_file]

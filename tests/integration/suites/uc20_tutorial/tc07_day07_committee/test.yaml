@@ -1,0 +1,188 @@
+# Test Case: Day 7 — Committee of Specialists
+# Validates the Day 7 tutorial narrative: start 13 agents (10 from Day 6 + 3 specialists),
+# verify registration, call plan_trip via HTTP gateway, verify response includes
+# specialist insights (budget analysis, adventure advice, logistics planning).
+#
+# Requires ANTHROPIC_API_KEY and OPENAI_API_KEY — tagged with 'llm' so CI can skip.
+# Requires Redis on localhost:6379 — tagged with 'redis'.
+# Uses tc-level artifacts from /artifacts
+
+name: "Tutorial Day 7: Committee of Specialists"
+description: "Verify 13 agents start, specialist fan-out works, response includes structured specialist insights"
+tags:
+  - tutorial
+  - day07
+  - python
+  - llm
+  - redis
+  - meshctl
+  - gateway
+  - fastapi
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - handler: shell
+    command: "pip install fastapi uvicorn redis"
+
+test:
+  # Copy all 13 agents to workspace
+  - name: "Copy agents to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/flight-agent /workspace/
+      cp -r /artifacts/hotel-agent /workspace/
+      cp -r /artifacts/weather-agent /workspace/
+      cp -r /artifacts/poi-agent /workspace/
+      cp -r /artifacts/user-prefs-agent /workspace/
+      cp -r /artifacts/claude-provider /workspace/
+      cp -r /artifacts/openai-provider /workspace/
+      cp -r /artifacts/planner-agent /workspace/
+      cp -r /artifacts/chat-history-agent /workspace/
+      cp -r /artifacts/gateway /workspace/
+      cp -r /artifacts/budget-analyst /workspace/
+      cp -r /artifacts/adventure-advisor /workspace/
+      cp -r /artifacts/logistics-planner /workspace/
+    capture: copy_output
+
+  # Start all 12 tool/provider/planner/specialist agents in detached mode
+  - name: "Start tool, provider, and specialist agents"
+    handler: shell
+    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py openai-provider/main.py planner-agent/main.py chat-history-agent/main.py budget-analyst/main.py adventure-advisor/main.py logistics-planner/main.py -d"
+    workdir: /workspace
+    capture: start_agents_output
+
+  # Wait for registration and DI resolution
+  - name: "Wait for agent registration"
+    handler: wait
+    seconds: 25
+
+  # Start the gateway
+  - name: "Start gateway"
+    handler: shell
+    command: "meshctl start gateway/main.py -d"
+    workdir: /workspace
+    capture: start_gateway_output
+
+  # Wait for gateway to register and resolve dependencies
+  - name: "Wait for gateway registration"
+    handler: wait
+    seconds: 10
+
+  # Verify all 13 agents are registered
+  - name: "Verify all agents are registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Verify tools are listed (including specialist tools)
+  - name: "Verify tools are listed"
+    handler: shell
+    command: "meshctl list --tools"
+    workdir: /workspace
+    capture: list_tools
+
+  # Verify gateway health
+  - name: "Verify gateway health endpoint"
+    handler: shell
+    command: |
+      RESPONSE=$(curl -s http://localhost:8080/health 2>&1)
+      echo "$RESPONSE"
+      if echo "$RESPONSE" | grep -q '"healthy"'; then
+        echo "PASS: gateway health check passed"
+      else
+        echo "FAIL: gateway health check failed"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: health_check
+
+  # Call planner and verify specialist insights are included
+  - name: "Call planner with specialist committee"
+    handler: shell
+    command: |
+      echo "=== Calling planner with committee of specialists ==="
+      RESPONSE=$(curl -s --max-time 300 -X POST http://localhost:8080/plan \
+        -H "Content-Type: application/json" \
+        -H "X-Session-Id: test-session-day7" \
+        -d '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' 2>&1)
+      echo "$RESPONSE"
+      if echo "$RESPONSE" | grep -qi 'specialist\|budget.*analysis\|adventure\|logistics\|savings_tips\|unique_experiences\|daily_schedule'; then
+        echo "PASS: Response includes specialist insights"
+      else
+        echo "FAIL: Response missing specialist insights"
+        exit 1
+      fi
+    workdir: /workspace
+    timeout: 360
+    capture: planner_result
+
+assertions:
+  # All 13 agents registered
+  - expr: "${captured.list_output} contains 'flight-agent'"
+    message: "flight-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'hotel-agent'"
+    message: "hotel-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'weather-agent'"
+    message: "weather-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'poi-agent'"
+    message: "poi-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'user-prefs-agent'"
+    message: "user-prefs-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'claude-provider'"
+    message: "claude-provider should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'openai-provider'"
+    message: "openai-provider should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'planner-agent'"
+    message: "planner-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'chat-history-agent'"
+    message: "chat-history-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'gateway'"
+    message: "gateway should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'budget-analyst'"
+    message: "budget-analyst should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'adventure-advisor'"
+    message: "adventure-advisor should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'logistics-planner'"
+    message: "logistics-planner should appear in meshctl list"
+
+  # Specialist tools registered
+  - expr: "${captured.list_tools} contains 'budget_analysis'"
+    message: "budget_analysis tool should appear"
+
+  - expr: "${captured.list_tools} contains 'adventure_advice'"
+    message: "adventure_advice tool should appear"
+
+  - expr: "${captured.list_tools} contains 'logistics_planning'"
+    message: "logistics_planning tool should appear"
+
+  # Gateway health check
+  - expr: "${captured.health_check} contains 'PASS'"
+    message: "gateway health endpoint should return healthy"
+
+  # Planner with specialists succeeded
+  - expr: "${captured.planner_result} contains 'PASS'"
+    message: "Planner response should include specialist insights"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

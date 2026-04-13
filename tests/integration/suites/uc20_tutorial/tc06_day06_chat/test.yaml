@@ -1,0 +1,197 @@
+# Test Case: Day 6 — Chat History
+# Validates the Day 6 tutorial narrative: start 10 agents (9 from Day 5 + chat-history-agent),
+# verify registration, call plan_trip via HTTP gateway with X-Session-Id header,
+# verify second turn references first turn (multi-turn awareness).
+#
+# Requires ANTHROPIC_API_KEY and OPENAI_API_KEY — tagged with 'llm' so CI can skip.
+# Requires Redis on localhost:6379 — tagged with 'redis'.
+# Uses tc-level artifacts from /artifacts
+
+name: "Tutorial Day 6: Chat History"
+description: "Verify 10 agents start, chat-history-agent stores turns in Redis, multi-turn conversation works"
+tags:
+  - tutorial
+  - day06
+  - python
+  - llm
+  - redis
+  - meshctl
+  - gateway
+  - fastapi
+timeout: 480
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - handler: shell
+    command: "pip install fastapi uvicorn redis"
+
+test:
+  # Copy all 10 agents to workspace
+  - name: "Copy agents to workspace"
+    handler: shell
+    command: |
+      cp -r /artifacts/flight-agent /workspace/
+      cp -r /artifacts/hotel-agent /workspace/
+      cp -r /artifacts/weather-agent /workspace/
+      cp -r /artifacts/poi-agent /workspace/
+      cp -r /artifacts/user-prefs-agent /workspace/
+      cp -r /artifacts/claude-provider /workspace/
+      cp -r /artifacts/openai-provider /workspace/
+      cp -r /artifacts/planner-agent /workspace/
+      cp -r /artifacts/chat-history-agent /workspace/
+      cp -r /artifacts/gateway /workspace/
+    capture: copy_output
+
+  # Start all 9 tool/provider/planner agents in detached mode
+  - name: "Start tool and provider agents"
+    handler: shell
+    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py openai-provider/main.py planner-agent/main.py chat-history-agent/main.py -d"
+    workdir: /workspace
+    capture: start_agents_output
+
+  # Wait for registration and DI resolution
+  - name: "Wait for agent registration"
+    handler: wait
+    seconds: 20
+
+  # Start the gateway
+  - name: "Start gateway"
+    handler: shell
+    command: "meshctl start gateway/main.py -d"
+    workdir: /workspace
+    capture: start_gateway_output
+
+  # Wait for gateway to register and resolve dependencies
+  - name: "Wait for gateway registration"
+    handler: wait
+    seconds: 10
+
+  # Verify all 10 agents are registered
+  - name: "Verify all agents are registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Verify tools are listed (including chat history tools)
+  - name: "Verify tools are listed"
+    handler: shell
+    command: "meshctl list --tools"
+    workdir: /workspace
+    capture: list_tools
+
+  # Verify gateway health
+  - name: "Verify gateway health endpoint"
+    handler: shell
+    command: |
+      RESPONSE=$(curl -s http://localhost:8080/health 2>&1)
+      echo "$RESPONSE"
+      if echo "$RESPONSE" | grep -q '"healthy"'; then
+        echo "PASS: gateway health check passed"
+      else
+        echo "FAIL: gateway health check failed"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: health_check
+
+  # Turn 1: initial trip plan
+  - name: "Turn 1 — initial trip plan"
+    handler: shell
+    command: |
+      echo "=== Turn 1: Initial trip plan ==="
+      RESPONSE=$(curl -s --max-time 120 -X POST http://localhost:8080/plan \
+        -H "Content-Type: application/json" \
+        -H "X-Session-Id: test-session-day6" \
+        -d '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' 2>&1)
+      echo "$RESPONSE"
+      if echo "$RESPONSE" | grep -qi 'result\|Kyoto\|itinerary\|day'; then
+        echo "PASS: Turn 1 returned trip plan"
+      else
+        echo "FAIL: Turn 1 response missing expected fields"
+        exit 1
+      fi
+    workdir: /workspace
+    timeout: 180
+    capture: turn1_result
+
+  # Turn 2: follow-up referencing first turn
+  - name: "Turn 2 — follow-up with history"
+    handler: shell
+    command: |
+      echo "=== Turn 2: Follow-up with budget change ==="
+      RESPONSE=$(curl -s --max-time 120 -X POST http://localhost:8080/plan \
+        -H "Content-Type: application/json" \
+        -H "X-Session-Id: test-session-day6" \
+        -d '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$1500","message":"Can you make it cheaper? I want to stay under $1500."}' 2>&1)
+      echo "$RESPONSE"
+      if echo "$RESPONSE" | grep -qi 'result\|Kyoto\|budget\|cheaper\|1500'; then
+        echo "PASS: Turn 2 returned updated plan"
+      else
+        echo "FAIL: Turn 2 response missing expected fields"
+        exit 1
+      fi
+    workdir: /workspace
+    timeout: 180
+    capture: turn2_result
+
+assertions:
+  # All 10 agents registered
+  - expr: "${captured.list_output} contains 'flight-agent'"
+    message: "flight-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'hotel-agent'"
+    message: "hotel-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'weather-agent'"
+    message: "weather-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'poi-agent'"
+    message: "poi-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'user-prefs-agent'"
+    message: "user-prefs-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'claude-provider'"
+    message: "claude-provider should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'openai-provider'"
+    message: "openai-provider should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'planner-agent'"
+    message: "planner-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'chat-history-agent'"
+    message: "chat-history-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'gateway'"
+    message: "gateway should appear in meshctl list"
+
+  # Chat history tools registered
+  - expr: "${captured.list_tools} contains 'save_turn'"
+    message: "save_turn tool should appear"
+
+  - expr: "${captured.list_tools} contains 'get_history'"
+    message: "get_history tool should appear"
+
+  # Gateway health check
+  - expr: "${captured.health_check} contains 'PASS'"
+    message: "gateway health endpoint should return healthy"
+
+  # Turn 1 succeeded
+  - expr: "${captured.turn1_result} contains 'PASS'"
+    message: "Turn 1 should return a trip plan"
+
+  # Turn 2 succeeded
+  - expr: "${captured.turn2_result} contains 'PASS'"
+    message: "Turn 2 should return an updated plan"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -1,0 +1,94 @@
+# Test Case: Day 1 — Scaffold and First Tool Agent
+# Validates the Day 1 tutorial narrative: start flight-agent, list it,
+# verify tools, call flight_search, verify response shape.
+#
+# Uses tc-level artifacts from /artifacts
+
+name: "Tutorial Day 1: Scaffold and First Tool"
+description: "Verify flight-agent starts, registers, exposes flight_search, and returns correct stub data"
+tags:
+  - tutorial
+  - day01
+  - python
+  - tools
+  - meshctl
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifact to workspace
+  - name: "Copy flight-agent to workspace"
+    handler: shell
+    command: "cp -r /artifacts/flight-agent /workspace/"
+    capture: copy_output
+
+  # Start agent in detached mode
+  - name: "Start flight-agent"
+    handler: shell
+    command: "meshctl start flight-agent/main.py -d"
+    workdir: /workspace
+    capture: start_output
+
+  # Wait for registration
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 10
+
+  # Verify agent is registered
+  - name: "Verify agent is registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Verify tools are listed
+  - name: "Verify flight_search tool is listed"
+    handler: shell
+    command: "meshctl list --tools"
+    workdir: /workspace
+    capture: list_tools
+
+  # Call flight_search and verify response shape
+  - name: "Call flight_search tool"
+    handler: shell
+    command: |
+      echo "=== Calling flight_search ==="
+      RESULT=$(meshctl call flight_search '{"origin":"SFO","destination":"NRT","date":"2026-06-01"}' 2>&1)
+      echo "$RESULT"
+      # Verify the response contains expected values
+      if echo "$RESULT" | grep -q '"origin": "SFO"' && \
+         echo "$RESULT" | grep -q '"destination": "NRT"' && \
+         echo "$RESULT" | grep -q '"date": "2026-06-01"' && \
+         echo "$RESULT" | grep -q '"carrier"'; then
+        echo "PASS: flight_search returned correct stub data"
+      else
+        echo "FAIL: Response missing expected fields"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: call_result
+
+assertions:
+  # Agent registered and visible
+  - expr: "${captured.list_output} contains 'flight-agent'"
+    message: "flight-agent should appear in meshctl list"
+
+  # flight_search tool is registered
+  - expr: "${captured.list_tools} contains 'flight_search'"
+    message: "flight_search tool should appear in meshctl list --tools"
+
+  # Tool call returned expected data
+  - expr: "${captured.call_result} contains 'PASS'"
+    message: "flight_search should return stub data with correct origin, destination, and date"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
