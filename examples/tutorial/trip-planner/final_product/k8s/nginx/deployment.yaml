@@ -1,0 +1,80 @@
+# Nginx (OpenResty) Deployment for TripPlanner
+# Serves the React SPA and proxies API calls to the gateway agent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          # Build from final_product/nginx/Dockerfile and push to your registry:
+          #   docker build -t <your-registry>/trip-planner-nginx:latest ./nginx
+          #   docker push <your-registry>/trip-planner-nginx:latest
+          image: trip-planner/nginx:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+          env:
+            - name: GOOGLE_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: nginx-oauth
+                  key: GOOGLE_CLIENT_ID
+            - name: GOOGLE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: nginx-oauth
+                  key: GOOGLE_CLIENT_SECRET
+            - name: DEV_MODE
+              valueFrom:
+                secretKeyRef:
+                  name: nginx-oauth
+                  key: DEV_MODE
+                  optional: true
+            - name: REDIS_HOST
+              value: "mcp-core-mcp-mesh-redis"
+            - name: REDIS_PORT
+              value: "6379"
+            - name: API_BACKEND
+              value: "http://gateway-mcp-mesh-agent:8080"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /usr/local/openresty/nginx/conf/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: nginx-config

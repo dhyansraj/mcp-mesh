@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/components/chatbubble.tsx","./src/components/layout.tsx","./src/components/tripcard.tsx","./src/lib/api.ts","./src/lib/auth.tsx","./src/pages/history.tsx","./src/pages/home.tsx","./src/pages/login.tsx","./src/pages/plan.tsx"],"version":"5.9.3"}

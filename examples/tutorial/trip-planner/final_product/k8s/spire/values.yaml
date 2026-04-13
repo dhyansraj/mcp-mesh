@@ -1,0 +1,53 @@
+# SPIRE Configuration for TripPlanner
+# Trust domain and workload identity settings
+#
+# This file documents the SPIRE configuration used by the manifests
+# in this directory. It is not consumed by Helm — it serves as a
+# single source of truth for operators customising the deployment.
+
+trust_domain: mcp-mesh.local
+
+server:
+  replicas: 1
+  port: 8081
+  image: ghcr.io/spiffe/spire-server:1.11.1
+  datastore:
+    type: sqlite3
+    connection_string: /run/spire/data/datastore.sqlite3
+  ca_ttl: "24h"
+  default_x509_svid_ttl: "1h"
+  log_level: INFO
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+agent:
+  image: ghcr.io/spiffe/spire-agent:1.11.1
+  socket_path: /run/spire/agent/sockets/agent.sock
+  log_level: INFO
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+workload_entries:
+  - name: mesh-registry
+    spiffe_id: spiffe://mcp-mesh.local/mesh-registry
+    parent_id: spiffe://mcp-mesh.local/agent
+    selectors:
+      - "k8s:pod-label:app.kubernetes.io/name:mcp-mesh-registry"
+    x509_svid_ttl: 3600
+
+  - name: mesh-agent
+    spiffe_id: spiffe://mcp-mesh.local/mesh-agent
+    parent_id: spiffe://mcp-mesh.local/agent
+    selectors:
+      - "k8s:pod-label:app.kubernetes.io/name:mcp-mesh-agent"
+    x509_svid_ttl: 3600

@@ -1,0 +1,31 @@
+# Helm values for planner-agent — TripPlanner Final Product (with SPIRE mTLS)
+
+image:
+  repository: trip-planner/planner-agent
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+agent:
+  name: planner-agent
+  runtime: python
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 200m
+    memory: 256Mi
+
+mesh:
+  enabled: true
+  tls:
+    mode: "auto"
+    provider: "spire"
+    spire:
+      enabled: true
+      socketPath: "/run/spire/agent/sockets/agent.sock"
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
