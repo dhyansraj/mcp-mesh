@@ -37,10 +37,15 @@ test:
       cp -r /artifacts/planner-agent /workspace/
     capture: copy_output
 
+  # Create env file with secrets (tsuite injects API keys automatically)
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
   # Start all 7 agents in detached mode
   - name: "Start all agents"
     handler: shell
-    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py planner-agent/main.py -d"
+    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py planner-agent/main.py --env-file .env -d"
     workdir: /workspace
     capture: start_output
 

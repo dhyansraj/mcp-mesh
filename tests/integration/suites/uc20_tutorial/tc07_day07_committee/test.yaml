@@ -48,10 +48,15 @@ test:
       cp -r /artifacts/logistics-planner /workspace/
     capture: copy_output
 
+  # Create env file with secrets (tsuite injects API keys automatically)
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
   # Start all 12 tool/provider/planner/specialist agents in detached mode
   - name: "Start tool, provider, and specialist agents"
     handler: shell
-    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py openai-provider/main.py planner-agent/main.py chat-history-agent/main.py budget-analyst/main.py adventure-advisor/main.py logistics-planner/main.py -d"
+    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py openai-provider/main.py planner-agent/main.py chat-history-agent/main.py budget-analyst/main.py adventure-advisor/main.py logistics-planner/main.py --env-file .env -d"
     workdir: /workspace
     capture: start_agents_output
 
@@ -63,7 +68,7 @@ test:
   # Start the gateway
   - name: "Start gateway"
     handler: shell
-    command: "meshctl start gateway/main.py -d"
+    command: "meshctl start gateway/main.py --env-file .env -d"
     workdir: /workspace
     capture: start_gateway_output
 
