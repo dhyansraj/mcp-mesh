@@ -483,8 +483,37 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		proxyReq.Header.Set("X-Parent-Span", parentSpan)
 	}
 
+	// Forward X-Mesh-Timeout so downstream agents can propagate it further (#769)
+	if meshTimeout := c.Request.Header.Get("X-Mesh-Timeout"); meshTimeout != "" {
+		proxyReq.Header.Set("X-Mesh-Timeout", meshTimeout)
+	}
+
+	// Forward headers matching MCP_MESH_PROPAGATE_HEADERS prefixes (#769)
+	if propagateEnv := os.Getenv("MCP_MESH_PROPAGATE_HEADERS"); propagateEnv != "" {
+		prefixes := strings.Split(propagateEnv, ",")
+		for i := range prefixes {
+			prefixes[i] = strings.TrimSpace(strings.ToLower(prefixes[i]))
+		}
+		for headerName, values := range c.Request.Header {
+			lowerName := strings.ToLower(headerName)
+			for _, prefix := range prefixes {
+				if prefix != "" && strings.HasPrefix(lowerName, prefix) {
+					for _, v := range values {
+						proxyReq.Header.Set(headerName, v)
+					}
+					break
+				}
+			}
+		}
+	}
+
 	// Respect client timeout if provided via X-Mesh-Timeout header (#656)
 	proxyTimeout := 60 * time.Second
+	if envTimeout := os.Getenv("MCP_MESH_PROXY_TIMEOUT"); envTimeout != "" {
+		if secs, err := strconv.Atoi(envTimeout); err == nil && secs > 0 {
+			proxyTimeout = time.Duration(secs) * time.Second
+		}
+	}
 	if timeoutHeader := c.Request.Header.Get("X-Mesh-Timeout"); timeoutHeader != "" {
 		if secs, err := strconv.Atoi(timeoutHeader); err == nil && secs > 0 {
 			if secs > 600 {

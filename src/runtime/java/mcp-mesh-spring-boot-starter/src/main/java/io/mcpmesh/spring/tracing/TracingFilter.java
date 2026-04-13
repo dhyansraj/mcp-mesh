@@ -112,6 +112,14 @@ public class TracingFilter implements Filter {
                 }
             }
 
+            // Always capture X-Mesh-Timeout for chain propagation (#769)
+            String meshTimeout = httpRequest.getHeader("X-Mesh-Timeout");
+            if (meshTimeout != null && !meshTimeout.isEmpty()) {
+                Map<String, String> current = new HashMap<>(TraceContext.getPropagatedHeaders());
+                current.put("x-mesh-timeout", meshTimeout);
+                TraceContext.setPropagatedHeaders(current);
+            }
+
             chain.doFilter(request, response);
 
         } finally {

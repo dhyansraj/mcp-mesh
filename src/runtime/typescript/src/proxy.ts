@@ -269,6 +269,12 @@ export async function callMcpTool(
         headers[key] = value;
       }
 
+      // Set X-Mesh-Timeout for registry proxy (#769). If already propagated, keep it.
+      if (!headers["X-Mesh-Timeout"] && !headers["x-mesh-timeout"]) {
+        const callTimeout = process.env.MCP_MESH_CALL_TIMEOUT || String(Math.floor(options.timeout / 1000));
+        headers["X-Mesh-Timeout"] = callTimeout;
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const fetchOptions: Record<string, any> = {
         method: "POST",

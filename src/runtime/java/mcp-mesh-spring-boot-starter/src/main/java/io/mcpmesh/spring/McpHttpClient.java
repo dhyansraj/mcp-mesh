@@ -256,6 +256,15 @@ public class McpHttpClient {
                 requestBuilder.header(entry.getKey(), entry.getValue());
             }
 
+            // Set X-Mesh-Timeout for registry proxy (#769)
+            if (!mergedHeaders.containsKey("x-mesh-timeout") && !mergedHeaders.containsKey("X-Mesh-Timeout")) {
+                String callTimeout = System.getenv("MCP_MESH_CALL_TIMEOUT");
+                if (callTimeout == null || callTimeout.isEmpty()) {
+                    callTimeout = "300"; // 5 minutes default for mesh calls
+                }
+                requestBuilder.header("X-Mesh-Timeout", callTimeout);
+            }
+
             Request httpRequest = requestBuilder.build();
 
             try (Response response = httpClient.newCall(httpRequest).execute()) {

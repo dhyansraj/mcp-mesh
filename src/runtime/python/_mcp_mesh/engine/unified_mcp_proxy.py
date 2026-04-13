@@ -957,6 +957,17 @@ class UnifiedMCPProxy:
                 self.timeout, 300
             )  # At least 5 minutes for large files
 
+            # Set X-Mesh-Timeout for registry proxy (#769). If already
+            # propagated from an incoming request, keep that value;
+            # otherwise use env/default.
+            import os
+
+            if "X-Mesh-Timeout" not in headers and "x-mesh-timeout" not in headers:
+                call_timeout = os.environ.get(
+                    "MCP_MESH_CALL_TIMEOUT", str(int(enhanced_timeout))
+                )
+                headers["X-Mesh-Timeout"] = call_timeout
+
             self.logger.debug(
                 f"🔄 HTTP call to {url} with {request_bytes} byte payload, timeout: {enhanced_timeout}s"
             )

@@ -401,6 +401,12 @@ export function route(
         }
       }
 
+      // Always capture X-Mesh-Timeout for chain propagation (#769)
+      const meshTimeout = req.headers["x-mesh-timeout"];
+      if (meshTimeout) {
+        propagatedHeaders["x-mesh-timeout"] = Array.isArray(meshTimeout) ? meshTimeout[0] : meshTimeout;
+      }
+
       // Parse trace context from incoming request headers
       const reqHeaders: Record<string, string | undefined> = {};
       if (req.headers) {
