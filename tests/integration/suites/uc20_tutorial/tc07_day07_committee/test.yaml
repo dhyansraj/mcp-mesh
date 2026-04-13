@@ -21,6 +21,8 @@ tags:
 timeout: 600
 
 pre_run:
+  - routine: global.start_observability
+
   - routine: global.setup_for_python_agent
     params:
       meshctl_version: "${config.packages.cli_version}"
