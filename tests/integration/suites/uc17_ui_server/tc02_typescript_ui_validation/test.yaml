@@ -77,6 +77,7 @@ test:
     handler: shell
     workdir: /workspace
     command: |
+      DATABASE_URL=$HOME/.mcp-mesh/mcp_mesh_registry.db \
       MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true \
       REDIS_URL=redis://localhost:6379 \
       TEMPO_URL=http://localhost:3200 \
