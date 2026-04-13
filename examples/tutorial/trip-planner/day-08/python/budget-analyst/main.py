@@ -9,16 +9,18 @@ app = FastMCP("Budget Analyst")
 
 
 # --8<-- [start:output_model]
+class BudgetItem(BaseModel):
+    category: str = Field(..., description="Budget category (e.g. flights, hotels, food)")
+    amount: int = Field(..., description="Estimated cost in USD")
+
+
 class BudgetAnalysis(BaseModel):
     """Structured budget analysis returned by the specialist."""
 
     total_estimated: int = Field(..., description="Total estimated cost in USD")
-    savings_tips: list[str] = Field(
-        default_factory=list, description="Actionable tips to save money"
-    )
-    budget_breakdown: list[dict] = Field(
-        default_factory=list,
-        description="Cost breakdown by category (flights, hotels, food, activities)",
+    savings_tips: list[str] = Field(..., description="Actionable tips to save money")
+    budget_breakdown: list[BudgetItem] = Field(
+        ..., description="Cost breakdown by category"
     )
 # --8<-- [end:output_model]
 

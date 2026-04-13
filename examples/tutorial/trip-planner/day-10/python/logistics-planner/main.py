@@ -9,15 +9,17 @@ app = FastMCP("Logistics Planner")
 
 
 # --8<-- [start:output_model]
+class DaySchedule(BaseModel):
+    day: int = Field(..., description="Day number (1, 2, 3, etc.)")
+    activities: list[str] = Field(..., description="Activities for this day with times")
+
+
 class LogisticsPlan(BaseModel):
     """Structured logistics plan returned by the specialist."""
 
-    daily_schedule: list[dict] = Field(
-        default_factory=list,
-        description="Day-by-day schedule with times, locations, and transit notes",
-    )
+    daily_schedule: list[DaySchedule] = Field(..., description="Day-by-day schedule")
     transit_tips: list[str] = Field(
-        default_factory=list, description="Local transport tips and passes to buy"
+        ..., description="Local transport tips and passes to buy"
     )
     time_optimization: str = Field(
         ..., description="Advice on minimizing travel time between locations"

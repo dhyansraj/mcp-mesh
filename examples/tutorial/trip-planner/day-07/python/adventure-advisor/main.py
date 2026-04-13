@@ -9,15 +9,18 @@ app = FastMCP("Adventure Advisor")
 
 
 # --8<-- [start:output_model]
+class Experience(BaseModel):
+    name: str = Field(..., description="Name of the experience")
+    description: str = Field(..., description="What makes this experience special")
+    why_special: str = Field(..., description="Why this is worth doing")
+
+
 class AdventureAdvice(BaseModel):
     """Structured adventure recommendations returned by the specialist."""
 
-    unique_experiences: list[dict] = Field(
-        default_factory=list,
-        description="Unique experiences with name, description, and why_special fields",
-    )
+    unique_experiences: list[Experience] = Field(..., description="Unique experiences")
     local_gems: list[str] = Field(
-        default_factory=list, description="Hidden local spots most tourists miss"
+        ..., description="Hidden local spots most tourists miss"
     )
     off_beaten_path: str = Field(
         ..., description="A paragraph about unconventional things to do"
