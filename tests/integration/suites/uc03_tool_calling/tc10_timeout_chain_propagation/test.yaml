@@ -44,23 +44,45 @@ test:
     path: /workspace/java-slow-agent
     timeout: 600
 
-  # Start agents in reverse order (Java first, then TS, then Python)
-  # so dependencies resolve before the calling agent starts
+  # Start registry first to avoid race between multiple meshctl start -d
+  # commands (each fork writes registry.pid, overwriting the previous one)
+  - name: "Start registry"
+    handler: shell
+    command: "meshctl start --registry-only -d"
+    workdir: /workspace
+    capture: start_registry
+
+  - name: "Wait for registry"
+    handler: shell
+    command: |
+      for i in $(seq 1 15); do
+        if curl -s http://localhost:8000/health 2>/dev/null | grep -q healthy; then
+          echo "Registry ready"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: Registry not ready"
+      exit 1
+    capture: wait_registry
+    timeout: 30
+
+  # Start agents in reverse dependency order (Java first, then TS, then Python)
   - name: "Start Java slow agent"
     handler: shell
-    command: "meshctl start /workspace/java-slow-agent -d"
+    command: "meshctl start /workspace/java-slow-agent --connect-only --registry-url http://localhost:8000 -d"
     workdir: /workspace
     capture: start_java
 
   - name: "Start TypeScript slow agent"
     handler: shell
-    command: "meshctl start ts-slow-agent/src/index.ts --env MCP_MESH_HTTP_PORT=4002 -d"
+    command: "meshctl start ts-slow-agent/src/index.ts --env MCP_MESH_HTTP_PORT=4002 --connect-only --registry-url http://localhost:8000 -d"
     workdir: /workspace
     capture: start_ts
 
   - name: "Start Python slow agent"
     handler: shell
-    command: "meshctl start py-slow-agent/main.py -d"
+    command: "meshctl start py-slow-agent/main.py --connect-only --registry-url http://localhost:8000 -d"
     workdir: /workspace
     capture: start_py
 
