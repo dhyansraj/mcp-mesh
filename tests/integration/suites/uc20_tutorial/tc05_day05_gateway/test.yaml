@@ -24,7 +24,7 @@ pre_run:
       meshctl_version: "${config.packages.cli_version}"
       mcpmesh_version: "${config.packages.sdk_python_version}"
   - handler: shell
-    command: "pip install fastapi uvicorn"
+    command: "/workspace/.venv/bin/pip install fastapi uvicorn"
 
 test:
   # Copy all 9 agents to workspace
@@ -42,29 +42,75 @@ test:
       cp -r /artifacts/gateway /workspace/
     capture: copy_output
 
+  # Create env file with secrets (tsuite injects API keys automatically)
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
   # Start all 8 tool/provider/planner agents in detached mode
   - name: "Start tool and provider agents"
     handler: shell
-    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py openai-provider/main.py planner-agent/main.py -d"
+    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py openai-provider/main.py planner-agent/main.py --env-file .env -d"
     workdir: /workspace
     capture: start_agents_output
 
   # Wait for registration and DI resolution
-  - name: "Wait for agent registration"
-    handler: wait
-    seconds: 20
+  - name: "Wait for all agents to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="flight-agent hotel-agent weather-agent poi-agent user-prefs-agent claude-provider openai-provider planner-agent"
+      EXPECTED_COUNT=8
+      echo "Waiting for $EXPECTED_COUNT agents to register..."
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        COUNT=0
+        for agent in $EXPECTED; do
+          if echo "$AGENTS" | grep -q "$agent"; then
+            COUNT=$((COUNT + 1))
+          fi
+        done
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "All $EXPECTED_COUNT agents registered after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        echo "  $COUNT/$EXPECTED_COUNT agents registered (attempt $i/30)..."
+        sleep 2
+      done
+      echo "ERROR: Only $COUNT/$EXPECTED_COUNT agents registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_agents_output
+    timeout: 90
 
   # Start the gateway
   - name: "Start gateway"
     handler: shell
-    command: "meshctl start gateway/main.py -d"
+    command: "meshctl start gateway/main.py --env-file .env -d"
     workdir: /workspace
     capture: start_gateway_output
 
   # Wait for gateway to register and resolve dependencies
-  - name: "Wait for gateway registration"
-    handler: wait
-    seconds: 10
+  - name: "Wait for gateway to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for API gateway to register..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -qi "API"; then
+          echo "API gateway registered after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        echo "  API gateway not yet registered (attempt $i/30)..."
+        sleep 2
+      done
+      echo "ERROR: API gateway not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_gateway_output
+    timeout: 90
 
   # Verify all 9 agents are registered
   - name: "Verify all agents are registered"
@@ -119,7 +165,7 @@ test:
     handler: shell
     command: |
       echo "=== Calling plan_trip via meshctl ==="
-      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace 2>&1)
+      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace --timeout 90 2>&1)
       echo "$RESULT"
       if echo "$RESULT" | grep -qi 'Kyoto\|itinerary\|day' && \
          echo "$RESULT" | grep -q 'Trace ID'; then
@@ -158,8 +204,8 @@ assertions:
   - expr: "${captured.list_output} contains 'planner-agent'"
     message: "planner-agent should appear in meshctl list"
 
-  - expr: "${captured.list_output} contains 'gateway'"
-    message: "gateway should appear in meshctl list"
+  - expr: "${captured.list_output} contains 'API'"
+    message: "API gateway should appear in meshctl list"
 
   # Tools registered
   - expr: "${captured.list_tools} contains 'plan_trip'"

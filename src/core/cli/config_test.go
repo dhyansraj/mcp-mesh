@@ -2,6 +2,8 @@ package cli
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -17,8 +19,9 @@ func TestDefaultConfig(t *testing.T) {
 	if config.RegistryHost != "localhost" {
 		t.Errorf("Expected RegistryHost 'localhost', got '%s'", config.RegistryHost)
 	}
-	if config.DBPath != "mcp_mesh_registry.db" {
-		t.Errorf("Expected DBPath 'mcp_mesh_registry.db', got '%s'", config.DBPath)
+	expectedSuffix := filepath.Join(".mcp-mesh", "mcp_mesh_registry.db")
+	if !strings.HasSuffix(config.DBPath, expectedSuffix) {
+		t.Errorf("Expected DBPath to end with '%s', got '%s'", expectedSuffix, config.DBPath)
 	}
 	if config.LogLevel != "INFO" {
 		t.Errorf("Expected LogLevel 'INFO', got '%s'", config.LogLevel)

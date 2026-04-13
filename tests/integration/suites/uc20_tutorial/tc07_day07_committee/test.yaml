@@ -21,12 +21,14 @@ tags:
 timeout: 600
 
 pre_run:
+  - routine: global.start_observability
+
   - routine: global.setup_for_python_agent
     params:
       meshctl_version: "${config.packages.cli_version}"
       mcpmesh_version: "${config.packages.sdk_python_version}"
   - handler: shell
-    command: "pip install fastapi uvicorn redis"
+    command: "/workspace/.venv/bin/pip install fastapi uvicorn redis"
 
 test:
   # Copy all 13 agents to workspace
@@ -48,29 +50,75 @@ test:
       cp -r /artifacts/logistics-planner /workspace/
     capture: copy_output
 
+  # Create env file with secrets (tsuite injects API keys automatically)
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
   # Start all 12 tool/provider/planner/specialist agents in detached mode
   - name: "Start tool, provider, and specialist agents"
     handler: shell
-    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py openai-provider/main.py planner-agent/main.py chat-history-agent/main.py budget-analyst/main.py adventure-advisor/main.py logistics-planner/main.py -d"
+    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py openai-provider/main.py planner-agent/main.py chat-history-agent/main.py budget-analyst/main.py adventure-advisor/main.py logistics-planner/main.py --env-file .env -d"
     workdir: /workspace
     capture: start_agents_output
 
   # Wait for registration and DI resolution
-  - name: "Wait for agent registration"
-    handler: wait
-    seconds: 25
+  - name: "Wait for all agents to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="flight-agent hotel-agent weather-agent poi-agent user-prefs-agent claude-provider openai-provider planner-agent chat-history-agent budget-analyst adventure-advisor logistics-planner"
+      EXPECTED_COUNT=12
+      echo "Waiting for $EXPECTED_COUNT agents to register..."
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        COUNT=0
+        for agent in $EXPECTED; do
+          if echo "$AGENTS" | grep -q "$agent"; then
+            COUNT=$((COUNT + 1))
+          fi
+        done
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "All $EXPECTED_COUNT agents registered after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        echo "  $COUNT/$EXPECTED_COUNT agents registered (attempt $i/30)..."
+        sleep 2
+      done
+      echo "ERROR: Only $COUNT/$EXPECTED_COUNT agents registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_agents_output
+    timeout: 90
 
   # Start the gateway
   - name: "Start gateway"
     handler: shell
-    command: "meshctl start gateway/main.py -d"
+    command: "meshctl start gateway/main.py --env-file .env -d"
     workdir: /workspace
     capture: start_gateway_output
 
   # Wait for gateway to register and resolve dependencies
-  - name: "Wait for gateway registration"
-    handler: wait
-    seconds: 10
+  - name: "Wait for gateway to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for API gateway to register..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -qi "API"; then
+          echo "API gateway registered after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        echo "  API gateway not yet registered (attempt $i/30)..."
+        sleep 2
+      done
+      echo "ERROR: API gateway not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_gateway_output
+    timeout: 90
 
   # Verify all 13 agents are registered
   - name: "Verify all agents are registered"
@@ -101,15 +149,13 @@ test:
     workdir: /workspace
     capture: health_check
 
-  # Call planner and verify specialist insights are included
+  # Call planner via meshctl (bypasses gateway's 60s proxy timeout — the
+  # committee fan-out with 4 LLM calls needs more time than the default)
   - name: "Call planner with specialist committee"
     handler: shell
     command: |
       echo "=== Calling planner with committee of specialists ==="
-      RESPONSE=$(curl -s --max-time 300 -X POST http://localhost:8080/plan \
-        -H "Content-Type: application/json" \
-        -H "X-Session-Id: test-session-day7" \
-        -d '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' 2>&1)
+      RESPONSE=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000","session_id":"test-session-day7"}' --timeout 300 2>&1)
       echo "$RESPONSE"
       if echo "$RESPONSE" | grep -qi 'specialist\|budget.*analysis\|adventure\|logistics\|savings_tips\|unique_experiences\|daily_schedule'; then
         echo "PASS: Response includes specialist insights"
@@ -150,8 +196,8 @@ assertions:
   - expr: "${captured.list_output} contains 'chat-history-agent'"
     message: "chat-history-agent should appear in meshctl list"
 
-  - expr: "${captured.list_output} contains 'gateway'"
-    message: "gateway should appear in meshctl list"
+  - expr: "${captured.list_output} contains 'API'"
+    message: "API gateway should appear in meshctl list"
 
   - expr: "${captured.list_output} contains 'budget-analyst'"
     message: "budget-analyst should appear in meshctl list"

@@ -758,23 +758,38 @@ func cleanupAllFiles(pm *PIDManager, quiet bool) error {
 
 	var deletedDB, deletedLogs, deletedPIDs int
 
-	// Delete the registry database file (only the known mcp_mesh_registry.db)
-	const registryDBFile = "mcp_mesh_registry.db"
-	if err := os.Remove(registryDBFile); err == nil {
-		deletedDB++
-		if !quiet {
-			fmt.Printf("  Deleted: %s\n", registryDBFile)
-		}
-	}
-	// Remove SQLite WAL and SHM companion files
-	for _, suffix := range []string{"-wal", "-shm"} {
-		companion := registryDBFile + suffix
-		if err := os.Remove(companion); err == nil {
+	// Delete the registry database file from the mesh home directory
+	homeDir, err := os.UserHomeDir()
+	if err == nil {
+		registryDBFile := filepath.Join(homeDir, ".mcp-mesh", "mcp_mesh_registry.db")
+		if err := os.Remove(registryDBFile); err == nil {
 			deletedDB++
 			if !quiet {
-				fmt.Printf("  Deleted: %s\n", companion)
+				fmt.Printf("  Deleted: %s\n", registryDBFile)
 			}
 		}
+		// Remove SQLite WAL and SHM companion files
+		for _, suffix := range []string{"-wal", "-shm"} {
+			companion := registryDBFile + suffix
+			if err := os.Remove(companion); err == nil {
+				deletedDB++
+				if !quiet {
+					fmt.Printf("  Deleted: %s\n", companion)
+				}
+			}
+		}
+	}
+
+	// Also clean up any legacy DB file in the current directory
+	const legacyDBFile = "mcp_mesh_registry.db"
+	if err := os.Remove(legacyDBFile); err == nil {
+		deletedDB++
+		if !quiet {
+			fmt.Printf("  Deleted: %s (legacy location)\n", legacyDBFile)
+		}
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		os.Remove(legacyDBFile + suffix)
 	}
 
 	// Delete log files

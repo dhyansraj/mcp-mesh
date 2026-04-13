@@ -39,17 +39,47 @@ test:
       cp -r /artifacts/planner-agent /workspace/
     capture: copy_output
 
+  # Create env file with secrets (tsuite injects API keys automatically)
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
   # Start all 8 agents in detached mode
   - name: "Start all agents"
     handler: shell
-    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py openai-provider/main.py planner-agent/main.py -d"
+    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py openai-provider/main.py planner-agent/main.py --env-file .env -d"
     workdir: /workspace
     capture: start_output
 
   # Wait for registration and DI resolution
-  - name: "Wait for registration"
-    handler: wait
-    seconds: 20
+  - name: "Wait for all agents to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="flight-agent hotel-agent weather-agent poi-agent user-prefs-agent claude-provider openai-provider planner-agent"
+      EXPECTED_COUNT=8
+      echo "Waiting for $EXPECTED_COUNT agents to register..."
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        COUNT=0
+        for agent in $EXPECTED; do
+          if echo "$AGENTS" | grep -q "$agent"; then
+            COUNT=$((COUNT + 1))
+          fi
+        done
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "All $EXPECTED_COUNT agents registered after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        echo "  $COUNT/$EXPECTED_COUNT agents registered (attempt $i/30)..."
+        sleep 2
+      done
+      echo "ERROR: Only $COUNT/$EXPECTED_COUNT agents registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_output
+    timeout: 90
 
   # Verify all 8 agents are registered
   - name: "Verify all agents are registered"
@@ -99,7 +129,7 @@ test:
     handler: shell
     command: |
       echo "=== Calling plan_trip (should route to Claude via +claude) ==="
-      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace 2>&1)
+      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace --timeout 90 2>&1)
       echo "$RESULT"
       if echo "$RESULT" | grep -qi 'Kyoto\|itinerary\|day' && \
          echo "$RESULT" | grep -q 'Trace ID'; then
@@ -120,16 +150,33 @@ test:
     capture: stop_claude_output
 
   # Wait for deregistration
-  - name: "Wait for deregistration"
-    handler: wait
-    seconds: 10
+  - name: "Wait for claude-provider to deregister"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for claude-provider to deregister..."
+      for i in $(seq 1 15); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if ! echo "$AGENTS" | grep -q "claude-provider"; then
+          echo "claude-provider deregistered after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        echo "  claude-provider still present (attempt $i/15)..."
+        sleep 2
+      done
+      echo "WARNING: claude-provider may still be registered, continuing anyway"
+      meshctl list 2>/dev/null || true
+      exit 0
+    capture: deregister_output
+    timeout: 60
 
   # Call plan_trip again — should auto-route to OpenAI
   - name: "Call plan_trip with failover to OpenAI"
     handler: shell
     command: |
       echo "=== Calling plan_trip (should failover to OpenAI) ==="
-      RESULT=$(meshctl call plan_trip '{"destination":"Tokyo","dates":"June 10-14, 2026","budget":"$3000"}' --trace 2>&1)
+      RESULT=$(meshctl call plan_trip '{"destination":"Tokyo","dates":"June 10-14, 2026","budget":"$3000"}' --trace --timeout 90 2>&1)
       echo "$RESULT"
       if echo "$RESULT" | grep -qi 'Tokyo\|itinerary\|day' && \
          echo "$RESULT" | grep -q 'Trace ID'; then

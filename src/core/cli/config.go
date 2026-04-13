@@ -67,7 +67,7 @@ func DefaultConfig() *CLIConfig {
 	return &CLIConfig{
 		RegistryPort:        8000,
 		RegistryHost:        "localhost",
-		DBPath:              "mcp_mesh_registry.db",
+		DBPath:              filepath.Join(stateDir, "mcp_mesh_registry.db"),
 		LogLevel:            "INFO",
 		HealthCheckInterval: 10,
 		DebugMode:           false,
@@ -249,22 +249,6 @@ func IsValidConfigPath(path string) error {
 	os.Remove(tempFile) // Cleanup
 
 	return nil
-}
-
-// GetPlatformDefaults returns platform-specific default values
-func GetPlatformDefaults() map[string]interface{} {
-	defaults := make(map[string]interface{})
-
-	switch runtime.GOOS {
-	case "windows":
-		defaults["pid_file"] = ".\\mcp_mesh_dev.pid"
-		defaults["db_path"] = "mcp_mesh_registry.db"
-	default:
-		defaults["pid_file"] = "./mcp_mesh_dev.pid"
-		defaults["db_path"] = "mcp_mesh_registry.db"
-	}
-
-	return defaults
 }
 
 // NormalizePath normalizes file paths for the current platform
