@@ -244,6 +244,18 @@ export async function callMcpTool(
     },
   };
 
+  // Use X-Mesh-Timeout from propagated headers to override client timeout (#769).
+  // This ensures the client-side AbortController doesn't kill the call before
+  // the registry proxy's timeout expires.
+  let effectiveTimeout = options.timeout;
+  const meshTimeoutStr = mergedHeaders["x-mesh-timeout"] || headers["X-Mesh-Timeout"];
+  if (meshTimeoutStr) {
+    const meshTimeoutMs = parseInt(meshTimeoutStr, 10) * 1000;
+    if (!isNaN(meshTimeoutMs) && meshTimeoutMs > 0) {
+      effectiveTimeout = meshTimeoutMs;
+    }
+  }
+
   let lastError: Error | null = null;
   const bodyStr = JSON.stringify(payload);
   const requestBytes = Buffer.byteLength(bodyStr, "utf8");
@@ -251,7 +263,7 @@ export async function callMcpTool(
   for (let attempt = 0; attempt < options.maxAttempts; attempt++) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), options.timeout);
+      const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout);
 
       // Build headers: custom headers first, then protocol-required headers override
       const headers: Record<string, string> = {

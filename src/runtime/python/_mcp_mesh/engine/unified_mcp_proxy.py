@@ -959,7 +959,7 @@ class UnifiedMCPProxy:
 
             # Set X-Mesh-Timeout for registry proxy (#769). If already
             # propagated from an incoming request, keep that value;
-            # otherwise use env/default.
+            # otherwise use env/default. Also use it for client timeout.
             import os
 
             if "X-Mesh-Timeout" not in headers and "x-mesh-timeout" not in headers:
@@ -967,6 +967,16 @@ class UnifiedMCPProxy:
                     "MCP_MESH_CALL_TIMEOUT", str(int(enhanced_timeout))
                 )
                 headers["X-Mesh-Timeout"] = call_timeout
+
+            # Use X-Mesh-Timeout to override client-side timeout too (#769)
+            mesh_timeout_val = headers.get("X-Mesh-Timeout") or headers.get("x-mesh-timeout")
+            if mesh_timeout_val:
+                try:
+                    mesh_timeout_secs = int(mesh_timeout_val)
+                    if mesh_timeout_secs > 0:
+                        enhanced_timeout = max(enhanced_timeout, mesh_timeout_secs)
+                except (ValueError, TypeError):
+                    pass
 
             self.logger.debug(
                 f"🔄 HTTP call to {url} with {request_bytes} byte payload, timeout: {enhanced_timeout}s"
