@@ -29,7 +29,7 @@ a basic Python tool agent, the flags you need are `--name`, `--agent-type tool`,
 and `--lang python` (which is the default, so you can omit it).
 
 ```shell
-$ meshctl scaffold --name flight-agent --agent-type tool
+$ meshctl scaffold --name flight-agent --agent-type tool --port 9101
 
 Created agent 'flight-agent' in flight-agent/
 
@@ -149,7 +149,7 @@ The dashboard is available at [http://localhost:3080](http://localhost:3080). Op
 it in your browser and you'll see flight-agent listed with its status and
 capabilities.
 
-*[Screenshot placeholder — mesh UI showing flight-agent will be captured here.]*
+![Mesh UI showing flight-agent on the Topology page](../assets/images/tutorial/day-01-mesh-ui-flight-agent.png)
 
 ## Step 5: Inspect the mesh
 

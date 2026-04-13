@@ -4,7 +4,7 @@ A MCP Mesh agent generated using `meshctl scaffold`.
 
 ## Overview
 
-TripPlanner flight search tool (Day 2). Searches for flights personalized with user preferences via dependency injection.
+This is a basic MCP Mesh agent that provides simple tools for demonstration.
 
 ## Getting Started
 
@@ -34,15 +34,51 @@ meshctl start main.py --debug
 
 The agent will start on port 9101 by default.
 
+To override the port, modify the `http_port` parameter in the `@mesh.agent` decorator.
+
 ## Available Tools
 
-| Tool | Capability | Description | Dependencies |
-|------|------------|-------------|--------------|
-| `flight_search` | `flight_search` | Search for flights between two cities | `user_preferences` |
+| Tool | Capability | Description |
+|------|------------|-------------|
+| `hello` | `hello` | Say hello to someone |
+| `echo` | `echo` | Echo a message back |
+
+## Project Structure
+
+```
+flight-agent/
+├── __init__.py       # Package init
+├── __main__.py       # Module entry point
+├── main.py           # Agent implementation
+├── README.md         # This file
+└── requirements.txt  # Python dependencies
+```
+
+## Docker
+
+```bash
+# Build the image
+docker build -t flight-agent:latest .
+
+# Run the container
+docker run -p 9101:9101 flight-agent:latest
+```
+
+## Kubernetes
+
+```bash
+# Deploy using Helm
+helm install flight-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  -n mcp-mesh \
+  -f helm-values.yaml \
+  --set image.repository=your-registry/flight-agent \
+  --set image.tag=v1.0.0
+```
 
 ## Documentation
 
 - [MCP Mesh Documentation](https://github.com/dhyansraj/mcp-mesh)
+- [Python SDK Reference](https://github.com/dhyansraj/mcp-mesh/tree/main/src/runtime/python)
 - Run `meshctl man decorators` for decorator reference
 
 ## License

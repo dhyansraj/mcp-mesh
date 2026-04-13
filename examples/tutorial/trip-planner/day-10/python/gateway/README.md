@@ -1,10 +1,12 @@
 # gateway
 
-A MCP Mesh API gateway generated for the Day 6 tutorial.
+An MCP Mesh API gateway generated using `meshctl scaffold`.
 
 ## Overview
 
-FastAPI gateway that exposes the trip planner as a REST API via `@mesh.route` dependency injection. Day 6 adds multi-turn chat history through the `chat_history` capability.
+This is an HTTP API gateway that consumes mesh capabilities via `@mesh.route`.
+Unlike tool agents, this agent does not provide tools — it exposes REST endpoints
+that call tools on other agents in the mesh.
 
 ## Getting Started
 
@@ -12,8 +14,7 @@ FastAPI gateway that exposes the trip planner as a REST API via `@mesh.route` de
 
 - Python 3.11+
 - MCP Mesh SDK
-- FastAPI
-- Uvicorn
+- FastAPI + Uvicorn
 
 ### Installation
 
@@ -21,7 +22,7 @@ FastAPI gateway that exposes the trip planner as a REST API via `@mesh.route` de
 pip install -r requirements.txt
 ```
 
-### Running the Gateway
+### Running the Agent
 
 ```bash
 meshctl start main.py
@@ -33,25 +34,53 @@ Or with debug logging:
 meshctl start main.py --debug
 ```
 
-The gateway will start on port 8080 by default.
+The API gateway will start on port 8080 by default.
 
-## Endpoints
+## Available Endpoints
 
-| Method | Path      | Description                        |
-|--------|-----------|------------------------------------|
-| POST   | `/plan`   | Generate a trip itinerary via mesh  |
-| GET    | `/health` | Health check                       |
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check |
+| GET | `/api/hello` | Call hello capability |
+| GET | `/` | List available routes |
 
-## Headers
+## Project Structure
 
-| Header         | Description                       | Default        |
-|----------------|-----------------------------------|----------------|
-| X-Session-Id   | Chat session identifier           | Auto-generated |
+```
+gateway/
+├── __init__.py       # Package init
+├── __main__.py       # Module entry point
+├── main.py           # API gateway implementation
+├── README.md         # This file
+└── requirements.txt  # Python dependencies
+```
+
+## Docker
+
+```bash
+# Build the image
+docker build -t gateway:latest .
+
+# Run the container
+docker run -p 8080:8080 gateway:latest
+```
+
+## Kubernetes
+
+```bash
+# Deploy using Helm
+helm install gateway oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  -n mcp-mesh \
+  -f helm-values.yaml \
+  --set image.repository=your-registry/gateway \
+  --set image.tag=v1.0.0
+```
 
 ## Documentation
 
 - [MCP Mesh Documentation](https://github.com/dhyansraj/mcp-mesh)
-- Run `meshctl man fastapi` for FastAPI integration reference
+- [Python SDK Reference](https://github.com/dhyansraj/mcp-mesh/tree/main/src/runtime/python)
+- Run `meshctl man decorators` for decorator reference
 
 ## License
 

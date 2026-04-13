@@ -1,9 +1,9 @@
 # Day 3 -- Observability and LLM Integration
 
-Your five tool agents are still running from Day 2. Today you'll set up
-distributed tracing so you can see every call across the mesh, then add an LLM
-provider and build your first agent that can reason -- a trip planner that
-generates itineraries from natural language.
+On Day 2 you built five tool agents with dependency injection. Today you'll
+restart them with distributed tracing enabled, add an LLM provider, and build
+your first agent that can reason -- a trip planner that generates itineraries
+from natural language.
 
 ## What we're building today
 
@@ -47,16 +47,16 @@ Before any of that works, you need the observability stack running.
 ### Generate the compose file
 
 ```shell
-$ meshctl scaffold --compose --observability
+$ meshctl scaffold --observability
 ```
 
-This generates a `docker-compose.yml` with Redis, Tempo, and Grafana, plus the
+This generates a `docker-compose.observability.yml` with Redis, Tempo, and Grafana, plus the
 supporting config files (Tempo config, Grafana provisioning).
 
 ### Start the stack
 
 ```shell
-$ docker compose up -d
+$ docker compose -f docker-compose.observability.yml up -d
 ```
 
 ```
@@ -68,7 +68,7 @@ $ docker compose up -d
 Verify everything is healthy:
 
 ```shell
-$ docker compose ps
+$ docker compose -f docker-compose.observability.yml ps
 NAME                   STATUS
 trip-planner-redis     Up (healthy)
 trip-planner-tempo     Up (healthy)
@@ -78,23 +78,6 @@ trip-planner-grafana   Up (healthy)
 Three containers. Redis collects trace events on port 6379, Tempo stores traces
 on ports 3200 (HTTP) and 4317 (OTLP gRPC), and Grafana serves dashboards on
 port 3000.
-
-### Enable tracing
-
-Tell the registry and agents to publish trace events. This must be set before
-starting any agents:
-
-```shell
-$ export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true
-```
-
-That's all you need. Redis, Tempo, and Grafana URLs default to `localhost` with
-the standard ports from the compose file you just started.
-
-!!! tip "Make it stick"
-    Add this to a `.env` file in your project directory and pass it with
-    `meshctl start --env-file .env ...` so you don't have to export it every
-    session.
 
 ## Part 2: Register an LLM provider
 
@@ -112,7 +95,7 @@ parsing, and response formatting.
 ### Scaffold the provider
 
 ```shell
-$ meshctl scaffold --name claude-provider --agent-type llm-provider --model anthropic/claude-sonnet-4-5
+$ meshctl scaffold --name claude-provider --agent-type llm-provider --model anthropic/claude-sonnet-4-5 --port 9106
 ```
 
 Replace the generated `main.py` with:
@@ -132,19 +115,22 @@ The decorator does all the work:
 
 The function body is `pass` -- the decorator generates the full implementation.
 
-### Start the provider
+### Start the provider with all Day 2 agents
+
+Day 2 ended with `meshctl stop`, so start the five tool agents alongside the
+new provider -- this time with `--dte` to enable distributed tracing:
 
 ```shell
-$ meshctl start --debug -d -w claude-provider/main.py
+$ meshctl start --dte --debug -d -w flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py
 ```
 
 ```
-Starting 1 agents in detach: claude-provider
+Starting 6 agents in detach: flight-agent, hotel-agent, weather-agent, poi-agent, user-prefs-agent, claude-provider
 Logs: ~/.mcp-mesh/logs/<agent>.log
 Use 'meshctl logs <agent>' to view or 'meshctl stop' to stop all
 ```
 
-Check that it registered:
+Check that all six registered:
 
 ```shell
 $ meshctl list
@@ -159,8 +145,13 @@ user-prefs-agent-bfa9de39   Python    Agent   healthy   0/0    10.0.0.74:65353  
 weather-agent-0aed0742      Python    Agent   healthy   0/0    10.0.0.74:65355    5s    0s
 ```
 
-Six agents. The provider shows `0/0` for dependencies -- it doesn't depend on
-anything, it provides a capability for others to consume.
+Six agents. The five tool agents from Day 2 plus the new provider. The `--dte`
+flag enables distributed tracing for all of them -- every cross-agent call now
+publishes trace events to Redis.
+
+
+![Mesh UI Topology showing seven agents with LLM provider connections](../assets/images/tutorial/day-03-mesh-ui-topology.png)
+
 
 ## Part 3: Build the planner agent
 
@@ -184,7 +175,7 @@ are populated from the context model at call time.
 Scaffold the agent, then replace `main.py`:
 
 ```shell
-$ meshctl scaffold --name planner-agent --agent-type llm-agent
+$ meshctl scaffold --name planner-agent --agent-type llm-agent --port 9107
 ```
 
 ```python
@@ -212,7 +203,7 @@ to the resolved LLM provider.
 ### Start the planner
 
 ```shell
-$ meshctl start --debug -d -w planner-agent/main.py
+$ meshctl start --dte --debug -d -w planner-agent/main.py
 ```
 
 Check the full mesh:
@@ -330,10 +321,20 @@ The total time (~22 seconds) is almost entirely Claude's inference time. The
 mesh overhead -- discovery, routing, serialization -- is in the low
 milliseconds.
 
+The Traffic page in the mesh UI tracks this automatically -- per-edge latency, error rates, token usage by model, and data transferred per agent. No instrumentation code needed; mesh collects it from the trace data.
+
+
+![Mesh UI Traffic page showing per-edge latency, token usage, and per-agent stats](../assets/images/tutorial/day-03-mesh-ui-traffic.png)
+
+
 In Grafana at [http://localhost:3000](http://localhost:3000), you can drill
 into each span, see request/response payloads, and visualize latency in a
 waterfall chart. Navigate to **Explore** and select the **Tempo** datasource
 to search for traces.
+
+
+![Grafana Tempo trace view showing planner-agent to claude-provider call](../assets/images/tutorial/day-03-grafana-trace.png)
+
 
 This is the payoff for the observability setup at the start of the chapter. From
 now on, every `meshctl call --trace` gives you a trace ID, and
@@ -355,22 +356,23 @@ to tool agents and back.
 
 ## Leave it running
 
-Your seven agents are running in watch mode -- leave them. On Day 4 you'll add
-more LLM providers and introduce provider tiers. No need to stop and restart
-between chapters.
+From here on, your agents stay running between chapters. On Day 4 you'll add
+more LLM providers and introduce provider tiers -- just start the new agents
+with `--dte` and they join the existing mesh.
 
 Keep the observability stack running too (`docker compose` stays up). Traces
 from Day 4 calls will appear in the same Grafana instance.
 
 If you do need to stop for any reason, `meshctl stop` shuts down all agents,
-and `docker compose down` stops the observability stack.
+and `docker compose -f docker-compose.observability.yml down` stops the
+observability stack.
 
 ## Troubleshooting
 
 **Docker not running / compose fails.** The observability stack runs in Docker.
 Make sure Docker Desktop (or your Docker daemon) is running before
-`docker compose up -d`. If ports 6379, 3200, or 3000 are already in use, stop
-the conflicting services or change the ports in `docker-compose.yml`.
+`docker compose -f docker-compose.observability.yml up -d`. If ports 6379, 3200, or 3000 are already in use, stop
+the conflicting services or change the ports in `docker-compose.observability.yml`.
 
 **`ANTHROPIC_API_KEY` not set.** The `claude-provider` agent needs an Anthropic
 API key. Set it in your environment:
@@ -384,11 +386,11 @@ authentication error.
 
 **Traces not appearing.** Check two things:
 
-1. `MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true` is set before starting agents.
+1. Agents were started with `--dte` (or `MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true`).
 2. Redis is reachable at `redis://localhost:6379` (run `redis-cli ping`).
 
-If you started agents before setting the variable, stop them with
-`meshctl stop` and start again with it exported.
+If you started agents without `--dte`, stop them with `meshctl stop` and
+restart with the flag.
 
 **Observability stack on non-default ports.** If you're running Redis, Tempo, or
 Grafana on non-standard ports (because the defaults are already in use), set the

@@ -10,8 +10,8 @@ planner remembers what you have discussed.
 ```mermaid
 graph LR
     U[User] -->|"POST /plan"| GW[gateway]
-    GW -->|"chat_history"| CH[chat-history-agent]
     GW -->|"trip_planning"| PL[planner-agent]
+    PL -->|"chat_history"| CH[chat-history-agent]
     PL -->|"+claude"| CP[claude-provider]
     PL -.->|failover| OP[openai-provider]
     PL ==>|tier-1| UPA[user-prefs-agent]
@@ -36,16 +36,15 @@ graph LR
 ```
 
 Ten agents. Everything from Day 5 plus `chat-history-agent` in teal. The
-gateway fetches prior turns from chat history before calling the planner, and
-saves both the user message and the planner response afterward. The planner
-receives the conversation as a multi-turn message list, so the LLM sees the
-full dialogue.
+planner fetches prior turns from chat history before calling the LLM, and saves
+both the user message and the response afterward. The gateway stays thin -- it
+just passes the session ID through.
 
 Today has four parts:
 
 1. **Build the chat history agent** -- a tool agent backed by Redis
-2. **Update the gateway** -- add history fetch and save around the planner call
-3. **Start and test** -- multi-turn curl demo
+2. **Update the planner** -- add history fetch and save around the LLM call
+3. **Update the gateway** -- add session ID passthrough
 4. **Walk the trace** -- see history calls in the distributed trace
 
 ## Part 1: Build the chat history agent
@@ -58,7 +57,7 @@ and other agents call it like any other tool.
 ### Scaffold the agent
 
 ```shell
-$ meshctl scaffold --name chat-history-agent --agent-type tool
+$ meshctl scaffold --name chat-history-agent --agent-type tool --port 9109
 ```
 
 ```
@@ -79,7 +78,7 @@ Generated files:
 ### Add Redis to requirements
 
 The agent needs `redis-py` to talk to the Redis instance from your
-observability stack (Day 3's `docker-compose.yml` already runs Redis on
+observability stack (Day 3's `docker-compose.observability.yml` already runs Redis on
 port 6379):
 
 ```
@@ -96,7 +95,7 @@ Replace the generated `main.py` with:
 
 Two tools, one capability. `save_turn` appends a JSON-encoded turn to a Redis
 list keyed by session ID. `get_history` reads the most recent turns from that
-list. Both tools share the `chat_history` capability -- when the gateway
+list. Both tools share the `chat_history` capability -- when the planner
 declares a dependency on `chat_history`, mesh injects a proxy that can call
 either tool by name.
 
@@ -115,50 +114,44 @@ agent. The gateway and planner do not move. mesh does not need a chat history
 primitive -- the general abstraction (any MCP tool anywhere is a local function
 call) handles it.
 
-## Part 2: Update the gateway
+## Part 2: Update the planner
 
-The Day 5 gateway was five lines: parse body, check dependency, call planner,
-return result. The Day 6 gateway adds three steps around that core:
-
-1. Read the session ID from the `X-Session-Id` header (or generate one).
-2. Fetch conversation history before calling the planner.
-3. Save both the user message and the planner response after the call.
+The planner gains chat history as a tier-1 dependency alongside user
+preferences. It fetches history before the LLM call and saves turns after. The
+gateway stays thin -- it just passes the session ID.
 
 ```python
---8<-- "examples/tutorial/trip-planner/day-06/python/gateway/main.py:full_file"
+--8<-- "examples/tutorial/trip-planner/day-06/python/planner-agent/main.py:full_file"
 ```
 
 ### Dependency declaration
 
-The `@mesh.route` decorator now declares two dependencies instead of one:
+The `@mesh.tool` decorator now declares two dependencies instead of one:
 
 ```python
---8<-- "examples/tutorial/trip-planner/day-06/python/gateway/main.py:plan_endpoint"
+--8<-- "examples/tutorial/trip-planner/day-06/python/planner-agent/main.py:tier1_prefetch"
 ```
 
-Dependencies are resolved by position -- `chat_history` maps to the first
-`McpMeshTool` parameter, `trip_planning` maps to the second. The gateway calls
+Both `user_preferences` and `chat_history` are tier-1 dependencies -- resolved
+before the tool function runs. The planner calls
 `chat_history.call_tool("get_history", {...})` and
 `chat_history.call_tool("save_turn", {...})` because the `chat_history`
-capability exposes two tools. For `plan_trip`, the single-tool shorthand
-(`await plan_trip(...)`) still works.
+capability exposes two tools. For `user_prefs`, the single-tool shorthand
+(`await user_prefs(...)`) still works.
 
-### Session ID
+### History fetch
+
+Before the LLM call, the planner fetches the conversation history for the
+current session:
 
 ```python
---8<-- "examples/tutorial/trip-planner/day-06/python/gateway/main.py:session_id"
+--8<-- "examples/tutorial/trip-planner/day-06/python/planner-agent/main.py:chat_history_fetch"
 ```
 
-If the client sends `X-Session-Id`, the gateway uses it. Otherwise it generates
-a UUID and returns it in the response so the client can use it for follow-up
-calls.
+### Multi-turn messages
 
-### Update the planner
-
-The planner gains two optional parameters: `message` (the user's text, which
-may differ from the default "Plan a trip..." prompt) and
-`conversation_history` (a list of prior turns). When history is present, the
-planner passes the full message list to the LLM instead of a single string:
+When history is present, the planner passes the full message list to the LLM
+instead of a single string:
 
 ```python
 --8<-- "examples/tutorial/trip-planner/day-06/python/planner-agent/main.py:multi_turn"
@@ -169,9 +162,38 @@ The `@mesh.llm` decorator handles multi-turn natively -- pass a list of
 the decorator builds the correct LLM API call. The system prompt from the
 Jinja2 template is inserted automatically.
 
-## Part 3: Start and test
+### History save
 
-### Install redis-py
+After the LLM responds, the planner saves both the user turn and the assistant
+turn so the next request sees them:
+
+```python
+--8<-- "examples/tutorial/trip-planner/day-06/python/planner-agent/main.py:chat_history_save"
+```
+
+## Part 3: Update the gateway
+
+The gateway gains a `session_id` parameter. Everything else stays the same --
+one dependency, five lines of code.
+
+```python
+--8<-- "examples/tutorial/trip-planner/day-06/python/gateway/main.py:full_file"
+```
+
+### Session ID
+
+```python
+--8<-- "examples/tutorial/trip-planner/day-06/python/gateway/main.py:session_id"
+```
+
+If the client sends `X-Session-Id`, the gateway uses it. Otherwise it generates
+a UUID and returns it in the response so the client can use it for follow-up
+calls. The gateway passes `session_id` to the planner alongside the trip
+parameters -- the planner handles the rest.
+
+### Start and test
+
+#### Install redis-py
 
 If `redis` is not already in your venv:
 
@@ -179,18 +201,18 @@ If `redis` is not already in your venv:
 $ pip install redis
 ```
 
-### Start the chat history agent
+#### Start the chat history agent
 
 Your nine agents from Day 5 should still be running. Add `chat-history-agent`:
 
 ```shell
-$ meshctl start --debug -d -w chat-history-agent/main.py
+$ meshctl start --dte --debug -d -w chat-history-agent/main.py
 ```
 
 If you are starting fresh, launch everything at once:
 
 ```shell
-$ meshctl start --debug -d -w \
+$ meshctl start --dte --debug -d -w \
     chat-history-agent/main.py \
     claude-provider/main.py \
     openai-provider/main.py \
@@ -216,17 +238,18 @@ NAME                             RUNTIME   TYPE    STATUS    DEPS   ENDPOINT    
 chat-history-agent-3f2a1b9c      Python    Agent   healthy   0/0    10.0.0.74:9109     8s    2s
 claude-provider-0a89e8c6         Python    Agent   healthy   0/0    10.0.0.74:49486    15m   2s
 flight-agent-a939da4b            Python    Agent   healthy   1/1    10.0.0.74:49480    15m   2s
-gateway-7b3f2e91                 Python    API     healthy   2/2    10.0.0.74:8080     5m    2s
+gateway-7b3f2e91                 Python    API     healthy   1/1    10.0.0.74:8080     5m    2s
 hotel-agent-9932ac09             Python    Agent   healthy   0/0    10.0.0.74:49482    15m   2s
 openai-provider-40a5c637         Python    Agent   healthy   0/0    10.0.0.74:49485    15m   2s
-planner-agent-fb07b918           Python    Agent   healthy   1/1    10.0.0.74:49484    15m   2s
+planner-agent-fb07b918           Python    Agent   healthy   2/2    10.0.0.74:49484    15m   2s
 poi-agent-97bd9fcc               Python    Agent   healthy   1/1    10.0.0.74:49481    15m   2s
 user-prefs-agent-87506c4a        Python    Agent   healthy   0/0    10.0.0.74:49479    15m   2s
 weather-agent-a6f7ea5e           Python    Agent   healthy   0/0    10.0.0.74:49483    15m   2s
 ```
 
-Ten agents. The gateway now shows `2/2` dependencies -- it resolved both
-`chat_history` and `trip_planning`.
+Ten agents. The gateway shows `1/1` dependency -- just `trip_planning`. The
+planner shows `2/2` dependencies -- it resolved both `user_preferences` and
+`chat_history`.
 
 List the tools:
 
@@ -253,7 +276,9 @@ search_pois               poi-agent-97bd9fcc               poi_search           
 
 Two new tools: `save_turn` and `get_history`, both from `chat-history-agent`.
 
-### Multi-turn demo
+![Mesh UI Topology showing ten agents with chat-history-agent connected to planner](../assets/images/tutorial/day-06-mesh-ui-topology.png)
+
+#### Multi-turn demo
 
 Turn 1 -- plan a trip:
 
@@ -289,9 +314,9 @@ $ curl -s -X POST http://localhost:8080/plan \
 
 The second response references the first plan -- it knows about the previous
 hotel choice, the original budget, and the itinerary structure. This is the
-conversation history at work: the gateway fetched the prior turns from Redis,
-the planner passed them to the LLM as a multi-turn message list, and the LLM
-responded with awareness of the full dialogue.
+conversation history at work: the planner fetched the prior turns from Redis,
+passed them to the LLM as a multi-turn message list, and the LLM responded
+with awareness of the full dialogue.
 
 Turn 3 -- ask a question:
 
@@ -313,29 +338,29 @@ Open the mesh UI to view the trace:
 $ meshctl start --ui -d
 ```
 
-Navigate to `http://localhost:9999` and click the most recent trace. The call
-tree shows the gateway's orchestration:
+Navigate to `http://localhost:3080` and click the most recent trace. The call
+tree shows the planner's orchestration -- history fetch and save happen inside
+the planner, not the gateway:
 
 ```
-└─ gateway [18542ms]
+└─ plan_trip (planner-agent) [18542ms] ✓
    ├─ get_history (chat-history-agent) [2ms] ✓
-   ├─ plan_trip (planner-agent) [18490ms] ✓
-   │  ├─ get_user_prefs (user-prefs-agent) [1ms] ✓
-   │  └─ claude_provider (claude-provider) [18451ms] ✓
-   │     ├─ flight_search (flight-agent) [14ms] ✓
-   │     │  └─ get_user_prefs (user-prefs-agent) [0ms] ✓
-   │     ├─ hotel_search (hotel-agent) [1ms] ✓
-   │     ├─ get_weather (weather-agent) [0ms] ✓
-   │     └─ search_pois (poi-agent) [21ms] ✓
-   │        └─ get_weather (weather-agent) [0ms] ✓
+   ├─ get_user_prefs (user-prefs-agent) [1ms] ✓
+   ├─ claude_provider (claude-provider) [18451ms] ✓
+   │  ├─ flight_search (flight-agent) [14ms] ✓
+   │  │  └─ get_user_prefs (user-prefs-agent) [0ms] ✓
+   │  ├─ hotel_search (hotel-agent) [1ms] ✓
+   │  ├─ get_weather (weather-agent) [0ms] ✓
+   │  └─ search_pois (poi-agent) [21ms] ✓
+   │     └─ get_weather (weather-agent) [0ms] ✓
    ├─ save_turn (chat-history-agent) [1ms] ✓
    └─ save_turn (chat-history-agent) [1ms] ✓
 ```
 
-The flow reads left to right: fetch history (2ms), plan the trip (18s, most of
-which is the LLM), save the user message (1ms), save the assistant response
-(1ms). The chat history calls add negligible overhead -- Redis round-trips are
-sub-millisecond.
+The flow reads top to bottom: fetch history (2ms), prefetch user preferences
+(1ms), run the LLM (18s, most of which is the LLM reasoning loop), save the
+user message (1ms), save the assistant response (1ms). The chat history calls
+add negligible overhead -- Redis round-trips are sub-millisecond.
 
 !!! note "Stateful concerns are just agents"
     Redis-backed chat history, user profiles, booking state, audit logs -- they
@@ -356,13 +381,13 @@ of specialists. No need to stop between chapters.
 `localhost:6379`. Make sure the observability stack is running:
 
 ```shell
-$ docker compose up -d
+$ docker compose -f docker-compose.observability.yml up -d
 ```
 
 Check Redis is healthy:
 
 ```shell
-$ docker compose ps redis
+$ docker compose -f docker-compose.observability.yml ps redis
 ```
 
 **History not persisting across calls.** Verify you are sending the same
@@ -373,7 +398,7 @@ shared history. Check the `session_id` field in the response.
 **Second turn does not reference the first.** Three things to check:
 
 1. The `chat_history` dependency resolved: `meshctl list` should show the
-   gateway with `2/2` deps.
+   planner with `2/2` deps.
 2. Redis contains the turns: `redis-cli LRANGE chat:test-session-1 0 -1`
    should show the saved JSON.
 3. The planner received the history: check the trace for `get_history` returning
@@ -391,11 +416,11 @@ $ pip install redis
 
 You added multi-turn chat history to the trip planner by building one new
 agent and updating two existing ones. The chat-history-agent wraps Redis with
-two tools (`save_turn`, `get_history`). The gateway fetches history before
-calling the planner and saves turns after. The planner passes the conversation
-to the LLM as a multi-turn message list. No framework changes, no special
-chat primitives -- just another mesh tool agent wired through dependency
-injection.
+two tools (`save_turn`, `get_history`). The planner owns the full chat
+lifecycle -- it fetches history before the LLM call and saves turns after. The
+gateway stays thin: one dependency, session ID passthrough. No framework
+changes, no special chat primitives -- just another mesh tool agent wired
+through dependency injection.
 
 ## See also
 

@@ -46,6 +46,7 @@ class TripRequest(MeshContextModel):
     tags=["planner", "travel", "llm"],
     dependencies=[
         "user_preferences",
+        "chat_history",
         "budget_analysis",
         "adventure_advice",
         "logistics_planning",
@@ -57,8 +58,10 @@ async def plan_trip(
     dates: str,
     budget: str,
     message: str = "",
-    conversation_history: list[dict] = None,
+    session_id: str = "",
+    conversation_history: list[dict] = [],
     user_prefs: mesh.McpMeshTool = None,
+    chat_history: mesh.McpMeshTool = None,
     budget_analyst: mesh.McpMeshTool = None,
     adventure_advisor: mesh.McpMeshTool = None,
     logistics_planner: mesh.McpMeshTool = None,
@@ -81,15 +84,27 @@ async def plan_trip(
         else "No user preferences available."
     )
 
+    # --8<-- [start:chat_history_fetch]
+    # Tier-1: fetch chat history if a session is active
+    history = []
+    if session_id and chat_history:
+        history = await chat_history.call_tool("get_history", {
+            "session_id": session_id,
+            "limit": 20,
+        })
+        if isinstance(history, dict):
+            history = history.get("result", [])
+    # --8<-- [end:chat_history_fetch]
+
     # --8<-- [start:multi_turn]
-    # Build the message for the LLM. When conversation_history is present,
+    # Build the message for the LLM. When history is present,
     # pass the full turn list so the LLM sees prior context.
     user_text = message or (
         f"Plan a trip to {destination} from {dates} with a budget of {budget}."
     )
 
-    if conversation_history:
-        messages = list(conversation_history)
+    if history:
+        messages = list(history)
         messages.append({"role": "user", "content": user_text})
         base_plan = await llm(
             messages,
@@ -138,10 +153,28 @@ async def plan_trip(
         for label, result in zip(labels, specialist_results):
             sections.append(f"\n### {label}\n{result}\n")
 
-        return "\n".join(sections)
+        final_result = "\n".join(sections)
+    else:
+        final_result = str(base_plan)
     # --8<-- [end:committee_fanout]
 
-    return str(base_plan)
+    # --8<-- [start:chat_history_save]
+    # Save turns to chat history so the next request sees them
+    if session_id and chat_history:
+        await chat_history.call_tool("save_turn", {
+            "session_id": session_id,
+            "role": "user",
+            "content": user_text,
+        })
+        response_text = final_result if isinstance(final_result, str) else str(final_result)
+        await chat_history.call_tool("save_turn", {
+            "session_id": session_id,
+            "role": "assistant",
+            "content": response_text,
+        })
+    # --8<-- [end:chat_history_save]
+
+    return final_result
 # --8<-- [end:llm_function]
 
 

@@ -33,7 +33,7 @@ Or with debug logging:
 meshctl start main.py --debug
 ```
 
-The agent will start on port 8080 by default.
+The agent will start on port 9110 by default.
 
 ## Configuration
 

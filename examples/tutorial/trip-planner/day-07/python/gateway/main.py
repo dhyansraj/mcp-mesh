@@ -18,13 +18,9 @@ async def health():
 
 # --8<-- [start:plan_endpoint]
 @app.post("/plan")
-@mesh.route(dependencies=["chat_history", "trip_planning"])
-async def plan_trip(
-    request: Request,
-    chat_history: McpMeshTool = None,
-    plan_trip: McpMeshTool = None,
-):
-    """Bridge HTTP to the mesh planner with multi-turn chat history."""
+@mesh.route(dependencies=["trip_planning"])
+async def plan_trip(request: Request, plan_trip: McpMeshTool = None):
+    """Bridge HTTP to the mesh planner with session tracking."""
     body = await request.json()
     if not plan_trip:
         return {"error": "trip_planning capability unavailable"}
@@ -33,43 +29,13 @@ async def plan_trip(
     session_id = request.headers.get("X-Session-Id") or str(uuid.uuid4())
     # --8<-- [end:session_id]
 
-    # --8<-- [start:fetch_history]
-    history = []
-    if chat_history:
-        history = await chat_history.call_tool("get_history", {
-            "session_id": session_id,
-            "limit": 20,
-        })
-        if isinstance(history, dict):
-            history = history.get("result", [])
-    # --8<-- [end:fetch_history]
-
-    # --8<-- [start:call_planner]
-    user_message = body.get("message", f"Plan a trip to {body['destination']}")
     result = await plan_trip(
         destination=body["destination"],
         dates=body["dates"],
         budget=body["budget"],
-        message=user_message,
-        conversation_history=history,
+        message=body.get("message", ""),
+        session_id=session_id,
     )
-    # --8<-- [end:call_planner]
-
-    # --8<-- [start:save_turns]
-    if chat_history:
-        await chat_history.call_tool("save_turn", {
-            "session_id": session_id,
-            "role": "user",
-            "content": user_message,
-        })
-        response_text = result if isinstance(result, str) else str(result)
-        await chat_history.call_tool("save_turn", {
-            "session_id": session_id,
-            "role": "assistant",
-            "content": response_text,
-        })
-    # --8<-- [end:save_turns]
-
     return {"result": result, "session_id": session_id}
 # --8<-- [end:plan_endpoint]
 

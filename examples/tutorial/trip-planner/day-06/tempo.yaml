@@ -5,6 +5,12 @@ server:
   http_listen_port: 3200
   grpc_listen_port: 9095
 
+memberlist:
+  abort_if_cluster_join_fails: false
+  bind_addr:
+    - '0.0.0.0'
+  bind_port: 7946
+
 distributor:
   receivers:
     otlp:

@@ -67,7 +67,7 @@ Day 3. Same decorator, same zero-code body, different model string.
 ### Scaffold the provider
 
 ```shell
-$ meshctl scaffold --name openai-provider --agent-type llm-provider --model openai/gpt-4o-mini
+$ meshctl scaffold --name openai-provider --agent-type llm-provider --model openai/gpt-4o-mini --port 9108
 ```
 
 Replace the generated `main.py` with:
@@ -90,7 +90,7 @@ function.
 ### Start the provider
 
 ```shell
-$ meshctl start --debug -d -w openai-provider/main.py
+$ meshctl start --dte --debug -d -w openai-provider/main.py
 ```
 
 Check the mesh:
@@ -267,10 +267,12 @@ LLM. No code change, no config change, no restart. The registry saw that
 Claude was down, found another healthy provider with capability `llm`, and
 routed there.
 
+![Mesh UI Topology during failover — planner routed to openai-provider while claude-provider is down](../assets/images/tutorial/day-04-topology-failover.png)
+
 ### Call 3: Restart Claude, verify preference
 
 ```shell
-$ meshctl start --debug -d -w claude-provider/main.py
+$ meshctl start --dte --debug -d -w claude-provider/main.py
 ```
 
 Wait a few seconds for registration, then call again:
@@ -305,6 +307,10 @@ Summary: 18 spans across 7 agents | 18.02s | ✓
 
 Back to `claude_provider`. The `+claude` preference kicks in again because
 Claude is healthy and has the highest tag score.
+
+![Mesh UI Topology with Claude back — planner prefers claude-provider via +claude tag](../assets/images/tutorial/day-04-topology-claude-preferred.png)
+
+Notice that `openai-provider` is still healthy and connected to the mesh. The planner routes to `claude-provider` because of the `+claude` preference tag — not because OpenAI is unavailable. Both providers are ready; mesh picks the preferred one.
 
 Three calls, three traces, two different providers. The planner's code didn't
 change once.

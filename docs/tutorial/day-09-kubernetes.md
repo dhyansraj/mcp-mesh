@@ -341,18 +341,18 @@ budget-analyst-bbde0bf2     Python   Agent   healthy  0/0   budget-analyst-mcp-m
 chat-history-agent-e6fe4291 Python   Agent   healthy  0/0   chat-history-agent-mcp-mesh-agent.trip-planner:8080
 claude-provider-de41d665    Python   Agent   healthy  0/0   claude-provider-mcp-mesh-agent.trip-planner:8080
 flight-agent-b5a0bfb6       Python   Agent   healthy  1/1   flight-agent-mcp-mesh-agent.trip-planner:8080
-gateway-api-b7080b01        Python   API     healthy  2/2   gateway-mcp-mesh-agent.trip-planner:8080
+gateway-api-b7080b01        Python   API     healthy  1/1   gateway-mcp-mesh-agent.trip-planner:8080
 hotel-agent-db0a6b18        Python   Agent   healthy  0/0   hotel-agent-mcp-mesh-agent.trip-planner:8080
 logistics-planner-5fd4a0e7  Python   Agent   healthy  0/0   logistics-planner-mcp-mesh-agent.trip-planner:8080
 openai-provider-b32513de    Python   Agent   healthy  0/0   openai-provider-mcp-mesh-agent.trip-planner:8080
-planner-agent-9b662efc      Python   Agent   healthy  4/4   planner-agent-mcp-mesh-agent.trip-planner:8080
+planner-agent-9b662efc      Python   Agent   healthy  5/5   planner-agent-mcp-mesh-agent.trip-planner:8080
 poi-agent-2ccdd8e5          Python   Agent   healthy  1/1   poi-agent-mcp-mesh-agent.trip-planner:8080
 user-prefs-agent-3bfc1af9   Python   Agent   healthy  0/0   user-prefs-agent-mcp-mesh-agent.trip-planner:8080
 weather-agent-b8c26c65      Python   Agent   healthy  0/0   weather-agent-mcp-mesh-agent.trip-planner:8080
 ```
 
-Thirteen agents, all healthy. The planner resolves all four dependencies
-(`4/4`). The gateway resolves both of its (`2/2`). Endpoints use
+Thirteen agents, all healthy. The planner resolves all five dependencies
+(`5/5`). The gateway resolves its single dependency (`1/1`). Endpoints use
 Kubernetes DNS names -- `<service>.<namespace>:<port>` -- which resolve
 automatically within the cluster.
 

@@ -1,1 +1,1 @@
-"""Gateway Agent - MCP Mesh API gateway."""
+"""Gateway API Gateway - MCP Mesh API gateway."""

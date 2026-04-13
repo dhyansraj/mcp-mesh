@@ -32,10 +32,10 @@ outdoor activities. The other three — `hotel-agent`, `weather-agent`, and
 You know `meshctl scaffold` from Day 1. Scaffold four new agents:
 
 ```shell
-$ meshctl scaffold --name hotel-agent --agent-type tool
-$ meshctl scaffold --name weather-agent --agent-type tool
-$ meshctl scaffold --name poi-agent --agent-type tool
-$ meshctl scaffold --name user-prefs-agent --agent-type tool
+$ meshctl scaffold --name hotel-agent --agent-type tool --port 9102
+$ meshctl scaffold --name weather-agent --agent-type tool --port 9103
+$ meshctl scaffold --name poi-agent --agent-type tool --port 9104
+$ meshctl scaffold --name user-prefs-agent --agent-type tool --port 9105
 ```
 
 Each command creates the same set of files you saw on Day 1: `main.py`,
@@ -131,7 +131,7 @@ Logs: ~/.mcp-mesh/logs/<agent>.log
 Use 'meshctl logs <agent>' to view or 'meshctl stop' to stop all
 ```
 
-That's the last time you'll run this command for this session. The `-w` flag
+The `-w` flag
 means mesh is watching your agent files — edit any `main.py`, save it, and mesh
 restarts that agent automatically. Combined with `-d` (detach) and `--debug`
 (verbose logs), this gives you a tight development loop: edit, save, call, see
@@ -153,6 +153,8 @@ $ meshctl start --ui -d
 
 The dashboard is at [http://localhost:3080](http://localhost:3080). You'll see
 all five agents listed.
+
+![Mesh UI Topology showing five agents with dependency edges](../assets/images/tutorial/day-02-mesh-ui-topology.png)
 
 ## Step 5: Inspect the mesh
 
@@ -251,29 +253,22 @@ $ meshctl call search_pois '{"location":"Tokyo"}'
 
 ```json
 {
-  "_meta": {
-    "fastmcp": {
-      "wrap_result": true
-    }
-  },
   "content": [
     {
       "type": "text",
-      "text": "{\"location\":\"Tokyo\",\"weather_summary\":\"Partly cloudy in Tokyo on today, 28C high, 30% chance of rain.\",\"recommendation\":\"Weather looks good \\u2014 outdoor activities recommended.\",\"pois\":[{\"name\":\"Senso-ji Temple\",\"type\":\"outdoor\",\"category\":\"cultural\",\"location\":\"Tokyo\"},{\"name\":\"Ueno Park\",\"type\":\"outdoor\",\"category\":\"nature\",\"location\":\"Tokyo\"},{\"name\":\"Meiji Shrine\",\"type\":\"outdoor\",\"category\":\"cultural\",\"location\":\"Tokyo\"},{\"name\":\"TeamLab Borderless\",\"type\":\"indoor\",\"category\":\"art\",\"location\":\"Tokyo\"}]}"
+      "text": "{\"location\":\"Tokyo\",\"weather_summary\":\"Partly cloudy in Tokyo on today, 28C high, 30% chance of rain.\",\"recommendation\":\"Weather looks good — outdoor activities recommended.\",\"pois\":[{\"name\":\"Senso-ji Temple\",\"type\":\"outdoor\",\"category\":\"cultural\",\"location\":\"Tokyo\"},{\"name\":\"Ueno Park\",\"type\":\"outdoor\",\"category\":\"nature\",\"location\":\"Tokyo\"},{\"name\":\"Meiji Shrine\",\"type\":\"outdoor\",\"category\":\"cultural\",\"location\":\"Tokyo\"},{\"name\":\"TeamLab Borderless\",\"type\":\"indoor\",\"category\":\"art\",\"location\":\"Tokyo\"}]}"
     }
   ],
   "structuredContent": {
-    "result": {
-      "location": "Tokyo",
-      "weather_summary": "Partly cloudy in Tokyo on today, 28C high, 30% chance of rain.",
-      "recommendation": "Weather looks good — outdoor activities recommended.",
-      "pois": [
-        {"name": "Senso-ji Temple", "type": "outdoor", "category": "cultural", "location": "Tokyo"},
-        {"name": "Ueno Park", "type": "outdoor", "category": "nature", "location": "Tokyo"},
-        {"name": "Meiji Shrine", "type": "outdoor", "category": "cultural", "location": "Tokyo"},
-        {"name": "TeamLab Borderless", "type": "indoor", "category": "art", "location": "Tokyo"}
-      ]
-    }
+    "location": "Tokyo",
+    "weather_summary": "Partly cloudy in Tokyo on today, 28C high, 30% chance of rain.",
+    "recommendation": "Weather looks good — outdoor activities recommended.",
+    "pois": [
+      {"name": "Senso-ji Temple", "type": "outdoor", "category": "cultural", "location": "Tokyo"},
+      {"name": "Ueno Park", "type": "outdoor", "category": "nature", "location": "Tokyo"},
+      {"name": "Meiji Shrine", "type": "outdoor", "category": "cultural", "location": "Tokyo"},
+      {"name": "TeamLab Borderless", "type": "indoor", "category": "art", "location": "Tokyo"}
+    ]
   },
   "isError": false
 }
@@ -298,11 +293,13 @@ you'll get indoor recommendations instead.
     network call, and your code stayed clean. That's Distributed Dynamic
     Dependency Injection — DDDI.
 
-## Leave it running
+## Stop and clean up
 
-Your five agents are running in watch mode — leave them. On Day 3 you'll add new agents to this mesh with another `meshctl start` command, and meshctl will track everything together. No need to stop and restart between chapters.
+```shell
+$ meshctl stop
+```
 
-If you do need to stop for any reason, `meshctl stop` shuts down all agents, the UI, and the registry in one command.
+On Day 3 you'll restart with distributed tracing enabled — the agents need the `--dte` flag to publish trace events, so a fresh start is needed.
 
 ## Troubleshooting
 

@@ -1,1 +1,1 @@
-"""ClaudeProvider Agent - MCP Mesh agent."""
+"""ClaudeProvider - MCP Mesh LLM provider."""

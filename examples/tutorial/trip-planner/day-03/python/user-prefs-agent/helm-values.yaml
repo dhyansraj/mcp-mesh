@@ -4,12 +4,15 @@
 
 image:
   repository: your-registry/user-prefs-agent
-  tag: "v1.0.0"
+  tag: "v1.0.0"  # Your image version. Override with: --set image.tag=v1.2.3
   pullPolicy: IfNotPresent
 
 agent:
   name: user-prefs-agent
   runtime: python
+  # K8s uses port 8080 by default (each pod has its own IP, no conflicts)
+  # http:
+  #   port: 8080
 
 resources:
   limits:
@@ -21,7 +24,21 @@ resources:
 
 mesh:
   enabled: true
+  # Short name resolves in same namespace as core. For cross-namespace:
+  #   registry.host: mcp-core-mcp-mesh-registry.<core-namespace>.svc.cluster.local
 
 registry:
   host: "mcp-core-mcp-mesh-registry"
   port: "8000"
+
+# Optional: Additional environment variables
+# Uncomment to add — leaving commented avoids overriding base values
+# env:
+#   - name: LOG_LEVEL
+#     value: "INFO"
+
+# Optional: Secrets (creates a K8s Secret, injected via envFrom)
+# Uncomment to add — leaving commented avoids overriding base values
+# secrets:
+#   DATABASE_URL: "postgres://user:pass@host:5432/db"
+#   API_KEY: "your-api-key"

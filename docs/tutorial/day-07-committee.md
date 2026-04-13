@@ -11,8 +11,8 @@ planner consult all of them before producing the final plan.
 ```mermaid
 graph LR
     U[User] -->|"POST /plan"| GW[gateway]
-    GW -->|"chat_history"| CH[chat-history-agent]
     GW -->|"trip_planning"| PL[planner-agent]
+    PL ==>|tier-1| CH[chat-history-agent]
     PL -->|"+claude"| CP[claude-provider]
     PL -.->|failover| OP[openai-provider]
     PL ==>|tier-1| UPA[user-prefs-agent]
@@ -87,7 +87,7 @@ Pydantic model with fields specific to its domain.
 Scaffold the agent:
 
 ```shell
-$ meshctl scaffold --name budget-analyst --agent-type llm-agent
+$ meshctl scaffold --name budget-analyst --agent-type llm-agent --port 9110
 ```
 
 ```
@@ -129,7 +129,7 @@ Replace the prompt template at `prompts/budget_analysis.j2`:
 Scaffold:
 
 ```shell
-$ meshctl scaffold --name adventure-advisor --agent-type llm-agent
+$ meshctl scaffold --name adventure-advisor --agent-type llm-agent --port 9111
 ```
 
 Replace `main.py`:
@@ -153,7 +153,7 @@ Replace the prompt at `prompts/adventure_advice.j2`:
 Scaffold:
 
 ```shell
-$ meshctl scaffold --name logistics-planner --agent-type llm-agent
+$ meshctl scaffold --name logistics-planner --agent-type llm-agent --port 9112
 ```
 
 Replace `main.py`:
@@ -223,7 +223,7 @@ replacing the original planning logic.
 Your ten agents from Day 6 should still be running. Add the three specialists:
 
 ```shell
-$ meshctl start --debug -d -w \
+$ meshctl start --dte --debug -d -w \
     budget-analyst/main.py \
     adventure-advisor/main.py \
     logistics-planner/main.py
@@ -232,7 +232,7 @@ $ meshctl start --debug -d -w \
 If you are starting fresh, launch everything at once:
 
 ```shell
-$ meshctl start --debug -d -w \
+$ meshctl start --dte --debug -d -w \
     budget-analyst/main.py \
     adventure-advisor/main.py \
     logistics-planner/main.py \
@@ -263,18 +263,18 @@ budget-analyst-5a1d3b8e          Python    Agent   healthy   0/0    10.0.0.74:91
 chat-history-agent-3f2a1b9c      Python    Agent   healthy   0/0    10.0.0.74:9109     20m   2s
 claude-provider-0a89e8c6         Python    Agent   healthy   0/0    10.0.0.74:49486    35m   2s
 flight-agent-a939da4b            Python    Agent   healthy   1/1    10.0.0.74:49480    35m   2s
-gateway-7b3f2e91                 Python    API     healthy   2/2    10.0.0.74:8080     25m   2s
+gateway-7b3f2e91                 Python    API     healthy   1/1    10.0.0.74:8080     25m   2s
 hotel-agent-9932ac09             Python    Agent   healthy   0/0    10.0.0.74:49482    35m   2s
 logistics-planner-9f6b4d2c       Python    Agent   healthy   0/0    10.0.0.74:9112     8s    2s
 openai-provider-40a5c637         Python    Agent   healthy   0/0    10.0.0.74:49485    35m   2s
-planner-agent-fb07b918           Python    Agent   healthy   4/4    10.0.0.74:49484    35m   2s
+planner-agent-fb07b918           Python    Agent   healthy   5/5    10.0.0.74:49484    35m   2s
 poi-agent-97bd9fcc               Python    Agent   healthy   1/1    10.0.0.74:49481    35m   2s
 user-prefs-agent-87506c4a        Python    Agent   healthy   0/0    10.0.0.74:49479    35m   2s
 weather-agent-a6f7ea5e           Python    Agent   healthy   0/0    10.0.0.74:49483    35m   2s
 ```
 
-Thirteen agents. The planner now shows `4/4` dependencies -- `user_preferences`
-plus the three specialist capabilities.
+Thirteen agents. The planner now shows `5/5` dependencies -- `user_preferences`,
+`chat_history`, plus the three specialist capabilities.
 
 List the tools:
 
@@ -304,6 +304,8 @@ search_pois               poi-agent-97bd9fcc               poi_search           
 
 Three new specialist tools: `budget_analysis`, `adventure_advice`, and
 `logistics_planning`.
+
+![Mesh UI Topology showing thirteen agents with committee fan-out pattern](../assets/images/tutorial/day-07-mesh-ui-topology.png)
 
 ### Call the planner
 
@@ -337,24 +339,23 @@ Open the mesh UI:
 $ meshctl start --ui -d
 ```
 
-Navigate to `http://localhost:9999` and click the most recent trace. The call
+Navigate to `http://localhost:3080` and click the most recent trace. The call
 tree shows the fan-out pattern:
 
 ```
-└─ gateway [42871ms]
+└─ plan_trip (planner-agent) [42871ms] ✓
    ├─ get_history (chat-history-agent) [2ms] ✓
-   ├─ plan_trip (planner-agent) [42810ms] ✓
-   │  ├─ get_user_prefs (user-prefs-agent) [1ms] ✓
-   │  ├─ claude_provider (claude-provider) [18451ms] ✓
-   │  │  ├─ flight_search (flight-agent) [14ms] ✓
-   │  │  │  └─ get_user_prefs (user-prefs-agent) [0ms] ✓
-   │  │  ├─ hotel_search (hotel-agent) [1ms] ✓
-   │  │  ├─ get_weather (weather-agent) [0ms] ✓
-   │  │  └─ search_pois (poi-agent) [21ms] ✓
-   │  │     └─ get_weather (weather-agent) [0ms] ✓
-   │  ├─ budget_analysis (budget-analyst) [8204ms] ✓    ← parallel
-   │  ├─ adventure_advice (adventure-advisor) [7891ms] ✓ ← parallel
-   │  └─ logistics_planning (logistics-planner) [8102ms] ✓ ← parallel
+   ├─ get_user_prefs (user-prefs-agent) [1ms] ✓
+   ├─ claude_provider (claude-provider) [18451ms] ✓
+   │  ├─ flight_search (flight-agent) [14ms] ✓
+   │  │  └─ get_user_prefs (user-prefs-agent) [0ms] ✓
+   │  ├─ hotel_search (hotel-agent) [1ms] ✓
+   │  ├─ get_weather (weather-agent) [0ms] ✓
+   │  └─ search_pois (poi-agent) [21ms] ✓
+   │     └─ get_weather (weather-agent) [0ms] ✓
+   ├─ budget_analysis (budget-analyst) [8204ms] ✓    ← parallel
+   ├─ adventure_advice (adventure-advisor) [7891ms] ✓ ← parallel
+   ├─ logistics_planning (logistics-planner) [8102ms] ✓ ← parallel
    ├─ save_turn (chat-history-agent) [1ms] ✓
    └─ save_turn (chat-history-agent) [1ms] ✓
 ```
@@ -372,10 +373,13 @@ through the shared `claude-provider`.
     needed. This is especially useful when specialists are developed by
     different teams: the model definition is the API contract.
 
-## Leave it running
+## Stop and clean up
 
-Your thirteen agents are running in watch mode. On Day 8 you will
-containerize the mesh with Docker Compose. No need to stop between chapters.
+```shell
+$ meshctl stop
+```
+
+On Day 8 you'll containerize the entire mesh with Docker Compose — local agents need to stop so Docker can use the same ports.
 
 ## Troubleshooting
 

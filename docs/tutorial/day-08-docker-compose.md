@@ -85,7 +85,7 @@ Today has five parts:
 
 ### Stop local agents
 
-If you still have agents running from Day 7, stop them first:
+Day 7 stopped your local agents. If any are still running:
 
 ```shell
 $ meshctl stop
@@ -379,7 +379,7 @@ $ docker compose down -v
 ## Troubleshooting
 
 **Docker build fails with missing requirements.** The compose file uses
-`mcpmesh/python-runtime:0.8` images with a dev-mode entrypoint that
+`mcpmesh/python-runtime:1.2.0` images with a dev-mode entrypoint that
 installs `requirements.txt` on startup. If an agent has dependencies not
 in the base image, check that `requirements.txt` exists in the agent
 directory and lists all dependencies.
@@ -395,6 +395,12 @@ another process is using that port on your host. Either stop the
 conflicting process or change the host port mapping in
 `docker-compose.yml`. For example, change `"8000:8000"` to `"8001:8000"`
 to map the registry to port 8001 on your host.
+
+**Duplicate agent ports.** If any two agents share the same `http_port`,
+Docker Compose will fail to start them -- they'd bind to the same host
+port. Check your `main.py` files: each agent should have a unique port.
+If you used `--port` when scaffolding (as shown in earlier chapters),
+you're already set.
 
 **API keys not passed to containers.** LLM providers need
 `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`. These must be set in your shell

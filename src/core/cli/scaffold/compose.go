@@ -1055,7 +1055,7 @@ const agentServicesTemplate = `{{- range .Agents }}
 # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
 #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
 {{ .Name }}:
-  image: mcpmesh/python-runtime:0.8
+  image: mcpmesh/python-runtime:1.2.0
   container_name: {{ $.ProjectName }}-{{ .Name }}
   hostname: {{ .Name }}
   user: root
@@ -1100,7 +1100,7 @@ const agentServicesTemplate = `{{- range .Agents }}
 # NOTE: In dev mode, npm install runs on startup and source is mounted.
 #       In production (Dockerfile), dependencies are pre-installed in the image.
 {{ .Name }}:
-  image: mcpmesh/typescript-runtime:1.2
+  image: mcpmesh/typescript-runtime:1.2.0
   container_name: {{ $.ProjectName }}-{{ .Name }}
   hostname: {{ .Name }}
   user: root
@@ -1143,7 +1143,7 @@ const agentServicesTemplate = `{{- range .Agents }}
 # Agent: {{ .Name }} (Java/Spring Boot)
 # NOTE: In dev mode, maven builds on startup. In production, use the Dockerfile.
 {{ .Name }}:
-  image: mcpmesh/java-runtime:1.2
+  image: mcpmesh/java-runtime:1.2.0
   container_name: {{ $.ProjectName }}-{{ .Name }}
   hostname: {{ .Name }}
   user: root
@@ -1203,6 +1203,12 @@ const tempoConfigTemplate = `# Tempo configuration for MCP Mesh distributed trac
 server:
   http_listen_port: 3200
   grpc_listen_port: 9095
+
+memberlist:
+  abort_if_cluster_join_fails: false
+  bind_addr:
+    - '0.0.0.0'
+  bind_port: 7946
 
 distributor:
   receivers:
@@ -1818,7 +1824,7 @@ services:
       - {{ .NetworkName }}
 
   registry:
-    image: mcpmesh/registry:0.8
+    image: mcpmesh/registry:1.2.0
     container_name: {{ .ProjectName }}-registry
     hostname: registry
     ports:
@@ -1927,7 +1933,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   {{ .Name }}:
-    image: mcpmesh/python-runtime:0.8
+    image: mcpmesh/python-runtime:1.2.0
     container_name: {{ $.ProjectName }}-{{ .Name }}
     hostname: {{ .Name }}
     user: root
@@ -1973,7 +1979,7 @@ services:
   # NOTE: In dev mode, npm install runs on startup and source is mounted.
   #       In production (Dockerfile), dependencies are pre-installed in the image.
   {{ .Name }}:
-    image: mcpmesh/typescript-runtime:1.2
+    image: mcpmesh/typescript-runtime:1.2.0
     container_name: {{ $.ProjectName }}-{{ .Name }}
     hostname: {{ .Name }}
     user: root
@@ -2017,7 +2023,7 @@ services:
   # Java Agent: {{ .Name }}
   # NOTE: In dev mode, maven builds on startup. In production, use the Dockerfile.
   {{ .Name }}:
-    image: mcpmesh/java-runtime:1.2
+    image: mcpmesh/java-runtime:1.2.0
     container_name: {{ $.ProjectName }}-{{ .Name }}
     hostname: {{ .Name }}
     user: root

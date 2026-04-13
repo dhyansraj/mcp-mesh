@@ -51,7 +51,7 @@ Today has four parts:
 ### Scaffold the gateway
 
 ```shell
-$ meshctl scaffold --name gateway --agent-type api --lang python
+$ meshctl scaffold --name gateway --agent-type api --lang python --port 8080
 ```
 
 Replace the generated `main.py` with:
@@ -91,20 +91,12 @@ declares a dependency on `trip_planning`, and mesh injects a callable. When you
 add new tool agents on Day 6, the gateway won't change -- it calls the planner,
 and the planner discovers new tools automatically.
 
-### Install dependencies
-
-The gateway needs `fastapi` and `uvicorn`. If they're not already in your venv:
-
-```shell
-$ pip install fastapi uvicorn
-```
-
 ## Part 2: Start the gateway
 
 Your eight agents from Day 4 should still be running. Add the gateway:
 
 ```shell
-$ meshctl start --debug -d -w gateway/main.py
+$ meshctl start --dte --debug -d -w gateway/main.py
 ```
 
 Check the mesh:
@@ -157,6 +149,8 @@ The gateway doesn't appear in the tool list -- it doesn't expose any tools. It
 consumes the `trip_planning` capability via `@mesh.route`, not `@mesh.tool`.
 This is the difference between an API agent and a tool agent: API agents are
 HTTP entry points into the mesh, not MCP tool providers.
+
+![Mesh UI Topology showing nine agents with the API gateway at the top](../assets/images/tutorial/day-05-mesh-ui-topology.png)
 
 ## Part 3: Call the API
 

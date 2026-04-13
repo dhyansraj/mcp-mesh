@@ -1,1 +1,1 @@
-"""PlannerAgent Agent - MCP Mesh agent."""
+"""PlannerAgent Agent - MCP Mesh LLM agent."""

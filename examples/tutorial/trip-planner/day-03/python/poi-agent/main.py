@@ -19,7 +19,7 @@ app = FastMCP("POI Agent")
 async def search_pois(
     location: str,
     weather: mesh.McpMeshTool = None,
-) -> list[dict]:
+) -> dict:
     """Find points of interest, adjusted for weather conditions."""
     # Fetch weather via dependency injection
     forecast = await weather(location=location, date="today") if weather else {}

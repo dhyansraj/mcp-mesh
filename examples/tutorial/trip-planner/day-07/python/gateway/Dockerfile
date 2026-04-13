@@ -1,4 +1,4 @@
-# Dockerfile for gateway MCP Mesh API agent
+# Dockerfile for gateway MCP Mesh API gateway
 FROM mcpmesh/python-runtime:1.2.0
 
 WORKDIR /app
@@ -17,9 +17,9 @@ RUN chown -R mcp-mesh:mcp-mesh /app && chmod -R 755 /app
 # Switch back to non-root user for security
 USER mcp-mesh
 
-# Expose the gateway port
+# Expose the agent port
 EXPOSE 8080
 
-# Run the gateway
+# Run the agent
 # NOTE: Base image has ENTRYPOINT ["python"], so CMD only needs the script name
 CMD ["main.py"]

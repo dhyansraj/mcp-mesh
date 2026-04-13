@@ -1,1 +1,1 @@
-"""OpenaiProvider Agent - MCP Mesh agent."""
+"""OpenaiProvider - MCP Mesh LLM provider."""

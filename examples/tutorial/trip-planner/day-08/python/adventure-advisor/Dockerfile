@@ -18,7 +18,7 @@ RUN chown -R mcp-mesh:mcp-mesh /app && chmod -R 755 /app
 USER mcp-mesh
 
 # Expose the agent port
-EXPOSE 8080
+EXPOSE 9111
 
 # Run the agent
 # NOTE: Base image has ENTRYPOINT ["python"], so CMD only needs the script name

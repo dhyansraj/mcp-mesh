@@ -1,4 +1,3 @@
-# gateway dependencies (Day 5)
-# mcp-mesh is provided by the runtime environment (local venv or Docker base image).
-fastapi
-uvicorn
+# gateway dependencies
+# Add your third-party dependencies here
+# Note: mcp-mesh is provided by the runtime environment (local venv or Docker base image)
