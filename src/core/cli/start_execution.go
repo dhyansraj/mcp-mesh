@@ -49,19 +49,21 @@ func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) err
 				fmt.Printf("Registry not found at %s, starting embedded registry...\n", registryURL)
 			}
 
-			// Enforce single-registry constraint
+			// Check if we can start a registry (port available)
+			registryPort := getRegistryPortFromURL(registryURL, config.RegistryPort)
+			if !IsPortAvailable(registryHost, registryPort) {
+				return fmt.Errorf("cannot start registry: port %d is already in use on %s", registryPort, registryHost)
+			}
+
+			// Port is free, but another registry might be running on a different
+			// port. The PID guard catches this case without interfering with
+			// concurrent starts on the same port (handled by port check above).
 			pm2, pidErr := NewPIDManager()
 			if pidErr == nil {
 				existingPID, err := pm2.ReadPID("registry")
 				if err == nil && existingPID > 0 && existingPID != os.Getpid() && IsProcessAlive(existingPID) {
 					return fmt.Errorf("a registry is already running (PID %d) but not reachable at %s. Stop it with 'meshctl stop --registry' and try again", existingPID, registryURL)
 				}
-			}
-
-			// Check if we can start a registry (port available)
-			registryPort := getRegistryPortFromURL(registryURL, config.RegistryPort)
-			if !IsPortAvailable(registryHost, registryPort) {
-				return fmt.Errorf("cannot start registry: port %d is already in use on %s", registryPort, registryHost)
 			}
 
 			// Start registry in detach. startRegistryWithOptions returns the child

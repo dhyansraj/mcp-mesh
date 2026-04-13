@@ -99,18 +99,6 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 		return fmt.Errorf("registry is already running at %s", registryURL)
 	}
 
-	// Enforce single-registry constraint: only one local registry at a time.
-	// If a registry process is alive (even on a different port), refuse to start.
-	// This guard runs AFTER the IsRegistryRunning HTTP check so that the UI-only
-	// path (registry running + --ui flag) is not blocked.
-	pidMgr, pidErr := NewPIDManager()
-	if pidErr == nil {
-		existingPID, err := pidMgr.ReadPID("registry")
-		if err == nil && existingPID > 0 && existingPID != os.Getpid() && IsProcessAlive(existingPID) {
-			return fmt.Errorf("a registry is already running (PID %d). Stop it with 'meshctl stop --registry' before starting a new one, or use '--connect-only --registry-url <url>' to connect to a remote registry", existingPID)
-		}
-	}
-
 	// Ensure DB directory exists before starting the registry
 	if dir := filepath.Dir(config.DBPath); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -121,6 +109,17 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 	// Check if port is available (secondary check for better error messages)
 	if !IsPortAvailable(config.RegistryHost, config.RegistryPort) {
 		return fmt.Errorf("port %d is already in use on %s - another service may be using this port", config.RegistryPort, config.RegistryHost)
+	}
+
+	// Port is free, but another registry might be running on a different port.
+	// The PID guard catches this case without interfering with concurrent starts
+	// on the same port (handled by port check above).
+	pidMgr, pidErr := NewPIDManager()
+	if pidErr == nil {
+		existingPID, err := pidMgr.ReadPID("registry")
+		if err == nil && existingPID > 0 && existingPID != os.Getpid() && IsProcessAlive(existingPID) {
+			return fmt.Errorf("a registry is already running (PID %d). Stop it with 'meshctl stop --registry' before starting a new one, or use '--connect-only --registry-url <url>' to connect to a remote registry", existingPID)
+		}
 	}
 
 	// Setup security if specified
