@@ -56,17 +56,32 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 			}
 			maybeStartUIServer(cmd, config, registryURL)
 
-			// Monitor UI process — exit if killed externally
+			// Monitor UI process — exit if killed externally.
+			// Retry PID file reads since the UI server writes its PID
+			// asynchronously after maybeStartUIServer returns.
 			go func() {
-				pidMgr, err := NewPIDManager()
-				if err != nil {
-					return
+				var uiPID int
+				for i := 0; i < 30; i++ {
+					if signalHandler.IsShuttingDown() {
+						return
+					}
+					pidMgr, err := NewPIDManager()
+					if err == nil {
+						pid, err := pidMgr.ReadPID("ui")
+						if err == nil && pid > 0 {
+							uiPID = pid
+							break
+						}
+					}
+					time.Sleep(1 * time.Second)
 				}
-				uiPID, err := pidMgr.ReadPID("ui")
-				if err != nil || uiPID <= 0 {
-					return
+				if uiPID <= 0 {
+					return // Could not find UI PID after retries
 				}
 				for IsProcessAlive(uiPID) {
+					if signalHandler.IsShuttingDown() {
+						return
+					}
 					time.Sleep(1 * time.Second)
 				}
 				if !signalHandler.IsShuttingDown() {
@@ -305,10 +320,9 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 	// Monitor registry subprocess — if killed externally (e.g., by meshctl stop),
 	// detect it so this wrapper process exits cleanly instead of orphaning.
 	// Wait() also reaps the child, preventing zombie processes.
-	registryDone := make(chan struct{})
+	registryDone := make(chan error, 1)
 	go func() {
-		registryCmd.Wait()
-		close(registryDone)
+		registryDone <- registryCmd.Wait()
 	}()
 
 	// Wait for user signal OR registry death
@@ -317,21 +331,22 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 		if !quiet {
 			fmt.Println("\nShutting down registry...")
 		}
-		// Remove from process list
-		RemoveRunningProcess(registryCmd.Process.Pid)
-		// Kill the process
 		shutdownTimeout, _ := cmd.Flags().GetInt("shutdown-timeout")
 		if shutdownTimeout == 0 {
 			shutdownTimeout = config.ShutdownTimeout
 		}
-		return registryCmd.Process.Pid, KillProcess(registryCmd.Process.Pid, time.Duration(shutdownTimeout)*time.Second)
-	case <-registryDone:
-		// Registry was killed externally — clean up and exit
+		killErr := KillProcess(registryCmd.Process.Pid, time.Duration(shutdownTimeout)*time.Second)
+		if killErr == nil {
+			RemoveRunningProcess(registryCmd.Process.Pid)
+		}
+		return registryCmd.Process.Pid, killErr
+	case waitErr := <-registryDone:
+		// Registry exited (killed externally or crashed)
 		if !quiet {
 			fmt.Println("\nRegistry process exited, shutting down...")
 		}
 		RemoveRunningProcess(registryCmd.Process.Pid)
-		return registryCmd.Process.Pid, nil
+		return registryCmd.Process.Pid, waitErr
 	}
 }
 
