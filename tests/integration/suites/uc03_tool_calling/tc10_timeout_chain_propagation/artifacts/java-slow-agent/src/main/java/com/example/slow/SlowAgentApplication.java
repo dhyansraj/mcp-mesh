@@ -8,8 +8,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
-import java.util.Map;
-
 @MeshAgent(
     name = "java-slow-agent",
     version = "1.0.0",
@@ -30,7 +28,7 @@ public class SlowAgentApplication {
         capability = "slow_java",
         description = "Sleeps 70s then returns completion marker"
     )
-    public Map<String, String> slowChainJava(
+    public String slowChainJava(
         @Param(value = "message", description = "chain message") String message
     ) {
         log.info("slow_java called with message={}", message);
@@ -38,8 +36,8 @@ public class SlowAgentApplication {
             Thread.sleep(70000);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return Map.of("chain", "java (interrupted)", "data", "interrupted");
+            return "{\"chain\":\"java (interrupted)\",\"data\":\"interrupted\"}";
         }
-        return Map.of("chain", "java", "data", "timeout_chain_complete");
+        return "{\"chain\":\"java\",\"data\":\"timeout_chain_complete\"}";
     }
 }

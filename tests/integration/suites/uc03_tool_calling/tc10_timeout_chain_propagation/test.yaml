@@ -89,6 +89,10 @@ test:
       done
       echo "ERROR: Only $COUNT/$EXPECTED_COUNT agents registered within 60s"
       meshctl list 2>/dev/null || true
+      echo "=== Java agent logs ==="
+      meshctl logs java-slow-agent 2>/dev/null | tail -40 || echo "no java logs"
+      echo "=== TS agent logs ==="
+      meshctl logs ts-slow-agent 2>/dev/null | tail -20 || echo "no ts logs"
       exit 1
     capture: wait_output
     timeout: 90
