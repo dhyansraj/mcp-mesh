@@ -354,6 +354,39 @@ table {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
+/* App showcase grid — iPhone mockups in Day 10 */
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+  max-width: 500px;
+  margin: 2rem auto;
+}
+
+.app-grid p {
+  margin: 0;
+  text-align: center;
+}
+
+.app-grid img.app-screen {
+  border-radius: 12px;
+  width: 100%;
+  max-width: 240px;
+  margin: 0 auto;
+  display: block;
+}
+
+@media screen and (min-width: 960px) {
+  .app-grid {
+    grid-template-columns: repeat(4, 1fr);
+    max-width: 900px;
+  }
+
+  .app-grid img.app-screen {
+    max-width: 200px;
+  }
+}
+
 /* Ensure widget floats above all MkDocs content */
 #sky-widget {
   z-index: 9999;

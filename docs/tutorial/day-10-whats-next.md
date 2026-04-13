@@ -275,6 +275,37 @@ fetch/axios integration.
 
 ---
 
+## The finished product
+
+Add a modern web UI, wire in Google authentication, and your ten days of work
+becomes a production-ready AI application. Not a demo. Not a prototype. A
+real, multi-user trip planner backed by thirteen mesh agents, specialist AI
+committees, multi-turn chat, automatic LLM failover, and distributed
+tracing -- deployable to Kubernetes with a single helm install.
+
+<div class="app-showcase" markdown>
+<div class="app-grid" markdown>
+
+![Google OAuth login](../assets/images/tutorial/app-login.png){: .app-screen }
+
+![Trip search](../assets/images/tutorial/app-search.png){: .app-screen }
+
+![AI-generated itinerary](../assets/images/tutorial/app-plan.png){: .app-screen }
+
+![Specialist insights](../assets/images/tutorial/app-specialists.png){: .app-screen }
+
+</div>
+</div>
+
+Ten days. Thirteen agents. Three LLM providers. One framework. You went from
+`meshctl scaffold` to a Kubernetes-deployed, multi-user AI application -- and
+the `flight_search` function you wrote in the first hour of Day 1 is still
+running, unchanged, in a production pod. No rewrites. No migration layer. No
+"now let's port it to the real stack." The code you wrote *is* the real stack.
+That is what MCP Mesh was built for, and you just proved it works.
+
+---
+
 ## Thank you
 
 That's the TripPlanner tutorial. You started with a single Python function

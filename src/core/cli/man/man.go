@@ -2,6 +2,8 @@ package man
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -41,6 +43,10 @@ Examples:
   meshctl man --raw decorators      # Raw markdown output (LLM-friendly)
   meshctl man --search "health"     # Search across all topics
 
+Tutorial:
+  meshctl man tutorial             # Full 10-day TripPlanner tutorial
+  meshctl man tutorial --day 3     # Just Day 3
+
 Code Generation:
   To generate agent code from templates, use:
     meshctl scaffold              # Interactive wizard
@@ -56,6 +62,7 @@ Code Generation:
 	cmd.Flags().StringP("search", "s", "", "Search across all topics")
 	cmd.Flags().BoolP("typescript", "t", false, "Show TypeScript examples (for topics with TypeScript variants)")
 	cmd.Flags().BoolP("java", "j", false, "Show Java/Spring Boot examples (for topics with Java variants)")
+	cmd.Flags().Int("day", 0, "Show a specific day from the tutorial (1-10)")
 
 	return cmd
 }
@@ -113,8 +120,59 @@ func runManCommand(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Handle --day flag for tutorial topic
+	day, _ := cmd.Flags().GetInt("day")
+	if day > 0 {
+		if guide.Name != "tutorial" {
+			return fmt.Errorf("--day flag is only valid with the 'tutorial' topic")
+		}
+		section, err := extractTutorialDay(content, day)
+		if err != nil {
+			return err
+		}
+		content = section
+	}
+
 	fmt.Print(renderer.Render(guide, content))
 	return nil
+}
+
+// dayHeaderRe matches top-level "# Day N" headers in the tutorial content.
+var dayHeaderRe = regexp.MustCompile(`(?m)^# Day (\d+)`)
+
+// extractTutorialDay extracts the content for a specific day from the tutorial.
+// It looks for "# Day N" headers and returns everything from that header to the
+// next "# Day" header (or a "---" separator followed by a "# Day" header) or end of file.
+func extractTutorialDay(content string, day int) (string, error) {
+	if day < 1 || day > 10 {
+		return "", fmt.Errorf("--day must be between 1 and 10")
+	}
+
+	dayStr := fmt.Sprintf("%d", day)
+	lines := strings.Split(content, "\n")
+	startIdx := -1
+	endIdx := len(lines)
+
+	for i, line := range lines {
+		if strings.HasPrefix(line, "# Day "+dayStr+" ") || line == "# Day "+dayStr {
+			startIdx = i
+			continue
+		}
+		if startIdx >= 0 && dayHeaderRe.MatchString(line) {
+			endIdx = i
+			// Include the preceding "---" separator line if present
+			for endIdx > startIdx && strings.TrimSpace(lines[endIdx-1]) == "---" {
+				endIdx--
+			}
+			break
+		}
+	}
+
+	if startIdx < 0 {
+		return "", fmt.Errorf("Day %d not found in the tutorial", day)
+	}
+
+	return strings.Join(lines[startIdx:endIdx], "\n"), nil
 }
 
 // completeManTopics provides shell completion for man topics.

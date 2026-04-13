@@ -173,6 +173,7 @@ nav:
           - "Day 8 — Docker Compose": tutorial/day-08-docker-compose.md
           - "Day 9 — Kubernetes": tutorial/day-09-kubernetes.md
           - "Day 10 — What's Next": tutorial/day-10-whats-next.md
+      - Downloads: tutorial/downloads.md
 
   # Python SDK - Generated from meshctl man pages
   - Python SDK:

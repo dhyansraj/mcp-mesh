@@ -183,6 +183,12 @@ var guideRegistry = map[string]*Guide{
 		HasTypeScriptVariant: true,
 		HasJavaVariant:       true,
 	},
+	"tutorial": {
+		Name:        "tutorial",
+		Aliases:     []string{"trip-planner", "tripplanner"},
+		Title:       "TripPlanner Tutorial",
+		Description: "10-day tutorial: scaffold to Kubernetes (use --day N for a single chapter)",
+	},
 }
 
 // aliasMap maps aliases to canonical guide names.
@@ -292,7 +298,7 @@ func ListGuides() []*Guide {
 	guides := make([]*Guide, 0, len(guideRegistry))
 	// Return in a consistent order
 	order := []string{
-		"quickstart", "prerequisites", "overview", "capabilities", "tags", "decorators",
+		"quickstart", "prerequisites", "tutorial", "overview", "capabilities", "tags", "decorators",
 		"dependency-injection", "health", "registry", "llm", "media", "multimodal",
 		"proxies", "api", "environment", "deployment", "observability", "headers",
 		"testing", "scaffold", "cli", "security",

@@ -72,10 +72,18 @@ Here is the budget specialist's output model:
 ```
 
 The `BudgetAnalysis` model has three fields: `total_estimated` (an integer),
-`savings_tips` (a list of strings), and `budget_breakdown` (a list of dicts
-with per-category costs). When the LLM returns, mesh validates the response
-against this schema. If the LLM produces invalid JSON, mesh retries
-automatically.
+`savings_tips` (a list of strings), and `budget_breakdown` (a list of
+`BudgetItem` sub-models with per-category costs). When the LLM returns, mesh
+validates the response against this schema. If the LLM produces invalid JSON,
+mesh retries automatically.
+
+!!! tip "Use typed models, not dict"
+    Define typed Pydantic sub-models (like `BudgetItem`) instead of bare `dict` for
+    list fields. Typed models produce explicit JSON schemas that work across all LLM
+    providers -- Claude, GPT, Gemini -- without schema compatibility issues. If you
+    use `list[dict]`, some providers may reject the schema or return unpredictable
+    field names. Typed models also give the LLM a clearer contract, producing more
+    consistent results.
 
 The same pattern applies to the other two specialists. Each defines its own
 Pydantic model with fields specific to its domain.
@@ -138,9 +146,9 @@ Replace `main.py`:
 --8<-- "examples/tutorial/trip-planner/day-07/python/adventure-advisor/main.py:full_file"
 ```
 
-The `AdventureAdvice` model returns `unique_experiences` (list of dicts with
-name, description, and why_special), `local_gems` (list of strings), and
-`off_beaten_path` (a paragraph of text).
+The `AdventureAdvice` model returns `unique_experiences` (a list of
+`Experience` sub-models with name, description, and why_special),
+`local_gems` (list of strings), and `off_beaten_path` (a paragraph of text).
 
 Replace the prompt at `prompts/adventure_advice.j2`:
 
