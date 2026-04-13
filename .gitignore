@@ -285,6 +285,9 @@ or-tests/
 java-sdk-mcp-integration.md
 .python-version
 
+# Generated tutorial artifacts
+docs/downloads/
+
 # Dashboard & UI
 src/ui/dist/
 src/ui/node_modules/

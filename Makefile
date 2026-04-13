@@ -466,6 +466,12 @@ docs-serve:
 	@echo "📚 Starting MkDocs dev server..."
 	@mkdocs serve --dev-addr 127.0.0.1:8000
 
+.PHONY: docs-artifacts
+docs-artifacts:
+	@echo "Generating tutorial artifacts..."
+	@bash scripts/generate_tutorial_artifacts.sh
+	@echo "Artifacts generated in docs/downloads/"
+
 .PHONY: docs-build
 docs-build:
 	@echo "📚 Building static docs site..."
