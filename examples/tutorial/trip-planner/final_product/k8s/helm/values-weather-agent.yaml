@@ -1,0 +1,31 @@
+# Helm values for weather-agent — TripPlanner Final Product (with SPIRE mTLS)
+
+image:
+  repository: trip-planner/weather-agent
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+agent:
+  name: weather-agent
+  runtime: python
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+mesh:
+  enabled: true
+  tls:
+    mode: "auto"
+    provider: "spire"
+    spire:
+      enabled: true
+      socketPath: "/run/spire/agent/sockets/agent.sock"
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"

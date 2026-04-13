@@ -1,0 +1,56 @@
+# TripPlanner Final Product - Docker Compose
+#
+# Services: nginx (auth + reverse proxy) and redis (sessions + chat history)
+# Agents run locally via `meshctl start` - they are NOT containerized here.
+#
+# Usage:
+#   cp .env.example .env   # fill in Google OAuth credentials
+#   cd web && npm install && npm run build && cd ..
+#   docker compose up -d
+#   open http://localhost
+
+services:
+  nginx:
+    build: ./nginx
+    container_name: trip-planner-nginx
+    hostname: nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
+      - ./nginx/lua:/etc/nginx/lua:ro
+      - ./web/dist:/usr/share/nginx/html:ro
+    environment:
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      DEV_MODE: ${DEV_MODE:-false}
+      API_BACKEND: http://host.docker.internal:8080
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - trip-planner-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: trip-planner-redis
+    hostname: redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - trip-planner-network
+
+networks:
+  trip-planner-network:
+    name: trip-planner-network
+    driver: bridge

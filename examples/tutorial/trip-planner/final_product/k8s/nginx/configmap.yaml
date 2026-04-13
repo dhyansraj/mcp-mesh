@@ -1,0 +1,151 @@
+# Nginx ConfigMap — nginx.conf adapted for Kubernetes
+# Uses k8s service names instead of host.docker.internal
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  labels:
+    app: nginx
+data:
+  nginx.conf: |
+    worker_processes auto;
+
+    env GOOGLE_CLIENT_ID;
+    env GOOGLE_CLIENT_SECRET;
+    env REDIS_HOST;
+    env REDIS_PORT;
+    env REDIS_PASSWORD;
+    env DEV_MODE;
+    env API_BACKEND;
+
+    events {
+        worker_connections 1024;
+    }
+
+    http {
+        include       mime.types;
+        default_type  application/octet-stream;
+
+        lua_package_path '/etc/nginx/lua/?.lua;;';
+        lua_shared_dict oauth_states 1m;
+
+        init_by_lua_block {
+            _G.GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID") or ""
+            _G.GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET") or ""
+            _G.DEV_MODE = os.getenv("DEV_MODE") == "true"
+
+            _G.REDIS_CONFIG = {
+                host = os.getenv("REDIS_HOST") or "mcp-core-mcp-mesh-redis",
+                port = tonumber(os.getenv("REDIS_PORT")) or 6379,
+                password = os.getenv("REDIS_PASSWORD")
+            }
+
+            _G.API_BACKEND = os.getenv("API_BACKEND") or "http://gateway-mcp-mesh-agent:8080"
+        }
+
+        # kube-dns resolver for service name resolution
+        resolver kube-dns.kube-system.svc.cluster.local valid=30s ipv6=off;
+
+        # External DNS for Google OAuth token exchange
+        resolver 8.8.8.8 8.8.4.4 ipv6=off;
+
+        server {
+            listen 80;
+            server_name _;
+
+            # Static frontend (built UI)
+            root /usr/share/nginx/html;
+            index index.html;
+
+            # Auth endpoints
+            location = /auth/google {
+                content_by_lua_file /etc/nginx/lua/oauth_initiate.lua;
+            }
+
+            location = /auth/callback {
+                resolver kube-dns.kube-system.svc.cluster.local valid=30s ipv6=off;
+                content_by_lua_file /etc/nginx/lua/oauth_callback.lua;
+            }
+
+            location = /auth/logout {
+                resolver kube-dns.kube-system.svc.cluster.local valid=30s ipv6=off;
+                content_by_lua_file /etc/nginx/lua/logout.lua;
+            }
+
+            location = /auth/me {
+                resolver kube-dns.kube-system.svc.cluster.local valid=30s ipv6=off;
+                content_by_lua_file /etc/nginx/lua/auth_me.lua;
+            }
+
+            # API: trip planning endpoint (protected)
+            location = /api/plan {
+                resolver kube-dns.kube-system.svc.cluster.local valid=30s ipv6=off;
+                resolver_timeout 5s;
+                access_by_lua_file /etc/nginx/lua/auth_check.lua;
+
+                set_by_lua_block $api_backend {
+                    return _G.API_BACKEND or "http://gateway-mcp-mesh-agent:8080"
+                }
+
+                proxy_pass $api_backend/plan;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_read_timeout 300s;
+            }
+
+            # API: user profile endpoints (protected)
+            location /api/user/ {
+                resolver kube-dns.kube-system.svc.cluster.local valid=30s ipv6=off;
+                resolver_timeout 5s;
+                access_by_lua_file /etc/nginx/lua/auth_check.lua;
+
+                set_by_lua_block $api_backend {
+                    return _G.API_BACKEND or "http://gateway-mcp-mesh-agent:8080"
+                }
+
+                rewrite ^/api/(.*)$ /$1 break;
+                proxy_pass $api_backend;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_read_timeout 300s;
+            }
+
+            # API: catch-all for other API routes (protected)
+            location /api/ {
+                resolver kube-dns.kube-system.svc.cluster.local valid=30s ipv6=off;
+                resolver_timeout 5s;
+                access_by_lua_file /etc/nginx/lua/auth_check.lua;
+
+                set_by_lua_block $api_backend {
+                    return _G.API_BACKEND or "http://gateway-mcp-mesh-agent:8080"
+                }
+
+                rewrite ^/api/(.*)$ /$1 break;
+                proxy_pass $api_backend;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_read_timeout 300s;
+            }
+
+            # Health check (unprotected)
+            location = /health {
+                resolver kube-dns.kube-system.svc.cluster.local valid=30s ipv6=off;
+                set_by_lua_block $api_backend {
+                    return _G.API_BACKEND or "http://gateway-mcp-mesh-agent:8080"
+                }
+                proxy_pass $api_backend/health;
+            }
+
+            # SPA catch-all
+            location / {
+                try_files $uri $uri/ /index.html;
+            }
+        }
+    }

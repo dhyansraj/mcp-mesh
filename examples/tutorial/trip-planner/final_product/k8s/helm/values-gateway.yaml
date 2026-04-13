@@ -1,0 +1,38 @@
+# Helm values for gateway — TripPlanner Final Product (with SPIRE mTLS)
+# The gateway is a FastAPI app using @mesh.route, not a @mesh.agent.
+
+image:
+  repository: trip-planner/gateway
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+agent:
+  name: gateway
+  runtime: python
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+mesh:
+  enabled: true
+  tls:
+    mode: "auto"
+    provider: "spire"
+    spire:
+      enabled: true
+      socketPath: "/run/spire/agent/sockets/agent.sock"
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
+
+# Gateway service — nginx proxies to this
+service:
+  type: ClusterIP
+  port: 8080
+  targetPort: 8080

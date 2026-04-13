@@ -1,0 +1,74 @@
+# SPIRE Workload Registration Entries
+# Registers mesh workloads so they can fetch X.509-SVIDs
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spire-registration
+  labels:
+    app: spire-registration
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: spire-registration
+    spec:
+      serviceAccountName: spire-server
+      restartPolicy: OnFailure
+      containers:
+        - name: register
+          image: ghcr.io/spiffe/spire-server:1.11.1
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+
+              echo "Waiting for SPIRE server to be ready..."
+              for i in $(seq 1 30); do
+                if /opt/spire/bin/spire-server healthcheck -socketPath /tmp/spire-server/private/api.sock 2>/dev/null; then
+                  echo "SPIRE server ready after ${i}s"
+                  break
+                fi
+                if [ $i -eq 30 ]; then
+                  echo "ERROR: SPIRE server not ready after 30s"
+                  exit 1
+                fi
+                sleep 1
+              done
+
+              echo ""
+              echo "=== Registering mesh-registry workload ==="
+              /opt/spire/bin/spire-server entry create \
+                -socketPath /tmp/spire-server/private/api.sock \
+                -parentID spiffe://mcp-mesh.local/agent \
+                -spiffeID spiffe://mcp-mesh.local/mesh-registry \
+                -selector k8s:pod-label:app.kubernetes.io/name:mcp-mesh-registry \
+                -x509SVIDTTL 3600 2>&1 || echo "(entry may already exist)"
+
+              echo ""
+              echo "=== Registering mesh-agent workload ==="
+              /opt/spire/bin/spire-server entry create \
+                -socketPath /tmp/spire-server/private/api.sock \
+                -parentID spiffe://mcp-mesh.local/agent \
+                -spiffeID spiffe://mcp-mesh.local/mesh-agent \
+                -selector k8s:pod-label:app.kubernetes.io/name:mcp-mesh-agent \
+                -x509SVIDTTL 3600 2>&1 || echo "(entry may already exist)"
+
+              echo ""
+              echo "=== Verifying entries ==="
+              /opt/spire/bin/spire-server entry show \
+                -socketPath /tmp/spire-server/private/api.sock
+
+              echo ""
+              echo "Registration complete."
+          volumeMounts:
+            - name: spire-server-socket
+              mountPath: /tmp/spire-server/private
+              readOnly: true
+      volumes:
+        - name: spire-server-socket
+          hostPath:
+            path: /run/spire/server/private
+            type: DirectoryOrCreate

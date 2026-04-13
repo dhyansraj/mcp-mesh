@@ -1,0 +1,40 @@
+# Helm values for claude-provider — TripPlanner Final Product (with SPIRE mTLS)
+
+image:
+  repository: trip-planner/claude-provider
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+agent:
+  name: claude-provider
+  runtime: python
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+mesh:
+  enabled: true
+  tls:
+    mode: "auto"
+    provider: "spire"
+    spire:
+      enabled: true
+      socketPath: "/run/spire/agent/sockets/agent.sock"
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
+
+# API key injected from the llm-keys Secret
+env:
+  - name: ANTHROPIC_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: llm-keys
+        key: ANTHROPIC_API_KEY
+        optional: true

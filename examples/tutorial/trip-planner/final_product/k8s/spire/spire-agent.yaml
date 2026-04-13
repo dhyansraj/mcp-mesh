@@ -1,0 +1,136 @@
+# SPIRE Agent for TripPlanner
+# DaemonSet that runs on every node, exposes Workload API socket
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-agent-config
+  labels:
+    app: spire-agent
+data:
+  agent.conf: |
+    agent {
+        data_dir = "/run/spire/agent/data"
+        log_level = "INFO"
+        server_address = "spire-server"
+        server_port = "8081"
+        trust_domain = "mcp-mesh.local"
+        socket_path = "/run/spire/agent/sockets/agent.sock"
+        insecure_bootstrap = true
+    }
+    plugins {
+        NodeAttestor "k8s_psat" {
+            plugin_data {
+                cluster = "trip-planner"
+            }
+        }
+        KeyManager "memory" {
+            plugin_data {}
+        }
+        WorkloadAttestor "k8s" {
+            plugin_data {
+                skip_kubelet_verification = true
+            }
+        }
+    }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spire-agent
+  labels:
+    app: spire-agent
+spec:
+  selector:
+    matchLabels:
+      app: spire-agent
+  template:
+    metadata:
+      labels:
+        app: spire-agent
+    spec:
+      serviceAccountName: spire-agent
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+        - name: spire-agent
+          image: ghcr.io/spiffe/spire-agent:1.11.1
+          args:
+            - -config
+            - /run/spire/agent/config/agent.conf
+          readinessProbe:
+            exec:
+              command:
+                - /opt/spire/bin/spire-agent
+                - healthcheck
+                - -socketPath
+                - /run/spire/agent/sockets/agent.sock
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - /opt/spire/bin/spire-agent
+                - healthcheck
+                - -socketPath
+                - /run/spire/agent/sockets/agent.sock
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          volumeMounts:
+            - name: spire-agent-config
+              mountPath: /run/spire/agent/config
+              readOnly: true
+            - name: spire-agent-socket
+              mountPath: /run/spire/agent/sockets
+            - name: spire-agent-data
+              mountPath: /run/spire/agent/data
+      volumes:
+        - name: spire-agent-config
+          configMap:
+            name: spire-agent-config
+        - name: spire-agent-socket
+          hostPath:
+            path: /run/spire/agent/sockets
+            type: DirectoryOrCreate
+        - name: spire-agent-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-agent-role
+rules:
+  # Needed by k8s workload attestor
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "nodes/proxy"]
+    verbs: ["get", "list"]
+  # Needed by k8s_psat node attestor
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-agent-binding
+subjects:
+  - kind: ServiceAccount
+    name: spire-agent
+    namespace: trip-planner
+roleRef:
+  kind: ClusterRole
+  name: spire-agent-role
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,170 @@
+# SPIRE Server for TripPlanner
+# Based on proven patterns from mcp-mesh integration tests
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-server-config
+  labels:
+    app: spire-server
+data:
+  server.conf: |
+    server {
+        bind_address = "0.0.0.0"
+        bind_port = "8081"
+        trust_domain = "mcp-mesh.local"
+        data_dir = "/run/spire/data"
+        log_level = "INFO"
+        ca_ttl = "24h"
+        default_x509_svid_ttl = "1h"
+    }
+    plugins {
+        DataStore "sql" {
+            plugin_data {
+                database_type = "sqlite3"
+                connection_string = "/run/spire/data/datastore.sqlite3"
+            }
+        }
+        NodeAttestor "k8s_psat" {
+            plugin_data {
+                clusters = {
+                    "trip-planner" = {
+                        service_account_allow_list = ["trip-planner:spire-agent"]
+                    }
+                }
+            }
+        }
+        KeyManager "disk" {
+            plugin_data {
+                keys_path = "/run/spire/data/keys.json"
+            }
+        }
+        Notifier "k8sbundle" {
+            plugin_data {
+                namespace = "trip-planner"
+                config_map = "spire-bundle"
+            }
+        }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spire-server
+  labels:
+    app: spire-server
+spec:
+  type: ClusterIP
+  ports:
+    - name: grpc
+      port: 8081
+      targetPort: 8081
+      protocol: TCP
+  selector:
+    app: spire-server
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: spire-server
+  labels:
+    app: spire-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spire-server
+  serviceName: spire-server
+  template:
+    metadata:
+      labels:
+        app: spire-server
+    spec:
+      serviceAccountName: spire-server
+      containers:
+        - name: spire-server
+          image: ghcr.io/spiffe/spire-server:1.11.1
+          args:
+            - -config
+            - /run/spire/config/server.conf
+          ports:
+            - containerPort: 8081
+              name: grpc
+          readinessProbe:
+            exec:
+              command:
+                - /opt/spire/bin/spire-server
+                - healthcheck
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command:
+                - /opt/spire/bin/spire-server
+                - healthcheck
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: spire-config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: spire-data
+              mountPath: /run/spire/data
+      volumes:
+        - name: spire-config
+          configMap:
+            name: spire-server-config
+  volumeClaimTemplates:
+    - metadata:
+        name: spire-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-server
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-server-trust-role
+rules:
+  # TokenReview for validating k8s_psat tokens
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  # ConfigMap for k8sbundle notifier
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-server-trust-binding
+subjects:
+  - kind: ServiceAccount
+    name: spire-server
+    namespace: trip-planner
+roleRef:
+  kind: ClusterRole
+  name: spire-server-trust-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Empty ConfigMap for the k8sbundle notifier — SPIRE server will populate it
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-bundle
+data: {}

@@ -1,0 +1,117 @@
+# Helm values for mcp-mesh-core — TripPlanner Final Product
+# Deploys: registry, PostgreSQL, Redis, Tempo, Grafana, UI
+#
+# Usage:
+#   helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
+#     --version 1.2.0 -n trip-planner -f values-core.yaml
+
+global:
+  namespace: trip-planner
+  coreReleaseName: "mcp-core"
+
+# All components enabled
+postgres:
+  enabled: true
+
+redis:
+  enabled: true
+
+registry:
+  enabled: true
+
+grafana:
+  enabled: true
+
+tempo:
+  enabled: true
+
+ui:
+  enabled: true
+
+# Lighter resource limits for minikube
+mcp-mesh-postgres:
+  persistence:
+    enabled: true
+    size: 2Gi
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+mcp-mesh-redis:
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+mcp-mesh-registry:
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  registry:
+    # SPIRE-based TLS for registry
+    environment:
+      MCP_MESH_TLS_MODE: "auto"
+      MCP_MESH_TLS_PROVIDER: "spire"
+      MCP_MESH_SPIRE_SOCKET: "/run/spire/agent/sockets/agent.sock"
+      MCP_MESH_TRUST_BACKEND: "spire"
+      ENABLE_RESPONSE_CACHE: "true"
+      ENABLE_CORS: "true"
+      ENABLE_METRICS: "true"
+      ENABLE_PROMETHEUS: "true"
+      ENABLE_EVENTS: "true"
+      ACCESS_LOG: "true"
+      CACHE_TTL: "30"
+
+  # Mount SPIRE agent socket into registry pod
+  extraVolumes:
+    - name: spire-agent-socket
+      hostPath:
+        path: /run/spire/agent/sockets
+        type: Directory
+  extraVolumeMounts:
+    - name: spire-agent-socket
+      mountPath: /run/spire/agent/sockets
+      readOnly: true
+
+mcp-mesh-grafana:
+  grafana:
+    persistence:
+      enabled: false
+
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+mcp-mesh-tempo:
+  tempo:
+    persistence:
+      enabled: false
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+mcp-mesh-ui:
+  ui:
+    registryURL: "http://mcp-core-mcp-mesh-registry:8000"
