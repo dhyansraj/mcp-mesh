@@ -574,11 +574,6 @@ func (c *CLIConfig) GetRegistryEnvironmentVariables() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// Ensure DB directory exists before passing path to registry
-	if dir := filepath.Dir(c.DBPath); dir != "." && dir != "" {
-		os.MkdirAll(dir, 0755)
-	}
-
 	// Determine effective log level (debug mode forces DEBUG level)
 	effectiveLogLevel := c.LogLevel
 	if c.DebugMode {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -95,6 +96,13 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 		}
 	}
 
+	// Ensure DB directory exists before starting the registry
+	if dir := filepath.Dir(config.DBPath); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create database directory %s: %w", dir, err)
+		}
+	}
+
 	// Check if port is available (secondary check for better error messages)
 	if !IsPortAvailable(config.RegistryHost, config.RegistryPort) {
 		return fmt.Errorf("port %d is already in use on %s - another service may be using this port", config.RegistryPort, config.RegistryHost)
@@ -130,10 +138,9 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 		return nil
 	})
 
-	// Write PID file for registry process
-	pidMgr2, pidErr2 := NewPIDManager()
-	if pidErr2 == nil {
-		if err := pidMgr2.WritePID("registry", processInfo.PID); err != nil && !quiet {
+	// Write PID file for registry process (reuse pidMgr from constraint check)
+	if pidErr == nil {
+		if err := pidMgr.WritePID("registry", processInfo.PID); err != nil && !quiet {
 			fmt.Printf("Warning: failed to write registry PID file: %v\n", err)
 		}
 	}
