@@ -45,7 +45,7 @@ Examples:
 	// Registry configuration flags
 	cmd.Flags().String("registry-host", "", "Registry host address (default: localhost)")
 	cmd.Flags().Int("registry-port", 0, "Registry port number (default: 8000)")
-	cmd.Flags().String("db-path", "", "Database file path (default: ./dev_registry.db)")
+	cmd.Flags().String("db-path", "", "Database file path (default: ~/.mcp-mesh/mcp_mesh_registry.db)")
 
 	// Logging and debug flags
 	cmd.Flags().Bool("debug", false, "Enable debug mode")

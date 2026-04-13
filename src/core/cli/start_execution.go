@@ -49,6 +49,15 @@ func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) err
 				fmt.Printf("Registry not found at %s, starting embedded registry...\n", registryURL)
 			}
 
+			// Enforce single-registry constraint
+			pm2, pidErr := NewPIDManager()
+			if pidErr == nil {
+				existingPID, err := pm2.ReadPID("registry")
+				if err == nil && existingPID > 0 && existingPID != os.Getpid() && IsProcessAlive(existingPID) {
+					return fmt.Errorf("a registry is already running (PID %d) but not reachable at %s. Stop it with 'meshctl stop --registry' and try again", existingPID, registryURL)
+				}
+			}
+
 			// Check if we can start a registry (port available)
 			registryPort := getRegistryPortFromURL(registryURL, config.RegistryPort)
 			if !IsPortAvailable(registryHost, registryPort) {
@@ -641,6 +650,7 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 	})
 
 	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = os.Environ()
 
 	// Inject TLS-related --env values into the forked process environment.
@@ -690,6 +700,34 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
 		return fmt.Errorf("failed to start detach process: %w", err)
+	}
+
+	// Write PID files so meshctl stop can find this detached process.
+	// The forked child will eventually write its own agent PID files, but
+	// we write the child meshctl PID now so stop has something to kill
+	// even if it runs before the child finishes starting agents.
+	pm, pidErr := NewPIDManager()
+	if pidErr == nil {
+		for _, arg := range args {
+			if isAgentFile(arg) {
+				absPath, _ := filepath.Abs(arg)
+				name := extractAgentName(absPath)
+				pm.WritePID(name, cmd.Process.Pid)
+			}
+		}
+		// Write registry PID only when the child will start a registry.
+		// UI-only forks (--ui without agents or --registry-only) connect to
+		// an existing registry instead of starting one.
+		startUI, _ := cobraCmd.Flags().GetBool("ui")
+		uiOnly := startUI && len(args) == 0 && !registryOnly
+		if !uiOnly {
+			pm.WritePID("registry", cmd.Process.Pid)
+		}
+		// Write UI PID as a safety net — the child will start a UI server
+		// and write its own PID, but this ensures stop can find the wrapper.
+		if startUI {
+			pm.WritePID("ui", cmd.Process.Pid)
+		}
 	}
 
 	if !quiet {

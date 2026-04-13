@@ -35,6 +35,11 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 	pm.mutex.Unlock()
 	quiet, _ := cmd.Flags().GetBool("quiet")
 
+	// Acquire signal handler early so SIGTERM is caught by our handler even
+	// during registry startup (prevents orphaned subprocesses if meshctl stop
+	// sends SIGTERM before the monitoring goroutine is set up).
+	signalHandler := GetGlobalSignalHandler()
+
 	if !quiet {
 		fmt.Printf("Starting MCP Mesh registry on %s:%d\n", config.RegistryHost, config.RegistryPort)
 	}
@@ -50,8 +55,25 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 			}
 			maybeStartUIServer(cmd, config, registryURL)
 
+			// Monitor UI process — exit if killed externally
+			go func() {
+				pidMgr, err := NewPIDManager()
+				if err != nil {
+					return
+				}
+				uiPID, err := pidMgr.ReadPID("ui")
+				if err != nil || uiPID <= 0 {
+					return
+				}
+				for IsProcessAlive(uiPID) {
+					time.Sleep(1 * time.Second)
+				}
+				if !signalHandler.IsShuttingDown() {
+					syscall.Kill(os.Getpid(), syscall.SIGTERM)
+				}
+			}()
+
 			// Block in foreground so the UI server keeps running
-			signalHandler := GetGlobalSignalHandler()
 			signalHandler.WaitForShutdown()
 			return nil
 		}
@@ -59,6 +81,18 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 			fmt.Printf("Registry is already running at %s\n", registryURL)
 		}
 		return fmt.Errorf("registry is already running at %s", registryURL)
+	}
+
+	// Enforce single-registry constraint: only one local registry at a time.
+	// If a registry process is alive (even on a different port), refuse to start.
+	// This guard runs AFTER the IsRegistryRunning HTTP check so that the UI-only
+	// path (registry running + --ui flag) is not blocked.
+	pidMgr, pidErr := NewPIDManager()
+	if pidErr == nil {
+		existingPID, err := pidMgr.ReadPID("registry")
+		if err == nil && existingPID > 0 && existingPID != os.Getpid() && IsProcessAlive(existingPID) {
+			return fmt.Errorf("a registry is already running (PID %d). Stop it with 'meshctl stop --registry' before starting a new one, or use '--connect-only --registry-url <url>' to connect to a remote registry", existingPID)
+		}
 	}
 
 	// Check if port is available (secondary check for better error messages)
@@ -87,10 +121,19 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 		return fmt.Errorf("failed to start registry: %w", err)
 	}
 
+	// Register explicit cleanup so the registry subprocess is killed even if
+	// SIGTERM arrives before the monitoring goroutine is scheduled.
+	signalHandler.RegisterShutdownCallback(func() error {
+		if IsProcessAlive(processInfo.PID) {
+			return KillProcess(processInfo.PID, 5*time.Second)
+		}
+		return nil
+	})
+
 	// Write PID file for registry process
-	pidMgr, pidErr := NewPIDManager()
-	if pidErr == nil {
-		if err := pidMgr.WritePID("registry", processInfo.PID); err != nil && !quiet {
+	pidMgr2, pidErr2 := NewPIDManager()
+	if pidErr2 == nil {
+		if err := pidMgr2.WritePID("registry", processInfo.PID); err != nil && !quiet {
 			fmt.Printf("Warning: failed to write registry PID file: %v\n", err)
 		}
 	}
@@ -119,8 +162,18 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 	// Don't start CLI health monitoring when we have an embedded registry
 	// The registry will handle health monitoring internally
 
-	// Wait for shutdown signal
-	signalHandler := GetGlobalSignalHandler()
+	// Monitor registry process — if killed externally (e.g., by meshctl stop),
+	// signal ourselves to trigger graceful shutdown instead of orphaning.
+	go func() {
+		for IsProcessAlive(processInfo.PID) {
+			time.Sleep(1 * time.Second)
+		}
+		// Only trigger if not already shutting down
+		if !signalHandler.IsShuttingDown() {
+			syscall.Kill(os.Getpid(), syscall.SIGTERM)
+		}
+	}()
+
 	signalHandler.WaitForShutdown()
 
 	return nil
@@ -207,6 +260,11 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 		return 0, fmt.Errorf("failed to start registry: %w", err)
 	}
 
+	// Setup signal handling immediately after Start() to minimize the window
+	// where SIGTERM uses the default handler (which would orphan the child).
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
 	// Record the process
 	proc := ProcessInfo{
 		PID:       registryCmd.Process.Pid,
@@ -237,25 +295,37 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 		fmt.Println("Registry is running. Press Ctrl+C to stop.")
 	}
 
-	// Setup signal handling for graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	// Monitor registry subprocess — if killed externally (e.g., by meshctl stop),
+	// detect it so this wrapper process exits cleanly instead of orphaning.
+	// Wait() also reaps the child, preventing zombie processes.
+	registryDone := make(chan struct{})
+	go func() {
+		registryCmd.Wait()
+		close(registryDone)
+	}()
 
-	// Wait for signal
-	<-sigChan
-	if !quiet {
-		fmt.Println("\nShutting down registry...")
+	// Wait for user signal OR registry death
+	select {
+	case <-sigChan:
+		if !quiet {
+			fmt.Println("\nShutting down registry...")
+		}
+		// Remove from process list
+		RemoveRunningProcess(registryCmd.Process.Pid)
+		// Kill the process
+		shutdownTimeout, _ := cmd.Flags().GetInt("shutdown-timeout")
+		if shutdownTimeout == 0 {
+			shutdownTimeout = config.ShutdownTimeout
+		}
+		return registryCmd.Process.Pid, KillProcess(registryCmd.Process.Pid, time.Duration(shutdownTimeout)*time.Second)
+	case <-registryDone:
+		// Registry was killed externally — clean up and exit
+		if !quiet {
+			fmt.Println("\nRegistry process exited, shutting down...")
+		}
+		RemoveRunningProcess(registryCmd.Process.Pid)
+		return registryCmd.Process.Pid, nil
 	}
-
-	// Remove from process list
-	RemoveRunningProcess(registryCmd.Process.Pid)
-
-	// Kill the process
-	shutdownTimeout, _ := cmd.Flags().GetInt("shutdown-timeout")
-	if shutdownTimeout == 0 {
-		shutdownTimeout = config.ShutdownTimeout
-	}
-	return registryCmd.Process.Pid, KillProcess(registryCmd.Process.Pid, time.Duration(shutdownTimeout)*time.Second)
 }
 
 func startRegistryService(config *CLIConfig) (*exec.Cmd, error) {

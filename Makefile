@@ -401,6 +401,7 @@ install-dev: build
 	@mkdir -p ~/.local/bin
 	ln -sf $(PWD)/$(BUILD_DIR)/$(REGISTRY_NAME) ~/.local/bin/$(REGISTRY_NAME)
 	ln -sf $(PWD)/$(BUILD_DIR)/$(DEV_NAME) ~/.local/bin/$(DEV_NAME)
+	ln -sf $(PWD)/$(BUILD_DIR)/$(UI_SERVER_NAME) ~/.local/bin/$(UI_SERVER_NAME)
 	@echo "✅ Development installation complete"
 	@echo ""
 	@echo "📝 Note: Make sure ~/.local/bin is in your PATH"
