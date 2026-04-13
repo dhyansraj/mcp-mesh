@@ -414,11 +414,6 @@ class HttpMcpWrapper:
                                     else:
                                         filtered = {}
 
-                                    # Always propagate x-mesh-timeout regardless of allowlist (#769)
-                                    mesh_timeout = mesh_headers_raw.get("x-mesh-timeout")
-                                    if isinstance(mesh_timeout, str):
-                                        filtered["x-mesh-timeout"] = mesh_timeout
-
                                     if filtered:
                                         # Merge with HTTP-captured headers (HTTP takes precedence)
                                         existing = _TC2.get_propagated_headers()

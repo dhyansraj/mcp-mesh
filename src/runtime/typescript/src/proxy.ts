@@ -248,7 +248,7 @@ export async function callMcpTool(
   // This ensures the client-side AbortController doesn't kill the call before
   // the registry proxy's timeout expires.
   let effectiveTimeout = options.timeout;
-  const meshTimeoutStr = mergedHeaders["x-mesh-timeout"] || headers["X-Mesh-Timeout"];
+  const meshTimeoutStr = mergedHeaders["x-mesh-timeout"];
   if (meshTimeoutStr) {
     const meshTimeoutMs = parseInt(meshTimeoutStr, 10) * 1000;
     if (!isNaN(meshTimeoutMs) && meshTimeoutMs > 0) {

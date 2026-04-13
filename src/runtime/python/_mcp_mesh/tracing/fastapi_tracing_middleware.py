@@ -54,14 +54,6 @@ class FastAPITracingMiddleware(BaseHTTPMiddleware):
                         captured[header_name] = value
                 if captured:
                     _TC.set_propagated_headers(captured)
-
-            # Always capture X-Mesh-Timeout for chain propagation (#769)
-            mesh_timeout = request.headers.get("x-mesh-timeout")
-            if mesh_timeout:
-                _TC.set_propagated_headers({
-                    **_TC.get_propagated_headers(),
-                    "x-mesh-timeout": mesh_timeout,
-                })
         except Exception as e:
             pass
 

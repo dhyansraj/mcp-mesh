@@ -14,6 +14,9 @@ import mcp_mesh_core
 # Parse MCP_MESH_PROPAGATE_HEADERS env var once at import time
 _raw = os.environ.get("MCP_MESH_PROPAGATE_HEADERS", "")
 PROPAGATE_HEADERS: list[str] = [h.strip().lower() for h in _raw.split(",") if h.strip()]
+# Always propagate mesh infrastructure headers
+if "x-mesh-timeout" not in PROPAGATE_HEADERS:
+    PROPAGATE_HEADERS.append("x-mesh-timeout")
 PROPAGATE_HEADERS_CSV: str = ",".join(PROPAGATE_HEADERS)
 
 

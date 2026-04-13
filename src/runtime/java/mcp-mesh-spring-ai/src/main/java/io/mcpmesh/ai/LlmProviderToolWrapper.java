@@ -158,11 +158,6 @@ public class LlmProviderToolWrapper implements McpToolHandler {
                     }
                 }
             }
-            // Always propagate x-mesh-timeout regardless of allowlist (#769)
-            if (meshHeaders.containsKey("x-mesh-timeout")
-                && meshHeaders.get("x-mesh-timeout") instanceof String) {
-                filtered.put("x-mesh-timeout", (String) meshHeaders.get("x-mesh-timeout"));
-            }
             if (!filtered.isEmpty()) {
                 // Merge with any headers already captured by TracingFilter
                 Map<String, String> existing = TraceContext.getPropagatedHeaders();

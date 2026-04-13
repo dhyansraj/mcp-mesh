@@ -173,10 +173,6 @@ export class MeshAgent {
               propagatedHeaders[key.toLowerCase()] = value;
             }
           }
-          // Always propagate x-mesh-timeout regardless of allowlist (#769)
-          if (typeof meshHeaders["x-mesh-timeout"] === "string") {
-            propagatedHeaders["x-mesh-timeout"] = meshHeaders["x-mesh-timeout"];
-          }
         }
         // Remove trace context and mesh headers from args before passing to tool
         if (incomingTraceId || incomingParentSpan || Object.keys(propagatedHeaders).length > 0) {
