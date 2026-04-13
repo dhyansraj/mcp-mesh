@@ -411,19 +411,27 @@ class HttpMcpWrapper:
                                             if isinstance(v, str)
                                             and matches_propagate_header(k)
                                         }
-                                        if filtered:
-                                            # Merge with HTTP-captured headers (HTTP takes precedence)
-                                            existing = _TC2.get_propagated_headers()
-                                            if existing:
-                                                merged = dict(filtered)
-                                                merged.update(
-                                                    existing
-                                                )  # HTTP headers override arg headers
-                                                filtered = merged
-                                            _TC2.set_propagated_headers(filtered)
-                                            self.logger.debug(
-                                                f"Set {len(filtered)} propagated headers from _mesh_headers args"
-                                            )
+                                    else:
+                                        filtered = {}
+
+                                    # Always propagate x-mesh-timeout regardless of allowlist (#769)
+                                    mesh_timeout = mesh_headers_raw.get("x-mesh-timeout")
+                                    if isinstance(mesh_timeout, str):
+                                        filtered["x-mesh-timeout"] = mesh_timeout
+
+                                    if filtered:
+                                        # Merge with HTTP-captured headers (HTTP takes precedence)
+                                        existing = _TC2.get_propagated_headers()
+                                        if existing:
+                                            merged = dict(filtered)
+                                            merged.update(
+                                                existing
+                                            )  # HTTP headers override arg headers
+                                            filtered = merged
+                                        _TC2.set_propagated_headers(filtered)
+                                        self.logger.debug(
+                                            f"Set {len(filtered)} propagated headers from _mesh_headers args"
+                                        )
 
                                 # Strip trace context fields from arguments before passing to FastMCP
                                 if (

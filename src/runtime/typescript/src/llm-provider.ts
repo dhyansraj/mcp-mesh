@@ -377,6 +377,10 @@ export function llmProvider(config: LlmProviderConfig): {
             propagatedHeaders[key.toLowerCase()] = value;
           }
         }
+        // Always propagate x-mesh-timeout regardless of allowlist (#769)
+        if (typeof meshHeaders["x-mesh-timeout"] === "string") {
+          propagatedHeaders["x-mesh-timeout"] = meshHeaders["x-mesh-timeout"];
+        }
       }
     }
 
