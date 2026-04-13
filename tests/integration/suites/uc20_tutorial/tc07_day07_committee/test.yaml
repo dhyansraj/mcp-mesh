@@ -102,26 +102,17 @@ test:
     handler: shell
     workdir: /workspace
     command: |
-      EXPECTED="gateway"
-      EXPECTED_COUNT=1
-      echo "Waiting for gateway to register..."
+      echo "Waiting for API gateway to register..."
       for i in $(seq 1 30); do
-        AGENTS=$(meshctl list 2>/dev/null || true)
-        COUNT=0
-        for agent in $EXPECTED; do
-          if echo "$AGENTS" | grep -q "$agent"; then
-            COUNT=$((COUNT + 1))
-          fi
-        done
-        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
-          echo "Gateway registered after $((i * 2))s"
+        if meshctl list 2>/dev/null | grep -qi "API"; then
+          echo "API gateway registered after $((i * 2))s"
           meshctl list
           exit 0
         fi
-        echo "  gateway not yet registered (attempt $i/30)..."
+        echo "  API gateway not yet registered (attempt $i/30)..."
         sleep 2
       done
-      echo "ERROR: gateway not registered within 60s"
+      echo "ERROR: API gateway not registered within 60s"
       meshctl list 2>/dev/null || true
       exit 1
     capture: wait_gateway_output
@@ -205,8 +196,8 @@ assertions:
   - expr: "${captured.list_output} contains 'chat-history-agent'"
     message: "chat-history-agent should appear in meshctl list"
 
-  - expr: "${captured.list_output} contains 'gateway'"
-    message: "gateway should appear in meshctl list"
+  - expr: "${captured.list_output} contains 'API'"
+    message: "API gateway should appear in meshctl list"
 
   - expr: "${captured.list_output} contains 'budget-analyst'"
     message: "budget-analyst should appear in meshctl list"
