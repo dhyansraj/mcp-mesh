@@ -24,7 +24,7 @@ pre_run:
       meshctl_version: "${config.packages.cli_version}"
       mcpmesh_version: "${config.packages.sdk_python_version}"
   - handler: shell
-    command: "pip install fastapi uvicorn"
+    command: "/workspace/.venv/bin/pip install fastapi uvicorn"
 
 test:
   # Copy all 9 agents to workspace
@@ -174,7 +174,7 @@ test:
     handler: shell
     command: |
       echo "=== Calling plan_trip via meshctl ==="
-      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace 2>&1)
+      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace --timeout 90 2>&1)
       echo "$RESULT"
       if echo "$RESULT" | grep -qi 'Kyoto\|itinerary\|day' && \
          echo "$RESULT" | grep -q 'Trace ID'; then

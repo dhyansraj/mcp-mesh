@@ -26,7 +26,7 @@ pre_run:
       meshctl_version: "${config.packages.cli_version}"
       mcpmesh_version: "${config.packages.sdk_python_version}"
   - handler: shell
-    command: "pip install fastapi uvicorn redis"
+    command: "/workspace/.venv/bin/pip install fastapi uvicorn redis"
 
 test:
   # Copy all 10 agents to workspace

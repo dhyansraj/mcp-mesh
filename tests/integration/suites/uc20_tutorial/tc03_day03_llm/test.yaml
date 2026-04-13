@@ -128,7 +128,7 @@ test:
     handler: shell
     command: |
       echo "=== Calling plan_trip (triggers LLM delegation) ==="
-      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace 2>&1)
+      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace --timeout 90 2>&1)
       echo "$RESULT"
       # Verify response contains itinerary content
       if echo "$RESULT" | grep -q '"result"' && \

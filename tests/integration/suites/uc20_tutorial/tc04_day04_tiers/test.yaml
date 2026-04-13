@@ -129,7 +129,7 @@ test:
     handler: shell
     command: |
       echo "=== Calling plan_trip (should route to Claude via +claude) ==="
-      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace 2>&1)
+      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace --timeout 90 2>&1)
       echo "$RESULT"
       if echo "$RESULT" | grep -qi 'Kyoto\|itinerary\|day' && \
          echo "$RESULT" | grep -q 'Trace ID'; then
@@ -176,7 +176,7 @@ test:
     handler: shell
     command: |
       echo "=== Calling plan_trip (should failover to OpenAI) ==="
-      RESULT=$(meshctl call plan_trip '{"destination":"Tokyo","dates":"June 10-14, 2026","budget":"$3000"}' --trace 2>&1)
+      RESULT=$(meshctl call plan_trip '{"destination":"Tokyo","dates":"June 10-14, 2026","budget":"$3000"}' --trace --timeout 90 2>&1)
       echo "$RESULT"
       if echo "$RESULT" | grep -qi 'Tokyo\|itinerary\|day' && \
          echo "$RESULT" | grep -q 'Trace ID'; then
