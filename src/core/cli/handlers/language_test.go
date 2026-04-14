@@ -202,7 +202,7 @@ func TestDetectLanguage_PythonDirectoryRequirements(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create requirements.txt
-	if err := os.WriteFile(filepath.Join(tmpDir, "requirements.txt"), []byte("mcp-mesh==1.2.0"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpDir, "requirements.txt"), []byte("mcp-mesh==1.3.0"), 0644); err != nil {
 		t.Fatalf("Failed to create requirements.txt: %v", err)
 	}
 
@@ -399,7 +399,7 @@ func TestPythonHandler_GetDockerImage(t *testing.T) {
 		t.Error("GetDockerImage() returned empty string")
 	}
 	// Should contain python
-	if image != "mcpmesh/python-runtime:1.1" && image != "mcpmesh/python-runtime:latest" {
+	if image != "mcpmesh/python-runtime:1.3" && image != "mcpmesh/python-runtime:latest" {
 		// Just check it's not empty - version may vary
 		t.Logf("Docker image: %s", image)
 	}
@@ -412,7 +412,7 @@ func TestTypeScriptHandler_GetDockerImage(t *testing.T) {
 		t.Error("GetDockerImage() returned empty string")
 	}
 	// Should contain typescript
-	if image != "mcpmesh/typescript-runtime:1.1" && image != "mcpmesh/typescript-runtime:latest" {
+	if image != "mcpmesh/typescript-runtime:1.3" && image != "mcpmesh/typescript-runtime:latest" {
 		// Just check it's not empty - version may vary
 		t.Logf("Docker image: %s", image)
 	}

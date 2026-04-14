@@ -230,7 +230,7 @@ existingSecret: my-secret
 ### Python
 
 ```dockerfile
-FROM mcpmesh/python-runtime:0.9
+FROM mcpmesh/python-runtime:1.3.0
 
 COPY . /app/
 CMD ["-m", "myagent"]
@@ -239,7 +239,7 @@ CMD ["-m", "myagent"]
 ### TypeScript
 
 ```dockerfile
-FROM mcpmesh/typescript-runtime:0.9
+FROM mcpmesh/typescript-runtime:1.3.0
 
 COPY . /app/
 CMD ["src/index.ts"]
@@ -248,7 +248,7 @@ CMD ["src/index.ts"]
 ### Java
 
 ```dockerfile
-FROM mcpmesh/java-runtime:0.9
+FROM mcpmesh/java-runtime:1.3.0
 
 COPY target/myagent.jar /app/
 CMD ["/app/myagent.jar"]

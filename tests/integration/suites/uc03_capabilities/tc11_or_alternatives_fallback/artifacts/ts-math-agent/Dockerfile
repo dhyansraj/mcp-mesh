@@ -1,5 +1,5 @@
 # Dockerfile for ts-math-agent MCP Mesh agent
-FROM mcpmesh/typescript-runtime:0.8
+FROM mcpmesh/typescript-runtime:1.3.0
 
 WORKDIR /app
 
