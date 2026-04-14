@@ -163,6 +163,24 @@ test:
         echo "PASS: Response includes specialist insights"
       else
         echo "FAIL: Response missing specialist insights"
+        echo ""
+        echo "=== Gateway logs ==="
+        meshctl logs gateway 2>/dev/null | tail -60 || echo "no gateway logs"
+        echo ""
+        echo "=== Planner logs ==="
+        meshctl logs planner-agent 2>/dev/null | tail -60 || echo "no planner logs"
+        echo ""
+        echo "=== Budget-analyst logs ==="
+        meshctl logs budget-analyst 2>/dev/null | tail -40 || echo "no budget-analyst logs"
+        echo ""
+        echo "=== Adventure-advisor logs ==="
+        meshctl logs adventure-advisor 2>/dev/null | tail -40 || echo "no adventure-advisor logs"
+        echo ""
+        echo "=== Logistics-planner logs ==="
+        meshctl logs logistics-planner 2>/dev/null | tail -40 || echo "no logistics-planner logs"
+        echo ""
+        echo "=== Claude-provider logs ==="
+        meshctl logs claude-provider 2>/dev/null | tail -40 || echo "no claude-provider logs"
         exit 1
       fi
     workdir: /workspace
