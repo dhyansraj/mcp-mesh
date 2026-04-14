@@ -30,11 +30,6 @@ test:
     workdir: /workspace
     capture: start_math_output
 
-  # Wait for math-agent to register
-  - name: "Wait for math-agent to register"
-    handler: wait
-    seconds: 5
-
   # Start calculator-agent with fixed port via env var
   - name: "Start calculator-agent with fixed port"
     handler: shell
@@ -42,10 +37,34 @@ test:
     workdir: /workspace
     capture: start_calc_output
 
-  # Wait for calculator-agent to register
-  - name: "Wait for calculator-agent to register"
-    handler: wait
-    seconds: 5
+  # Wait for both agents to register via polling
+  - name: "Wait for math-agent and calculator-agent to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="math-agent calculator-agent"
+      EXPECTED_COUNT=2
+      echo "Waiting for $EXPECTED_COUNT agents to register..."
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        COUNT=0
+        for agent in $EXPECTED; do
+          if echo "$AGENTS" | grep -q "$agent"; then
+            COUNT=$((COUNT + 1))
+          fi
+        done
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "All $EXPECTED_COUNT agents registered after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Only $COUNT/$EXPECTED_COUNT agents registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_output
+    timeout: 90
 
   # Debug: Check calculator-agent startup logs
   - name: "Debug: Check calculator-agent startup logs"

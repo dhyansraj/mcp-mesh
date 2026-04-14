@@ -84,25 +84,34 @@ test:
     workdir: /workspace
     capture: start_api
 
-  # Wait for initial agents to register
-  - name: "Wait for tool and API agents"
+  # Wait for initial agents to register via polling
+  - name: "Wait for ts-math-agent, ts-llm-provider, and API to register"
     handler: shell
     workdir: /workspace
     command: |
-      echo "Waiting for ts-math-agent, ts-llm-provider, and API agent..."
-      for i in $(seq 1 15); do
+      EXPECTED="ts-math-agent ts-llm-provider API"
+      EXPECTED_COUNT=3
+      echo "Waiting for $EXPECTED_COUNT agents to register..."
+      for i in $(seq 1 30); do
         AGENTS=$(meshctl list 2>/dev/null || true)
-        if echo "$AGENTS" | grep -q "ts-math-agent" && echo "$AGENTS" | grep -q "ts-llm-provider" && echo "$AGENTS" | grep -q "API"; then
-          echo "Tool, provider, and API agents registered after ${i} iterations"
+        COUNT=0
+        for agent in $EXPECTED; do
+          if echo "$AGENTS" | grep -q "$agent"; then
+            COUNT=$((COUNT + 1))
+          fi
+        done
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "All $EXPECTED_COUNT agents registered after $((i * 2))s"
+          meshctl list
           exit 0
         fi
         sleep 2
       done
-      echo "ERROR: Agents did not register within 30s"
+      echo "ERROR: Only $COUNT/$EXPECTED_COUNT agents registered within 60s"
       meshctl list 2>/dev/null || true
       exit 1
     capture: wait_tools
-    timeout: 60
+    timeout: 90
 
   # Start ts-llm-consumer (depends on ts-math-agent + ts-llm-provider)
   - name: "Start ts-llm-consumer"
@@ -111,25 +120,35 @@ test:
     workdir: /workspace
     capture: start_consumer
 
-  # Wait for consumer to register and resolve dependencies
-  - name: "Wait for consumer registration"
+  # Wait for consumer to register and resolve dependencies via polling
+  - name: "Wait for ts-llm-consumer to register"
     handler: shell
     workdir: /workspace
     command: |
-      echo "Waiting for ts-llm-consumer to register and resolve deps..."
-      for i in $(seq 1 15); do
-        if meshctl list 2>/dev/null | grep -q "ts-llm-consumer"; then
-          echo "ts-llm-consumer registered after ${i} iterations"
+      EXPECTED="ts-llm-consumer"
+      EXPECTED_COUNT=1
+      echo "Waiting for $EXPECTED_COUNT agents to register..."
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        COUNT=0
+        for agent in $EXPECTED; do
+          if echo "$AGENTS" | grep -q "$agent"; then
+            COUNT=$((COUNT + 1))
+          fi
+        done
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "All $EXPECTED_COUNT agents registered after $((i * 2))s"
+          meshctl list
           exit 0
         fi
         sleep 2
       done
-      echo "ERROR: ts-llm-consumer did not register within 30s"
+      echo "ERROR: Only $COUNT/$EXPECTED_COUNT agents registered within 60s"
       meshctl list 2>/dev/null || true
       meshctl logs ts-llm-consumer 2>/dev/null | tail -30 || true
       exit 1
     capture: wait_consumer
-    timeout: 60
+    timeout: 90
 
   # Verify all agents are running
   - name: "List agents"
