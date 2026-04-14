@@ -90,13 +90,13 @@ test:
       echo "Verifying Java agent accepts calls after reload..."
       for i in $(seq 1 20); do
         RESULT=$(meshctl call getInfo '{}' 2>&1 || true)
-        if echo "$RESULT" | grep -q '"name"'; then
-          echo "Java agent reachable after $((i * 2))s"
+        if echo "$RESULT" | grep -q '2.0.0-watch'; then
+          echo "Java agent reachable with reloaded code after $((i * 2))s"
           exit 0
         fi
         sleep 2
       done
-      echo "ERROR: Java agent not reachable within 40s after reload"
+      echo "ERROR: Java agent not reachable with reloaded code within 40s"
       echo "Last response: $RESULT"
       exit 1
     capture: reachability_check
