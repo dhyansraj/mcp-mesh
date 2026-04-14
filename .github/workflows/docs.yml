@@ -29,7 +29,7 @@ jobs:
           python-version: '3.11'
 
       - name: Cache dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
@@ -42,8 +42,42 @@ jobs:
           pip install mkdocs-minify-plugin
           pip install mkdocs-git-revision-date-localized-plugin
 
+      - name: Install pandoc
+        run: sudo apt-get update && sudo apt-get install -y pandoc
+
       - name: Generate tutorial download artifacts
         run: bash scripts/generate_tutorial_artifacts.sh
+
+      - name: Verify tutorial artifacts exist
+        run: |
+          set -e
+          REQUIRED=(
+            docs/downloads/day-01-scaffold.zip
+            docs/downloads/day-02-dependency-injection.zip
+            docs/downloads/day-03-llm-provider.zip
+            docs/downloads/day-04-provider-tiers.zip
+            docs/downloads/day-05-http-gateway.zip
+            docs/downloads/day-06-chat-history.zip
+            docs/downloads/day-07-committee.zip
+            docs/downloads/day-08-docker-compose.zip
+            docs/downloads/day-09-kubernetes.zip
+            docs/downloads/day-10-whats-next.zip
+            docs/downloads/final-product.zip
+            docs/downloads/tutorial-complete.html
+            docs/downloads/tutorial-complete.txt
+          )
+          MISSING=()
+          for f in "${REQUIRED[@]}"; do
+            if [ ! -s "$f" ]; then
+              MISSING+=("$f")
+            fi
+          done
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "ERROR: Missing tutorial artifacts:"
+            printf '  - %s\n' "${MISSING[@]}"
+            exit 1
+          fi
+          echo "All tutorial artifacts present."
 
       - name: Deploy to GitHub Pages
         run: mkdocs gh-deploy --force
