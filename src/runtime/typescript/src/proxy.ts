@@ -357,7 +357,7 @@ export async function callMcpTool(
       // Don't retry on abort (timeout)
       if (isTimeoutError(lastError)) {
         publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, "timeout", "error", requestBytes);
-        throw new Error(`MCP call timed out after ${options.timeout}ms`);
+        throw new Error(`MCP call timed out after ${effectiveTimeout}ms`);
       }
 
       // Retry on network errors

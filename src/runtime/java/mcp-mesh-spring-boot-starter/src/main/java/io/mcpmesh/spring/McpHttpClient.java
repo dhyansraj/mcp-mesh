@@ -256,18 +256,36 @@ public class McpHttpClient {
                 requestBuilder.header(entry.getKey(), entry.getValue());
             }
 
-            // Set X-Mesh-Timeout for registry proxy (#769)
-            if (!mergedHeaders.containsKey("x-mesh-timeout") && !mergedHeaders.containsKey("X-Mesh-Timeout")) {
+            // Determine effective timeout from X-Mesh-Timeout (propagated) or default (#769)
+            int effectiveTimeoutSecs = 300; // default
+            String existingTimeout = mergedHeaders.get("x-mesh-timeout");
+            if (existingTimeout == null) existingTimeout = mergedHeaders.get("X-Mesh-Timeout");
+            if (existingTimeout == null) {
                 String callTimeout = System.getenv("MCP_MESH_CALL_TIMEOUT");
-                if (callTimeout == null || callTimeout.isEmpty()) {
-                    callTimeout = "300"; // 5 minutes default for mesh calls
+                if (callTimeout != null && !callTimeout.isEmpty()) {
+                    try { effectiveTimeoutSecs = Integer.parseInt(callTimeout); } catch (NumberFormatException e) {}
                 }
-                requestBuilder.header("X-Mesh-Timeout", callTimeout);
+            } else {
+                try { effectiveTimeoutSecs = Integer.parseInt(existingTimeout); } catch (NumberFormatException e) {}
+            }
+            // Guard against negative/zero
+            if (effectiveTimeoutSecs <= 0) effectiveTimeoutSecs = 300;
+
+            // Set X-Mesh-Timeout on the outgoing request if not already propagated
+            if (!mergedHeaders.containsKey("x-mesh-timeout") && !mergedHeaders.containsKey("X-Mesh-Timeout")) {
+                requestBuilder.header("X-Mesh-Timeout", String.valueOf(effectiveTimeoutSecs));
             }
 
             Request httpRequest = requestBuilder.build();
 
-            try (Response response = httpClient.newCall(httpRequest).execute()) {
+            // Override OkHttpClient timeout for this specific call — add 10s buffer
+            // so client timeout doesn't race with the server-side proxy timeout.
+            OkHttpClient perCallClient = httpClient.newBuilder()
+                .readTimeout(effectiveTimeoutSecs + 10, TimeUnit.SECONDS)
+                .writeTimeout(effectiveTimeoutSecs + 10, TimeUnit.SECONDS)
+                .build();
+
+            try (Response response = perCallClient.newCall(httpRequest).execute()) {
                 if (!response.isSuccessful()) {
                     throw new MeshToolCallException(functionName, functionName,
                         "HTTP " + response.code() + ": " + response.message());
