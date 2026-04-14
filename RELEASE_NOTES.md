@@ -1,5 +1,51 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.2.0...v1.3.0)
+
+## v1.3.0 (2026-04-14)
+
+Reliability and production-readiness release. meshctl stop works reliably across all scenarios, timeouts propagate through multi-hop agent chains, and the TripPlanner tutorial ships end-to-end from first agent to production deployment.
+
+### 🔗 X-Mesh-Timeout Propagation
+
+- **Header propagation across all SDKs** (#769): Python/TypeScript/Java SDKs set and propagate `X-Mesh-Timeout` header on outgoing mesh calls. Multi-hop LLM chains (gateway → planner → specialist → provider) now respect a single top-level timeout instead of hitting the hardcoded 60s proxy floor
+- **Registry proxy**: Forwards `X-Mesh-Timeout` to target agents and matches `MCP_MESH_PROPAGATE_HEADERS` headers; `MCP_MESH_PROXY_TIMEOUT` env var replaces the hardcoded 60s default
+- **Client-side timeout override**: SDKs use propagated `X-Mesh-Timeout` value for their own client timeouts (not just the registry's) — Java's OkHttpClient rebuilt per-call to avoid the hardcoded 60s readTimeout
+
+### 🛠️ meshctl Reliability
+
+- **meshctl stop finds and kills detached processes** (#767): Parent writes safety-net PID files in `forkToBackground()` so `meshctl stop` has something to kill even before the child finishes starting agents. Monitoring goroutines detect external kills so wrapper meshctl processes self-exit instead of orphaning
+- **macOS zombie detection** (#767): New `utils_darwin.go` uses `ps -o state=` to properly detect zombie processes (was a no-op, causing "still alive after SIGKILL" errors)
+- **Signal handler race fix**: Signal handler set up early in `startRegistryOnlyMode` so SIGTERM during startup doesn't orphan the registry subprocess
+- **Setpgid on forked child**: Process group kills now work reliably for cleanup
+- **meshctl stop cascade-kill across independent watchers** (#749)
+
+### 🗄️ Database Centralization
+
+- **Registry DB moved to `~/.mcp-mesh/mcp_mesh_registry.db`** (#768): No more DB files scattered across project directories. `stop --clean` deletes from the centralized location
+- **Single-registry constraint**: Prevents accidentally starting multiple local registries on different ports. Guard runs after port check to avoid false positives on concurrent starts
+
+### 📚 TripPlanner Tutorial
+
+- **10-day progressive tutorial** (#764): From scaffold to Kubernetes — flight/hotel/POI agents, LLM delegation with `@mesh.llm`, multiple providers with tag-based routing, HTTP gateway, chat history, committee pattern with specialist fan-out
+- **TripPlanner production app** (#760): Full production-ready app with UI, auth, real data sources, and SPIRE workload identity
+- **Tutorial polish** (#752, #759): Typed Pydantic models, downloadable artifacts, `meshctl man tutorial` integration
+- **meshctl home dir, scaffold, UI resilience** (#754-757)
+
+### 🔧 Environment Variables
+
+- **`MCP_MESH_PROXY_TIMEOUT`** (default 60s, capped at 600s): Registry proxy default timeout when no `X-Mesh-Timeout` header is present
+- **`MCP_MESH_CALL_TIMEOUT`** (default 300s): SDK default for outgoing mesh calls, sent as `X-Mesh-Timeout` header
+
+### 🐛 Bug Fixes
+
+- **Fortuna usability quick wins** (#751): Scaffold improvements, stop UX fixes
+- **meshctl scaffold compose files**: No longer generates with stale 0.8 version tags
+
+### 📋 Follow-up
+
+- **Version bump script gaps** (#753): Current release required manual cleanup of 158 additional files (man content, Go handlers, docs, example Dockerfiles, test artifacts, tutorial Dockerfiles) that the bump script missed. Script needs extension to catch `mcpmesh/*:<tag>` patterns across all directories
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.1.0...v1.2.0)
 
 ## v1.2.0 (2026-04-09)
