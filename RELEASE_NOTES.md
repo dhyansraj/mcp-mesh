@@ -1,5 +1,11 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.3.0...v1.3.1)
+
+## v1.3.1 (2026-04-14)
+
+Patch release. Tutorial download artifacts (zips, tutorial-complete.html/txt) now generate and deploy in CI (#775). Version bump script refactored to a handler-based design — catches 363 files per bump vs 184 previously, eliminating the manual cleanup toil from #753.
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.2.0...v1.3.0)
 
 ## v1.3.0 (2026-04-14)

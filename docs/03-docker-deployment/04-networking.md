@@ -31,12 +31,12 @@ graph TD
     # docker-compose.yml
     services:
       registry:
-        image: mcpmesh/registry:1.3.0
+        image: mcpmesh/registry:1.3.1
         ports:
           - "8000:8000"
 
       my-agent:
-        image: mcpmesh/python-runtime:1.3.0
+        image: mcpmesh/python-runtime:1.3.1
         volumes:
           - ./my-agent:/app/agent:ro
         command: ["python", "/app/agent/main.py"]
@@ -44,7 +44,7 @@ graph TD
           - MCP_MESH_REGISTRY_URL=http://registry:8000
 
       another-agent:
-        image: mcpmesh/python-runtime:1.3.0
+        image: mcpmesh/python-runtime:1.3.1
         volumes:
           - ./another-agent:/app/agent:ro
         command: ["python", "/app/agent/main.py"]
@@ -62,12 +62,12 @@ graph TD
     # docker-compose.yml
     services:
       registry:
-        image: mcpmesh/registry:1.3.0
+        image: mcpmesh/registry:1.3.1
         ports:
           - "8000:8000"
 
       my-agent:
-        image: mcpmesh/typescript-runtime:1.3.0
+        image: mcpmesh/typescript-runtime:1.3.1
         volumes:
           - ./my-agent:/app/agent:ro
         command: ["npx", "tsx", "/app/agent/src/index.ts"]
@@ -75,7 +75,7 @@ graph TD
           - MCP_MESH_REGISTRY_URL=http://registry:8000
 
       another-agent:
-        image: mcpmesh/typescript-runtime:1.3.0
+        image: mcpmesh/typescript-runtime:1.3.1
         volumes:
           - ./another-agent:/app/agent:ro
         command: ["npx", "tsx", "/app/agent/src/index.ts"]
