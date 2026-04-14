@@ -244,6 +244,39 @@ export ENABLE_EVENTS=true
 export ACCESS_LOG=true
 ```
 
+## Proxy & Timeout
+
+Agent-to-agent calls go through the registry proxy, which forwards the
+request to the target agent. The `X-Mesh-Timeout` header controls how
+long the proxy and SDK clients wait for a response. It propagates
+automatically through multi-hop chains (gateway → planner → specialist).
+
+```bash
+# Registry proxy: default timeout in seconds when no X-Mesh-Timeout
+# header is sent (default: 60s, capped at 600s)
+export MCP_MESH_PROXY_TIMEOUT=60
+
+# SDK: default timeout for outgoing mesh tool calls in seconds (default: 300s)
+# SDKs send this as X-Mesh-Timeout header on outgoing calls, and use it to
+# override the client-side HTTP timeout. Propagates down the call chain.
+export MCP_MESH_CALL_TIMEOUT=300
+```
+
+**How timeout propagation works:**
+
+1. First hop: SDK sets `X-Mesh-Timeout: 300` (from `MCP_MESH_CALL_TIMEOUT`) on the outgoing request
+2. Registry proxy reads the header, uses it for its client timeout, and forwards it to the target agent
+3. Target agent's SDK captures the header and propagates it on its own outgoing calls
+4. The same timeout value flows through the entire chain without requiring per-hop configuration
+
+If no `X-Mesh-Timeout` header is sent (e.g., a direct curl to an agent endpoint), the registry proxy falls back to `MCP_MESH_PROXY_TIMEOUT`.
+
+```bash
+# Example: raise proxy floor for an environment with long-running LLM chains
+export MCP_MESH_PROXY_TIMEOUT=120
+export MCP_MESH_CALL_TIMEOUT=600
+```
+
 ## Tracing & Observability
 
 ### Distributed Tracing
