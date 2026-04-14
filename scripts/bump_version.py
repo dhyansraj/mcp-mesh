@@ -11,14 +11,29 @@ Usage:
 Beta support:
     Versions like 0.9.2-beta.1 are automatically converted to PEP 440
     format (0.9.2b1) for Python/PyPI files.
+
+Design:
+    Most version replacements are declared as Handler entries in HANDLERS.
+    A handler describes which files to scan (globs/excludes), what regex to
+    apply, and which projection of the version to substitute (raw / pep440 /
+    minor / scaffold-tag). A small number of edge cases that need bespoke
+    logic (Helm Charts.yaml multi-pattern, Test Config multi-key, etc.)
+    remain as functions and are invoked alongside the handlers.
 """
 
 import argparse
+import os
 import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent.parent
+
+
+# ---------------------------------------------------------------------------
+# Version helpers
+# ---------------------------------------------------------------------------
 
 
 def to_pep440(version: str) -> str:
@@ -42,6 +57,29 @@ def to_pep440(version: str) -> str:
     return version
 
 
+def to_minor(version: str) -> str:
+    """Drop patch and prerelease, e.g. 1.3.0-beta.1 -> 1.3."""
+    m = re.match(r"^(\d+)\.(\d+)", version)
+    if not m:
+        return version
+    return f"{m.group(1)}.{m.group(2)}"
+
+
+def format_version(version: str, version_format: str) -> str:
+    if version_format == "raw":
+        return version
+    if version_format == "pep440":
+        return to_pep440(version)
+    if version_format == "minor":
+        return to_minor(version)
+    raise ValueError(f"unknown version_format: {version_format}")
+
+
+# ---------------------------------------------------------------------------
+# File replacement helpers
+# ---------------------------------------------------------------------------
+
+
 def replace_in_file(
     filepath: Path,
     pattern: str,
@@ -61,146 +99,493 @@ def replace_in_file(
     return True
 
 
-def bump_python_packages(old: str, new_pep440: str, dry_run: bool) -> list[str]:
-    """Category 1: Python package version fields."""
-    changed: list[str] = []
-    files = [
-        PROJECT_ROOT / "packaging" / "pypi" / "pyproject.toml",
-        PROJECT_ROOT / "src" / "runtime" / "python" / "pyproject.toml",
-        PROJECT_ROOT / "src" / "runtime" / "core" / "pyproject.toml",
+# ---------------------------------------------------------------------------
+# Handler definition + executor
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Handler:
+    name: str
+    globs: list[str]
+    pattern: str
+    replacement: str
+    excludes: list[str] = field(default_factory=list)
+    version_format: str = "raw"  # "raw" | "pep440" | "minor" | "scaffold-tag"
+    flags: int = 0
+    # Optional cosmetic suffix appended to each reported file path. Useful
+    # when two handlers update the same file but you want to disambiguate
+    # them in the report (e.g. the mcp-mesh-core dep entry in pypi).
+    report_suffix: str = ""
+
+
+def _glob_to_regex(pattern: str) -> re.Pattern:
+    """Translate a glob pattern (with `**`, `*`, `?`) to a regex.
+
+    `**` (followed by `/` or end) matches any number of path components.
+    `*` matches any sequence of characters except `/`.
+    `?` matches a single non-`/` character.
+    """
+    parts: list[str] = []
+    i = 0
+    while i < len(pattern):
+        if pattern[i : i + 3] == "**/":
+            parts.append("(?:.*/)?")
+            i += 3
+        elif pattern[i : i + 2] == "**":
+            parts.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            parts.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            parts.append("[^/]")
+            i += 1
+        else:
+            parts.append(re.escape(pattern[i]))
+            i += 1
+    return re.compile("^" + "".join(parts) + "$")
+
+
+def _walk_files(base: Path):
+    """Recursively yield every file under `base`, following symlinks but
+    detecting cycles by tracking realpaths in the current ancestor chain.
+
+    Uses a stack so each branch carries its own ancestor set — multiple
+    symlinks pointing to the same target are still each visited (we only
+    skip a directory if descending would re-enter one of OUR ancestors).
+    """
+    if not base.exists():
+        return
+    base_str = str(base)
+    stack: list[tuple[str, frozenset[str]]] = [
+        (base_str, frozenset({os.path.realpath(base_str)}))
     ]
-    old_pep440 = to_pep440(old)
-    for f in files:
-        pattern = rf'(version\s*=\s*"){re.escape(old_pep440)}(")'
-        replacement = rf"\g<1>{new_pep440}\2"
-        if replace_in_file(f, pattern, replacement, dry_run):
-            changed.append(str(f.relative_to(PROJECT_ROOT)))
-
-    init_files = [
-        PROJECT_ROOT / "src" / "runtime" / "python" / "_mcp_mesh" / "__init__.py",
-        PROJECT_ROOT / "src" / "runtime" / "python" / "mesh" / "__init__.py",
-    ]
-    old_pep440 = to_pep440(old)
-    for init_file in init_files:
-        pattern = rf'(__version__\s*=\s*"){re.escape(old_pep440)}(")'
-        replacement = rf"\g<1>{new_pep440}\2"
-        if replace_in_file(init_file, pattern, replacement, dry_run):
-            changed.append(str(init_file.relative_to(PROJECT_ROOT)))
-
-    return changed
+    while stack:
+        dirpath, ancestors = stack.pop()
+        try:
+            entries = list(os.scandir(dirpath))
+        except OSError:
+            continue
+        for e in entries:
+            try:
+                if e.is_file(follow_symlinks=True):
+                    yield Path(e.path)
+                elif e.is_dir(follow_symlinks=True):
+                    rp = os.path.realpath(e.path)
+                    if rp in ancestors:
+                        continue
+                    stack.append((e.path, ancestors | {rp}))
+            except OSError:
+                continue
 
 
-def bump_python_dependencies(old: str, new_pep440: str, dry_run: bool) -> list[str]:
-    """Category 2: Python OUR dependencies (mcp-mesh-core only)."""
+def _glob_files(globs: list[str]) -> set[Path]:
+    """Resolve a list of glob patterns (relative to PROJECT_ROOT) into the set
+    of matching files. Symlinks (including symlinked directories) are
+    followed — necessary because integration test artifacts and tutorial
+    scaffolds use symlinks heavily."""
+    files: set[Path] = set()
+    for g in globs:
+        # Determine the static directory prefix (everything up to the first
+        # wildcard). We walk that directory and match each candidate.
+        static_parts: list[str] = []
+        for part in g.split("/"):
+            if any(c in part for c in "*?["):
+                break
+            static_parts.append(part)
+        static = "/".join(static_parts)
+        base = PROJECT_ROOT / static if static else PROJECT_ROOT
+
+        # Fast path: pattern has no wildcards — just check the file directly.
+        if static == g:
+            if base.is_file():
+                files.add(base)
+            continue
+
+        rgx = _glob_to_regex(g)
+        for f in _walk_files(base):
+            try:
+                rel = f.relative_to(PROJECT_ROOT).as_posix()
+            except ValueError:
+                continue
+            if rgx.match(rel):
+                files.add(f)
+    return files
+
+
+def run_handler(handler: Handler, old: str, new: str, dry_run: bool) -> list[str]:
+    old_v = format_version(old, handler.version_format)
+    new_v = format_version(new, handler.version_format)
+    pattern = handler.pattern.replace("OLD", re.escape(old_v))
+    replacement = handler.replacement.replace("NEW", new_v)
+
+    files = _glob_files(handler.globs)
+    if handler.excludes:
+        files -= _glob_files(handler.excludes)
+
     changed: list[str] = []
-    f = PROJECT_ROOT / "packaging" / "pypi" / "pyproject.toml"
-    old_pep440 = to_pep440(old)
-    pattern = rf'("mcp-mesh-core>={re.escape(old_pep440)}")'
-    replacement = f'"mcp-mesh-core>={new_pep440}"'
-    if replace_in_file(f, pattern, replacement, dry_run):
-        changed.append(str(f.relative_to(PROJECT_ROOT)) + " (mcp-mesh-core dep)")
+    for f in sorted(files):
+        if replace_in_file(f, pattern, replacement, dry_run, flags=handler.flags):
+            label = str(f.relative_to(PROJECT_ROOT))
+            if handler.report_suffix:
+                label = f"{label} {handler.report_suffix}"
+            changed.append(label)
     return changed
 
 
-def bump_typescript_packages(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 3: TypeScript/Node.js core package versions."""
-    changed: list[str] = []
-    files = [
-        PROJECT_ROOT / "src" / "runtime" / "typescript" / "package.json",
-        PROJECT_ROOT / "src" / "runtime" / "core" / "typescript" / "package.json",
-        PROJECT_ROOT / "npm" / "cli" / "package.json",
-    ]
-    for f in files:
-        pattern = rf'("version":\s*"){re.escape(old)}(")'
-        replacement = rf"\g<1>{new}\2"
-        if replace_in_file(f, pattern, replacement, dry_run):
-            changed.append(str(f.relative_to(PROJECT_ROOT)))
-    return changed
+# ---------------------------------------------------------------------------
+# Handler list (migrated from the original 20 category functions plus new
+# handlers that catch previously-missed stale references).
+# ---------------------------------------------------------------------------
 
 
-def bump_typescript_dependencies(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 4: @mcpmesh/* dependency versions in package.json files."""
-    changed: list[str] = []
-    files = [
-        PROJECT_ROOT / "npm" / "cli" / "package.json",
-        PROJECT_ROOT / "src" / "runtime" / "typescript" / "package.json",
-    ]
-    for f in files:
-        # Match "@mcpmesh/anything": "OLD" or "@mcpmesh/anything": "^OLD"
-        pattern = rf'("@mcpmesh/[^"]+?":\s*")(\^?){re.escape(old)}(")'
-        replacement = rf"\g<1>\g<2>{new}\3"
-        if replace_in_file(f, pattern, replacement, dry_run):
-            changed.append(str(f.relative_to(PROJECT_ROOT)))
-    return changed
+HANDLERS: list[Handler] = [
+    # --- Category 1: Python Packages (pyproject.toml version field) -------
+    Handler(
+        name="Python Packages (pyproject.toml)",
+        globs=[
+            "packaging/pypi/pyproject.toml",
+            "src/runtime/python/pyproject.toml",
+            "src/runtime/core/pyproject.toml",
+        ],
+        pattern=r'(version\s*=\s*")OLD(")',
+        replacement=r"\g<1>NEW\2",
+        version_format="pep440",
+    ),
+    Handler(
+        name="Python Packages (__init__.py __version__)",
+        globs=[
+            "src/runtime/python/_mcp_mesh/__init__.py",
+            "src/runtime/python/mesh/__init__.py",
+        ],
+        pattern=r'(__version__\s*=\s*")OLD(")',
+        replacement=r"\g<1>NEW\2",
+        version_format="pep440",
+    ),
+    # --- Category 2: Python OUR dependencies ------------------------------
+    Handler(
+        name="Python Dependencies (mcp-mesh-core)",
+        globs=["packaging/pypi/pyproject.toml"],
+        pattern=r'("mcp-mesh-core>=)OLD(")',
+        replacement=r"\g<1>NEW\2",
+        version_format="pep440",
+        report_suffix="(mcp-mesh-core dep)",
+    ),
+    # --- Category 3: TypeScript/Node.js Packages --------------------------
+    Handler(
+        name="TypeScript/Node.js Packages",
+        globs=[
+            "src/runtime/typescript/package.json",
+            "src/runtime/core/typescript/package.json",
+            "npm/cli/package.json",
+        ],
+        pattern=r'("version":\s*")OLD(")',
+        replacement=r"\g<1>NEW\2",
+    ),
+    # --- Category 4: TypeScript Dependencies (@mcpmesh/*) -----------------
+    Handler(
+        name="TypeScript Dependencies (@mcpmesh/*)",
+        globs=[
+            "npm/cli/package.json",
+            "src/runtime/typescript/package.json",
+        ],
+        pattern=r'("@mcpmesh/[^"]+?":\s*")(\^?)OLD(")',
+        replacement=r"\g<1>\g<2>NEW\3",
+    ),
+    # --- Category 5: Java Parent/Module POMs ------------------------------
+    Handler(
+        name="Java Parent/Module POMs",
+        globs=[
+            "src/runtime/java/pom.xml",
+            "src/runtime/java/mcp-mesh-bom/pom.xml",
+            "src/runtime/java/mcp-mesh-core/pom.xml",
+            "src/runtime/java/mcp-mesh-sdk/pom.xml",
+            "src/runtime/java/mcp-mesh-spring-boot-starter/pom.xml",
+            "src/runtime/java/mcp-mesh-spring-ai/pom.xml",
+            "src/runtime/java/mcp-mesh-native/pom.xml",
+        ],
+        pattern=r"(<version>)OLD(</version>)",
+        replacement=r"\g<1>NEW\2",
+    ),
+    # --- Category 6: Java Example POMs ------------------------------------
+    Handler(
+        name="Java Example POMs",
+        globs=[
+            "examples/java/*/pom.xml",
+            "examples/toolcalls/*/pom.xml",
+        ],
+        pattern=r"(<mcp-mesh\.version>)OLD(</mcp-mesh\.version>)",
+        replacement=r"\g<1>NEW\2",
+    ),
+    # --- Category 7: Rust Cargo.toml --------------------------------------
+    Handler(
+        name="Rust Cargo.toml",
+        globs=["src/runtime/core/Cargo.toml"],
+        pattern=r'(version\s*=\s*")OLD(")',
+        replacement=r"\g<1>NEW\2",
+    ),
+    # --- Category 9: Package Managers (Homebrew + Scoop) ------------------
+    Handler(
+        name="Package Managers (Homebrew)",
+        globs=["packaging/homebrew/mcp-mesh.rb"],
+        pattern=r'(version\s+")OLD(")',
+        replacement=r"\g<1>NEW\2",
+    ),
+    Handler(
+        name="Package Managers (Scoop)",
+        globs=["packaging/scoop/mcp-mesh.json"],
+        pattern=r'("version":\s*")OLD(")',
+        replacement=r"\g<1>NEW\2",
+    ),
+    # --- Category 10: Go Handler Templates --------------------------------
+    Handler(
+        name="Go Handler Templates (python_handler.go pip dep)",
+        globs=["src/core/cli/handlers/python_handler.go"],
+        pattern=r"(mcp-mesh>=)OLD",
+        replacement=r"\g<1>NEW",
+        version_format="pep440",
+    ),
+    Handler(
+        name="Go Handler Templates (typescript_handler.go @mcpmesh/sdk)",
+        globs=["src/core/cli/handlers/typescript_handler.go"],
+        pattern=r'("@mcpmesh/sdk":\s*"\^)OLD(")',
+        replacement=r"\g<1>NEW\2",
+    ),
+    Handler(
+        name="Go Handler Templates (java_handler.go <version>)",
+        globs=["src/core/cli/handlers/java_handler.go"],
+        pattern=r"(<version>)OLD(</version>)",
+        replacement=r"\g<1>NEW\2",
+    ),
+    Handler(
+        name="Go Handler Templates (language_test.go pip dep)",
+        globs=["src/core/cli/handlers/language_test.go"],
+        pattern=r"(mcp-mesh==)OLD",
+        replacement=r"\g<1>NEW",
+        version_format="pep440",
+    ),
+    # --- Category 11: Scaffold Templates ----------------------------------
+    Handler(
+        name="Scaffold Templates (Java pom.xml.tmpl)",
+        globs=["cmd/meshctl/templates/java/*/pom.xml.tmpl"],
+        pattern=r"(<mcp-mesh\.version>)OLD(</mcp-mesh\.version>)",
+        replacement=r"\g<1>NEW\2",
+    ),
+    Handler(
+        name="Scaffold Templates (TypeScript package.json.tmpl)",
+        globs=["cmd/meshctl/templates/typescript/*/package.json.tmpl"],
+        pattern=r'("@mcpmesh/sdk":\s*"\^)OLD(")',
+        replacement=r"\g<1>NEW\2",
+    ),
+    # --- Category 12: Documentation (markdown) ----------------------------
+    # Three patterns: --version OLD, <version>OLD</version>, vOLD.
+    Handler(
+        name="Documentation (--version OLD)",
+        globs=[
+            "docs/**/*.md",
+            "src/core/cli/man/content/**/*.md",
+        ],
+        pattern=r"(--version\s+)OLD",
+        replacement=r"\g<1>NEW",
+    ),
+    Handler(
+        name="Documentation (<version>OLD</version>)",
+        globs=[
+            "docs/**/*.md",
+            "src/core/cli/man/content/**/*.md",
+        ],
+        pattern=r"(<version>)OLD(</version>)",
+        replacement=r"\g<1>NEW\2",
+    ),
+    Handler(
+        name="Documentation (vOLD)",
+        globs=[
+            "docs/**/*.md",
+            "src/core/cli/man/content/**/*.md",
+        ],
+        # Word boundary, not preceded by / so URLs aren't touched.
+        pattern=r"(?<!/)vOLD(?=[\s,\)\]\"']|$)",
+        replacement=r"vNEW",
+        flags=re.MULTILINE,
+    ),
+    # --- Category 14: Example agent requirements.txt ---------------------
+    Handler(
+        name="Example Requirements (requirements.txt)",
+        globs=["examples/docker-examples/agents/*/requirements.txt"],
+        pattern=r"(mcp-mesh>=)OLD",
+        replacement=r"\g<1>NEW",
+        version_format="pep440",
+    ),
+    # --- Category 15: CI/CD Workflows ------------------------------------
+    Handler(
+        name="CI/CD Workflows (default: \"vOLD\")",
+        globs=[
+            ".github/workflows/release.yml",
+            ".github/workflows/helm-release.yml",
+        ],
+        pattern=r'(default:\s*"v)OLD(")',
+        replacement=r"\g<1>NEW\2",
+    ),
+    Handler(
+        name="CI/CD Workflows (e.g., vOLD)",
+        globs=[
+            ".github/workflows/release.yml",
+            ".github/workflows/helm-release.yml",
+        ],
+        pattern=r"(e\.g\.,\s*v)OLD",
+        replacement=r"\g<1>NEW",
+    ),
+    # --- Category 16: TypeScript Toolcall Examples -----------------------
+    Handler(
+        name="TypeScript Toolcall Examples",
+        globs=["examples/toolcalls/*-ts/package.json"],
+        # Match "@mcpmesh/x": "OLD" or "@mcpmesh/x": "^OLD" (replace with ^NEW)
+        pattern=r'("@mcpmesh/[^"]+?":\s*")\^?OLD(")',
+        replacement=r"\g<1>^NEW\2",
+    ),
+    # --- Category 17: Docker Example Helm Values --------------------------
+    Handler(
+        name="Docker Example Helm Values",
+        globs=["examples/docker-examples/agents/*/helm-values.yaml"],
+        pattern=r"(--version\s+)OLD",
+        replacement=r"\g<1>NEW",
+    ),
+    # --- Category 18: Integration Test Artifacts --------------------------
+    Handler(
+        name="Integration Test Artifacts (package.json)",
+        globs=["tests/integration/suites/**/package.json"],
+        excludes=["**/node_modules/**"],
+        pattern=r'("@mcpmesh/[^"]+?":\s*")(\^?)OLD(")',
+        replacement=r"\g<1>\g<2>NEW\3",
+    ),
+    Handler(
+        name="Integration Test Artifacts (pom.xml)",
+        globs=["tests/integration/suites/**/pom.xml"],
+        pattern=r"(<mcp-mesh\.version>)OLD(</mcp-mesh\.version>)",
+        replacement=r"\g<1>NEW\2",
+    ),
+    # --- Category 20: Docker Image Tags (Scaffold Dockerfile templates) --
+    # Dockerfile templates use full version tags (mcpmesh/python-runtime:1.3.0)
+    Handler(
+        name="Docker Image Tags (Scaffold Dockerfile.tmpl)",
+        globs=["cmd/meshctl/templates/*/*/Dockerfile.tmpl"],
+        pattern=(
+            r"(mcpmesh/(?:python-runtime|typescript-runtime|java-runtime):)[^\s]+"
+        ),
+        replacement=r"\g<1>NEW",
+    ),
+    # --- NEW: Docker tags in markdown (man content + docs + helm READMEs)
+    # Pattern uses (?![\d.\-+]) negative lookahead so `:1.3.1` doesn't match
+    # the prefix of `:1.3.10`, `:1.3.1-rc.2`, `:1.3.1.0`, or `:1.3.1+build`.
+    Handler(
+        name="Docker Image Tags in Markdown",
+        globs=[
+            "docs/**/*.md",
+            "src/core/cli/man/content/**/*.md",
+            "helm/*/README.md",
+        ],
+        excludes=["docs/downloads/**"],
+        pattern=(
+            r"(mcpmesh/(?:registry|python-runtime|typescript-runtime"
+            r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
+        ),
+        replacement=r"\g<1>NEW",
+    ),
+    # --- NEW: Docker tags in example + integration test Dockerfiles ------
+    Handler(
+        name="Docker Image Tags in Dockerfiles",
+        globs=[
+            "examples/**/Dockerfile",
+            "tests/integration/suites/**/Dockerfile",
+        ],
+        excludes=[
+            # uc20_tutorial uses symlinks back into examples/tutorial/**
+            "tests/integration/suites/uc20_tutorial/**",
+            "**/node_modules/**",
+        ],
+        pattern=(
+            r"(FROM mcpmesh/(?:registry|python-runtime|typescript-runtime"
+            r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
+        ),
+        replacement=r"\g<1>NEW",
+    ),
+    # --- NEW: Docker tags in docker-compose.yml + variants ---------------
+    # Matches both `image: mcpmesh/...:VER` lines AND bare `mcpmesh/...:VER`
+    # references in YAML comments (e.g., the file header that describes services)
+    Handler(
+        name="Docker Image Tags in docker-compose",
+        globs=[
+            "examples/**/docker-compose.yml",
+            "examples/**/docker-compose.*.yml",
+        ],
+        excludes=["**/node_modules/**"],
+        pattern=(
+            r"(mcpmesh/(?:registry|python-runtime|typescript-runtime"
+            r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
+        ),
+        replacement=r"\g<1>NEW",
+    ),
+    # --- NEW: Hardcoded image tags inside Go handler source --------------
+    Handler(
+        name="Go Handler Hardcoded Image Tags",
+        globs=[
+            "src/core/cli/handlers/python_handler.go",
+            "src/core/cli/handlers/typescript_handler.go",
+            "src/core/cli/handlers/java_handler.go",
+        ],
+        pattern=(
+            r"(mcpmesh/(?:registry|python-runtime|typescript-runtime"
+            r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
+        ),
+        replacement=r"\g<1>NEW",
+    ),
+    # --- NEW: Scaffold help text + scaffold tests + handler tests --------
+    # Full version form (e.g., 1.3.0) appears in scaffold.go help text and
+    # in compose.go template strings + compose_test.go expected output.
+    Handler(
+        name="Scaffold Source Hardcoded Image Tags (full version)",
+        globs=[
+            "src/core/cli/scaffold.go",
+            "src/core/cli/scaffold/compose.go",
+            "src/core/cli/scaffold/compose_test.go",
+        ],
+        pattern=(
+            r"(mcpmesh/(?:registry|python-runtime|typescript-runtime"
+            r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
+        ),
+        replacement=r"\g<1>NEW",
+    ),
+    # --- NEW: language_test.go uses the MINOR-tag form (e.g., :1.3) ------
+    # Minor tag — (?![\d.\-+]) prevents matching `:1.3` as the prefix of `:1.30` or `:1.3.0`.
+    Handler(
+        name="Language Test Hardcoded Image Tags (minor version)",
+        globs=["src/core/cli/handlers/language_test.go"],
+        pattern=(
+            r"(mcpmesh/(?:registry|python-runtime|typescript-runtime"
+            r"|java-runtime|ui|cli):)OLD(?![\d.\-+])"
+        ),
+        replacement=r"\g<1>NEW",
+        version_format="minor",
+    ),
+]
 
 
-def bump_java_parent_poms(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 5: Java parent/module POM versions."""
-    changed: list[str] = []
-    files = [
-        PROJECT_ROOT / "src" / "runtime" / "java" / "pom.xml",
-        PROJECT_ROOT / "src" / "runtime" / "java" / "mcp-mesh-bom" / "pom.xml",
-        PROJECT_ROOT / "src" / "runtime" / "java" / "mcp-mesh-core" / "pom.xml",
-        PROJECT_ROOT / "src" / "runtime" / "java" / "mcp-mesh-sdk" / "pom.xml",
-        PROJECT_ROOT
-        / "src"
-        / "runtime"
-        / "java"
-        / "mcp-mesh-spring-boot-starter"
-        / "pom.xml",
-        PROJECT_ROOT / "src" / "runtime" / "java" / "mcp-mesh-spring-ai" / "pom.xml",
-        PROJECT_ROOT / "src" / "runtime" / "java" / "mcp-mesh-native" / "pom.xml",
-    ]
-    for f in files:
-        pattern = rf"(<version>){re.escape(old)}(</version>)"
-        replacement = rf"\g<1>{new}\2"
-        if replace_in_file(f, pattern, replacement, dry_run):
-            changed.append(str(f.relative_to(PROJECT_ROOT)))
-    return changed
-
-
-def bump_java_example_poms(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 6: Java example POM mcp-mesh.version property."""
-    changed: list[str] = []
-    # Find all example pom.xml files
-    patterns = [
-        PROJECT_ROOT / "examples" / "java",
-        PROJECT_ROOT / "examples" / "toolcalls",
-    ]
-    pom_files = []
-    for base_dir in patterns:
-        if base_dir.exists():
-            for pom in base_dir.glob("*/pom.xml"):
-                pom_files.append(pom)
-
-    for f in pom_files:
-        pattern = rf"(<mcp-mesh\.version>){re.escape(old)}(</mcp-mesh\.version>)"
-        replacement = rf"\g<1>{new}\2"
-        if replace_in_file(f, pattern, replacement, dry_run):
-            changed.append(str(f.relative_to(PROJECT_ROOT)))
-    return changed
-
-
-def bump_rust_cargo(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 7: Rust Cargo.toml version."""
-    changed: list[str] = []
-    f = PROJECT_ROOT / "src" / "runtime" / "core" / "Cargo.toml"
-    pattern = rf'(version\s*=\s*"){re.escape(old)}(")'
-    replacement = rf"\g<1>{new}\2"
-    if replace_in_file(f, pattern, replacement, dry_run):
-        changed.append(str(f.relative_to(PROJECT_ROOT)))
-    return changed
+# ---------------------------------------------------------------------------
+# Bespoke handlers (kept as functions because they have multi-pattern logic
+# or conditional behavior that a single Handler can't express cleanly)
+# ---------------------------------------------------------------------------
 
 
 def bump_helm_charts(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 8: Helm Chart.yaml and Chart.lock files."""
+    """Helm Chart.yaml + Chart.lock + values.yaml image tag (minor)."""
     changed: list[str] = []
     helm_dir = PROJECT_ROOT / "helm"
     if not helm_dir.exists():
         return changed
 
-    # Chart.yaml files
-    for chart_yaml in helm_dir.glob("*/Chart.yaml"):
+    # Chart.yaml files: three patterns per file.
+    for chart_yaml in sorted(helm_dir.glob("*/Chart.yaml")):
         file_changed = False
         # version: OLD (top-level chart version, start of line)
         p1 = rf"(^version:\s*){re.escape(old)}$"
@@ -227,11 +612,8 @@ def bump_helm_charts(old: str, new: str, dry_run: bool) -> list[str]:
             changed.append(str(chart_lock.relative_to(PROJECT_ROOT)))
 
     # values.yaml image tags (minor version format, only mcp-mesh charts)
-    old_parts = old.split(".")
-    new_parts = new.split(".")
-    old_minor = f"{old_parts[0]}.{old_parts[1]}"
-    new_minor = f"{new_parts[0]}.{new_parts[1]}"
-
+    old_minor = to_minor(old)
+    new_minor = to_minor(new)
     if old_minor != new_minor:
         mcp_mesh_charts = [
             "mcp-mesh-registry",
@@ -242,7 +624,6 @@ def bump_helm_charts(old: str, new: str, dry_run: bool) -> list[str]:
         for chart_name in mcp_mesh_charts:
             values_yaml = helm_dir / chart_name / "values.yaml"
             if values_yaml.exists():
-                # Match tag: "OLD_MINOR" (with quotes, indented under image:)
                 pattern = rf'(tag:\s*"){re.escape(old_minor)}(")'
                 replacement = rf"\g<1>{new_minor}\2"
                 if replace_in_file(values_yaml, pattern, replacement, dry_run):
@@ -251,131 +632,8 @@ def bump_helm_charts(old: str, new: str, dry_run: bool) -> list[str]:
     return changed
 
 
-def bump_package_managers(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 9: Homebrew and Scoop package manager files."""
-    changed: list[str] = []
-
-    # Homebrew
-    homebrew = PROJECT_ROOT / "packaging" / "homebrew" / "mcp-mesh.rb"
-    pattern = rf'(version\s+"){re.escape(old)}(")'
-    replacement = rf"\g<1>{new}\2"
-    if replace_in_file(homebrew, pattern, replacement, dry_run):
-        changed.append(str(homebrew.relative_to(PROJECT_ROOT)))
-
-    # Scoop
-    scoop = PROJECT_ROOT / "packaging" / "scoop" / "mcp-mesh.json"
-    pattern = rf'("version":\s*"){re.escape(old)}(")'
-    replacement = rf"\g<1>{new}\2"
-    if replace_in_file(scoop, pattern, replacement, dry_run):
-        changed.append(str(scoop.relative_to(PROJECT_ROOT)))
-
-    return changed
-
-
-def bump_go_handler_templates(
-    old: str, new: str, new_pep440: str, dry_run: bool
-) -> list[str]:
-    """Category 10: Go handler template files."""
-    changed: list[str] = []
-    handlers_dir = PROJECT_ROOT / "src" / "core" / "cli" / "handlers"
-
-    # python_handler.go: mcp-mesh>=OLD
-    f = handlers_dir / "python_handler.go"
-    old_pep440 = to_pep440(old)
-    pattern = rf"(mcp-mesh>={re.escape(old_pep440)})"
-    replacement = f"mcp-mesh>={new_pep440}"
-    if replace_in_file(f, pattern, replacement, dry_run):
-        changed.append(str(f.relative_to(PROJECT_ROOT)))
-
-    # typescript_handler.go: "@mcpmesh/sdk": "^OLD"
-    f = handlers_dir / "typescript_handler.go"
-    pattern = rf'("@mcpmesh/sdk":\s*"\^){re.escape(old)}(")'
-    replacement = rf"\g<1>{new}\2"
-    if replace_in_file(f, pattern, replacement, dry_run):
-        changed.append(str(f.relative_to(PROJECT_ROOT)))
-
-    # java_handler.go: <version>OLD</version>
-    f = handlers_dir / "java_handler.go"
-    pattern = rf"(<version>){re.escape(old)}(</version>)"
-    replacement = rf"\g<1>{new}\2"
-    if replace_in_file(f, pattern, replacement, dry_run):
-        changed.append(str(f.relative_to(PROJECT_ROOT)))
-
-    # language_test.go: mcp-mesh==OLD
-    f = handlers_dir / "language_test.go"
-    pattern = rf"(mcp-mesh=={re.escape(old_pep440)})"
-    replacement = f"mcp-mesh=={new_pep440}"
-    if replace_in_file(f, pattern, replacement, dry_run):
-        changed.append(str(f.relative_to(PROJECT_ROOT)))
-
-    return changed
-
-
-def bump_scaffold_templates(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 11: Scaffold template files (meshctl scaffold)."""
-    changed: list[str] = []
-    templates_dir = PROJECT_ROOT / "cmd" / "meshctl" / "templates"
-
-    # Java templates: <mcp-mesh.version>OLD</mcp-mesh.version>
-    for pom_tmpl in sorted(templates_dir.glob("java/*/pom.xml.tmpl")):
-        pattern = rf"(<mcp-mesh\.version>){re.escape(old)}(</mcp-mesh\.version>)"
-        replacement = rf"\g<1>{new}\2"
-        if replace_in_file(pom_tmpl, pattern, replacement, dry_run):
-            changed.append(str(pom_tmpl.relative_to(PROJECT_ROOT)))
-
-    # TypeScript templates: "@mcpmesh/sdk": "^OLD"
-    for pkg_tmpl in sorted(templates_dir.glob("typescript/*/package.json.tmpl")):
-        pattern = rf'("@mcpmesh/sdk":\s*"\^){re.escape(old)}(")'
-        replacement = rf"\g<1>{new}\2"
-        if replace_in_file(pkg_tmpl, pattern, replacement, dry_run):
-            changed.append(str(pkg_tmpl.relative_to(PROJECT_ROOT)))
-
-    return changed
-
-
-def _bump_version_in_md(md_file: Path, old: str, new: str, dry_run: bool) -> bool:
-    """Apply version replacement patterns to a single markdown file."""
-    file_changed = False
-
-    # --version OLD -> --version NEW
-    p1 = rf"(--version\s+){re.escape(old)}"
-    if replace_in_file(md_file, p1, rf"\g<1>{new}", dry_run):
-        file_changed = True
-
-    # <version>OLD</version> -> <version>NEW</version>
-    p2 = rf"(<version>){re.escape(old)}(</version>)"
-    if replace_in_file(md_file, p2, rf"\g<1>{new}\2", dry_run):
-        file_changed = True
-
-    # vOLD in version strings (word boundary, not preceded by / to avoid URLs)
-    p4 = rf"(?<!/)v{re.escape(old)}(?=[\s,\)\]\"']|$)"
-    if replace_in_file(md_file, p4, f"v{new}", dry_run, flags=re.MULTILINE):
-        file_changed = True
-
-    return file_changed
-
-
-def bump_documentation(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 12: Documentation markdown files."""
-    changed: list[str] = []
-
-    md_dirs = [
-        PROJECT_ROOT / "docs",
-        PROJECT_ROOT / "src" / "core" / "cli" / "man" / "content",
-    ]
-
-    for md_dir in md_dirs:
-        if not md_dir.exists():
-            continue
-        for md_file in md_dir.rglob("*.md"):
-            if _bump_version_in_md(md_file, old, new, dry_run):
-                changed.append(str(md_file.relative_to(PROJECT_ROOT)))
-
-    return changed
-
-
-def bump_test_config(old: str, new: str, new_pep440: str, dry_run: bool) -> list[str]:
-    """Category 13: Test configuration file."""
+def bump_test_config(old: str, new: str, dry_run: bool) -> list[str]:
+    """tests/lib-tests/config.yaml — multiple keys, mixed formats."""
     changed: list[str] = []
     f = PROJECT_ROOT / "tests" / "lib-tests" / "config.yaml"
     if not f.exists():
@@ -383,9 +641,9 @@ def bump_test_config(old: str, new: str, new_pep440: str, dry_run: bool) -> list
 
     content = f.read_text()
     old_pep440 = to_pep440(old)
+    new_pep440 = to_pep440(new)
     new_content = content
 
-    # Replace non-Python version lines
     for key in [
         "cli_version",
         "sdk_typescript_version",
@@ -395,7 +653,6 @@ def bump_test_config(old: str, new: str, new_pep440: str, dry_run: bool) -> list
         p = rf'({key}:\s*"){re.escape(old)}(")'
         new_content = re.sub(p, rf"\g<1>{new}\2", new_content)
 
-    # sdk_python_version uses PEP 440 format
     p = rf'(sdk_python_version:\s*"){re.escape(old_pep440)}(")'
     new_content = re.sub(p, rf"\g<1>{new_pep440}\2", new_content)
 
@@ -407,78 +664,8 @@ def bump_test_config(old: str, new: str, new_pep440: str, dry_run: bool) -> list
     return changed
 
 
-def bump_example_requirements(old: str, new_pep440: str, dry_run: bool) -> list[str]:
-    """Category 14: Example agent requirements.txt files."""
-    changed: list[str] = []
-    agents_dir = PROJECT_ROOT / "examples" / "docker-examples" / "agents"
-    if not agents_dir.exists():
-        return changed
-
-    old_pep440 = to_pep440(old)
-    for req_file in agents_dir.glob("*/requirements.txt"):
-        pattern = rf"(mcp-mesh>={re.escape(old_pep440)})"
-        replacement = f"mcp-mesh>={new_pep440}"
-        if replace_in_file(req_file, pattern, replacement, dry_run):
-            changed.append(str(req_file.relative_to(PROJECT_ROOT)))
-    return changed
-
-
-def bump_ts_toolcall_examples(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 16: TypeScript toolcall example package.json files."""
-    changed: list[str] = []
-    toolcalls_dir = PROJECT_ROOT / "examples" / "toolcalls"
-    if not toolcalls_dir.exists():
-        return changed
-
-    for pkg in sorted(toolcalls_dir.glob("*-ts/package.json")):
-        # Match "@mcpmesh/anything": "OLD" or "@mcpmesh/anything": "^OLD"
-        pattern = rf'("@mcpmesh/[^"]+?":\s*")\^?{re.escape(old)}(")'
-        replacement = rf"\g<1>^{new}\2"
-        if replace_in_file(pkg, pattern, replacement, dry_run):
-            changed.append(str(pkg.relative_to(PROJECT_ROOT)))
-    return changed
-
-
-def bump_docker_example_helm(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 17: Docker example Helm values files."""
-    changed: list[str] = []
-    agents_dir = PROJECT_ROOT / "examples" / "docker-examples" / "agents"
-    if not agents_dir.exists():
-        return changed
-
-    for helm_file in sorted(agents_dir.glob("*/helm-values.yaml")):
-        pattern = rf"(--version\s+){re.escape(old)}"
-        replacement = rf"\g<1>{new}"
-        if replace_in_file(helm_file, pattern, replacement, dry_run):
-            changed.append(str(helm_file.relative_to(PROJECT_ROOT)))
-    return changed
-
-
-def bump_integration_test_artifacts(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 18: Integration test artifact package.json and pom.xml files."""
-    changed: list[str] = []
-    suites_dir = PROJECT_ROOT / "tests" / "integration" / "suites"
-    if not suites_dir.exists():
-        return changed
-
-    for pkg in sorted(suites_dir.rglob("*/package.json")):
-        # Match "@mcpmesh/sdk": "OLD" or "@mcpmesh/sdk": "^OLD"
-        pattern = rf'("@mcpmesh/[^"]+?":\s*")(\^?){re.escape(old)}(")'
-        replacement = rf"\g<1>\g<2>{new}\3"
-        if replace_in_file(pkg, pattern, replacement, dry_run):
-            changed.append(str(pkg.relative_to(PROJECT_ROOT)))
-
-    # Java pom.xml: <mcp-mesh.version>OLD</mcp-mesh.version>
-    for pom in sorted(suites_dir.rglob("*/pom.xml")):
-        pattern = rf"(<mcp-mesh\.version>){re.escape(old)}(</mcp-mesh\.version>)"
-        replacement = rf"\g<1>{new}\2"
-        if replace_in_file(pom, pattern, replacement, dry_run):
-            changed.append(str(pom.relative_to(PROJECT_ROOT)))
-    return changed
-
-
 def bump_test_documentation(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 19: Test documentation README files."""
+    """Test documentation README files use a plain string replace."""
     changed: list[str] = []
     files = [
         PROJECT_ROOT / "tests" / "integration" / "README.md",
@@ -497,62 +684,22 @@ def bump_test_documentation(old: str, new: str, dry_run: bool) -> list[str]:
     return changed
 
 
-def bump_scaffold_docker_tags(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 20: Docker image tags in scaffold Dockerfiles and compose.go."""
-    changed: list[str] = []
-
-    # compose.go uses minor version tags (e.g., mcpmesh/python-runtime:0.9)
-    old_parts = old.split(".")
-    new_parts = new.split(".")
-    old_minor = f"{old_parts[0]}.{old_parts[1]}"
-    new_minor = f"{new_parts[0]}.{new_parts[1]}"
-
-    if old_minor != new_minor:
-        f = PROJECT_ROOT / "src" / "core" / "cli" / "scaffold" / "compose.go"
-        pattern = rf"(mcpmesh/(?:python-runtime|typescript-runtime|java-runtime|registry):){re.escape(old_minor)}"
-        replacement = rf"\g<1>{new_minor}"
-        if replace_in_file(f, pattern, replacement, dry_run):
-            changed.append(str(f.relative_to(PROJECT_ROOT)))
-
-    # Dockerfile templates use full version tags (e.g., mcpmesh/python-runtime:1.0.0-beta.1)
-    templates_dir = PROJECT_ROOT / "cmd" / "meshctl" / "templates"
-    if templates_dir.exists():
-        for dockerfile in sorted(templates_dir.glob("*/*/Dockerfile.tmpl")):
-            pattern = (
-                r"(mcpmesh/(?:python-runtime|typescript-runtime|java-runtime):)[^\s]+"
-            )
-            replacement = rf"\g<1>{new}"
-            if replace_in_file(dockerfile, pattern, replacement, dry_run):
-                changed.append(str(dockerfile.relative_to(PROJECT_ROOT)))
-
-    return changed
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 
-def bump_ci_workflows(old: str, new: str, dry_run: bool) -> list[str]:
-    """Category 15: CI/CD workflow files."""
-    changed: list[str] = []
-    workflows = [
-        PROJECT_ROOT / ".github" / "workflows" / "release.yml",
-        PROJECT_ROOT / ".github" / "workflows" / "helm-release.yml",
-    ]
-    for f in workflows:
-        if not f.exists():
-            continue
-        file_changed = False
-
-        # default: "vOLD" -> default: "vNEW"
-        p1 = rf'(default:\s*"v){re.escape(old)}(")'
-        if replace_in_file(f, p1, rf"\g<1>{new}\2", dry_run):
-            file_changed = True
-
-        # e.g., vOLD -> e.g., vNEW
-        p2 = rf"(e\.g\.,\s*v){re.escape(old)}"
-        if replace_in_file(f, p2, rf"\g<1>{new}", dry_run):
-            file_changed = True
-
-        if file_changed:
-            changed.append(str(f.relative_to(PROJECT_ROOT)))
-    return changed
+def _merge_changes(
+    accumulator: dict[str, list[str]], name: str, files: list[str]
+) -> None:
+    """Append a category's changes preserving insertion order."""
+    if name in accumulator:
+        existing = accumulator[name]
+        for f in files:
+            if f not in existing:
+                existing.append(f)
+    else:
+        accumulator[name] = list(files)
 
 
 def main() -> int:
@@ -582,92 +729,25 @@ def main() -> int:
         print(f"PEP 440 format: {new_pep440}")
     print()
 
-    categories: list[tuple[str, list[str]]] = []
+    # Run handlers, grouping per handler name. Some handlers share categories
+    # at the report level (e.g., several "Documentation" sub-handlers).
+    categories: dict[str, list[str]] = {}
 
-    # Category 1: Python Packages
-    changed = bump_python_packages(old, new_pep440, dry_run)
-    categories.append(("Python Packages", changed))
+    for handler in HANDLERS:
+        files = run_handler(handler, old, new, dry_run)
+        _merge_changes(categories, handler.name, files)
 
-    # Category 2: Python Dependencies
-    changed = bump_python_dependencies(old, new_pep440, dry_run)
-    categories.append(("Python Dependencies", changed))
+    # Bespoke handlers that don't fit the declarative shape.
+    _merge_changes(categories, "Helm Charts", bump_helm_charts(old, new, dry_run))
+    _merge_changes(categories, "Test Config", bump_test_config(old, new, dry_run))
+    _merge_changes(
+        categories, "Test Documentation", bump_test_documentation(old, new, dry_run)
+    )
 
-    # Category 3: TypeScript/Node.js Packages
-    changed = bump_typescript_packages(old, new, dry_run)
-    categories.append(("TypeScript/Node.js Packages", changed))
-
-    # Category 4: TypeScript Dependencies
-    changed = bump_typescript_dependencies(old, new, dry_run)
-    categories.append(("TypeScript Dependencies", changed))
-
-    # Category 5: Java Parent/Module POMs
-    changed = bump_java_parent_poms(old, new, dry_run)
-    categories.append(("Java Parent/Module POMs", changed))
-
-    # Category 6: Java Example POMs
-    changed = bump_java_example_poms(old, new, dry_run)
-    categories.append(("Java Example POMs", changed))
-
-    # Category 7: Rust Cargo.toml
-    changed = bump_rust_cargo(old, new, dry_run)
-    categories.append(("Rust Cargo.toml", changed))
-
-    # Category 8: Helm Charts
-    changed = bump_helm_charts(old, new, dry_run)
-    categories.append(("Helm Charts", changed))
-
-    # Category 9: Package Managers
-    changed = bump_package_managers(old, new, dry_run)
-    categories.append(("Package Managers", changed))
-
-    # Category 10: Go Handler Templates
-    changed = bump_go_handler_templates(old, new, new_pep440, dry_run)
-    categories.append(("Go Handler Templates", changed))
-
-    # Category 11: Scaffold Templates
-    changed = bump_scaffold_templates(old, new, dry_run)
-    categories.append(("Scaffold Templates", changed))
-
-    # Category 12: Documentation
-    changed = bump_documentation(old, new, dry_run)
-    categories.append(("Documentation", changed))
-
-    # Category 13: Test Config
-    changed = bump_test_config(old, new, new_pep440, dry_run)
-    categories.append(("Test Config", changed))
-
-    # Category 14: Example Requirements
-    changed = bump_example_requirements(old, new_pep440, dry_run)
-    categories.append(("Example Requirements", changed))
-
-    # Category 15: CI/CD Workflows
-    changed = bump_ci_workflows(old, new, dry_run)
-    categories.append(("CI/CD Workflows", changed))
-
-    # Category 16: TypeScript Toolcall Examples
-    changed = bump_ts_toolcall_examples(old, new, dry_run)
-    categories.append(("TypeScript Toolcall Examples", changed))
-
-    # Category 17: Docker Example Helm Values
-    changed = bump_docker_example_helm(old, new, dry_run)
-    categories.append(("Docker Example Helm Values", changed))
-
-    # Category 18: Integration Test Artifacts
-    changed = bump_integration_test_artifacts(old, new, dry_run)
-    categories.append(("Integration Test Artifacts", changed))
-
-    # Category 19: Test Documentation
-    changed = bump_test_documentation(old, new, dry_run)
-    categories.append(("Test Documentation", changed))
-
-    # Category 20: Docker Image Tags (Scaffold)
-    changed = bump_scaffold_docker_tags(old, new, dry_run)
-    categories.append(("Docker Image Tags (Scaffold)", changed))
-
-    # Print results
+    # Print results.
     total_files = 0
     total_categories = 0
-    for name, files in categories:
+    for name, files in categories.items():
         print(f"Category: {name}")
         if files:
             total_categories += 1
@@ -679,7 +759,6 @@ def main() -> int:
             print("  (no changes)")
         print()
 
-    # Summary
     if dry_run:
         print(
             f"[DRY RUN] Would update {total_files} files across "
@@ -690,7 +769,6 @@ def main() -> int:
             f"Summary: {total_files} files updated across {total_categories} categories"
         )
 
-    # Reminder for Helm Chart.lock
     chart_lock = PROJECT_ROOT / "helm" / "mcp-mesh-core" / "Chart.lock"
     if chart_lock.exists():
         print()
