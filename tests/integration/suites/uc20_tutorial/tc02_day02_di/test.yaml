@@ -27,11 +27,11 @@ test:
   - name: "Copy agents to workspace"
     handler: shell
     command: |
-      cp -r /artifacts/flight-agent /workspace/
-      cp -r /artifacts/hotel-agent /workspace/
-      cp -r /artifacts/weather-agent /workspace/
-      cp -r /artifacts/poi-agent /workspace/
-      cp -r /artifacts/user-prefs-agent /workspace/
+      cp -rL /artifacts/flight-agent /workspace/
+      cp -rL /artifacts/hotel-agent /workspace/
+      cp -rL /artifacts/weather-agent /workspace/
+      cp -rL /artifacts/poi-agent /workspace/
+      cp -rL /artifacts/user-prefs-agent /workspace/
     capture: copy_output
 
   # Start all 5 agents in detached mode

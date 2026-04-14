@@ -35,16 +35,16 @@ test:
   - name: "Copy agents to workspace"
     handler: shell
     command: |
-      cp -r /artifacts/flight-agent /workspace/
-      cp -r /artifacts/hotel-agent /workspace/
-      cp -r /artifacts/weather-agent /workspace/
-      cp -r /artifacts/poi-agent /workspace/
-      cp -r /artifacts/user-prefs-agent /workspace/
-      cp -r /artifacts/claude-provider /workspace/
-      cp -r /artifacts/openai-provider /workspace/
-      cp -r /artifacts/planner-agent /workspace/
-      cp -r /artifacts/chat-history-agent /workspace/
-      cp -r /artifacts/gateway /workspace/
+      cp -rL /artifacts/flight-agent /workspace/
+      cp -rL /artifacts/hotel-agent /workspace/
+      cp -rL /artifacts/weather-agent /workspace/
+      cp -rL /artifacts/poi-agent /workspace/
+      cp -rL /artifacts/user-prefs-agent /workspace/
+      cp -rL /artifacts/claude-provider /workspace/
+      cp -rL /artifacts/openai-provider /workspace/
+      cp -rL /artifacts/planner-agent /workspace/
+      cp -rL /artifacts/chat-history-agent /workspace/
+      cp -rL /artifacts/gateway /workspace/
     capture: copy_output
 
   # Create env file with secrets (tsuite injects API keys automatically)

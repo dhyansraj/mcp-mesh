@@ -24,7 +24,7 @@ test:
   # Copy artifact to workspace
   - name: "Copy flight-agent to workspace"
     handler: shell
-    command: "cp -r /artifacts/flight-agent /workspace/"
+    command: "cp -rL /artifacts/flight-agent /workspace/"
     capture: copy_output
 
   # Start agent in detached mode
