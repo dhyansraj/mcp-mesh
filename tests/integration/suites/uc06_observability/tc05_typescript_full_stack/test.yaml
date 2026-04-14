@@ -84,39 +84,31 @@ test:
     workdir: /workspace
     capture: start_api
 
-  # Wait for initial agents to register and resolve dependencies via polling
-  - name: "Wait for ts-math-agent, ts-llm-provider, and API to register and resolve dependencies"
+  # Wait for initial agents to register. Don't wait for full dep resolution
+  # because the API agent has deps that need ts-llm-consumer (started later).
+  - name: "Wait for ts-math-agent, ts-llm-provider, and API to register"
     handler: shell
     workdir: /workspace
     command: |
       EXPECTED="ts-math-agent ts-llm-provider API"
       EXPECTED_COUNT=3
-      echo "Waiting for $EXPECTED_COUNT agents to register with resolved deps..."
+      echo "Waiting for $EXPECTED_COUNT agents to register..."
       for i in $(seq 1 30); do
-        # Strip ANSI escape codes for reliable parsing
         AGENTS=$(meshctl list 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' || true)
-        READY_COUNT=0
+        COUNT=0
         for agent in $EXPECTED; do
-          # Match any row containing the token (agent name in NAME col or "API" in TYPE col)
-          LINE=$(echo "$AGENTS" | grep -m 1 "${agent}" || true)
-          if [ -n "$LINE" ]; then
-            # DEPS column format: "X/Y" (e.g., "0/0", "4/4", "3/4")
-            DEPS=$(echo "$LINE" | awk '{print $5}')
-            RESOLVED=$(echo "$DEPS" | cut -d/ -f1)
-            TOTAL=$(echo "$DEPS" | cut -d/ -f2)
-            if [ "$RESOLVED" = "$TOTAL" ]; then
-              READY_COUNT=$((READY_COUNT + 1))
-            fi
+          if echo "$AGENTS" | grep -q "${agent}"; then
+            COUNT=$((COUNT + 1))
           fi
         done
-        if [ "$READY_COUNT" -ge "$EXPECTED_COUNT" ]; then
-          echo "All $EXPECTED_COUNT agents ready (registered + deps resolved) after $((i * 2))s"
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "All $EXPECTED_COUNT agents registered after $((i * 2))s"
           meshctl list
           exit 0
         fi
         sleep 2
       done
-      echo "ERROR: Only $READY_COUNT/$EXPECTED_COUNT agents ready within 60s"
+      echo "ERROR: Only $COUNT/$EXPECTED_COUNT agents registered within 60s"
       meshctl list 2>/dev/null || true
       exit 1
     capture: wait_tools
