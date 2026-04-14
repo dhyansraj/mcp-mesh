@@ -35,19 +35,19 @@ test:
   - name: "Copy agents to workspace"
     handler: shell
     command: |
-      cp -r /artifacts/flight-agent /workspace/
-      cp -r /artifacts/hotel-agent /workspace/
-      cp -r /artifacts/weather-agent /workspace/
-      cp -r /artifacts/poi-agent /workspace/
-      cp -r /artifacts/user-prefs-agent /workspace/
-      cp -r /artifacts/claude-provider /workspace/
-      cp -r /artifacts/openai-provider /workspace/
-      cp -r /artifacts/planner-agent /workspace/
-      cp -r /artifacts/chat-history-agent /workspace/
-      cp -r /artifacts/gateway /workspace/
-      cp -r /artifacts/budget-analyst /workspace/
-      cp -r /artifacts/adventure-advisor /workspace/
-      cp -r /artifacts/logistics-planner /workspace/
+      cp -rL /artifacts/flight-agent /workspace/
+      cp -rL /artifacts/hotel-agent /workspace/
+      cp -rL /artifacts/weather-agent /workspace/
+      cp -rL /artifacts/poi-agent /workspace/
+      cp -rL /artifacts/user-prefs-agent /workspace/
+      cp -rL /artifacts/claude-provider /workspace/
+      cp -rL /artifacts/openai-provider /workspace/
+      cp -rL /artifacts/planner-agent /workspace/
+      cp -rL /artifacts/chat-history-agent /workspace/
+      cp -rL /artifacts/gateway /workspace/
+      cp -rL /artifacts/budget-analyst /workspace/
+      cp -rL /artifacts/adventure-advisor /workspace/
+      cp -rL /artifacts/logistics-planner /workspace/
     capture: copy_output
 
   # Create env file with secrets (tsuite injects API keys automatically)
@@ -149,18 +149,38 @@ test:
     workdir: /workspace
     capture: health_check
 
-  # Call planner via meshctl (bypasses gateway's 60s proxy timeout — the
-  # committee fan-out with 4 LLM calls needs more time than the default)
+  # Call planner via HTTP gateway — X-Mesh-Timeout propagates automatically
   - name: "Call planner with specialist committee"
     handler: shell
     command: |
       echo "=== Calling planner with committee of specialists ==="
-      RESPONSE=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000","session_id":"test-session-day7"}' --timeout 300 2>&1)
+      RESPONSE=$(curl -s --max-time 300 -X POST http://localhost:8080/plan \
+        -H "Content-Type: application/json" \
+        -H "X-Session-Id: test-session-day7" \
+        -d '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' 2>&1)
       echo "$RESPONSE"
       if echo "$RESPONSE" | grep -qi 'specialist\|budget.*analysis\|adventure\|logistics\|savings_tips\|unique_experiences\|daily_schedule'; then
         echo "PASS: Response includes specialist insights"
       else
         echo "FAIL: Response missing specialist insights"
+        echo ""
+        echo "=== Gateway logs ==="
+        meshctl logs gateway 2>/dev/null | tail -60 || echo "no gateway logs"
+        echo ""
+        echo "=== Planner logs ==="
+        meshctl logs planner-agent 2>/dev/null | tail -60 || echo "no planner logs"
+        echo ""
+        echo "=== Budget-analyst logs ==="
+        meshctl logs budget-analyst 2>/dev/null | tail -40 || echo "no budget-analyst logs"
+        echo ""
+        echo "=== Adventure-advisor logs ==="
+        meshctl logs adventure-advisor 2>/dev/null | tail -40 || echo "no adventure-advisor logs"
+        echo ""
+        echo "=== Logistics-planner logs ==="
+        meshctl logs logistics-planner 2>/dev/null | tail -40 || echo "no logistics-planner logs"
+        echo ""
+        echo "=== Claude-provider logs ==="
+        meshctl logs claude-provider 2>/dev/null | tail -40 || echo "no claude-provider logs"
         exit 1
       fi
     workdir: /workspace

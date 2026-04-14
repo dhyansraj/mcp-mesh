@@ -22,10 +22,15 @@ import {
  */
 function parsePropagateHeaders(): string[] {
   const raw = process.env.MCP_MESH_PROPAGATE_HEADERS ?? "";
-  return raw
+  const headers = raw
     .split(",")
     .map((h) => h.trim().toLowerCase())
     .filter((h) => h.length > 0);
+  // Always propagate mesh infrastructure headers
+  if (!headers.includes("x-mesh-timeout")) {
+    headers.push("x-mesh-timeout");
+  }
+  return headers;
 }
 
 export const PROPAGATE_HEADERS: string[] = parsePropagateHeaders();

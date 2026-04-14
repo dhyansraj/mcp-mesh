@@ -37,10 +37,43 @@ test:
     command: "meshctl start claude-provider/main.py --env-file .env --env MCP_MESH_HTTP_PORT=3020 -d"
     workdir: /workspace
     capture: start_output
-  # Wait for provider to register
-  - name: "Wait for provider to register"
-    handler: wait
-    seconds: 10
+  # Wait for provider to register and resolve dependencies via polling
+  - name: "Wait for claude-provider to register and resolve dependencies"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="claude-provider"
+      EXPECTED_COUNT=1
+      echo "Waiting for $EXPECTED_COUNT agents to register with resolved deps..."
+      for i in $(seq 1 30); do
+        # Strip ANSI escape codes for reliable parsing
+        AGENTS=$(meshctl list 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' || true)
+        READY_COUNT=0
+        for agent in $EXPECTED; do
+          # Match line starting with agent name, extract DEPS column (5th field)
+          LINE=$(echo "$AGENTS" | grep -E "^${agent}" || true)
+          if [ -n "$LINE" ]; then
+            # DEPS column format: "X/Y" (e.g., "0/0", "4/4", "3/4")
+            DEPS=$(echo "$LINE" | awk '{print $5}')
+            RESOLVED=$(echo "$DEPS" | cut -d/ -f1)
+            TOTAL=$(echo "$DEPS" | cut -d/ -f2)
+            if [ "$RESOLVED" = "$TOTAL" ]; then
+              READY_COUNT=$((READY_COUNT + 1))
+            fi
+          fi
+        done
+        if [ "$READY_COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "All $EXPECTED_COUNT agents ready (registered + deps resolved) after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Only $READY_COUNT/$EXPECTED_COUNT agents ready within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_output
+    timeout: 90
   # Verify provider is running
   - name: "Verify provider is running"
     handler: shell

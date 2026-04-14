@@ -149,28 +149,28 @@ public class LlmProviderToolWrapper implements McpToolHandler {
         if (meshHeadersObj instanceof Map) {
             @SuppressWarnings("unchecked")
             Map<String, Object> meshHeaders = (Map<String, Object>) meshHeadersObj;
+            Map<String, String> filtered = new HashMap<>();
             if (!TraceContext.getPropagateHeaderNames().isEmpty()) {
-                Map<String, String> filtered = new HashMap<>();
                 for (Map.Entry<String, Object> entry : meshHeaders.entrySet()) {
                     if (entry.getValue() instanceof String
                         && TraceContext.matchesPropagateHeader(entry.getKey())) {
                         filtered.put(entry.getKey().toLowerCase(), (String) entry.getValue());
                     }
                 }
-                if (!filtered.isEmpty()) {
-                    // Merge with any headers already captured by TracingFilter
-                    Map<String, String> existing = TraceContext.getPropagatedHeaders();
-                    if (!existing.isEmpty()) {
-                        Map<String, String> merged = new HashMap<>(existing);
-                        // Args headers fill in gaps but don't override HTTP headers
-                        for (Map.Entry<String, String> e : filtered.entrySet()) {
-                            merged.putIfAbsent(e.getKey(), e.getValue());
-                        }
-                        filtered = merged;
+            }
+            if (!filtered.isEmpty()) {
+                // Merge with any headers already captured by TracingFilter
+                Map<String, String> existing = TraceContext.getPropagatedHeaders();
+                if (!existing.isEmpty()) {
+                    Map<String, String> merged = new HashMap<>(existing);
+                    // Args headers fill in gaps but don't override HTTP headers
+                    for (Map.Entry<String, String> e : filtered.entrySet()) {
+                        merged.putIfAbsent(e.getKey(), e.getValue());
                     }
-                    TraceContext.setPropagatedHeaders(filtered);
-                    log.trace("Set {} propagated headers from _mesh_headers args", filtered.size());
+                    filtered = merged;
                 }
+                TraceContext.setPropagatedHeaders(filtered);
+                log.trace("Set {} propagated headers from _mesh_headers args", filtered.size());
             }
         }
 

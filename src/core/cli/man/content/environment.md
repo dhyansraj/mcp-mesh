@@ -261,6 +261,17 @@ export MCP_MESH_SPIRE_SOCKET=/run/spire/agent/sockets/agent.sock
 export MCP_MESH_ADMIN_PORT=9443
 ```
 
+## Proxy & Timeout
+
+```bash
+# Default proxy timeout in seconds when no X-Mesh-Timeout header is sent (default: 60)
+export MCP_MESH_PROXY_TIMEOUT=60
+
+# Default timeout for outgoing mesh tool calls in seconds (default: 300)
+# SDKs send this as X-Mesh-Timeout header on outgoing calls
+export MCP_MESH_CALL_TIMEOUT=300
+```
+
 ## Registry Configuration
 
 ```bash

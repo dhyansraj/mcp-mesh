@@ -83,6 +83,25 @@ test:
     capture: wait_reload
     timeout: 120
 
+  - name: "Wait for Java agent to be reachable after reload"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Verifying Java agent accepts calls after reload..."
+      for i in $(seq 1 20); do
+        RESULT=$(meshctl call getInfo '{}' 2>&1 || true)
+        if echo "$RESULT" | grep -q '2.0.0-watch'; then
+          echo "Java agent reachable with reloaded code after $((i * 2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Java agent not reachable with reloaded code within 40s"
+      echo "Last response: $RESULT"
+      exit 1
+    capture: reachability_check
+    timeout: 60
+
   - name: "Call getInfo after modification"
     handler: shell
     workdir: /workspace

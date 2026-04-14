@@ -28,6 +28,32 @@ type resolvedDependency = struct {
 	Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
 }
 
+// Package-level proxy configuration parsed once at init (#769)
+var (
+	proxyPropagateHeaderPrefixes []string
+	proxyDefaultTimeout          = 60 * time.Second
+)
+
+func init() {
+	if raw := os.Getenv("MCP_MESH_PROPAGATE_HEADERS"); raw != "" {
+		prefixes := strings.Split(raw, ",")
+		for _, p := range prefixes {
+			p = strings.TrimSpace(strings.ToLower(p))
+			if p != "" {
+				proxyPropagateHeaderPrefixes = append(proxyPropagateHeaderPrefixes, p)
+			}
+		}
+	}
+	if envTimeout := os.Getenv("MCP_MESH_PROXY_TIMEOUT"); envTimeout != "" {
+		if secs, err := strconv.Atoi(envTimeout); err == nil && secs > 0 {
+			if secs > 600 {
+				secs = 600 // Cap at 10 minutes
+			}
+			proxyDefaultTimeout = time.Duration(secs) * time.Second
+		}
+	}
+}
+
 // EntBusinessLogicHandlers implements the generated server interface using EntService
 type EntBusinessLogicHandlers struct {
 	entService *EntService
@@ -483,8 +509,28 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		proxyReq.Header.Set("X-Parent-Span", parentSpan)
 	}
 
+	// Forward X-Mesh-Timeout so downstream agents can propagate it further (#769)
+	if meshTimeout := c.Request.Header.Get("X-Mesh-Timeout"); meshTimeout != "" {
+		proxyReq.Header.Set("X-Mesh-Timeout", meshTimeout)
+	}
+
+	// Forward headers matching MCP_MESH_PROPAGATE_HEADERS prefixes (#769)
+	if len(proxyPropagateHeaderPrefixes) > 0 {
+		for headerName, values := range c.Request.Header {
+			lowerName := strings.ToLower(headerName)
+			for _, prefix := range proxyPropagateHeaderPrefixes {
+				if strings.HasPrefix(lowerName, prefix) {
+					for _, v := range values {
+						proxyReq.Header.Add(headerName, v)
+					}
+					break
+				}
+			}
+		}
+	}
+
 	// Respect client timeout if provided via X-Mesh-Timeout header (#656)
-	proxyTimeout := 60 * time.Second
+	proxyTimeout := proxyDefaultTimeout
 	if timeoutHeader := c.Request.Header.Get("X-Mesh-Timeout"); timeoutHeader != "" {
 		if secs, err := strconv.Atoi(timeoutHeader); err == nil && secs > 0 {
 			if secs > 600 {

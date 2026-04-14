@@ -8,6 +8,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import os
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any, Optional
@@ -956,6 +957,25 @@ class UnifiedMCPProxy:
             enhanced_timeout = max(
                 self.timeout, 300
             )  # At least 5 minutes for large files
+
+            # Set X-Mesh-Timeout for registry proxy (#769). If already
+            # propagated from an incoming request, keep that value;
+            # otherwise use env/default. Also use it for client timeout.
+            if "X-Mesh-Timeout" not in headers and "x-mesh-timeout" not in headers:
+                call_timeout = os.environ.get(
+                    "MCP_MESH_CALL_TIMEOUT", str(int(enhanced_timeout))
+                )
+                headers["X-Mesh-Timeout"] = call_timeout
+
+            # Use X-Mesh-Timeout to set client-side timeout (authoritative override)
+            mesh_timeout_val = headers.get("X-Mesh-Timeout") or headers.get("x-mesh-timeout")
+            if mesh_timeout_val:
+                try:
+                    mesh_timeout_secs = int(mesh_timeout_val)
+                    if mesh_timeout_secs > 0:
+                        enhanced_timeout = mesh_timeout_secs  # override, not max
+                except (ValueError, TypeError):
+                    pass
 
             self.logger.debug(
                 f"🔄 HTTP call to {url} with {request_bytes} byte payload, timeout: {enhanced_timeout}s"

@@ -42,18 +42,20 @@ public class TraceContext {
 
     static {
         String envVal = System.getenv("MCP_MESH_PROPAGATE_HEADERS");
+        List<String> names = new ArrayList<>();
         if (envVal != null && !envVal.trim().isEmpty()) {
-            List<String> names = new ArrayList<>();
             for (String name : envVal.split(",")) {
                 String trimmed = name.trim();
                 if (!trimmed.isEmpty()) {
                     names.add(trimmed.toLowerCase());
                 }
             }
-            PROPAGATE_HEADERS = Collections.unmodifiableList(names);
-        } else {
-            PROPAGATE_HEADERS = Collections.emptyList();
         }
+        // Always propagate mesh infrastructure headers
+        if (!names.contains("x-mesh-timeout")) {
+            names.add("x-mesh-timeout");
+        }
+        PROPAGATE_HEADERS = Collections.unmodifiableList(names);
         PROPAGATE_HEADERS_CSV = String.join(",", PROPAGATE_HEADERS);
     }
 
