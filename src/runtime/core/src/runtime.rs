@@ -119,10 +119,12 @@ impl AgentRuntime {
         shutdown_rx: mpsc::Receiver<()>,
         command_rx: mpsc::Receiver<RuntimeCommand>,
     ) -> Result<Self, crate::registry::RegistryError> {
-        // Reuse cached config from prepare_tls() if available, otherwise resolve fresh
+        // Reuse cached config from prepare_tls() if available, otherwise resolve fresh.
+        // Use the unique per-replica agent_id so TLS credential temp dirs don't collide
+        // when multiple replicas of the same base agent run on the same host.
         let tls_config = match TlsConfig::get_resolved_config() {
             Some(config) => config,
-            None => TlsConfig::resolve(&spec.name).await?,
+            None => TlsConfig::resolve(&spec.agent_id()).await?,
         };
         let registry_client = RegistryClient::new(&spec.registry_url, &tls_config)?;
         let heartbeat_config = HeartbeatConfig {

@@ -1,115 +1,230 @@
 import dagre from "dagre";
 import { type Node, type Edge } from "@xyflow/react";
 import { Agent } from "./types";
+import { extractAgentName } from "./api";
 
-// Compute a structural fingerprint: sorted agent IDs + sorted edge pairs.
-// If this hash is the same, the graph structure hasn't changed — only node data has.
+// Returns the base name for an agent by stripping the registry-assigned
+// "-{8hex}" suffix from the full agent ID.
+//
+// NOTE on name shape: As of this writing the Python/TS SDKs send
+// `name = agent_id = "{base}-{uuid8}"` in the registration payload
+// (see src/runtime/python/.../heartbeat_preparation.py:_build_registration_payload
+// and src/runtime/typescript/src/agent.ts). So `agent.name` is not a reliable
+// base name. We normalize via `extractAgentName(agent.id)` which strips the
+// trailing 8-hex suffix.
+export function getAgentBaseName(agent: Agent): string {
+  return extractAgentName(agent.id);
+}
+
+// Group key used for collapsed (multi-replica) nodes.
+function groupKey(base: string): string {
+  return `group:${base}`;
+}
+
+interface GroupInfo {
+  base: string;
+  instances: Agent[];
+}
+
+// Bucket agents by base name and return base -> group info map.
+function bucketAgents(agents: Agent[]): Map<string, GroupInfo> {
+  const buckets = new Map<string, GroupInfo>();
+  for (const a of agents) {
+    const base = getAgentBaseName(a);
+    const existing = buckets.get(base);
+    if (existing) {
+      existing.instances.push(a);
+    } else {
+      buckets.set(base, { base, instances: [a] });
+    }
+  }
+  return buckets;
+}
+
+// Worst-of aggregation for group status.
+// Any unhealthy -> unhealthy; any unknown -> unknown; else healthy.
+function aggregateStatus(instances: Agent[]): "healthy" | "unhealthy" | "unknown" {
+  let hasUnknown = false;
+  for (const a of instances) {
+    if (a.status === "unhealthy") return "unhealthy";
+    if (a.status === "unknown") hasUnknown = true;
+  }
+  return hasUnknown ? "unknown" : "healthy";
+}
+
+// Given a set of agents, compute mapping from agent ID to either a group key
+// (when the agent belongs to a group of >=2 replicas) or its own ID (single).
+function buildIdToNodeKey(buckets: Map<string, GroupInfo>): Map<string, string> {
+  const idMap = new Map<string, string>();
+  for (const { base, instances } of buckets.values()) {
+    if (instances.length >= 2) {
+      const key = groupKey(base);
+      for (const inst of instances) {
+        idMap.set(inst.id, key);
+      }
+    } else {
+      idMap.set(instances[0].id, instances[0].id);
+    }
+  }
+  return idMap;
+}
+
+// Compute a structural fingerprint: sorted node keys + sorted edge pairs.
+// Node keys already account for grouping, so the hash is stable as long as
+// the collapsed structure is identical.
 export function computeStructureHash(agents: Agent[]): string {
-  const agentIds = agents.map((a) => a.id).sort();
+  const buckets = bucketAgents(agents);
+  const idMap = buildIdToNodeKey(buckets);
+
+  const nodeKeys = Array.from(new Set(idMap.values())).sort();
 
   const edgePairs: string[] = [];
-  const agentIdSet = new Set(agentIds);
-
   for (const agent of agents) {
+    const src = idMap.get(agent.id);
+    if (!src) continue;
     for (const dep of agent.dependency_resolutions ?? []) {
-      if (dep.provider_agent_id && agentIdSet.has(dep.provider_agent_id)) {
-        edgePairs.push(`${agent.id}->${dep.provider_agent_id}`);
+      if (dep.provider_agent_id) {
+        const dst = idMap.get(dep.provider_agent_id);
+        if (dst) edgePairs.push(`${src}->${dst}`);
       }
     }
     for (const llm of agent.llm_tool_resolutions ?? []) {
-      if (llm.provider_agent_id && agentIdSet.has(llm.provider_agent_id)) {
-        edgePairs.push(`${agent.id}->llm:${llm.provider_agent_id}`);
+      if (llm.provider_agent_id) {
+        const dst = idMap.get(llm.provider_agent_id);
+        if (dst) edgePairs.push(`${src}->llm:${dst}`);
       }
     }
     for (const prov of agent.llm_provider_resolutions ?? []) {
-      if (prov.provider_agent_id && agentIdSet.has(prov.provider_agent_id)) {
-        edgePairs.push(`${agent.id}->prov:${prov.provider_agent_id}`);
+      if (prov.provider_agent_id) {
+        const dst = idMap.get(prov.provider_agent_id);
+        if (dst) edgePairs.push(`${src}->prov:${dst}`);
       }
     }
   }
 
-  edgePairs.sort();
-  return agentIds.join(",") + "|" + edgePairs.join(",");
+  const uniqueEdgePairs = Array.from(new Set(edgePairs)).sort();
+  return nodeKeys.join(",") + "|" + uniqueEdgePairs.join(",");
 }
 
 export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: Edge[] } {
-  const nodes: Node[] = agents.map((agent) => ({
-    id: agent.id,
-    type: "agentNode",
-    position: { x: 0, y: 0 },
-    data: { agent },
-  }));
+  const buckets = bucketAgents(agents);
+  const idMap = buildIdToNodeKey(buckets);
 
-  const edges: Edge[] = [];
-  const agentIds = new Set(agents.map((a) => a.id));
-  const seenEdgeIds = new Set<string>();
-
-  function uniqueEdgeId(base: string): string {
-    let id = base;
-    let i = 2;
-    while (seenEdgeIds.has(id)) {
-      id = `${base}-${i++}`;
+  // Build nodes: one per group (collapsed) or single agent.
+  const nodes: Node[] = [];
+  for (const { base, instances } of buckets.values()) {
+    if (instances.length >= 2) {
+      const aggDepsTotal = instances.reduce((sum, a) => sum + (a.total_dependencies ?? 0), 0);
+      const aggDepsResolved = instances.reduce((sum, a) => sum + (a.dependencies_resolved ?? 0), 0);
+      nodes.push({
+        id: groupKey(base),
+        type: "agentNode",
+        position: { x: 0, y: 0 },
+        data: {
+          kind: "group",
+          name: base,
+          instances,
+          status: aggregateStatus(instances),
+          total_dependencies: aggDepsTotal,
+          dependencies_resolved: aggDepsResolved,
+        },
+      });
+    } else {
+      nodes.push({
+        id: instances[0].id,
+        type: "agentNode",
+        position: { x: 0, y: 0 },
+        data: { kind: "single", agent: instances[0] },
+      });
     }
-    seenEdgeIds.add(id);
-    return id;
+  }
+
+  const validNodeKeys = new Set(nodes.map((n) => n.id));
+
+  // Build edges then dedupe by (source,target,kind,label) after rewrite.
+  // Edge merging note: when multiple replicas' edges collapse into one, we keep
+  // the first seen edge's base style/label and let downstream edge-stats merge
+  // update the label/stroke. This is a simplification — latency/call stats are
+  // not summed here because edgeStats are keyed by base name (extractAgentName),
+  // which already aligns with the group node ID. See mergeEdgeStatsIntoEdges
+  // in TopologyGraph.tsx.
+  type EdgeKind = "dep" | "llm" | "prov";
+  const edgeMap = new Map<string, Edge>();
+
+  function addEdge(kind: EdgeKind, src: string, dst: string, label: string, base: Edge) {
+    const key = `${kind}|${src}|${dst}|${label}`;
+    if (edgeMap.has(key)) return;
+    edgeMap.set(key, base);
   }
 
   for (const agent of agents) {
+    const src = idMap.get(agent.id);
+    if (!src || !validNodeKeys.has(src)) continue;
     const isApi = agent.agent_type === "api";
 
     for (const dep of agent.dependency_resolutions ?? []) {
-      if (dep.provider_agent_id && agentIds.has(dep.provider_agent_id)) {
-        // Pink (#ec4899) for API agents, green (#22c55e) for regular agents
-        const availableColor = isApi ? "#ec4899" : "#22c55e";
-        edges.push({
-          id: uniqueEdgeId(`${agent.id}-${dep.function_name}-${dep.capability}-${dep.provider_agent_id}`),
-          source: agent.id,
-          target: dep.provider_agent_id,
-          label: dep.capability,
-          animated: dep.status === "available",
-          data: { originalLabel: dep.capability },
-          style: {
-            stroke: dep.status === "available" ? availableColor : dep.status === "unavailable" ? "#ef4444" : "#6b7280",
-            strokeDasharray: dep.status === "unresolved" ? "5 5" : undefined,
-          },
-        });
-      }
+      if (!dep.provider_agent_id) continue;
+      const dst = idMap.get(dep.provider_agent_id);
+      if (!dst || !validNodeKeys.has(dst)) continue;
+
+      const availableColor = isApi ? "#ec4899" : "#22c55e";
+      const label = dep.capability;
+      addEdge("dep", src, dst, label, {
+        id: `dep|${src}|${dst}|${label}`,
+        source: src,
+        target: dst,
+        label,
+        animated: dep.status === "available",
+        data: { originalLabel: label },
+        style: {
+          stroke: dep.status === "available" ? availableColor : dep.status === "unavailable" ? "#ef4444" : "#6b7280",
+          strokeDasharray: dep.status === "unresolved" ? "5 5" : undefined,
+        },
+      });
     }
 
     for (const llm of agent.llm_tool_resolutions ?? []) {
-      if (llm.provider_agent_id && agentIds.has(llm.provider_agent_id)) {
-        edges.push({
-          id: uniqueEdgeId(`${agent.id}-llm-${llm.function_name}-${llm.provider_agent_id}`),
-          source: agent.id,
-          target: llm.provider_agent_id,
-          label: `llm:${llm.filter_capability}`,
-          animated: llm.status === "available",
-          data: { originalLabel: `llm:${llm.filter_capability}` },
-          style: {
-            stroke: llm.status === "available" ? "#22d3ee" : "#ef4444",
-            strokeDasharray: llm.status !== "available" ? "5 5" : undefined,
-          },
-        });
-      }
+      if (!llm.provider_agent_id) continue;
+      const dst = idMap.get(llm.provider_agent_id);
+      if (!dst || !validNodeKeys.has(dst)) continue;
+
+      const label = `llm:${llm.filter_capability}`;
+      addEdge("llm", src, dst, label, {
+        id: `llm|${src}|${dst}|${label}`,
+        source: src,
+        target: dst,
+        label,
+        animated: llm.status === "available",
+        data: { originalLabel: label },
+        style: {
+          stroke: llm.status === "available" ? "#22d3ee" : "#ef4444",
+          strokeDasharray: llm.status !== "available" ? "5 5" : undefined,
+        },
+      });
     }
 
     for (const prov of agent.llm_provider_resolutions ?? []) {
-      if (prov.provider_agent_id && agentIds.has(prov.provider_agent_id)) {
-        edges.push({
-          id: uniqueEdgeId(`${agent.id}-prov-${prov.function_name}-${prov.provider_agent_id}`),
-          source: agent.id,
-          target: prov.provider_agent_id,
-          label: `provider:${prov.required_capability}`,
-          animated: prov.status === "available",
-          data: { originalLabel: `provider:${prov.required_capability}` },
-          style: {
-            stroke: prov.status === "available" ? "#a855f7" : "#ef4444",
-            strokeDasharray: prov.status !== "available" ? "5 5" : undefined,
-          },
-        });
-      }
+      if (!prov.provider_agent_id) continue;
+      const dst = idMap.get(prov.provider_agent_id);
+      if (!dst || !validNodeKeys.has(dst)) continue;
+
+      const label = `provider:${prov.required_capability}`;
+      addEdge("prov", src, dst, label, {
+        id: `prov|${src}|${dst}|${label}`,
+        source: src,
+        target: dst,
+        label,
+        animated: prov.status === "available",
+        data: { originalLabel: label },
+        style: {
+          stroke: prov.status === "available" ? "#a855f7" : "#ef4444",
+          strokeDasharray: prov.status !== "available" ? "5 5" : undefined,
+        },
+      });
     }
   }
+
+  const edges: Edge[] = Array.from(edgeMap.values());
 
   return applyDagreLayout(nodes, edges);
 }

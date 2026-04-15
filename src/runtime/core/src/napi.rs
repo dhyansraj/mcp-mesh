@@ -175,8 +175,11 @@ impl From<JsToolSpec> for RustToolSpec {
 #[napi(object)]
 #[derive(Clone)]
 pub struct JsAgentSpec {
-    /// Unique agent name/identifier
+    /// Base agent name (shared across replicas, e.g., "fortuna")
     pub name: String,
+    /// Unique per-replica agent ID (e.g., "fortuna-abc12345").
+    /// Defaults to `name` when not provided (backward compat).
+    pub agent_id: Option<String>,
     /// Agent version (semver)
     pub version: String,
     /// Human-readable description
@@ -219,6 +222,7 @@ impl From<JsAgentSpec> for RustAgentSpec {
             Some(js.tools.into_iter().map(|t| t.into()).collect()),
             js.llm_agents.map(|agents| agents.into_iter().map(|a| a.into()).collect()),
             js.heartbeat_interval as u64,
+            js.agent_id,
         )
     }
 }
@@ -908,6 +912,8 @@ mod tests {
     fn test_js_spec_conversion() {
         let js_spec = JsAgentSpec {
             name: "test-agent".to_string(),
+            agent_id: None,
+            runtime: None,
             version: "1.0.0".to_string(),
             description: "Test agent".to_string(),
             registry_url: "http://localhost:8100".to_string(),
@@ -922,14 +928,41 @@ mod tests {
 
         let rust_spec: RustAgentSpec = js_spec.into();
         assert_eq!(rust_spec.name, "test-agent");
+        // When agent_id is not provided, it defaults to name for backward compat.
+        assert_eq!(rust_spec.agent_id(), "test-agent");
         assert_eq!(rust_spec.http_port, 9000);
         assert_eq!(rust_spec.agent_type, AgentType::McpAgent);
+    }
+
+    #[test]
+    fn test_js_spec_with_agent_id() {
+        let js_spec = JsAgentSpec {
+            name: "fortuna".to_string(),
+            agent_id: Some("fortuna-abc12345".to_string()),
+            runtime: None,
+            version: "1.0.0".to_string(),
+            description: "".to_string(),
+            registry_url: "http://localhost:8100".to_string(),
+            http_port: 9000,
+            http_host: "localhost".to_string(),
+            namespace: "default".to_string(),
+            agent_type: None,
+            tools: vec![],
+            llm_agents: None,
+            heartbeat_interval: 5,
+        };
+
+        let rust_spec: RustAgentSpec = js_spec.into();
+        assert_eq!(rust_spec.name, "fortuna");
+        assert_eq!(rust_spec.agent_id(), "fortuna-abc12345");
     }
 
     #[test]
     fn test_js_spec_api_type() {
         let js_spec = JsAgentSpec {
             name: "api-service".to_string(),
+            agent_id: None,
+            runtime: None,
             version: "1.0.0".to_string(),
             description: "API service".to_string(),
             registry_url: "http://localhost:8100".to_string(),
@@ -967,6 +1000,8 @@ mod tests {
     fn test_js_spec_with_llm_agents() {
         let js_spec = JsAgentSpec {
             name: "llm-agent".to_string(),
+            agent_id: None,
+            runtime: None,
             version: "1.0.0".to_string(),
             description: "LLM agent".to_string(),
             registry_url: "http://localhost:8100".to_string(),

@@ -45,10 +45,13 @@ public class MeshRuntime implements SmartLifecycle {
     @Override
     public void start() {
         if (running.compareAndSet(false, true)) {
-            log.info("Starting MCP Mesh runtime for agent '{}'", agentSpec.getName());
+            log.info("Starting MCP Mesh runtime for agent '{}' (id={})",
+                agentSpec.getName(), agentSpec.getAgentId());
             try {
-                // Prepare TLS credentials before starting (fetches from Vault if configured)
-                MeshTlsConfig.prepareTls(agentSpec.getName());
+                // Prepare TLS credentials before starting (fetches from Vault if configured).
+                // Pass the full per-replica agent ID so credential temp dirs are unique
+                // across replicas on the same host (matches Python/TypeScript SDKs).
+                MeshTlsConfig.prepareTls(agentSpec.getAgentId());
 
                 handle = MeshHandle.start(agentSpec);
                 log.info("MCP Mesh runtime started successfully");

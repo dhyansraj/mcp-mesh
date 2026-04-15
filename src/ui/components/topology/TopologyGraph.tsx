@@ -12,11 +12,11 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Agent, EdgeStat } from "@/lib/types";
-import { buildGraphFromAgents, computeStructureHash } from "@/lib/topology";
+import { buildGraphFromAgents, computeStructureHash, getAgentBaseName } from "@/lib/topology";
 import { extractAgentName, formatDuration } from "@/lib/api";
 import { useMesh } from "@/lib/mesh-context";
 import { AgentNode } from "./AgentNode";
-import { TopologySidebar } from "./TopologySidebar";
+import { TopologySidebar, type SidebarSelection } from "./TopologySidebar";
 
 const nodeTypes = { agentNode: AgentNode };
 
@@ -24,20 +24,43 @@ interface TopologyGraphProps {
   agents: Agent[];
 }
 
-// Forward-only: selected agent + the providers it depends on (downstream)
-function getForwardNeighborIds(selectedId: string, agents: Agent[]): Set<string> {
-  const ids = new Set<string>([selectedId]);
+// Given a node ID ("group:<base>" or raw agent ID), return its base agent name
+// for cross-referencing with edgeStats / traceActivity which are keyed by base.
+function nodeKeyToBaseName(nodeKey: string): string {
+  if (nodeKey.startsWith("group:")) return nodeKey.slice("group:".length);
+  return extractAgentName(nodeKey);
+}
 
-  const selected = agents.find((a) => a.id === selectedId);
-  if (selected) {
-    for (const dep of selected.dependency_resolutions ?? []) {
-      if (dep.provider_agent_id) ids.add(dep.provider_agent_id);
+// Forward-only: selected node + its downstream node keys. Works whether the
+// selection is a group or a single agent. Replicas of the same selected group
+// share dependencies, so we union across all instances.
+function getForwardNeighborIds(
+  selectedNodeId: string,
+  agents: Agent[],
+  idToNodeKey: Map<string, string>
+): Set<string> {
+  const ids = new Set<string>([selectedNodeId]);
+
+  // Collect the agent IDs contributing to this selected node (1 for single, N for group).
+  const contributingAgentIds: string[] = [];
+  for (const [agentId, nodeKey] of idToNodeKey.entries()) {
+    if (nodeKey === selectedNodeId) contributingAgentIds.push(agentId);
+  }
+
+  const contributing = new Set(contributingAgentIds);
+  for (const agent of agents) {
+    if (!contributing.has(agent.id)) continue;
+    for (const dep of agent.dependency_resolutions ?? []) {
+      const dst = dep.provider_agent_id ? idToNodeKey.get(dep.provider_agent_id) : undefined;
+      if (dst) ids.add(dst);
     }
-    for (const llm of selected.llm_tool_resolutions ?? []) {
-      if (llm.provider_agent_id) ids.add(llm.provider_agent_id);
+    for (const llm of agent.llm_tool_resolutions ?? []) {
+      const dst = llm.provider_agent_id ? idToNodeKey.get(llm.provider_agent_id) : undefined;
+      if (dst) ids.add(dst);
     }
-    for (const prov of selected.llm_provider_resolutions ?? []) {
-      if (prov.provider_agent_id) ids.add(prov.provider_agent_id);
+    for (const prov of agent.llm_provider_resolutions ?? []) {
+      const dst = prov.provider_agent_id ? idToNodeKey.get(prov.provider_agent_id) : undefined;
+      if (dst) ids.add(dst);
     }
   }
 
@@ -67,8 +90,8 @@ function mergeEdgeStatsIntoEdges(edges: Edge[], edgeStats: EdgeStat[]): Edge[] {
   const maxCallCount = Math.max(...edgeStats.map((e) => e.call_count), 1);
 
   return edges.map((edge) => {
-    const sourceName = extractAgentName(edge.source);
-    const targetName = extractAgentName(edge.target);
+    const sourceName = nodeKeyToBaseName(edge.source);
+    const targetName = nodeKeyToBaseName(edge.target);
     const stat = statsMap.get(`${sourceName}->${targetName}`);
     if (!stat) return edge;
 
@@ -89,8 +112,8 @@ function mergeEdgeStatsIntoEdges(edges: Edge[], edgeStats: EdgeStat[]): Edge[] {
 }
 
 export function TopologyGraph({ agents }: TopologyGraphProps) {
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [sidebarAgent, setSidebarAgent] = useState<Agent | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [sidebarSelection, setSidebarSelection] = useState<SidebarSelection | null>(null);
   const { setPaused, edgeStats, traceActivity } = useMesh();
 
   // Structural hash: only relayout when agents or edges change, not on data-only updates
@@ -98,25 +121,44 @@ export function TopologyGraph({ agents }: TopologyGraphProps) {
   const prevHashRef = useRef<string>("");
   const layoutCacheRef = useRef<{ nodes: Node[]; edges: Edge[] }>({ nodes: [], edges: [] });
 
-  const { layoutedNodes, rawEdges } = useMemo(() => {
+  const { layoutedNodes, rawEdges, idToNodeKey } = useMemo(() => {
+    // Always build the id->nodeKey map (cheap, needed for neighbor highlight)
+    const mapping = new Map<string, string>();
+    const bucketsByBase = new Map<string, Agent[]>();
+    for (const a of agents) {
+      const base = getAgentBaseName(a);
+      const arr = bucketsByBase.get(base);
+      if (arr) arr.push(a);
+      else bucketsByBase.set(base, [a]);
+    }
+    for (const [base, inst] of bucketsByBase.entries()) {
+      if (inst.length >= 2) {
+        const key = `group:${base}`;
+        for (const a of inst) mapping.set(a.id, key);
+      } else {
+        mapping.set(inst[0].id, inst[0].id);
+      }
+    }
+
     if (structureHash === prevHashRef.current && layoutCacheRef.current.nodes.length > 0) {
-      // Structure unchanged — reuse cached positions, update node data only
-      const agentMap = new Map(agents.map((a) => [a.id, a]));
+      // Structure unchanged — reuse cached positions, rebuild data.
+      // We still do a fresh buildGraphFromAgents to get up-to-date node data
+      // (status/deps for groups, agent snapshot for singles) and fresh edges.
+      const fresh = buildGraphFromAgents(agents);
+      const freshNodeMap = new Map(fresh.nodes.map((n) => [n.id, n]));
       const updatedNodes = layoutCacheRef.current.nodes.map((node) => {
-        const agent = agentMap.get(node.id);
-        if (!agent) return node;
-        return { ...node, data: { ...node.data, agent } };
+        const freshNode = freshNodeMap.get(node.id);
+        if (!freshNode) return node;
+        return { ...node, data: freshNode.data };
       });
-      // Rebuild edges (they carry status/style info that may change)
-      const { edges: freshEdges } = buildGraphFromAgents(agents);
-      return { layoutedNodes: updatedNodes, rawEdges: freshEdges };
+      return { layoutedNodes: updatedNodes, rawEdges: fresh.edges, idToNodeKey: mapping };
     }
 
     // Structure changed — full relayout
     const result = buildGraphFromAgents(agents);
     prevHashRef.current = structureHash;
     layoutCacheRef.current = result;
-    return { layoutedNodes: result.nodes, rawEdges: result.edges };
+    return { layoutedNodes: result.nodes, rawEdges: result.edges, idToNodeKey: mapping };
   }, [agents, structureHash]);
 
   const layoutedEdges = useMemo(
@@ -126,20 +168,20 @@ export function TopologyGraph({ agents }: TopologyGraphProps) {
 
   // Compute highlighted neighbor set
   const highlightedIds = useMemo(() => {
-    if (!selectedAgentId) return null;
-    return getForwardNeighborIds(selectedAgentId, agents);
-  }, [selectedAgentId, agents]);
+    if (!selectedNodeId) return null;
+    return getForwardNeighborIds(selectedNodeId, agents, idToNodeKey);
+  }, [selectedNodeId, agents, idToNodeKey]);
 
   // Apply dimming + trace count to nodes
   const styledNodes = useMemo(() => {
     return layoutedNodes.map((node) => {
-      const agentName = extractAgentName(node.id);
+      const baseName = nodeKeyToBaseName(node.id);
       return {
         ...node,
         data: {
           ...node.data,
           dimmed: highlightedIds ? !highlightedIds.has(node.id) : false,
-          traceCount: traceActivity[agentName] || 0,
+          traceCount: traceActivity[baseName] || 0,
         },
       };
     });
@@ -167,27 +209,62 @@ export function TopologyGraph({ agents }: TopologyGraphProps) {
     setEdges(styledEdges);
   }, [styledNodes, styledEdges, setNodes, setEdges]);
 
+  // Keep sidebar selection in sync with fresh agent data when selection is active.
+  useEffect(() => {
+    if (!selectedNodeId) return;
+    const node = layoutedNodes.find((n) => n.id === selectedNodeId);
+    if (!node) {
+      // Selected node no longer exists (e.g., group collapsed or agent removed)
+      setSelectedNodeId(null);
+      setSidebarSelection(null);
+      setPaused(false);
+      return;
+    }
+    if (node.data.kind === "group") {
+      setSidebarSelection({
+        kind: "group",
+        name: node.data.name as string,
+        instances: node.data.instances as Agent[],
+        status: node.data.status as string,
+        totalDependencies: node.data.total_dependencies as number,
+        dependenciesResolved: node.data.dependencies_resolved as number,
+      });
+    } else {
+      setSidebarSelection({ kind: "single", agent: node.data.agent as Agent });
+    }
+  }, [selectedNodeId, layoutedNodes, setPaused]);
+
   const onNodeClick = useCallback(
     (_event: React.MouseEvent, node: Node) => {
-      if (selectedAgentId === node.id) {
+      if (selectedNodeId === node.id) {
         // Toggle off — deselect
-        setSelectedAgentId(null);
-        setSidebarAgent(null);
+        setSelectedNodeId(null);
+        setSidebarSelection(null);
         setPaused(false);
       } else {
         // Select new node
-        const agent = agents.find((a) => a.id === node.id) ?? null;
-        setSelectedAgentId(node.id);
-        setSidebarAgent(agent);
+        setSelectedNodeId(node.id);
+        if (node.data.kind === "group") {
+          setSidebarSelection({
+            kind: "group",
+            name: node.data.name as string,
+            instances: node.data.instances as Agent[],
+            status: node.data.status as string,
+            totalDependencies: node.data.total_dependencies as number,
+            dependenciesResolved: node.data.dependencies_resolved as number,
+          });
+        } else {
+          setSidebarSelection({ kind: "single", agent: node.data.agent as Agent });
+        }
         setPaused(true);
       }
     },
-    [agents, selectedAgentId, setPaused]
+    [selectedNodeId, setPaused]
   );
 
   const onPaneClick = useCallback(() => {
-    setSelectedAgentId(null);
-    setSidebarAgent(null);
+    setSelectedNodeId(null);
+    setSidebarSelection(null);
     setPaused(false);
   }, [setPaused]);
 
@@ -258,7 +335,7 @@ export function TopologyGraph({ agents }: TopologyGraphProps) {
         </div>
       </div>
 
-      <TopologySidebar agent={sidebarAgent} onClose={() => setSidebarAgent(null)} />
+      <TopologySidebar selection={sidebarSelection} onClose={() => { setSelectedNodeId(null); setSidebarSelection(null); setPaused(false); }} />
     </div>
   );
 }

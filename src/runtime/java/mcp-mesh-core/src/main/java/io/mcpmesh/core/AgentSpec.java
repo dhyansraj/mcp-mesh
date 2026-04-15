@@ -15,7 +15,17 @@ import java.util.List;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class AgentSpec {
 
+    /** Base agent name (shared across replicas, e.g., "fortuna"). */
     private String name;
+
+    /**
+     * Unique per-replica agent ID (e.g., "fortuna-abc12345").
+     * Serialized to the Rust core as the `agent_id` field; defaults to `name`
+     * when left null for backward compatibility.
+     */
+    @JsonProperty("agent_id")
+    private String agentId;
+
     private String version = "1.0.0";
     private String description = "";
 
@@ -55,6 +65,11 @@ public class AgentSpec {
 
     public AgentSpec name(String name) {
         this.name = name;
+        return this;
+    }
+
+    public AgentSpec agentId(String agentId) {
+        this.agentId = agentId;
         return this;
     }
 
@@ -114,6 +129,15 @@ public class AgentSpec {
         return name;
     }
 
+    /**
+     * Returns the unique per-replica agent ID (e.g., "fortuna-abc12345").
+     * Falls back to {@link #getName()} when {@code agentId} is unset, which
+     * preserves behavior for callers that haven't been migrated yet.
+     */
+    public String getAgentId() {
+        return (agentId != null && !agentId.isEmpty()) ? agentId : name;
+    }
+
     public String getVersion() {
         return version;
     }
@@ -162,6 +186,10 @@ public class AgentSpec {
 
     public void setName(String name) {
         this.name = name;
+    }
+
+    public void setAgentId(String agentId) {
+        this.agentId = agentId;
     }
 
     public void setVersion(String version) {

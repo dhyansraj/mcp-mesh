@@ -210,7 +210,9 @@ class ApiRuntime {
 
       // Create AgentSpec with agent_type: "api"
       const spec: JsAgentSpec = {
-        name: this.serviceId,
+        // Base name (shared across replicas), unique ID via agentId.
+        name: namePart,
+        agentId: this.serviceId,
         version: "1.0.0",
         description: "",
         registryUrl,

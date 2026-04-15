@@ -667,8 +667,11 @@ func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context
 				if parsedEP.Host == hostPort {
 					return true, parsedEP.Scheme, nil
 				}
-				// Match by agent name (Docker/K8s hostname) with port verification
-				if agent.Name == host && parsedEP.Port() == port {
+				// Match by agent ID (primary: callers use full agent IDs like "fortuna-abc12345").
+				// Also match by agent Name as a fallback for future base-name proxying
+				// (e.g., /proxy/fortuna:8080 -> any replica named "fortuna") and to stay
+				// backward-compatible with old SDK versions that sent Name == ID.
+				if (agent.Id == host || agent.Name == host) && parsedEP.Port() == port {
 					return true, parsedEP.Scheme, nil
 				}
 			}

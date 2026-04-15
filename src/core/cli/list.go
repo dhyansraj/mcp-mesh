@@ -578,9 +578,11 @@ func getEnhancedAgents(registryURL string) ([]EnhancedAgent, error) {
 		enhanced = append(enhanced, agent)
 	}
 
-	// Sort by name for consistent display
+	// Sort by ID for consistent display (IDs include the base name as a prefix,
+	// so this groups replicas of the same decorator name together while remaining
+	// deterministic across replicas that share a base name).
 	sort.Slice(enhanced, func(i, j int) bool {
-		return enhanced[i].Name < enhanced[j].Name
+		return enhanced[i].ID < enhanced[j].ID
 	})
 
 	return enhanced, nil
@@ -912,7 +914,16 @@ func countResolvedDependencies(deps []Dependency) int {
 	return resolved
 }
 
-// enrichWithProcessInfo adds process information to enhanced agents
+// enrichWithProcessInfo adds process information to enhanced agents.
+//
+// Process-map keys are derived from the agent *script filename* (e.g. "hello_world"
+// from hello_world.py) by the start path — see start_execution.go and
+// pid_manager.sanitizeName. They are NOT the registered agent ID or the
+// decorator-declared name. Matching is therefore best-effort: it works when the
+// user names the decorator the same as the script file (the common case). We
+// use agent.Name (the decorator-declared base name) here rather than agent.ID
+// because the ID carries a uniqueness suffix that can never match a script
+// filename.
 func enrichWithProcessInfo(agents []EnhancedAgent, processes []ProcessInfo) []EnhancedAgent {
 	processMap := make(map[string]ProcessInfo)
 	for _, proc := range processes {
@@ -942,8 +953,9 @@ func filterEnhancedAgents(agents []EnhancedAgent, pattern string) []EnhancedAgen
 	pattern = strings.ToLower(pattern)
 
 	for _, agent := range agents {
-		if strings.Contains(strings.ToLower(agent.Name), pattern) ||
-			strings.Contains(strings.ToLower(agent.ID), pattern) {
+		// ID contains the base Name as a prefix, so substring on ID matches
+		// both "hello" (base name) and "hello-world-4e0773d7" (full ID).
+		if strings.Contains(strings.ToLower(agent.ID), pattern) {
 			filtered = append(filtered, agent)
 		}
 	}
@@ -1041,8 +1053,8 @@ func calculateColumnWidths(agents []EnhancedAgent, wide bool) (nameWidth, runtim
 	endpointWidth = 20
 
 	for _, agent := range agents {
-		if len(agent.Name) > nameWidth {
-			nameWidth = len(agent.Name)
+		if len(agent.ID) > nameWidth {
+			nameWidth = len(agent.ID)
 		}
 		// Use display format for width calculation (e.g., "TypeScript" not "typescript")
 		runtimeDisplay := formatRuntimeDisplay(agent.Runtime)
@@ -1125,7 +1137,7 @@ func printTableSeparator(nameWidth, runtimeWidth, statusWidth, typeWidth, endpoi
 // printAgentRow prints a single agent row in the table
 func printAgentRow(agent EnhancedAgent, nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth int, noDeps, wide, verbose bool) {
 	// Name column
-	fmt.Printf("%-*s", nameWidth, truncateStringForList(agent.Name, nameWidth-2))
+	fmt.Printf("%-*s", nameWidth, truncateStringForList(agent.ID, nameWidth-2))
 
 	// Runtime column with color (pad first, then colorize to avoid alignment issues)
 	runtime := agent.Runtime
@@ -1294,8 +1306,8 @@ func truncateStringForList(s string, maxLen int) string {
 // printVerboseDetails shows additional information in verbose mode
 func printVerboseDetails(agents []EnhancedAgent) {
 	for _, agent := range agents {
-		fmt.Printf("=== %s ===\n", agent.Name)
-		fmt.Printf("  ID: %s\n", agent.ID)
+		fmt.Printf("=== %s ===\n", agent.ID)
+		fmt.Printf("  Name: %s\n", agent.Name)
 		fmt.Printf("  Endpoint: %s\n", agent.Endpoint)
 		fmt.Printf("  Version: %s\n", agent.Version)
 
@@ -1992,8 +2004,8 @@ func outputToolsList(tools []ToolListItem, jsonOutput bool) error {
 		if len(tool.ToolName) > toolWidth-2 {
 			toolWidth = len(tool.ToolName) + 2
 		}
-		if len(tool.AgentName) > agentWidth-2 {
-			agentWidth = len(tool.AgentName) + 2
+		if len(tool.AgentID) > agentWidth-2 {
+			agentWidth = len(tool.AgentID) + 2
 		}
 		if len(tool.Capability) > capWidth-2 {
 			capWidth = len(tool.Capability) + 2
@@ -2023,7 +2035,7 @@ func outputToolsList(tools []ToolListItem, jsonOutput bool) error {
 		}
 		fmt.Printf("%-*s %-*s %-*s %s\n",
 			toolWidth, truncateStringForList(tool.ToolName, toolWidth-2),
-			agentWidth, truncateStringForList(tool.AgentName, agentWidth-2),
+			agentWidth, truncateStringForList(tool.AgentID, agentWidth-2),
 			capWidth, truncateStringForList(tool.Capability, capWidth-2),
 			tags)
 	}
@@ -2086,7 +2098,7 @@ func outputToolDetails(tool *ToolListItem, agent *EnhancedAgent, registryURL str
 
 	// Pretty print tool details
 	fmt.Printf("%sTool: %s%s\n", colorBlue, tool.ToolName, colorReset)
-	fmt.Printf("Agent: %s\n", tool.AgentName)
+	fmt.Printf("Agent: %s\n", tool.AgentID)
 	fmt.Printf("Capability: %s\n", tool.Capability)
 	if mcpTool != nil && mcpTool.Description != "" {
 		fmt.Printf("Description: %s\n", mcpTool.Description)

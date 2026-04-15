@@ -248,7 +248,7 @@ func outputStatusHuman(status StatusOutput, verbose bool) error {
 		fmt.Printf("Agents (%d):\n", len(status.Agents))
 		for _, agent := range status.Agents {
 			healthSymbol := getStatusSymbol(agent.Health)
-			fmt.Printf("  %s %-20s %s", healthSymbol, agent.Name, agent.Health)
+			fmt.Printf("  %s %-20s %s", healthSymbol, agent.ID, agent.Health)
 
 			if agent.PID > 0 {
 				fmt.Printf(" (PID: %d)", agent.PID)

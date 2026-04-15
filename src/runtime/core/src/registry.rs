@@ -564,6 +564,7 @@ mod tests {
             )]),
             None,
             5,
+            None,
         );
 
         let request = HeartbeatRequest::from_spec(&spec, HealthStatus::Healthy);
@@ -590,6 +591,7 @@ mod tests {
             None,
             None,
             5,
+            None,
         );
 
         let request = HeartbeatRequest::from_spec(&spec, HealthStatus::Healthy);

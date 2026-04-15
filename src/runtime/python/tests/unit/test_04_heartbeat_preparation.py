@@ -233,7 +233,9 @@ class TestHeartbeatPreparationContext:
             assert isinstance(reg_data, dict)
             assert reg_data["agent_id"] == "context-test-456"
             assert reg_data["agent_type"] == "mcp_agent"
-            assert reg_data["name"] == "context-test-456"
+            # Name is the base decorator name (shared across replicas),
+            # distinct from the unique per-replica agent_id.
+            assert reg_data["name"] == "context-agent"
             assert reg_data["version"] == "2.0.0"
             assert (
                 reg_data["http_host"] == "test.host.com"

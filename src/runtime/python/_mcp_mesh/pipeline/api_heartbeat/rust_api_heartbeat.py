@@ -128,9 +128,20 @@ def _build_api_agent_spec(context: dict[str, Any], service_id: str = None) -> An
         )
         tools.append(tool_spec)
 
+    # Derive base name from service_id (strip the "-{uuid8}" suffix if present).
+    # API services generate service_id as "{base}-{uuid8}" (see
+    # _generate_api_service_id_fallback); we expose the base as the shared name.
+    base_name = agent_config.get("name")
+    if not base_name:
+        # Fallback: try to strip the trailing "-xxxxxxxx" suffix from service_id
+        if len(service_id) > 9 and service_id[-9] == "-":
+            base_name = service_id[:-9]
+        else:
+            base_name = service_id
+
     # Create AgentSpec
     spec = core.AgentSpec(
-        name=service_id,
+        name=base_name,
         registry_url=registry_url,
         version=version,
         description="",
@@ -141,11 +152,12 @@ def _build_api_agent_spec(context: dict[str, Any], service_id: str = None) -> An
         tools=tools if tools else None,
         llm_agents=None,  # API services don't have LLM agents
         heartbeat_interval=heartbeat_interval,
+        agent_id=service_id,
     )
 
     logger.info(
-        f"Built API AgentSpec: name={service_id}, routes_with_deps={len(tools)}, "
-        f"registry={registry_url}"
+        f"Built API AgentSpec: name={base_name}, agent_id={service_id}, "
+        f"routes_with_deps={len(tools)}, registry={registry_url}"
     )
 
     return spec
