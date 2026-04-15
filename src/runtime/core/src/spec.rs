@@ -469,10 +469,18 @@ impl AgentSpec {
     }
 
     /// Get the unique per-replica agent ID.
+    ///
     /// The `new()` constructor normalizes an empty/missing `agent_id` to
-    /// `name`, so callers can rely on this field being non-empty.
+    /// `name`, but deserialization (via serde) bypasses `new()` and can
+    /// produce an empty `agent_id` because of `#[serde(default)]` on the
+    /// field. This getter applies the same fallback defensively so callers
+    /// always receive a non-empty ID regardless of construction path.
     pub fn agent_id(&self) -> String {
-        self.agent_id.clone()
+        if self.agent_id.is_empty() {
+            self.name.clone()
+        } else {
+            self.agent_id.clone()
+        }
     }
 
     /// Get all dependency capabilities required by this agent's tools

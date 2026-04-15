@@ -460,7 +460,7 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 	}
 
 	// Security: Validate target is a registered agent
-	isRegistered, scheme, err := h.isRegisteredAgentEndpoint(c.Request.Context(), hostPort)
+	isRegistered, scheme, endpointHost, err := h.isRegisteredAgentEndpoint(c.Request.Context(), hostPort)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
 			Error:     fmt.Sprintf("Failed to validate agent: %v", err),
@@ -477,8 +477,15 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		return
 	}
 
-	// Build target URL using the scheme from the agent's registered endpoint
-	targetURL := fmt.Sprintf("%s://%s%s", scheme, hostPort, path)
+	// Build target URL using the matched replica's actual registered endpoint host
+	// when available. Falls back to the user-supplied hostPort if the registered
+	// endpoint host could not be determined (direct host:port match path is a no-op
+	// since endpointHost == hostPort there).
+	dialHost := endpointHost
+	if dialHost == "" {
+		dialHost = hostPort
+	}
+	targetURL := fmt.Sprintf("%s://%s%s", scheme, dialHost, path)
 
 	// Create the proxied request
 	var reqBody io.Reader
@@ -639,12 +646,15 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 }
 
 // isRegisteredAgentEndpoint checks if the given host:port is a registered agent.
-// Returns (isRegistered, scheme, error) where scheme is "http" or "https".
-func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context, hostPort string) (bool, string, error) {
+// Returns (isRegistered, scheme, endpointHost, error) where scheme is "http" or
+// "https" and endpointHost is the matched replica's actual registered endpoint
+// host (e.g., K8s service DNS) — used by the proxy to dial the real endpoint
+// rather than the user-supplied hostPort when matching via Id/Name fallback.
+func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context, hostPort string) (bool, string, string, error) {
 	// Parse host and port
 	parts := strings.Split(hostPort, ":")
 	if len(parts) != 2 {
-		return false, "", nil // Invalid format
+		return false, "", "", nil // Invalid format
 	}
 
 	host := parts[0]
@@ -653,7 +663,7 @@ func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context
 	params := &AgentQueryParams{}
 	resp, err := h.entService.ListAgents(params)
 	if err != nil {
-		return false, "", err
+		return false, "", "", err
 	}
 
 	port := parts[1]
@@ -665,7 +675,7 @@ func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context
 			if err == nil {
 				// Direct host:port match against parsed endpoint
 				if parsedEP.Host == hostPort {
-					return true, parsedEP.Scheme, nil
+					return true, parsedEP.Scheme, parsedEP.Host, nil
 				}
 				// Match by agent ID (primary: callers use full agent IDs like "fortuna-abc12345").
 				// Also match by agent Name as a fallback for future base-name proxying
@@ -678,11 +688,11 @@ func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context
 				// dev concern; to target a specific replica, port-forward to it
 				// directly.
 				if (agent.Id == host || agent.Name == host) && parsedEP.Port() == port {
-					return true, parsedEP.Scheme, nil
+					return true, parsedEP.Scheme, parsedEP.Host, nil
 				}
 			}
 		}
 	}
 
-	return false, "", nil
+	return false, "", "", nil
 }

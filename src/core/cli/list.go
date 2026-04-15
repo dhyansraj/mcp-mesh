@@ -48,7 +48,7 @@ Examples:
   meshctl list                                    # Show healthy agents only (default)
   meshctl list --all                              # Show all agents including unhealthy
   meshctl list --json                             # Output in JSON format
-  meshctl list --filter hello                     # Filter agents by name pattern
+  meshctl list --filter hello                     # Filter by substring match on agent ID
   meshctl list --no-deps                          # Hide dependency status
   meshctl list --wide                             # Show endpoints and tool counts
   meshctl list --registry-url http://remote:8000  # Connect to remote registry
@@ -64,7 +64,7 @@ Tools listing:
 	}
 
 	// Enhanced flags for better UX
-	cmd.Flags().String("filter", "", "Filter by name pattern")
+	cmd.Flags().String("filter", "", "Filter by substring match on agent ID")
 	cmd.Flags().Bool("json", false, "Output in JSON format")
 	cmd.Flags().Bool("verbose", false, "Show detailed information")
 	cmd.Flags().Bool("no-deps", false, "Hide dependency status")
@@ -943,7 +943,7 @@ func enrichWithProcessInfo(agents []EnhancedAgent, processes []ProcessInfo) []En
 	return agents
 }
 
-// filterEnhancedAgents applies name filtering to enhanced agents
+// filterEnhancedAgents applies substring matching on agent ID to enhanced agents
 func filterEnhancedAgents(agents []EnhancedAgent, pattern string) []EnhancedAgent {
 	if pattern == "" {
 		return agents

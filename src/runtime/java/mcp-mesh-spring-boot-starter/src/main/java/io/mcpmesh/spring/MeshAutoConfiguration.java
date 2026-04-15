@@ -320,11 +320,23 @@ public class MeshAutoConfiguration {
 
         AgentSpec spec = new AgentSpec();
 
-        // Auto-generated ID: api-{8char_uuid} (matches Python's pattern).
-        // Base name is "api" (shared across replicas); full ID includes the UUID suffix.
+        // Derive an app-specific base name so unrelated Spring apps in consumer-only
+        // mode don't collapse together in the topology as replicas of "api".
+        // Priority: MCP_MESH_AGENT_NAME env/property (via configResolver) >
+        //           spring.application.name > "api" fallback.
+        String appName = configResolver.resolve("agent_name", null);
+        if (appName == null || appName.isBlank()) {
+            appName = applicationContext.getEnvironment().getProperty("spring.application.name");
+        }
+        if (appName == null || appName.isBlank()) {
+            appName = "api";
+        }
+
+        // Auto-generated ID: {appName}-{8char_uuid} (matches Python's pattern).
+        // Base name is shared across replicas; full ID includes the UUID suffix.
         String uuidSuffix = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
-        spec.setName("api");
-        spec.setAgentId("api-" + uuidSuffix);
+        spec.setName(appName);
+        spec.setAgentId(appName + "-" + uuidSuffix);
 
         // Consumer-only agent type
         spec.setAgentType("api");

@@ -47,11 +47,13 @@ public class MeshRuntime implements SmartLifecycle {
         if (running.compareAndSet(false, true)) {
             log.info("Starting MCP Mesh runtime for agent '{}' (id={})",
                 agentSpec.getName(), agentSpec.getAgentId());
+            boolean tlsPrepared = false;
             try {
                 // Prepare TLS credentials before starting (fetches from Vault if configured).
                 // Pass the full per-replica agent ID so credential temp dirs are unique
                 // across replicas on the same host (matches Python/TypeScript SDKs).
                 MeshTlsConfig.prepareTls(agentSpec.getAgentId());
+                tlsPrepared = true;
 
                 handle = MeshHandle.start(agentSpec);
                 log.info("MCP Mesh runtime started successfully");
@@ -64,6 +66,13 @@ public class MeshRuntime implements SmartLifecycle {
                 }
             } catch (Exception e) {
                 running.set(false);
+                if (tlsPrepared) {
+                    try {
+                        MeshTlsConfig.cleanupTls();
+                    } catch (Exception cleanupEx) {
+                        log.warn("TLS cleanup on failed start: {}", cleanupEx.toString());
+                    }
+                }
                 throw new RuntimeException("Failed to start mesh runtime", e);
             }
         }

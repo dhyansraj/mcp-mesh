@@ -88,6 +88,9 @@ export function computeStructureHash(agents: Agent[]): string {
 
   const nodeKeys = Array.from(new Set(idMap.values())).sort();
 
+  // Edge discriminator keys mirror the addEdge key format (kind|src|dst|label)
+  // so the structural hash changes when, e.g., a new capability is added to
+  // an existing src->dst pair.
   const edgePairs: string[] = [];
   for (const agent of agents) {
     const src = idMap.get(agent.id);
@@ -95,19 +98,19 @@ export function computeStructureHash(agents: Agent[]): string {
     for (const dep of agent.dependency_resolutions ?? []) {
       if (dep.provider_agent_id) {
         const dst = idMap.get(dep.provider_agent_id);
-        if (dst) edgePairs.push(`${src}->${dst}`);
+        if (dst) edgePairs.push(`dep|${src}|${dst}|${dep.capability}`);
       }
     }
     for (const llm of agent.llm_tool_resolutions ?? []) {
       if (llm.provider_agent_id) {
         const dst = idMap.get(llm.provider_agent_id);
-        if (dst) edgePairs.push(`${src}->llm:${dst}`);
+        if (dst) edgePairs.push(`llm|${src}|${dst}|${llm.filter_capability}`);
       }
     }
     for (const prov of agent.llm_provider_resolutions ?? []) {
       if (prov.provider_agent_id) {
         const dst = idMap.get(prov.provider_agent_id);
-        if (dst) edgePairs.push(`${src}->prov:${dst}`);
+        if (dst) edgePairs.push(`prov|${src}|${dst}|${prov.required_capability}`);
       }
     }
   }
@@ -163,8 +166,23 @@ export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: E
 
   function addEdge(kind: EdgeKind, src: string, dst: string, label: string, base: Edge) {
     const key = `${kind}|${src}|${dst}|${label}`;
-    if (edgeMap.has(key)) return;
-    edgeMap.set(key, base);
+    const existing = edgeMap.get(key);
+    if (!existing) {
+      edgeMap.set(key, base);
+      return;
+    }
+    // Worst-of merge: when replicas collapse into one collapsed group edge,
+    // prefer the degraded edge style (dashed/unresolved/unavailable) over the
+    // healthy animated style so the group edge reflects any failing replica.
+    // Healthy edges are animated with no strokeDasharray; degraded edges are
+    // non-animated and/or dashed.
+    const existingHealthy =
+      existing.animated === true && !existing.style?.strokeDasharray;
+    const incomingHealthy =
+      base.animated === true && !base.style?.strokeDasharray;
+    if (existingHealthy && !incomingHealthy) {
+      edgeMap.set(key, { ...existing, animated: base.animated, style: base.style });
+    }
   }
 
   for (const agent of agents) {

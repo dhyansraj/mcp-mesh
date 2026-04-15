@@ -40,6 +40,7 @@ import {
   type JsToolSpec,
   type JsDependencySpec,
 } from "@mcpmesh/core";
+import os from "os";
 
 import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { createProxy } from "./proxy.js";
@@ -167,8 +168,24 @@ class ApiRuntime {
     this.starting = true;
 
     try {
-      // Generate service ID: "api-<random-suffix>"
-      const namePart = resolveConfig("agent_name", this.config.name) || "api";
+      // Generate service ID: "<base>-<random-suffix>".
+      //
+      // Base name priority: MCP_MESH_AGENT_NAME env (via resolveConfig) >
+      // config.name > os.hostname() > "api-<random>" last resort.
+      //
+      // Falling back to hostname (rather than literal "api") prevents unrelated
+      // Express apps on different pods/hosts from collapsing together as
+      // replicas of "api" in the topology. In K8s/Docker the hostname is the
+      // pod/container name, which is typically app-specific.
+      let namePart = resolveConfig("agent_name", this.config.name);
+      if (!namePart || namePart.trim() === "") {
+        const hostname = os.hostname();
+        if (hostname && hostname.trim() !== "") {
+          namePart = hostname;
+        } else {
+          namePart = `api-${Math.random().toString(36).substring(2, 10)}`;
+        }
+      }
       const suffix = Math.random().toString(36).substring(2, 10);
       this.serviceId = `${namePart}-${suffix}`;
 
