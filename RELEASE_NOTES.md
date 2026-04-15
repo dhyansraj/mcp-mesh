@@ -1,5 +1,11 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.3.1...v1.3.2)
+
+## v1.3.2 (2026-04-15)
+
+Patch release. Agent `name` and `agent_id` are now distinct fields across Python, TypeScript, and Java SDKs — previously all three collapsed `name == agent_id`, making replicas behind a K8s Service indistinguishable. The topology dashboard now groups replicas of the same base name into a single node with a ×N badge and an accordion drawer for per-replica details. meshctl `list` / `call` / `status` display and filter by full agent ID so replicas are individually addressable; registry `/proxy/{target}` matches by either ID or base name (#781).
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.3.0...v1.3.1)
 
 ## v1.3.1 (2026-04-14)
