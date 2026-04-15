@@ -66,6 +66,14 @@ public class MeshRuntime implements SmartLifecycle {
                 }
             } catch (Exception e) {
                 running.set(false);
+                if (handle != null) {
+                    try {
+                        handle.close();
+                    } catch (Exception closeEx) {
+                        log.warn("Error closing mesh handle after failed start: {}", closeEx.toString());
+                    }
+                    handle = null;
+                }
                 if (tlsPrepared) {
                     try {
                         MeshTlsConfig.cleanupTls();

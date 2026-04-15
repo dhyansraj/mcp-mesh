@@ -596,6 +596,62 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_spec_id_fallback_on_deserialize() {
+        // Case 1: agent_id field is omitted entirely → falls back to name.
+        let json_missing = r#"{
+            "name": "fortuna",
+            "version": "1.0.0",
+            "description": "",
+            "registry_url": "http://localhost:8100",
+            "http_port": 0,
+            "http_host": "localhost",
+            "namespace": "default",
+            "tools": [],
+            "llm_agents": [],
+            "heartbeat_interval": 5
+        }"#;
+        let spec: AgentSpec = serde_json::from_str(json_missing).unwrap();
+        assert_eq!(spec.name, "fortuna");
+        assert_eq!(spec.agent_id(), "fortuna");
+
+        // Case 2: agent_id is present but empty → falls back to name.
+        let json_empty = r#"{
+            "name": "fortuna",
+            "agent_id": "",
+            "version": "1.0.0",
+            "description": "",
+            "registry_url": "http://localhost:8100",
+            "http_port": 0,
+            "http_host": "localhost",
+            "namespace": "default",
+            "tools": [],
+            "llm_agents": [],
+            "heartbeat_interval": 5
+        }"#;
+        let spec: AgentSpec = serde_json::from_str(json_empty).unwrap();
+        assert_eq!(spec.name, "fortuna");
+        assert_eq!(spec.agent_id(), "fortuna");
+
+        // Case 3: agent_id is set → returned as-is.
+        let json_set = r#"{
+            "name": "fortuna",
+            "agent_id": "fortuna-abc12345",
+            "version": "1.0.0",
+            "description": "",
+            "registry_url": "http://localhost:8100",
+            "http_port": 0,
+            "http_host": "localhost",
+            "namespace": "default",
+            "tools": [],
+            "llm_agents": [],
+            "heartbeat_interval": 5
+        }"#;
+        let spec: AgentSpec = serde_json::from_str(json_set).unwrap();
+        assert_eq!(spec.name, "fortuna");
+        assert_eq!(spec.agent_id(), "fortuna-abc12345");
+    }
+
+    #[test]
     fn test_agent_type_api() {
         let spec = AgentSpec::new(
             "api-service".to_string(),
