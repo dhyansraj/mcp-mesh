@@ -671,6 +671,12 @@ func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context
 				// Also match by agent Name as a fallback for future base-name proxying
 				// (e.g., /proxy/fortuna:8080 -> any replica named "fortuna") and to stay
 				// backward-compatible with old SDK versions that sent Name == ID.
+				//
+				// Matching by Name as a fallback is intentional — it routes to an
+				// arbitrary replica when multiple share a base name. The registry
+				// proxy is a dev/test convenience and replica targeting is not a
+				// dev concern; to target a specific replica, port-forward to it
+				// directly.
 				if (agent.Id == host || agent.Name == host) && parsedEP.Port() == port {
 					return true, parsedEP.Scheme, nil
 				}

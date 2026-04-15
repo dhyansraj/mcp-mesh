@@ -233,7 +233,14 @@ export function TopologySidebar({ selection, onClose }: TopologySidebarProps) {
 
   // Group selection
   const { name, instances, status, totalDependencies, dependenciesResolved } = selection;
-  const sharedEndpoint = instances[0]?.endpoint ?? "";
+  // Determine whether all replicas share a single endpoint. If so, show it
+  // directly; otherwise indicate divergence — per-instance endpoints are
+  // available in the accordion below.
+  const uniqueEndpoints = Array.from(
+    new Set(instances.map((i) => i.endpoint).filter((e): e is string => !!e))
+  );
+  const sharedEndpoint = uniqueEndpoints.length === 1 ? uniqueEndpoints[0] : "";
+  const endpointsDiffer = uniqueEndpoints.length > 1;
 
   return (
     <div className="absolute right-0 top-0 h-full w-[360px] z-50 border-l border-border bg-card shadow-2xl flex flex-col">
@@ -270,6 +277,15 @@ export function TopologySidebar({ selection, onClose }: TopologySidebarProps) {
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <Globe className="h-3.5 w-3.5 shrink-0" />
                   <span className="truncate font-mono" title={sharedEndpoint}>{sharedEndpoint}</span>
+                </div>
+              )}
+              {endpointsDiffer && (
+                <div
+                  className="flex items-center gap-2 text-muted-foreground"
+                  title={uniqueEndpoints.join("\n")}
+                >
+                  <Globe className="h-3.5 w-3.5 shrink-0" />
+                  <span>Endpoints: {uniqueEndpoints.length} (varies — see instances)</span>
                 </div>
               )}
               <div className="flex items-center gap-2 text-muted-foreground">

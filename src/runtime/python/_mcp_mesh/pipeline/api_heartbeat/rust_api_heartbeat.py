@@ -15,7 +15,12 @@ Python handles:
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Optional
+
+# Matches the registry/SDK convention of "{base}-{8-hex-chars}" at the end
+# of a service_id. Used to strip the suffix and recover the base name.
+_API_SERVICE_ID_SUFFIX_RE = re.compile(r"-[0-9a-f]{8}$")
 
 logger = logging.getLogger(__name__)
 
@@ -133,11 +138,12 @@ def _build_api_agent_spec(context: dict[str, Any], service_id: str = None) -> An
     # _generate_api_service_id_fallback); we expose the base as the shared name.
     base_name = agent_config.get("name")
     if not base_name:
-        # Fallback: try to strip the trailing "-xxxxxxxx" suffix from service_id
-        if len(service_id) > 9 and service_id[-9] == "-":
-            base_name = service_id[:-9]
-        else:
-            base_name = service_id
+        # Only strip when the trailing "-xxxxxxxx" segment actually matches the
+        # UUID-8 convention (lowercase hex). This avoids false positives for
+        # IDs like "my-agent-name" where the 9th-from-last char happens to be
+        # a dash but the suffix isn't a UUID.
+        stripped = _API_SERVICE_ID_SUFFIX_RE.sub("", service_id)
+        base_name = stripped if stripped != service_id else service_id
 
     # Create AgentSpec
     spec = core.AgentSpec(

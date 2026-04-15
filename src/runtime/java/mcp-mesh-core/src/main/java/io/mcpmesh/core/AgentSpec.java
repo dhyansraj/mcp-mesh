@@ -133,6 +133,12 @@ public class AgentSpec {
      * Returns the unique per-replica agent ID (e.g., "fortuna-abc12345").
      * Falls back to {@link #getName()} when {@code agentId} is unset, which
      * preserves behavior for callers that haven't been migrated yet.
+     *
+     * <p>The fallback is intentional for Jackson serialization: the
+     * {@code @JsonProperty("agent_id")} annotation sits on the field, but
+     * Jackson uses this getter when emitting JSON, so unset {@code agentId}
+     * serializes as {@code agent_id == name}. This matches the fallback
+     * behavior of {@code AgentSpec::agent_id()} in the Rust core.
      */
     public String getAgentId() {
         return (agentId != null && !agentId.isEmpty()) ? agentId : name;

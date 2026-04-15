@@ -6,12 +6,14 @@ import { extractAgentName } from "./api";
 // Returns the base name for an agent by stripping the registry-assigned
 // "-{8hex}" suffix from the full agent ID.
 //
-// NOTE on name shape: As of this writing the Python/TS SDKs send
-// `name = agent_id = "{base}-{uuid8}"` in the registration payload
-// (see src/runtime/python/.../heartbeat_preparation.py:_build_registration_payload
-// and src/runtime/typescript/src/agent.ts). So `agent.name` is not a reliable
-// base name. We normalize via `extractAgentName(agent.id)` which strips the
-// trailing 8-hex suffix.
+// Modern SDKs send `name` (base, e.g. "fortuna") and `agent_id` (full, e.g.
+// "fortuna-abc12345") as distinct fields. We still derive the base from
+// `agent.id` here for two reasons:
+//   1. Robustness across SDK versions — older agents collapsed `name == id`,
+//      so trusting `name` as the base would mis-group them.
+//   2. Single source of truth for display grouping — all replica bucketing
+//      happens off the normalized ID suffix, keeping the UI independent of
+//      whatever the sending SDK chose to put in `name`.
 export function getAgentBaseName(agent: Agent): string {
   return extractAgentName(agent.id);
 }
@@ -54,7 +56,7 @@ function aggregateStatus(instances: Agent[]): "healthy" | "unhealthy" | "unknown
 
 // Given a set of agents, compute mapping from agent ID to either a group key
 // (when the agent belongs to a group of >=2 replicas) or its own ID (single).
-function buildIdToNodeKey(buckets: Map<string, GroupInfo>): Map<string, string> {
+function buildIdToNodeKeyFromBuckets(buckets: Map<string, GroupInfo>): Map<string, string> {
   const idMap = new Map<string, string>();
   for (const { base, instances } of buckets.values()) {
     if (instances.length >= 2) {
@@ -69,12 +71,20 @@ function buildIdToNodeKey(buckets: Map<string, GroupInfo>): Map<string, string> 
   return idMap;
 }
 
+// Public helper: map each agent's full ID to its node key in the collapsed
+// topology graph. Single agents map to their own ID; replicas of a base name
+// all map to the shared `group:<base>` key. Callers outside topology.ts use
+// this to resolve edge endpoints and highlight neighbors.
+export function buildIdToNodeKey(agents: Agent[]): Map<string, string> {
+  return buildIdToNodeKeyFromBuckets(bucketAgents(agents));
+}
+
 // Compute a structural fingerprint: sorted node keys + sorted edge pairs.
 // Node keys already account for grouping, so the hash is stable as long as
 // the collapsed structure is identical.
 export function computeStructureHash(agents: Agent[]): string {
   const buckets = bucketAgents(agents);
-  const idMap = buildIdToNodeKey(buckets);
+  const idMap = buildIdToNodeKeyFromBuckets(buckets);
 
   const nodeKeys = Array.from(new Set(idMap.values())).sort();
 
@@ -108,7 +118,7 @@ export function computeStructureHash(agents: Agent[]): string {
 
 export function buildGraphFromAgents(agents: Agent[]): { nodes: Node[]; edges: Edge[] } {
   const buckets = bucketAgents(agents);
-  const idMap = buildIdToNodeKey(buckets);
+  const idMap = buildIdToNodeKeyFromBuckets(buckets);
 
   // Build nodes: one per group (collapsed) or single agent.
   const nodes: Node[] = [];

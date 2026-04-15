@@ -469,14 +469,10 @@ impl AgentSpec {
     }
 
     /// Get the unique per-replica agent ID.
-    /// Falls back to `name` when `agent_id` is empty (e.g., from older SDK
-    /// JSON payloads that don't set the field).
+    /// The `new()` constructor normalizes an empty/missing `agent_id` to
+    /// `name`, so callers can rely on this field being non-empty.
     pub fn agent_id(&self) -> String {
-        if self.agent_id.is_empty() {
-            self.name.clone()
-        } else {
-            self.agent_id.clone()
-        }
+        self.agent_id.clone()
     }
 
     /// Get all dependency capabilities required by this agent's tools
