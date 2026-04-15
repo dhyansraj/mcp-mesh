@@ -592,7 +592,9 @@ export class MeshAgent {
         : undefined;
 
     const spec: JsAgentSpec = {
-      name: this.agentId,
+      // Base name (shared across replicas, e.g., "fortuna"), unique ID via agentId.
+      name: this.config.name,
+      agentId: this.agentId,
       version: this.config.version,
       description: this.config.description,
       registryUrl: this.config.registryUrl,

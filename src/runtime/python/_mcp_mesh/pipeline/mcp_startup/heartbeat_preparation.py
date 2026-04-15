@@ -335,10 +335,16 @@ class HeartbeatPreparationStep(PipelineStep):
         """Build agent registration payload."""
         from ...shared.host_resolver import HostResolver
 
+        # Name is the base decorator name (e.g., "fortuna"), shared across replicas.
+        # agent_id is the unique per-replica ID (e.g., "fortuna-abc12345").
+        # Fall back to agent_id if base name is not set (e.g., synthetic agents
+        # configured only via @mesh.tool with no @mesh.agent(name=...)).
+        base_name = agent_config.get("name") or agent_id
+
         return {
             "agent_id": agent_id,
             "agent_type": "mcp_agent",
-            "name": agent_id,
+            "name": base_name,
             "version": agent_config.get("version", "1.0.0"),
             "http_host": HostResolver.get_external_host(),
             "http_port": agent_config.get("http_port", 0),

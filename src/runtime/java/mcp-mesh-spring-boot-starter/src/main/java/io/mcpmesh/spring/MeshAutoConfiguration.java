@@ -77,8 +77,10 @@ public class MeshAutoConfiguration {
             McpMeshToolProxyFactory proxyFactory,
             MeshToolWrapperRegistry wrapperRegistry,
             MeshRuntime runtime) {
-        // Full ToolInvoker with self-dependency optimization support
-        String agentId = runtime.getAgentSpec().getName();
+        // Full ToolInvoker with self-dependency optimization support.
+        // Uses the unique per-replica agent ID so dependency events (which carry
+        // full agent IDs) can be compared directly against currentAgentId.
+        String agentId = runtime.getAgentSpec().getAgentId();
         return new ToolInvoker(proxyFactory, wrapperRegistry, agentId);
     }
 
@@ -238,10 +240,13 @@ public class MeshAutoConfiguration {
                 "Agent name is required. Set MCP_MESH_AGENT_NAME, mesh.agent.name, or @MeshAgent(name=...)");
         }
 
-        // Append UUID suffix like Python/TypeScript SDKs: {name}-{8char_uuid}
+        // Append UUID suffix like Python/TypeScript SDKs: {name}-{8char_uuid}.
+        // `name` stays as the base (shared across replicas); `agentId` is the
+        // unique per-replica identifier.
         String uuidSuffix = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         String agentId = name + "-" + uuidSuffix;
-        spec.setName(agentId);
+        spec.setName(name);
+        spec.setAgentId(agentId);
 
         // Resolve version (not a Rust config key, use annotation/properties directly)
         String version = agentAnnotation != null ? agentAnnotation.version() : null;
@@ -315,9 +320,23 @@ public class MeshAutoConfiguration {
 
         AgentSpec spec = new AgentSpec();
 
-        // Auto-generated name: api-{8char_uuid} (matches Python's pattern)
+        // Derive an app-specific base name so unrelated Spring apps in consumer-only
+        // mode don't collapse together in the topology as replicas of "api".
+        // Priority: MCP_MESH_AGENT_NAME env/property (via configResolver) >
+        //           spring.application.name > "api" fallback.
+        String appName = configResolver.resolve("agent_name", null);
+        if (appName == null || appName.isBlank()) {
+            appName = applicationContext.getEnvironment().getProperty("spring.application.name");
+        }
+        if (appName == null || appName.isBlank()) {
+            appName = "api";
+        }
+
+        // Auto-generated ID: {appName}-{8char_uuid} (matches Python's pattern).
+        // Base name is shared across replicas; full ID includes the UUID suffix.
         String uuidSuffix = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
-        spec.setName("api-" + uuidSuffix);
+        spec.setName(appName);
+        spec.setAgentId(appName + "-" + uuidSuffix);
 
         // Consumer-only agent type
         spec.setAgentType("api");

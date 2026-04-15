@@ -247,7 +247,9 @@ export class MeshExpress {
     const tools = buildToolSpecs(routes);
 
     const spec: JsAgentSpec = {
-      name: this.serviceId,
+      // Base name (shared across replicas), unique ID via agentId.
+      name: this.config.name,
+      agentId: this.serviceId,
       version: this.config.version,
       description: this.config.description,
       registryUrl: this.config.registryUrl,

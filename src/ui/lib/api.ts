@@ -161,14 +161,13 @@ export async function getEdgeStats(limit: number = 20): Promise<EdgeStatsRespons
   return res.json();
 }
 
+const SUFFIX_RE = /-[0-9a-f]{8}$/;
+
 export function extractAgentName(agentId: string): string {
   // Agent IDs are formatted as "{name}-{8char_hex_uuid}"
   // E.g., "digest-agent-b1a5da10" -> "digest-agent"
-  const parts = agentId.split("-");
-  if (parts.length >= 2) {
-    return parts.slice(0, -1).join("-");
-  }
-  return agentId;
+  // Legacy IDs without a hex suffix (e.g., "hello-world") are returned as-is.
+  return agentId.replace(SUFFIX_RE, "");
 }
 
 export function formatBytes(bytes: number): string {

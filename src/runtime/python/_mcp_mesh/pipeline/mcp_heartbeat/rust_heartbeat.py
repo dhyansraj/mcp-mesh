@@ -255,9 +255,13 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
         )
         llm_agents.append(llm_spec)
 
+    # Base decorator name (shared across replicas) falls back to agent_id for
+    # synthetic configs where @mesh.agent(name=...) wasn't used.
+    base_name = agent_config.get("name") or agent_id
+
     # Create AgentSpec
     spec = core.AgentSpec(
-        name=agent_id,
+        name=base_name,
         registry_url=registry_url,
         version=version,
         description=description,
@@ -267,10 +271,11 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
         tools=tools if tools else None,
         llm_agents=llm_agents if llm_agents else None,
         heartbeat_interval=heartbeat_interval,
+        agent_id=agent_id,
     )
 
     logger.info(
-        f"Built AgentSpec: name={agent_id}, tools={len(tools)}, "
+        f"Built AgentSpec: name={base_name}, agent_id={agent_id}, tools={len(tools)}, "
         f"llm_agents={len(llm_agents)}, registry={registry_url}"
     )
 

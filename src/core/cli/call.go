@@ -403,7 +403,7 @@ func findAgentWithTool(client *http.Client, registryURL, agentName, toolName str
 		for _, cap := range agent.Capabilities {
 			if cap.FunctionName == toolName {
 				if agent.Endpoint == "" {
-					return "", "", fmt.Errorf("agent '%s' has tool '%s' but no endpoint", agent.Name, toolName)
+					return "", "", fmt.Errorf("agent '%s' has tool '%s' but no endpoint", agent.ID, toolName)
 				}
 				return agent.Endpoint, cap.FunctionName, nil
 			}
@@ -421,7 +421,7 @@ func findAgentWithTool(client *http.Client, registryURL, agentName, toolName str
 		for _, cap := range agent.Capabilities {
 			if cap.Name == toolName {
 				if agent.Endpoint == "" {
-					return "", "", fmt.Errorf("agent '%s' has capability '%s' but no endpoint", agent.Name, toolName)
+					return "", "", fmt.Errorf("agent '%s' has capability '%s' but no endpoint", agent.ID, toolName)
 				}
 				// Return the actual MCP tool name (FunctionName) for the call
 				return agent.Endpoint, cap.FunctionName, nil
@@ -488,7 +488,7 @@ func findAgentWithToolIngress(client *http.Client, ingressURL, ingressDomain, ag
 	// Helper to build ingress result from matched agent
 	buildIngressResult := func(agent AgentWithCapabilities, resolvedToolName string) (string, string, string, error) {
 		if agent.Endpoint == "" {
-			return "", "", "", fmt.Errorf("agent '%s' has tool '%s' but no endpoint", agent.Name, resolvedToolName)
+			return "", "", "", fmt.Errorf("agent '%s' has tool '%s' but no endpoint", agent.ID, resolvedToolName)
 		}
 		extractedName := extractAgentNameFromEndpoint(agent.Endpoint)
 		agentHost := extractedName + "." + ingressDomain

@@ -319,8 +319,14 @@ impl RuntimeType {
 #[cfg_attr(feature = "python", pyclass(get_all, set_all))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSpec {
-    /// Unique agent name/identifier
+    /// Base agent name (shared across replicas, e.g., "fortuna").
+    /// Comes from the decorator/annotation name argument.
     pub name: String,
+
+    /// Unique per-replica agent ID (e.g., "fortuna-abc12345").
+    /// Defaults to `name` when not set, preserving backward compatibility.
+    #[serde(default)]
+    pub agent_id: String,
 
     /// Agent version (semver)
     pub version: String,
@@ -374,7 +380,8 @@ impl AgentSpec {
         runtime=None,
         tools=None,
         llm_agents=None,
-        heartbeat_interval=5
+        heartbeat_interval=5,
+        agent_id=None
     ))]
     #[allow(clippy::too_many_arguments)]
     pub fn py_new(
@@ -390,6 +397,7 @@ impl AgentSpec {
         tools: Option<Vec<ToolSpec>>,
         llm_agents: Option<Vec<LlmAgentSpec>>,
         heartbeat_interval: u64,
+        agent_id: Option<String>,
     ) -> Self {
         Self::new(
             name,
@@ -404,6 +412,7 @@ impl AgentSpec {
             tools,
             llm_agents,
             heartbeat_interval,
+            agent_id,
         )
     }
 
@@ -434,9 +443,13 @@ impl AgentSpec {
         tools: Option<Vec<ToolSpec>>,
         llm_agents: Option<Vec<LlmAgentSpec>>,
         heartbeat_interval: u64,
+        agent_id: Option<String>,
     ) -> Self {
+        // Default agent_id to name if not provided (backward compat).
+        let agent_id = agent_id.filter(|s| !s.is_empty()).unwrap_or_else(|| name.clone());
         Self {
             name,
+            agent_id,
             version,
             description,
             registry_url,
@@ -455,10 +468,19 @@ impl AgentSpec {
         }
     }
 
-    /// Get the agent ID (name with optional suffix for uniqueness)
+    /// Get the unique per-replica agent ID.
+    ///
+    /// The `new()` constructor normalizes an empty/missing `agent_id` to
+    /// `name`, but deserialization (via serde) bypasses `new()` and can
+    /// produce an empty `agent_id` because of `#[serde(default)]` on the
+    /// field. This getter applies the same fallback defensively so callers
+    /// always receive a non-empty ID regardless of construction path.
     pub fn agent_id(&self) -> String {
-        // For now, just use the name. Could add UUID suffix later.
-        self.name.clone()
+        if self.agent_id.is_empty() {
+            self.name.clone()
+        } else {
+            self.agent_id.clone()
+        }
     }
 
     /// Get all dependency capabilities required by this agent's tools
@@ -541,6 +563,7 @@ mod tests {
             None,
             None,
             5,
+            None, // agent_id defaults to name
         );
 
         assert_eq!(spec.name, "test-agent");
@@ -548,6 +571,84 @@ mod tests {
         assert!(spec.tools.is_empty());
         assert_eq!(spec.agent_type, AgentType::McpAgent);
         assert_eq!(spec.runtime, RuntimeType::Python);
+    }
+
+    #[test]
+    fn test_agent_spec_distinct_agent_id() {
+        let spec = AgentSpec::new(
+            "fortuna".to_string(),
+            "http://localhost:8100".to_string(),
+            "1.0.0".to_string(),
+            "".to_string(),
+            0,
+            "localhost".to_string(),
+            "default".to_string(),
+            None,
+            None,
+            None,
+            None,
+            5,
+            Some("fortuna-abc12345".to_string()),
+        );
+
+        assert_eq!(spec.name, "fortuna");
+        assert_eq!(spec.agent_id(), "fortuna-abc12345");
+    }
+
+    #[test]
+    fn test_agent_spec_id_fallback_on_deserialize() {
+        // Case 1: agent_id field is omitted entirely → falls back to name.
+        let json_missing = r#"{
+            "name": "fortuna",
+            "version": "1.0.0",
+            "description": "",
+            "registry_url": "http://localhost:8100",
+            "http_port": 0,
+            "http_host": "localhost",
+            "namespace": "default",
+            "tools": [],
+            "llm_agents": [],
+            "heartbeat_interval": 5
+        }"#;
+        let spec: AgentSpec = serde_json::from_str(json_missing).unwrap();
+        assert_eq!(spec.name, "fortuna");
+        assert_eq!(spec.agent_id(), "fortuna");
+
+        // Case 2: agent_id is present but empty → falls back to name.
+        let json_empty = r#"{
+            "name": "fortuna",
+            "agent_id": "",
+            "version": "1.0.0",
+            "description": "",
+            "registry_url": "http://localhost:8100",
+            "http_port": 0,
+            "http_host": "localhost",
+            "namespace": "default",
+            "tools": [],
+            "llm_agents": [],
+            "heartbeat_interval": 5
+        }"#;
+        let spec: AgentSpec = serde_json::from_str(json_empty).unwrap();
+        assert_eq!(spec.name, "fortuna");
+        assert_eq!(spec.agent_id(), "fortuna");
+
+        // Case 3: agent_id is set → returned as-is.
+        let json_set = r#"{
+            "name": "fortuna",
+            "agent_id": "fortuna-abc12345",
+            "version": "1.0.0",
+            "description": "",
+            "registry_url": "http://localhost:8100",
+            "http_port": 0,
+            "http_host": "localhost",
+            "namespace": "default",
+            "tools": [],
+            "llm_agents": [],
+            "heartbeat_interval": 5
+        }"#;
+        let spec: AgentSpec = serde_json::from_str(json_set).unwrap();
+        assert_eq!(spec.name, "fortuna");
+        assert_eq!(spec.agent_id(), "fortuna-abc12345");
     }
 
     #[test]
@@ -565,6 +666,7 @@ mod tests {
             None,
             None,
             5,
+            None,
         );
 
         assert_eq!(spec.agent_type, AgentType::Api);
@@ -588,6 +690,7 @@ mod tests {
             None,
             None,
             5,
+            None,
         );
 
         spec.tools = vec![

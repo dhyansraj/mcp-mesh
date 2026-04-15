@@ -167,7 +167,8 @@ class ApiRuntime {
     this.starting = true;
 
     try {
-      // Generate service ID: "api-<random-suffix>"
+      // Generate service ID: "<base>-<random-suffix>".
+      // Unnamed API services default to "api" — set MCP_MESH_AGENT_NAME to disambiguate.
       const namePart = resolveConfig("agent_name", this.config.name) || "api";
       const suffix = Math.random().toString(36).substring(2, 10);
       this.serviceId = `${namePart}-${suffix}`;
@@ -210,7 +211,9 @@ class ApiRuntime {
 
       // Create AgentSpec with agent_type: "api"
       const spec: JsAgentSpec = {
-        name: this.serviceId,
+        // Base name (shared across replicas), unique ID via agentId.
+        name: namePart,
+        agentId: this.serviceId,
         version: "1.0.0",
         description: "",
         registryUrl,

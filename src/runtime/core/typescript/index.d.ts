@@ -251,8 +251,13 @@ export declare function isTracingEnabled(): boolean
 
 /** Agent specification for TypeScript. */
 export interface JsAgentSpec {
-  /** Unique agent name/identifier */
+  /** Base agent name (shared across replicas, e.g., "fortuna") */
   name: string
+  /**
+   * Unique per-replica agent ID (e.g., "fortuna-abc12345").
+   * Defaults to `name` when not provided (backward compat).
+   */
+  agentId?: string
   /** Agent version (semver) */
   version: string
   /** Human-readable description */

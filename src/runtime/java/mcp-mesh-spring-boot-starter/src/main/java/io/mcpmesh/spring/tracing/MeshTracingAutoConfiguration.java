@@ -85,9 +85,9 @@ public class MeshTracingAutoConfiguration {
         String namespace = "default";
 
         if (runtime != null && runtime.getAgentSpec() != null) {
-            // Agent ID is assigned by registry at runtime, use name as initial ID
+            // Base agent name (shared across replicas) and unique per-replica ID.
             agentName = runtime.getAgentSpec().getName();
-            agentId = agentName;  // Will be updated when registration event is received
+            agentId = runtime.getAgentSpec().getAgentId();
             port = runtime.getAgentSpec().getHttpPort();
             // Get namespace from spec if available
             if (runtime.getAgentSpec().getNamespace() != null) {
