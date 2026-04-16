@@ -85,10 +85,10 @@ The [TSuite](https://github.com/dhyansraj/mcp-mesh-test-suite) integration testi
 
     ```bash
     helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-      --version 1.3.2 -n mcp-mesh --create-namespace
+      --version 1.3.3 -n mcp-mesh --create-namespace
 
     helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-      --version 1.3.2 -n mcp-mesh -f helm-values.yaml
+      --version 1.3.3 -n mcp-mesh -f helm-values.yaml
     ```
 
 Same agent code runs locally, in Docker, and in Kubernetes — no changes needed.

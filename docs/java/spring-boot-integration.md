@@ -23,7 +23,7 @@ MCP Mesh provides `@MeshRoute` and `@MeshInject` annotations for Spring Boot RES
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>1.3.2</version>
+        <version>1.3.3</version>
     </dependency>
     <dependency>
         <groupId>org.springframework.boot</groupId>
