@@ -47,10 +47,10 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
         flights: mesh.McpMeshTool = None,
         budget:  mesh.McpMeshTool = None,
     ) -> TripPlan:
-        forecast = await weather(destination, dates)
-        options  = await hotels(destination, dates)
-        routes   = await flights(destination, dates)
-        cost     = await budget(routes, options)
+        forecast = await weather(destination=destination, dates=dates)
+        options  = await hotels(destination=destination, dates=dates)
+        routes   = await flights(destination=destination, dates=dates)
+        cost     = await budget(routes=routes, options=options)
         return TripPlan(forecast, options, routes, cost)
 
     @mesh.agent(name="trip-planner", auto_run=True)
