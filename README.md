@@ -61,19 +61,82 @@ You write the agent logic. The mesh discovers, connects, heals, and traces — a
 - **kubectl-like Management**: `meshctl` - a familiar command-line tool to run, monitor, and manage your entire agent network
 
 ```python
-# MCP Agent
-@app.tool()
-@mesh.tool(capability="plan_trip", dependencies=["weather_service"])
-def plan_trip(weather_service: mesh.McpMeshTool = None):
-    # Just write business logic - mesh handles the rest
+from fastmcp import FastMCP
+import mesh
 
-# FastAPI Route with MCP DI
-@api.post("/trip-planning")
-@mesh.route(dependencies=["plan_trip"])
-async def create_trip(trip_data: dict, plan_trip: mesh.McpMeshTool = None):
-    # Use MCP agents directly in your web API
-    return plan_trip(trip_data)
+app = FastMCP("TripPlanner")
+
+@app.tool()
+@mesh.tool(
+    capability="plan_trip",
+    dependencies=[
+        {"capability": "weather", "tags": ["+claude"]},
+        {"capability": "hotels",  "tags": ["+gpt"]},
+        {"capability": "flights"},
+        {"capability": "budget",  "tags": ["+claude"]},
+    ],
+)
+async def plan_trip(
+    destination: str,
+    dates: str,
+    weather: mesh.McpMeshTool = None,
+    hotels:  mesh.McpMeshTool = None,
+    flights: mesh.McpMeshTool = None,
+    budget:  mesh.McpMeshTool = None,
+) -> TripPlan:
+    forecast = await weather(destination, dates)
+    options  = await hotels(destination, dates)
+    routes   = await flights(destination, dates)
+    cost     = await budget(routes, options)
+    return TripPlan(forecast, options, routes, cost)
+
+@mesh.agent(name="trip-planner", auto_run=True)
+class TripAgent: pass
 ```
+
+> **Four distributed calls, composed like a local function.** Each dependency could live in this process, another machine, another language. Mesh handles discovery, transport, retry, and failover — your function stays a function.
+>
+> **Any dependency can be a plain tool _or_ an LLM agent — your code can't tell the difference.** `weather` could be a REST API *or* a Claude-powered reasoning agent returning a typed pydantic forecast. `+claude` means prefer the reasoning agent; if it dies, mesh auto-rewires to the API. When Claude recovers, mesh rewires back. No deploy, no config, no code change.
+>
+> **Routing stays in Python, not YAML.** See how below.
+
+<details>
+<summary><b>See how the Claude-powered weather agent is built (10 lines)</b></summary>
+
+```python
+from fastmcp import FastMCP
+import mesh
+
+app = FastMCP("ClaudeWeather")
+
+@app.tool()
+@mesh.llm(
+    system_prompt="file://prompts/weather.j2",
+    provider={"capability": "llm", "tags": ["+claude"]},
+)
+@mesh.tool(capability="weather", tags=["+claude"])
+def weather(destination: str, dates: str,
+            llm: mesh.MeshLlmAgent = None) -> Forecast:
+    return llm(f"Forecast for {destination} on {dates}")
+
+@mesh.agent(name="claude-weather", auto_run=True)
+class Agent: pass
+```
+
+</details>
+
+<details>
+<summary><b>Route by Python if/else, not config</b></summary>
+
+```python
+# Two providers of the same capability, wired at runtime
+weather = reasoning_weather if user.wants_explanation else api_weather
+forecast = await weather(destination, dates)
+```
+
+</details>
+
+**[See the full TripPlanner tutorial →](https://mcp-mesh.ai/tutorial/)**
 
 ---
 

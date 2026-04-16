@@ -27,16 +27,34 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     from fastmcp import FastMCP
     import mesh
 
-    app = FastMCP("My Service")
+    app = FastMCP("TripPlanner")
 
     @app.tool()
-    @mesh.tool(capability="greeting", dependencies=["date_service"])
-    async def greet(date_service: mesh.McpMeshTool = None):
-        return f"Hello! {await date_service()}"
+    @mesh.tool(
+        capability="plan_trip",
+        dependencies=[
+            {"capability": "weather", "tags": ["+claude"]},
+            {"capability": "hotels",  "tags": ["+gpt"]},
+            {"capability": "flights"},
+            {"capability": "budget",  "tags": ["+claude"]},
+        ],
+    )
+    async def plan_trip(
+        destination: str,
+        dates: str,
+        weather: mesh.McpMeshTool = None,
+        hotels:  mesh.McpMeshTool = None,
+        flights: mesh.McpMeshTool = None,
+        budget:  mesh.McpMeshTool = None,
+    ) -> TripPlan:
+        forecast = await weather(destination, dates)
+        options  = await hotels(destination, dates)
+        routes   = await flights(destination, dates)
+        cost     = await budget(routes, options)
+        return TripPlan(forecast, options, routes, cost)
 
-    @mesh.agent(name="my-service", auto_run=True)
-    class MyAgent:
-        pass
+    @mesh.agent(name="trip-planner", auto_run=True)
+    class TripAgent: pass
     ```
 
 === "Java"
@@ -57,27 +75,39 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     import io.mcpmesh.types.McpMeshTool;
     import org.springframework.boot.SpringApplication;
     import org.springframework.boot.autoconfigure.SpringBootApplication;
+    import java.util.Map;
 
-    @MeshAgent(name = "my-service", version = "1.0.0", port = 8080)
+    @MeshAgent(name = "trip-planner", version = "1.0.0", port = 8080)
     @SpringBootApplication
-    public class MyServiceApplication {
+    public class TripPlannerApp {
 
         public static void main(String[] args) {
-            SpringApplication.run(MyServiceApplication.class, args);
+            SpringApplication.run(TripPlannerApp.class, args);
         }
 
         @MeshTool(
-            capability = "greeting",
-            dependencies = @Selector(capability = "date_service")
-        )
-        public String greet(
-            @Param("name") String name,
-            McpMeshTool<String> dateService
-        ) {
-            if (dateService != null && dateService.isAvailable()) {
-                return "Hello, " + name + "! " + dateService.call();
+            capability = "plan_trip",
+            dependencies = {
+                @Selector(capability = "weather", tags = {"+claude"}),
+                @Selector(capability = "hotels",  tags = {"+gpt"}),
+                @Selector(capability = "flights"),
+                @Selector(capability = "budget",  tags = {"+claude"})
             }
-            return "Hello, " + name + "!";
+        )
+        public TripPlan planTrip(
+            @Param("destination") String destination,
+            @Param("dates") String dates,
+            McpMeshTool<Forecast> weather,
+            McpMeshTool<HotelOptions> hotels,
+            McpMeshTool<FlightRoutes> flights,
+            McpMeshTool<Cost> budget
+        ) {
+            var args = Map.of("destination", destination, "dates", dates);
+            var forecast = weather.call(args);
+            var options  = hotels.call(args);
+            var routes   = flights.call(args);
+            var cost     = budget.call(Map.of("routes", routes, "options", options));
+            return new TripPlan(forecast, options, routes, cost);
         }
     }
     ```
@@ -89,26 +119,78 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     ```
 
     ```typescript
-    import { FastMCP, mesh } from "@mcpmesh/sdk";
+    import { FastMCP, mesh, McpMeshTool } from "@mcpmesh/sdk";
     import { z } from "zod";
 
-    const server = new FastMCP({ name: "my-service", version: "1.0.0" });
-    const agent = mesh(server, { name: "my-service", port: 8080 });
+    const server = new FastMCP({ name: "TripPlanner", version: "1.0.0" });
+    const agent = mesh(server, { name: "trip-planner", httpPort: 8080 });
 
     agent.addTool({
-      name: "greet",
-      capability: "greeting",
-      description: "Greet the user with current date",
-      dependencies: ["date_service"],
-      parameters: z.object({ name: z.string() }),
-      execute: async ({ name }, { date_service }) => {
-        const date = await date_service();
-        return `Hello, ${name}! Today is ${date}`;
+      name: "plan_trip",
+      capability: "plan_trip",
+      description: "Plan a trip by composing weather, hotels, flights, and budget",
+      dependencies: [
+        { capability: "weather", tags: ["+claude"] },
+        { capability: "hotels",  tags: ["+gpt"] },
+        { capability: "flights" },
+        { capability: "budget",  tags: ["+claude"] },
+      ],
+      parameters: z.object({
+        destination: z.string(),
+        dates: z.string(),
+      }),
+      execute: async (
+        { destination, dates },
+        weather: McpMeshTool | null,
+        hotels: McpMeshTool | null,
+        flights: McpMeshTool | null,
+        budget: McpMeshTool | null,
+      ) => {
+        const forecast = await weather!({ destination, dates });
+        const options  = await hotels!({ destination, dates });
+        const routes   = await flights!({ destination, dates });
+        const cost     = await budget!({ routes, options });
+        return { forecast, options, routes, cost };
       },
     });
     ```
 
-**That's it!** Define `date_service` the same way — in this agent or another, in Python, Java, or TypeScript. MCP Mesh discovers it anywhere on the network, across agents, across runtimes. No server setup, no connection management, no networking code.
+!!! abstract "What just happened?"
+    Four distributed calls, composed like a local function. Each dep could live in this process, another machine, another language. Mesh handles discovery, transport, retry, and failover — your function stays a function.
+
+    Any dep can be a plain tool **or** an LLM agent — your code can't tell. `weather` could be a REST API *or* a Claude-powered reasoning agent returning a typed pydantic forecast. `+claude` means prefer the reasoning agent; if it dies, mesh auto-rewires to the API. When Claude recovers, mesh rewires back. No deploy, no config, no code change.
+
+???+ example "See how the Claude-powered weather agent is built (10 lines)"
+    ```python
+    from fastmcp import FastMCP
+    import mesh
+
+    app = FastMCP("ClaudeWeather")
+
+    @app.tool()
+    @mesh.llm(
+        system_prompt="file://prompts/weather.j2",
+        provider={"capability": "llm", "tags": ["+claude"]},
+    )
+    @mesh.tool(capability="weather", tags=["+claude"])
+    def weather(destination: str, dates: str,
+                llm: mesh.MeshLlmAgent = None) -> Forecast:
+        return llm(f"Forecast for {destination} on {dates}")
+
+    @mesh.agent(name="claude-weather", auto_run=True)
+    class Agent: pass
+    ```
+
+    The LLM orchestrates tools via the mesh `filter` pattern and returns a typed pydantic `Forecast` — no agentic loop to write.
+
+??? example "Route by Python if/else, not config"
+    ```python
+    # Two providers of the same capability, wired at runtime
+    weather = reasoning_weather if user.wants_explanation else api_weather
+    forecast = await weather(destination, dates)
+    ```
+
+**[See the full TripPlanner tutorial →](https://mcp-mesh.ai/tutorial/)**
 
 ---
 
