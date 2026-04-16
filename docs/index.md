@@ -156,7 +156,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     ```
 
 !!! abstract "What just happened?"
-    Four distributed calls, composed like a local function. Each dep could live in this process, another machine, another language. Mesh handles discovery, transport, retry, and failover — your function stays a function.
+    Four distributed calls, composed like a local function. Each dep could live in this process, another machine, another language. Mesh handles discovery, transport, retry, and failover — your function stays a function. Each dep is just another `@mesh.tool`, defined the same way — in this agent or another.
 
     Any dep can be a plain tool **or** an LLM agent — your code can't tell. `weather` could be a REST API *or* a Claude-powered reasoning agent returning a typed pydantic forecast. `+claude` means prefer the reasoning agent; if it dies, mesh auto-rewires to the API. When Claude recovers, mesh rewires back. No deploy, no config, no code change.
 
