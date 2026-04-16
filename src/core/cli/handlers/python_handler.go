@@ -86,7 +86,7 @@ func (h *PythonHandler) GenerateAgent(config ScaffoldConfig) error {
 // GenerateDockerfile returns Python Dockerfile content
 func (h *PythonHandler) GenerateDockerfile() string {
 	return `# Dockerfile for MCP Mesh Python agent
-FROM mcpmesh/python-runtime:1.3.2
+FROM mcpmesh/python-runtime:1.3.3
 
 WORKDIR /app
 
@@ -170,7 +170,7 @@ func (h *PythonHandler) ParseAgentFile(path string) (*AgentInfo, error) {
 
 // GetDockerImage returns the Python runtime Docker image
 func (h *PythonHandler) GetDockerImage() string {
-	return "mcpmesh/python-runtime:1.3.2"
+	return "mcpmesh/python-runtime:1.3.3"
 }
 
 // ValidatePrerequisites checks Python environment
@@ -248,5 +248,5 @@ const pythonInitTemplate = `# {{.Name}} MCP Mesh Agent
 const pythonMainModuleTemplate = `from .main import *
 `
 
-const pythonRequirementsTemplate = `mcp-mesh>=1.3.2
+const pythonRequirementsTemplate = `mcp-mesh>=1.3.3
 `

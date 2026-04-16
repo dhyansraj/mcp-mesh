@@ -63,7 +63,7 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>1.3.2</version>
+        <version>1.3.3</version>
     </dependency>
     ```
 
@@ -353,7 +353,7 @@ Pass images, PDFs, and files between agents and LLMs. Claude, OpenAI, and Gemini
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>1.3.2</version>
+        <version>1.3.3</version>
     </dependency>
     ```
 
@@ -372,10 +372,10 @@ Pass images, PDFs, and files between agents and LLMs. Claude, OpenAI, and Gemini
 === "Docker Images"
 
     ```bash
-    docker pull mcpmesh/registry:1.3.2
-    docker pull mcpmesh/python-runtime:1.3.2
-    docker pull mcpmesh/java-runtime:1.3.2
-    docker pull mcpmesh/typescript-runtime:1.3.2
+    docker pull mcpmesh/registry:1.3.3
+    docker pull mcpmesh/python-runtime:1.3.3
+    docker pull mcpmesh/java-runtime:1.3.3
+    docker pull mcpmesh/typescript-runtime:1.3.3
     ```
 
     Official container images for production deployments.
@@ -401,7 +401,7 @@ Pass images, PDFs, and files between agents and LLMs. Claude, OpenAI, and Gemini
 
 ## :star: Project Status
 
-- **Latest Release**: v1.3.2 (March 2026)
+- **Latest Release**: v1.3.3 (March 2026)
 - **License**: MIT
 - **Languages**: Python 3.11+, TypeScript/Node.js 18+, and Java 17+ (runtime), Go 1.23+ (registry)
 - **Status**: Production-ready, actively developed
