@@ -777,6 +777,14 @@ def main() -> int:
             "to regenerate Chart.lock digest"
         )
 
+    cargo_lock = PROJECT_ROOT / "src" / "runtime" / "core" / "Cargo.lock"
+    if cargo_lock.exists():
+        print()
+        print(
+            "Reminder: run 'cargo generate-lockfile' in src/runtime/core "
+            "to refresh Cargo.lock with the new mcp-mesh-core version"
+        )
+
     return 0
 
 

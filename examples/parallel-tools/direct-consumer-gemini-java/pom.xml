@@ -21,7 +21,7 @@
 
     <properties>
         <java.version>17</java.version>
-        <mcp-mesh.version>1.3.3</mcp-mesh.version>
+        <mcp-mesh.version>1.3.4</mcp-mesh.version>
         <spring-ai.version>2.0.0-M4</spring-ai.version>
     </properties>
 
