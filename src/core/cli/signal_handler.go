@@ -61,16 +61,22 @@ func (sh *SignalHandler) SetShutdownTimeout(timeout time.Duration) {
 
 // StartSignalHandling starts listening for system signals
 func (sh *SignalHandler) StartSignalHandling() {
-	sh.signalChan = make(chan os.Signal, 1)
+	signalChan := make(chan os.Signal, 1)
 
 	// Register for interrupt signals
-	signal.Notify(sh.signalChan,
+	signal.Notify(signalChan,
 		os.Interrupt,    // SIGINT (Ctrl+C)
 		syscall.SIGTERM, // SIGTERM (termination request)
 		syscall.SIGHUP,  // SIGHUP (hangup)
 	)
 
-	go sh.handleSignals(sh.signalChan)
+	// Publish the channel under the mutex so gracefulShutdown's
+	// snapshot read sees a fully-initialized value.
+	sh.mutex.Lock()
+	sh.signalChan = signalChan
+	sh.mutex.Unlock()
+
+	go sh.handleSignals(signalChan)
 	sh.logger.Println("Started signal handling")
 }
 
@@ -97,9 +103,19 @@ func (sh *SignalHandler) gracefulShutdown() {
 		// Stop receiving signals and close the channel so the
 		// handleSignals goroutine exits cleanly (prevents goroutine leak,
 		// notably for SIGHUP which loops in handleSignals).
-		if sh.signalChan != nil {
-			signal.Stop(sh.signalChan)
-			close(sh.signalChan)
+		//
+		// Snapshot the channel under the mutex (writers go through the
+		// same lock in StartSignalHandling), then perform signal.Stop +
+		// close outside the critical section to avoid holding the lock
+		// across a potentially blocking call. Nil out sh.signalChan so
+		// any future caller observes "already torn down".
+		sh.mutex.Lock()
+		ch := sh.signalChan
+		sh.signalChan = nil
+		sh.mutex.Unlock()
+		if ch != nil {
+			signal.Stop(ch)
+			close(ch)
 		}
 
 		close(sh.shutdownChan)
