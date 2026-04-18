@@ -1,0 +1,91 @@
+# Test Case: Invalid Type Hint Warning (Python)
+# Verifies that a tool with an unresolvable forward reference type hint
+# (e.g. value: "NonExistentType") triggers a warning log from
+# signature_analyzer.get_mesh_agent_parameter_names instead of being
+# silently swallowed, and that the agent still comes up gracefully.
+#
+# Regression test for GitHub issue #792.
+#
+# Uses UC-level artifacts from /uc-artifacts
+
+name: "Invalid Type Hint Warning (Python)"
+description: "Verify malformed type hints log a warning and agent degrades gracefully"
+tags:
+  - tools
+  - signature-analyzer
+  - logging
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifact
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-bad-hints-agent /workspace/
+    capture: copy_output
+
+  # Start agent (must include MCP_MESH_LOG_LEVEL=DEBUG-or-WARNING-or-default
+  # default level captures WARNING already)
+  - name: "Start agent with invalid type hint"
+    handler: shell
+    command: "meshctl start py-bad-hints-agent/main.py -d"
+    workdir: /workspace
+    capture: start_agent
+
+  # Wait for registration
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 10
+
+  # Verify agent is registered (graceful degradation)
+  - name: "Verify agent is registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Inspect log file for the warning we emit from signature_analyzer
+  - name: "Inspect agent log for signature warning"
+    handler: shell
+    command: |
+      LOG_FILE="$HOME/.mcp-mesh/logs/py-bad-hints-agent.log"
+      if [ ! -f "$LOG_FILE" ]; then
+        echo "FAIL: Log file not found at $LOG_FILE"
+        ls -la "$HOME/.mcp-mesh/logs/" 2>/dev/null || true
+        exit 1
+      fi
+      echo "=== Matching warning lines ==="
+      grep "Failed to analyze signature for" "$LOG_FILE" || true
+      if grep -q "Failed to analyze signature for" "$LOG_FILE"; then
+        echo "PASS: Warning was logged"
+      else
+        echo "FAIL: Expected warning 'Failed to analyze signature for' not found in log"
+        echo "=== Last 50 log lines ==="
+        tail -50 "$LOG_FILE"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: log_check
+
+assertions:
+  # Agent registered despite the malformed hint (graceful degradation)
+  - expr: "${captured.list_output} contains 'py-bad-hints-agent'"
+    message: "Agent should still register despite unresolvable type hint"
+
+  # Warning was emitted (no silent swallow)
+  - expr: "${captured.log_check} contains 'PASS: Warning was logged'"
+    message: "signature_analyzer should log a warning instead of silently swallowing"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

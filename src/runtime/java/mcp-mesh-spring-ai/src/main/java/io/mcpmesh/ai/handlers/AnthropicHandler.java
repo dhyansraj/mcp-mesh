@@ -104,7 +104,9 @@ public class AnthropicHandler implements LlmProviderHandler {
                         } catch (UnsatisfiedLinkError e) {
                             // Native library unavailable (e.g., CI) — safe default
                         }
-                    } catch (Exception ignored) {}
+                    } catch (Exception e) {
+                        log.warn("Failed to serialize tool schema for media params detection: {}", e.getMessage());
+                    }
                 }
             }
         }

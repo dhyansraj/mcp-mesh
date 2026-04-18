@@ -157,7 +157,11 @@ def get_mesh_agent_parameter_names(func: Any) -> list[str]:
 
         return mesh_param_names
 
-    except Exception:
+    except Exception as e:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to analyze signature for {func}: {e}")
         return []
 
 
@@ -266,7 +270,11 @@ def get_llm_agent_parameter_names(func: Any) -> list[str]:
                     llm_param_names.append(param_name)
 
         return llm_param_names
-    except Exception:
+    except Exception as e:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to analyze signature for {func}: {e}")
         return []
 
 
