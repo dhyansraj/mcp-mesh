@@ -17,6 +17,7 @@ type SignalHandler struct {
 	shutdownTimeout   time.Duration
 	shutdownChan      chan struct{}
 	shutdownOnce      sync.Once
+	signalChan        chan os.Signal
 }
 
 // ProcessCleanupManager handles cleanup operations during shutdown
@@ -60,16 +61,16 @@ func (sh *SignalHandler) SetShutdownTimeout(timeout time.Duration) {
 
 // StartSignalHandling starts listening for system signals
 func (sh *SignalHandler) StartSignalHandling() {
-	signalChan := make(chan os.Signal, 1)
+	sh.signalChan = make(chan os.Signal, 1)
 
 	// Register for interrupt signals
-	signal.Notify(signalChan,
+	signal.Notify(sh.signalChan,
 		os.Interrupt,    // SIGINT (Ctrl+C)
 		syscall.SIGTERM, // SIGTERM (termination request)
 		syscall.SIGHUP,  // SIGHUP (hangup)
 	)
 
-	go sh.handleSignals(signalChan)
+	go sh.handleSignals(sh.signalChan)
 	sh.logger.Println("Started signal handling")
 }
 
@@ -93,6 +94,14 @@ func (sh *SignalHandler) handleSignals(signalChan chan os.Signal) {
 // gracefulShutdown performs a graceful shutdown of all processes
 func (sh *SignalHandler) gracefulShutdown() {
 	sh.shutdownOnce.Do(func() {
+		// Stop receiving signals and close the channel so the
+		// handleSignals goroutine exits cleanly (prevents goroutine leak,
+		// notably for SIGHUP which loops in handleSignals).
+		if sh.signalChan != nil {
+			signal.Stop(sh.signalChan)
+			close(sh.signalChan)
+		}
+
 		close(sh.shutdownChan)
 
 		sh.logger.Println("Starting graceful shutdown sequence...")
