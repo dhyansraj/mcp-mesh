@@ -4,7 +4,6 @@ import io.mcpmesh.core.MeshCoreBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.anthropic.AnthropicChatOptions;
-import org.springframework.ai.anthropic.api.AnthropicApi.ChatCompletionRequest.OutputFormat;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -333,10 +332,10 @@ public class AnthropicHandler implements LlmProviderHandler {
         if (outputSchema != null) {
             try {
                 Map<String, Object> sanitizedSchema = outputSchema.sanitize();
-                OutputFormat outputFormat = new OutputFormat("json_schema", sanitizedSchema);
+                String schemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(sanitizedSchema);
 
                 AnthropicChatOptions chatOptions = AnthropicChatOptions.builder()
-                    .outputFormat(outputFormat)
+                    .outputSchema(schemaJson)
                     .build();
 
                 requestSpec.options(chatOptions);
@@ -424,12 +423,12 @@ public class AnthropicHandler implements LlmProviderHandler {
         if (outputSchema != null) {
             try {
                 Map<String, Object> sanitizedSchema = outputSchema.sanitize();
-                OutputFormat outputFormat = new OutputFormat("json_schema", sanitizedSchema);
+                String schemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(sanitizedSchema);
 
                 AnthropicChatOptions chatOptions = AnthropicChatOptions.builder()
                     .toolCallbacks(toolCallbacks)
                     .internalToolExecutionEnabled(false)
-                    .outputFormat(outputFormat)
+                    .outputSchema(schemaJson)
                     .build();
 
                 prompt = new org.springframework.ai.chat.prompt.Prompt(messagesWithFormattedSystem, chatOptions);

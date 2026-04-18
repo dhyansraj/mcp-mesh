@@ -215,7 +215,7 @@ func TestScaffoldConfig_Validate(t *testing.T) {
 			config: ScaffoldConfig{
 				Name:      "test",
 				AgentType: "llm-provider",
-				Provider:  &ProviderConfig{Model: "anthropic/claude-3-opus"},
+				Provider:  &ProviderConfig{Model: "anthropic/claude-3-5-sonnet"},
 			},
 			wantErr: "",
 		},

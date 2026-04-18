@@ -56,7 +56,7 @@
 
         <!-- Dependency versions -->
         <spring-boot.version>4.0.5</spring-boot.version>
-        <spring-ai.version>2.0.0-M2</spring-ai.version>
+        <spring-ai.version>2.0.0-M4</spring-ai.version>
         <mcp-sdk.version>1.1.0</mcp-sdk.version>
         <jnr-ffi.version>2.2.16</jnr-ffi.version>
         <!-- Jackson 3 (databind uses tools.jackson, annotations stays on com.fasterxml) -->
