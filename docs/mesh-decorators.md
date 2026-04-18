@@ -915,7 +915,7 @@ async def process_pipeline(
 
 ## @mesh.llm - LLM Agent Injection
 
-> **New in v0.7**: Inject LLM agents as dependencies with automatic tool discovery and type-safe prompt templates
+> Inject LLM agents as dependencies with automatic tool discovery and type-safe prompt templates
 
 The `@mesh.llm` decorator enables LLM integration as first-class mesh capabilities, treating LLMs as injectable dependencies like any other agent.
 

@@ -2,11 +2,11 @@
 
 > Upgrading from exact tag matching to smart `+`/`-` operators
 
-This guide helps you migrate existing MCP Mesh applications to take advantage of enhanced tag matching with preference and exclusion operators introduced in v0.4+.
+This guide helps you migrate existing MCP Mesh applications to take advantage of enhanced tag matching with preference and exclusion operators.
 
 ## What Changed
 
-### Before v0.4 - Exact Matching Only
+### Legacy: Exact Matching Only
 
 ```python
 @mesh.tool(
@@ -19,7 +19,7 @@ This guide helps you migrate existing MCP Mesh applications to take advantage of
 
 **Problem**: Rigid matching - either exact match or total failure. No fallback options.
 
-### After v0.4 - Smart Matching
+### Now: Smart Matching
 
 ```python
 @mesh.tool(

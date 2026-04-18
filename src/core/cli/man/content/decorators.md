@@ -39,7 +39,7 @@ Configures the agent server settings. Applied to a class.
     http_host="localhost",       # Host announced to registry
     namespace="default",         # Namespace for isolation
     auto_run=True,               # Start automatically (no main() needed)
-    auto_run_interval=30,        # Heartbeat interval in seconds
+    auto_run_interval=10,        # Heartbeat interval in seconds
     health_check=health_fn,      # Optional health check function
     health_check_ttl=30,         # Health check cache TTL
 )
