@@ -18,15 +18,64 @@ Set the allowlist via environment variable on every agent in the chain:
 export MCP_MESH_PROPAGATE_HEADERS=authorization,x-request-id,x-tenant-id
 ```
 
-- Comma-separated header name **prefixes**
+- Comma-separated header names
 - Case-insensitive (normalized to lowercase internally)
-- Prefix matching: `x-audit` matches `x-audit-id`, `x-audit-source`, etc.
 - Whitespace around names is trimmed
 - Parsed once at startup — restart to change
 - Must be set on **every agent** in the chain that should participate
 
 With no value set, no custom headers are propagated. Trace headers
 (`X-Trace-ID`, `X-Parent-Span`) are always propagated independently.
+
+### Matching semantics (as of v1.4)
+
+Each entry in the allowlist is one of:
+
+- **Exact match** (plain token): `authorization` matches only `authorization`.
+- **Prefix match** (trailing `*`): `x-trace-*` matches `x-trace-id`,
+  `x-trace-parent`, etc.
+
+Matching is case-insensitive for both modes.
+
+```bash
+# Exact: only "authorization" is forwarded. "authorization-extra" is dropped.
+export MCP_MESH_PROPAGATE_HEADERS=authorization
+
+# Prefix: all x-trace-* headers are forwarded.
+export MCP_MESH_PROPAGATE_HEADERS=x-trace-*
+
+# Mixed: exact for auth tokens, prefix for trace/audit families.
+export MCP_MESH_PROPAGATE_HEADERS=authorization,x-trace-*,x-audit-*
+```
+
+### Migration note (v1.3 → v1.4)
+
+Prior to v1.4, **all** entries used prefix matching. Setting
+`MCP_MESH_PROPAGATE_HEADERS=auth` would silently match `authorization`,
+`auth-token`, and anything else starting with `auth` — a credential-leakage
+risk. Starting in v1.4, plain tokens are exact-only.
+
+If you previously relied on a short token to match longer header names,
+update your allowlist to either the exact name or an explicit prefix:
+
+```bash
+# Before (v1.3):                    After (v1.4, pick one):
+export MCP_MESH_PROPAGATE_HEADERS=auth    # matched "authorization"
+export MCP_MESH_PROPAGATE_HEADERS=authorization        # exact
+export MCP_MESH_PROPAGATE_HEADERS=auth-*               # prefix family
+```
+
+> **Note**: `auth-*` matches `auth-token`, `auth-secret`, etc. — but **NOT**
+> `authorization`. If you previously relied on `auth` matching `authorization`,
+> the correct replacement is the exact entry `authorization`.
+
+> **Note**: A bare `*` (or any entry that becomes empty after stripping the
+> trailing `*`) is rejected at parse time. Such entries would be a
+> zero-length prefix that matches every header — including credentials —
+> re-introducing the leakage class this allowlist exists to prevent. To
+> propagate a wide set of headers, list them explicitly
+> (`x-trace-id, x-tenant-id, ...`) or use prefix matching with a non-empty
+> prefix (`x-app-*`).
 
 ## How It Works
 
@@ -114,7 +163,7 @@ Session propagated headers (from incoming request)
 ```
 
 Per-call headers **win** on conflict. All headers (session and per-call)
-are filtered by the `MCP_MESH_PROPAGATE_HEADERS` prefix allowlist — agents
+are filtered by the `MCP_MESH_PROPAGATE_HEADERS` allowlist — agents
 cannot inject arbitrary headers unless the operator explicitly allows them.
 
 ## Example: Auth Token Forwarding
@@ -166,7 +215,7 @@ SDK combination is in the chain.
 
 | Variable                     | Description                                       | Default  |
 | ---------------------------- | ------------------------------------------------- | -------- |
-| `MCP_MESH_PROPAGATE_HEADERS` | Comma-separated header name prefixes to forward   | _(none)_ |
+| `MCP_MESH_PROPAGATE_HEADERS` | Comma-separated allowlist (exact `name` or `prefix*`) | _(none)_ |
 
 ## See Also
 

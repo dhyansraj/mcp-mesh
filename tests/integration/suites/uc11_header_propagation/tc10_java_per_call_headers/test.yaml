@@ -44,7 +44,7 @@ test:
   - name: "Start header-echo-java agent"
     handler: shell
     workdir: /workspace
-    command: "meshctl start /workspace/header-echo-java --env MCP_MESH_PROPAGATE_HEADERS=x-audit -d"
+    command: "meshctl start /workspace/header-echo-java --env 'MCP_MESH_PROPAGATE_HEADERS=x-audit-*' -d"
     capture: start_echo
 
   # Wait for echo agent to register (Java is slow to start)
@@ -69,7 +69,7 @@ test:
   - name: "Start header-relay-java agent"
     handler: shell
     workdir: /workspace
-    command: "meshctl start /workspace/header-relay-java --env MCP_MESH_PROPAGATE_HEADERS=x-audit -d"
+    command: "meshctl start /workspace/header-relay-java --env 'MCP_MESH_PROPAGATE_HEADERS=x-audit-*' -d"
     capture: start_relay
 
   # Wait for relay agent to register

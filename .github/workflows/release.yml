@@ -354,8 +354,23 @@ jobs:
           echo "Publishing Java SDK version: ${VERSION}"
 
       - name: Import GPG key
+        env:
+          GPG_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+          # Mask each non-empty line of the multi-line PEM individually.
+          # GitHub's auto-mask only catches exact full-string matches; per-line
+          # masking ensures fragments that surface in error output are also redacted.
+          while IFS= read -r line; do
+            if [ -n "$line" ]; then
+              echo "::add-mask::$line"
+            fi
+          done <<< "$GPG_KEY"
+          # Import; filter gpg output to suppress any incidental PEM markers
+          # (defense-in-depth — gpg --batch normally doesn't echo key material,
+          # but error paths could).
+          printf '%s\n' "$GPG_KEY" | gpg --batch --import 2>&1 \
+              | grep -vE '(BEGIN PGP|END PGP|^\s*[A-Za-z0-9+/]{40,}={0,2}\s*$)' \
+              || true
           echo "Imported GPG key: F94266795DCA259D"
           echo "D3B274C5F3344FD4DCC969F9F94266795DCA259D:6:" | gpg --import-ownertrust
 

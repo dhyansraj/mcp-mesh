@@ -289,6 +289,13 @@ func (fs *FileStore) startWatcher() error {
 							log.Printf("[trust/filestore] warning: cannot watch new entities dir: %v", err)
 						}
 						log.Printf("[trust/filestore] now watching entities directory: %s", event.Name)
+						// Reload to catch any PEM files written before the watch was set up
+						// (race: meshctl entity register MkdirAll's the dir AND writes the file
+						// in rapid succession; fsnotify may fire entities/ Create before we add
+						// a watch on it, missing the subsequent .pem write).
+						if err := fs.loadAll(); err != nil {
+							log.Printf("[trust/filestore] reload error after entities dir creation: %v", err)
+						}
 					}
 				}
 				if !strings.HasSuffix(event.Name, ".pem") {

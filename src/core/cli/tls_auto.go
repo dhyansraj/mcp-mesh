@@ -141,7 +141,7 @@ func (tc *TLSAutoConfig) GenerateAgentCert(agentName string) (certPath string, k
 func (tc *TLSAutoConfig) GetRegistryTLSEnv() []string {
 	return []string{
 		"MCP_MESH_TLS_MODE=auto",
-		"MCP_MESH_TRUST_BACKEND=localca",
+		"MCP_MESH_TRUST_BACKEND=localca,filestore",
 		fmt.Sprintf("MCP_MESH_TRUST_DIR=%s", tc.TLSDir),
 		fmt.Sprintf("MCP_MESH_TLS_CERT=%s", tc.RegistryCert),
 		fmt.Sprintf("MCP_MESH_TLS_KEY=%s", tc.RegistryKey),
@@ -150,6 +150,11 @@ func (tc *TLSAutoConfig) GetRegistryTLSEnv() []string {
 }
 
 // GetAgentTLSEnv returns environment variables for an agent process when TLS auto is enabled.
+//
+// Agents trust localca only — the filestore backend is registry-scoped (#805).
+// Propagating filestore to agents would mean every agent implicitly trusts
+// every entity an operator registers via `meshctl entity register`, which
+// broadens the trust surface beyond what the #805 fix intended.
 func (tc *TLSAutoConfig) GetAgentTLSEnv(agentCertPath, agentKeyPath string) []string {
 	return []string{
 		"MCP_MESH_TLS_MODE=auto",

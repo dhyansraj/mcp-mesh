@@ -21,10 +21,15 @@ PROPAGATE_HEADERS_CSV: str = ",".join(PROPAGATE_HEADERS)
 
 
 def matches_propagate_header(name: str) -> bool:
-    """Check if a header name matches any prefix in the propagate headers allowlist.
+    """Check if a header name matches the propagate headers allowlist.
 
-    Uses prefix matching: if PROPAGATE_HEADERS contains 'x-audit', it will match
-    'x-audit', 'x-audit-id', 'x-audit-source', etc.
+    Each allowlist entry is either an exact match (plain token) or a prefix
+    match (trailing ``*``). Matching is case-insensitive and is delegated to
+    the Rust core so all SDKs behave identically.
+
+    Examples:
+        - ``authorization`` matches only ``authorization``.
+        - ``x-trace-*`` matches ``x-trace-id``, ``x-trace-parent``, etc.
     """
     if not PROPAGATE_HEADERS:
         return False

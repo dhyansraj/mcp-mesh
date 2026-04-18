@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -21,6 +22,15 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 )
+
+// ErrEntityIDMismatch is returned when a heartbeat or registration update is
+// attempted by an entity that does not own the target agent. The mesh enforces
+// "first-claim wins": once an agent_id is registered with a TLS-verified
+// entity_id, only heartbeats from that same entity can update it. Empty
+// entity_id requests are rejected when the existing agent has been claimed
+// (prevents downgrade attacks where TLS-off heartbeats modify TLS-claimed
+// agents).
+var ErrEntityIDMismatch = errors.New("entity_id mismatch")
 
 // Dependency represents a tool dependency with constraints
 // Replaces the old database.Dependency from GORM models
@@ -290,6 +300,22 @@ func extractAgentMetadata(agentID string, metadata map[string]interface{}) agent
 	return m
 }
 
+// checkEntityOwnership verifies that req's entity_id matches the existing
+// agent's owner. Returns ErrEntityIDMismatch (wrapped) if claimed != stored
+// and stored is non-empty. op is a short caller name for log context.
+func (s *EntService) checkEntityOwnership(op, agentID, reqEntityID string, storedEntityID *string) error {
+	if storedEntityID == nil || *storedEntityID == "" {
+		return nil
+	}
+	if *storedEntityID == reqEntityID {
+		return nil
+	}
+	s.logger.Warning("entity_id mismatch in %s: agent %q owned by %q, rejected request from %q",
+		op, agentID, *storedEntityID, reqEntityID)
+	return fmt.Errorf("%w: agent %q owned by another entity",
+		ErrEntityIDMismatch, agentID)
+}
+
 // RegisterAgent handles agent registration using Ent queries
 func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrationResponse, error) {
 	ctx := context.Background()
@@ -348,6 +374,15 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 				return fmt.Errorf("failed to check existing agent: %w", err)
 			}
 		} else {
+			// Enforce entity ownership on register-update path. Mirrors the check in
+			// UpdateHeartbeat — protects against the race where a heartbeat for a
+			// non-existent agent_id escalates into RegisterAgent and an entity
+			// concurrently claims that agent_id; without this check, the rogue
+			// register would silently overwrite EntityID.
+			if err := s.checkEntityOwnership("RegisterAgent", req.AgentID, req.EntityID, existingAgent.EntityID); err != nil {
+				return err
+			}
+
 			// Update existing agent
 			updateBuilder := existingAgent.Update().
 				SetAgentType(agent.AgentType(meta.agentType)).
@@ -972,6 +1007,12 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				}
 				regResp, err := s.RegisterAgent(fullReq)
 				if err != nil {
+					// Propagate ErrEntityIDMismatch as a real error so the HTTP
+					// handler can map it to 403 (otherwise it'd be swallowed into
+					// a 200 response with status="error").
+					if errors.Is(err, ErrEntityIDMismatch) {
+						return nil, err
+					}
 					return &HeartbeatResponse{
 						Status:    "error",
 						Timestamp:    now.Format(time.RFC3339),
@@ -1009,6 +1050,14 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to check agent existence: %w", err)
+	}
+
+	// Enforce entity ownership. Once an agent has been claimed by an entity
+	// (via TLS-verified registration), subsequent heartbeats must come from the
+	// same entity. Empty req.EntityID is rejected if the existing agent is
+	// claimed — this prevents downgrade attacks.
+	if err := s.checkEntityOwnership("UpdateHeartbeat", req.AgentID, req.EntityID, existingAgent.EntityID); err != nil {
+		return nil, err
 	}
 
 	// Check for status transitions and handle accordingly

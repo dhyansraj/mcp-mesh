@@ -98,7 +98,13 @@ pub fn extract_trace_context(headers_json: &str, body_json: Option<&str>) -> Str
     .to_string()
 }
 
-/// Filter headers by propagation allowlist with prefix matching.
+/// Filter headers by propagation allowlist.
+///
+/// Allowlist entries are comma-separated and case-insensitive. Each entry is
+/// either:
+/// - Exact match (plain token): `authorization` matches only `authorization`.
+/// - Prefix match (trailing `*`): `x-trace-*` matches `x-trace-id`,
+///   `x-trace-parent`, etc.
 pub fn filter_propagation_headers(
     headers_json: &str,
     allowlist_csv: &str,
@@ -114,7 +120,13 @@ pub fn filter_propagation_headers(
     let mut result = serde_json::Map::new();
     for (key, value) in obj {
         let lower_key = key.to_lowercase();
-        if allowlist.iter().any(|prefix| lower_key.starts_with(prefix)) {
+        if allowlist.iter().any(|entry| {
+            if let Some(prefix) = entry.strip_suffix('*') {
+                lower_key.starts_with(prefix)
+            } else {
+                lower_key == entry.as_str()
+            }
+        }) {
             result.insert(lower_key, value.clone());
         }
     }
@@ -124,16 +136,32 @@ pub fn filter_propagation_headers(
 }
 
 /// Check if a header matches the propagation allowlist.
+///
+/// See [`filter_propagation_headers`] for allowlist syntax: plain tokens are
+/// exact matches; tokens with a trailing `*` are prefix matches.
 pub fn matches_propagate_header(header_name: &str, allowlist_csv: &str) -> bool {
     let allowlist = parse_allowlist(allowlist_csv);
     let lower = header_name.to_lowercase();
-    allowlist.iter().any(|prefix| lower.starts_with(prefix))
+    allowlist.iter().any(|entry| {
+        if let Some(prefix) = entry.strip_suffix('*') {
+            lower.starts_with(prefix)
+        } else {
+            lower == entry.as_str()
+        }
+    })
 }
 
 fn parse_allowlist(csv: &str) -> Vec<String> {
     csv.split(',')
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty())
+        .filter(|s| {
+            // Reject zero-length prefix matchers (e.g. "*" alone) which would
+            // match every header and re-introduce the credential leakage class
+            // #790 was meant to prevent.
+            let core = s.strip_suffix('*').unwrap_or(s);
+            !core.is_empty()
+        })
         .collect()
 }
 
@@ -286,7 +314,7 @@ mod tests {
     fn test_filter_prefix_matching() {
         let result = filter_propagation_headers(
             r#"{"X-Audit-Id": "123", "X-Request-Id": "456", "Content-Type": "json"}"#,
-            "x-audit, x-request",
+            "x-audit-*, x-request-*",
         )
         .unwrap();
         let v: Value = serde_json::from_str(&result).unwrap();
@@ -299,7 +327,7 @@ mod tests {
     fn test_filter_no_matches() {
         let result = filter_propagation_headers(
             r#"{"Content-Type": "json"}"#,
-            "x-audit",
+            "x-audit-*",
         )
         .unwrap();
         let v: Value = serde_json::from_str(&result).unwrap();
@@ -321,13 +349,39 @@ mod tests {
     fn test_filter_multiple_prefixes() {
         let result = filter_propagation_headers(
             r#"{"X-A-One": "1", "X-B-Two": "2", "X-C-Three": "3"}"#,
-            "x-a, x-c",
+            "x-a-*, x-c-*",
         )
         .unwrap();
         let v: Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["x-a-one"], "1");
         assert!(v.get("x-b-two").is_none());
         assert_eq!(v["x-c-three"], "3");
+    }
+
+    #[test]
+    fn test_filter_exact_match_only() {
+        // Exact token must match exactly, not as a prefix.
+        let result = filter_propagation_headers(
+            r#"{"Authorization": "bearer", "Authorization-Extra": "leak"}"#,
+            "authorization",
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["authorization"], "bearer");
+        assert!(v.get("authorization-extra").is_none());
+    }
+
+    #[test]
+    fn test_filter_mixed_exact_and_prefix() {
+        let result = filter_propagation_headers(
+            r#"{"X-Auth-Exact": "ok", "X-Auth-Exact-Longer": "nope", "X-Trace-Id": "t1"}"#,
+            "x-auth-exact, x-trace-*",
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["x-auth-exact"], "ok");
+        assert!(v.get("x-auth-exact-longer").is_none());
+        assert_eq!(v["x-trace-id"], "t1");
     }
 
     // =========================================================================
@@ -340,17 +394,55 @@ mod tests {
     }
 
     #[test]
-    fn test_matches_prefix() {
-        assert!(matches_propagate_header("X-Audit-Id", "x-audit"));
+    fn test_matches_exact_rejects_prefix() {
+        // Plain token is exact-only; longer header must not match.
+        assert!(!matches_propagate_header("X-Audit-Id", "x-audit"));
+    }
+
+    #[test]
+    fn test_matches_prefix_with_star() {
+        assert!(matches_propagate_header("X-Audit-Id", "x-audit-*"));
     }
 
     #[test]
     fn test_matches_no_match() {
-        assert!(!matches_propagate_header("Content-Type", "x-audit"));
+        assert!(!matches_propagate_header("Content-Type", "x-audit-*"));
     }
 
     #[test]
     fn test_matches_empty_allowlist() {
         assert!(!matches_propagate_header("X-Audit-Id", ""));
+    }
+
+    // =========================================================================
+    // bare "*" rejection — guards against credential leakage class #790
+    // =========================================================================
+
+    #[test]
+    fn test_bare_star_rejected_in_matches() {
+        // A bare "*" must NOT match anything — it's a zero-length prefix and
+        // would otherwise propagate every header (including auth).
+        assert!(!matches_propagate_header("authorization", "*"));
+        assert!(!matches_propagate_header("x-audit-id", "*"));
+        assert!(!matches_propagate_header("cookie", "*"));
+    }
+
+    #[test]
+    fn test_bare_star_rejected_in_filter() {
+        let result = filter_propagation_headers(
+            r#"{"authorization": "Bearer secret", "x-audit-id": "123"}"#,
+            "*",
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&result).unwrap();
+        // Empty result — bare "*" rejected, no headers propagate.
+        assert_eq!(v.as_object().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_bare_star_rejected_among_other_entries() {
+        // Other valid entries should still work; only the bare "*" is dropped.
+        assert!(matches_propagate_header("x-audit-id", "*, x-audit-id"));
+        assert!(!matches_propagate_header("authorization", "*, x-audit-id"));
     }
 }

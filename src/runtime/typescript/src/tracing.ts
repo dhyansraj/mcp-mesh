@@ -36,11 +36,14 @@ function parsePropagateHeaders(): string[] {
 export const PROPAGATE_HEADERS: string[] = parsePropagateHeaders();
 
 /**
- * Check if a header name matches any prefix in the propagate headers allowlist.
- * Uses prefix matching: if PROPAGATE_HEADERS contains 'x-audit', it will match
- * 'x-audit', 'x-audit-id', 'x-audit-source', etc.
+ * Check if a header name matches the propagate headers allowlist.
  *
- * Delegates to Rust core for matching logic.
+ * Each allowlist entry is either an exact match (plain token) or a prefix
+ * match (trailing `*`). Matching is case-insensitive.
+ * - `authorization` matches only `authorization`.
+ * - `x-trace-*` matches `x-trace-id`, `x-trace-parent`, etc.
+ *
+ * Delegates to Rust core so all SDKs behave identically.
  */
 export function matchesPropagateHeader(name: string): boolean {
   if (PROPAGATE_HEADERS.length === 0) return false;

@@ -136,13 +136,9 @@ func (s *Server) Run(addr string) error {
 	// Use TLS listener when TLS mode is enabled
 	if s.config.TlsMode != "" && s.config.TlsMode != "off" {
 		if s.config.TlsCertFile == "" || s.config.TlsKeyFile == "" {
-			if s.config.TlsMode == "strict" {
-				return fmt.Errorf("TLS mode is 'strict' but TLS cert/key not configured (set MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY)")
-			}
-			log.Printf("[server] WARNING: TLS mode '%s' but cert/key not configured, falling back to plaintext", s.config.TlsMode)
-		} else {
-			return s.runWithTLS(addr)
+			return fmt.Errorf("TLS mode %q requires MCP_MESH_TLS_CERT and MCP_MESH_TLS_KEY to be set; use MCP_MESH_TLS_MODE=off to run plaintext", s.config.TlsMode)
 		}
+		return s.runWithTLS(addr)
 	}
 	return s.engine.Run(addr)
 }

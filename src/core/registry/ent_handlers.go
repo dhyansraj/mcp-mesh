@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -30,18 +31,29 @@ type resolvedDependency = struct {
 
 // Package-level proxy configuration parsed once at init (#769)
 var (
-	proxyPropagateHeaderPrefixes []string
-	proxyDefaultTimeout          = 60 * time.Second
+	proxyPropagateHeaderEntries []string
+	proxyDefaultTimeout         = 60 * time.Second
 )
 
 func init() {
+	// Parse MCP_MESH_PROPAGATE_HEADERS. Each comma-separated entry is either an
+	// exact header name (e.g., "authorization") or a prefix with trailing "*"
+	// (e.g., "x-trace-*"). Matching is performed in proxyRequest below.
 	if raw := os.Getenv("MCP_MESH_PROPAGATE_HEADERS"); raw != "" {
-		prefixes := strings.Split(raw, ",")
-		for _, p := range prefixes {
-			p = strings.TrimSpace(strings.ToLower(p))
-			if p != "" {
-				proxyPropagateHeaderPrefixes = append(proxyPropagateHeaderPrefixes, p)
+		entries := strings.Split(raw, ",")
+		for _, e := range entries {
+			e = strings.TrimSpace(strings.ToLower(e))
+			if e == "" {
+				continue
 			}
+			// Reject zero-length prefix matchers (e.g. "*" alone) which would match
+			// every header and re-introduce the credential leakage class #790 was
+			// meant to prevent.
+			if strings.TrimSuffix(e, "*") == "" {
+				log.Printf("[propagate-headers] ignoring entry %q: zero-length prefix would match all headers", e)
+				continue
+			}
+			proxyPropagateHeaderEntries = append(proxyPropagateHeaderEntries, e)
 		}
 	}
 	if envTimeout := os.Getenv("MCP_MESH_PROXY_TIMEOUT"); envTimeout != "" {
@@ -140,8 +152,14 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 	// Call lightweight heartbeat service method using EntService
 	serviceResp, err := h.entService.UpdateHeartbeat(heartbeatReq)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
-			Error:     err.Error(),
+		status := http.StatusBadRequest
+		msg := err.Error()
+		if errors.Is(err, ErrEntityIDMismatch) {
+			status = http.StatusForbidden
+			msg = "entity_id mismatch: agent owned by another entity" // sanitized — full detail in server log
+		}
+		c.JSON(status, generated.ErrorResponse{
+			Error:     msg,
 			Timestamp: time.Now().UTC(),
 		})
 		return
@@ -521,12 +539,31 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		proxyReq.Header.Set("X-Mesh-Timeout", meshTimeout)
 	}
 
-	// Forward headers matching MCP_MESH_PROPAGATE_HEADERS prefixes (#769)
-	if len(proxyPropagateHeaderPrefixes) > 0 {
+	// Names already set explicitly above — don't duplicate via propagation
+	explicitlySet := map[string]bool{
+		"content-type":   true,
+		"accept":         true,
+		"x-trace-id":     true,
+		"x-parent-span":  true,
+		"x-mesh-timeout": true,
+	}
+
+	// Forward headers matching MCP_MESH_PROPAGATE_HEADERS allowlist (#769, #790).
+	// Entries are exact matches by default; a trailing "*" denotes a prefix.
+	if len(proxyPropagateHeaderEntries) > 0 {
 		for headerName, values := range c.Request.Header {
 			lowerName := strings.ToLower(headerName)
-			for _, prefix := range proxyPropagateHeaderPrefixes {
-				if strings.HasPrefix(lowerName, prefix) {
+			if explicitlySet[lowerName] {
+				continue
+			}
+			for _, entry := range proxyPropagateHeaderEntries {
+				matches := false
+				if strings.HasSuffix(entry, "*") {
+					matches = strings.HasPrefix(lowerName, strings.TrimSuffix(entry, "*"))
+				} else {
+					matches = lowerName == entry
+				}
+				if matches {
 					for _, v := range values {
 						proxyReq.Header.Add(headerName, v)
 					}
@@ -573,20 +610,30 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		caCert, err := os.ReadFile(caPath)
 		if err != nil {
 			log.Printf("ERROR: failed to read CA cert %s: %v", caPath, err)
+			// Sanitize response: full detail (paths, OS errors) stays in server log only (#794).
 			c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
-				Error:     fmt.Sprintf("Proxy TLS misconfiguration: failed to read CA cert: %v", err),
+				Error:     "Proxy TLS misconfiguration",
 				Timestamp: time.Now().UTC(),
 			})
 			return
 		}
 		caCertPool := x509.NewCertPool()
-		caCertPool.AppendCertsFromPEM(caCert)
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			log.Printf("ERROR: failed to parse CA cert from %s (empty or malformed PEM)", caPath)
+			// Sanitize response: full detail stays in server log only (#794).
+			c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+				Error:     "Proxy TLS misconfiguration",
+				Timestamp: time.Now().UTC(),
+			})
+			return
+		}
 
 		clientCert, err := tls.LoadX509KeyPair(certPath, keyPath)
 		if err != nil {
 			log.Printf("ERROR: failed to load client cert/key (%s, %s): %v", certPath, keyPath, err)
+			// Sanitize response: full detail (paths, OS errors) stays in server log only (#794).
 			c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
-				Error:     fmt.Sprintf("Proxy TLS misconfiguration: failed to load client certificate: %v", err),
+				Error:     "Proxy TLS misconfiguration",
 				Timestamp: time.Now().UTC(),
 			})
 			return

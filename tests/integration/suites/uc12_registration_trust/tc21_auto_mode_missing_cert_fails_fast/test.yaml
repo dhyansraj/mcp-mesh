@@ -1,0 +1,87 @@
+name: "Auto Mode - Fail Fast When Cert/Key Missing"
+description: "Verify registry in MCP_MESH_TLS_MODE=auto refuses to start with plaintext fallback when cert/key env vars are missing (issue #791)"
+tags:
+  - registration-trust
+  - tls
+  - auto
+  - security
+  - python
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Start registry with TLS auto but NO cert/key configured"
+    handler: shell
+    command: |
+      # Launch registry binary directly in the background with auto TLS mode
+      # but WITHOUT MCP_MESH_TLS_CERT/KEY env vars. Expectation: exits fast
+      # with an error mentioning MCP_MESH_TLS_CERT, instead of silently
+      # falling back to plaintext HTTP.
+      unset MCP_MESH_TLS_CERT
+      unset MCP_MESH_TLS_KEY
+      MCP_MESH_TLS_MODE=auto \
+      mcp-mesh-registry --host localhost --port 8000 >/tmp/registry-auto-nocert.log 2>&1 &
+      REGISTRY_PID=$!
+      echo "$REGISTRY_PID" > /tmp/tc21_registry.pid
+      echo "REGISTRY_PID=$REGISTRY_PID"
+      # Give the process a moment to either fail or start listening
+      sleep 3
+      if kill -0 "$REGISTRY_PID" 2>/dev/null; then
+        echo "REGISTRY_STILL_RUNNING=true"
+      else
+        wait "$REGISTRY_PID" 2>/dev/null
+        EXIT_CODE=$?
+        echo "REGISTRY_EXIT_CODE=$EXIT_CODE"
+      fi
+      echo "--- registry log ---"
+      cat /tmp/registry-auto-nocert.log || true
+    capture: registry_start
+
+  - name: "Verify registry is NOT listening on port 8000 (no plaintext fallback)"
+    handler: shell
+    command: |
+      # Any response (HTTPS or HTTP) means the registry is up and serving,
+      # which is a bug. A failed connection (000) is what we want.
+      HTTPS_CODE=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 3 https://localhost:8000/health 2>/dev/null || echo "000")
+      HTTP_CODE=$(curl -s  -o /dev/null -w "%{http_code}" --max-time 3 http://localhost:8000/health  2>/dev/null || echo "000")
+      echo "HTTPS_CODE=$HTTPS_CODE"
+      echo "HTTP_CODE=$HTTP_CODE"
+    capture: port_check
+
+  - name: "Stop registry if somehow still running"
+    handler: shell
+    command: |
+      REGISTRY_PID=$(cat /tmp/tc21_registry.pid 2>/dev/null)
+      if [ -n "$REGISTRY_PID" ]; then kill "$REGISTRY_PID" 2>/dev/null || true; fi
+      meshctl stop 2>/dev/null || true
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.registry_start} not contains 'REGISTRY_STILL_RUNNING=true'"
+    message: "Registry must exit fast in auto mode when cert/key are not configured (no plaintext fallback)"
+
+  - expr: "${captured.registry_start} contains 'MCP_MESH_TLS_CERT'"
+    message: "Error message should mention MCP_MESH_TLS_CERT so the operator knows what to set"
+
+  - expr: "${captured.registry_start} contains 'requires'"
+    message: "Error message should state that the TLS mode 'requires' cert/key"
+
+  - expr: "${captured.port_check} contains 'HTTP_CODE=000'"
+    message: "Registry must not be serving plaintext HTTP on port 8000"
+
+  - expr: "${captured.port_check} contains 'HTTPS_CODE=000'"
+    message: "Registry must not be serving HTTPS on port 8000 either (it should have exited)"
+
+post_run:
+  - handler: shell
+    command: |
+      REGISTRY_PID=$(cat /tmp/tc21_registry.pid 2>/dev/null)
+      if [ -n "$REGISTRY_PID" ]; then kill "$REGISTRY_PID" 2>/dev/null || true; fi
+      meshctl stop 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

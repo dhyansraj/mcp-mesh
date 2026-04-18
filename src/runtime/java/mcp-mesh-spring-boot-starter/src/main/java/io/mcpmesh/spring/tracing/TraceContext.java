@@ -37,7 +37,7 @@ public class TraceContext {
 
     static final List<String> PROPAGATE_HEADERS;
 
-    /** Pre-built CSV of propagate header prefixes for Rust core calls. */
+    /** Pre-built CSV of propagate header allowlist entries for Rust core calls. */
     private static final String PROPAGATE_HEADERS_CSV;
 
     static {
@@ -141,14 +141,19 @@ public class TraceContext {
     }
 
     /**
-     * Check if a header name matches any prefix in the propagate headers allowlist.
-     * Uses prefix matching: if PROPAGATE_HEADERS contains "x-audit", it will match
-     * "x-audit", "x-audit-id", "x-audit-source", etc.
+     * Check if a header name matches the propagate headers allowlist.
+     *
+     * <p>Each allowlist entry is either an exact match (plain token) or a
+     * prefix match (trailing {@code *}). Matching is case-insensitive.
+     * <ul>
+     *   <li>{@code authorization} matches only {@code authorization}.</li>
+     *   <li>{@code x-trace-*} matches {@code x-trace-id}, {@code x-trace-parent}, etc.</li>
+     * </ul>
      *
      * <p>Delegates to Rust core for consistent cross-SDK behavior.
      *
      * @param name Header name to check
-     * @return true if the name matches any prefix in the allowlist
+     * @return true if the name matches any entry in the allowlist
      */
     public static boolean matchesPropagateHeader(String name) {
         if (PROPAGATE_HEADERS.isEmpty()) return false;

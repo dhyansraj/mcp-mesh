@@ -1,0 +1,173 @@
+# Test Case: Error Messages Do Not Leak Internal File Paths (#794)
+# Regression test for proxy TLS error responses that previously echoed
+# err.Error() — which included the CA/cert/key file paths — directly into
+# the HTTP response body. After the fix, the body is a fixed sanitized
+# string ("Proxy TLS misconfiguration"); full detail stays in server logs.
+#
+# Scenario:
+#   1. Start the registry + system agent with --tls-auto (everything HTTPS).
+#   2. Move the CA file out of the way so os.ReadFile(caPath) in the proxy
+#      path fails when a proxy call is attempted.
+#   3. Issue a proxy call (https://localhost:8000/proxy/<agent>/mcp).
+#   4. Assert the response body has NO file paths, cert extensions or
+#      internal directory tokens — only the sanitized message.
+
+name: "Proxy Error Messages Do Not Leak Paths"
+description: "Regression test for #794 — proxy TLS failures must not echo file paths"
+tags:
+  - registry
+  - proxy
+  - security
+  - tls
+  - issue_794
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy system agent to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent.py /workspace/system_agent.py
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Start system agent with TLS auto (brings up mTLS registry)"
+    handler: shell
+    command: "meshctl start system_agent.py --tls-auto -d"
+    workdir: /workspace
+    capture: system_start
+
+  - name: "Wait for system agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Confirm agent registered with HTTPS endpoint"
+    handler: shell
+    command: |
+      curl -sk https://localhost:8000/agents 2>&1
+    capture: agents_api
+
+  - name: "Extract agent host:port from registry"
+    handler: shell
+    command: |
+      AGENT_HP=$(curl -sk https://localhost:8000/agents | python3 -c "
+      import sys, json
+      data = json.load(sys.stdin)
+      for a in data.get('agents', []):
+          ep = a.get('endpoint', '')
+          if 'system-agent' in a.get('name', '') and ep.startswith('https://'):
+              print(ep.replace('https://', ''))
+              break
+      ")
+      echo "AGENT_HP=$AGENT_HP"
+    workdir: /workspace
+    capture: agent_hp
+
+  - name: "Move CA file out of registry's reach"
+    handler: shell
+    command: |
+      CA_PATH="$HOME/.mcp-mesh/tls/ca.pem"
+      if [ -f "$CA_PATH" ]; then
+        mv "$CA_PATH" "$CA_PATH.bak"
+        echo "CA_MOVED=true"
+      else
+        echo "CA file not at expected path, searching..."
+        find "$HOME/.mcp-mesh" -name "ca*.pem" 2>/dev/null || true
+        # Try alternate locations used by tls_auto
+        for p in $HOME/.mcp-mesh/tls/local-dev/ca.pem $HOME/.mcp-mesh/tls/local-dev/root-ca.pem; do
+          if [ -f "$p" ]; then
+            mv "$p" "$p.bak"
+            echo "CA_MOVED=true (from $p)"
+            break
+          fi
+        done
+      fi
+    workdir: /workspace
+    capture: ca_move
+    ignore_errors: true
+
+  - name: "Call /proxy/<agent>/mcp and capture response body"
+    handler: shell
+    command: |
+      AGENT_HP=$(echo "${captured.agent_hp}" | grep "AGENT_HP=" | cut -d= -f2)
+      echo "Calling proxy for AGENT_HP=$AGENT_HP"
+      # Use -k to skip registry cert verification (its cert is still fine),
+      # and capture the response body for assertion.
+      BODY=$(curl -sk -X POST \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_current_time","arguments":{}}}' \
+        "https://localhost:8000/proxy/${AGENT_HP}/mcp")
+      echo "PROXY_BODY_START"
+      echo "$BODY"
+      echo "PROXY_BODY_END"
+    workdir: /workspace
+    capture: proxy_body
+    timeout: 30
+
+  - name: "Capture registry logs (full detail should be here, not in body)"
+    handler: shell
+    command: |
+      meshctl logs registry 2>&1 | tail -40 || echo "no registry logs"
+    workdir: /workspace
+    capture: registry_logs
+    ignore_errors: true
+
+  - name: "Restore CA file for clean teardown"
+    handler: shell
+    command: |
+      CA_PATH="$HOME/.mcp-mesh/tls/ca.pem"
+      if [ -f "$CA_PATH.bak" ]; then mv "$CA_PATH.bak" "$CA_PATH"; fi
+      for p in $HOME/.mcp-mesh/tls/local-dev/ca.pem.bak $HOME/.mcp-mesh/tls/local-dev/root-ca.pem.bak; do
+        if [ -f "$p" ]; then
+          mv "$p" "${p%.bak}"
+        fi
+      done
+    workdir: /workspace
+    ignore_errors: true
+
+  - name: "Stop all"
+    handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  # Sanitized message must be present in the response body.
+  - expr: "${captured.proxy_body} contains 'Proxy TLS misconfiguration'"
+    message: "Response body should contain the sanitized TLS-misconfig message"
+
+  # No filesystem path tokens may appear in the response body.
+  - expr: "${captured.proxy_body} not contains '/etc/'"
+    message: "Response body must not contain absolute /etc/ paths"
+
+  - expr: "${captured.proxy_body} not contains '.pem'"
+    message: "Response body must not contain .pem file extensions"
+
+  - expr: "${captured.proxy_body} not contains '.mcp-mesh/tls'"
+    message: "Response body must not contain registry TLS directory paths"
+
+  - expr: "${captured.proxy_body} not contains 'no such file'"
+    message: "Response body must not contain OS error strings like 'no such file'"
+
+  - expr: "${captured.proxy_body} not contains 'open '"
+    message: "Response body must not contain Go's 'open <path>:' error prefix"
+
+post_run:
+  - handler: shell
+    command: |
+      # Safety net: always restore CA if the step above did not run.
+      CA_PATH="$HOME/.mcp-mesh/tls/ca.pem"
+      if [ -f "$CA_PATH.bak" ]; then mv "$CA_PATH.bak" "$CA_PATH"; fi
+      for p in $HOME/.mcp-mesh/tls/local-dev/ca.pem.bak $HOME/.mcp-mesh/tls/local-dev/root-ca.pem.bak; do
+        if [ -f "$p" ]; then mv "$p" "${p%.bak}"; fi
+      done
+      meshctl stop 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
