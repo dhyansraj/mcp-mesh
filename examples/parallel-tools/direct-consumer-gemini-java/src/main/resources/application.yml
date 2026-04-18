@@ -3,7 +3,7 @@ spring:
     name: direct-consumer-gemini-java
   ai:
     google:
-      gemini:
+      genai:
         api-key: ${GOOGLE_API_KEY:}
         chat:
           options:

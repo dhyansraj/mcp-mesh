@@ -59,9 +59,17 @@ public class GeminiHandler implements LlmProviderHandler {
 
     @Override
     public String determineOutputMode(OutputSchema outputSchema) {
-        // Gemini Java: HINT mode only -- Spring AI 2.0.0-M2 has a bug where
-        // responseMimeType + responseSchema alongside tools causes tool args to become {}.
-        // This is NOT a Gemini API issue; it's a Spring AI request construction bug.
+        // Gemini Java: HINT mode only -- the Gemini API REJECTS the combination of
+        // function calling (tools) + responseMimeType="application/json" with the
+        // explicit error: "Function calling with a response mime type: 'application/json'
+        // is unsupported". Verified against Spring AI 2.0.0-M4 + google-genai SDK 1.44.0.
+        //
+        // HINT mode achieves structured output by including the schema in the system
+        // prompt instead of via the API parameter, which IS compatible with tools.
+        //
+        // M2 silently returned empty tool args {} for the same invalid combo; M4
+        // surfaces it as a 400. The workaround is unchanged either way -- this is a
+        // permanent Gemini API constraint, not a Spring AI bug to be patched.
         return outputSchema == null ? OUTPUT_MODE_TEXT : OUTPUT_MODE_HINT;
     }
 

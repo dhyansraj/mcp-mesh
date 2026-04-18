@@ -10,8 +10,6 @@
 
 name: "Java Direct Gemini Parallel Tool Calls"
 description: "Test parallelToolCalls=true in Java direct-mode LLM agent with Gemini"
-disabled: true # Spring AI Gemini starter dependency issue — not available in test container
-# SKIP: Spring AI Google GenAI starter dependency not available in test container
 tags:
   - parallel
   - java
