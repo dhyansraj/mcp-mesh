@@ -301,7 +301,7 @@ This project is open source. License details will be provided in the LICENSE fil
 ## 📚 Learn More
 
 1. **[📚 Full Documentation](https://mcp-mesh.ai/)** - Complete guides and reference
-2. **[⚡ Quick Tutorial](https://mcp-mesh.ai/01-getting-started/)** - Build your first distributed MCP agent
+2. **[⚡ Quick Tutorial](https://mcp-mesh.ai/python/getting-started/)** - Build your first distributed MCP agent
 3. **[💬 Join Discord](https://discord.gg/KDFDREphWn)** - Connect with the community
 4. **[🔧 Contribute](https://mcp-mesh.ai/contributing/)** - Help build the future of AI orchestration
 

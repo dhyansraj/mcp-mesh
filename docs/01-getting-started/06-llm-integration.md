@@ -4,7 +4,7 @@
 
 ## What is @mesh.llm?
 
-**New in v0.7**: MCP Mesh treats LLMs as first-class agents in the mesh. With `@mesh.llm()`, you can:
+MCP Mesh treats LLMs as first-class agents in the mesh. With `@mesh.llm()`, you can:
 
 - 🤖 **Inject LLM agents** like any other dependency
 - 🔍 **Auto-discover tools** based on capability filters
@@ -197,7 +197,7 @@ async def chat(
 
 ## Advanced: Dual Injection (LLM + MCP Agent)
 
-**New in v0.7**: Inject both LLM agents AND MCP agents into the same function:
+Inject both LLM agents AND MCP agents into the same function:
 
 ```python
 from pydantic import BaseModel

@@ -68,17 +68,16 @@ export MCP_MESH_SESSION_TTL=3600
 ### HTTP Server Settings
 
 ```bash
-# Server binding address (what interface to bind to)
-export HOST=0.0.0.0
+# External hostname announced to registry (also used as bind hint)
+# In K8s/production, set to the externally reachable hostname (e.g., service name).
+# Agents bind to 0.0.0.0 internally regardless.
+export MCP_MESH_HTTP_HOST=0.0.0.0
 
 # Agent HTTP port
 export MCP_MESH_HTTP_PORT=8080
 
 # Enable/disable HTTP transport
 export MCP_MESH_HTTP_ENABLED=true
-
-# External hostname announced to registry
-export MCP_MESH_HTTP_HOST=my-agent
 ```
 
 ### Health and Monitoring
@@ -534,7 +533,6 @@ MCP_MESH_REGISTRY_URL=http://registry.company.com:8000
 MCP_MESH_NAMESPACE=production
 MCP_MESH_AUTO_RUN_INTERVAL=30
 MCP_MESH_HEALTH_INTERVAL=30
-HOST=0.0.0.0
 MCP_MESH_HTTP_HOST=api-service.company.com
 ```
 
@@ -657,7 +655,6 @@ export HOSTNAME=my-agent-pod-abc123
 services:
   my-agent:
     environment:
-      - HOST=0.0.0.0 # Bind to all interfaces
       - MCP_MESH_HTTP_HOST=my-agent # Service name for inter-container communication
       - MCP_MESH_HTTP_PORT=8080
       - MCP_MESH_REGISTRY_URL=http://registry:8000
@@ -889,7 +886,7 @@ MCP_MESH_REGISTRY_URL=http://localhost:8000
 MCP_MESH_NAMESPACE=development
 MCP_MESH_AUTO_RUN_INTERVAL=10
 MCP_MESH_HEALTH_INTERVAL=15
-HOST=0.0.0.0
+MCP_MESH_HTTP_HOST=0.0.0.0
 ```
 
 ### Production Template
@@ -904,14 +901,13 @@ MCP_MESH_AUTO_RUN_INTERVAL=30
 MCP_MESH_HEALTH_INTERVAL=30
 MCP_MESH_UPDATE_STRATEGY=graceful
 MCP_MESH_UPDATE_GRACE_PERIOD=60
-HOST=0.0.0.0
+MCP_MESH_HTTP_HOST=0.0.0.0
 ```
 
 ### Docker Template
 
 ```bash
 # .env.docker
-HOST=0.0.0.0
 MCP_MESH_HTTP_HOST=my-service
 MCP_MESH_REGISTRY_URL=http://registry:8000
 MCP_MESH_NAMESPACE=docker
@@ -940,7 +936,7 @@ export MCP_MESH_REGISTRY_URL=$(vault kv get -field=url secret/mesh/registry)
 # Use secure URLs in production
 export MCP_MESH_REGISTRY_URL=https://registry.company.com  # ✅ HTTPS
 
-# Bind to specific interfaces when needed
+# Bind the registry server to specific interfaces when needed
 export HOST=127.0.0.1  # ✅ Localhost only
 export HOST=0.0.0.0    # ⚠️ All interfaces (use carefully)
 ```
