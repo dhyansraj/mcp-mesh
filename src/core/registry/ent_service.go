@@ -300,6 +300,22 @@ func extractAgentMetadata(agentID string, metadata map[string]interface{}) agent
 	return m
 }
 
+// checkEntityOwnership verifies that req's entity_id matches the existing
+// agent's owner. Returns ErrEntityIDMismatch (wrapped) if claimed != stored
+// and stored is non-empty. op is a short caller name for log context.
+func (s *EntService) checkEntityOwnership(op, agentID, reqEntityID string, storedEntityID *string) error {
+	if storedEntityID == nil || *storedEntityID == "" {
+		return nil
+	}
+	if *storedEntityID == reqEntityID {
+		return nil
+	}
+	s.logger.Warning("entity_id mismatch in %s: agent %q owned by %q, rejected request from %q",
+		op, agentID, *storedEntityID, reqEntityID)
+	return fmt.Errorf("%w: agent %q owned by another entity",
+		ErrEntityIDMismatch, agentID)
+}
+
 // RegisterAgent handles agent registration using Ent queries
 func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistrationResponse, error) {
 	ctx := context.Background()
@@ -363,11 +379,8 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 			// non-existent agent_id escalates into RegisterAgent and an entity
 			// concurrently claims that agent_id; without this check, the rogue
 			// register would silently overwrite EntityID.
-			if existingAgent.EntityID != nil && *existingAgent.EntityID != "" && *existingAgent.EntityID != req.EntityID {
-				s.logger.Warning("entity_id mismatch in RegisterAgent: agent %q owned by %q, rejected register from %q",
-					req.AgentID, *existingAgent.EntityID, req.EntityID)
-				return fmt.Errorf("%w: agent %q owned by another entity",
-					ErrEntityIDMismatch, req.AgentID)
+			if err := s.checkEntityOwnership("RegisterAgent", req.AgentID, req.EntityID, existingAgent.EntityID); err != nil {
+				return err
 			}
 
 			// Update existing agent
@@ -1043,11 +1056,8 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 	// (via TLS-verified registration), subsequent heartbeats must come from the
 	// same entity. Empty req.EntityID is rejected if the existing agent is
 	// claimed — this prevents downgrade attacks.
-	if existingAgent.EntityID != nil && *existingAgent.EntityID != "" && *existingAgent.EntityID != req.EntityID {
-		s.logger.Warning("entity_id mismatch: agent %q owned by %q, rejected heartbeat from %q",
-			req.AgentID, *existingAgent.EntityID, req.EntityID)
-		return nil, fmt.Errorf("%w: agent %q owned by another entity",
-			ErrEntityIDMismatch, req.AgentID)
+	if err := s.checkEntityOwnership("UpdateHeartbeat", req.AgentID, req.EntityID, existingAgent.EntityID); err != nil {
+		return nil, err
 	}
 
 	// Check for status transitions and handle accordingly

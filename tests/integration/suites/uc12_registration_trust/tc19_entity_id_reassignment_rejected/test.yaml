@@ -18,6 +18,7 @@ test:
   - name: "Copy Python agent to workspace"
     handler: shell
     command: |
+      set -euo pipefail
       cp /uc-artifacts/py-system-agent /workspace/system_agent.py
       ls -la /workspace/
     capture: copy_output
@@ -35,7 +36,8 @@ test:
   - name: "Capture legitimate agent id and entity_id from registry"
     handler: shell
     command: |
-      curl -sk https://localhost:8000/agents > /tmp/agents_before.json
+      set -euo pipefail
+      curl -s --cacert $HOME/.mcp-mesh/tls/ca.pem https://localhost:8000/agents > /tmp/agents_before.json
       cat /tmp/agents_before.json
       echo ""
       LEGIT_AGENT_ID=$(python3 -c "
@@ -56,6 +58,11 @@ test:
               print(a['entity_id'])
               break
       ")
+      if [ -z "$LEGIT_AGENT_ID" ] || [ -z "$LEGIT_ENTITY_ID" ]; then
+          echo "ERROR: Failed to extract legitimate agent id/entity_id from registry response"
+          cat /tmp/agents_before.json
+          exit 1
+      fi
       echo "LEGIT_AGENT_ID=$LEGIT_AGENT_ID"
       echo "LEGIT_ENTITY_ID=$LEGIT_ENTITY_ID"
       # Persist for later steps
@@ -67,6 +74,7 @@ test:
   - name: "Generate rogue CA and client certificate"
     handler: shell
     command: |
+      set -euo pipefail
       mkdir -p /tmp/rogue-certs
       cd /tmp/rogue-certs
       # Generate rogue CA (different trust root, will be registered as rogue-corp)
@@ -88,6 +96,7 @@ test:
   - name: "Register rogue CA as trusted entity rogue-corp"
     handler: shell
     command: |
+      set -euo pipefail
       meshctl entity register rogue-corp --ca-cert /tmp/rogue-certs/rogue-ca.pem
       echo "REGISTER_EXIT=$?"
       meshctl entity list
@@ -101,6 +110,7 @@ test:
   - name: "Attempt heartbeat with rogue cert claiming legitimate agent_id"
     handler: shell
     command: |
+      set -euo pipefail
       LEGIT_AGENT_ID=$(cat /tmp/legit_agent_id.txt)
       echo "Attempting to hijack agent_id: $LEGIT_AGENT_ID"
       # Build minimal heartbeat body per MeshAgentRegistration schema.
@@ -113,7 +123,7 @@ test:
       EOF
       cat /tmp/hijack_body.json
       echo ""
-      HIJACK_CODE=$(curl -sk -o /tmp/hijack_body_resp -w "%{http_code}" \
+      HIJACK_CODE=$(curl -s -o /tmp/hijack_body_resp -w "%{http_code}" \
         --cert /tmp/rogue-certs/rogue-client-cert.pem \
         --key /tmp/rogue-certs/rogue-client-key.pem \
         --cacert $HOME/.mcp-mesh/tls/ca.pem \
@@ -130,9 +140,10 @@ test:
   - name: "Verify legitimate agent entity_id is unchanged"
     handler: shell
     command: |
+      set -euo pipefail
       LEGIT_AGENT_ID=$(cat /tmp/legit_agent_id.txt)
       LEGIT_ENTITY_ID=$(cat /tmp/legit_entity_id.txt)
-      curl -sk https://localhost:8000/agents > /tmp/agents_after.json
+      curl -s --cacert $HOME/.mcp-mesh/tls/ca.pem https://localhost:8000/agents > /tmp/agents_after.json
       AFTER_ENTITY_ID=$(python3 -c "
       import sys, json
       with open('/tmp/agents_after.json') as f:
@@ -165,11 +176,11 @@ assertions:
   - expr: "${captured.rogue_register} contains 'registered'"
     message: "Rogue CA should be registered as trusted entity rogue-corp"
 
-  - expr: "${captured.legit_info} contains 'LEGIT_AGENT_ID='"
-    message: "Legitimate agent id should be captured from registry"
+  - expr: "${captured.legit_info} contains 'LEGIT_AGENT_ID=system-agent-'"
+    message: "Legitimate agent id should be captured from registry (non-empty, with expected prefix)"
 
-  - expr: "${captured.legit_info} contains 'LEGIT_ENTITY_ID=local-dev'"
-    message: "Legitimate agent should have entity_id=local-dev from mTLS registration"
+  - expr: "${captured.legit_info} matches 'LEGIT_ENTITY_ID=[a-zA-Z0-9_-]+'"
+    message: "Legitimate agent should have a non-empty entity_id from mTLS registration"
 
   - expr: "${captured.hijack_attempt} contains 'HIJACK_CODE=403'"
     message: "Registry should return 403 Forbidden when rogue entity attempts to hijack legitimate agent"

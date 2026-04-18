@@ -65,6 +65,10 @@ export MCP_MESH_PROPAGATE_HEADERS=authorization        # exact
 export MCP_MESH_PROPAGATE_HEADERS=auth-*               # prefix family
 ```
 
+> **Note**: `auth-*` matches `auth-token`, `auth-secret`, etc. — but **NOT**
+> `authorization`. If you previously relied on `auth` matching `authorization`,
+> the correct replacement is the exact entry `authorization`.
+
 > **Note**: A bare `*` (or any entry that becomes empty after stripping the
 > trailing `*`) is rejected at parse time. Such entries would be a
 > zero-length prefix that matches every header — including credentials —
@@ -211,7 +215,7 @@ SDK combination is in the chain.
 
 | Variable                     | Description                                       | Default  |
 | ---------------------------- | ------------------------------------------------- | -------- |
-| `MCP_MESH_PROPAGATE_HEADERS` | Comma-separated allowlist (exact or `prefix-*`)   | _(none)_ |
+| `MCP_MESH_PROPAGATE_HEADERS` | Comma-separated allowlist (exact `name` or `prefix*`) | _(none)_ |
 
 ## See Also
 

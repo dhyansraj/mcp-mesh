@@ -46,7 +46,7 @@ test:
   - name: "Start header-echo-ts agent"
     handler: shell
     workdir: /workspace
-    command: "meshctl start header-echo-ts/src/index.ts --env MCP_MESH_HTTP_PORT=3044 --env MCP_MESH_PROPAGATE_HEADERS=x-audit-* -d"
+    command: "meshctl start header-echo-ts/src/index.ts --env MCP_MESH_HTTP_PORT=3044 --env 'MCP_MESH_PROPAGATE_HEADERS=x-audit-*' -d"
     capture: start_echo
 
   # Wait for echo agent to register
@@ -71,7 +71,7 @@ test:
   - name: "Start header-relay-py agent"
     handler: shell
     workdir: /workspace
-    command: "meshctl start header-relay-py/main.py --env MCP_MESH_HTTP_PORT=3045 --env MCP_MESH_PROPAGATE_HEADERS=x-audit-* -d"
+    command: "meshctl start header-relay-py/main.py --env MCP_MESH_HTTP_PORT=3045 --env 'MCP_MESH_PROPAGATE_HEADERS=x-audit-*' -d"
     capture: start_relay
 
   # Wait for relay agent to register

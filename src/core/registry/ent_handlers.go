@@ -539,11 +539,23 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		proxyReq.Header.Set("X-Mesh-Timeout", meshTimeout)
 	}
 
+	// Names already set explicitly above — don't duplicate via propagation
+	explicitlySet := map[string]bool{
+		"content-type":   true,
+		"accept":         true,
+		"x-trace-id":     true,
+		"x-parent-span":  true,
+		"x-mesh-timeout": true,
+	}
+
 	// Forward headers matching MCP_MESH_PROPAGATE_HEADERS allowlist (#769, #790).
 	// Entries are exact matches by default; a trailing "*" denotes a prefix.
 	if len(proxyPropagateHeaderEntries) > 0 {
 		for headerName, values := range c.Request.Header {
 			lowerName := strings.ToLower(headerName)
+			if explicitlySet[lowerName] {
+				continue
+			}
 			for _, entry := range proxyPropagateHeaderEntries {
 				matches := false
 				if strings.HasSuffix(entry, "*") {
@@ -606,7 +618,15 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 			return
 		}
 		caCertPool := x509.NewCertPool()
-		caCertPool.AppendCertsFromPEM(caCert)
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			log.Printf("ERROR: failed to parse CA cert from %s (empty or malformed PEM)", caPath)
+			// Sanitize response: full detail stays in server log only (#794).
+			c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+				Error:     "Proxy TLS misconfiguration",
+				Timestamp: time.Now().UTC(),
+			})
+			return
+		}
 
 		clientCert, err := tls.LoadX509KeyPair(certPath, keyPath)
 		if err != nil {
