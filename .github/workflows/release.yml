@@ -354,8 +354,13 @@ jobs:
           echo "Publishing Java SDK version: ${VERSION}"
 
       - name: Import GPG key
+        env:
+          GPG_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
-          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+          # Defense-in-depth: explicit mask (GitHub already auto-masks secrets.*)
+          echo "::add-mask::$GPG_KEY"
+          # Pass via env var + printf to avoid shell-quoting risks of inline template substitution
+          printf '%s' "$GPG_KEY" | gpg --batch --import
           echo "Imported GPG key: F94266795DCA259D"
           echo "D3B274C5F3344FD4DCC969F9F94266795DCA259D:6:" | gpg --import-ownertrust
 

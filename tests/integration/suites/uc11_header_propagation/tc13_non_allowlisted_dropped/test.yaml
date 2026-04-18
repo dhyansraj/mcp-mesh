@@ -1,0 +1,143 @@
+# Test Case: Non-Allowlisted Headers Dropped (#790)
+# Verifies that headers NOT in MCP_MESH_PROPAGATE_HEADERS are stripped by
+# the propagation layer.
+#
+# Scenario:
+#   - Allowlist: x-custom-auth, x-tenant-id (both exact-match)
+#   - Client sends an extra header x-not-allowed: secret
+#   - Assert: downstream echo response contains the allowlisted values,
+#     but NOT the leaked secret or the x-not-allowed header name.
+
+name: "Non-Allowlisted Headers Dropped"
+description: "Verify headers outside MCP_MESH_PROPAGATE_HEADERS are not propagated"
+tags:
+  - header_propagation
+  - python
+  - security
+  - issue_790
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy artifacts to workspace"
+    handler: shell
+    command: "cp -r /artifacts/* /workspace/"
+
+  - name: "Start header-echo agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start header-echo-py/main.py --env MCP_MESH_HTTP_PORT=3130 --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id -d"
+    capture: start_echo
+
+  - name: "Wait for header-echo registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "header-echo"; then
+          echo "header-echo registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-echo did not register within 40s"
+      meshctl logs header-echo 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_echo
+    timeout: 60
+
+  - name: "Start header-relay agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start header-relay-py/main.py --env MCP_MESH_HTTP_PORT=3131 --env MCP_MESH_PROPAGATE_HEADERS=x-custom-auth,x-tenant-id -d"
+    capture: start_relay
+
+  - name: "Wait for header-relay registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "header-relay"; then
+          echo "header-relay registered after ${i}s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: header-relay did not register within 40s"
+      meshctl logs header-relay 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_relay
+    timeout: 60
+
+  - name: "Wait for dependency wiring"
+    handler: wait
+    seconds: 5
+
+  - name: "Get relay agent port"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl list --json 2>/dev/null | python -c "import sys,json; data=json.load(sys.stdin); ports=[a[''endpoint''].split('':'')[-1] for a in data.get(''agents'',[]) if ''header-relay'' in a.get(''name'','''')]; print(ports[0] if ports else ''3131'')"'
+    capture: relay_port
+
+  - name: "Call relay with allowlisted + non-allowlisted headers"
+    handler: shell
+    workdir: /workspace
+    command: |
+      PORT=${captured.relay_port}
+      curl -s -X POST http://localhost:${PORT}/mcp \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
+        -H "X-Custom-Auth: allowed-token" \
+        -H "X-Tenant-Id: tenant-xyz" \
+        -H "X-Not-Allowed: super-secret-should-not-leak" \
+        -H "Cookie: session=should-not-leak" \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"relay_headers","arguments":{}}}'
+    capture: curl_result
+    timeout: 30
+
+  - name: "Get header-echo logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-echo 2>/dev/null | tail -20 || echo 'no echo logs'"
+    capture: echo_logs
+
+  - name: "Get header-relay logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs header-relay 2>/dev/null | tail -20 || echo 'no relay logs'"
+    capture: relay_logs
+
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+
+assertions:
+  # Sanity: allowlisted headers DO propagate
+  - expr: "${captured.curl_result} contains 'allowed-token'"
+    message: "Allowlisted X-Custom-Auth value should appear in echoed headers"
+
+  - expr: "${captured.curl_result} contains 'tenant-xyz'"
+    message: "Allowlisted X-Tenant-Id value should appear in echoed headers"
+
+  # Core assertion: non-allowlisted header must NOT propagate
+  - expr: "${captured.curl_result} not contains 'super-secret-should-not-leak'"
+    message: "Non-allowlisted X-Not-Allowed value must NOT leak through"
+
+  - expr: "${captured.curl_result} not contains 'x-not-allowed'"
+    message: "Non-allowlisted header name must NOT appear in echoed headers"
+
+  - expr: "${captured.curl_result} not contains 'should-not-leak'"
+    message: "Cookie value must NOT leak through (not in allowlist)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

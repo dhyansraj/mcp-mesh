@@ -1,0 +1,191 @@
+name: "Entity ID Reassignment Rejected - Spoofing Prevention"
+description: "Verify registry rejects heartbeat from a different entity attempting to hijack an existing agent_id (issue #789)"
+tags:
+  - registration-trust
+  - tls
+  - security
+  - spoofing
+  - python
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy Python agent to workspace"
+    handler: shell
+    command: |
+      cp /uc-artifacts/py-system-agent /workspace/system_agent.py
+      ls -la /workspace/
+    capture: copy_output
+
+  - name: "Start registry and legitimate agent with TLS auto"
+    handler: shell
+    command: "meshctl start system_agent.py --tls-auto -d"
+    workdir: /workspace
+    capture: legit_start
+
+  - name: "Wait for legitimate agent to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Capture legitimate agent id and entity_id from registry"
+    handler: shell
+    command: |
+      curl -sk https://localhost:8000/agents > /tmp/agents_before.json
+      cat /tmp/agents_before.json
+      echo ""
+      LEGIT_AGENT_ID=$(python3 -c "
+      import sys, json
+      with open('/tmp/agents_before.json') as f:
+          data = json.load(f)
+      for a in data.get('agents', []):
+          if 'system-agent' in a.get('name', '') and a.get('entity_id'):
+              print(a['id'])
+              break
+      ")
+      LEGIT_ENTITY_ID=$(python3 -c "
+      import sys, json
+      with open('/tmp/agents_before.json') as f:
+          data = json.load(f)
+      for a in data.get('agents', []):
+          if 'system-agent' in a.get('name', '') and a.get('entity_id'):
+              print(a['entity_id'])
+              break
+      ")
+      echo "LEGIT_AGENT_ID=$LEGIT_AGENT_ID"
+      echo "LEGIT_ENTITY_ID=$LEGIT_ENTITY_ID"
+      # Persist for later steps
+      echo "$LEGIT_AGENT_ID" > /tmp/legit_agent_id.txt
+      echo "$LEGIT_ENTITY_ID" > /tmp/legit_entity_id.txt
+    workdir: /workspace
+    capture: legit_info
+
+  - name: "Generate rogue CA and client certificate"
+    handler: shell
+    command: |
+      mkdir -p /tmp/rogue-certs
+      cd /tmp/rogue-certs
+      # Generate rogue CA (different trust root, will be registered as rogue-corp)
+      openssl req -x509 -newkey rsa:2048 \
+        -keyout rogue-ca-key.pem -out rogue-ca.pem \
+        -days 1 -nodes -subj "/CN=rogue-ca" 2>&1
+      # Generate rogue client CSR
+      openssl req -newkey rsa:2048 \
+        -keyout rogue-client-key.pem -out rogue-client.csr \
+        -nodes -subj "/CN=rogue-client" 2>&1
+      # Sign rogue client cert with rogue CA
+      openssl x509 -req -in rogue-client.csr \
+        -CA rogue-ca.pem -CAkey rogue-ca-key.pem \
+        -CAcreateserial -out rogue-client-cert.pem -days 1 2>&1
+      echo "ROGUE_CERTS_GENERATED=true"
+      ls -la /tmp/rogue-certs/
+    capture: rogue_certs
+
+  - name: "Register rogue CA as trusted entity rogue-corp"
+    handler: shell
+    command: |
+      meshctl entity register rogue-corp --ca-cert /tmp/rogue-certs/rogue-ca.pem
+      echo "REGISTER_EXIT=$?"
+      meshctl entity list
+      ls -la $HOME/.mcp-mesh/tls/entities/
+    capture: rogue_register
+
+  - name: "Wait for filestore to pick up the new entity"
+    handler: wait
+    seconds: 5
+
+  - name: "Attempt heartbeat with rogue cert claiming legitimate agent_id"
+    handler: shell
+    command: |
+      LEGIT_AGENT_ID=$(cat /tmp/legit_agent_id.txt)
+      echo "Attempting to hijack agent_id: $LEGIT_AGENT_ID"
+      # Build minimal heartbeat body per MeshAgentRegistration schema.
+      # Tools array is required; send empty list.
+      cat > /tmp/hijack_body.json <<EOF
+      {
+        "agent_id": "$LEGIT_AGENT_ID",
+        "tools": []
+      }
+      EOF
+      cat /tmp/hijack_body.json
+      echo ""
+      HIJACK_CODE=$(curl -sk -o /tmp/hijack_body_resp -w "%{http_code}" \
+        --cert /tmp/rogue-certs/rogue-client-cert.pem \
+        --key /tmp/rogue-certs/rogue-client-key.pem \
+        --cacert $HOME/.mcp-mesh/tls/ca.pem \
+        -H "Content-Type: application/json" \
+        -X POST \
+        --data @/tmp/hijack_body.json \
+        https://localhost:8000/heartbeat)
+      HIJACK_BODY=$(cat /tmp/hijack_body_resp 2>/dev/null || true)
+      echo "HIJACK_CODE=$HIJACK_CODE"
+      echo "HIJACK_BODY=$HIJACK_BODY"
+    workdir: /workspace
+    capture: hijack_attempt
+
+  - name: "Verify legitimate agent entity_id is unchanged"
+    handler: shell
+    command: |
+      LEGIT_AGENT_ID=$(cat /tmp/legit_agent_id.txt)
+      LEGIT_ENTITY_ID=$(cat /tmp/legit_entity_id.txt)
+      curl -sk https://localhost:8000/agents > /tmp/agents_after.json
+      AFTER_ENTITY_ID=$(python3 -c "
+      import sys, json
+      with open('/tmp/agents_after.json') as f:
+          data = json.load(f)
+      for a in data.get('agents', []):
+          if a.get('id') == '$LEGIT_AGENT_ID':
+              print(a.get('entity_id', ''))
+              break
+      ")
+      echo "BEFORE_ENTITY_ID=$LEGIT_ENTITY_ID"
+      echo "AFTER_ENTITY_ID=$AFTER_ENTITY_ID"
+      if [ "$LEGIT_ENTITY_ID" = "$AFTER_ENTITY_ID" ] && [ -n "$LEGIT_ENTITY_ID" ]; then
+        echo "ENTITY_ID_UNCHANGED=true"
+      else
+        echo "ENTITY_ID_UNCHANGED=false"
+      fi
+    workdir: /workspace
+    capture: verify_unchanged
+
+  - name: "Stop all"
+    handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  - expr: "${captured.rogue_certs} contains 'ROGUE_CERTS_GENERATED=true'"
+    message: "Rogue CA and client certificate should be generated"
+
+  - expr: "${captured.rogue_register} contains 'registered'"
+    message: "Rogue CA should be registered as trusted entity rogue-corp"
+
+  - expr: "${captured.legit_info} contains 'LEGIT_AGENT_ID='"
+    message: "Legitimate agent id should be captured from registry"
+
+  - expr: "${captured.legit_info} contains 'LEGIT_ENTITY_ID=local-dev'"
+    message: "Legitimate agent should have entity_id=local-dev from mTLS registration"
+
+  - expr: "${captured.hijack_attempt} contains 'HIJACK_CODE=403'"
+    message: "Registry should return 403 Forbidden when rogue entity attempts to hijack legitimate agent"
+
+  - expr: "${captured.hijack_attempt} contains 'entity_id mismatch'"
+    message: "Response body should indicate entity_id mismatch (proves our check ran, not the TLS untrusted-cert short-circuit)"
+
+  - expr: "${captured.verify_unchanged} contains 'ENTITY_ID_UNCHANGED=true'"
+    message: "Legitimate agent's entity_id must remain unchanged after hijack attempt"
+
+post_run:
+  - handler: shell
+    command: |
+      meshctl stop 2>/dev/null || true
+      meshctl entity revoke rogue-corp --force 2>/dev/null || true
+      rm -rf /tmp/rogue-certs /tmp/agents_before.json /tmp/agents_after.json /tmp/legit_agent_id.txt /tmp/legit_entity_id.txt /tmp/hijack_body.json /tmp/hijack_body_resp 2>/dev/null || true
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
