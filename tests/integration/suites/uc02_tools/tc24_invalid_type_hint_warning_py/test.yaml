@@ -51,7 +51,18 @@ test:
     workdir: /workspace
     capture: list_output
 
-  # Inspect log file for the warning we emit from signature_analyzer
+  # Verify the agent reached 'healthy' status — a registration that
+  # crashes immediately after registering would still appear in
+  # `meshctl list`, but would not show up as healthy.
+  - name: "Verify agent is healthy"
+    handler: shell
+    command: "meshctl status py-bad-hints-agent"
+    workdir: /workspace
+    capture: status_output
+
+  # Inspect log file for the warning we emit from signature_analyzer.
+  # We grep for the WARNING-level prefix together with the message so
+  # a future downgrade to DEBUG/INFO would surface as a test failure.
   - name: "Inspect agent log for signature warning"
     handler: shell
     command: |
@@ -62,11 +73,11 @@ test:
         exit 1
       fi
       echo "=== Matching warning lines ==="
-      grep "Failed to analyze signature for" "$LOG_FILE" || true
-      if grep -q "Failed to analyze signature for" "$LOG_FILE"; then
-        echo "PASS: Warning was logged"
+      grep -E "WARNING.*Failed to analyze signature for" "$LOG_FILE" || true
+      if grep -Eq "WARNING.*Failed to analyze signature for" "$LOG_FILE"; then
+        echo "PASS: WARNING-level signature analyzer log was emitted"
       else
-        echo "FAIL: Expected warning 'Failed to analyze signature for' not found in log"
+        echo "FAIL: Expected 'WARNING ... Failed to analyze signature for' not found in log"
         echo "=== Last 50 log lines ==="
         tail -50 "$LOG_FILE"
         exit 1
@@ -79,9 +90,23 @@ assertions:
   - expr: "${captured.list_output} contains 'py-bad-hints-agent'"
     message: "Agent should still register despite unresolvable type hint"
 
-  # Warning was emitted (no silent swallow)
-  - expr: "${captured.log_check} contains 'PASS: Warning was logged'"
-    message: "signature_analyzer should log a warning instead of silently swallowing"
+  # Status command should succeed for the registered agent
+  - expr: ${steps.status_output.exit_code} == 0
+    message: "meshctl status should succeed for the bad-hints agent"
+
+  # Tightened: agent must reach 'healthy' status, not just be present
+  # in the registry. A crash-on-registration would not satisfy this.
+  # Word-boundary regex avoids a false-positive match on 'unhealthy'.
+  - expr: "${captured.status_output} matches '(^|[^a-zA-Z])healthy([^a-zA-Z]|$)'"
+    message: "Agent should reach healthy status (word-boundary; not 'unhealthy')"
+
+  # Tightened: assert the WARNING level prefix is present together
+  # with the message — a downgrade to DEBUG/INFO would now fail.
+  - expr: "${captured.log_check} matches 'WARNING.*Failed to analyze signature for'"
+    message: "signature_analyzer should emit a WARNING-level log (not silently swallow or downgrade)"
+
+  - expr: "${captured.log_check} contains 'PASS: WARNING-level signature analyzer log was emitted'"
+    message: "Inspection step should report PASS for the WARNING-level grep"
 
 post_run:
   - handler: shell

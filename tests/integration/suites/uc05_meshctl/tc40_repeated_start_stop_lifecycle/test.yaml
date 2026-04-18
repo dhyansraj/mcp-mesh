@@ -1,37 +1,37 @@
-# Test Case: tc40_repeated_start_stop_no_goroutine_leak
-# Verifies meshctl can be started and stopped repeatedly without resource leaks.
+# Test Case: tc40_repeated_start_stop_lifecycle
+# Smoke test: 20-iteration meshctl start/stop lifecycle stays healthy.
 # Related Issue: https://github.com/dhyansraj/mcp-mesh/issues/801
 #
-# Background:
-# In src/core/cli/signal_handler.go, the SIGHUP-handling goroutine spawned by
-# StartSignalHandling() never exited cleanly because:
-#   1. signal.Stop() was never called for the signal channel.
-#   2. The signal channel was never closed.
-# SIGINT/SIGTERM exited via an explicit `return`, but on a normal graceful
-# shutdown the goroutine could remain blocked on `range signalChan`.
+# Scope of this test:
+# Each `meshctl start ... -d` invocation spawns a fresh meshctl process,
+# and `gracefulShutdown` ends that process via os.Exit(0) — so any
+# in-process goroutine state is reaped by the OS at exit. As a result,
+# this loop test cannot directly observe a goroutine leak inside
+# meshctl; it would pass even with the pre-fix signal_handler code.
 #
-# Fix:
-# gracefulShutdown() now calls signal.Stop(sh.signalChan) and closes the
-# channel so the handleSignals goroutine exits when the channel is drained.
+# What this test DOES verify:
+#   - meshctl can complete 20 back-to-back start/stop cycles without
+#     hanging, crashing, or accumulating user-visible failures.
+#   - meshctl remains responsive (`meshctl list` succeeds) after the
+#     loop, so the lifecycle plumbing is healthy end-to-end.
 #
-# Test approach:
-# Goroutine state inside the meshctl process is not directly observable from
-# the outside. As a pragmatic check, we exercise the full start/stop lifecycle
-# many times in a loop and confirm:
-#   - The loop completes without hanging or crashing.
-#   - meshctl remains responsive after the iterations.
-# A real leak typically surfaces as cumulative resource pressure (slowdown,
-# OOM, or a hang), so a clean run is meaningful evidence the lifecycle is
-# healthy. The actual goroutine-leak fix is verified at code-review time and
-# by Go's static guarantees about closed channels.
+# How the actual goroutine-leak fix is verified:
+#   - Code review of src/core/cli/signal_handler.go (signal.Stop +
+#     close of the signal channel inside gracefulShutdown, guarded by
+#     sync.Once).
+#   - Go's static guarantees about closed-channel semantics: a `range`
+#     loop over a closed channel terminates after draining buffered
+#     values, allowing the handleSignals goroutine to exit cleanly.
+#   - The inline comment in signal_handler.go documenting the
+#     sync.Once + signal.Stop ordering.
 
-name: "Repeated start/stop has no goroutine leak"
-description: "Run meshctl start/stop many times to exercise SignalHandler lifecycle (issue #801)"
+name: "Repeated start/stop lifecycle smoke test"
+description: "Smoke test: 20-iteration meshctl start/stop lifecycle stays healthy (issue #801)"
 tags:
   - meshctl
   - python
   - lifecycle
-  - regression
+  - smoke
   - signal-handler
 timeout: 600
 
@@ -65,7 +65,7 @@ test:
   - name: "Verify meshctl still responsive after loop"
     handler: shell
     workdir: /workspace
-    command: "meshctl list 2>&1 || true"
+    command: "meshctl list 2>&1"
     capture: post_loop_list
 
 assertions:

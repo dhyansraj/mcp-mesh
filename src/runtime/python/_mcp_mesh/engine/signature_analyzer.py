@@ -3,9 +3,12 @@ Function signature analysis for MCP Mesh dependency injection.
 """
 
 import inspect
+import logging
 from typing import Any, get_type_hints
 
 from mesh.types import McpMeshTool, MeshLlmAgent
+
+logger = logging.getLogger(__name__)
 
 # Also support deprecated McpMeshAgent for backwards compatibility
 try:
@@ -126,9 +129,6 @@ def get_mesh_agent_positions(func: Any) -> list[int]:
 
     except Exception as e:
         # If we can't analyze the signature, return empty list
-        import logging
-
-        logger = logging.getLogger(__name__)
         logger.warning(f"Failed to analyze signature for {func}: {e}")
         return []
 
@@ -158,9 +158,6 @@ def get_mesh_agent_parameter_names(func: Any) -> list[str]:
         return mesh_param_names
 
     except Exception as e:
-        import logging
-
-        logger = logging.getLogger(__name__)
         logger.warning(f"Failed to analyze signature for {func}: {e}")
         return []
 
@@ -227,9 +224,6 @@ def get_llm_agent_positions(func: Any) -> list[int]:
 
     except Exception as e:
         # If we can't analyze the signature, return empty list
-        import logging
-
-        logger = logging.getLogger(__name__)
         logger.warning(f"Failed to analyze signature for {func}: {e}")
         return []
 
@@ -271,9 +265,6 @@ def get_llm_agent_parameter_names(func: Any) -> list[str]:
 
         return llm_param_names
     except Exception as e:
-        import logging
-
-        logger = logging.getLogger(__name__)
         logger.warning(f"Failed to analyze signature for {func}: {e}")
         return []
 
@@ -389,8 +380,5 @@ def get_context_parameter_name(
         # Re-raise ValueError for explicit name validation errors
         raise
     except Exception as e:
-        import logging
-
-        logger = logging.getLogger(__name__)
         logger.debug(f"Failed to detect context parameter for {func.__name__}: {e}")
         return None
