@@ -1,5 +1,17 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.3.3...v1.3.4)
+
+## v1.3.4 (2026-04-18)
+
+Hardening + Spring AI M4. Closes an audit-derived security pass (registry agent_id validation, header-propagation allowlist tightened from prefix-by-default to exact match, TLS auto fail-fast, proxy error sanitization), error-visibility improvements across Python/Java SDKs, meshctl signal handler leak fix, and stale doc/version cleanups. Spring AI upgraded to 2.0.0-M4 — brings the Java integration suite to parity, 5 previously-disabled Java tests re-enabled.
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.3.2...v1.3.3)
+
+## v1.3.3 (2026-04-16)
+
+Patch release. Documentation polish — TripPlanner hero example refreshed in README and Quick Start (#786).
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.3.1...v1.3.2)
 
 ## v1.3.2 (2026-04-15)
