@@ -100,12 +100,21 @@ def _start_workers() -> list[tuple[threading.Thread, asyncio.AbstractEventLoop]]
         for i in range(n):
             ready = threading.Event()
             loop_holder: dict[str, asyncio.AbstractEventLoop] = {}
+            init_error: dict[str, BaseException] = {}
 
             def _run() -> None:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop_holder["loop"] = loop
-                ready.set()
+                loop: asyncio.AbstractEventLoop | None = None
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop_holder["loop"] = loop
+                except BaseException as e:  # noqa: BLE001 — surface to parent
+                    init_error["error"] = e
+                    return
+                finally:
+                    # Always wake the parent — success or failure — so it
+                    # never hangs on a worker that never started.
+                    ready.set()
                 try:
                     loop.run_forever()
                 finally:
@@ -117,7 +126,15 @@ def _start_workers() -> list[tuple[threading.Thread, asyncio.AbstractEventLoop]]
             name = f"mesh-tool-worker-{i}"
             thread = threading.Thread(target=_run, name=name, daemon=True)
             thread.start()
-            ready.wait()
+            if not ready.wait(timeout=10):
+                raise RuntimeError(
+                    f"mesh-tool-worker '{name}' failed to initialize within 10s"
+                )
+            if "error" in init_error:
+                raise RuntimeError(
+                    f"mesh-tool-worker '{name}' failed to initialize: "
+                    f"{init_error['error']!r}"
+                ) from init_error["error"]
             new_workers.append((thread, loop_holder["loop"]))
             thread_names.append(name)
 
@@ -218,13 +235,25 @@ async def _invoke_with_context(
 ) -> Any:
     """Invoke the user coroutine on the worker loop inside the captured context.
 
-    ``ctx.run`` only runs synchronous callables, so we use it to BUILD the
-    coroutine (which sets contextvars at coroutine-creation time, since the
-    coroutine object captures the current context). Each ``await`` inside
-    the user code then sees those contextvars. We then await the coroutine
-    on the worker loop.
+    Per PEP 567, contextvars are tied to ``Task`` instances — *not* to the
+    coroutine object itself. A coroutine awaited directly inside another
+    coroutine inherits the surrounding Task's context, which here is the
+    worker-loop wrapper Task and would NOT see the caller's contextvars.
+
+    Two-step propagation:
+
+    1. ``ctx.run(coro_func, *args, **kwargs)`` invokes the function inside
+       ``ctx``. For sync functions this runs the body and returns the result;
+       for async functions it constructs the coroutine object inside ``ctx``
+       (cheap — no body executes yet).
+    2. For async results, we explicitly create an inner Task with
+       ``loop.create_task(coro, context=ctx)`` so the coroutine *body* runs
+       inside the captured context. The ``context=`` kwarg on
+       ``loop.create_task`` is the documented Python 3.11+ API for this.
     """
-    coro = ctx.run(coro_func, *args, **kwargs)
-    if not asyncio.iscoroutine(coro):
-        return coro
-    return await coro
+    result = ctx.run(coro_func, *args, **kwargs)
+    if not asyncio.iscoroutine(result):
+        return result
+    loop = asyncio.get_running_loop()
+    task = loop.create_task(result, context=ctx)
+    return await task

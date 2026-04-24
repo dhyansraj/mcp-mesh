@@ -8,8 +8,9 @@ inside an `async` function will stall the loop and freeze health probes.
 
 ## Why
 
-`src/runtime/typescript/src/express.ts` (lines 143–157) registers `/health`
-and `/ready` on the same Express app that handles MCP tool calls. Node has
+The `/health` and `/ready` handlers in `src/runtime/typescript/src/express.ts`
+(search for `setupHealthEndpoints`) are registered on the same Express app
+that handles MCP tool calls. Node has
 a single event loop. A tool whose `execute` blocks (e.g. `execSync`,
 busy CPU loop, sync file I/O) prevents the loop from servicing any other
 request — including the health endpoints.

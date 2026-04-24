@@ -125,8 +125,12 @@ test:
       done
 
       echo "=== Waiting for busy_tool to finish ==="
+      # Disable errexit around `wait` so a non-zero busy_tool exit doesn't
+      # abort the script before BUSY_RC / busy.out / OVERALL diagnostics run.
+      set +e
       wait "$BUSY_PID"
       BUSY_RC=$?
+      set -e
       echo "BUSY_RC=${BUSY_RC}"
       echo "=== busy_tool output ==="
       cat /tmp/busy.out

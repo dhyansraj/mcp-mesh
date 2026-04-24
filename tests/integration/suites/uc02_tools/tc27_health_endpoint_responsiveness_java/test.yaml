@@ -127,8 +127,12 @@ test:
       done
 
       echo "=== Waiting for busyToolJava to finish ==="
+      # Disable errexit around `wait` so a non-zero busyToolJava exit doesn't
+      # abort the script before BUSY_RC / busy.out / OVERALL diagnostics run.
+      set +e
       wait "$BUSY_PID"
       BUSY_RC=$?
+      set -e
       echo "BUSY_RC=${BUSY_RC}"
       echo "=== busyToolJava output ==="
       cat /tmp/busy.out
@@ -143,7 +147,7 @@ test:
 
 assertions:
   - expr: "${captured.baseline_probe} contains 'BASELINE_OK'"
-    message: "Baseline probe (idle) should report all endpoints healthy"
+    message: "Baseline /health probe should report service healthy"
 
   - expr: "${captured.probe_output} contains 'PASS: /health'"
     message: "/health must respond < 1.0s during a blocking tool call"

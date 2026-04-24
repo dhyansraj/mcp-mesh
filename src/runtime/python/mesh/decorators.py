@@ -670,7 +670,7 @@ def _wrap_with_isolation(final_func: Callable, func_name: str) -> Callable:
     """Wrap an async tool function so its body runs on the mesh worker loop.
 
     Only async functions are wrapped — sync tools are already dispatched off
-    the main loop by FastMCP via ``call_sync_fn_in_threadpool``.
+    the main loop by FastMCP via ``anyio.to_thread.run_sync``.
 
     The isolation wrapper is applied as the OUTERMOST layer so FastMCP sees
     a coroutine function and awaits it on the main loop, while the actual

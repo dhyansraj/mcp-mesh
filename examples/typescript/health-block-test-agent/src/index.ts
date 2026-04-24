@@ -7,7 +7,7 @@
  * health probes for as long as it runs.
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { FastMCP } from "fastmcp";
 import { mesh } from "@mcpmesh/sdk";
 import { z } from "zod";
@@ -29,10 +29,10 @@ agent.addTool({
   tags: ["test", "blocking"],
   description: "Blocks the Node event loop via execSync('sleep N')",
   parameters: z.object({
-    seconds: z.number().int().default(35).describe("Seconds to block the loop"),
+    seconds: z.number().int().min(0).default(35).describe("Seconds to block the loop"),
   }),
   execute: async ({ seconds }) => {
-    execSync(`sleep ${seconds}`);
+    execFileSync("sleep", [String(seconds)]);
     return `slept ${seconds}s (blocking)`;
   },
 });
