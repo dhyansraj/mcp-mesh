@@ -1,0 +1,165 @@
+# Test Case: Health Endpoint Responsiveness Under Blocking Tool Call (Java)
+#
+# Verifies that /health and /ready stay responsive (sub-second) while a tool
+# call blocks one Tomcat request thread for 35 seconds.
+#
+# Java's MCP Mesh runtime uses Spring Boot + embedded Tomcat with a thread
+# pool, so a blocked tool consumes one worker thread but the remaining
+# workers keep serving health probes. This test serves as REGRESSION
+# COVERAGE — it locks in that current behavior so a future migration to a
+# reactive / single-thread model cannot silently regress responsiveness.
+#
+# Counterpart tests:
+#   - tc25 (Python): same shape, was previously broken, fixed via worker
+#     thread isolation in tool_executor.py
+#   - tc26 (TypeScript): currently DISABLED; the TS runtime has the bug and
+#     a fix is tracked in a separate PR
+#
+# Uses UC-level artifacts from /uc-artifacts (symlinked to examples/java).
+
+name: "Health Endpoint Responsiveness During Blocking Tool Call (Java)"
+description: "Verify Java /health and /ready stay responsive while a 35s blocking tool call runs"
+tags:
+  - tools
+  - java
+  - health
+  - regression
+  - issue-event-loop-blocking
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact (port 9097 is set via src/main/resources/application.yml — server.port)
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/java-health-block-test-agent /workspace/
+      ls -la /workspace/java-health-block-test-agent/
+    capture: copy_output
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-health-block-test-agent
+    timeout: 600
+
+  # Start the Java agent (registry starts automatically)
+  - name: "Start Java health-block-test-agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/java-health-block-test-agent -d"
+    capture: start_agent
+
+  # Wait for registration — Java startup takes longer than Python/TS
+  - name: "Wait for agent to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for health-block-test-agent to register..."
+      for i in $(seq 1 60); do
+        if meshctl list 2>/dev/null | grep -q "health-block-test-agent"; then
+          echo "Agent registered after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agent did not register within 120s"
+      meshctl logs health-block-test-agent 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 150
+
+  # Probe baseline before any blocking work.
+  # Java runtime (MeshHealthController) exposes only /health — no /ready or /livez.
+  - name: "Probe baseline /health (idle)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      set -e
+      PORT=9097
+      for ep in /health; do
+        OUT=$(curl --max-time 2 -o /dev/null -s -w "%{http_code} %{time_total}" "http://127.0.0.1:${PORT}${ep}")
+        CODE=$(echo "$OUT" | awk '{print $1}')
+        T=$(echo "$OUT" | awk '{print $2}')
+        echo "BASELINE ${ep}: code=${CODE} time=${T}s"
+        if [ "$CODE" != "200" ]; then
+          echo "FAIL: baseline ${ep} returned ${CODE} (expected 200)"
+          exit 1
+        fi
+      done
+      echo "BASELINE_OK"
+    capture: baseline_probe
+
+  # Kick off the blocking tool call (busyToolJava sleeps for 35s on its
+  # request thread via Thread.sleep) and probe health while it runs.
+  - name: "Start blocking tool call + probe health while it runs"
+    handler: shell
+    workdir: /workspace
+    command: |
+      set -e
+      PORT=9097
+
+      echo "=== Launching busyToolJava(35s) in background ==="
+      meshctl call busyToolJava '{"seconds":35}' --timeout 60 > /tmp/busy.out 2>&1 &
+      BUSY_PID=$!
+      echo "BUSY_PID=${BUSY_PID}"
+
+      sleep 3
+
+      echo "=== Probing /health during blocking tool call ==="
+      FAILED=0
+      for ep in /health; do
+        OUT=$(curl --max-time 2 -o /dev/null -s -w "%{http_code} %{time_total}" "http://127.0.0.1:${PORT}${ep}" || echo "000 99.9")
+        CODE=$(echo "$OUT" | awk '{print $1}')
+        T=$(echo "$OUT" | awk '{print $2}')
+        TOO_SLOW=$(awk -v t="$T" 'BEGIN { print (t+0 > 1.0) ? 1 : 0 }')
+        if [ "$CODE" != "200" ] || [ "$TOO_SLOW" = "1" ]; then
+          echo "FAIL: ${ep} bad result code=${CODE} time=${T}s during busyToolJava"
+          FAILED=1
+        else
+          echo "PASS: ${ep} 200 in ${T}s during busyToolJava"
+        fi
+      done
+
+      echo "=== Waiting for busyToolJava to finish ==="
+      wait "$BUSY_PID"
+      BUSY_RC=$?
+      echo "BUSY_RC=${BUSY_RC}"
+      echo "=== busyToolJava output ==="
+      cat /tmp/busy.out
+
+      if [ "$FAILED" = "1" ]; then
+        echo "OVERALL: FAIL — at least one health probe was blocked"
+        exit 1
+      fi
+      echo "OVERALL: PASS — all health probes stayed responsive"
+    capture: probe_output
+    timeout: 120
+
+assertions:
+  - expr: "${captured.baseline_probe} contains 'BASELINE_OK'"
+    message: "Baseline probe (idle) should report all endpoints healthy"
+
+  - expr: "${captured.probe_output} contains 'PASS: /health'"
+    message: "/health must respond < 1.0s during a blocking tool call"
+
+  - expr: "${captured.probe_output} contains 'slept 35s'"
+    message: "busyToolJava must complete its 35s blocking sleep — proves the test exercised the real code path"
+
+  - expr: "${captured.probe_output} contains 'OVERALL: PASS'"
+    message: "All probes during the blocking call must pass"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*health-block" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

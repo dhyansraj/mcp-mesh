@@ -4,6 +4,7 @@ Mesh decorators implementation - dual decorator architecture.
 Provides @mesh.tool and @mesh.agent decorators with clean separation of concerns.
 """
 
+import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
@@ -652,6 +653,85 @@ def _clear_shared_agent_id():
     _SHARED_AGENT_ID = None
 
 
+def _is_tool_isolation_enabled() -> bool:
+    """Whether to dispatch async tool execution to the dedicated worker loop.
+
+    Default ON. Set MCP_MESH_TOOL_ISOLATION=false to disable (legacy behavior).
+    """
+    return get_config_value(
+        "MCP_MESH_TOOL_ISOLATION",
+        override=None,
+        default=True,
+        rule=ValidationRule.TRUTHY_RULE,
+    )
+
+
+def _wrap_with_isolation(final_func: Callable, func_name: str) -> Callable:
+    """Wrap an async tool function so its body runs on the mesh worker loop.
+
+    Only async functions are wrapped — sync tools are already dispatched off
+    the main loop by FastMCP via ``call_sync_fn_in_threadpool``.
+
+    The isolation wrapper is applied as the OUTERMOST layer so FastMCP sees
+    a coroutine function and awaits it on the main loop, while the actual
+    user work executes on the worker thread. The decorator chain
+    (``__wrapped__`` and ``_mesh_original_func``) is preserved via
+    ``functools.wraps`` and explicit attribute copy so
+    ``signature_analyzer._get_original_func`` keeps finding the user function.
+    """
+    if not asyncio.iscoroutinefunction(final_func):
+        return final_func
+
+    @wraps(final_func)
+    async def isolated(*args, **kwargs):
+        # Local import to keep the decorator import-time cost minimal and to
+        # avoid any circular import surprises.
+        from _mcp_mesh.shared.tool_executor import dispatch
+
+        future = dispatch(final_func, args, kwargs)
+        return await asyncio.wrap_future(future)
+
+    # functools.wraps sets __wrapped__ = final_func, which preserves the
+    # signature_analyzer chain (it walks __wrapped__ then checks
+    # _mesh_original_func). Mirror _mesh_original_func explicitly so callers
+    # that read it directly off the outermost wrapper still find the user
+    # function, not the DI wrapper.
+    if hasattr(final_func, "_mesh_original_func"):
+        isolated._mesh_original_func = final_func._mesh_original_func
+    else:
+        isolated._mesh_original_func = final_func
+
+    # Preserve mesh metadata attributes that FastMCP / pipeline code reads
+    # from the outermost wrapper.
+    for attr in (
+        "_mesh_tool_metadata",
+        "_mesh_injected_deps",
+        "_mesh_dependencies",
+        "_mesh_positions",
+        "_mesh_update_dependency",
+        "_mesh_function_id",
+    ):
+        if hasattr(final_func, attr):
+            try:
+                setattr(isolated, attr, getattr(final_func, attr))
+            except AttributeError:
+                pass
+
+    # Preserve the trimmed signature (DI wrapper hides injectable params from
+    # FastMCP). functools.wraps does NOT copy __signature__ by default.
+    if hasattr(final_func, "__signature__"):
+        try:
+            isolated.__signature__ = final_func.__signature__
+        except AttributeError:
+            pass
+
+    isolated._mesh_isolation_wrapped = True
+    logger.debug(
+        f"🧵 ISOLATION: Wrapped async tool '{func_name}' for worker-loop execution"
+    )
+    return isolated
+
+
 def tool(
     capability: str | None = None,
     *,
@@ -808,6 +888,20 @@ def tool(
 
             # Preserve metadata on wrapper
             wrapped._mesh_tool_metadata = metadata
+
+            # Apply tool-execution isolation: for async tools, dispatch the
+            # actual coroutine onto a dedicated worker event loop so a user's
+            # blocking syscall (e.g. time.sleep inside an async def tool)
+            # cannot freeze uvicorn's main loop and stall /health probes.
+            # Sync tools are left alone — FastMCP already runs them via
+            # anyio.to_thread.run_sync (off the main loop).
+            isolation_enabled = _is_tool_isolation_enabled()
+            logger.debug(
+                f"🧵 ISOLATION: enabled={isolation_enabled} for '{target.__name__}' "
+                f"(async={asyncio.iscoroutinefunction(wrapped)})"
+            )
+            if isolation_enabled and asyncio.iscoroutinefunction(wrapped):
+                wrapped = _wrap_with_isolation(wrapped, target.__name__)
 
             # Store the wrapper on the original function for reference
             target._mesh_injection_wrapper = wrapped
