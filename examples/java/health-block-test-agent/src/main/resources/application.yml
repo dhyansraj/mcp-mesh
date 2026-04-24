@@ -1,0 +1,11 @@
+server:
+  port: ${MCP_MESH_HTTP_PORT:9097}
+
+spring:
+  application:
+    name: health-block-test-agent
+
+logging:
+  level:
+    io.mcpmesh: INFO
+    com.example: INFO

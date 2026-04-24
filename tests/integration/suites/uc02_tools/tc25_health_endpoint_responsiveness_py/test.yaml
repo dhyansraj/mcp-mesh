@@ -1,0 +1,172 @@
+# Test Case: Health Endpoint Responsiveness Under Blocking Tool Call (Python)
+#
+# Verifies that /health, /ready, and /livez stay responsive (sub-second) while
+# a tool call blocks the request thread for 35 seconds.
+#
+# Background: previously, a sync time.sleep() inside an async @app.tool would
+# block the single uvicorn event loop that also serves the FastAPI health
+# endpoints, causing curl --max-time 2 to time out for the duration of the
+# tool call. Fix: worker-thread isolation in
+# src/runtime/python/_mcp_mesh/shared/tool_executor.py — sync work is now
+# offloaded so the event loop remains free.
+#
+# This test is regression coverage. Threshold of 1.0s is wildly generous
+# vs. the actual single-digit-millisecond baseline; it cleanly separates
+# "healthy" from "blocked = curl times out".
+#
+# Uses UC-level artifacts from /uc-artifacts (symlinked to examples/python).
+
+name: "Health Endpoint Responsiveness During Blocking Tool Call (Python)"
+description: "Verify /health, /ready, /livez stay responsive while a 35s blocking tool call runs"
+tags:
+  - tools
+  - python
+  - health
+  - regression
+  - issue-event-loop-blocking
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  # Copy artifact (port 9099 is hard-coded in the agent)
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -r /uc-artifacts/py-health-block-test-agent /workspace/
+      ls -la /workspace/py-health-block-test-agent/
+    capture: copy_output
+
+  # Start the Python agent (binds to 9099 per the @mesh.agent(http_port=9099))
+  - name: "Start Python health-block-test-agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start py-health-block-test-agent/main.py -d"
+    capture: start_agent
+
+  # Wait for registration + agent fully reachable
+  - name: "Wait for agent to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for health-block-test-agent to register..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -q "health-block-test-agent"; then
+          echo "Agent registered after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Agent did not register within 60s"
+      meshctl logs health-block-test-agent 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
+
+  # Probe baseline before any blocking work — sanity check that the endpoints
+  # respond correctly and quickly when the agent is idle.
+  - name: "Probe baseline /health /ready /livez (idle)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      set -e
+      PORT=9099
+      for ep in /health /ready /livez; do
+        OUT=$(curl --max-time 2 -o /dev/null -s -w "%{http_code} %{time_total}" "http://127.0.0.1:${PORT}${ep}")
+        CODE=$(echo "$OUT" | awk '{print $1}')
+        T=$(echo "$OUT" | awk '{print $2}')
+        echo "BASELINE ${ep}: code=${CODE} time=${T}s"
+        if [ "$CODE" != "200" ]; then
+          echo "FAIL: baseline ${ep} returned ${CODE} (expected 200)"
+          exit 1
+        fi
+      done
+      echo "BASELINE_OK"
+    capture: baseline_probe
+
+  # Kick off the blocking tool call in the background. busy_tool sleeps for
+  # 35s on the runtime's main thread (sync time.sleep inside an async tool).
+  # We capture the PID so we can wait for it later.
+  - name: "Start blocking tool call + probe health while it runs"
+    handler: shell
+    workdir: /workspace
+    command: |
+      set -e
+      PORT=9099
+
+      echo "=== Launching busy_tool(35s) in background ==="
+      meshctl call busy_tool '{"seconds":35}' --timeout 60 > /tmp/busy.out 2>&1 &
+      BUSY_PID=$!
+      echo "BUSY_PID=${BUSY_PID}"
+
+      # Give the tool a moment to actually enter the blocking syscall before
+      # we start probing — otherwise we could measure the pre-call window.
+      sleep 3
+
+      echo "=== Probing /health /ready /livez during blocking tool call ==="
+      FAILED=0
+      for ep in /health /ready /livez; do
+        OUT=$(curl --max-time 2 -o /dev/null -s -w "%{http_code} %{time_total}" "http://127.0.0.1:${PORT}${ep}" || echo "000 99.9")
+        CODE=$(echo "$OUT" | awk '{print $1}')
+        T=$(echo "$OUT" | awk '{print $2}')
+        # Compare time_total < 1.0 in shell (no bc dependency)
+        TOO_SLOW=$(awk -v t="$T" 'BEGIN { print (t+0 > 1.0) ? 1 : 0 }')
+        if [ "$CODE" != "200" ] || [ "$TOO_SLOW" = "1" ]; then
+          echo "FAIL: ${ep} bad result code=${CODE} time=${T}s during busy_tool"
+          FAILED=1
+        else
+          echo "PASS: ${ep} 200 in ${T}s during busy_tool"
+        fi
+      done
+
+      echo "=== Waiting for busy_tool to finish ==="
+      # Disable errexit around `wait` so a non-zero busy_tool exit doesn't
+      # abort the script before BUSY_RC / busy.out / OVERALL diagnostics run.
+      set +e
+      wait "$BUSY_PID"
+      BUSY_RC=$?
+      set -e
+      echo "BUSY_RC=${BUSY_RC}"
+      echo "=== busy_tool output ==="
+      cat /tmp/busy.out
+
+      if [ "$FAILED" = "1" ]; then
+        echo "OVERALL: FAIL — at least one health probe was blocked"
+        exit 1
+      fi
+      echo "OVERALL: PASS — all health probes stayed responsive"
+    capture: probe_output
+    timeout: 120
+
+assertions:
+  # Baseline must show all three endpoints healthy
+  - expr: "${captured.baseline_probe} contains 'BASELINE_OK'"
+    message: "Baseline probe (idle) should report all endpoints healthy"
+
+  # During the blocking tool call, every health endpoint must stay responsive
+  - expr: "${captured.probe_output} contains 'PASS: /health'"
+    message: "/health must respond < 1.0s during a blocking tool call"
+  - expr: "${captured.probe_output} contains 'PASS: /ready'"
+    message: "/ready must respond < 1.0s during a blocking tool call"
+  - expr: "${captured.probe_output} contains 'PASS: /livez'"
+    message: "/livez must respond < 1.0s during a blocking tool call"
+
+  # And the tool itself must have actually run to completion (not been killed
+  # or timed out — that would invalidate the test).
+  - expr: "${captured.probe_output} contains 'slept 35s'"
+    message: "busy_tool must complete its 35s blocking sleep — proves the test exercised the real code path"
+
+  - expr: "${captured.probe_output} contains 'OVERALL: PASS'"
+    message: "All probes during the blocking call must pass"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace
