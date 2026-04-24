@@ -133,56 +133,89 @@ def _get_httpx_client_sync(base_endpoint: str) -> "httpx.AsyncClient":
         return client
 
 
-async def _get_httpx_client(base_endpoint: str) -> "httpx.AsyncClient":
-    """Async wrapper around :func:`_get_httpx_client_sync` for call-site parity."""
-    return _get_httpx_client_sync(base_endpoint)
-
-
 async def close_connection_pools() -> None:
-    """Close pooled HTTP clients owned by the CURRENT event loop.
+    """Close ALL pooled HTTP/FastMCP clients across every owning event loop.
 
     Each cached client is bound to the loop that created it (see module-level
     docstring). Closing a client from a different loop would raise the same
-    cross-loop error we are trying to avoid, so we only close clients keyed to
-    this loop. Worker-loop clients are reaped when their daemon threads exit
-    at process termination — best-effort, matching prior behaviour.
+    cross-loop error we are trying to avoid. So for clients owned by a
+    DIFFERENT loop than the caller's, we schedule the close coroutine on the
+    owning loop via ``asyncio.run_coroutine_threadsafe`` and await the
+    resulting future on the current loop via ``asyncio.wrap_future`` — that
+    avoids the deadlock pitfall of calling ``.result()`` from the same loop
+    a future is bound to.
+
+    Typical caller is uvicorn's main loop during graceful shutdown. Worker
+    loop clients (the majority, since N workers ≥ 1) used to leak silently
+    until daemon threads died at process termination; this routine now
+    actively closes them.
     """
     try:
-        loop_key = _current_loop_key()
+        current_loop = asyncio.get_running_loop()
     except RuntimeError:
         # No running loop — nothing we can safely close from here.
         return
 
-    with _pool_lock:
-        fastmcp_to_close = [
-            (key, client)
-            for key, client in _fastmcp_client_pool.items()
-            if key[0] == loop_key
-        ]
-        for key in [k for k, _ in fastmcp_to_close]:
-            _fastmcp_client_pool.pop(key, None)
+    # Build {loop_id: loop} map from the current loop + worker loops so we can
+    # find the owning loop for each pooled client by its (loop_id, endpoint) key.
+    from ..shared.tool_executor import get_worker_loops
 
-        httpx_to_close = [
-            (key, client)
-            for key, client in _httpx_pool.items()
-            if key[0] == loop_key
-        ]
-        for key in [k for k, _ in httpx_to_close]:
-            _httpx_pool.pop(key, None)
+    loop_by_id: dict[int, asyncio.AbstractEventLoop] = {id(current_loop): current_loop}
+    for loop in get_worker_loops():
+        loop_by_id[id(loop)] = loop
+
+    with _pool_lock:
+        fastmcp_to_close = list(_fastmcp_client_pool.items())
+        httpx_to_close = list(_httpx_pool.items())
+        _fastmcp_client_pool.clear()
+        _httpx_pool.clear()
+
+    async def _close_one(client, owning_loop, *, is_fastmcp: bool, label: str) -> None:
+        kind = "FastMCP" if is_fastmcp else "httpx"
+        if owning_loop is current_loop:
+            # Same loop — just await directly.
+            if is_fastmcp:
+                await client.__aexit__(None, None, None)
+            else:
+                await client.aclose()
+            return
+
+        # Different (worker) loop — schedule on its loop, await the resulting
+        # future on the current loop. Using wrap_future (NOT future.result())
+        # avoids deadlocking when this happens to be invoked on the same loop
+        # as the future's bound loop.
+        if is_fastmcp:
+            coro = client.__aexit__(None, None, None)
+        else:
+            coro = client.aclose()
+        fut = asyncio.run_coroutine_threadsafe(coro, owning_loop)
+        try:
+            await asyncio.wait_for(asyncio.wrap_future(fut), timeout=5)
+        except asyncio.TimeoutError:
+            logger.warning(f"Timed out closing {kind} client for: {label}")
 
     for key, client in fastmcp_to_close:
+        owning_loop = loop_by_id.get(key[0])
+        if owning_loop is None or owning_loop.is_closed():
+            logger.debug(
+                f"Skipping FastMCP client for {key[1]}: owning loop closed/missing"
+            )
+            continue
         try:
-            import anyio
-
-            with anyio.move_on_after(5):
-                await client.__aexit__(None, None, None)
+            await _close_one(client, owning_loop, is_fastmcp=True, label=key[1])
             logger.debug(f"Closed pooled FastMCP client for: {key[1]}")
         except Exception as e:
             logger.warning(f"Error closing FastMCP client for {key[1]}: {e}")
 
     for key, client in httpx_to_close:
+        owning_loop = loop_by_id.get(key[0])
+        if owning_loop is None or owning_loop.is_closed():
+            logger.debug(
+                f"Skipping httpx client for {key[1]}: owning loop closed/missing"
+            )
+            continue
         try:
-            await client.aclose()
+            await _close_one(client, owning_loop, is_fastmcp=False, label=key[1])
             logger.debug(f"Closed pooled httpx client for: {key[1]}")
         except Exception as e:
             logger.warning(f"Error closing httpx client for {key[1]}: {e}")
@@ -361,6 +394,29 @@ class UnifiedMCPProxy:
 
         See module-level pool docstring: FastMCP Client owns asyncio resources
         that are loop-affine, so we key the pool by ``(loop_id, endpoint)``.
+
+        Health-check rationale (no proactive probe of the cached client):
+
+        FastMCP's ``Client._connect()`` already self-heals at session level —
+        on each ``async with``, it inspects ``session_task`` and restarts the
+        background session task if it is ``None`` or ``done()`` (which is
+        precisely what happens when the previous session errored or was torn
+        down). The two attribute-level signals available are:
+
+          * ``client.is_connected()`` — only True while a session is live
+            (i.e. inside an ``async with`` block). Between calls it is
+            always False; it does NOT indicate "broken", just "idle".
+          * ``client._session_state.session_task.done()`` — touches private
+            internals; redundant with the check ``_connect()`` already does.
+
+        FastMCP exposes no `ping_no_session()` or transport-health probe
+        cheap enough to run on every cache hit (``ping()`` requires a live
+        session and a network round-trip). So we rely on FastMCP's built-in
+        reconnect on the next ``async with``. In the worst case (transport
+        permanently broken at the underlying httpx level) the next call
+        raises and the existing HTTP-fallback path in ``call_tool`` covers
+        it. Note also that the proxy's primary path is the pooled httpx
+        client (see ``_http_call``); FastMCP is fallback + listing methods.
         """
         key = (_current_loop_key(), mcp_endpoint)
         with _pool_lock:
@@ -1051,7 +1107,7 @@ class UnifiedMCPProxy:
                 f"🔄 HTTP call to {url} with {request_bytes} byte payload, timeout: {enhanced_timeout}s"
             )
 
-            client = await _get_httpx_client(self.endpoint)
+            client = _get_httpx_client_sync(self.endpoint)
             response = await client.post(
                 url,
                 content=request_body,

@@ -167,6 +167,17 @@ def _pick_loop() -> asyncio.AbstractEventLoop:
     return _workers[idx][1]
 
 
+# Exposed for the proxy's connection-pool cleanup (close_connection_pools), which
+# needs to schedule client.aclose() on the worker loop that originally created
+# each cached httpx/FastMCP client. Without this, worker-loop clients leak at
+# orderly shutdown — they only get reaped at process termination when their
+# daemon threads die.
+def get_worker_loops() -> list[asyncio.AbstractEventLoop]:
+    """Return the live worker event loops (snapshot)."""
+    with _lock:
+        return [loop for _, loop in _workers]
+
+
 def dispatch(
     coro_func: Callable[..., Coroutine[Any, Any, Any]],
     args: tuple,
