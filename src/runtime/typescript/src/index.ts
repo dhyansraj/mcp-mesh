@@ -89,6 +89,20 @@ const mesh: MeshNamespace = Object.assign(meshFn, {
 // Main API
 export { mesh, MeshAgent };
 
+// Worker-mode user contract: check globalThis[IN_WORKER_SYMBOL] to detect
+// whether your module is being loaded inside a tool-isolation worker. Use
+// this to guard module-top-level side effects (custom servers, OTel init).
+export { IN_WORKER_SYMBOL } from "./agent.js";
+
+// Internal: worker entry uses this to look up user-registered tools.
+// Not part of the public API; do not depend on it from user code.
+export { __getWorkerToolMap } from "./agent.js";
+
+// Internal: worker entry needs these to restore ALS scopes around user
+// tool calls so trace context + propagated headers work inside workers.
+// Not part of the public API.
+export { runWithTraceContext, runWithPropagatedHeaders } from "./proxy.js";
+
 // Re-export FastMCP for convenience (so users don't need to install it separately)
 export { FastMCP } from "fastmcp";
 

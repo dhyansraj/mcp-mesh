@@ -39,6 +39,17 @@ export const DEFAULT_CALL_OPTIONS: CallOptions = {
 };
 
 /**
+ * Symbol stash for proxy dispatch metadata. Non-enumerable so it doesn't leak
+ * via JSON.stringify(proxy) (which would expose endpoint, kwargs.customHeaders,
+ * and any auth tokens user code put in customHeaders).
+ *
+ * Internal use only — read by agent.ts when serializing deps for worker
+ * dispatch. User code should continue to read public properties (endpoint,
+ * capability, functionName, kwargs) directly off the proxy if they need them.
+ */
+export const PROXY_DISPATCH_META = Symbol.for("@mcpmesh/sdk/proxy-dispatch-meta");
+
+/**
  * AsyncLocalStorage for trace context - provides async-safe context propagation.
  * Unlike module-level variables, this correctly handles concurrent requests
  * without trace context bleeding between them.
@@ -143,11 +154,14 @@ export function createProxy(
     }
   };
 
-  // Attach properties and methods
+  // Attach properties and methods. Public properties are non-enumerable so
+  // JSON.stringify(proxy) doesn't leak endpoint/kwargs.customHeaders (which
+  // may contain auth tokens). Matches pre-isolation baseline.
   Object.defineProperties(proxyFn, {
     endpoint: { value: endpoint, writable: false },
     capability: { value: capability, writable: false },
     functionName: { value: functionName, writable: false },
+    kwargs: { value: kwargs, writable: false },
     isAvailable: { value: true, writable: false },
     callTool: {
       value: async (
@@ -167,6 +181,17 @@ export function createProxy(
       },
       writable: false,
     },
+  });
+
+  // Internal: stash dispatch metadata under a non-enumerable Symbol so the
+  // worker pool dispatcher can read it without depending on the public
+  // properties (which we keep non-enumerable for the JSON.stringify safety
+  // reason above).
+  Object.defineProperty(proxyFn, PROXY_DISPATCH_META, {
+    value: { endpoint, capability, functionName, kwargs },
+    enumerable: false,
+    writable: false,
+    configurable: false,
   });
 
   return proxyFn as McpMeshTool;
