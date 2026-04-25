@@ -235,8 +235,7 @@ To migrate an existing agent from AI Studio to Vertex AI:
 
 ```python
 # Change one line in the decorator:
-model="gemini/gemini-2.0-flash"      # was: "gemini/gemini-2.0-flash"
-                                     # now: "vertex_ai/gemini-2.0-flash"
+model="vertex_ai/gemini-2.0-flash"   # was: "gemini/gemini-2.0-flash"
 ```
 
 ```bash

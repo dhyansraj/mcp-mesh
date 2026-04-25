@@ -107,6 +107,30 @@ describe("resolveResourceLinks", () => {
       expect((result[0] as Record<string, unknown>).image_url).toBeDefined();
     });
 
+    it("resolves image resource_link for vertex_ai (uses gemini/openai format)", async () => {
+      const imageData = Buffer.from("fake-vertex-image-data");
+      mockFetch.mockResolvedValue({ data: imageData, mimeType: "image/png" });
+
+      const result = await resolveResourceLinks(
+        {
+          type: "resource_link",
+          resource: {
+            uri: "file:///tmp/vertex.png",
+            name: "vertex.png",
+            mimeType: "image/png",
+          },
+        },
+        "vertex_ai"
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].type).toBe("image_url");
+      expect((result[0] as Record<string, unknown>).image_url).toEqual({
+        url: `data:image/png;base64,${imageData.toString("base64")}`,
+        detail: "high",
+      });
+    });
+
     it("resolves image resource_link with flat format (no nested resource)", async () => {
       const imageData = Buffer.from("flat-format-data");
       mockFetch.mockResolvedValue({ data: imageData, mimeType: "image/png" });
@@ -164,6 +188,35 @@ describe("resolveResourceLinks", () => {
       expect(result).toHaveLength(1);
       expect(result[0].type).toBe("text");
       expect(result[0].text).toContain("report.pdf");
+    });
+
+    it("PDF for vertex_ai uses gemini-style placeholder", async () => {
+      const pdfData = Buffer.from("%PDF-1.4 fake");
+      mockFetch.mockResolvedValue({ data: pdfData, mimeType: "application/pdf" });
+
+      const result = await resolveResourceLinks(
+        {
+          type: "resource_link",
+          resource: {
+            uri: "file:///tmp/vertex-doc.pdf",
+            name: "vertex-doc.pdf",
+            mimeType: "application/pdf",
+          },
+        },
+        "vertex_ai"
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].type).toBe("text");
+      expect(result[0].text).toContain("vertex-doc.pdf");
+      expect(result[0].text).toContain("Gemini PDF support via LiteLLM may vary");
+    });
+  });
+
+  describe("vertex_ai vendor", () => {
+    it("vertex_ai is in TOOL_IMAGE_UNSUPPORTED_VENDORS (mirrors gemini)", async () => {
+      const { TOOL_IMAGE_UNSUPPORTED_VENDORS } = await import("../media/resolver.js");
+      expect(TOOL_IMAGE_UNSUPPORTED_VENDORS.has("vertex_ai")).toBe(true);
     });
   });
 

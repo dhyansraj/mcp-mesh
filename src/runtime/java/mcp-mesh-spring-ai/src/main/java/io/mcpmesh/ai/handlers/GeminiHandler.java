@@ -344,6 +344,37 @@ public class GeminiHandler implements LlmProviderHandler {
         return new LlmResponse(content, toolCalls, extractUsage(response));
     }
 
+    // Reflection-based lookup of Vertex AI chat model class. The
+    // spring-ai-vertex-ai-gemini dependency is declared <optional>true</optional>
+    // in mcp-mesh-spring-ai/pom.xml, so consumers using only AI Studio
+    // (spring-ai-starter-model-google-genai) won't have these classes on their
+    // runtime classpath. Resolving via Class.forName lets us safely detect
+    // availability without an `instanceof` check that would trigger a
+    // NoClassDefFoundError on consumer classpaths missing the dep.
+    //
+    // The compile-time imports of VertexAiGeminiChatModel/VertexAiGeminiChatOptions
+    // are intentional and benign: imports are erased to fully-qualified bytecode
+    // references, and the JVM only resolves a referenced class when a method
+    // *body* mentioning it is first invoked. By isolating Vertex API calls into
+    // buildVertexOptions(), the class load is deferred until we've already
+    // verified the class is present (VERTEX_OPTIONS_CLASS != null).
+    private static final Class<?> VERTEX_CHAT_MODEL_CLASS;
+    private static final Class<?> VERTEX_OPTIONS_CLASS;
+    static {
+        Class<?> modelClass = null;
+        Class<?> optionsClass = null;
+        try {
+            modelClass = Class.forName("org.springframework.ai.vertexai.gemini.VertexAiGeminiChatModel");
+            optionsClass = Class.forName("org.springframework.ai.vertexai.gemini.VertexAiGeminiChatOptions");
+        } catch (ClassNotFoundException e) {
+            // Vertex AI starter not on classpath -- fine, AI Studio path will be used.
+            // Logged at debug level so we don't spam stdout for normal AI-Studio-only deployments.
+            log.debug("spring-ai-vertex-ai-gemini not on classpath; vertex_ai routing disabled");
+        }
+        VERTEX_CHAT_MODEL_CLASS = modelClass;
+        VERTEX_OPTIONS_CLASS = optionsClass;
+    }
+
     /**
      * Build provider-specific {@link ChatOptions} for the no-tool-execution path.
      *
@@ -352,22 +383,40 @@ public class GeminiHandler implements LlmProviderHandler {
      * the underlying {@link ChatModel} differs:
      * <ul>
      *   <li>{@code GoogleGenAiChatModel} accepts {@link GoogleGenAiChatOptions}</li>
-     *   <li>{@link VertexAiGeminiChatModel} accepts {@link VertexAiGeminiChatOptions}</li>
+     *   <li>{@code VertexAiGeminiChatModel} accepts {@code VertexAiGeminiChatOptions}</li>
      * </ul>
      * Each chat model does an explicit checkcast on the options it receives, so
      * passing the wrong type throws {@link ClassCastException} at request time.
      * Branch on the chat model type to pick the matching options class.
      *
+     * <p>The Vertex branch is guarded by {@link #VERTEX_CHAT_MODEL_CLASS} being
+     * non-null, which is only true when {@code spring-ai-vertex-ai-gemini} is on
+     * the consumer's classpath. AI-Studio-only consumers will skip the branch
+     * and never trigger a class load of the Vertex types.
+     *
      * <p>Package-private for testability.
      */
     ChatOptions buildToolNoExecuteOptions(ChatModel chatModel, List<ToolCallback> toolCallbacks) {
-        if (chatModel instanceof VertexAiGeminiChatModel) {
-            return VertexAiGeminiChatOptions.builder()
-                .toolCallbacks(toolCallbacks)
-                .internalToolExecutionEnabled(false)
-                .build();
+        if (VERTEX_CHAT_MODEL_CLASS != null && VERTEX_CHAT_MODEL_CLASS.isInstance(chatModel)) {
+            return buildVertexOptions(toolCallbacks);
         }
         return GoogleGenAiChatOptions.builder()
+            .toolCallbacks(toolCallbacks)
+            .internalToolExecutionEnabled(false)
+            .build();
+    }
+
+    /**
+     * Isolated method that touches the Vertex options class.
+     *
+     * <p>Only called when {@link #VERTEX_CHAT_MODEL_CLASS} != null (verified at
+     * the call site in {@link #buildToolNoExecuteOptions}), so the JVM's lazy
+     * class resolution of {@code VertexAiGeminiChatOptions} when this method
+     * body is first executed is guaranteed to succeed -- the class IS on the
+     * classpath by the time we get here.
+     */
+    private ChatOptions buildVertexOptions(List<ToolCallback> toolCallbacks) {
+        return VertexAiGeminiChatOptions.builder()
             .toolCallbacks(toolCallbacks)
             .internalToolExecutionEnabled(false)
             .build();

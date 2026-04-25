@@ -61,6 +61,7 @@ _VENDOR_FORMATTERS = {
     "openai": _format_for_openai,
     "gemini": _format_for_gemini,
     "google": _format_for_gemini,
+    "vertex_ai": _format_for_gemini,
 }
 
 
@@ -164,7 +165,7 @@ async def _resolve_single_resource_link(resource_link: dict, vendor: str) -> dic
             b64_data = base64.b64encode(data).decode("ascii")
             if vendor in ("anthropic", "claude"):
                 return _format_pdf_for_claude(b64_data)
-            elif vendor in ("gemini", "google"):
+            elif vendor in ("gemini", "google", "vertex_ai"):
                 return _format_pdf_for_gemini(b64_data, name)
             else:
                 return _format_pdf_for_openai(b64_data, name)
@@ -240,7 +241,7 @@ async def resolve_resource_links(tool_result: Any, vendor: str) -> list[dict]:
 # For OpenAI and Gemini, images are sent in a follow-up user message using
 # OpenAI-compatible format (image_url with data URI), which LiteLLM converts
 # to the provider's native format.
-_TOOL_IMAGE_UNSUPPORTED_VENDORS = {"openai", "gemini", "google"}
+_TOOL_IMAGE_UNSUPPORTED_VENDORS = {"openai", "gemini", "google", "vertex_ai"}
 
 
 async def resolve_resource_links_for_tool_message(
