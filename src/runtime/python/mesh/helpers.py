@@ -8,11 +8,185 @@ mesh decorators to simplify common patterns like zero-code LLM providers.
 import asyncio
 import json
 import logging
-from typing import Any, Optional
+import re
+from typing import Any
 
 from _mcp_mesh.shared.logging_config import format_log_value
 
 logger = logging.getLogger(__name__)
+
+
+def _hint_response_parses(content: str, schema: dict[str, Any]) -> bool:
+    """Validate that ``content`` is JSON-parseable and conforms to ``schema``.
+
+    Used after Claude HINT mode to decide whether to fall back to native
+    response_format. Tolerant of fenced code blocks (Claude HINT can wrap
+    JSON in ``\u0060\u0060\u0060json...\u0060\u0060\u0060``) — strip them before parsing.
+
+    If ``jsonschema`` is not installed, only JSON parseability is checked.
+    """
+    if not content:
+        return False
+    try:
+        cleaned = content.strip()
+        # Strip surrounding markdown code fences if present.
+        # Handle both ```json\n...\n``` and ```\n...\n``` patterns.
+        cleaned = re.sub(
+            r"^```(?:json)?\s*\n?", "", cleaned, count=1
+        )
+        cleaned = re.sub(r"\n?```\s*$", "", cleaned, count=1)
+        parsed = json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        return False
+
+    try:
+        import jsonschema  # type: ignore
+
+        try:
+            jsonschema.validate(instance=parsed, schema=schema)
+            return True
+        except jsonschema.ValidationError:
+            return False
+    except ImportError:
+        # jsonschema not available — JSON parseability is the best we can do.
+        return True
+
+
+# Internal mesh control flags set by provider handlers (e.g., ClaudeHandler
+# HINT mode) and consumed by the loop / legacy paths in this module. They MUST
+# be stripped from completion_args before any litellm.completion call —
+# otherwise providers like Anthropic reject the request with HTTP 400
+# ("Extra inputs are not permitted").
+_MESH_HINT_KEYS = (
+    "_mesh_hint_mode",
+    "_mesh_hint_schema",
+    "_mesh_hint_fallback_timeout",
+    "_mesh_hint_output_type_name",
+)
+
+
+def _pop_mesh_hint_flags(
+    completion_args: dict[str, Any],
+    defaults: tuple[bool, dict | None, int, str] = (False, None, 30, "Response"),
+) -> tuple[bool, dict | None, int, str]:
+    """Strip ``_mesh_*`` HINT-mode flags from ``completion_args`` in place.
+
+    Returns the captured ``(hint_mode, hint_schema, hint_fallback_timeout,
+    hint_output_type_name)`` so callers can use them to drive the post-call
+    fallback. Defaults preserve existing values across loop iterations.
+    """
+    hint_mode_default, hint_schema_default, hint_timeout_default, hint_name_default = defaults
+    hint_mode = bool(completion_args.pop("_mesh_hint_mode", hint_mode_default))
+    hint_schema = completion_args.pop("_mesh_hint_schema", hint_schema_default)
+    hint_fallback_timeout = completion_args.pop(
+        "_mesh_hint_fallback_timeout", hint_timeout_default
+    )
+    hint_output_type_name = completion_args.pop(
+        "_mesh_hint_output_type_name", hint_name_default
+    )
+    return hint_mode, hint_schema, hint_fallback_timeout, hint_output_type_name
+
+
+async def _maybe_run_hint_fallback(
+    *,
+    final_content: str,
+    message: Any,
+    response: Any,
+    base_completion_args: dict[str, Any],
+    hint_mode: bool,
+    hint_schema: dict[str, Any] | None,
+    hint_fallback_timeout: int,
+    hint_output_type_name: str,
+    fallback_logger: logging.Logger | None = None,
+) -> tuple[str, Any, Any]:
+    """If HINT mode is active and ``final_content`` fails to parse against the
+    schema, retry once with native ``response_format`` and a bounded
+    ``request_timeout``.
+
+    Returns ``(possibly-replaced final_content, message, response)``.
+
+    Raises whatever the fallback ``litellm.completion`` raises if it fails —
+    the caller is responsible for surfacing or wrapping. The original
+    (HINT-mode) response is NOT retained on fallback failure: a fallback that
+    errors means we couldn't recover, so re-raising is the cleanest signal.
+
+    IMPORTANT: ``base_completion_args`` MUST already be stripped of the
+    ``_mesh_*`` HINT keys AND of the ``tools`` key. The helper does NOT strip
+    ``tools`` itself — that's the caller's responsibility. Stripping ``tools``
+    matters because the fallback only fires AFTER the model returned final
+    content with no tool_calls, and re-introducing the ``response_format +
+    tools`` combo would re-create the silent-hang vector from issue #820.
+    """
+    if not (hint_mode and hint_schema and final_content):
+        return final_content, message, response
+
+    if _hint_response_parses(final_content, hint_schema):
+        return final_content, message, response
+
+    if fallback_logger:
+        fallback_logger.warning(
+            "Claude HINT mode response failed to parse against output schema; "
+            "retrying with native response_format (bounded request_timeout=%ss)",
+            hint_fallback_timeout,
+        )
+
+    fallback_args = {
+        **base_completion_args,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": hint_output_type_name,
+                "schema": hint_schema,
+                "strict": True,
+            },
+        },
+        "request_timeout": hint_fallback_timeout,
+    }
+    # Lazy import keeps this module importable in environments without
+    # litellm (e.g., during static analysis); both call sites already
+    # import litellm before invoking this helper.
+    import litellm
+
+    fallback_response = await asyncio.to_thread(
+        litellm.completion, **fallback_args
+    )
+    fb_message = fallback_response.choices[0].message
+    fb_content = _extract_text_from_message_content(fb_message.content)
+
+    if fallback_logger:
+        fallback_logger.info("Claude HINT fallback to response_format succeeded")
+
+    return (fb_content if fb_content else "", fb_message, fallback_response)
+
+
+def _extract_text_from_message_content(content: Any) -> str:
+    """Normalize a LiteLLM message ``content`` field to a plain string.
+
+    LiteLLM may return ``content`` as a string (most providers) or as a list
+    of content blocks (Anthropic with thinking, mixed text+image, etc.). This
+    helper handles both shapes and concatenates text blocks.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for block in content:
+            if block is None:
+                continue
+            if isinstance(block, dict):
+                text_value = block.get("text", "")
+                text_parts.append(
+                    str(text_value) if text_value is not None else ""
+                )
+            else:
+                try:
+                    text_parts.append(str(block))
+                except Exception:
+                    continue
+        return "".join(text_parts)
+    return str(content)
 
 
 async def _provider_agentic_loop(
@@ -213,6 +387,13 @@ async def _provider_agentic_loop(
             [],
         )
 
+    # HINT-mode state (set by ClaudeHandler.apply_structured_output).
+    # Captured outside the loop so the fallback after the loop has access.
+    hint_mode = False
+    hint_schema: dict[str, Any] | None = None
+    hint_fallback_timeout = 30
+    hint_output_type_name = "Response"
+
     while iteration < max_iterations:
         iteration += 1
 
@@ -224,6 +405,27 @@ async def _provider_agentic_loop(
         }
         if model_params:
             completion_args.update(model_params)
+
+        # Strip internal mesh control flags before they reach LiteLLM.
+        # These are set by handlers (e.g., ClaudeHandler HINT mode) to
+        # signal post-processing to the loop. Must run every iteration
+        # because model_params is unconditionally re-applied above.
+        # NOTE: The legacy single-call path below (in ``llm_provider``) does
+        # the SAME strip — keep both in sync.
+        (
+            hint_mode,
+            hint_schema,
+            hint_fallback_timeout,
+            hint_output_type_name,
+        ) = _pop_mesh_hint_flags(
+            completion_args,
+            defaults=(
+                hint_mode,
+                hint_schema,
+                hint_fallback_timeout,
+                hint_output_type_name,
+            ),
+        )
 
         response = await asyncio.to_thread(litellm.completion, **completion_args)
         message = response.choices[0].message
@@ -293,27 +495,48 @@ async def _provider_agentic_loop(
                     )
         else:
             # No tool calls - final response
-            content = message.content
-            if isinstance(content, list):
-                text_parts = []
-                for block in content:
-                    if block is None:
-                        continue
-                    elif isinstance(block, dict):
-                        text_value = block.get("text", "")
-                        text_parts.append(
-                            str(text_value) if text_value is not None else ""
-                        )
-                    else:
-                        try:
-                            text_parts.append(str(block))
-                        except Exception:
-                            continue
-                content = "".join(text_parts)
+            final_content = _extract_text_from_message_content(message.content)
+
+            # HINT-mode validation + bounded-timeout fallback (issue #820).
+            # If a handler (currently only ClaudeHandler) signaled HINT mode,
+            # validate the final response against the schema. If it fails to
+            # parse, retry once with native response_format and a hard timeout.
+            # This recovers from HINT compliance failures without re-introducing
+            # the silent 600s+ hang of the unbounded response_format path.
+            #
+            # Build base args for the fallback — strip ``tools`` since the
+            # fallback only fires AFTER the model gave a final answer with no
+            # tool_calls. Keeping ``tools`` would re-introduce the
+            # ``response_format + tools`` combo that caused the original
+            # silent hang (issue #820). Bounded timeout is still there as
+            # defense-in-depth, but stripping tools removes the deadlock
+            # vector entirely.
+            fallback_base_args = {
+                k: v for k, v in completion_args.items() if k != "tools"
+            }
+            try:
+                final_content, message, response = await _maybe_run_hint_fallback(
+                    final_content=final_content,
+                    message=message,
+                    response=response,
+                    base_completion_args=fallback_base_args,
+                    hint_mode=hint_mode,
+                    hint_schema=hint_schema,
+                    hint_fallback_timeout=hint_fallback_timeout,
+                    hint_output_type_name=hint_output_type_name,
+                    fallback_logger=loop_logger,
+                )
+            except Exception as e:
+                if loop_logger:
+                    loop_logger.error(
+                        "Claude HINT fallback to response_format failed: %s",
+                        e,
+                    )
+                raise
 
             message_dict: dict[str, Any] = {
                 "role": message.role,
-                "content": content if content else "",
+                "content": final_content,
             }
 
             if hasattr(response, "usage") and response.usage:
@@ -373,7 +596,7 @@ def _extract_vendor_from_model(model: str) -> str | None:
 def llm_provider(
     model: str,
     capability: str = "llm",
-    tags: Optional[list[str]] = None,
+    tags: list[str] | None = None,
     version: str = "1.0.0",
     **litellm_kwargs: Any,
 ):
@@ -638,6 +861,20 @@ def llm_provider(
             if model_params_copy:
                 completion_args.update(model_params_copy)
 
+            # Strip internal mesh control flags before they reach LiteLLM.
+            # These are set by handlers (e.g., ClaudeHandler HINT mode) and
+            # would otherwise cause provider APIs to reject the request with
+            # HTTP 400 ("Extra inputs are not permitted"). The HINT fallback
+            # below uses the captured values.
+            # NOTE: The provider-managed loop above does the SAME strip —
+            # see ``_provider_agentic_loop`` for the multi-iteration path.
+            (
+                hint_mode,
+                hint_schema,
+                hint_fallback_timeout,
+                hint_output_type_name,
+            ) = _pop_mesh_hint_flags(completion_args)
+
             try:
                 logger.debug(
                     f"📤 LLM provider request: {format_log_value(completion_args)}"
@@ -652,30 +889,50 @@ def llm_provider(
                 message = response.choices[0].message
 
                 # Handle content - it can be a string or list of content blocks
-                content = message.content
-                if isinstance(content, list):
-                    text_parts = []
-                    for block in content:
-                        if block is None:
-                            continue
-                        elif isinstance(block, dict):
-                            text_value = block.get("text", "")
-                            text_parts.append(
-                                str(text_value) if text_value is not None else ""
-                            )
-                        else:
-                            try:
-                                text_parts.append(str(block))
-                            except Exception:
-                                logger.warning(
-                                    f"Unable to convert content block to string: {type(block)}"
-                                )
-                                continue
-                    content = "".join(text_parts)
+                final_content = _extract_text_from_message_content(message.content)
+
+                # HINT-mode validation + bounded-timeout fallback (issue #820).
+                # Mirrors the same logic in ``_provider_agentic_loop``. Without
+                # this, a HINT compliance failure here would surface as a
+                # ResponseParseError to the consumer.
+                # NOTE: only run when there are no tool_calls — if the model
+                # returned tools, structured output is not yet expected.
+                no_tool_calls = not (
+                    hasattr(message, "tool_calls") and message.tool_calls
+                )
+                if hint_mode and no_tool_calls:
+                    # Build base args for the fallback — strip ``tools`` since
+                    # the fallback only fires AFTER the model gave a final
+                    # answer with no tool_calls. Keeping ``tools`` would
+                    # re-introduce the ``response_format + tools`` combo that
+                    # caused the original silent hang (issue #820). Bounded
+                    # timeout is still there as defense-in-depth, but stripping
+                    # tools removes the deadlock vector entirely.
+                    fallback_base_args = {
+                        k: v for k, v in completion_args.items() if k != "tools"
+                    }
+                    try:
+                        final_content, message, response = await _maybe_run_hint_fallback(
+                            final_content=final_content,
+                            message=message,
+                            response=response,
+                            base_completion_args=fallback_base_args,
+                            hint_mode=hint_mode,
+                            hint_schema=hint_schema,
+                            hint_fallback_timeout=hint_fallback_timeout,
+                            hint_output_type_name=hint_output_type_name,
+                            fallback_logger=logger,
+                        )
+                    except Exception as fallback_err:
+                        logger.error(
+                            "Claude HINT fallback to response_format failed: %s",
+                            fallback_err,
+                        )
+                        raise
 
                 message_dict: dict[str, Any] = {
                     "role": message.role,
-                    "content": content if content else "",
+                    "content": final_content if final_content else "",
                 }
 
                 # Include tool_calls if present (critical for agentic loop support!)

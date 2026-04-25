@@ -8,10 +8,12 @@ Output strategy:
 - format_system_prompt (direct calls): Uses HINT mode — prompt-based JSON
   instructions with DECISION GUIDE (~95% reliable). This avoids cross-runtime
   incompatibilities when the caller is a non-Python SDK.
-- apply_structured_output (mesh delegation): Uses native response_format with
-  json_schema type and strict: True (inherited from base class). The Python
-  provider controls the full API call, so cross-runtime concerns don't apply.
-  This gives 100% JSON schema enforcement.
+- apply_structured_output (mesh delegation): Uses HINT mode (prompt injection)
+  by default to avoid the Anthropic response_format + tools silent-hang bug
+  (issue #820). The agentic loop validates the final response against the
+  schema and falls back to a bounded-timeout response_format call if the HINT
+  output fails to parse. Set MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT=true to
+  revert to the previous response_format-first behavior.
 
 Features:
 - Automatic prompt caching for system messages (up to 90% cost reduction)
@@ -21,12 +23,17 @@ Features:
 
 import json
 import logging
-from typing import Any, Optional
+import os
+from typing import Any
 
 import mcp_mesh_core
 from pydantic import BaseModel
 
-from .base_provider_handler import BaseProviderHandler, has_media_params
+from .base_provider_handler import (
+    BaseProviderHandler,
+    has_media_params,
+    sanitize_schema_for_structured_output,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +72,7 @@ class ClaudeHandler(BaseProviderHandler):
         super().__init__(vendor="anthropic")
 
     def determine_output_mode(
-        self, output_type: type, override_mode: Optional[str] = None
+        self, output_type: type, override_mode: str | None = None
     ) -> str:
         """
         Determine the output mode based on return type.
@@ -169,7 +176,7 @@ class ClaudeHandler(BaseProviderHandler):
     def prepare_request(
         self,
         messages: list[dict[str, Any]],
-        tools: Optional[list[dict[str, Any]]],
+        tools: list[dict[str, Any]] | None,
         output_type: type,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -218,14 +225,20 @@ class ClaudeHandler(BaseProviderHandler):
     def format_system_prompt(
         self,
         base_prompt: str,
-        tool_schemas: Optional[list[dict[str, Any]]],
+        tool_schemas: list[dict[str, Any]] | None,
         output_type: type,
-        output_mode: Optional[str] = None,
+        output_mode: str | None = None,
     ) -> str:
         """
         Format system prompt for Claude with output mode support.
 
         Delegates to Rust core for prompt construction.
+
+        When called via the mesh delegation path, ``apply_structured_output``
+        will have already injected an ``OUTPUT FORMAT:`` HINT block into the
+        system message. In that case the Rust formatter is invoked with
+        ``output_type=str`` (text mode) so the only additions are tool/media
+        instructions — the HINT block is not duplicated.
 
         Args:
             base_prompt: Base system prompt
@@ -253,6 +266,118 @@ class ClaudeHandler(BaseProviderHandler):
             schema_name,
             determined_mode,
         )
+
+    def _build_hint_text(self, sanitized_schema: dict[str, Any]) -> str:
+        """Build the ``OUTPUT FORMAT:`` HINT block for ``apply_structured_output``.
+
+        Returned text starts with leading blank lines so it can be appended
+        directly to existing system message content. Callers that synthesize
+        a fresh system message should ``.strip()`` the result.
+        """
+        hint_text = "\n\nOUTPUT FORMAT:\n"
+        hint_text += (
+            "Your FINAL response must be ONLY valid JSON (no markdown, "
+            "no code blocks) with this exact structure:\n"
+        )
+        properties = sanitized_schema.get("properties", {})
+        hint_text += self.build_json_example(properties) + "\n\n"
+        hint_text += (
+            "Return ONLY the JSON object with actual values. Do not "
+            "include the schema definition, markdown formatting, or "
+            "code blocks."
+        )
+        return hint_text
+
+    def apply_structured_output(
+        self,
+        output_schema: dict[str, Any],
+        output_type_name: str | None,
+        model_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Apply Claude-specific structured output for mesh delegation.
+
+        Claude's native ``response_format`` path silently hangs (600s+) on
+        certain content + tools combinations (issue #820). To avoid this,
+        we use HINT mode by default: inject schema instructions into the
+        system prompt and let the agentic loop validate the final response.
+        If validation fails, the loop falls back to a bounded-timeout
+        ``response_format`` call (see ``_provider_agentic_loop``).
+
+        Set ``MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT=true`` to revert to the
+        previous response_format-first behavior (delegates to base impl).
+
+        Args:
+            output_schema: JSON schema dict from consumer
+            output_type_name: Name of the output type (e.g., "TripPlan")
+            model_params: Current model parameters dict (will be modified)
+
+        Returns:
+            Modified model_params with HINT-mode flags + injected system prompt
+        """
+        # Backwards-compat env flag: revert to base response_format behavior.
+        if os.environ.get("MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            logger.info(
+                "Claude: MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT set, using "
+                "native response_format (base behavior)"
+            )
+            return super().apply_structured_output(
+                output_schema, output_type_name, model_params
+            )
+
+        sanitized_schema = sanitize_schema_for_structured_output(output_schema)
+
+        # Inject HINT instructions into the first system message.
+        # Mesh delegation always involves tools, and Claude's response_format
+        # path silently hangs on certain content+tools combos (issue #820),
+        # so we cannot use it here.
+        messages = model_params.get("messages", [])
+        hint_block_inserted = False
+        for msg in messages:
+            if msg.get("role") == "system":
+                base_content = msg.get("content", "")
+                msg["content"] = base_content + self._build_hint_text(sanitized_schema)
+                hint_block_inserted = True
+                break
+
+        if not hint_block_inserted:
+            # No system message found — synthesize one containing just the
+            # HINT block. Without this, the _mesh_hint_* flags below would
+            # still be set but the model would never see the schema, every
+            # response would fail validation, and the 30s fallback timeout
+            # would fire on every request.
+            hint_text = self._build_hint_text(sanitized_schema)
+            messages.insert(0, {"role": "system", "content": hint_text.strip()})
+            logger.debug(
+                "Claude HINT mode for '%s': no system message found, "
+                "synthesized one with HINT block",
+                output_type_name or "Response",
+            )
+            # Keep model_params["messages"] in sync — messages may be a
+            # fresh list reference if the caller passed an empty/missing list.
+            model_params["messages"] = messages
+
+        # Internal flags read by _provider_agentic_loop. Prefixed with
+        # "_mesh_" so the loop strips them before calling LiteLLM (these
+        # are NOT API params).
+        model_params["_mesh_hint_mode"] = True
+        model_params["_mesh_hint_schema"] = sanitized_schema
+        model_params["_mesh_hint_fallback_timeout"] = 30
+        model_params["_mesh_hint_output_type_name"] = output_type_name or "Response"
+
+        # Explicitly DO NOT set response_format — that's the bug we're avoiding.
+        model_params.pop("response_format", None)
+
+        logger.info(
+            "Claude HINT mode for '%s' (mesh delegation, schema in prompt; "
+            "loop will fall back to response_format if parse fails)",
+            output_type_name or "Response",
+        )
+        return model_params
 
     def get_vendor_capabilities(self) -> dict[str, bool]:
         """

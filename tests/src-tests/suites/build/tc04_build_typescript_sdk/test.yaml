@@ -11,7 +11,7 @@ tags:
   - build
   - typescript
   - sdk
-timeout: 300
+timeout: 600
 
 test:
   # Ensure output directories exist
@@ -49,27 +49,49 @@ test:
       echo "Output: $OUTPUT_ABS"
 
       echo "Building TypeScript SDK inside container (clean build)..."
-      # Optimized: Only copy required files instead of entire repo
-      # TypeScript SDK needs: typescript/ (package.json, tsconfig.json, src/) + core/typescript/ (local dep)
+      # TypeScript SDK depends on @mcpmesh/core (file:../core/typescript), whose
+      # napi-generated index.js / index.d.ts / *.node are NOT in git. We must
+      # build them inline first, then build the SDK. Mirrors tc04a's pattern.
       docker run --rm \
         -v "$SOURCE_ABS:/src-host:ro" \
         -v "$OUTPUT_ABS:/out" \
         ${config.build.image} \
         bash -c "
+          set -euo pipefail
           mkdir -p /src/mcp-mesh/src/runtime/typescript /src/mcp-mesh/src/runtime/core && \
           mkdir -p /out/packages && \
+          # Copy napi core build inputs (full Rust source needed for napi build)
+          cp /src-host/src/runtime/core/Cargo.toml /src/mcp-mesh/src/runtime/core/ && \
+          # Cargo.lock may not exist on a fresh tree; tolerate missing-file
+          # only — any other cp failure (permission, IO) must propagate via
+          # set -euo pipefail.
+          if [ -f /src-host/src/runtime/core/Cargo.lock ]; then \
+            cp /src-host/src/runtime/core/Cargo.lock /src/mcp-mesh/src/runtime/core/; \
+          fi && \
+          cp /src-host/src/runtime/core/build.rs /src/mcp-mesh/src/runtime/core/ && \
+          cp -r /src-host/src/runtime/core/src /src/mcp-mesh/src/runtime/core/ && \
+          cp -r /src-host/src/runtime/core/typescript /src/mcp-mesh/src/runtime/core/ && \
+          # Copy SDK source
           cp /src-host/src/runtime/typescript/package.json /src/mcp-mesh/src/runtime/typescript/ && \
           cp /src-host/src/runtime/typescript/tsconfig.json /src/mcp-mesh/src/runtime/typescript/ && \
           cp -r /src-host/src/runtime/typescript/src /src/mcp-mesh/src/runtime/typescript/ && \
-          cp -r /src-host/src/runtime/core/typescript /src/mcp-mesh/src/runtime/core/ && \
+          # Build napi core wrappers FIRST (generates index.js, index.d.ts, *.node)
+          echo '=== Building @mcpmesh/core napi wrappers ===' && \
+          cd /src/mcp-mesh/src/runtime/core/typescript && \
+          npm install && \
+          npm run build && \
+          # Then build the SDK
+          echo '=== Building @mcpmesh/sdk ===' && \
           cd /src/mcp-mesh/src/runtime/typescript && \
-          npm install && npm run build && npm pack --pack-destination /out/packages
+          npm install && \
+          npm run build && \
+          npm pack --pack-destination /out/packages
         "
 
       echo "TypeScript build complete"
       echo "npm pack complete"
     capture: build_output
-    timeout: 180
+    timeout: 480
 
   # List built packages on host
   - name: "List built packages"

@@ -28,6 +28,11 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
+from ._handler_context import (
+    clear_pending_output_schema,
+    get_pending_output_schema,
+    set_pending_output_schema,
+)
 from .base_provider_handler import (
     BaseProviderHandler,
     has_media_params,
@@ -70,11 +75,14 @@ class GeminiHandler(BaseProviderHandler):
     """
 
     def __init__(self):
-        """Initialize Gemini handler."""
+        """Initialize Gemini handler.
+
+        Pending output-schema state lives in ``_handler_context`` ContextVars
+        rather than instance fields, because handlers are cached as
+        singletons in ``ProviderHandlerRegistry`` and instance state would
+        race across concurrent async requests.
+        """
         super().__init__(vendor="gemini")
-        # Store output schema for use in format_system_prompt (set by apply_structured_output)
-        self._pending_output_schema: dict[str, Any] | None = None
-        self._pending_output_type_name: str | None = None
 
     def determine_output_mode(self, output_type, override_mode=None):
         """Determine output mode for Gemini.
@@ -131,8 +139,7 @@ class GeminiHandler(BaseProviderHandler):
 
         # Skip structured output for str return type (text mode)
         if output_type is str:
-            self._pending_output_schema = None
-            self._pending_output_type_name = None
+            clear_pending_output_schema()
             return request_params
 
         # Only store schema for Pydantic models
@@ -141,8 +148,7 @@ class GeminiHandler(BaseProviderHandler):
             schema = sanitize_schema_for_structured_output(schema)
 
             # Store for HINT mode in format_system_prompt (always needed as fallback)
-            self._pending_output_schema = schema
-            self._pending_output_type_name = output_type.__name__
+            set_pending_output_schema(schema, output_type.__name__)
 
             # Only use response_format when NO tools present
             # Gemini 3 + response_format + tools causes non-deterministic infinite tool loops
@@ -166,8 +172,7 @@ class GeminiHandler(BaseProviderHandler):
                     output_type.__name__,
                 )
         else:
-            self._pending_output_schema = None
-            self._pending_output_type_name = None
+            clear_pending_output_schema()
 
         return request_params
 
@@ -192,9 +197,10 @@ class GeminiHandler(BaseProviderHandler):
         """
         import mcp_mesh_core
 
-        # Use pending schema if set (from apply_structured_output or prepare_request)
-        output_schema = self._pending_output_schema
-        output_type_name = self._pending_output_type_name
+        # Use pending schema if set (from apply_structured_output or prepare_request).
+        # State lives in a per-async-context ContextVar to avoid races under
+        # singleton handler caching.
+        output_schema, output_type_name = get_pending_output_schema()
 
         if output_schema is None:
             if output_type is str:
@@ -264,9 +270,9 @@ class GeminiHandler(BaseProviderHandler):
         """
         sanitized_schema = sanitize_schema_for_structured_output(output_schema)
 
-        # Store for format_system_prompt
-        self._pending_output_schema = sanitized_schema
-        self._pending_output_type_name = output_type_name
+        # Store for format_system_prompt (per-async-context to avoid races
+        # across concurrent requests sharing this singleton handler).
+        set_pending_output_schema(sanitized_schema, output_type_name)
 
         # Inject HINT instructions into system messages
         # (mesh delegation always has tools, so we can't use response_format)
