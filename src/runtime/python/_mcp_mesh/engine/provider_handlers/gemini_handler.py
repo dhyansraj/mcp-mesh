@@ -29,6 +29,7 @@ from typing import Any, Optional
 from pydantic import BaseModel
 
 from ._handler_context import (
+    clear_pending_output_schema,
     get_pending_output_schema,
     set_pending_output_schema,
 )
@@ -138,7 +139,7 @@ class GeminiHandler(BaseProviderHandler):
 
         # Skip structured output for str return type (text mode)
         if output_type is str:
-            set_pending_output_schema(None, None)
+            clear_pending_output_schema()
             return request_params
 
         # Only store schema for Pydantic models
@@ -171,7 +172,7 @@ class GeminiHandler(BaseProviderHandler):
                     output_type.__name__,
                 )
         else:
-            set_pending_output_schema(None, None)
+            clear_pending_output_schema()
 
         return request_params
 

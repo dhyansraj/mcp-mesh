@@ -62,7 +62,12 @@ test:
           mkdir -p /out/packages && \
           # Copy napi core build inputs (full Rust source needed for napi build)
           cp /src-host/src/runtime/core/Cargo.toml /src/mcp-mesh/src/runtime/core/ && \
-          cp /src-host/src/runtime/core/Cargo.lock /src/mcp-mesh/src/runtime/core/ 2>/dev/null || true && \
+          # Cargo.lock may not exist on a fresh tree; tolerate missing-file
+          # only — any other cp failure (permission, IO) must propagate via
+          # set -euo pipefail.
+          if [ -f /src-host/src/runtime/core/Cargo.lock ]; then \
+            cp /src-host/src/runtime/core/Cargo.lock /src/mcp-mesh/src/runtime/core/; \
+          fi && \
           cp /src-host/src/runtime/core/build.rs /src/mcp-mesh/src/runtime/core/ && \
           cp -r /src-host/src/runtime/core/src /src/mcp-mesh/src/runtime/core/ && \
           cp -r /src-host/src/runtime/core/typescript /src/mcp-mesh/src/runtime/core/ && \

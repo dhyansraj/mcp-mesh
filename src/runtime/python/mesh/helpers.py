@@ -87,6 +87,78 @@ def _pop_mesh_hint_flags(
     return hint_mode, hint_schema, hint_fallback_timeout, hint_output_type_name
 
 
+async def _maybe_run_hint_fallback(
+    *,
+    final_content: str,
+    message: Any,
+    response: Any,
+    base_completion_args: dict[str, Any],
+    hint_mode: bool,
+    hint_schema: dict[str, Any] | None,
+    hint_fallback_timeout: int,
+    hint_output_type_name: str,
+    fallback_logger: logging.Logger | None = None,
+) -> tuple[str, Any, Any]:
+    """If HINT mode is active and ``final_content`` fails to parse against the
+    schema, retry once with native ``response_format`` and a bounded
+    ``request_timeout``.
+
+    Returns ``(possibly-replaced final_content, message, response)``.
+
+    Raises whatever the fallback ``litellm.completion`` raises if it fails —
+    the caller is responsible for surfacing or wrapping. The original
+    (HINT-mode) response is NOT retained on fallback failure: a fallback that
+    errors means we couldn't recover, so re-raising is the cleanest signal.
+
+    IMPORTANT: ``base_completion_args`` MUST already be stripped of the
+    ``_mesh_*`` HINT keys AND of the ``tools`` key. The helper does NOT strip
+    ``tools`` itself — that's the caller's responsibility. Stripping ``tools``
+    matters because the fallback only fires AFTER the model returned final
+    content with no tool_calls, and re-introducing the ``response_format +
+    tools`` combo would re-create the silent-hang vector from issue #820.
+    """
+    if not (hint_mode and hint_schema and final_content):
+        return final_content, message, response
+
+    if _hint_response_parses(final_content, hint_schema):
+        return final_content, message, response
+
+    if fallback_logger:
+        fallback_logger.warning(
+            "Claude HINT mode response failed to parse against output schema; "
+            "retrying with native response_format (bounded request_timeout=%ss)",
+            hint_fallback_timeout,
+        )
+
+    fallback_args = {
+        **base_completion_args,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": hint_output_type_name,
+                "schema": hint_schema,
+                "strict": True,
+            },
+        },
+        "request_timeout": hint_fallback_timeout,
+    }
+    # Lazy import keeps this module importable in environments without
+    # litellm (e.g., during static analysis); both call sites already
+    # import litellm before invoking this helper.
+    import litellm
+
+    fallback_response = await asyncio.to_thread(
+        litellm.completion, **fallback_args
+    )
+    fb_message = fallback_response.choices[0].message
+    fb_content = _extract_text_from_message_content(fb_message.content)
+
+    if fallback_logger:
+        fallback_logger.info("Claude HINT fallback to response_format succeeded")
+
+    return (fb_content if fb_content else "", fb_message, fallback_response)
+
+
 def _extract_text_from_message_content(content: Any) -> str:
     """Normalize a LiteLLM message ``content`` field to a plain string.
 
@@ -431,53 +503,36 @@ async def _provider_agentic_loop(
             # parse, retry once with native response_format and a hard timeout.
             # This recovers from HINT compliance failures without re-introducing
             # the silent 600s+ hang of the unbounded response_format path.
-            if hint_mode and hint_schema and final_content:
-                if not _hint_response_parses(final_content, hint_schema):
-                    if loop_logger:
-                        loop_logger.warning(
-                            "Claude HINT mode response failed to parse against "
-                            "output schema; retrying with native response_format "
-                            "(bounded request_timeout=%ss)",
-                            hint_fallback_timeout,
-                        )
-                    fallback_args: dict[str, Any] = {
-                        "model": effective_model,
-                        "messages": current_messages,
-                        "tools": tools,
-                        **litellm_kwargs,
-                        "response_format": {
-                            "type": "json_schema",
-                            "json_schema": {
-                                "name": hint_output_type_name,
-                                "schema": hint_schema,
-                                "strict": True,
-                            },
-                        },
-                        "request_timeout": hint_fallback_timeout,
-                    }
-                    try:
-                        fallback_response = await asyncio.to_thread(
-                            litellm.completion, **fallback_args
-                        )
-                        fb_message = fallback_response.choices[0].message
-                        final_content = _extract_text_from_message_content(
-                            fb_message.content
-                        )
-                        # Replace response/message references so usage metrics
-                        # below reflect the call that produced the returned content.
-                        response = fallback_response
-                        message = fb_message
-                        if loop_logger:
-                            loop_logger.info(
-                                "Claude HINT fallback to response_format succeeded"
-                            )
-                    except Exception as e:
-                        if loop_logger:
-                            loop_logger.error(
-                                "Claude HINT fallback to response_format failed: %s",
-                                e,
-                            )
-                        raise
+            #
+            # Build base args for the fallback — strip ``tools`` since the
+            # fallback only fires AFTER the model gave a final answer with no
+            # tool_calls. Keeping ``tools`` would re-introduce the
+            # ``response_format + tools`` combo that caused the original
+            # silent hang (issue #820). Bounded timeout is still there as
+            # defense-in-depth, but stripping tools removes the deadlock
+            # vector entirely.
+            fallback_base_args = {
+                k: v for k, v in completion_args.items() if k != "tools"
+            }
+            try:
+                final_content, message, response = await _maybe_run_hint_fallback(
+                    final_content=final_content,
+                    message=message,
+                    response=response,
+                    base_completion_args=fallback_base_args,
+                    hint_mode=hint_mode,
+                    hint_schema=hint_schema,
+                    hint_fallback_timeout=hint_fallback_timeout,
+                    hint_output_type_name=hint_output_type_name,
+                    fallback_logger=loop_logger,
+                )
+            except Exception as e:
+                if loop_logger:
+                    loop_logger.error(
+                        "Claude HINT fallback to response_format failed: %s",
+                        e,
+                    )
+                raise
 
             message_dict: dict[str, Any] = {
                 "role": message.role,
@@ -845,45 +900,28 @@ def llm_provider(
                 no_tool_calls = not (
                     hasattr(message, "tool_calls") and message.tool_calls
                 )
-                if (
-                    hint_mode
-                    and hint_schema
-                    and final_content
-                    and no_tool_calls
-                    and not _hint_response_parses(final_content, hint_schema)
-                ):
-                    logger.warning(
-                        "Claude HINT mode response failed to parse against "
-                        "output schema; retrying with native response_format "
-                        "(bounded request_timeout=%ss)",
-                        hint_fallback_timeout,
-                    )
-                    fallback_args: dict[str, Any] = {
-                        **completion_args,  # already-stripped, no _mesh_* keys
-                        "response_format": {
-                            "type": "json_schema",
-                            "json_schema": {
-                                "name": hint_output_type_name,
-                                "schema": hint_schema,
-                                "strict": True,
-                            },
-                        },
-                        "request_timeout": hint_fallback_timeout,
+                if hint_mode and no_tool_calls:
+                    # Build base args for the fallback — strip ``tools`` since
+                    # the fallback only fires AFTER the model gave a final
+                    # answer with no tool_calls. Keeping ``tools`` would
+                    # re-introduce the ``response_format + tools`` combo that
+                    # caused the original silent hang (issue #820). Bounded
+                    # timeout is still there as defense-in-depth, but stripping
+                    # tools removes the deadlock vector entirely.
+                    fallback_base_args = {
+                        k: v for k, v in completion_args.items() if k != "tools"
                     }
                     try:
-                        fallback_response = await asyncio.to_thread(
-                            litellm.completion, **fallback_args
-                        )
-                        fb_message = fallback_response.choices[0].message
-                        final_content = _extract_text_from_message_content(
-                            fb_message.content
-                        )
-                        # Replace response/message references so usage metrics
-                        # below reflect the call that produced the returned content.
-                        response = fallback_response
-                        message = fb_message
-                        logger.info(
-                            "Claude HINT fallback to response_format succeeded"
+                        final_content, message, response = await _maybe_run_hint_fallback(
+                            final_content=final_content,
+                            message=message,
+                            response=response,
+                            base_completion_args=fallback_base_args,
+                            hint_mode=hint_mode,
+                            hint_schema=hint_schema,
+                            hint_fallback_timeout=hint_fallback_timeout,
+                            hint_output_type_name=hint_output_type_name,
+                            fallback_logger=logger,
                         )
                     except Exception as fallback_err:
                         logger.error(

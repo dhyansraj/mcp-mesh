@@ -11,6 +11,7 @@ Background:
 """
 
 import os
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -19,6 +20,7 @@ from mesh.helpers import (
     _MESH_HINT_KEYS,
     _extract_text_from_message_content,
     _hint_response_parses,
+    _maybe_run_hint_fallback,
     _pop_mesh_hint_flags,
 )
 
@@ -415,3 +417,221 @@ class TestExtractTextFromMessageContent:
     def test_block_with_null_text_value_treated_as_empty(self):
         blocks = [{"type": "text", "text": None}, {"type": "text", "text": "y"}]
         assert _extract_text_from_message_content(blocks) == "y"
+
+
+# ---------------------------------------------------------------------------
+# ClaudeHandler.apply_structured_output — no-system-message synthesis (Fix 1)
+# ---------------------------------------------------------------------------
+
+
+class TestClaudeApplyStructuredOutputNoSystemMessage:
+    """Verify HINT-mode synthesizes a system message when none exists.
+
+    Without this, the ``_mesh_hint_*`` flags would be set but the model would
+    never see the schema, every response would fail validation, and the 30s
+    fallback timeout would fire on every request (issue #820 follow-up).
+    """
+
+    def setup_method(self):
+        os.environ.pop("MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT", None)
+
+    def teardown_method(self):
+        os.environ.pop("MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT", None)
+
+    def test_apply_structured_output_synthesizes_system_message_when_none_exists(self):
+        """When messages contain no system role, apply_structured_output should
+        synthesize one with the HINT block so HINT mode actually works."""
+        handler = ClaudeHandler()
+        schema = {
+            "type": "object",
+            "properties": {"foo": {"type": "string"}},
+            "required": ["foo"],
+        }
+        model_params = {"messages": [{"role": "user", "content": "Hello"}]}
+        handler.apply_structured_output(schema, "MyType", model_params)
+
+        # First message should now be the synthesized system message
+        assert model_params["messages"][0]["role"] == "system"
+        assert "OUTPUT FORMAT:" in model_params["messages"][0]["content"]
+        assert "foo" in model_params["messages"][0]["content"]
+
+        # Original user message should still be there
+        assert model_params["messages"][1] == {"role": "user", "content": "Hello"}
+
+        # Flags should be set as normal
+        assert model_params["_mesh_hint_mode"] is True
+        assert model_params["_mesh_hint_schema"]["properties"]["foo"]["type"] == "string"
+
+    def test_apply_structured_output_synthesizes_when_only_user_messages(self):
+        """Multiple user messages, no system — should still prepend exactly one."""
+        handler = ClaudeHandler()
+        schema = {
+            "type": "object",
+            "properties": {"x": {"type": "integer"}},
+            "required": ["x"],
+        }
+        model_params = {
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": "second"},
+            ]
+        }
+        handler.apply_structured_output(schema, "MyType", model_params)
+
+        # Synthesized system message should be at position 0
+        assert model_params["messages"][0]["role"] == "system"
+        assert "OUTPUT FORMAT:" in model_params["messages"][0]["content"]
+        # Original messages preserved in order after the new system message
+        assert model_params["messages"][1] == {"role": "user", "content": "first"}
+        assert model_params["messages"][2] == {"role": "assistant", "content": "ok"}
+        assert model_params["messages"][3] == {"role": "user", "content": "second"}
+        # Only ONE system message synthesized (no duplicates)
+        system_count = sum(
+            1 for m in model_params["messages"] if m.get("role") == "system"
+        )
+        assert system_count == 1
+
+    def test_existing_system_message_path_not_affected(self):
+        """When a system message already exists, no synthesis happens — the
+        existing message is mutated in place (regression check)."""
+        handler = ClaudeHandler()
+        schema = {
+            "type": "object",
+            "properties": {"foo": {"type": "string"}},
+            "required": ["foo"],
+        }
+        model_params = {
+            "messages": [
+                {"role": "system", "content": "Original."},
+                {"role": "user", "content": "Hi"},
+            ]
+        }
+        handler.apply_structured_output(schema, "MyType", model_params)
+
+        # Length unchanged — no synthesis
+        assert len(model_params["messages"]) == 2
+        # System content was mutated in place
+        assert model_params["messages"][0]["content"].startswith("Original.")
+        assert "OUTPUT FORMAT:" in model_params["messages"][0]["content"]
+
+
+# ---------------------------------------------------------------------------
+# _maybe_run_hint_fallback — extracted helper (Fix 3 + Fix 4)
+# ---------------------------------------------------------------------------
+
+
+class TestMaybeRunHintFallback:
+    """Verify the extracted fallback helper used by both the agentic loop and
+    the legacy single-call path. The helper assumes the caller already
+    stripped ``tools`` from ``base_completion_args`` (Fix 4)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_unchanged_when_hint_mode_disabled(self):
+        """If hint_mode is False, helper is a no-op."""
+        result = await _maybe_run_hint_fallback(
+            final_content="anything",
+            message="msg",
+            response="resp",
+            base_completion_args={},
+            hint_mode=False,
+            hint_schema={"type": "object"},
+            hint_fallback_timeout=30,
+            hint_output_type_name="X",
+        )
+        assert result == ("anything", "msg", "resp")
+
+    @pytest.mark.asyncio
+    async def test_returns_unchanged_when_content_already_parses(self):
+        """If hint mode is on but content parses, no fallback fires."""
+        schema = {
+            "type": "object",
+            "properties": {"foo": {"type": "string"}},
+            "required": ["foo"],
+        }
+        result = await _maybe_run_hint_fallback(
+            final_content='{"foo": "ok"}',
+            message="orig_msg",
+            response="orig_resp",
+            base_completion_args={},
+            hint_mode=True,
+            hint_schema=schema,
+            hint_fallback_timeout=30,
+            hint_output_type_name="X",
+        )
+        assert result == ('{"foo": "ok"}', "orig_msg", "orig_resp")
+
+    @pytest.mark.asyncio
+    async def test_strips_no_tools_in_args(self):
+        """Helper assumes caller already stripped ``tools``. Verify by
+        passing ``base_completion_args`` without ``tools`` and confirming the
+        fallback ``litellm.completion`` call doesn't include ``tools`` either
+        — proves the helper isn't sneaking it back in."""
+        captured_kwargs: dict = {}
+
+        async def fake_to_thread(fn, **kwargs):
+            captured_kwargs.update(kwargs)
+            fake_msg = MagicMock()
+            fake_msg.content = '{"foo": "ok"}'
+            fake_response = MagicMock()
+            fake_response.choices = [MagicMock(message=fake_msg)]
+            return fake_response
+
+        schema = {
+            "type": "object",
+            "properties": {"foo": {"type": "string"}},
+            "required": ["foo"],
+        }
+        base_args = {
+            "model": "anthropic/claude-3-5-sonnet",
+            "messages": [{"role": "user", "content": "x"}],
+        }
+
+        with patch("mesh.helpers.asyncio.to_thread", side_effect=fake_to_thread):
+            final_content, _msg, _resp = await _maybe_run_hint_fallback(
+                final_content="not parseable as json",
+                message=None,
+                response=None,
+                base_completion_args=base_args,
+                hint_mode=True,
+                hint_schema=schema,
+                hint_fallback_timeout=30,
+                hint_output_type_name="MyType",
+            )
+
+        # Confirm fallback ran and replaced content
+        assert final_content == '{"foo": "ok"}'
+        # Tools must NOT have been added by the helper
+        assert "tools" not in captured_kwargs
+        # response_format and request_timeout must be set by the helper
+        assert captured_kwargs["response_format"]["json_schema"]["name"] == "MyType"
+        assert captured_kwargs["response_format"]["json_schema"]["strict"] is True
+        assert captured_kwargs["request_timeout"] == 30
+        # Original base args preserved
+        assert captured_kwargs["model"] == "anthropic/claude-3-5-sonnet"
+
+    @pytest.mark.asyncio
+    async def test_fallback_failure_re_raises(self):
+        """If the fallback litellm call raises, the helper must re-raise
+        (caller is responsible for surfacing/wrapping)."""
+
+        async def fake_to_thread(fn, **kwargs):
+            raise RuntimeError("simulated litellm failure")
+
+        schema = {
+            "type": "object",
+            "properties": {"foo": {"type": "string"}},
+            "required": ["foo"],
+        }
+        with patch("mesh.helpers.asyncio.to_thread", side_effect=fake_to_thread):
+            with pytest.raises(RuntimeError, match="simulated litellm failure"):
+                await _maybe_run_hint_fallback(
+                    final_content="not parseable",
+                    message=None,
+                    response=None,
+                    base_completion_args={"model": "x", "messages": []},
+                    hint_mode=True,
+                    hint_schema=schema,
+                    hint_fallback_timeout=30,
+                    hint_output_type_name="X",
+                )

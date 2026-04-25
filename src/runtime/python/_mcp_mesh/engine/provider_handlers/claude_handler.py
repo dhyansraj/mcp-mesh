@@ -267,6 +267,27 @@ class ClaudeHandler(BaseProviderHandler):
             determined_mode,
         )
 
+    def _build_hint_text(self, sanitized_schema: dict[str, Any]) -> str:
+        """Build the ``OUTPUT FORMAT:`` HINT block for ``apply_structured_output``.
+
+        Returned text starts with leading blank lines so it can be appended
+        directly to existing system message content. Callers that synthesize
+        a fresh system message should ``.strip()`` the result.
+        """
+        hint_text = "\n\nOUTPUT FORMAT:\n"
+        hint_text += (
+            "Your FINAL response must be ONLY valid JSON (no markdown, "
+            "no code blocks) with this exact structure:\n"
+        )
+        properties = sanitized_schema.get("properties", {})
+        hint_text += self.build_json_example(properties) + "\n\n"
+        hint_text += (
+            "Return ONLY the JSON object with actual values. Do not "
+            "include the schema definition, markdown formatting, or "
+            "code blocks."
+        )
+        return hint_text
+
     def apply_structured_output(
         self,
         output_schema: dict[str, Any],
@@ -315,24 +336,30 @@ class ClaudeHandler(BaseProviderHandler):
         # path silently hangs on certain content+tools combos (issue #820),
         # so we cannot use it here.
         messages = model_params.get("messages", [])
+        hint_block_inserted = False
         for msg in messages:
             if msg.get("role") == "system":
                 base_content = msg.get("content", "")
-                hint_text = "\n\nOUTPUT FORMAT:\n"
-                hint_text += (
-                    "Your FINAL response must be ONLY valid JSON (no markdown, "
-                    "no code blocks) with this exact structure:\n"
-                )
-                properties = sanitized_schema.get("properties", {})
-                hint_text += self.build_json_example(properties) + "\n\n"
-                hint_text += (
-                    "Return ONLY the JSON object with actual values. Do not "
-                    "include the schema definition, markdown formatting, or "
-                    "code blocks."
-                )
-
-                msg["content"] = base_content + hint_text
+                msg["content"] = base_content + self._build_hint_text(sanitized_schema)
+                hint_block_inserted = True
                 break
+
+        if not hint_block_inserted:
+            # No system message found — synthesize one containing just the
+            # HINT block. Without this, the _mesh_hint_* flags below would
+            # still be set but the model would never see the schema, every
+            # response would fail validation, and the 30s fallback timeout
+            # would fire on every request.
+            hint_text = self._build_hint_text(sanitized_schema)
+            messages.insert(0, {"role": "system", "content": hint_text.strip()})
+            logger.debug(
+                "Claude HINT mode for '%s': no system message found, "
+                "synthesized one with HINT block",
+                output_type_name or "Response",
+            )
+            # Keep model_params["messages"] in sync — messages may be a
+            # fresh list reference if the caller passed an empty/missing list.
+            model_params["messages"] = messages
 
         # Internal flags read by _provider_agentic_loop. Prefixed with
         # "_mesh_" so the loop strips them before calling LiteLLM (these
