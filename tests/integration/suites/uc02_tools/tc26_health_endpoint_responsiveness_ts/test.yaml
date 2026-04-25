@@ -21,8 +21,7 @@ tags:
   - typescript
   - health
   - regression
-  - skip-known-issue
-  - issue-event-loop-blocking
+  - event-loop-isolation
 timeout: 180
 
 pre_run:

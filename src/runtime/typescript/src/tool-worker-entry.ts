@@ -54,7 +54,10 @@ const WORKER_MODE_SYMBOL = Symbol.for("@mcpmesh/sdk/worker-mode");
 async function bootstrap(): Promise<void> {
   // 1. Register tsx loader for the worker if user runs .ts directly.
   const isTs =
-    userModulePath.endsWith(".ts") || userModulePath.endsWith(".mts");
+    userModulePath.endsWith(".ts") ||
+    userModulePath.endsWith(".mts") ||
+    userModulePath.endsWith(".cts") ||
+    userModulePath.endsWith(".tsx");
   if (isTs) {
     try {
       const userRequire = createRequire(userModulePath);
@@ -106,13 +109,22 @@ async function bootstrap(): Promise<void> {
   parentPort!.postMessage({ kind: "ready" });
 }
 
-function serializeError(err: any): { name: string; message: string; stack?: string; code?: string; cause?: any } {
+interface SerializedError {
+  name: string;
+  message: string;
+  stack?: string;
+  code?: string | number;
+  cause?: SerializedError;
+}
+
+function serializeError(err: unknown): SerializedError {
   if (!(err instanceof Error)) {
     return { name: "Error", message: String(err) };
   }
-  const out: any = { name: err.name, message: err.message, stack: err.stack };
-  if ((err as any).code !== undefined) out.code = (err as any).code;
-  if ((err as any).cause !== undefined) out.cause = serializeError((err as any).cause);
+  const out: SerializedError = { name: err.name, message: err.message, stack: err.stack };
+  const errAny = err as Error & { code?: string | number; cause?: unknown };
+  if (errAny.code !== undefined) out.code = errAny.code;
+  if (errAny.cause !== undefined) out.cause = serializeError(errAny.cause);
   return out;
 }
 
@@ -172,18 +184,23 @@ function handleMessage(
   );
 
   // Restore ALS scopes so user code sees the same trace context + headers as
-  // the main-thread caller, then invoke the tool.
+  // the main-thread caller, then invoke the tool. When traceContext is null,
+  // skip runWithTraceContext entirely so user's getCurrentTraceContext()
+  // returns null — matching the MCP_MESH_TOOL_ISOLATION=false legacy path.
   const headers = m.propagatedHeaders ?? {};
-  const traceCtx = m.traceContext ?? { traceId: "", parentSpanId: null };
+
+  const invokeUser = () =>
+    runWithPropagatedHeaders(headers, () =>
+      (tool as (...args: unknown[]) => unknown)(m.cleanArgs, ...deps)
+    );
+
+  const wrapWithTrace = () =>
+    m.traceContext === null
+      ? invokeUser()
+      : runWithTraceContext(m.traceContext, invokeUser);
 
   Promise.resolve()
-    .then(() =>
-      runWithTraceContext(traceCtx, () =>
-        runWithPropagatedHeaders(headers, () =>
-          (tool as (...args: unknown[]) => unknown)(m.cleanArgs, ...deps)
-        )
-      )
-    )
+    .then(wrapWithTrace)
     .then((value) => respond({ kind: "result", value }))
     .catch((err: unknown) => {
       respond({ kind: "error", error: serializeError(err) });

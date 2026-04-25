@@ -21,6 +21,7 @@ import { Worker } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
+import fs from "node:fs";
 
 export interface DepConfig {
   endpoint: string;
@@ -51,8 +52,19 @@ let _nextIdx = 0;
 let _msgId = 0;
 let _shutdownRegistered = false;
 
-function deserializeError(serialized: any): Error {
-  const err: any = new Error(serialized?.message ?? "worker error");
+interface SerializedError {
+  name?: string;
+  message?: string;
+  stack?: string;
+  code?: string | number;
+  cause?: SerializedError;
+}
+
+function deserializeError(serialized: SerializedError | undefined | null): Error {
+  const err = new Error(serialized?.message ?? "worker error") as Error & {
+    code?: string | number;
+    cause?: Error;
+  };
   if (serialized?.name) err.name = serialized.name;
   if (serialized?.stack) err.stack = serialized.stack;
   if (serialized?.code !== undefined) err.code = serialized.code;
@@ -95,10 +107,19 @@ function _resolveUserModulePath(): string {
   const argv1 = process.argv[1];
   if (!argv1) {
     throw new Error(
-      "Cannot determine user module path: process.argv[1] is empty"
+      "Cannot determine user module path for worker isolation: process.argv[1] is empty. " +
+        "Mesh worker isolation expects the agent entry to be the launched script. " +
+        "If you have an unusual launch context, set MCP_MESH_TOOL_ISOLATION=false to disable isolation."
     );
   }
-  return path.resolve(argv1);
+  const resolved = path.resolve(argv1);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(
+      `User module path does not exist: ${resolved} (resolved from process.argv[1]=${argv1}). ` +
+        "Set MCP_MESH_TOOL_ISOLATION=false to disable worker isolation."
+    );
+  }
+  return resolved;
 }
 
 function _initPool(): void {

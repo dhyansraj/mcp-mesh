@@ -298,11 +298,18 @@ export class MeshAgent {
           // Read from the non-enumerable Symbol stash so we don't rely on
           // public properties (which we keep non-enumerable to avoid leaking
           // endpoint/customHeaders via JSON.stringify).
-          const depsConfig = depsArray.map((d) => {
+          const depsConfig = depsArray.map((d, depIndex) => {
             if (d === null) return null;
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const meta = (d as any)[PROXY_DISPATCH_META];
-            if (!meta) return null; // proxy missing metadata — defensive
+            if (!meta) {
+              console.warn(
+                `[mesh] tool '${toolName}' dependency at index ${depIndex} is missing PROXY_DISPATCH_META — ` +
+                  `this proxy was not created via createProxy() and will arrive as null in the worker. ` +
+                  `If you are constructing proxies manually, use createProxy() from @mcpmesh/sdk.`
+              );
+              return null;
+            }
             return {
               endpoint: meta.endpoint as string,
               capability: meta.capability as string,
