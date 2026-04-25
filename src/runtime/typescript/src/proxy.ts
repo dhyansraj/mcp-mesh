@@ -145,10 +145,11 @@ export function createProxy(
 
   // Attach properties and methods
   Object.defineProperties(proxyFn, {
-    endpoint: { value: endpoint, writable: false },
-    capability: { value: capability, writable: false },
-    functionName: { value: functionName, writable: false },
-    isAvailable: { value: true, writable: false },
+    endpoint: { value: endpoint, writable: false, enumerable: true },
+    capability: { value: capability, writable: false, enumerable: true },
+    functionName: { value: functionName, writable: false, enumerable: true },
+    kwargs: { value: kwargs, writable: false, enumerable: true },
+    isAvailable: { value: true, writable: false, enumerable: true },
     callTool: {
       value: async (
         toolName: string,

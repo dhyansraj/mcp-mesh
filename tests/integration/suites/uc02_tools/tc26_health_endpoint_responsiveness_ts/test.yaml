@@ -1,30 +1,21 @@
 # Test Case: Health Endpoint Responsiveness Under Blocking Tool Call (TypeScript)
 #
-# DISABLED — known bug. The TypeScript runtime suffers the same
-# single-event-loop blocking issue as the (now-fixed) Python runtime: Express
-# health endpoints (/health, /ready) and the FastMCP HTTP handler share Node's
-# one event loop. A tool that blocks the loop (e.g. execSync('sleep N'))
-# stalls health probes for the entire duration of the tool call.
+# Verifies that /health and /ready stay responsive (sub-second) while a tool
+# call blocks Node's event loop for 35 seconds.
 #
-# The fix requires moving tool execution into worker_threads (or an analogous
-# off-loop mechanism) — a non-trivial refactor of the TS runtime that is
-# being deferred to a separate PR. This test is checked in *now* so that the
-# follow-up PR can simply flip `disabled: false` and use it as the regression
-# fixture, without having to recreate the test setup, artifact symlink, or
-# example reproducer agent.
+# Background: previously, execSync('sleep N') inside an async tool would block
+# the single Node event loop that also serves Express health endpoints, causing
+# curl --max-time 2 to time out for the duration of the tool call. Fix: tool
+# execution dispatched onto a worker_threads pool (mirroring Python's pattern),
+# see src/runtime/typescript/src/tool-worker-pool.ts and tool-worker-entry.ts.
+# Set MCP_MESH_TOOL_ISOLATION=false to opt out (legacy behavior).
 #
-# When the TS runtime is fixed:
-#   1. Remove `disabled: true` below.
-#   2. Remove this DISABLED comment block.
-#   3. Confirm the test passes against the fix.
-#
-# Tracking: https://github.com/dhyansraj/mcp-mesh/issues/818
+# Resolves: https://github.com/dhyansraj/mcp-mesh/issues/818
 #
 # Uses UC-level artifacts from /uc-artifacts (symlinked to examples/typescript).
 
 name: "Health Endpoint Responsiveness During Blocking Tool Call (TypeScript)"
-description: "Verify /health and /ready stay responsive while a 35s blocking tool call runs (TS) — DISABLED, see header"
-disabled: true # TS runtime: known event-loop blocking bug; fix tracked in follow-up PR
+description: "Verify /health and /ready stay responsive while a 35s blocking tool call runs (TS)"
 tags:
   - tools
   - typescript

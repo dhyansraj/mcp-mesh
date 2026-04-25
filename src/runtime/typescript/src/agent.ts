@@ -12,6 +12,7 @@
 import type { FastMCP } from "fastmcp";
 import type { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { isMainThread } from "node:worker_threads";
 import {
   startAgent,
   type JsAgentSpec,
@@ -53,6 +54,32 @@ import { llmProvider, getLlmProviderMeta } from "./llm-provider.js";
 import { findAndSetBasePath } from "./template.js";
 import { getTlsOptions, getTlsConfigCached, prepareTls, cleanupTls } from "./tls-config.js";
 import { closeHttpPool } from "./http-pool.js";
+import { dispatch as poolDispatch, closePool } from "./tool-worker-pool.js";
+
+// Worker-mode detection: when this module is loaded inside a worker_threads
+// Worker, we skip all main-thread init (HTTP server, registry heartbeat, etc.)
+// and only collect tool functions into _workerToolMap for the worker entry to
+// invoke. The symbol is set by tool-worker-entry.ts before any user import.
+const WORKER_MODE_SYMBOL = Symbol.for("@mcpmesh/sdk/worker-mode");
+const _isWorkerMode =
+  !isMainThread &&
+  (globalThis as unknown as Record<symbol, boolean>)[WORKER_MODE_SYMBOL] === true;
+
+// Module-level worker tool registry: populated by addTool() in worker mode,
+// read by the worker entry via the __getWorkerToolMap() export. Module-level
+// (not class-level) because the worker entry imports the SDK and needs a
+// stable handle independent of which MeshAgent instance the user constructs.
+const _workerToolMap = new Map<string, (...args: unknown[]) => unknown>();
+
+/**
+ * Internal: returns the worker-side tool map.
+ *
+ * Used exclusively by tool-worker-entry.ts after dynamic-importing the user
+ * module. Not part of the public API.
+ */
+export function __getWorkerToolMap(): Map<string, (...args: unknown[]) => unknown> {
+  return _workerToolMap;
+}
 
 // Internal: pending agent for auto-start
 let pendingAgent: MeshAgent | null = null;
@@ -109,7 +136,35 @@ export class MeshAgent {
    */
   private resolvedDeps: Map<string, McpMeshTool> = new Map();
 
+  // True when this MeshAgent is constructed inside a worker_threads Worker.
+  // In worker mode addTool() only stashes execute fns and skips all FastMCP /
+  // registry / Rust core wiring (no Express port conflict, no double-register).
+  private _workerMode = false;
+
   constructor(server: FastMCP, config: AgentConfig) {
+    if (_isWorkerMode) {
+      // Worker thread: skip ALL init. Only addTool() runs (in worker-mode
+      // branch) to populate the module-level _workerToolMap. The worker
+      // entry imports the SDK + user module purely to discover tools — it
+      // never calls server.start(), startAgent(), or scheduleAutoStart().
+      this._workerMode = true;
+      // Initialize required fields to satisfy "definitely assigned" without
+      // triggering any side effects. None of these are read in worker mode.
+      this.server = server;
+      this.config = {
+        name: config.name,
+        version: "0.0.0",
+        description: "",
+        httpPort: 0,
+        httpHost: "127.0.0.1",
+        namespace: "default",
+        registryUrl: "",
+        heartbeatInterval: 0,
+      };
+      this.agentId = "";
+      return;
+    }
+
     this.server = server;
 
     // Resolve config with env var precedence: ENV > config > defaults
@@ -133,6 +188,18 @@ export class MeshAgent {
   addTool<T extends z.ZodType>(def: MeshToolDef<T>): this {
     const toolName = def.name;
     const execute = def.execute;
+
+    // Worker mode: register the raw execute fn in the worker tool map and
+    // skip FastMCP registration, dependency wiring, and metadata storage.
+    // The worker entry will look up tools by name when handling dispatched
+    // calls from the main thread.
+    if (this._workerMode) {
+      _workerToolMap.set(
+        toolName,
+        execute as unknown as (...args: unknown[]) => unknown
+      );
+      return this;
+    }
 
     // Normalize dependencies
     const normalizedDeps: NormalizedDependency[] = (def.dependencies ?? []).map(
@@ -192,15 +259,50 @@ export class MeshAgent {
       let error: string | null = null;
       let resultType = "string";
 
+      // Tool isolation: dispatch user execute() onto a worker thread so
+      // blocking/long-running calls don't stall the main loop (which serves
+      // /health, /ready, FastMCP HTTP, and registry heartbeats). Mirrors the
+      // Python implementation in _mcp_mesh/shared/tool_executor.py.
+      // Default ON; set MCP_MESH_TOOL_ISOLATION=false to revert to inline
+      // execution on the main loop (legacy behavior).
+      const isolationEnabled =
+        (process.env.MCP_MESH_TOOL_ISOLATION ?? "true").toLowerCase() !== "false";
+
       try {
-        // Run tool execution within trace context using AsyncLocalStorage
-        // This ensures trace context is properly propagated to all async operations
-        // and isolated between concurrent requests
-        const result = await runWithTraceContext(traceContext, async () => {
-          return await runWithPropagatedHeaders(propagatedHeaders, async () => {
-            return await execute(cleanArgs, ...depsArray);
+        let result: unknown;
+
+        if (isolationEnabled) {
+          // Build serializable depsConfig from depsArray. The worker rebuilds
+          // its own proxies (with worker-local undici Agent) via createProxy
+          // — Python parity, avoids cross-thread proxy state sharing.
+          const depsConfig = depsArray.map((d) => {
+            if (d === null) return null;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const proxy = d as any;
+            return {
+              endpoint: proxy.endpoint as string,
+              capability: proxy.capability as string,
+              functionName: proxy.functionName as string,
+              kwargs: (proxy.kwargs ?? {}) as Record<string, unknown>,
+            };
           });
-        });
+
+          result = await poolDispatch({
+            toolName,
+            cleanArgs,
+            depsConfig,
+            traceContext,
+            propagatedHeaders,
+          });
+        } else {
+          // Legacy inline execution on the main thread. Preserved as a clean
+          // fallback for users who explicitly opt out of isolation.
+          result = await runWithTraceContext(traceContext, async () => {
+            return await runWithPropagatedHeaders(propagatedHeaders, async () => {
+              return await execute(cleanArgs, ...depsArray);
+            });
+          });
+        }
 
         // Auto-serialize non-string results (like Python SDK does)
         // This allows users to return natural types (numbers, objects, arrays)
@@ -886,6 +988,11 @@ export class MeshAgent {
       await closeHttpPool();
     } catch (err) {
       console.warn("Error closing HTTP pool:", err);
+    }
+    try {
+      await closePool();
+    } catch (err) {
+      console.warn("Error closing tool worker pool:", err);
     }
     if (this.httpsProxy) {
       this.httpsProxy.close();
