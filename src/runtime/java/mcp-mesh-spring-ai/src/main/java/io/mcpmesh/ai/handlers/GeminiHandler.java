@@ -10,10 +10,13 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
+import org.springframework.ai.vertexai.gemini.VertexAiGeminiChatModel;
+import org.springframework.ai.vertexai.gemini.VertexAiGeminiChatOptions;
 
 import java.util.*;
 import java.util.function.Function;
@@ -292,16 +295,15 @@ public class GeminiHandler implements LlmProviderHandler {
         // Create tool callbacks for schema only (no execution)
         List<ToolCallback> toolCallbacks = createToolCallbacksForSchema(tools);
 
-        // Build Gemini-specific chat options with tool execution DISABLED and response_format
-        GoogleGenAiChatOptions.Builder geminiOptionsBuilder = GoogleGenAiChatOptions.builder()
-            .toolCallbacks(toolCallbacks)
-            .internalToolExecutionEnabled(false);  // Don't auto-execute tools!
-
+        // Build Gemini-specific chat options with tool execution DISABLED.
+        // The concrete options class must match the underlying ChatModel: Vertex's
+        // chat model does an explicit checkcast to VertexAiGeminiChatOptions and
+        // throws ClassCastException if given GoogleGenAiChatOptions (and vice versa).
         // Don't use responseSchema - Spring AI has issues with Gemini responseSchema
         // Structured output is handled via prompt-based hints in formatSystemPrompt()
         log.debug("Using prompt-based JSON hints for structured output (not responseSchema)");
 
-        GoogleGenAiChatOptions chatOptions = geminiOptionsBuilder.build();
+        ChatOptions chatOptions = buildToolNoExecuteOptions(model, toolCallbacks);
 
         // Create prompt with options
         org.springframework.ai.chat.prompt.Prompt prompt =
@@ -340,6 +342,35 @@ public class GeminiHandler implements LlmProviderHandler {
             toolCalls.size());
 
         return new LlmResponse(content, toolCalls, extractUsage(response));
+    }
+
+    /**
+     * Build provider-specific {@link ChatOptions} for the no-tool-execution path.
+     *
+     * <p>Mesh delegation routes both {@code gemini/...} (Google AI Studio) and
+     * {@code vertex_ai/...} model strings through this {@code GeminiHandler}, but
+     * the underlying {@link ChatModel} differs:
+     * <ul>
+     *   <li>{@code GoogleGenAiChatModel} accepts {@link GoogleGenAiChatOptions}</li>
+     *   <li>{@link VertexAiGeminiChatModel} accepts {@link VertexAiGeminiChatOptions}</li>
+     * </ul>
+     * Each chat model does an explicit checkcast on the options it receives, so
+     * passing the wrong type throws {@link ClassCastException} at request time.
+     * Branch on the chat model type to pick the matching options class.
+     *
+     * <p>Package-private for testability.
+     */
+    ChatOptions buildToolNoExecuteOptions(ChatModel chatModel, List<ToolCallback> toolCallbacks) {
+        if (chatModel instanceof VertexAiGeminiChatModel) {
+            return VertexAiGeminiChatOptions.builder()
+                .toolCallbacks(toolCallbacks)
+                .internalToolExecutionEnabled(false)
+                .build();
+        }
+        return GoogleGenAiChatOptions.builder()
+            .toolCallbacks(toolCallbacks)
+            .internalToolExecutionEnabled(false)
+            .build();
     }
 
     /**

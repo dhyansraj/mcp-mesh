@@ -11,6 +11,7 @@ import {
   llmProvider,
   isLlmProviderTool,
   getLlmProviderMeta,
+  providerOptionsKey,
 } from "../llm-provider.js";
 
 describe("extractVendorFromModel", () => {
@@ -267,5 +268,32 @@ describe("LLM provider configurations", () => {
     expect(tool._meshMeta?.tags).toEqual(["production", "fast"]);
     expect(tool._meshMeta?.version).toBe("3.0.0");
     expect(tool._meshMeta?.vendor).toBe("anthropic");
+  });
+});
+
+describe("providerOptionsKey", () => {
+  it("should map gemini to google (Vercel @ai-sdk/google key)", () => {
+    expect(providerOptionsKey("gemini")).toBe("google");
+  });
+
+  it("should map vertex_ai to vertex (Vercel @ai-sdk/google-vertex key)", () => {
+    expect(providerOptionsKey("vertex_ai")).toBe("vertex");
+  });
+
+  it("should map anthropic to anthropic (matches mesh)", () => {
+    expect(providerOptionsKey("anthropic")).toBe("anthropic");
+  });
+
+  it("should map openai to openai (matches mesh)", () => {
+    expect(providerOptionsKey("openai")).toBe("openai");
+  });
+
+  it("should return unknown vendor unchanged", () => {
+    expect(providerOptionsKey("cohere")).toBe("cohere");
+    expect(providerOptionsKey("custom-vendor")).toBe("custom-vendor");
+  });
+
+  it("should return empty string unchanged", () => {
+    expect(providerOptionsKey("")).toBe("");
   });
 });

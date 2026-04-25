@@ -279,12 +279,109 @@ The provider automatically:
 
 Uses LiteLLM model format in `@MeshLlmProvider`:
 
-| Provider  | Model Format                   |
-| --------- | ------------------------------ |
-| Anthropic | `anthropic/claude-sonnet-4-5`  |
-| OpenAI    | `openai/gpt-4o`                |
-| Mistral   | `mistral/mistral-large-latest` |
-| Google    | `gemini/gemini-pro`            |
+| Provider                | Model Format                   |
+| ----------------------- | ------------------------------ |
+| Anthropic               | `anthropic/claude-sonnet-4-5`  |
+| OpenAI                  | `openai/gpt-4o`                |
+| Google AI Studio        | `gemini/gemini-2.0-flash`      |
+| Google Vertex AI (IAM)  | `vertex_ai/gemini-2.0-flash`   |
+| Mistral                 | `mistral/mistral-large-latest` |
+
+## Vertex AI (Gemini via IAM)
+
+The Java runtime supports Gemini via Google Cloud Vertex AI as an
+alternative to AI Studio. Same model family, same `GeminiHandler`, same
+HINT-mode prompt shaping for structured output with tools — only the
+provider value, dependency, and auth config change.
+
+### When to use Vertex AI vs AI Studio
+
+| Use case                                              | Pick                                                |
+| ----------------------------------------------------- | --------------------------------------------------- |
+| Quickstart / dev / lowest setup                       | AI Studio (`provider = "gemini"`, `GOOGLE_AI_GEMINI_API_KEY`) |
+| Production with IAM auth, GCP audit logs, VPC-SC      | Vertex AI (`provider = "vertex_ai"`, ADC)           |
+| Need Provisioned Throughput (no capacity 429s)        | Vertex AI                                           |
+| Multi-tenant org-controlled billing                   | Vertex AI                                           |
+
+### Setup
+
+1. Add the Vertex AI Spring AI starter to your `pom.xml` (mesh's
+   `mcp-mesh-spring-ai` does **not** pull it in by default — it's optional
+   so non-Vertex users don't drag in `google-cloud-aiplatform`):
+
+   ```xml
+   <dependency>
+     <groupId>org.springframework.ai</groupId>
+     <artifactId>spring-ai-starter-model-vertex-ai-gemini</artifactId>
+     <version>${spring-ai.version}</version>
+   </dependency>
+   ```
+
+2. Configure project + location in `application.yml` (or via env vars
+   through Spring Boot's relaxed binding):
+
+   ```yaml
+   spring:
+     ai:
+       vertex:
+         ai:
+           gemini:
+             project-id: ${SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID:my-gcp-project}
+             location:   ${SPRING_AI_VERTEX_AI_GEMINI_LOCATION:us-central1}
+             chat:
+               options:
+                 model: gemini-2.0-flash
+   ```
+
+3. Configure GCP Application Default Credentials:
+
+   ```bash
+   gcloud auth application-default login
+   # OR for CI/prod:
+   export GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json
+   ```
+
+4. Use `provider = "vertex_ai"` on `@MeshLlm`:
+
+   ```java
+   @MeshLlm(provider = "vertex_ai", maxTokens = 256, temperature = 0.0)
+   @MeshTool(capability = "geo")
+   public CapitalInfo capitalOf(@Param("country") String country, MeshLlmAgent llm) {
+       return llm.request().user("What is the capital of " + country + "?")
+                 .generate(CapitalInfo.class);
+   }
+   ```
+
+### Why "vertex_ai" matters
+
+`provider = "gemini"` (or `"google"`) prefers the AI Studio bean
+(`googleAiGeminiChatModel`) when both backends are configured, falling back
+to Vertex AI only if AI Studio is unavailable. This is convenient for users
+who only have one backend, but ambiguous when both are present.
+
+`provider = "vertex_ai"` (or `"vertexai"`) skips that preference and goes
+straight to `vertexAiGeminiChatModel`, throwing a clear error if it's not
+configured.
+
+### Switching backends
+
+Migrate from AI Studio to Vertex AI:
+
+```java
+// before:
+@MeshLlm(provider = "gemini", …)
+// after:
+@MeshLlm(provider = "vertex_ai", …)
+```
+
+Swap the dependency in `pom.xml`
+(`spring-ai-starter-model-google-genai` → `spring-ai-starter-model-vertex-ai-gemini`)
+and replace `GOOGLE_AI_GEMINI_API_KEY` with ADC + the
+`spring.ai.vertex.ai.gemini.*` properties shown above.
+
+### Reference example
+
+See `examples/java/vertex-ai-agent/` for a working minimal Spring Boot agent.
 
 ## Complete Example
 

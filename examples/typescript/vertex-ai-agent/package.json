@@ -1,0 +1,23 @@
+{
+  "name": "vertex-ai-agent-ts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal TS mesh agent: Gemini via Vertex AI (IAM auth) using Vercel AI SDK",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/core": "file:../../../src/runtime/core/typescript",
+    "@mcpmesh/sdk": "file:../../../src/runtime/typescript",
+    "fastmcp": "^3.34.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

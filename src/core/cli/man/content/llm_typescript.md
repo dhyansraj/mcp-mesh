@@ -228,12 +228,95 @@ agent.addLlmProvider({
 
 Uses LiteLLM model format:
 
-| Provider  | Model Format                   |
-| --------- | ------------------------------ |
-| Anthropic | `anthropic/claude-sonnet-4-5`  |
-| OpenAI    | `openai/gpt-4o`                |
-| Mistral   | `mistral/mistral-large-latest` |
-| Ollama    | `ollama/llama3`                |
+| Provider                | Model Format                   |
+| ----------------------- | ------------------------------ |
+| Anthropic               | `anthropic/claude-sonnet-4-5`  |
+| OpenAI                  | `openai/gpt-4o`                |
+| Google AI Studio        | `gemini/gemini-2.0-flash`      |
+| Google Vertex AI (IAM)  | `vertex_ai/gemini-2.0-flash`   |
+| Mistral                 | `mistral/mistral-large-latest` |
+| Ollama                  | `ollama/llama3`                |
+
+## Vertex AI (Gemini via IAM)
+
+The TypeScript runtime supports Gemini via Google Cloud Vertex AI as an
+alternative to AI Studio. Same model family, same `GeminiHandler`, same
+HINT-mode prompt shaping for structured output with tools — only the model
+prefix and auth env vars change.
+
+### When to use Vertex AI vs AI Studio
+
+| Use case                                              | Pick                                                  |
+| ----------------------------------------------------- | ----------------------------------------------------- |
+| Quickstart / dev / lowest setup                       | AI Studio (`gemini/*`, `GOOGLE_GENERATIVE_AI_API_KEY`) |
+| Production with IAM auth, GCP audit logs, VPC-SC      | Vertex AI (`vertex_ai/*`, ADC)                        |
+| Need Provisioned Throughput (no capacity 429s)        | Vertex AI (Provisioned Throughput is GCP-side)        |
+| Multi-tenant org-controlled billing                   | Vertex AI                                             |
+
+### Setup
+
+`@ai-sdk/google-vertex` is bundled with `@mcpmesh/sdk` — no extra install
+needed.
+
+1. Configure GCP Application Default Credentials. Pick one:
+
+   **User ADC** (dev):
+
+   ```bash
+   gcloud auth application-default login
+   export GOOGLE_VERTEX_PROJECT=my-gcp-project
+   export GOOGLE_VERTEX_LOCATION=us-central1
+   ```
+
+   **Service account** (CI / prod):
+
+   ```bash
+   export GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json
+   export GOOGLE_VERTEX_PROJECT=my-gcp-project
+   export GOOGLE_VERTEX_LOCATION=us-central1
+   ```
+
+   `GOOGLE_VERTEX_LOCATION` defaults to `us-central1` if unset.
+
+2. Use the `vertex_ai/*` model prefix:
+
+   ```typescript
+   agent.addLlmProvider({
+     model: "vertex_ai/gemini-2.0-flash",
+     capability: "llm",
+     tags: ["llm", "gemini", "vertex"],
+   });
+   ```
+
+That's it. Same agent code as the AI Studio path; mesh's `GeminiHandler` is
+selected automatically and applies HINT-mode prompt shaping when the call
+involves tools (avoiding Gemini's response_format-with-tools deadlock).
+
+### Switching backends
+
+Migrate from AI Studio to Vertex AI by changing the model prefix and env vars:
+
+```typescript
+// before:
+model: "gemini/gemini-2.0-flash"
+// after:
+model: "vertex_ai/gemini-2.0-flash"
+```
+
+```bash
+# before:
+export GOOGLE_GENERATIVE_AI_API_KEY=AIza...
+# after:
+gcloud auth application-default login
+export GOOGLE_VERTEX_PROJECT=my-gcp-project
+export GOOGLE_VERTEX_LOCATION=us-central1
+```
+
+No other code changes required.
+
+### Reference example
+
+See `examples/typescript/vertex-ai-agent/` for a working minimal agent.
 
 ## Complete Example
 

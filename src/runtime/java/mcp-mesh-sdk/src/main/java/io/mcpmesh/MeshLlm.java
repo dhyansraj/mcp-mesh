@@ -62,8 +62,19 @@ public @interface MeshLlm {
     /**
      * Direct LLM provider name for Spring AI.
      *
-     * <p>Supported values: "claude", "anthropic", "openai", "gpt".
-     * Leave empty to use {@link #providerSelector()} for mesh delegation.
+     * <p>Supported values:
+     * <ul>
+     *   <li>{@code "claude"}, {@code "anthropic"} — Claude via spring-ai-anthropic</li>
+     *   <li>{@code "openai"}, {@code "gpt"} — GPT via spring-ai-openai</li>
+     *   <li>{@code "gemini"}, {@code "google"} — Gemini, prefers AI Studio (spring-ai-google-genai)
+     *       and falls back to Vertex AI if AI Studio not configured</li>
+     *   <li>{@code "vertex_ai"} (or {@code "vertexai"}) — Force Gemini via Vertex AI
+     *       (spring-ai-vertex-ai-gemini), even if AI Studio is also configured. Use
+     *       this when you need IAM auth, Provisioned Throughput, VPC-SC, or
+     *       org-controlled billing.</li>
+     * </ul>
+     *
+     * <p>Leave empty to use {@link #providerSelector()} for mesh delegation.
      */
     String provider() default "";
 

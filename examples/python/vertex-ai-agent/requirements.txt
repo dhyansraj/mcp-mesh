@@ -1,0 +1,5 @@
+# vertex-ai-agent dependencies
+# Note: mcp-mesh is provided by the runtime environment.
+# LiteLLM (bundled with mcp-mesh) talks to Vertex AI directly using
+# the standard google-auth library — no extra packages required when
+# you authenticate via GOOGLE_APPLICATION_CREDENTIALS.

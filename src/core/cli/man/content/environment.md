@@ -95,6 +95,104 @@ export GOOGLE_GENERATIVE_AI_API_KEY=your-key       # TypeScript (Vercel AI SDK)
 export GOOGLE_AI_GEMINI_API_KEY=your-key           # Java (Spring AI)
 ```
 
+### Vertex AI (Gemini via IAM)
+
+For users who want to call Gemini through Google Cloud's Vertex AI instead of
+AI Studio (IAM auth, GCP Provisioned Throughput, VPC-SC, org-controlled billing),
+use the `vertex_ai/` model prefix (Python/TS) or `provider = "vertex_ai"` (Java).
+
+All three runtimes share the same prompt-shaping rules — the same
+GeminiHandler runs for both `gemini/*` and `vertex_ai/*`. Only the auth
+transport and env var names differ.
+
+#### Python (LiteLLM)
+
+```python
+@mesh.llm_provider(
+    capability="llm",
+    tags=["gemini", "vertex"],
+    model="vertex_ai/gemini-2.0-flash",  # vs "gemini/gemini-2.0-flash" for AI Studio
+)
+def my_provider(): pass
+```
+
+Install the optional `vertex` extra (adds `google-auth` for ADC):
+
+```bash
+pip install 'mcp-mesh[vertex]'
+```
+
+| Scenario                                            | Required env vars                                                            |
+| --------------------------------------------------- | ---------------------------------------------------------------------------- |
+| User ADC (`gcloud auth application-default login`)  | `VERTEXAI_PROJECT`, `VERTEXAI_LOCATION`                                      |
+| Service account JSON                                | `GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json`, `VERTEXAI_LOCATION`       |
+| Workload Identity (GKE pods)                        | `VERTEXAI_LOCATION` (project from WI binding)                                |
+
+#### TypeScript (Vercel AI SDK)
+
+```typescript
+agent.addLlmProvider({
+  model: "vertex_ai/gemini-2.0-flash",
+  capability: "llm",
+  tags: ["gemini", "vertex"],
+});
+```
+
+`@ai-sdk/google-vertex` is bundled with `@mcpmesh/sdk` — no extra install
+needed. Auth is via Google ADC.
+
+| Scenario                                            | Required env vars                                                                |
+| --------------------------------------------------- | -------------------------------------------------------------------------------- |
+| User ADC (`gcloud auth application-default login`)  | `GOOGLE_VERTEX_PROJECT`, `GOOGLE_VERTEX_LOCATION`                                |
+| Service account JSON                                | `GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json`, `GOOGLE_VERTEX_PROJECT`, `GOOGLE_VERTEX_LOCATION` |
+| Workload Identity (GKE pods)                        | `GOOGLE_VERTEX_PROJECT`, `GOOGLE_VERTEX_LOCATION`                                |
+
+If `GOOGLE_VERTEX_LOCATION` is omitted the SDK defaults to `us-central1`.
+
+#### Java (Spring AI)
+
+```java
+@MeshLlm(provider = "vertex_ai", …)
+@MeshTool(capability = "…")
+public MyResult myTool(@Param("…") String input, MeshLlmAgent llm) { … }
+```
+
+Add the Vertex AI starter to your `pom.xml` (mesh's `mcp-mesh-spring-ai`
+keeps it optional so you don't pull google-cloud-aiplatform unless asked):
+
+```xml
+<dependency>
+  <groupId>org.springframework.ai</groupId>
+  <artifactId>spring-ai-starter-model-vertex-ai-gemini</artifactId>
+  <version>${spring-ai.version}</version>
+</dependency>
+```
+
+Spring AI's auto-config doesn't read any conventional `GOOGLE_*` env var on
+its own — it binds Spring Boot properties:
+
+| Spring property                              | Equivalent env var (relaxed binding)         |
+| -------------------------------------------- | -------------------------------------------- |
+| `spring.ai.vertex.ai.gemini.project-id`      | `SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID`      |
+| `spring.ai.vertex.ai.gemini.location`        | `SPRING_AI_VERTEX_AI_GEMINI_LOCATION`        |
+| `spring.ai.vertex.ai.gemini.chat.options.model` | `SPRING_AI_VERTEX_AI_GEMINI_CHAT_OPTIONS_MODEL` |
+
+Auth is via Google ADC (`gcloud auth application-default login` or
+`GOOGLE_APPLICATION_CREDENTIALS`).
+
+The `provider = "vertex_ai"` value is significant. With just
+`provider = "gemini"`, the runtime prefers the AI Studio bean
+(`googleAiGeminiChatModel`) when both backends are configured;
+`"vertex_ai"` forces the IAM path.
+
+#### Common: ADC
+
+ADC is auto-discovered from the standard Google location
+(`~/.config/gcloud/application_default_credentials.json`) — no extra env
+needed if you've run `gcloud auth application-default login`. For headless
+or service-account scenarios, set `GOOGLE_APPLICATION_CREDENTIALS` to the
+JSON key file path. This is the **same** across all three runtimes.
+
 ## LLM Agent Configuration
 
 Override `@mesh.llm` decorator parameters at runtime:

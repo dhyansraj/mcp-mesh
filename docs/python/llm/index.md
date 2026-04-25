@@ -153,11 +153,105 @@ class ClaudeProviderAgent:
 
 ```
 anthropic/claude-sonnet-4-5
-anthropic/claude-sonnet-4-5
+anthropic/claude-opus-4
 openai/gpt-4o
 openai/gpt-4-turbo
 openai/gpt-3.5-turbo
+gemini/gemini-2.0-flash          # Google AI Studio (API key)
+vertex_ai/gemini-2.0-flash       # Google Vertex AI (IAM)
 ```
+
+## Vertex AI (Gemini via IAM)
+
+mcp-mesh's Python runtime supports Gemini via Google Cloud Vertex AI as an
+alternative to AI Studio. Same handler, same HINT-mode prompt shaping for
+structured output with tools — only the model prefix and auth env vars change.
+
+The TypeScript and Java runtimes have equivalent support — see
+[TypeScript LLM Integration](../../typescript/llm/index/) and
+[Java LLM Integration](../../java/llm/index/) for the runtime-specific
+auth env vars (each follows its own ecosystem's naming convention).
+
+### When to use Vertex AI vs AI Studio
+
+| Use case                                              | Pick                                            |
+| ----------------------------------------------------- | ----------------------------------------------- |
+| Quickstart / dev / lowest setup                       | AI Studio (`gemini/*`, `GOOGLE_API_KEY`)        |
+| Production with IAM auth, GCP audit logs, VPC-SC      | Vertex AI (`vertex_ai/*`, ADC)                  |
+| Need Provisioned Throughput (no capacity 429s)        | Vertex AI (Provisioned Throughput is GCP-side)  |
+| Multi-tenant org-controlled billing                   | Vertex AI                                       |
+
+### Setup
+
+1. Install the `vertex` extra:
+
+   ```bash
+   pip install 'mcp-mesh[vertex]'
+   ```
+
+   This adds `google-auth` (required by LiteLLM for ADC).
+
+2. Configure auth + project + location (pick one path):
+
+   **User ADC** (dev):
+
+   ```bash
+   gcloud auth application-default login
+   export VERTEXAI_PROJECT=my-gcp-project
+   export VERTEXAI_LOCATION=us-central1
+   ```
+
+   **Service account** (CI / prod):
+
+   ```bash
+   export GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json
+   export VERTEXAI_LOCATION=us-central1
+   ```
+
+   **Workload Identity** (GKE):
+
+   ```bash
+   export VERTEXAI_LOCATION=us-central1
+   ```
+
+3. Use the `vertex_ai/*` prefix in your decorator:
+
+   ```python
+   @mesh.llm_provider(
+       capability="llm",
+       tags=["gemini", "vertex"],
+       model="vertex_ai/gemini-2.0-flash",
+   )
+   def my_provider(): pass
+   ```
+
+That's it. Same agent code as the AI Studio path; mesh's `GeminiHandler` is
+selected automatically and applies HINT-mode prompt shaping when the call
+involves tools.
+
+### Switching backends
+
+To migrate an existing agent from AI Studio to Vertex AI:
+
+```python
+# Change one line in the decorator:
+model="gemini/gemini-2.0-flash"      # was: "gemini/gemini-2.0-flash"
+                                     # now: "vertex_ai/gemini-2.0-flash"
+```
+
+```bash
+# Switch the env vars:
+unset GOOGLE_API_KEY
+export VERTEXAI_PROJECT=my-project
+export VERTEXAI_LOCATION=us-central1
+gcloud auth application-default login
+```
+
+No other changes required.
+
+### Reference example
+
+See `examples/python/vertex-ai-agent/` for a working minimal agent.
 
 ## Tool Filtering
 

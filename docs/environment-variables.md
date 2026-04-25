@@ -358,12 +358,132 @@ export ANTHROPIC_API_KEY=sk-ant-your-key
 # OpenAI
 export OPENAI_API_KEY=sk-your-key
 
-# Google Gemini (varies by runtime)
+# Google Gemini AI Studio (API key — varies by runtime)
 export GOOGLE_API_KEY=your-key                     # Python (via LiteLLM)
 export GOOGLE_GENERATIVE_AI_API_KEY=your-key       # TypeScript (Vercel AI SDK)
 export GOOGLE_AI_GEMINI_API_KEY=your-key           # Java (Spring AI)
-export GOOGLE_PROJECT_ID=my-gcp-project            # Java (Vertex AI)
 ```
+
+For Gemini via Vertex AI (IAM auth), see the
+[Vertex AI section below](#vertex-ai-gemini-via-iam) — env var conventions
+also vary by runtime, with `GOOGLE_APPLICATION_CREDENTIALS` shared across
+all three.
+
+### Vertex AI (Gemini via IAM)
+
+For users who want to call Gemini through Google Cloud's Vertex AI instead
+of AI Studio (e.g., to use IAM service-account auth, GCP Provisioned
+Throughput, VPC-SC, or org-controlled billing). All three runtimes share
+mesh's `GeminiHandler` (same prompt-shaping, same HINT-mode behavior with
+tools); only the auth transport and env var names differ.
+
+#### Quick env var matrix
+
+| Runtime    | SDK            | Project env var                              | Location env var                             |
+| ---------- | -------------- | -------------------------------------------- | -------------------------------------------- |
+| Python     | LiteLLM        | `VERTEXAI_PROJECT`                           | `VERTEXAI_LOCATION`                          |
+| TypeScript | Vercel AI SDK  | `GOOGLE_VERTEX_PROJECT`                      | `GOOGLE_VERTEX_LOCATION`                     |
+| Java       | Spring AI      | `SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID`<br/>(or set `spring.ai.vertex.ai.gemini.project-id`) | `SPRING_AI_VERTEX_AI_GEMINI_LOCATION`<br/>(or set `spring.ai.vertex.ai.gemini.location`) |
+
+`GOOGLE_APPLICATION_CREDENTIALS` (or `gcloud auth application-default login`)
+is the same across all three.
+
+#### Python — model prefix
+
+```python
+@mesh.llm(
+    provider={"capability": "llm", "tags": ["gemini"]},
+    model="vertex_ai/gemini-2.0-flash",
+)
+async def my_tool(...): ...
+```
+
+The Python runtime routes `vertex_ai/*` through the same `GeminiHandler` as
+`gemini/*`, but LiteLLM picks the Vertex AI transport based on the prefix.
+
+Install the `vertex` extra (adds `google-auth`):
+
+```bash
+pip install 'mcp-mesh[vertex]'
+```
+
+Without it, the first Vertex call raises `ModuleNotFoundError: No module
+named 'google.auth'`. (Non-Vertex users — AI Studio, Claude, OpenAI — don't
+need this.)
+
+LiteLLM auth resolution order:
+
+1. Explicit `vertex_credentials` / `vertex_project` / `vertex_location`
+   passed in the call (mesh does not set these — your env wins).
+2. `VERTEXAI_CREDENTIALS` + `VERTEXAI_PROJECT` + `VERTEXAI_LOCATION`.
+3. `GOOGLE_APPLICATION_CREDENTIALS` (standard ADC), with project/location
+   derived from the SA JSON.
+4. Implicit ADC (e.g., `gcloud` user credentials, GCE metadata server).
+
+#### TypeScript — model prefix
+
+```typescript
+agent.addLlmProvider({
+  model: "vertex_ai/gemini-2.0-flash",
+  capability: "llm",
+  tags: ["gemini", "vertex"],
+});
+```
+
+`@ai-sdk/google-vertex` is bundled with `@mcpmesh/sdk` — no extra install.
+Auth uses Google ADC; project + location come from `GOOGLE_VERTEX_PROJECT`
+and `GOOGLE_VERTEX_LOCATION`. Location defaults to `us-central1`.
+
+#### Java — `provider = "vertex_ai"`
+
+```java
+@MeshLlm(provider = "vertex_ai", …)
+@MeshTool(capability = "…")
+public MyResult myTool(@Param("…") String input, MeshLlmAgent llm) { … }
+```
+
+Add the Vertex AI Spring AI starter to your `pom.xml` (mesh's
+`mcp-mesh-spring-ai` does not pull it in by default):
+
+```xml
+<dependency>
+  <groupId>org.springframework.ai</groupId>
+  <artifactId>spring-ai-starter-model-vertex-ai-gemini</artifactId>
+  <version>${spring-ai.version}</version>
+</dependency>
+```
+
+Spring AI's Vertex AI auto-config doesn't read any conventional `GOOGLE_*`
+env var on its own — it binds Spring Boot properties (which Spring relaxed
+binding can populate from env vars):
+
+| Spring property                                 | Env var (relaxed binding)                         |
+| ----------------------------------------------- | ------------------------------------------------- |
+| `spring.ai.vertex.ai.gemini.project-id`         | `SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID`           |
+| `spring.ai.vertex.ai.gemini.location`           | `SPRING_AI_VERTEX_AI_GEMINI_LOCATION`             |
+| `spring.ai.vertex.ai.gemini.chat.options.model` | `SPRING_AI_VERTEX_AI_GEMINI_CHAT_OPTIONS_MODEL`   |
+
+`provider = "vertex_ai"` is significant: with just `provider = "gemini"`,
+SpringAiLlmProvider prefers the AI Studio bean (`googleAiGeminiChatModel`)
+when both backends are configured; `"vertex_ai"` forces the IAM path.
+
+#### Same Code, Two Backends
+
+The same agent code works against AI Studio _or_ Vertex AI by changing only
+the model prefix / provider value and the auth config — no other code changes:
+
+|                | AI Studio                                  | Vertex AI                                                          |
+| -------------- | ------------------------------------------ | ------------------------------------------------------------------ |
+| Python         | `model="gemini/gemini-2.0-flash"`          | `model="vertex_ai/gemini-2.0-flash"`                               |
+| TypeScript     | `model: "gemini/gemini-2.0-flash"`         | `model: "vertex_ai/gemini-2.0-flash"`                              |
+| Java           | `@MeshLlm(provider = "gemini")`            | `@MeshLlm(provider = "vertex_ai")`                                 |
+| Auth env       | `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` / `GOOGLE_AI_GEMINI_API_KEY` | `GOOGLE_APPLICATION_CREDENTIALS` (ADC)        |
+
+#### Provisioned Throughput
+
+GCP Provisioned Throughput is a Vertex AI account-side feature and requires
+no mesh configuration — once your project has a PT reservation for the
+target model, Vertex routes your calls through it automatically.
 
 ### LLM Agent Overrides
 

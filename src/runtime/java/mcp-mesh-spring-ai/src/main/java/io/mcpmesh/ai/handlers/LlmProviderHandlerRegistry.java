@@ -47,6 +47,11 @@ public class LlmProviderHandlerRegistry {
         register("gpt", OpenAiHandler.class);        // Alias
         register("gemini", GeminiHandler.class);
         register("google", GeminiHandler.class);     // Alias
+        // Vertex AI uses the same Gemini model family on the wire — same prompt-shaping,
+        // same HINT-mode behavior with tools; only the auth/transport differs (IAM via
+        // spring-ai-vertex-ai-gemini vs API key via spring-ai-google-genai).
+        register("vertex_ai", GeminiHandler.class);  // Alias
+        register("vertexai", GeminiHandler.class);   // Forgiving alias for "vertex_ai"
     }
 
     /**

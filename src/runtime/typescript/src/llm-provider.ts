@@ -50,6 +50,7 @@ const VENDOR_PROVIDERS: Record<string, string> = {
   openai: "@ai-sdk/openai",
   google: "@ai-sdk/google",
   gemini: "@ai-sdk/google", // gemini/ model prefix uses Google AI SDK
+  vertex_ai: "@ai-sdk/google-vertex", // vertex_ai/ model prefix uses Google Vertex AI (IAM auth)
   // Can extend with more providers as needed
 };
 
@@ -60,7 +61,38 @@ const VENDOR_PROVIDERS: Record<string, string> = {
  */
 const VENDOR_EXPORTS: Record<string, string> = {
   gemini: "google", // @ai-sdk/google exports 'google', not 'gemini'
+  vertex_ai: "vertex", // @ai-sdk/google-vertex exports 'vertex'
 };
+
+/**
+ * Mapping from mesh's vendor name to the key Vercel AI SDK uses inside
+ * `generateText({ providerOptions: { ... } })`.
+ *
+ * The Vercel AI SDK parses `providerOptions` under each SDK's own key, NOT
+ * under mesh's vendor name. For example, `@ai-sdk/google` looks at
+ * `providerOptions.google.*`, so passing `providerOptions.gemini.*` is
+ * silently dropped. Mapping table:
+ *   - `@ai-sdk/google`         → key `"google"`
+ *   - `@ai-sdk/google-vertex`  → key `"vertex"`
+ *   - `@ai-sdk/anthropic`      → key `"anthropic"` (matches mesh)
+ *   - `@ai-sdk/openai`         → key `"openai"`   (matches mesh)
+ */
+const PROVIDER_OPTIONS_KEY: Record<string, string> = {
+  gemini: "google",
+  vertex_ai: "vertex",
+  anthropic: "anthropic",
+  openai: "openai",
+};
+
+/**
+ * Resolve the providerOptions key for a given mesh vendor.
+ *
+ * Returns the SDK-expected key (e.g., "google" for vendor "gemini"),
+ * falling back to the vendor name unchanged for unknown vendors.
+ */
+export function providerOptionsKey(vendor: string): string {
+  return PROVIDER_OPTIONS_KEY[vendor] ?? vendor;
+}
 
 /**
  * Normalize environment variables for cross-SDK compatibility.
@@ -85,6 +117,27 @@ function normalizeEnvVars(vendor: string): void {
     } else if (vercelKey && !litellmKey) {
       process.env.GOOGLE_API_KEY = vercelKey;
       debug("Set GOOGLE_API_KEY from GOOGLE_GENERATIVE_AI_API_KEY");
+    }
+  } else if (vendor === "vertex_ai") {
+    // Vercel AI SDK's @ai-sdk/google-vertex reads:
+    //   GOOGLE_VERTEX_PROJECT  - GCP project ID
+    //   GOOGLE_VERTEX_LOCATION - GCP region (e.g., us-central1)
+    //   GOOGLE_APPLICATION_CREDENTIALS - path to service-account JSON (or rely on
+    //                                    gcloud user ADC / GCE/GKE workload identity)
+    // We don't auto-copy from any other env var because the Python (LiteLLM) and
+    // Vercel SDK conventions diverge (VERTEXAI_PROJECT vs GOOGLE_VERTEX_PROJECT) —
+    // each runtime follows its own ecosystem's naming.
+    if (!process.env.GOOGLE_VERTEX_PROJECT) {
+      debug(
+        "vertex_ai vendor selected but GOOGLE_VERTEX_PROJECT is not set — " +
+        "@ai-sdk/google-vertex will fall back to ADC project discovery"
+      );
+    }
+    if (!process.env.GOOGLE_VERTEX_LOCATION) {
+      debug(
+        "vertex_ai vendor selected but GOOGLE_VERTEX_LOCATION is not set — " +
+        "@ai-sdk/google-vertex defaults to us-central1"
+      );
     }
   }
 }
@@ -568,7 +621,8 @@ export function llmProvider(config: LlmProviderConfig): {
     // The manual loop drops Gemini's thought_signature from assistant messages,
     // causing 400 errors in multi-turn tool conversations. AI SDK preserves it.
     // Claude/OpenAI keep the manual loop (they need response_format on every call).
-    const useMaxSteps = hasToolEndpoints && (vendor === "gemini" || vendor === "google");
+    // vertex_ai is the same Gemini model on the wire, so it gets the same treatment.
+    const useMaxSteps = hasToolEndpoints && (vendor === "gemini" || vendor === "google" || vendor === "vertex_ai");
     if (hasToolEndpoints) {
       debug(`Provider-managed loop: ${Object.keys(toolEndpoints).length} tools with endpoints${useMaxSteps ? " (Gemini maxSteps mode)" : ""}`);
     }
@@ -714,14 +768,16 @@ export function llmProvider(config: LlmProviderConfig): {
     // which generateObject() doesn't support. The handler sets responseFormat when in strict mode.
     // EXCEPTION: Gemini 3 + response_format + tools causes infinite tool loops,
     // so skip responseFormat when Gemini has tools (matching Python handler guard).
-    const skipResponseFormat = (vendor === "gemini" || vendor === "google") && hasTools;
+    // vertex_ai is the same Gemini model on the wire — same restriction applies.
+    const skipResponseFormat = (vendor === "gemini" || vendor === "google" || vendor === "vertex_ai") && hasTools;
     if (preparedRequest.responseFormat && !skipResponseFormat) {
+      const optsKey = providerOptionsKey(vendor);
       requestOptions.providerOptions = {
-        [vendor]: {
+        [optsKey]: {
           response_format: preparedRequest.responseFormat,
         },
       };
-      debug(`Passing responseFormat via providerOptions for vendor: ${vendor}`);
+      debug(`Passing responseFormat via providerOptions for vendor: ${vendor} (key: ${optsKey})`);
     } else if (skipResponseFormat) {
       debug(`Skipping responseFormat for Gemini (tools present — avoids infinite loop)`);
     }
