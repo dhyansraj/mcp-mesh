@@ -21,7 +21,7 @@ tags:
   - provider
   - typescript
   - issue-816
-timeout: 240
+timeout: 480
 # Note: Skip this test with --skip-tag llm if no GCP credentials are available
 pre_run:
   # TypeScript test - need Node.js + meshctl

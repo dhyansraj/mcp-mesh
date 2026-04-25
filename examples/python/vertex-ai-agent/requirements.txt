@@ -1,5 +1,7 @@
 # vertex-ai-agent dependencies
-# Note: mcp-mesh is provided by the runtime environment.
-# LiteLLM (bundled with mcp-mesh) talks to Vertex AI directly using
-# the standard google-auth library — no extra packages required when
-# you authenticate via GOOGLE_APPLICATION_CREDENTIALS.
+# Install mcp-mesh with the [vertex] extra:
+#   pip install 'mcp-mesh[vertex]'
+# This pulls in google-auth, which LiteLLM needs for vertex_ai/* model
+# strings (to read Application Default Credentials and call the Vertex AI
+# REST endpoint). Without it, the first call raises
+# `ModuleNotFoundError: No module named 'google.auth'`.

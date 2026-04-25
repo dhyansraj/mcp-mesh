@@ -130,13 +130,15 @@ function normalizeEnvVars(vendor: string): void {
     if (!process.env.GOOGLE_VERTEX_PROJECT) {
       debug(
         "vertex_ai vendor selected but GOOGLE_VERTEX_PROJECT is not set — " +
-        "@ai-sdk/google-vertex will fall back to ADC project discovery"
+        "@ai-sdk/google-vertex will throw a LoadSettingError on the first call " +
+        "(the SDK requires the env var; it does not auto-discover from ADC)"
       );
     }
     if (!process.env.GOOGLE_VERTEX_LOCATION) {
       debug(
         "vertex_ai vendor selected but GOOGLE_VERTEX_LOCATION is not set — " +
-        "@ai-sdk/google-vertex defaults to us-central1"
+        "@ai-sdk/google-vertex will throw a LoadSettingError on the first call " +
+        "(the SDK has no default location; set e.g. 'us-central1' or 'global')"
       );
     }
   }

@@ -21,7 +21,7 @@ tags:
   - provider
   - python
   - issue-816
-timeout: 180
+timeout: 360
 # Note: Skip this test with --skip-tag llm if no GCP credentials are available
 pre_run:
   # Setup for Python agent

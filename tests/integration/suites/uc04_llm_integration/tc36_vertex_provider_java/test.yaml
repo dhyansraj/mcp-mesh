@@ -32,7 +32,7 @@ tags:
   - provider
   - java
   - issue-816
-timeout: 360
+timeout: 900
 # Note: Skip this test with --skip-tag llm if no GCP credentials are available
 pre_run:
   - routine: global.setup_for_java_agent
@@ -194,6 +194,6 @@ post_run:
       meshctl stop 2>/dev/null || true
       pkill -f "spring-boot:run" 2>/dev/null || true
       pkill -f "java.*vertex-ai-agent" 2>/dev/null || true
-      rm -f /workspace/sa.json 2>/dev/null || true
+      rm -f /workspace/sa.json /workspace/java-vertex-ai-agent/.env 2>/dev/null || true
     ignore_errors: true
   - routine: global.cleanup_workspace

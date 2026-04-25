@@ -27,8 +27,11 @@ path — only the `provider` value and auth config change.
 ```bash
 cd examples/java/vertex-ai-agent
 
-# Configure project + location. Either edit src/main/resources/application.yml
-# or override via env vars (Spring Boot binds them through relaxed binding):
+# Configure project + location. Both are REQUIRED — application.yml has no
+# fallback defaults, so Spring Boot fails fast at startup if these are unset
+# (rather than deferring failure to the first Vertex API call with a
+# placeholder project id). Spring Boot relaxed binding maps them onto
+# `spring.ai.vertex.ai.gemini.project-id` / `.location`.
 export SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID=my-gcp-project
 export SPRING_AI_VERTEX_AI_GEMINI_LOCATION=us-central1
 

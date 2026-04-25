@@ -60,7 +60,20 @@ public class LlmProviderHandlerRegistry {
      * <p>Returns a cached instance if available, otherwise creates one.
      * Falls back to GenericHandler for unknown vendors.
      *
-     * @param vendor The vendor name (e.g., "anthropic", "openai")
+     * <p>Lookup order:
+     * <ol>
+     *   <li>Direct lookup of the raw provider name (covers explicit aliases like
+     *       {@code "vertex_ai"}, {@code "anthropic"}, {@code "openai"} that don't
+     *       follow the {@code "vendor/model"} form and that {@link #extractVendor}
+     *       does not recognize as substrings).</li>
+     *   <li>Fallback: extract a vendor from a model-string form
+     *       (e.g., {@code "vertex_ai/gemini-2.0-flash"} → {@code "vertex_ai"})
+     *       and look that up.</li>
+     *   <li>Final fallback: {@link GenericHandler}.</li>
+     * </ol>
+     *
+     * @param vendor The vendor name (e.g., "anthropic", "openai", "vertex_ai")
+     *               or a model string (e.g., "vertex_ai/gemini-2.0-flash")
      * @return The handler instance
      */
     public static LlmProviderHandler getHandler(String vendor) {
@@ -68,33 +81,50 @@ public class LlmProviderHandlerRegistry {
             vendor = "unknown";
         }
 
-        String normalizedVendor = extractVendor(vendor).toLowerCase().trim();
+        String normalizedRaw = vendor.toLowerCase().trim();
 
-        // Check cache first
-        LlmProviderHandler cached = instances.get(normalizedVendor);
+        // First: check direct registration (covers explicit provider names like
+        // "vertex_ai", "vertexai", "anthropic", etc. that don't follow the
+        // "vendor/model" form and that extractVendor() does not detect via
+        // substring inference).
+        LlmProviderHandler cached = instances.get(normalizedRaw);
         if (cached != null) {
             return cached;
+        }
+        Class<? extends LlmProviderHandler> handlerClass = handlers.get(normalizedRaw);
+        String cacheKey = normalizedRaw;
+
+        if (handlerClass == null) {
+            // Second: fall back to vendor extraction from model-string form
+            // ("anthropic/claude-..." -> "anthropic", "vertex_ai/gemini-..." -> "vertex_ai"
+            // via slash split).
+            String extracted = extractVendor(vendor).toLowerCase().trim();
+            cached = instances.get(extracted);
+            if (cached != null) {
+                return cached;
+            }
+            handlerClass = handlers.get(extracted);
+            cacheKey = extracted;
         }
 
         // Create new instance
         LlmProviderHandler handler;
-        Class<? extends LlmProviderHandler> handlerClass = handlers.get(normalizedVendor);
-
         if (handlerClass != null) {
             try {
                 handler = handlerClass.getDeclaredConstructor().newInstance();
-                log.debug("Created handler for vendor '{}': {}", normalizedVendor, handlerClass.getSimpleName());
+                log.debug("Created handler for vendor '{}': {}", cacheKey, handlerClass.getSimpleName());
             } catch (Exception e) {
-                log.error("Failed to instantiate handler for '{}', using GenericHandler", normalizedVendor, e);
+                log.error("Failed to instantiate handler for '{}', using GenericHandler", cacheKey, e);
                 handler = new GenericHandler();
             }
         } else {
-            log.warn("Unknown vendor '{}', using GenericHandler", normalizedVendor);
+            log.warn("Unknown vendor '{}', using GenericHandler", cacheKey);
             handler = new GenericHandler();
         }
 
-        // Cache and return
-        instances.put(normalizedVendor, handler);
+        // Cache under the resolved key (prefer extracted form when raw didn't match,
+        // so future lookups via either form still hit a cached entry).
+        instances.put(cacheKey, handler);
         return handler;
     }
 
@@ -121,6 +151,12 @@ public class LlmProviderHandlerRegistry {
     public static boolean hasHandler(String vendor) {
         if (vendor == null || vendor.isEmpty()) {
             return false;
+        }
+        String normalizedRaw = vendor.toLowerCase().trim();
+        // Mirror getHandler's two-tier lookup: direct match first (catches
+        // "vertex_ai" and other explicit aliases), then extraction fallback.
+        if (handlers.containsKey(normalizedRaw)) {
+            return true;
         }
         return handlers.containsKey(extractVendor(vendor).toLowerCase().trim());
     }

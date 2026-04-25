@@ -190,7 +190,15 @@ For Vertex AI:
 - **Java**: add `org.springframework.ai:spring-ai-starter-model-vertex-ai-gemini`
   to your `pom.xml` (the mesh starter only auto-wires it when present)
 
-See `meshctl man env` for the full env var matrix across runtimes.
+**Per-language env var names** (each runtime follows its ecosystem's convention):
+
+- **Python (LiteLLM)**: `VERTEXAI_PROJECT`, `VERTEXAI_LOCATION`
+- **TypeScript (Vercel AI SDK)**: `GOOGLE_VERTEX_PROJECT`, `GOOGLE_VERTEX_LOCATION`
+- **Java (Spring AI)**: `SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID`,
+  `SPRING_AI_VERTEX_AI_GEMINI_LOCATION`
+
+`GOOGLE_APPLICATION_CREDENTIALS` (path to SA JSON / ADC) is shared across all
+three. See `meshctl man env` for the full matrix.
 
 ## Tool Filtering
 

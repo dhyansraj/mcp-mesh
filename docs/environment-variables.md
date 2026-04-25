@@ -431,8 +431,10 @@ agent.addLlmProvider({
 ```
 
 `@ai-sdk/google-vertex` is bundled with `@mcpmesh/sdk` — no extra install.
-Auth uses Google ADC; project + location come from `GOOGLE_VERTEX_PROJECT`
-and `GOOGLE_VERTEX_LOCATION`. Location defaults to `us-central1`.
+Auth uses Google ADC. Both `GOOGLE_VERTEX_PROJECT` and `GOOGLE_VERTEX_LOCATION`
+are required — the SDK throws a `LoadSettingError` on the first call if
+either is unset (no project auto-discovery from ADC, no default location).
+Common location values: `us-central1`, `global`.
 
 #### Java — `provider = "vertex_ai"`
 

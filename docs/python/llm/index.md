@@ -205,12 +205,18 @@ auth env vars (each follows its own ecosystem's naming convention).
 
    ```bash
    export GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json
+   # VERTEXAI_PROJECT is technically optional with SA JSON (LiteLLM can read
+   # the project from the JSON), but recommended for explicitness:
+   export VERTEXAI_PROJECT=my-gcp-project
    export VERTEXAI_LOCATION=us-central1
    ```
 
    **Workload Identity** (GKE):
 
    ```bash
+   # VERTEXAI_PROJECT is recommended even when ADC carries project info via
+   # the WI binding / metadata server — explicit beats implicit across envs:
+   export VERTEXAI_PROJECT=my-gcp-project
    export VERTEXAI_LOCATION=us-central1
    ```
 

@@ -8,13 +8,15 @@ spring:
     vertex:
       ai:
         gemini:
-          # GCP project + region. Override at runtime via env vars:
+          # GCP project + region. REQUIRED env vars (no defaults — startup
+          # fails fast if these are missing rather than deferring failure to
+          # the first Vertex API call with a placeholder value):
           #   SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID=my-gcp-project
           #   SPRING_AI_VERTEX_AI_GEMINI_LOCATION=us-central1
           # Auth is via Google Application Default Credentials (gcloud
           # auth application-default login, or GOOGLE_APPLICATION_CREDENTIALS).
-          project-id: ${SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID:my-gcp-project}
-          location: ${SPRING_AI_VERTEX_AI_GEMINI_LOCATION:us-central1}
+          project-id: ${SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID}
+          location: ${SPRING_AI_VERTEX_AI_GEMINI_LOCATION}
           chat:
             options:
               model: gemini-2.0-flash

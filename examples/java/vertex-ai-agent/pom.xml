@@ -23,6 +23,10 @@
         <java.version>17</java.version>
         <mcp-mesh.version>1.3.4</mcp-mesh.version>
         <spring-ai.version>2.0.0-M4</spring-ai.version>
+        <!-- Defensive bump over Spring Boot 4.0.5's managed Tomcat 11.0.20.
+             Verified 11.0.21 exists on Maven Central. Keeps the example
+             on a CVE-free embed-tomcat without affecting SDK consumers. -->
+        <tomcat.version>11.0.21</tomcat.version>
     </properties>
 
     <dependencies>

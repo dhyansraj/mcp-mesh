@@ -147,7 +147,10 @@ needed. Auth is via Google ADC.
 | Service account JSON                                | `GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json`, `GOOGLE_VERTEX_PROJECT`, `GOOGLE_VERTEX_LOCATION` |
 | Workload Identity (GKE pods)                        | `GOOGLE_VERTEX_PROJECT`, `GOOGLE_VERTEX_LOCATION`                                |
 
-If `GOOGLE_VERTEX_LOCATION` is omitted the SDK defaults to `us-central1`.
+Both `GOOGLE_VERTEX_PROJECT` and `GOOGLE_VERTEX_LOCATION` are required by
+`@ai-sdk/google-vertex` — the SDK throws a `LoadSettingError` on the first
+call if either is unset (it does not auto-discover the project from ADC and
+has no default location). Common location values: `us-central1`, `global`.
 
 #### Java (Spring AI)
 
