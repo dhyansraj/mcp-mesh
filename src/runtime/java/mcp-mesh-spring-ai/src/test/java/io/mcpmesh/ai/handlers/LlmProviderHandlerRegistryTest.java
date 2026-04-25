@@ -127,6 +127,36 @@ class LlmProviderHandlerRegistryTest {
             assertTrue(handler instanceof GeminiHandler);
             assertEquals("gemini", handler.getVendor());
         }
+
+        // Regression: extractVendor() does not recognize "vertex" as a Gemini
+        // substring, so the old getHandler() (which always called extractVendor
+        // first) returned GenericHandler for "vertex_ai". This dropped HINT-mode
+        // prompt shaping for the Gemini-via-Vertex-AI provider. The two-tier
+        // lookup now matches the registered alias directly.
+        // See PR #824 (issue #816).
+        @Test
+        @DisplayName("'vertex_ai' returns GeminiHandler (not GenericHandler)")
+        void vertexAi_returnsGeminiHandler() {
+            LlmProviderHandler handler = LlmProviderHandlerRegistry.getHandler("vertex_ai");
+            assertTrue(handler instanceof GeminiHandler,
+                "vertex_ai must route to GeminiHandler so HINT-mode applies with tools");
+        }
+
+        @Test
+        @DisplayName("'vertexai' returns GeminiHandler (forgiving alias)")
+        void vertexai_returnsGeminiHandler() {
+            LlmProviderHandler handler = LlmProviderHandlerRegistry.getHandler("vertexai");
+            assertTrue(handler instanceof GeminiHandler);
+        }
+
+        @Test
+        @DisplayName("'vertex_ai/gemini-2.0-flash' (model-string form) returns GeminiHandler")
+        void vertexAiModelString_returnsGeminiHandler() {
+            // Confirms the extractVendor fallback still catches the slash-form
+            // model string after the two-tier lookup change.
+            LlmProviderHandler handler = LlmProviderHandlerRegistry.getHandler("vertex_ai/gemini-2.0-flash");
+            assertTrue(handler instanceof GeminiHandler);
+        }
     }
 
     @Nested
@@ -230,6 +260,18 @@ class LlmProviderHandlerRegistryTest {
         }
 
         @Test
+        @DisplayName("true for explicit aliases: vertex_ai, vertexai, claude, gpt, google")
+        void explicitAliases_returnTrue() {
+            // Regression: hasHandler used to delegate solely to extractVendor,
+            // which doesn't recognize "vertex" as a Gemini substring.
+            assertTrue(LlmProviderHandlerRegistry.hasHandler("vertex_ai"));
+            assertTrue(LlmProviderHandlerRegistry.hasHandler("vertexai"));
+            assertTrue(LlmProviderHandlerRegistry.hasHandler("claude"));
+            assertTrue(LlmProviderHandlerRegistry.hasHandler("gpt"));
+            assertTrue(LlmProviderHandlerRegistry.hasHandler("google"));
+        }
+
+        @Test
         @DisplayName("false for unregistered vendors")
         void unregisteredVendors_returnFalse() {
             assertFalse(LlmProviderHandlerRegistry.hasHandler("unregistered"));
@@ -288,6 +330,8 @@ class LlmProviderHandlerRegistryTest {
             assertEquals("AnthropicHandler", vendors.get("claude"));
             assertEquals("OpenAiHandler", vendors.get("gpt"));
             assertEquals("GeminiHandler", vendors.get("google"));
+            assertEquals("GeminiHandler", vendors.get("vertex_ai"));
+            assertEquals("GeminiHandler", vendors.get("vertexai"));
         }
     }
 }

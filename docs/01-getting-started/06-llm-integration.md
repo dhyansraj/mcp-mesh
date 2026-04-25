@@ -145,6 +145,14 @@ Provide detailed analysis appropriate for {{ user_level }}-level users.
 | `context_param`  | `str`  | `None`     | Parameter name containing template context         |
 | `max_iterations` | `int`  | `5`        | Max agentic loop iterations                        |
 
+> **Vertex AI (Gemini via IAM)**: For production deployments using Google
+> Cloud IAM instead of API keys, change the model prefix to
+> `vertex_ai/gemini-2.0-flash` and install the `[vertex]` extra. The
+> TypeScript and Java runtimes have equivalent support — see the
+> [Python](../python/llm/index.md), [TypeScript](../typescript/llm/index.md),
+> and [Java](../java/llm/index.md) LLM Integration pages for runtime-specific
+> auth env vars (each follows its own ecosystem's naming convention).
+
 ### Basic Usage Patterns
 
 #### Pattern 1: Simple LLM Chat

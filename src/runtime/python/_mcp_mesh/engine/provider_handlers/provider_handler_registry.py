@@ -27,7 +27,20 @@ class ProviderHandlerRegistry:
     Vendor Mapping:
     - "anthropic" -> ClaudeHandler
     - "openai" -> OpenAIHandler
+    - "gemini" -> GeminiHandler (Google AI Studio API key auth)
+    - "vertex_ai" -> GeminiHandler (Vertex AI / IAM auth, same Gemini models)
     - "unknown" or others -> GenericHandler
+
+    Note on the gemini/vertex_ai aliasing:
+        Both ``gemini/<model>`` and ``vertex_ai/<model>`` route through the
+        same GeminiHandler because they target the same Gemini model family on
+        the other side of the wire — only the auth/transport differs (AI
+        Studio API key vs GCP IAM via service account / ADC). LiteLLM handles
+        the routing distinction internally based on the model prefix and the
+        environment variables present (``GOOGLE_API_KEY`` vs
+        ``GOOGLE_APPLICATION_CREDENTIALS`` / ``VERTEXAI_*``). Mesh-side
+        prompt-shaping behavior (HINT mode with tools, STRICT mode without)
+        is identical for both.
 
     Usage:
         handler = ProviderHandlerRegistry.get_handler("anthropic")
@@ -43,7 +56,8 @@ class ProviderHandlerRegistry:
     _handlers: dict[str, type[BaseProviderHandler]] = {
         "anthropic": ClaudeHandler,
         "openai": OpenAIHandler,
-        "gemini": GeminiHandler,
+        "gemini": GeminiHandler,        # Google AI Studio (GOOGLE_API_KEY)
+        "vertex_ai": GeminiHandler,     # Vertex AI / IAM (same Gemini family, different auth)
     }
 
     # Cache of instantiated handlers (singleton per vendor)

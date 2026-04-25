@@ -65,6 +65,7 @@ const VENDOR_FORMATTERS: Record<string, (b64: string, mimeType: string) => Resol
   openai: formatForOpenai,
   gemini: formatForGemini,
   google: formatForGemini,
+  vertex_ai: formatForGemini,
 };
 
 function formatPdfForClaude(b64: string): ResolvedContent {
@@ -157,7 +158,7 @@ async function resolveSingleResourceLink(
       const b64 = data.toString("base64");
       if (vendor === "anthropic" || vendor === "claude") {
         return formatPdfForClaude(b64);
-      } else if (vendor === "gemini" || vendor === "google") {
+      } else if (vendor === "gemini" || vendor === "google" || vendor === "vertex_ai") {
         return formatPdfForGemini(b64, name);
       } else {
         return formatPdfForOpenai(b64, name);
@@ -269,7 +270,7 @@ export async function resolveResourceLinks(
 }
 
 /** Vendors that do NOT support images in tool/function result messages. */
-export const TOOL_IMAGE_UNSUPPORTED_VENDORS = new Set(["openai", "gemini", "google"]);
+export const TOOL_IMAGE_UNSUPPORTED_VENDORS = new Set(["openai", "gemini", "google", "vertex_ai"]);
 
 /**
  * Resolve resource_links for inclusion in a tool result message.

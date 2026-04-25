@@ -83,6 +83,13 @@ kubernetes = [
     "kubernetes>=28.1.0",
     "pykube-ng>=22.9.0"
 ]
+vertex = [
+    # google-auth is required for LiteLLM's vertex_ai/* model prefix to read
+    # Application Default Credentials. Optional because non-Vertex users (AI
+    # Studio, Claude, OpenAI) don't need it. Install via:
+    #   pip install mcp-mesh[vertex]
+    "google-auth>=2.0.0"
+]
 
 [project.urls]
 Homepage = "https://github.com/dhyansraj/mcp-mesh"

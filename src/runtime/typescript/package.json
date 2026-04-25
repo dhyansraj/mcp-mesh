@@ -33,6 +33,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.0",
     "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/google-vertex": "^3.0.0",
     "@ai-sdk/openai": "^3.0.0",
     "@mcpmesh/core": "file:../core/typescript",
     "ai": "^6.0.0",

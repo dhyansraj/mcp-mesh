@@ -22,7 +22,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <ul>
  *   <li>{@code "claude"}, {@code "anthropic"} - Anthropic Claude models</li>
  *   <li>{@code "openai"}, {@code "gpt"} - OpenAI GPT models</li>
- *   <li>{@code "gemini"}, {@code "google"} - Google Gemini models</li>
+ *   <li>{@code "gemini"}, {@code "google"} - Google Gemini models (prefers AI Studio when both AI Studio + Vertex configured)</li>
+ *   <li>{@code "vertex_ai"}, {@code "vertexai"} - Google Gemini via Vertex AI (IAM auth) — forced even if AI Studio is also configured</li>
  * </ul>
  *
  * <h2>Configuration</h2>
@@ -30,7 +31,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <ul>
  *   <li>{@code ANTHROPIC_API_KEY} - For Claude models</li>
  *   <li>{@code OPENAI_API_KEY} - For OpenAI models</li>
- *   <li>{@code GOOGLE_AI_GEMINI_API_KEY} or GCP credentials - For Gemini models</li>
+ *   <li>{@code GOOGLE_AI_GEMINI_API_KEY} - For Gemini AI Studio</li>
+ *   <li>GCP ADC + {@code spring.ai.vertex.ai.gemini.project-id} + {@code spring.ai.vertex.ai.gemini.location} - For Gemini via Vertex AI</li>
  * </ul>
  *
  * <p>Or in application.yml:
@@ -47,6 +49,15 @@ import java.util.concurrent.ConcurrentHashMap;
  *           project-id: ${GOOGLE_PROJECT_ID}
  *           location: us-central1
  * </pre>
+ *
+ * <p>Note: Spring AI's Vertex AI Gemini auto-config does not key off any
+ * fixed env var name itself — it looks at {@code spring.ai.vertex.ai.gemini.*}
+ * properties (which Spring Boot can in turn populate from env vars like
+ * {@code SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID}). The {@code GOOGLE_PROJECT_ID}
+ * shorthand only works because the example {@code application.properties}
+ * substitutes it. Authentication itself uses Google Application Default
+ * Credentials, so {@code GOOGLE_APPLICATION_CREDENTIALS} or {@code gcloud auth
+ * application-default login} are still required.
  */
 public class SpringAiLlmProvider {
 
@@ -89,6 +100,7 @@ public class SpringAiLlmProvider {
             case "claude", "anthropic" -> anthropicChatModel != null;
             case "openai", "gpt" -> openAiChatModel != null;
             case "gemini", "google" -> vertexAiGeminiChatModel != null || googleAiGeminiChatModel != null;
+            case "vertex_ai" -> vertexAiGeminiChatModel != null;
             default -> false;
         };
     }
@@ -254,6 +266,17 @@ public class SpringAiLlmProvider {
                     "Add spring-ai-google-genai dependency and set GEMINI_API_KEY, " +
                     "or add spring-ai-vertex-ai-gemini dependency and configure GCP credentials");
             }
+            case "vertex_ai" -> {
+                // Explicit Vertex AI: do NOT fall back to AI Studio even if both are configured.
+                // Use this when you specifically need IAM auth, Provisioned Throughput, VPC-SC, etc.
+                if (vertexAiGeminiChatModel != null) {
+                    yield vertexAiGeminiChatModel;
+                }
+                throw new IllegalStateException("Vertex AI Gemini ChatModel not configured. " +
+                    "Add spring-ai-starter-model-vertex-ai-gemini dependency and configure " +
+                    "spring.ai.vertex.ai.gemini.project-id + spring.ai.vertex.ai.gemini.location " +
+                    "(plus GCP Application Default Credentials).");
+            }
             default -> {
                 // Try anthropic as default fallback
                 if (anthropicChatModel != null) {
@@ -280,6 +303,11 @@ public class SpringAiLlmProvider {
     /**
      * Normalize provider string: extract vendor prefix from full model paths.
      * E.g., "anthropic/claude-sonnet-4-5" -> "anthropic", "claude" -> "claude".
+     *
+     * <p>Also normalizes the {@code vertexai} alias to {@code vertex_ai} so users
+     * can write either {@code @MeshLlm(provider = "vertex_ai")} or
+     * {@code @MeshLlm(provider = "vertexai")} or use a model string like
+     * {@code "vertex_ai/gemini-2.0-flash"}.
      */
     private static String normalizeProvider(String provider) {
         if (provider == null || provider.trim().isEmpty()) {
@@ -287,7 +315,11 @@ public class SpringAiLlmProvider {
         }
         String lower = provider.toLowerCase().trim();
         if (lower.contains("/")) {
-            return lower.substring(0, lower.indexOf('/'));
+            lower = lower.substring(0, lower.indexOf('/'));
+        }
+        // Forgiving alias: vertexai -> vertex_ai (matches LiteLLM-style "vertex_ai/" prefix)
+        if (lower.equals("vertexai")) {
+            return "vertex_ai";
         }
         return lower;
     }
@@ -319,8 +351,17 @@ public class SpringAiLlmProvider {
                 throw new IllegalStateException(
                     "Gemini ChatModel not configured. Add spring-ai-google-genai and set GEMINI_API_KEY");
             }
+            case "vertex_ai" -> {
+                if (vertexAiGeminiChatModel != null) {
+                    yield vertexAiGeminiChatModel;
+                }
+                throw new IllegalStateException(
+                    "Vertex AI Gemini ChatModel not configured. " +
+                    "Add spring-ai-starter-model-vertex-ai-gemini and configure " +
+                    "spring.ai.vertex.ai.gemini.project-id + spring.ai.vertex.ai.gemini.location.");
+            }
             default -> throw new IllegalArgumentException("Unknown LLM provider: " + provider +
-                ". Supported: claude, anthropic, openai, gpt, gemini, google");
+                ". Supported: claude, anthropic, openai, gpt, gemini, google, vertex_ai");
         };
 
         log.info("Creating ChatClient for provider: {}", provider);

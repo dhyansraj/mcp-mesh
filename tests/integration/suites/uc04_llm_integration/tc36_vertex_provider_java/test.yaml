@@ -1,0 +1,199 @@
+# Test Case: Vertex AI Provider Integration - Java
+# Verifies Gemini-via-Vertex-AI LLM provider using Spring AI's
+# spring-ai-starter-model-vertex-ai-gemini and the @MeshLlm(provider = "vertex_ai")
+# annotation (IAM auth via GCP ADC, NOT AI Studio API key).
+#
+# REQUIRED secrets in tsuite DB (configured via the secrets handler):
+#   - GCP_SA_JSON_B64                        : base64-encoded service-account JSON (single-line —
+#                                              multi-line values mangle .env when sourced via
+#                                              `set -a && . .env`).
+#                                              Generate via: `base64 -i ~/.config/gcloud/application_default_credentials.json | tr -d '\n'`
+#   - SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID  : GCP project id (e.g., eng-cache-151909)
+#   - SPRING_AI_VERTEX_AI_GEMINI_LOCATION    : GCP region    (e.g., us-central1)
+# Without these, the materialize step fails with a clear "secret not configured" error.
+#
+# Note: Java's @MeshLlm direct mode logs "(mode=direct:vertex_ai)" on registration
+# — that's the marker we assert on to confirm Vertex routing (vs AI Studio fallback).
+#
+# Note: Java registers tools by capability name, so we call `capital_lookup`
+# (not `capital_of`). Also, the Gemini model sometimes returns name=null in the
+# CapitalInfo record (model interpretation, not a routing bug), so we DON'T
+# strictly assert "France" — `Paris` + the field names is sufficient proof
+# the structured response shape is correct.
+#
+# Related: https://github.com/dhyansraj/mcp-mesh/issues/816
+
+name: "Vertex AI Provider Integration - Java"
+description: "Test Gemini via Vertex AI (IAM auth) provider end-to-end (Java / Spring AI)"
+tags:
+  - llm
+  - gemini
+  - vertex
+  - provider
+  - java
+  - issue-816
+timeout: 900
+# Note: Skip this test with --skip-tag llm if no GCP credentials are available
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy artifact to workspace (symlink resolves to examples/java/vertex-ai-agent)
+  - name: "Copy artifact to workspace"
+    handler: shell
+    command: |
+      cp -rL /uc-artifacts/java-vertex-ai-agent /workspace/
+      ls -la /workspace/java-vertex-ai-agent/
+    capture: copy_output
+
+  # Materialize all secrets (incl. multi-line GCP_SA_JSON) into the agent .env
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/java-vertex-ai-agent/.env
+
+  # Materialize the SA JSON to a file, then strip GCP_SA_JSON from .env
+  - name: "Materialize service-account JSON to file"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Defensive: detect raw-JSON secret value before sourcing it.
+      if grep -qE '^\{$|"account"|"client_id"' /workspace/java-vertex-ai-agent/.env; then
+        echo "ERROR: .env contains raw JSON — GCP_SA_JSON_B64 looks like multi-line JSON instead of base64."
+        echo "Fix: base64 -i ~/.config/gcloud/application_default_credentials.json | tr -d '\\n' (single-line, paste as the secret value)."
+        exit 1
+      fi
+      set -a
+      . /workspace/java-vertex-ai-agent/.env
+      set +a
+      if [ -z "$GCP_SA_JSON_B64" ]; then
+        echo "ERROR: GCP_SA_JSON_B64 is empty — secret not configured in tsuite DB"
+        exit 1
+      fi
+      echo "$GCP_SA_JSON_B64" | base64 -d > /workspace/sa.json
+      chmod 600 /workspace/sa.json
+      grep -v '^GCP_SA_JSON_B64=' /workspace/java-vertex-ai-agent/.env > /workspace/java-vertex-ai-agent/.env.tmp \
+        && mv /workspace/java-vertex-ai-agent/.env.tmp /workspace/java-vertex-ai-agent/.env
+      echo "sa.json bytes: $(wc -c < /workspace/sa.json)"
+      python3 -c "import json; json.load(open('/workspace/sa.json')); print('sa.json: valid JSON')"
+    capture: sa_materialize
+
+  # Install Maven dependencies
+  - name: "Install Maven dependencies"
+    handler: maven-install
+    path: /workspace/java-vertex-ai-agent
+    timeout: 600
+
+  # Start the vertex-ai-agent-java with env file + ADC pointing at sa.json.
+  # MCP_MESH_HTTP_PORT=0 lets the runtime pick a free port (matches tc12 pattern).
+  - name: "Start vertex-ai-agent (Java)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-vertex-ai-agent \
+        --env MCP_MESH_HTTP_PORT=0 \
+        --env GOOGLE_APPLICATION_CREDENTIALS=/workspace/sa.json \
+        --env-file /workspace/java-vertex-ai-agent/.env \
+        -d
+      echo "vertex-ai-agent (Java) starting via meshctl"
+    capture: start_output
+
+  # Wait for provider to register (Java is slow to start — Spring Boot warmup)
+  - name: "Wait for provider registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for vertex-ai-agent-java..."
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "vertex-ai-agent-java"; then
+          echo "Provider registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+        fi
+        sleep 2
+      done
+      echo "ERROR: Provider did not register within 120s"
+      meshctl logs vertex-ai-agent-java 2>/dev/null | tail -80 || true
+      exit 1
+    capture: wait_registration
+    timeout: 180
+
+  # Verify agent is running
+  - name: "Verify agent is running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_output
+
+  # List available tools
+  - name: "List available tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: tools_output
+
+  # Call capital_lookup (Java registers tools by capability name)
+  - name: "Call capital_lookup - France"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call capital_lookup '{"country": "France"}'
+    capture: llm_response
+    timeout: 90
+
+  # Capture agent log to confirm Vertex routing (vs AI Studio fallback)
+  - name: "Capture agent log for routing assertion"
+    handler: shell
+    workdir: /workspace
+    # Agent registers itself as 'vertex-ai-agent-java' (per @MeshAgent name in
+     # VertexAiAgentApplication.java); the workspace dir 'java-vertex-ai-agent'
+     # is just the artifact path. Use the registered agent name for logs.
+    command: "meshctl logs vertex-ai-agent-java 2>/dev/null | tail -300 || true"
+    capture: agent_log
+
+  # Stop agent
+  - name: "Stop agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+
+assertions:
+  # Agent registered (the @MeshAgent name is "vertex-ai-agent-java")
+  - expr: "${captured.list_output} contains 'vertex-ai-agent-java'"
+    message: "vertex-ai-agent-java should appear in meshctl list"
+
+  # Tool is registered by capability (Java behavior, confirmed in local test)
+  - expr: "${captured.tools_output} contains 'capital_lookup'"
+    message: "capital_lookup tool should be listed"
+
+  # Structured response shape: contains the field names + the answer.
+  # We DON'T strictly assert "France" — the Gemini model occasionally returns
+  # name=null in the structured CapitalInfo record (model interpretation issue,
+  # not a routing bug). Paris + the field names is enough proof the
+  # structured response shape is correct.
+  - expr: "${captured.llm_response} contains 'name'"
+    message: "Response should contain the 'name' field"
+  - expr: "${captured.llm_response} contains 'capital'"
+    message: "Response should contain the 'capital' field"
+  - expr: "${captured.llm_response} contains 'Paris'"
+    message: "Response should contain Paris as the capital"
+
+  # Routing — confirm @MeshLlm registered in direct:vertex_ai mode
+  # (this is the marker emitted by MeshLlmRegistry, NOT AI Studio's "gemini").
+  - expr: "${captured.agent_log} contains 'mode=direct:vertex_ai'"
+    message: "Agent log should show @MeshLlm registered with mode=direct:vertex_ai"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*vertex-ai-agent" 2>/dev/null || true
+      rm -f /workspace/sa.json /workspace/java-vertex-ai-agent/.env 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

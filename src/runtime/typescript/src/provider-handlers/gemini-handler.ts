@@ -176,3 +176,9 @@ export class GeminiHandler implements ProviderHandler {
 // Use "gemini" as vendor name to match model prefix (e.g., "gemini/gemini-3-flash-preview")
 // This is consistent with Python SDK's registration
 ProviderHandlerRegistry.register("gemini", GeminiHandler);
+
+// Also register under "vertex_ai" — same Gemini model family, same prompt-shaping
+// rules (HINT mode for tool calls, STRICT mode for tool-free structured output);
+// only the auth/transport differs (IAM via @ai-sdk/google-vertex vs API key via
+// @ai-sdk/google). Mirrors Python's GeminiHandler registry alias.
+ProviderHandlerRegistry.register("vertex_ai", GeminiHandler);
