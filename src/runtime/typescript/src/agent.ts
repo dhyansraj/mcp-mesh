@@ -33,7 +33,7 @@ import type {
 } from "./types.js";
 import { resolveConfig, generateAgentIdSuffix, findAvailablePort } from "./config.js";
 import { enrichSchemaWithMediaTypes } from "./media-param.js";
-import { createProxy, normalizeDependency, runWithTraceContext, runWithPropagatedHeaders } from "./proxy.js";
+import { createProxy, normalizeDependency, runWithTraceContext, runWithPropagatedHeaders, PROXY_DISPATCH_META } from "./proxy.js";
 import {
   initTracing,
   generateTraceId,
@@ -55,6 +55,26 @@ import { findAndSetBasePath } from "./template.js";
 import { getTlsOptions, getTlsConfigCached, prepareTls, cleanupTls } from "./tls-config.js";
 import { closeHttpPool } from "./http-pool.js";
 import { dispatch as poolDispatch, closePool } from "./tool-worker-pool.js";
+
+/**
+ * Globally-set symbol that user agent code can check to detect whether it
+ * is running inside a mesh tool-isolation worker. The mesh runtime sets
+ * this on globalThis BEFORE importing the user module in worker mode.
+ *
+ * Use this to guard module-top-level side effects that should run only in
+ * the main process — e.g. HTTP servers you start manually, OpenTelemetry
+ * SDK init, prometheus registries, file watchers, etc.:
+ *
+ *   if (!globalThis[Symbol.for("@mcpmesh/sdk/in-worker")]) {
+ *     await myCustomServer.listen(8081);
+ *     myMetrics.start();
+ *   }
+ *
+ * mesh's own setup (FastMCP server start, Express health endpoints,
+ * registry heartbeat) is automatically guarded; users only need this
+ * symbol if they have their own top-level side effects.
+ */
+export const IN_WORKER_SYMBOL = Symbol.for("@mcpmesh/sdk/in-worker");
 
 // Worker-mode detection: when this module is loaded inside a worker_threads
 // Worker, we skip all main-thread init (HTTP server, registry heartbeat, etc.)
@@ -275,15 +295,19 @@ export class MeshAgent {
           // Build serializable depsConfig from depsArray. The worker rebuilds
           // its own proxies (with worker-local undici Agent) via createProxy
           // — Python parity, avoids cross-thread proxy state sharing.
+          // Read from the non-enumerable Symbol stash so we don't rely on
+          // public properties (which we keep non-enumerable to avoid leaking
+          // endpoint/customHeaders via JSON.stringify).
           const depsConfig = depsArray.map((d) => {
             if (d === null) return null;
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const proxy = d as any;
+            const meta = (d as any)[PROXY_DISPATCH_META];
+            if (!meta) return null; // proxy missing metadata — defensive
             return {
-              endpoint: proxy.endpoint as string,
-              capability: proxy.capability as string,
-              functionName: proxy.functionName as string,
-              kwargs: (proxy.kwargs ?? {}) as Record<string, unknown>,
+              endpoint: meta.endpoint as string,
+              capability: meta.capability as string,
+              functionName: meta.functionName as string,
+              kwargs: (meta.kwargs ?? {}) as Record<string, unknown>,
             };
           });
 
@@ -397,6 +421,13 @@ export class MeshAgent {
    * ```
    */
   addLlmProvider(config: LlmProviderConfig): this {
+    if (this._workerMode) {
+      // LLM provider tools are registered with FastMCP directly (not via wrappedExecute),
+      // so they don't go through the dispatch path. In worker mode there's no FastMCP
+      // server running — just no-op and let the main thread handle LLM calls inline.
+      return this;
+    }
+
     // Create the LLM provider tool definition
     const toolDef = llmProvider(config);
 

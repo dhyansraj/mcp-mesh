@@ -51,6 +51,15 @@ let _nextIdx = 0;
 let _msgId = 0;
 let _shutdownRegistered = false;
 
+function deserializeError(serialized: any): Error {
+  const err: any = new Error(serialized?.message ?? "worker error");
+  if (serialized?.name) err.name = serialized.name;
+  if (serialized?.stack) err.stack = serialized.stack;
+  if (serialized?.code !== undefined) err.code = serialized.code;
+  if (serialized?.cause !== undefined) err.cause = deserializeError(serialized.cause);
+  return err;
+}
+
 function _resolvePoolSize(): number {
   const envVal = process.env.MCP_MESH_TOOL_WORKERS;
   if (envVal) {
@@ -166,10 +175,7 @@ function _spawnWorker(slot: WorkerSlot, slotIdx: number): void {
         if (msg.kind === "result") {
           pending.resolve(msg.value);
         } else if (msg.kind === "error") {
-          const err = new Error(msg.error?.message ?? "Worker error");
-          if (msg.error?.name) err.name = msg.error.name;
-          if (msg.error?.stack) err.stack = msg.error.stack;
-          pending.reject(err);
+          pending.reject(deserializeError(msg.error));
         }
       }
     });
@@ -227,11 +233,7 @@ export async function dispatch(payload: DispatchPayload): Promise<unknown> {
   // Wait for readiness before enqueuing the first call. After ready, pending
   // calls are buffered by Node's MessagePort regardless.
   if (slot.ready) {
-    try {
-      await slot.ready;
-    } catch (err) {
-      throw err;
-    }
+    await slot.ready;
   }
 
   const id = ++_msgId;
@@ -242,38 +244,60 @@ export async function dispatch(payload: DispatchPayload): Promise<unknown> {
       reject(new Error("Worker died during dispatch"));
       return;
     }
-    slot.worker.postMessage({
-      id,
-      kind: "call",
-      toolName: payload.toolName,
-      cleanArgs: payload.cleanArgs,
-      depsConfig: payload.depsConfig,
-      traceContext: payload.traceContext,
-      propagatedHeaders: payload.propagatedHeaders,
-    });
+    try {
+      slot.worker.postMessage({
+        id,
+        kind: "call",
+        toolName: payload.toolName,
+        cleanArgs: payload.cleanArgs,
+        depsConfig: payload.depsConfig,
+        traceContext: payload.traceContext,
+        propagatedHeaders: payload.propagatedHeaders,
+      });
+    } catch (err) {
+      slot.pending.delete(id);
+      reject(err instanceof Error ? err : new Error(String(err)));
+    }
   });
 }
 
 /**
- * Gracefully terminate all workers and clear pending calls.
+ * Drain in-flight calls (up to deadlineMs), then forcefully terminate all
+ * workers. Calls still pending after the deadline are rejected with a
+ * descriptive error.
  *
  * Called automatically on `process.exit`; can be invoked explicitly during
  * shutdown if you want to await completion.
  */
-export async function closePool(): Promise<void> {
+export async function closePool(deadlineMs = 5000): Promise<void> {
   if (!_initialized) return;
-  const terminations: Promise<unknown>[] = [];
-  for (const slot of _slots) {
-    if (slot.worker) {
-      const w = slot.worker;
-      slot.worker = null;
-      slot.alive = false;
-      slot.ready = null;
-      const err = new Error("Worker pool closed");
-      for (const [, pending] of slot.pending) pending.reject(err);
-      slot.pending.clear();
-      terminations.push(w.terminate().catch(() => undefined));
+  const workers = _slots.slice();
+  _slots.length = 0;
+  _initialized = false;
+  _poolSize = 0;
+  _nextIdx = 0;
+
+  // Phase 1: drain — wait up to `deadlineMs` for in-flight calls to finish.
+  const deadline = Date.now() + deadlineMs;
+  for (const slot of workers) {
+    while (slot.pending.size > 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
     }
   }
-  await Promise.all(terminations);
+
+  // Phase 2: reject anything still pending after the deadline.
+  for (const slot of workers) {
+    if (slot.pending.size > 0) {
+      const err = new Error(
+        `Worker pool closed with ${slot.pending.size} in-flight call(s) still pending after ${deadlineMs}ms drain`
+      );
+      for (const [, pending] of slot.pending) pending.reject(err);
+      slot.pending.clear();
+    }
+  }
+
+  // Phase 3: terminate workers.
+  await Promise.all(
+    workers.map((s) => (s.worker ? s.worker.terminate().catch(() => undefined) : Promise.resolve()))
+  );
 }

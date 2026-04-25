@@ -45,6 +45,12 @@ const sdkEntryPath = data.sdkEntryPath;
 const WORKER_MODE_SYMBOL = Symbol.for("@mcpmesh/sdk/worker-mode");
 (globalThis as unknown as Record<symbol, boolean>)[WORKER_MODE_SYMBOL] = true;
 
+// User-facing in-worker flag. Distinct from the SDK-internal worker-mode flag
+// above. User code can check this to guard their own top-level side effects
+// (custom HTTP servers, OTel init, prometheus registries) that should not
+// run in worker threads. Exported as IN_WORKER_SYMBOL from the SDK index.
+(globalThis as any)[Symbol.for("@mcpmesh/sdk/in-worker")] = true;
+
 async function bootstrap(): Promise<void> {
   // 1. Register tsx loader for the worker if user runs .ts directly.
   const isTs =
@@ -98,6 +104,16 @@ async function bootstrap(): Promise<void> {
   });
 
   parentPort!.postMessage({ kind: "ready" });
+}
+
+function serializeError(err: any): { name: string; message: string; stack?: string; code?: string; cause?: any } {
+  if (!(err instanceof Error)) {
+    return { name: "Error", message: String(err) };
+  }
+  const out: any = { name: err.name, message: err.message, stack: err.stack };
+  if ((err as any).code !== undefined) out.code = (err as any).code;
+  if ((err as any).cause !== undefined) out.cause = serializeError((err as any).cause);
+  return out;
 }
 
 interface CallMessage {
@@ -170,15 +186,7 @@ function handleMessage(
     )
     .then((value) => respond({ kind: "result", value }))
     .catch((err: unknown) => {
-      const e = err as Error;
-      respond({
-        kind: "error",
-        error: {
-          name: e?.name ?? "Error",
-          message: e?.message ?? String(err),
-          stack: e?.stack,
-        },
-      });
+      respond({ kind: "error", error: serializeError(err) });
     });
 }
 
