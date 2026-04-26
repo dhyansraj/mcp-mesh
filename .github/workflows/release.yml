@@ -405,6 +405,7 @@ jobs:
         run: |
           cd src/runtime/java
           mvn clean verify -DskipTests \
+            -Dskip.rust.build=true \
             -Dgpg.skip=false \
             -Dgpg.passphrase="" \
             -Dgpg.keyname="F94266795DCA259D!"

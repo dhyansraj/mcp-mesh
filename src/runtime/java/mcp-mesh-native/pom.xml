@@ -23,6 +23,11 @@
         <developerConnection>scm:git:git@github.com:dhyansraj/mcp-mesh.git</developerConnection>
     </scm>
 
+    <properties>
+        <skip.rust.build>false</skip.rust.build>
+        <cargo.executable>cargo</cargo.executable>
+    </properties>
+
     <!--
     This module bundles the native libraries for all supported platforms.
     The libraries are located in src/main/resources/META-INF/native/{classifier}/:
@@ -42,6 +47,103 @@
                 </includes>
             </resource>
         </resources>
+
+        <!--
+        Local-build only: rebuild the Rust FFI dylib for the host classifier and
+        copy it into src/main/resources/META-INF/native/${native.classifier}/ so the
+        packaged jar always contains a fresh native library matching current source.
+        Requires `cargo` toolchain on PATH for local builds; CI sets
+        -Dskip.rust.build=true since matrix jobs supply prebuilt cross-platform libs.
+        Cross-compile targets (e.g. linux on macOS) require `rustup target add <triple>` first.
+        -->
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>enforce-native-properties</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${skip.rust.build}</skip>
+                            <rules>
+                                <requireProperty>
+                                    <property>native.classifier</property>
+                                    <message>Unsupported host platform for local Rust build (os.name=${os.name}, os.arch=${os.arch}). Set -Dskip.rust.build=true to skip the local rebuild and use the existing META-INF/native/ contents.</message>
+                                </requireProperty>
+                                <requireProperty>
+                                    <property>native.lib-name</property>
+                                    <message>Unsupported host platform for local Rust build (os.name=${os.name}, os.arch=${os.arch}). Set -Dskip.rust.build=true to skip the local rebuild and use the existing META-INF/native/ contents.</message>
+                                </requireProperty>
+                                <requireProperty>
+                                    <property>rust.target</property>
+                                    <message>Unsupported host platform for local Rust build (os.name=${os.name}, os.arch=${os.arch}). Set -Dskip.rust.build=true to skip the local rebuild and use the existing META-INF/native/ contents.</message>
+                                </requireProperty>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>build-rust-ffi</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${skip.rust.build}</skip>
+                            <executable>${cargo.executable}</executable>
+                            <workingDirectory>${project.basedir}/../../core</workingDirectory>
+                            <arguments>
+                                <argument>build</argument>
+                                <argument>--release</argument>
+                                <argument>--target</argument>
+                                <argument>${rust.target}</argument>
+                                <argument>--features</argument>
+                                <argument>ffi</argument>
+                                <argument>--no-default-features</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-native-lib</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${skip.rust.build}</skip>
+                            <outputDirectory>${project.basedir}/src/main/resources/META-INF/native/${native.classifier}</outputDirectory>
+                            <overwrite>true</overwrite>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}/../../core/target/${rust.target}/release</directory>
+                                    <includes>
+                                        <include>${native.lib-name}</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
     </build>
 
     <profiles>
@@ -56,6 +158,8 @@
             </activation>
             <properties>
                 <native.classifier>osx-aarch_64</native.classifier>
+                <native.lib-name>libmcp_mesh_core.dylib</native.lib-name>
+                <rust.target>aarch64-apple-darwin</rust.target>
             </properties>
         </profile>
         <profile>
@@ -68,30 +172,50 @@
             </activation>
             <properties>
                 <native.classifier>osx-x86_64</native.classifier>
+                <native.lib-name>libmcp_mesh_core.dylib</native.lib-name>
+                <rust.target>x86_64-apple-darwin</rust.target>
             </properties>
         </profile>
         <profile>
             <id>native-linux-x86_64</id>
             <activation>
                 <os>
-                    <family>unix</family>
+                    <name>Linux</name>
                     <arch>amd64</arch>
                 </os>
             </activation>
             <properties>
                 <native.classifier>linux-x86_64</native.classifier>
+                <native.lib-name>libmcp_mesh_core.so</native.lib-name>
+                <rust.target>x86_64-unknown-linux-gnu</rust.target>
             </properties>
         </profile>
         <profile>
             <id>native-linux-aarch_64</id>
             <activation>
                 <os>
-                    <family>unix</family>
+                    <name>Linux</name>
                     <arch>aarch64</arch>
                 </os>
             </activation>
             <properties>
                 <native.classifier>linux-aarch_64</native.classifier>
+                <native.lib-name>libmcp_mesh_core.so</native.lib-name>
+                <rust.target>aarch64-unknown-linux-gnu</rust.target>
+            </properties>
+        </profile>
+        <profile>
+            <id>native-windows-x86_64</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                    <arch>amd64</arch>
+                </os>
+            </activation>
+            <properties>
+                <native.classifier>windows-x86_64</native.classifier>
+                <native.lib-name>mcp_mesh_core.dll</native.lib-name>
+                <rust.target>x86_64-pc-windows-msvc</rust.target>
             </properties>
         </profile>
     </profiles>
