@@ -5,6 +5,13 @@
 #   3. Stop agent 1 → list shows 1 agent (only agent 2)
 #   4. Start agent 1 again → list shows 2 agents
 #
+# DIAGNOSTIC INSTRUMENTATION (temporary, for triaging meshctl lifecycle regression):
+#   - All `meshctl start` invocations use --debug for richer wrapper/child logs.
+#   - A "DIAGNOSTIC: capture state" step runs after every wait and after stop, capturing
+#     all agent logs, registry log, ~/.mcp-mesh tree, pids/* + registry/deps/* contents,
+#     running processes, listening ports, and raw `meshctl list`. ignore_errors: true so
+#     real assertions still drive pass/fail.
+#
 # Uses UC-level artifacts from /uc-artifacts
 
 name: "Topology Updates"
@@ -41,13 +48,49 @@ test:
   # === STEP 1: Start agent 1, verify 1 agent in list ===
   - name: "Start first agent (py-simple-agent)"
     handler: shell
-    command: "meshctl start py-simple-agent/main.py -d"
+    command: "meshctl start py-simple-agent/main.py -d --debug"
     workdir: /workspace
     capture: start_1
 
   - name: "Wait for first agent registration"
     handler: wait
     seconds: 8
+
+  - name: "DIAGNOSTIC: state after first start"
+    handler: shell
+    command: |
+      echo "===== ALL AGENT LOGS ====="
+      for log in ~/.mcp-mesh/logs/*.log; do
+        echo "--- $log ---"
+        tail -200 "$log" 2>&1 || echo "(unreadable)"
+      done
+      echo ""
+      echo "===== ~/.mcp-mesh STATE ====="
+      find ~/.mcp-mesh -type f 2>&1 | head -60
+      echo ""
+      echo "===== pids/ contents ====="
+      for f in ~/.mcp-mesh/pids/*; do
+        echo "--- $f ---"
+        cat "$f" 2>&1 || true
+      done
+      echo ""
+      echo "===== registry/deps contents ====="
+      for f in ~/.mcp-mesh/registry/deps/* 2>/dev/null; do
+        echo "--- $f ---"
+        cat "$f" 2>&1 || true
+      done
+      echo ""
+      echo "===== running processes ====="
+      ps -ef | grep -E "python|node|meshctl|registry" | grep -v grep || true
+      echo ""
+      echo "===== listening ports ====="
+      ss -tnlp 2>/dev/null | head -30 || netstat -tnlp 2>/dev/null | head -30 || true
+      echo ""
+      echo "===== meshctl list (raw) ====="
+      meshctl list 2>&1 || true
+    workdir: /workspace
+    capture: diag_after_1
+    ignore_errors: true
 
   - name: "Verify 1 agent after first join"
     handler: shell
@@ -68,13 +111,49 @@ test:
   # === STEP 2: Start agent 2, verify 2 agents in list ===
   - name: "Start second agent (ts-simple-agent)"
     handler: shell
-    command: "meshctl start ts-simple-agent/src/index.ts -d"
+    command: "meshctl start ts-simple-agent/src/index.ts -d --debug"
     workdir: /workspace
     capture: start_2
 
   - name: "Wait for second agent registration"
     handler: wait
     seconds: 8
+
+  - name: "DIAGNOSTIC: state after second start"
+    handler: shell
+    command: |
+      echo "===== ALL AGENT LOGS ====="
+      for log in ~/.mcp-mesh/logs/*.log; do
+        echo "--- $log ---"
+        tail -200 "$log" 2>&1 || echo "(unreadable)"
+      done
+      echo ""
+      echo "===== ~/.mcp-mesh STATE ====="
+      find ~/.mcp-mesh -type f 2>&1 | head -60
+      echo ""
+      echo "===== pids/ contents ====="
+      for f in ~/.mcp-mesh/pids/*; do
+        echo "--- $f ---"
+        cat "$f" 2>&1 || true
+      done
+      echo ""
+      echo "===== registry/deps contents ====="
+      for f in ~/.mcp-mesh/registry/deps/* 2>/dev/null; do
+        echo "--- $f ---"
+        cat "$f" 2>&1 || true
+      done
+      echo ""
+      echo "===== running processes ====="
+      ps -ef | grep -E "python|node|meshctl|registry" | grep -v grep || true
+      echo ""
+      echo "===== listening ports ====="
+      ss -tnlp 2>/dev/null | head -30 || netstat -tnlp 2>/dev/null | head -30 || true
+      echo ""
+      echo "===== meshctl list (raw) ====="
+      meshctl list 2>&1 || true
+    workdir: /workspace
+    capture: diag_after_2
+    ignore_errors: true
 
   - name: "Verify 2 agents after second join"
     handler: shell
@@ -102,6 +181,42 @@ test:
   - name: "Wait for agent to unregister"
     handler: wait
     seconds: 5
+
+  - name: "DIAGNOSTIC: state after stop"
+    handler: shell
+    command: |
+      echo "===== ALL AGENT LOGS ====="
+      for log in ~/.mcp-mesh/logs/*.log; do
+        echo "--- $log ---"
+        tail -200 "$log" 2>&1 || echo "(unreadable)"
+      done
+      echo ""
+      echo "===== ~/.mcp-mesh STATE ====="
+      find ~/.mcp-mesh -type f 2>&1 | head -60
+      echo ""
+      echo "===== pids/ contents ====="
+      for f in ~/.mcp-mesh/pids/*; do
+        echo "--- $f ---"
+        cat "$f" 2>&1 || true
+      done
+      echo ""
+      echo "===== registry/deps contents ====="
+      for f in ~/.mcp-mesh/registry/deps/* 2>/dev/null; do
+        echo "--- $f ---"
+        cat "$f" 2>&1 || true
+      done
+      echo ""
+      echo "===== running processes ====="
+      ps -ef | grep -E "python|node|meshctl|registry" | grep -v grep || true
+      echo ""
+      echo "===== listening ports ====="
+      ss -tnlp 2>/dev/null | head -30 || netstat -tnlp 2>/dev/null | head -30 || true
+      echo ""
+      echo "===== meshctl list (raw) ====="
+      meshctl list 2>&1 || true
+    workdir: /workspace
+    capture: diag_after_stop
+    ignore_errors: true
 
   - name: "Verify only ts-simple-agent remains"
     handler: shell
@@ -134,19 +249,17 @@ test:
     handler: wait
     seconds: 8
 
-  # DIAGNOSTIC: capture full state before the failing assertion. Triaging issue
-  # where rejoined agent's process is alive but it never registers with the registry.
-  - name: "DIAGNOSTIC: capture agent + registry state on rejoin"
+  - name: "DIAGNOSTIC: state after rejoin"
     handler: shell
     command: |
-      echo "===== AGENT LOG (py-simple-agent) ====="
-      cat ~/.mcp-mesh/logs/py-simple-agent.log 2>&1 | tail -200 || echo "(no agent log)"
-      echo ""
-      echo "===== REGISTRY LOG ====="
-      cat ~/.mcp-mesh/logs/registry.log 2>&1 | tail -100 || echo "(no registry log)"
+      echo "===== ALL AGENT LOGS ====="
+      for log in ~/.mcp-mesh/logs/*.log; do
+        echo "--- $log ---"
+        tail -200 "$log" 2>&1 || echo "(unreadable)"
+      done
       echo ""
       echo "===== ~/.mcp-mesh STATE ====="
-      find ~/.mcp-mesh -type f 2>&1 | head -50
+      find ~/.mcp-mesh -type f 2>&1 | head -60
       echo ""
       echo "===== pids/ contents ====="
       for f in ~/.mcp-mesh/pids/*; do
@@ -169,7 +282,7 @@ test:
       echo "===== meshctl list (raw) ====="
       meshctl list 2>&1 || true
     workdir: /workspace
-    capture: rejoin_diagnostic
+    capture: diag_after_rejoin
     ignore_errors: true
 
   - name: "Verify both agents present after rejoin"
