@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"mcp-mesh/src/core/cli/lifecycle"
 )
 
 // isLocalhostRegistry checks if the registry host is localhost/local.
@@ -36,6 +38,10 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 	pm.mutex.Unlock()
 	quiet, _ := cmd.Flags().GetBool("quiet")
 
+	// Resolve group-id for UI dep registration (only matters when --ui is set
+	// and we're a forked-detach child, but harmless in other paths).
+	group := resolveGroupID()
+
 	// Acquire signal handler early so SIGTERM is caught by our handler even
 	// during registry startup (prevents orphaned subprocesses if meshctl stop
 	// sends SIGTERM before the monitoring goroutine is set up).
@@ -55,6 +61,8 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 				fmt.Printf("Registry already running at %s, starting UI server only\n", registryURL)
 			}
 			maybeStartUIServer(cmd, config, registryURL)
+			// Register the UI sentinel so refcount sees this group as a UI dep.
+			registerInvocationDeps(group, nil, true, quiet)
 
 			// Monitor UI process — exit if killed externally.
 			// Retry PID file reads since the UI server writes its PID
@@ -152,11 +160,9 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 		return nil
 	})
 
-	// Write PID file for registry process (reuse pidMgr from constraint check)
-	if pidErr == nil {
-		if err := pidMgr.WritePID("registry", processInfo.PID); err != nil && !quiet {
-			fmt.Printf("Warning: failed to write registry PID file: %v\n", err)
-		}
+	// Write registry PID file via lifecycle (canonical writer for service PIDs).
+	if err := lifecycle.WriteService(lifecycle.ServiceRegistry, processInfo.PID); err != nil && !quiet {
+		fmt.Printf("Warning: failed to write registry PID file: %v\n", err)
 	}
 
 	detach, _ := cmd.Flags().GetBool("detach")
@@ -167,11 +173,13 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 		}
 		// Start UI server if --ui flag is set (detach mode)
 		maybeStartUIServer(cmd, config, config.GetRegistryURL())
+		registerInvocationDeps(group, nil, startUI, quiet)
 		return nil
 	}
 
 	// Start UI server if --ui flag is set (before blocking on signals)
 	maybeStartUIServer(cmd, config, config.GetRegistryURL())
+	registerInvocationDeps(group, nil, startUI, quiet)
 
 	// Foreground mode - wait for signal
 	if !quiet {
@@ -247,12 +255,9 @@ func startRegistryWithOptions(config *CLIConfig, detach bool, cmd *cobra.Command
 		// Close parent's copy of log file — child process has its own file descriptor
 		logFile.Close()
 
-		// Write PID file for registry
-		pm, err := NewPIDManager()
-		if err == nil {
-			if err := pm.WritePID("registry", registryCmd.Process.Pid); err != nil {
-				fmt.Printf("Warning: failed to write PID file for registry: %v\n", err)
-			}
+		// Write PID file for registry via lifecycle.
+		if err := lifecycle.WriteService(lifecycle.ServiceRegistry, registryCmd.Process.Pid); err != nil {
+			fmt.Printf("Warning: failed to write PID file for registry: %v\n", err)
 		}
 
 		// Record the process

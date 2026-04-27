@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"mcp-mesh/src/core/cli/lifecycle"
 )
 
 // Language constants for agent detection
@@ -98,6 +100,20 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 	config, err := LoadConfig()
 	if err != nil {
 		return fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	// Ensure lifecycle directories exist and run a GC sweep so stale entries
+	// from previous crashed runs don't confuse refcount checks. Sweep NEVER
+	// kills processes — it only removes bookkeeping for already-dead PIDs.
+	if err := lifecycle.EnsureDirs(); err != nil {
+		return fmt.Errorf("failed to create lifecycle dirs: %w", err)
+	}
+	if _, err := lifecycle.Sweep(); err != nil {
+		// GC failures are non-fatal — log and continue.
+		quiet, _ := cmd.Flags().GetBool("quiet")
+		if !quiet {
+			fmt.Printf("Warning: GC sweep at startup: %v\n", err)
+		}
 	}
 
 	// Load environment file if specified
