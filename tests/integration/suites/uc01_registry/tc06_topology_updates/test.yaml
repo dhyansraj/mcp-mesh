@@ -126,13 +126,51 @@ test:
   # === STEP 4: Start agent 1 again, verify 2 agents ===
   - name: "Rejoin first agent (py-simple-agent)"
     handler: shell
-    command: "meshctl start py-simple-agent/main.py -d"
+    command: "meshctl start py-simple-agent/main.py -d --debug"
     workdir: /workspace
     capture: rejoin_1
 
   - name: "Wait for rejoin registration"
     handler: wait
     seconds: 8
+
+  # DIAGNOSTIC: capture full state before the failing assertion. Triaging issue
+  # where rejoined agent's process is alive but it never registers with the registry.
+  - name: "DIAGNOSTIC: capture agent + registry state on rejoin"
+    handler: shell
+    command: |
+      echo "===== AGENT LOG (py-simple-agent) ====="
+      cat ~/.mcp-mesh/logs/py-simple-agent.log 2>&1 | tail -200 || echo "(no agent log)"
+      echo ""
+      echo "===== REGISTRY LOG ====="
+      cat ~/.mcp-mesh/logs/registry.log 2>&1 | tail -100 || echo "(no registry log)"
+      echo ""
+      echo "===== ~/.mcp-mesh STATE ====="
+      find ~/.mcp-mesh -type f 2>&1 | head -50
+      echo ""
+      echo "===== pids/ contents ====="
+      for f in ~/.mcp-mesh/pids/*; do
+        echo "--- $f ---"
+        cat "$f" 2>&1 || true
+      done
+      echo ""
+      echo "===== registry/deps contents ====="
+      for f in ~/.mcp-mesh/registry/deps/* 2>/dev/null; do
+        echo "--- $f ---"
+        cat "$f" 2>&1 || true
+      done
+      echo ""
+      echo "===== running processes ====="
+      ps -ef | grep -E "python|node|meshctl|registry" | grep -v grep || true
+      echo ""
+      echo "===== listening ports ====="
+      ss -tnlp 2>/dev/null | head -30 || netstat -tnlp 2>/dev/null | head -30 || true
+      echo ""
+      echo "===== meshctl list (raw) ====="
+      meshctl list 2>&1 || true
+    workdir: /workspace
+    capture: rejoin_diagnostic
+    ignore_errors: true
 
   - name: "Verify both agents present after rejoin"
     handler: shell
