@@ -38,7 +38,7 @@ k8s:
   api_url: http://192.168.10.50:9999
 # Execution settings
 execution:
-  max_workers: 48 # concurrent tests in docker mode
+  max_workers: 60 # concurrent tests in docker mode
   timeout: 300 # seconds per test
 # Legacy defaults (for compatibility)
 defaults:
