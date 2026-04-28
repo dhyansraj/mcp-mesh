@@ -761,6 +761,12 @@ jobs:
           # Update @mcpmesh/core dependency from file: to npm version
           sed -i 's|"@mcpmesh/core": "file:../core/typescript"|"@mcpmesh/core": "'"${VERSION}"'"|' package.json
 
+          # Drop the committed lockfile so npm install resolves @mcpmesh/core from
+          # the updated package.json (registry) instead of honoring the lockfile's
+          # `file:../core/typescript` link, which in CI points at an empty dir
+          # (build artifacts are gitignored). See #830 for the failure trace.
+          rm -f package-lock.json
+
           echo "Updated package.json:"
           cat package.json
 
