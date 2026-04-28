@@ -640,10 +640,11 @@ case where the dependency wasn't resolved.
 **Watch mode doesn't pick up changes.** Verify that the file you edited is in
 the same directory that `meshctl start` is watching.
 
-**Agent ports change on every restart.** When using `-w` (watch mode), meshctl
-starts agents with the HTTP port set to `0` -- the OS assigns a random available
-port. This is intentional: mesh discovers agents by capability name through the
-registry (not by URL), so the actual port number doesn't matter.
+**Agent ports stay stable across reloads.** When using `-w` (watch mode),
+meshctl waits for the previous process to fully exit before spawning the new
+one, so the agent re-binds to the same configured port every time. Watch mode
+also works for `@mesh.route` API apps (FastAPI, Express, Spring Boot) — the
+framework's fixed port is honored on every reload.
 
 ## Recap
 

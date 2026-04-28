@@ -86,7 +86,7 @@ test:
           mkdir -p /out/m2-repo && \
           cp -r /src-host/src/runtime/java/* /src/mcp-mesh/src/runtime/java/ && \
           cd /src/mcp-mesh/src/runtime/java && \
-          mvn install -DskipTests -q && \
+          mvn install -DskipTests -Dskip.rust.build=true -q && \
           find . -name '*.jar' -path '*/target/*' ! -name '*-sources.jar' ! -name '*-javadoc.jar' | while read jar; do
             cp \"\$jar\" /out/java-jars/
             echo \"Copied: \$jar\"

@@ -35,11 +35,19 @@ docker:
 defaults:
   timeout: 600 # 10 minutes per test
 execution:
-  max_workers: 4 # DAG-based parallel builds
+  max_workers: 8 # DAG-based parallel builds
 packages:
   mode: local
 standalone:
   type: remote
+# ============================================================
+# DO NOT CHANGE ssh section below
+# beelink5 avoids CPU contention with k3s control plane on beelink1
+# api_url/local_path/mount_path are required for NFS path translation
+# ============================================================
 ssh:
-  host: beelink1
+  host: beelink5
   runner_dir: /tmp/tsuite
+  api_url: http://192.168.10.50:9999
+  local_path: /Users/dhyanraj/workspace
+  mount_path: /mnt/workspace

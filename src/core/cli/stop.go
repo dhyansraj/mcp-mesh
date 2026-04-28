@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"mcp-mesh/src/core/cli/lifecycle"
 )
 
 // NewStopCommand creates the stop command
@@ -20,24 +23,29 @@ func NewStopCommand() *cobra.Command {
 		Short: "Stop detached agents and registry",
 		Long: `Stop agents and/or registry running in detached mode.
 
-Without arguments, stops all agents and the registry.
-With name argument(s), stops only those specific agent(s).
+Without arguments, stops all agents, the UI server, and the registry.
+With name argument(s), stops only those specific agent(s); the registry/UI
+servers are kept alive if other agents still depend on them.
 
 Examples:
-  meshctl stop                    # Stop all agents + registry
+  meshctl stop                    # Stop all agents + UI + registry
   meshctl stop my-agent           # Stop specific agent
   meshctl stop agent1 agent2      # Stop multiple agents
-  meshctl stop --registry         # Stop only registry
-  meshctl stop --agents           # Stop all agents, keep registry
-  meshctl stop --keep-registry    # Stop all agents, keep registry (alias)
+  meshctl stop --registry         # Stop only the registry (force-kill, warns if deps)
+  meshctl stop --ui               # Stop only the UI server (force-kill, warns if deps)
+  meshctl stop --agents           # Stop all agents, keep registry/UI
+  meshctl stop --keep-registry    # Stop everything except the registry
+  meshctl stop --keep-ui          # Stop everything except the UI server
   meshctl stop --clean            # Stop all + delete db, logs, pids`,
 		Args: cobra.ArbitraryArgs,
 		RunE: runStopCommand,
 	}
 
-	cmd.Flags().Bool("registry", false, "Stop only the registry")
-	cmd.Flags().Bool("agents", false, "Stop all agents, keep registry running")
-	cmd.Flags().Bool("keep-registry", false, "Stop all agents, keep registry running (alias for --agents)")
+	cmd.Flags().Bool("registry", false, "Stop only the registry (force-kill; WARNs if other groups still depend on it)")
+	cmd.Flags().Bool("ui", false, "Stop only the UI server (force-kill; WARNs if other groups still depend on it)")
+	cmd.Flags().Bool("agents", false, "Stop all agents, keep registry and UI server running")
+	cmd.Flags().Bool("keep-registry", false, "Stop everything except the registry")
+	cmd.Flags().Bool("keep-ui", false, "Stop everything except the UI server")
 	cmd.Flags().Int("timeout", 10, "Shutdown timeout in seconds per process")
 	cmd.Flags().Bool("force", false, "Force kill without graceful shutdown")
 	cmd.Flags().Bool("quiet", false, "Suppress output messages")
@@ -48,49 +56,60 @@ Examples:
 
 func runStopCommand(cmd *cobra.Command, args []string) error {
 	registryOnly, _ := cmd.Flags().GetBool("registry")
+	uiOnly, _ := cmd.Flags().GetBool("ui")
 	agentsOnly, _ := cmd.Flags().GetBool("agents")
 	keepRegistry, _ := cmd.Flags().GetBool("keep-registry")
+	keepUI, _ := cmd.Flags().GetBool("keep-ui")
 	timeout, _ := cmd.Flags().GetInt("timeout")
 	force, _ := cmd.Flags().GetBool("force")
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	clean, _ := cmd.Flags().GetBool("clean")
 
-	// --keep-registry is alias for --agents
-	if keepRegistry {
-		agentsOnly = true
-	}
-
 	// Validate flag combinations
-	if registryOnly && agentsOnly {
-		return fmt.Errorf("cannot use --registry and --agents together")
+	if registryOnly && uiOnly {
+		return fmt.Errorf("cannot use --registry and --ui together")
+	}
+	if (registryOnly || uiOnly) && agentsOnly {
+		return fmt.Errorf("cannot use --registry/--ui with --agents")
 	}
 
-	// --clean only works when stopping all (no args, not with --registry or --agents)
-	if clean && (len(args) > 0 || registryOnly || agentsOnly) {
-		return fmt.Errorf("--clean can only be used when stopping all processes (no agent name, --registry, or --agents)")
+	// --clean only works when stopping all (no args, not with --registry/--ui/--agents)
+	if clean && (len(args) > 0 || registryOnly || uiOnly || agentsOnly) {
+		return fmt.Errorf("--clean can only be used when stopping all processes")
 	}
 
-	// Create PID manager
+	// Create PID manager (still used by --clean and the suggestion helper)
 	pm, err := NewPIDManager()
 	if err != nil {
 		return fmt.Errorf("failed to initialize PID manager: %w", err)
 	}
 
-	// Clean stale PID files first
-	cleaned, _ := pm.CleanStalePIDFiles()
-	if len(cleaned) > 0 && !quiet {
-		for _, name := range cleaned {
-			fmt.Printf("Cleaned stale PID file for: %s\n", name)
+	// GC sweep — drops dead-PID bookkeeping (agent .pid + .group, stale wrapper
+	// markers, dead deps entries, empty deps files). NEVER kills processes.
+	// Subsumes the legacy pm.CleanStalePIDFiles() call.
+	if report, sweepErr := lifecycle.Sweep(); sweepErr == nil && !quiet {
+		if report.DeadAgentPIDsCleaned > 0 || report.StaleGroupFilesPruned > 0 ||
+			report.StaleWrapperPIDs > 0 || report.StaleWatcherPIDs > 0 ||
+			report.StaleDepsEntries > 0 || report.EmptyDepsFilesRemoved > 0 {
+			fmt.Printf("GC: cleaned %d dead PID(s), %d orphan group file(s), %d stale wrapper(s), %d stale watcher(s), %d dead deps entry(ies), %d empty deps file(s)\n",
+				report.DeadAgentPIDsCleaned, report.StaleGroupFilesPruned,
+				report.StaleWrapperPIDs, report.StaleWatcherPIDs,
+				report.StaleDepsEntries, report.EmptyDepsFilesRemoved)
 		}
 	}
 
+	// --force shrinks the SIGTERM phase to zero so KillVerifyAndCleanup goes
+	// straight to SIGKILL.
 	shutdownTimeout := time.Duration(timeout) * time.Second
+	if force {
+		shutdownTimeout = 0
+	}
 
 	// Handle specific agent stop (one or more names)
 	if len(args) > 0 {
 		var failures []string
 		for _, name := range args {
-			if err := stopSpecificAgent(pm, name, shutdownTimeout, force, quiet); err != nil {
+			if err := stopSpecificAgent(name, shutdownTimeout, quiet, keepRegistry, keepUI); err != nil {
 				failures = append(failures, fmt.Sprintf("%s: %v", name, err))
 				if !quiet {
 					fmt.Printf("Warning: failed to stop %s: %v\n", name, err)
@@ -103,18 +122,23 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Handle --registry flag
+	// --registry: force-kill only the registry, after WARNing about deps.
 	if registryOnly {
-		return stopRegistry(pm, shutdownTimeout, force, quiet)
+		return stopServiceForce(lifecycle.ServiceRegistry, "registry", shutdownTimeout, quiet)
 	}
 
-	// Handle --agents flag (stop agents, keep registry)
+	// --ui: force-kill only the UI, after WARNing about deps.
+	if uiOnly {
+		return stopServiceForce(lifecycle.ServiceUI, "UI server", shutdownTimeout, quiet)
+	}
+
+	// --agents: stop all agents, keep registry and UI running regardless.
 	if agentsOnly {
-		return stopAllAgents(pm, shutdownTimeout, force, quiet)
+		return stopAllAgents(shutdownTimeout, quiet)
 	}
 
-	// Default: stop all (agents + registry)
-	if err := stopAll(pm, shutdownTimeout, force, quiet); err != nil {
+	// Default: stop everything, modulated by --keep-registry / --keep-ui.
+	if err := stopAll(shutdownTimeout, quiet, keepRegistry, keepUI); err != nil {
 		return err
 	}
 
@@ -128,275 +152,173 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// stopSpecificAgent stops all instances (flat and/or watch-mode) of an agent by name.
-// Returns an error if no running instances were found.
+// stopSpecificAgent stops a single agent by name and unregisters its
+// dependencies on the registry/UI. The registry and UI are NOT stopped here
+// — they're refcounted via deps files and only stopped when the last
+// dependent group goes away (handled by stopAll).
 //
-// Under the per-parent-PID namespacing scheme, the same agent name may have:
-//   - one flat (non-watch) instance, tracked as <name>.pid
-//   - zero or more watch-mode instances, each tracked as <name>.<parent_pid>.pid
-//     under a different watcher-parent meshctl process
-//
-// We stop all of them and then, for each distinct watcher-parent we touched,
-// decide whether to kill the parent process based on whether any watch-mode
-// agents still live under it.
-func stopSpecificAgent(pm *PIDManager, name string, timeout time.Duration, force, quiet bool) error {
-	foundAny := false
-	stoppedAny := false
-
-	// 1. Flat/non-watch mode instance (if any)
-	if pid, err := pm.ReadPID(name); err == nil {
-		foundAny = true
-		if !IsProcessAlive(pid) {
-			// Already dead at enumeration time — safe to remove the stale PID
-			// file. Treat this as a successful no-op: the user's intent was
-			// "stop this agent" and the agent is confirmed not running, so the
-			// outer "could not be stopped" error would actively mislead them.
-			if !quiet {
-				fmt.Printf("Agent '%s' is not running (cleaning stale PID file)\n", name)
-			}
-			pm.RemovePID(name)
-			stoppedAny = true
-		} else {
-			if !quiet {
-				fmt.Printf("Stopping agent '%s' (PID: %d)...\n", name, pid)
-			}
-			if err := stopProcess(pid, timeout, force); err != nil {
-				// Process is still alive — preserve the PID file so the user can
-				// retry with `meshctl stop <name>`.
-				if !quiet {
-					fmt.Printf("Warning: failed to stop agent '%s' (PID %d): %v (tracking preserved for retry)\n", name, pid, err)
-				}
-			} else {
-				if !quiet {
-					fmt.Printf("Agent '%s' stopped\n", name)
-				}
-				stoppedAny = true
-				pm.RemovePID(name)
-			}
-		}
-	}
-
-	// 2. All watch-mode instances of this name (may be multiple across different parent PIDs)
-	watchMatches, err := pm.FindWatchAgentsByName(name)
+// Returns an error if no PID file exists for the agent (with a "did you mean"
+// hint), or if the kill couldn't be verified within the timeout. A successful
+// stop removes both <agent>.pid and <agent>.group, and unregisters the agent
+// from registry/deps and ui/deps for its group.
+func stopSpecificAgent(name string, timeout time.Duration, quiet, keepRegistry, keepUI bool) error {
+	entry, err := lifecycle.LookupAgent(name)
 	if err != nil {
-		return fmt.Errorf("failed to enumerate watch-mode instances: %w", err)
+		return fmt.Errorf("lookup %s: %w", name, err)
 	}
-
-	// Track which parents we successfully cleaned up so we can run shared-watcher
-	// cleanup once per parent afterwards. We deliberately only add a parent here
-	// after the agent under it dies — if ANY agent under a parent failed to die,
-	// the parent should NOT be considered for stopWatcherParentIfEmpty so the
-	// watcher stays alive to potentially recover or report the state.
-	touchedParents := make(map[int]bool)
-
-	for _, match := range watchMatches {
-		foundAny = true
-		if !quiet {
-			fmt.Printf("Stopping agent '%s' (PID: %d, watcher parent: %d)...\n", name, match.PID, match.ParentPID)
-		}
-		if err := stopProcess(match.PID, timeout, force); err != nil {
-			// Process survived — do NOT remove the watch-mode PID file, and do NOT
-			// add this parent to touchedParents (so the watcher parent is not killed).
-			if !quiet {
-				fmt.Printf("Warning: failed to stop agent '%s' (PID %d): %v (tracking preserved for retry)\n", name, match.PID, err)
-			}
-		} else {
-			if !quiet {
-				fmt.Printf("Agent '%s' stopped\n", name)
-			}
-			stoppedAny = true
-			pm.RemoveWatchAgentPID(name, match.ParentPID)
-			touchedParents[match.ParentPID] = true
-		}
-	}
-
-	// 3. For each parent we touched, decide whether to stop its watcher process.
-	//    Rule: if the parent has no remaining watch-mode agents alive, stop it.
-	//    Sort parent PIDs before iterating so log output is deterministic across runs.
-	sortedParents := make([]int, 0, len(touchedParents))
-	for parentPID := range touchedParents {
-		sortedParents = append(sortedParents, parentPID)
-	}
-	sort.Ints(sortedParents)
-	for _, parentPID := range sortedParents {
-		stopWatcherParentIfEmpty(pm, name, parentPID, timeout, force, quiet)
-	}
-
-	if !foundAny {
-		suggestions := suggestAgentNames(pm, name)
+	if entry == nil {
+		// Agent not tracked. Suggest similar names if any are running.
+		suggestions := suggestAgentNames(name)
 		if len(suggestions) > 0 {
 			return fmt.Errorf("agent '%s' is not running. Did you mean: %s?",
 				name, strings.Join(quoteStrings(suggestions), ", "))
 		}
 		return fmt.Errorf("agent '%s' is not running", name)
 	}
-	if !stoppedAny {
-		return fmt.Errorf("agent '%s' could not be stopped (still running, tracking preserved for retry)", name)
+
+	// Read the group BEFORE killing — KillVerifyAndCleanup removes the .group
+	// file on success, after which we'd no longer be able to find the right
+	// deps file to unregister from. Distinguish "no .group file" (fine — older
+	// agent or services) from "garbled .group file" (loud warn — silently
+	// treating corruption as no-group would orphan deps entries forever).
+	group, gErr := lifecycle.LookupGroup(name)
+	if gErr != nil && !errors.Is(gErr, lifecycle.ErrNoGroup) {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", gErr)
+		group = ""
 	}
-	// Partial success (some instances died, others survived) is reported via the
-	// per-instance warnings above and returns nil so the overall CLI flow continues.
+
+	// Watch-mode wrapper: if a watcher meshctl owns this agent, kill it FIRST.
+	// Otherwise the watcher would respawn the agent the moment the next file
+	// system event fires (which can be triggered by anything, including unrelated
+	// `git checkout`). Killing the watcher then the agent guarantees no respawn.
+	killWatcherForAgent(name, timeout, quiet)
+
+	if !entry.Alive {
+		if !quiet {
+			fmt.Printf("Agent '%s' is not running (cleaning stale PID file)\n", name)
+		}
+	} else if !quiet {
+		fmt.Printf("Stopping agent '%s' (PID: %d)...\n", name, entry.PID)
+	}
+
+	killed, err := lifecycle.KillVerifyAndCleanup(name, timeout)
+	if err != nil {
+		return fmt.Errorf("agent '%s' could not be stopped (%v) — tracking preserved for retry", name, err)
+	}
+	if killed && !quiet {
+		fmt.Printf("Agent '%s' stopped\n", name)
+	}
+
+	// Unregister from registry/UI deps so refcount can drop to zero.
+	if group != "" {
+		_ = lifecycle.UnregisterDep(lifecycle.ServiceRegistry, group, []string{name})
+		_ = lifecycle.UnregisterDep(lifecycle.ServiceUI, group, []string{name})
+	}
+
+	// Symmetric refcount reap: if this was the last dependent for either
+	// service, stop the service too (subject to --keep-* flags). Without this,
+	// `meshctl stop <agent>` leaves the registry/UI orphaned even when nothing
+	// else depends on them. The mass-stop path goes through stopAll which calls
+	// stopServiceIfRefcountZero — this block does the same for the per-agent
+	// path so both routes converge on the same end state.
+	if !keepRegistry {
+		stopServiceIfRefcountZero(lifecycle.ServiceRegistry, "registry", timeout, quiet)
+	}
+	if !keepUI {
+		stopServiceIfRefcountZero(lifecycle.ServiceUI, "UI server", timeout, quiet)
+	}
 	return nil
 }
 
-// stopWatcherParentIfEmpty stops the watcher-parent meshctl process with the
-// given PID only if it has no remaining live watch-mode agents under it.
+// killWatcherForAgent stops the watch-mode meshctl wrapper that owns the
+// given agent, if any. Reads <agent>.watcher.pid; if the PID is alive, sends
+// SIGTERM (then SIGKILL on timeout) to that meshctl process so it can't
+// respawn the agent after we kill it.
 //
-// Tracking file cleanup is driven by enumeration and invariant-safe:
-//   - Case 1 (live agents remain): prune stale tracking files whose agents
-//     are gone, keep the parent alive, return.
-//   - Case 2 (no live agents, parent already dead): prune all tracking files.
-//   - Case 3 (no live agents, parent still alive, kill succeeds): prune after
-//     kill is confirmed.
-//   - Case 4 (no live agents, parent still alive, kill FAILS): preserve ALL
-//     tracking files so `meshctl stop` can retry later.
+// The watcher's signal handler runs `terminateAgent` on each managed
+// AgentWatcher, so a graceful TERM should also kill the agent — but the
+// caller MUST still kill the agent explicitly afterward to be defensive
+// against signal-handling edge cases (e.g., the watcher already dead but its
+// .pid file stale, or the agent leaking out of the watcher's process group).
 //
-// The invariant is: tracking files for a parent are pruned ONLY when we can
-// prove the parent either didn't need killing (keep-alive) or was successfully
-// killed. A failed kill must leave tracking intact for retry.
-//
-// The `name` argument is used purely for log messages.
-func stopWatcherParentIfEmpty(pm *PIDManager, name string, parentPID int, timeout time.Duration, force, quiet bool) {
-	// Enumerate all watcher-parent tracking entries for this parent PID. Unlike
-	// FindWatchAgentsByParent, this returns entries regardless of whether the
-	// parent process is alive — used to drive stale-file cleanup.
-	allParents, err := pm.FindWatchParentsByPID(parentPID)
-	if err != nil {
-		// Conservative: a transient enumeration error should not cause us to
-		// kill a potentially-healthy parent or touch any tracking files.
-		if !quiet {
-			fmt.Printf("Warning: failed to enumerate watcher-parent tracking for PID %d: %v (keeping alive)\n", parentPID, err)
-		}
+// Idempotent: missing .watcher.pid is a no-op. Failure to verify the kill is
+// logged (when not quiet) but doesn't return an error — the caller's job is
+// to kill the agent regardless.
+func killWatcherForAgent(agent string, timeout time.Duration, quiet bool) {
+	pid, err := lifecycle.ReadWatcherPID(agent)
+	if err != nil || pid == 0 {
 		return
 	}
-
-	remaining, err := pm.FindWatchAgentsByParent(parentPID)
-	if err != nil {
-		if !quiet {
-			fmt.Printf("Warning: failed to enumerate live agents under PID %d: %v (keeping alive)\n", parentPID, err)
-		}
+	if !lifecycle.IsAlive(pid) {
+		// Watcher already gone — just clean the stale sidecar.
+		_ = lifecycle.RemoveWatcher(agent)
 		return
 	}
-
-	// Case 1: live agents remain under this parent — keep it alive and
-	// prune any stale watcher-parent tracking files whose agents are gone.
-	// Safe to prune here because we are NOT attempting to kill the parent;
-	// the parent stays alive and the remaining live agents are tracked by
-	// their own entries.
-	if len(remaining) > 0 {
-		liveNames := make(map[string]bool, len(remaining))
-		for _, r := range remaining {
-			liveNames[r.Name] = true
-		}
-		for _, wp := range allParents {
-			if !liveNames[wp.Name] {
-				pm.RemovePIDFile(wp.PIDFile)
-			}
-		}
-		if !quiet {
-			fmt.Printf("Watcher parent (PID: %d) still has %d agent(s), keeping alive\n", parentPID, len(remaining))
-		}
-		return
-	}
-
-	// Case 2: no live agents under this parent — attempt to kill it.
-	// CRITICAL: do NOT prune tracking files yet. If the kill fails, the
-	// user needs those files intact to retry `meshctl stop`. We prune
-	// ONLY after confirming the parent is dead.
-
-	if !IsProcessAlive(parentPID) {
-		// Parent is already dead (e.g., exited on its own between
-		// enumeration and now). Safe to prune all its tracking files.
-		for _, wp := range allParents {
-			pm.RemovePIDFile(wp.PIDFile)
-		}
-		return
-	}
-
 	if !quiet {
-		fmt.Printf("Stopping watcher for '%s' (PID: %d)...\n", name, parentPID)
+		fmt.Printf("Stopping watcher for '%s' (PID: %d)...\n", agent, pid)
 	}
-
-	// Signal the parent meshctl process directly — NOT its process group — so we don't
-	// take down unrelated siblings sharing the same group (registry, UI, etc).
-	proc, perr := os.FindProcess(parentPID)
-	if perr == nil {
-		if sigErr := proc.Signal(syscall.SIGTERM); sigErr != nil && !quiet {
-			fmt.Printf("Warning: failed to signal watcher for '%s': %v\n", name, sigErr)
-		}
-		// Wait briefly for graceful exit, then force kill.
-		deadline := time.Now().Add(timeout)
-		for time.Now().Before(deadline) {
-			if !IsProcessAlive(parentPID) {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		if IsProcessAlive(parentPID) {
-			proc.Kill()
-			// Bounded poll for zombie reap — see waitForProcessDeath.
-			waitForProcessDeath(parentPID, 500*time.Millisecond)
-		}
-	}
-
-	if IsProcessAlive(parentPID) {
-		// Kill failed — PRESERVE all tracking files so the user can retry.
+	// We can't reuse KillVerifyAndCleanup because that's keyed on the
+	// <name>.pid file convention and would try to remove <agent>.watcher (no
+	// such file). Inline the TERM+poll+KILL dance against the bare PID, then
+	// remove the sidecar by hand.
+	if killProcessByPID(pid, timeout) {
+		_ = lifecycle.RemoveWatcher(agent)
 		if !quiet {
-			fmt.Printf("Warning: watcher for '%s' (PID: %d) may still be running — tracking files preserved\n", name, parentPID)
+			fmt.Printf("Watcher for '%s' stopped\n", agent)
 		}
 		return
 	}
-
 	if !quiet {
-		fmt.Printf("Watcher for '%s' stopped\n", name)
+		fmt.Printf("Warning: watcher for '%s' (PID %d) did not exit cleanly\n", agent, pid)
 	}
-
-	// Parent confirmed dead. Now safe to prune every watcher-parent tracking
-	// file for it. Re-enumerate to catch any file that may have appeared since
-	// the first enumeration (rare but defensive).
-	leftovers, _ := pm.FindWatchParentsByPID(parentPID)
-	for _, wp := range leftovers {
-		pm.RemovePIDFile(wp.PIDFile)
-	}
+	// Even on verify failure, remove the sidecar so a subsequent stop doesn't
+	// keep finding the same dead-process PID. The agent kill that follows
+	// will surface any real "process won't die" condition.
+	_ = lifecycle.RemoveWatcher(agent)
 }
 
-// stopRegistry stops only the registry
-func stopRegistry(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
-	registry, err := pm.GetRegistry()
-	if err != nil {
-		return fmt.Errorf("failed to check registry status: %w", err)
+// killProcessByPID is a lightweight TERM-then-KILL helper for PIDs that don't
+// have a corresponding <name>.pid file in the lifecycle layer (specifically
+// watcher meshctl processes). Returns true on confirmed death (including
+// zombie state — see lifecycle.KillVerifyAndCleanup commentary).
+func killProcessByPID(pid int, timeout time.Duration) bool {
+	if pid <= 0 || !lifecycle.IsAlive(pid) {
+		return true
 	}
-
-	if registry == nil {
-		if !quiet {
-			fmt.Println("Registry is not running in background")
+	// SIGTERM the process group first (the watcher meshctl was started with
+	// Setpgid in forkToBackground, so its group includes the watcher's
+	// agent grandchild). Group signal also helps if the watcher isn't
+	// process-group leader for some reason.
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	_ = syscall.Kill(pid, syscall.SIGTERM)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !lifecycle.IsAlive(pid) {
+			return true
 		}
-		return nil
+		time.Sleep(50 * time.Millisecond)
 	}
-
-	if !quiet {
-		fmt.Printf("Stopping registry (PID: %d)...\n", registry.PID)
+	// Force kill if SIGTERM didn't take.
+	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !lifecycle.IsAlive(pid) {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-
-	if err := stopProcess(registry.PID, timeout, force); err != nil {
-		return fmt.Errorf("failed to stop registry: %w", err)
-	}
-
-	pm.RemovePID("registry")
-
-	if !quiet {
-		fmt.Println("Registry stopped")
-	}
-
-	return nil
+	return !lifecycle.IsAlive(pid)
 }
 
-// stopAllAgents stops all agents but keeps the registry running (parallel)
-func stopAllAgents(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
-	agents, err := pm.GetRunningAgents()
+// stopAllAgents stops every agent on disk in parallel, but never touches the
+// registry or UI services. After the agents die, their group files are gone
+// so deps can be unregistered correctly.
+func stopAllAgents(timeout time.Duration, quiet bool) error {
+	agents, err := lifecycle.ListAgents()
 	if err != nil {
 		return fmt.Errorf("failed to list agents: %w", err)
 	}
-
 	if len(agents) == 0 {
 		if !quiet {
 			fmt.Println("No agents running in background")
@@ -408,69 +330,59 @@ func stopAllAgents(pm *PIDManager, timeout time.Duration, force, quiet bool) err
 		fmt.Printf("Stopping %d agent(s) in parallel...\n", len(agents))
 	}
 
-	// Stop agents in parallel
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var stopped, failed int
+	var (
+		wg                   sync.WaitGroup
+		mu                   sync.Mutex
+		stopped, failed      int
+		// (group, service) -> agent names to unregister, batched per group.
+	)
+	depUnregister := make(map[string]map[string][]string) // service -> group -> agents
 
 	for _, agent := range agents {
 		wg.Add(1)
-		go func(agent PIDInfo) {
+		go func(a lifecycle.AgentEntry) {
 			defer wg.Done()
-
+			// Watch-mode wrapper goes first — see stopSpecificAgent commentary.
+			killWatcherForAgent(a.Name, timeout, quiet)
 			if !quiet {
-				fmt.Printf("Stopping agent '%s' (PID: %d)...\n", agent.Name, agent.PID)
-			}
-
-			if err := stopProcess(agent.PID, timeout, force); err != nil {
 				mu.Lock()
+				fmt.Printf("Stopping agent '%s' (PID: %d)...\n", a.Name, a.PID)
+				mu.Unlock()
+			}
+			_, err := lifecycle.KillVerifyAndCleanup(a.Name, timeout)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
 				if !quiet {
-					fmt.Printf("Failed to stop agent '%s': %v\n", agent.Name, err)
+					fmt.Printf("Failed to stop agent '%s': %v\n", a.Name, err)
 				}
 				failed++
-				mu.Unlock()
 				return
 			}
-
-			pm.RemovePIDFile(agent.PIDFile)
-
-			mu.Lock()
 			stopped++
 			if !quiet {
-				fmt.Printf("Agent '%s' stopped\n", agent.Name)
+				fmt.Printf("Agent '%s' stopped\n", a.Name)
 			}
-			mu.Unlock()
+			if a.Group != "" {
+				for _, svc := range []string{lifecycle.ServiceRegistry, lifecycle.ServiceUI} {
+					if depUnregister[svc] == nil {
+						depUnregister[svc] = map[string][]string{}
+					}
+					gid := a.Group.String()
+					depUnregister[svc][gid] = append(depUnregister[svc][gid], a.Name)
+				}
+			}
 		}(agent)
 	}
-
 	wg.Wait()
 
-	// Stop watcher parent processes sequentially after all agents are stopped.
-	// Build the set of distinct parent PIDs from the killed watch-mode agents,
-	// then call stopWatcherParentIfEmpty once per parent. This avoids double-
-	// signalling the same parent when multiple agents share it (#706).
-	//
-	// The representative name is used only for log output inside
-	// stopWatcherParentIfEmpty; file cleanup is driven by enumeration, so
-	// watcher-parent tracking files for all agents sharing the parent are
-	// pruned even though we only call the function once per parent.
-	parentPIDs := make(map[int]string) // parentPID -> representative name (for log messages)
-	for _, agent := range agents {
-		if agent.ParentPID > 0 {
-			if _, ok := parentPIDs[agent.ParentPID]; !ok {
-				parentPIDs[agent.ParentPID] = agent.Name
-			}
+	// Apply deps unregistration once per (service, group). Must happen AFTER
+	// all kills so a single deps-file rewrite captures the full batch.
+	for svc, byGroup := range depUnregister {
+		for gid, names := range byGroup {
+			g, _ := lifecycle.Parse(gid)
+			_ = lifecycle.UnregisterDep(svc, g, names)
 		}
-	}
-	// Sort parent PIDs before iterating so log output is deterministic across
-	// runs (matches the pattern in stopSpecificAgent).
-	sortedParents := make([]int, 0, len(parentPIDs))
-	for pid := range parentPIDs {
-		sortedParents = append(sortedParents, pid)
-	}
-	sort.Ints(sortedParents)
-	for _, parentPID := range sortedParents {
-		stopWatcherParentIfEmpty(pm, parentPIDs[parentPID], parentPID, timeout, force, quiet)
 	}
 
 	if !quiet {
@@ -480,274 +392,169 @@ func stopAllAgents(pm *PIDManager, timeout time.Duration, force, quiet bool) err
 		}
 		fmt.Println()
 	}
-
 	if failed > 0 {
 		return fmt.Errorf("%d agent(s) failed to stop", failed)
 	}
-
 	return nil
 }
 
-// stopAll stops all agents and the registry (agents in parallel, registry last)
-func stopAll(pm *PIDManager, timeout time.Duration, force, quiet bool) error {
-	processes, err := pm.ListRunningProcesses()
-	if err != nil {
-		return fmt.Errorf("failed to list processes: %w", err)
-	}
-
-	// Separate agents, watcher parents, UI, and registry
-	var agents []PIDInfo
-	var watcherParents []PIDInfo
-	var uiProc *PIDInfo
-	var registry *PIDInfo
-	for _, proc := range processes {
-		if !proc.Running {
-			continue
-		}
-		switch proc.Type {
-		case "registry":
-			registry = &proc
-		case "ui":
-			uiProc = &proc
-		case "watcher-parent":
-			watcherParents = append(watcherParents, proc)
-		default:
-			agents = append(agents, proc)
-		}
-	}
-
-	if len(agents) == 0 && len(watcherParents) == 0 && uiProc == nil && registry == nil {
-		if !quiet {
-			fmt.Println("No agents running in background. Use 'meshctl start --detach' to run agents in background.")
-		}
-		return nil
-	}
-
-	var stopped, failed int
-	var mu sync.Mutex
-
-	// Stop agents in parallel
-	if len(agents) > 0 {
-		if !quiet {
-			fmt.Printf("Stopping %d agent(s) in parallel...\n", len(agents))
-		}
-
-		var wg sync.WaitGroup
-		for _, agent := range agents {
-			wg.Add(1)
-			go func(proc PIDInfo) {
-				defer wg.Done()
-
-				if !quiet {
-					fmt.Printf("Stopping agent '%s' (PID: %d)...\n", proc.Name, proc.PID)
-				}
-
-				if err := stopProcess(proc.PID, timeout, force); err != nil {
-					mu.Lock()
-					if !quiet {
-						fmt.Printf("Failed to stop agent '%s': %v\n", proc.Name, err)
-					}
-					failed++
-					mu.Unlock()
-					return
-				}
-
-				pm.RemovePIDFile(proc.PIDFile)
-
-				mu.Lock()
-				stopped++
-				if !quiet {
-					fmt.Printf("Agent '%s' stopped\n", proc.Name)
-				}
-				mu.Unlock()
-			}(agent)
-		}
-		wg.Wait()
-	}
-
-	// Stop watcher parent processes after agents are stopped.
-	// These are meshctl CLI processes that host watcher goroutines (#706).
-	// In stopAll, we intentionally kill all watcher parents in parallel since
-	// we're tearing everything down — no need for the shared-parent counting
-	// logic used by stopAllAgents/stopWatcherParent.
-	if len(watcherParents) > 0 {
-		var wg sync.WaitGroup
-		for _, wp := range watcherParents {
-			wg.Add(1)
-			go func(proc PIDInfo) {
-				defer wg.Done()
-
-				if !quiet {
-					fmt.Printf("Stopping watcher '%s' (PID: %d)...\n", proc.Name, proc.PID)
-				}
-
-				if err := stopProcess(proc.PID, timeout, force); err != nil {
-					mu.Lock()
-					if !quiet {
-						fmt.Printf("Failed to stop watcher '%s': %v\n", proc.Name, err)
-					}
-					failed++
-					mu.Unlock()
-					return
-				}
-
-				pm.RemovePIDFile(proc.PIDFile)
-
-				mu.Lock()
-				stopped++
-				if !quiet {
-					fmt.Printf("Watcher '%s' stopped\n", proc.Name)
-				}
-				mu.Unlock()
-			}(wp)
-		}
-		wg.Wait()
-	}
-
-	// Stop UI server before registry (UI depends on registry)
-	if uiProc != nil {
-		if !quiet {
-			fmt.Printf("Stopping UI server (PID: %d)...\n", uiProc.PID)
-		}
-
-		if err := stopProcess(uiProc.PID, timeout, force); err != nil {
-			if !quiet {
-				fmt.Printf("Failed to stop UI server: %v\n", err)
-			}
-			failed++
-		} else {
-			pm.RemovePIDFile(uiProc.PIDFile)
-			stopped++
-			if !quiet {
-				fmt.Println("UI server stopped")
-			}
-		}
-	}
-
-	// Stop registry last (sequential)
-	if registry != nil {
-		if !quiet {
-			fmt.Printf("Stopping registry (PID: %d)...\n", registry.PID)
-		}
-
-		if err := stopProcess(registry.PID, timeout, force); err != nil {
-			if !quiet {
-				fmt.Printf("Failed to stop registry: %v\n", err)
-			}
-			failed++
-		} else {
-			pm.RemovePIDFile(registry.PIDFile)
-			stopped++
-			if !quiet {
-				fmt.Println("Registry stopped")
-			}
-		}
-	}
-
-	if !quiet {
-		fmt.Printf("\nStopped %d process(es)", stopped)
-		if failed > 0 {
-			fmt.Printf(", %d failed", failed)
-		}
-		fmt.Println()
-	}
-
-	if failed > 0 {
-		return fmt.Errorf("%d process(es) failed to stop", failed)
-	}
-
-	return nil
-}
-
-// waitForProcessDeath polls IsProcessAlive for up to `limit` after a kill
-// signal, returning true if the process died within the window. Used to let
-// zombies be reaped across process boundaries — IsProcessAlive returns true
-// for unreaped zombies because signal 0 only fails with ESRCH after the
-// kernel fully reclaims the PID. A fixed short sleep is not enough when the
-// killing meshctl is not the agent's parent: reaping depends on the spawning
-// meshctl's exec.Cmd.Wait goroutine being scheduled, which may take longer
-// than a handful of milliseconds on a loaded system.
-func waitForProcessDeath(pid int, limit time.Duration) bool {
-	deadline := time.Now().Add(limit)
-	for time.Now().Before(deadline) {
-		if !IsProcessAlive(pid) {
-			return true
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return !IsProcessAlive(pid)
-}
-
-// stopProcess gracefully stops a process and its entire process group
-// (SIGTERM to process group, then SIGKILL after timeout).
-// This ensures child processes (e.g., npx -> tsx -> node) are also terminated.
+// stopAll stops agents, then UI, then registry. UI/registry are skipped if
+// the corresponding --keep-* flag is set OR if their refcount is non-zero
+// after the agents die (means another group still depends on them).
 //
-// Returns nil only if the process is confirmed dead. Returns an error if the
-// process is still alive after the SIGKILL path (D-state, hung zombie parent,
-// permission issue, pid reuse, etc.). Callers rely on this return value to
-// decide whether to remove tracking files or preserve them for retry.
-func stopProcess(pid int, timeout time.Duration, force bool) error {
-	// Verify process exists
-	if !IsProcessAlive(pid) {
-		return nil // Already dead
-	}
-
-	// If force, skip graceful shutdown - kill entire process group immediately
-	if force {
-		if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
-			// Try single process kill as fallback
-			if process, err := os.FindProcess(pid); err == nil {
-				process.Kill()
-			}
-		}
-		// Let the kernel propagate the SIGKILL before the final liveness check.
-		if !waitForProcessDeath(pid, 500*time.Millisecond) {
-			return fmt.Errorf("process %d still alive after SIGKILL", pid)
-		}
-		return nil
-	}
-
-	// Send SIGTERM to the entire process group for graceful shutdown
-	// The negative PID means "kill process group with PGID = abs(pid)"
-	// This works because we set Setpgid: true when starting, making PID = PGID
-	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
-		// Process group might not exist (old agent without Setpgid)
-		// Fall back to single process termination
-		if process, err := os.FindProcess(pid); err == nil {
-			process.Signal(syscall.SIGTERM)
-		} else if !IsProcessAlive(pid) {
-			return nil // Process already dead
+// Refcount is the canonical signal — even with --keep-* unset, a service
+// stays up if a separate `meshctl start` invocation registered a dep on it.
+// Stopping a service while another group depends on it is the explicit job
+// of `meshctl stop --registry` / `--ui`.
+func stopAll(timeout time.Duration, quiet, keepRegistry, keepUI bool) error {
+	if err := stopAllAgents(timeout, quiet); err != nil {
+		// Continue to service shutdown even if some agents failed; the user's
+		// intent was "stop everything" and partial progress is preferable to
+		// leaving services up.
+		if !quiet {
+			fmt.Printf("Warning: %v\n", err)
 		}
 	}
 
-	// Wait for process to exit
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if !IsProcessAlive(pid) {
-			return nil // Process exited gracefully
-		}
-		time.Sleep(100 * time.Millisecond)
+	// Drop sentinel deps entries (e.g. "_ui_only_" from a standalone
+	// `meshctl start --ui`) before refcount checks. Sentinels exist to keep
+	// per-agent stops from accidentally tearing down a separately-started
+	// service, but a no-args `meshctl stop` is the universal shutdown — the
+	// user's intent is "everything off", and a standalone UI must come down
+	// with it (only --keep-ui can save it).
+	if !keepUI {
+		_ = lifecycle.PruneSentinelDeps(lifecycle.ServiceUI)
+	}
+	if !keepRegistry {
+		_ = lifecycle.PruneSentinelDeps(lifecycle.ServiceRegistry)
 	}
 
-	// Timeout reached, force kill the entire process group
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil {
-		// Fall back to single process kill
-		if process, err := os.FindProcess(pid); err == nil {
-			process.Kill()
-		}
+	// UI before registry (UI depends on registry).
+	if !keepUI {
+		stopServiceIfRefcountZero(lifecycle.ServiceUI, "UI server", timeout, quiet)
+	} else if !quiet {
+		fmt.Println("Keeping UI server alive (--keep-ui)")
 	}
 
-	// Give the kernel a brief window to propagate SIGKILL and tear the
-	// process down. SIGKILL usually succeeds, but there are edge cases
-	// (D-state uninterruptible sleep, unreaped zombie with a hung parent,
-	// permission denial, PID reuse, etc.) where the process may still
-	// appear alive; we must report that to the caller so it can preserve
-	// tracking files for a retry instead of silently losing them.
-	if !waitForProcessDeath(pid, 500*time.Millisecond) {
-		return fmt.Errorf("process %d still alive after SIGKILL", pid)
+	if !keepRegistry {
+		stopServiceIfRefcountZero(lifecycle.ServiceRegistry, "registry", timeout, quiet)
+	} else if !quiet {
+		fmt.Println("Keeping registry alive (--keep-registry)")
 	}
 
 	return nil
+}
+
+// stopServiceIfRefcountZero stops the service ONLY when no group has agents
+// listed in its deps directory. Otherwise leaves it alone — another live
+// `meshctl start` group still depends on it.
+//
+// The whole refcount-check + LookupService + KillVerifyAndCleanup sequence is
+// held inside WithLifecycleLock so a concurrent `meshctl start` cannot
+// RegisterDep between the check and the kill — without the lock, a winning
+// start would write the dep right after IsServiceRefcountZero returns true,
+// then we'd kill the service the new dependent just registered against.
+//
+// Holding the lock across KillVerifyAndCleanup is safe: that helper only
+// touches the .pid file via os.Remove + sends signals; it does NOT itself
+// acquire the lifecycle lock, so no recursive-flock deadlock.
+func stopServiceIfRefcountZero(service, displayName string, timeout time.Duration, quiet bool) {
+	_ = lifecycle.WithLifecycleLock(func() error {
+		zero, err := lifecycle.IsServiceRefcountZero(service)
+		if err != nil {
+			if !quiet {
+				fmt.Printf("Warning: refcount check for %s failed: %v\n", displayName, err)
+			}
+			return nil
+		}
+		if !zero {
+			groups, _ := lifecycle.DepsForService(service)
+			if !quiet {
+				fmt.Printf("Keeping %s alive (refcount=%d, group(s): %s)\n",
+					displayName, len(groups), formatGroups(groups))
+			}
+			return nil
+		}
+
+		// Only stop the service if its PID file is present and the process is alive.
+		info, err := lifecycle.LookupService(service)
+		if err != nil || info == nil {
+			return nil
+		}
+		if !info.Alive {
+			_ = lifecycle.RemoveService(service)
+			return nil
+		}
+		if !quiet {
+			fmt.Printf("Stopping %s (PID: %d)...\n", displayName, info.PID)
+		}
+		if _, err := lifecycle.KillVerifyAndCleanup(service, timeout); err != nil {
+			if !quiet {
+				fmt.Printf("Failed to stop %s: %v\n", displayName, err)
+			}
+			return nil
+		}
+		if !quiet {
+			fmt.Printf("%s stopped\n", displayName)
+		}
+		return nil
+	})
+}
+
+// stopServiceForce always kills the service. If groups still depend on it,
+// emit a stderr WARN listing the dependent group-ids first; then proceed.
+// Per user decision Q2: --registry / --ui never refuse — they always force-kill
+// and just warn loudly.
+func stopServiceForce(service, displayName string, timeout time.Duration, quiet bool) error {
+	groups, err := lifecycle.DepsForService(service)
+	if err != nil {
+		return fmt.Errorf("refcount check for %s: %w", displayName, err)
+	}
+	if len(groups) > 0 {
+		fmt.Fprintf(os.Stderr, "WARN: stopping %s with %d dependent group(s): %s\n",
+			displayName, len(groups), formatGroups(groups))
+	}
+
+	info, err := lifecycle.LookupService(service)
+	if err != nil {
+		return err
+	}
+	if info == nil {
+		if !quiet {
+			fmt.Printf("%s is not running in background\n", displayName)
+		}
+		return nil
+	}
+	if !info.Alive {
+		_ = lifecycle.RemoveService(service)
+		if !quiet {
+			fmt.Printf("%s is not running (cleaned stale PID file)\n", displayName)
+		}
+		return nil
+	}
+	if !quiet {
+		fmt.Printf("Stopping %s (PID: %d)...\n", displayName, info.PID)
+	}
+	if _, err := lifecycle.KillVerifyAndCleanup(service, timeout); err != nil {
+		return fmt.Errorf("failed to stop %s: %w", displayName, err)
+	}
+	if !quiet {
+		fmt.Printf("%s stopped\n", displayName)
+	}
+	return nil
+}
+
+// formatGroups joins GroupIDs into a comma-separated display string. Order
+// is whatever DepsForService returned (already sorted lexicographically).
+func formatGroups(groups []lifecycle.GroupID) string {
+	if len(groups) == 0 {
+		return ""
+	}
+	out := make([]string, len(groups))
+	for i, g := range groups {
+		out[i] = g.String()
+	}
+	return strings.Join(out, ", ")
 }
 
 // cleanupAllFiles deletes database, log files, and PID files
@@ -810,7 +617,8 @@ func cleanupAllFiles(pm *PIDManager, quiet bool) error {
 		}
 	}
 
-	// Delete PID files
+	// Delete PID files (and .group files, deps files, lock files — everything
+	// in the lifecycle directories).
 	pidsDir := pm.GetPIDsDir()
 	entries, _ := os.ReadDir(pidsDir)
 	for _, entry := range entries {
@@ -821,15 +629,28 @@ func cleanupAllFiles(pm *PIDManager, quiet bool) error {
 			}
 		}
 	}
+
+	// Also wipe deps directories.
+	for _, depDir := range []string{lifecycle.RegistryDepsDir(), lifecycle.UIDepsDir()} {
+		entries, _ := os.ReadDir(depDir)
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				if err := os.Remove(filepath.Join(depDir, entry.Name())); err == nil {
+					deletedPIDs++
+				}
+			}
+		}
+	}
+
 	if deletedPIDs > 0 && !quiet {
-		fmt.Printf("  Deleted: %d PID file(s)\n", deletedPIDs)
+		fmt.Printf("  Deleted: %d PID/deps file(s)\n", deletedPIDs)
 	}
 
 	if !quiet {
 		if deletedDB == 0 && deletedLogs == 0 && deletedPIDs == 0 {
 			fmt.Println("  Nothing to clean")
 		} else {
-			fmt.Println("✅ Cleanup complete")
+			fmt.Println("Cleanup complete")
 		}
 	}
 
@@ -838,15 +659,9 @@ func cleanupAllFiles(pm *PIDManager, quiet bool) error {
 
 // suggestAgentNames returns up to 3 names of running agents that look similar
 // to the queried name. Used by stopSpecificAgent to provide "Did you mean?"
-// hints when the exact name isn't tracked — covers the common case where a
-// user types a partial or mesh-registered name instead of the script-derived
-// one (or vice versa).
-//
-// Matching is heuristic: substring match in either direction (query contains
-// candidate, or candidate contains query). Good enough for typical typos and
-// the digest-api/api class of mismatches. Not a full edit-distance implementation.
-func suggestAgentNames(pm *PIDManager, query string) []string {
-	processes, err := pm.ListRunningProcesses()
+// hints when the exact name isn't tracked.
+func suggestAgentNames(query string) []string {
+	agents, err := lifecycle.ListAgents()
 	if err != nil {
 		return nil
 	}
@@ -854,26 +669,22 @@ func suggestAgentNames(pm *PIDManager, query string) []string {
 	if q == "" {
 		return nil
 	}
-	// Collect all matching candidates first, then sort deterministically
-	// before capping. This decouples the function's output order from
-	// ListRunningProcesses' iteration order.
 	var candidates []string
 	seen := make(map[string]bool)
-	for _, p := range processes {
-		if p.Type != "agent" || !p.Running {
+	for _, a := range agents {
+		if !a.Alive {
 			continue
 		}
-		if seen[p.Name] {
+		if seen[a.Name] {
 			continue
 		}
-		n := strings.ToLower(p.Name)
+		n := strings.ToLower(a.Name)
 		if strings.Contains(n, q) || strings.Contains(q, n) {
-			candidates = append(candidates, p.Name)
-			seen[p.Name] = true
+			candidates = append(candidates, a.Name)
+			seen[a.Name] = true
 		}
 	}
 	sort.Strings(candidates)
-	// Cap to 3 suggestions after sorting so the returned set is stable.
 	if len(candidates) > 3 {
 		candidates = candidates[:3]
 	}

@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+
+	"mcp-mesh/src/core/cli/lifecycle"
 )
 
 // WatchConfig holds configuration for the AgentWatcher.
@@ -102,13 +104,13 @@ func (aw *AgentWatcher) Start() error {
 		return fmt.Errorf("failed to walk watch directory %s: %w", aw.config.WatchDir, err)
 	}
 
-	// Start initial process
+	// Start initial process. We deliberately do NOT inject MCP_MESH_HTTP_PORT=0
+	// here: the configured port is honored on initial start. On reload,
+	// restartAgent calls lifecycle.KillVerifyAndCleanup which polls until the
+	// previous PID is dead before the new process binds, so the same port is
+	// always free again — no random-port workaround needed.
 	aw.mu.Lock()
 	cmd := aw.cmdFactory()
-	// Use port 0 in watch mode — the OS assigns a random available port and the
-	// agent registers it with the mesh registry. Callers resolve via the registry
-	// (meshctl call, cross-agent calls, @MeshRoute), so the actual port is irrelevant.
-	cmd.Env = setOrReplaceEnv(cmd.Env, "MCP_MESH_HTTP_PORT", "0")
 	if aw.config.LogFileFactory != nil {
 		if logFile, err := aw.config.LogFileFactory(); err == nil {
 			cmd.Stdout = logFile
@@ -302,7 +304,87 @@ func (aw *AgentWatcher) terminateAgent() {
 	aw.currentCmd = nil
 }
 
+// shutdownCurrentForRestart stops the current agent process and waits for the
+// kernel to confirm it's gone, removing the on-disk PID file as a side
+// effect. Returns an error if the process refuses to die within the kill
+// budget — caller MUST treat this as "do not restart".
+//
+// This is the deterministic synchronization point for watch-mode reload: by
+// the time it returns nil, the previous PID is dead AND its <agent>.pid file
+// is gone, so the new process can safely bind to the same configured port.
+//
+// Implementation: clears aw.currentCmd up front (so the local exit reaper
+// doesn't race with our explicit kill), then routes through
+// lifecycle.KillVerifyAndCleanup which polls until dead and removes the .pid
+// file. Falls back to a direct process-group SIGTERM if the lifecycle layer
+// has no PID file (e.g., agent name lookup failed at startup).
+func (aw *AgentWatcher) shutdownCurrentForRestart() error {
+	aw.mu.Lock()
+	cmd := aw.currentCmd
+	aw.currentCmd = nil
+	aw.mu.Unlock()
+
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+
+	name := aw.config.AgentName
+	if name != "" {
+		// Use the killed boolean as the success indicator, not just err==nil.
+		// (false, nil) from KillVerifyAndCleanup means "PID file missing" or
+		// "process already dead per the lifecycle layer's view" — but the
+		// watcher holds cmd.Process.Pid for a process IT spawned, which the
+		// lifecycle layer might not know about (e.g., agent name lookup
+		// failed at startup and WriteAgent was never called). Fall through
+		// to the direct-PID fallback in that case.
+		killed, err := lifecycle.KillVerifyAndCleanup(name, aw.config.StopTimeout)
+		if err == nil && killed {
+			return nil
+		}
+		if err != nil && !aw.quiet {
+			// Non-fatal — fall through to the direct-PID fallback so we still
+			// try to stop the process even if the .pid file lookup misfired.
+			fmt.Printf("[watch] lifecycle kill for %s reported: %v (falling back to direct signal)\n", name, err)
+		}
+	}
+
+	pid := cmd.Process.Pid
+	pgid := pid
+	_ = syscall.Kill(-pgid, syscall.SIGTERM)
+	deadline := time.Now().Add(aw.config.StopTimeout)
+	for time.Now().Before(deadline) {
+		// Only ESRCH definitively means the process group is gone. Other
+		// errors (EPERM, etc.) mean we can't tell — keep polling rather
+		// than declare success prematurely.
+		if err := syscall.Kill(-pgid, 0); err == syscall.ESRCH {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	deadline = time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(-pgid, 0); err == syscall.ESRCH {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := syscall.Kill(-pgid, 0); err != syscall.ESRCH {
+		return fmt.Errorf("process %d still alive after SIGKILL", pid)
+	}
+	return nil
+}
+
 // restartAgent terminates the current agent and starts a new one.
+//
+// Termination is delegated to lifecycle.KillVerifyAndCleanup which polls until
+// the kernel confirms the previous PID is dead (treating zombies as dead) and
+// removes <agent>.pid + <agent>.group bookkeeping. This is what makes
+// watch-mode reload deterministic: the new process never tries to bind to a
+// port that the old process is still holding. If the old process refuses to
+// die within the 3s timeout, we SKIP the restart with a loud error rather
+// than blindly racing — the next file-change event can retry once the user
+// notices.
 func (aw *AgentWatcher) restartAgent(exitCh *chan struct{}) {
 	// Pre-restart validation (compile check)
 	if aw.config.PreRestartCheck != nil {
@@ -321,7 +403,19 @@ func (aw *AgentWatcher) restartAgent(exitCh *chan struct{}) {
 		fmt.Println("Restarting agent...")
 	}
 
-	aw.terminateAgent()
+	// Terminate by routing through the lifecycle layer. KillVerifyAndCleanup
+	// reads <agent>.pid (kept in sync by PIDUpdateCallback), sends SIGTERM to
+	// the process group, polls until dead, escalates to SIGKILL, and removes
+	// the .pid + .group files on confirmed death. On timeout it returns an
+	// error WITHOUT removing files, so we know the old process is still
+	// holding the port and skip the restart.
+	if err := aw.shutdownCurrentForRestart(); err != nil {
+		if !aw.quiet {
+			fmt.Printf("[watch] ERROR: failed to stop %s for restart, skipping this reload: %v\n", aw.config.AgentName, err)
+			fmt.Printf("[watch] The agent may be stuck. Save the file again to retry, or run 'meshctl stop %s' manually.\n", aw.config.AgentName)
+		}
+		return
+	}
 
 	aw.mu.Lock()
 	// Close old log file before starting new one
@@ -330,7 +424,6 @@ func (aw *AgentWatcher) restartAgent(exitCh *chan struct{}) {
 		aw.currentLogFile = nil
 	}
 	cmd := aw.cmdFactory()
-	cmd.Env = setOrReplaceEnv(cmd.Env, "MCP_MESH_HTTP_PORT", "0")
 	if aw.config.LogFileFactory != nil {
 		if logFile, err := aw.config.LogFileFactory(); err == nil {
 			cmd.Stdout = logFile
@@ -429,17 +522,4 @@ func getWatchPrecheckEnabled() bool {
 		return true // enabled by default
 	}
 	return parseBoolEnv(val) // parseBoolEnv is in config.go (same package)
-}
-
-// setOrReplaceEnv sets or replaces an environment variable in a slice.
-// If the key already exists, its value is replaced; otherwise the entry is appended.
-func setOrReplaceEnv(env []string, key, value string) []string {
-	prefix := key + "="
-	for i, e := range env {
-		if strings.HasPrefix(e, prefix) {
-			env[i] = prefix + value
-			return env
-		}
-	}
-	return append(env, prefix+value)
 }
