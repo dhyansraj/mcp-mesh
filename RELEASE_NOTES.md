@@ -1,5 +1,13 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.4.0...v1.4.1)
+
+## v1.4.1 (2026-04-28)
+
+Re-release of v1.4.0. The original v1.4.0 publish pipeline failed at `publish-typescript-sdk` because the lockfile's `@mcpmesh/core` file-link entry caused npm install to bypass the registry and copy from the (CI-empty) source dir. PyPI `mcp-mesh` / `mcp-mesh-core`, npm `@mcpmesh/core`, and Maven Central Java SDK at 1.4.0 shipped successfully, but `@mcpmesh/sdk@1.4.0` and the v1.4.0 Docker images never published. The lockfile-bypass fix landed in #831; cutting v1.4.1 sidesteps the duplicate-publish deadlock and ships every artifact at the new version.
+
+**Same code as v1.4.0 — no functional changes.** See [v1.4.0 release notes](#v140-2026-04-28) below for the actual feature/fix highlights.
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.3.4...v1.4.0)
 
 ## v1.4.0 (2026-04-28)

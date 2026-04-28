@@ -1,5 +1,5 @@
 # Dockerfile for claude-provider-py MCP Mesh LLM provider
-FROM mcpmesh/python-runtime:1.4.0
+FROM mcpmesh/python-runtime:1.4.1
 
 WORKDIR /app
 
