@@ -7,18 +7,26 @@ import (
 )
 
 // WriteAgent writes the agent's bookkeeping to disk:
-//   - <agent>.group  (text: group-id) — written FIRST so that a crash between
-//     the two writes leaves an unowned .group file (harmless; GC sweeps it).
-//     The reverse order would leave a .pid with no owner — stop would have to
-//     guess which deps file to update.
+//   - <agent>.group  (text: group-id, atomically via tmp+rename) — written
+//     FIRST so that a crash between the two writes leaves an unowned .group
+//     file (harmless; GC sweeps it). The reverse order would leave a .pid
+//     with no owner — stop would have to guess which deps file to update.
 //   - <agent>.pid    (text: PID, atomically via tmp+rename)
+//
+// Both files use tmp+rename so a crash mid-write can never leave a half-written
+// file that LookupGroup would fail to parse.
 func WriteAgent(name string, pid int, group GroupID) error {
 	if err := os.MkdirAll(PIDsDir(), 0755); err != nil {
 		return fmt.Errorf("lifecycle: mkdir pids: %w", err)
 	}
 	groupPath := GroupFile(name)
-	if err := os.WriteFile(groupPath, []byte(group.String()), 0644); err != nil {
-		return fmt.Errorf("lifecycle: write group file %s: %w", groupPath, err)
+	groupTmp := groupPath + ".tmp"
+	if err := os.WriteFile(groupTmp, []byte(group.String()), 0644); err != nil {
+		return fmt.Errorf("lifecycle: write group tmp %s: %w", groupTmp, err)
+	}
+	if err := os.Rename(groupTmp, groupPath); err != nil {
+		_ = os.Remove(groupTmp)
+		return fmt.Errorf("lifecycle: rename group file %s: %w", groupPath, err)
 	}
 	pidPath := PIDFile(name)
 	tmp := pidPath + ".tmp"

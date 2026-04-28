@@ -70,78 +70,90 @@ func Sweep() (Report, error) {
 			continue
 		}
 		base := strings.TrimSuffix(name, ".pid")
-		// Skip well-known service names — those are cleaned by stop, not GC.
-		// (We DO sweep registry/ui PID files when their process is dead so
-		// stale state doesn't haunt the user, but only when really dead.)
+		// Service PID files (registry, ui) are NOT skipped: when the recorded
+		// process is dead we sweep the file the same as any agent PID file, so
+		// stale service state from a crash doesn't haunt the user. Live
+		// services are left alone; stop is the only path that signals them.
 		path := pidsDirJoin(name)
 		pid, _ := readPIDFromFile(path)
 		if pid > 0 && processAliveFn(pid) {
 			continue // alive — leave alone
 		}
-		if pid == 0 || !processAliveFn(pid) {
-			if os.Remove(path) == nil {
-				r.DeadAgentPIDsCleaned++
-			}
-			// Best-effort prune of matching .group file (agents only — services
-			// don't have one, so the os.Remove will simply no-op).
-			_ = os.Remove(filepath.Join(PIDsDir(), base+".group"))
+		// Reaching here means pid==0 OR pid is dead — the cleanup branch is
+		// unconditional. (Previously this re-tested processAliveFn, which was
+		// always true given the continue above, and called the syscall twice
+		// for every dead PID.)
+		if os.Remove(path) == nil {
+			r.DeadAgentPIDsCleaned++
 		}
+		// Best-effort prune of matching .group file (agents only — services
+		// don't have one, so the os.Remove will simply no-op).
+		_ = os.Remove(filepath.Join(PIDsDir(), base+".group"))
 	}
 
-	// Step 3: walk deps files for both services.
-	for _, svc := range []string{ServiceRegistry, ServiceUI} {
-		dir, _ := depsDirFor(svc)
-		depEntries, err := os.ReadDir(dir)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return r, err
-		}
-		for _, de := range depEntries {
-			if de.IsDir() {
-				continue
-			}
-			n := de.Name()
-			if strings.HasSuffix(n, ".tmp") {
-				// Leftover from interrupted writeDepsAtomic — safe to drop.
-				_ = os.Remove(filepath.Join(dir, n))
-				continue
-			}
-			path := filepath.Join(dir, n)
-			agents, err := readDeps(path)
+	// Step 3: walk deps files for both services. The walk + rewrite must hold
+	// the lifecycle lock — RegisterDep/UnregisterDep also hold it, and without
+	// the lock here a concurrent meshctl invocation could rewrite a deps file
+	// between our read and our writeDepsAtomic, losing its update. Sweep is
+	// infrequent and the lock is short-lived so this is safe.
+	if err := withLifecycleLock(func() error {
+		for _, svc := range []string{ServiceRegistry, ServiceUI} {
+			dir := depsDirFor(svc)
+			depEntries, err := os.ReadDir(dir)
 			if err != nil {
-				continue
-			}
-			var alive []string
-			for _, a := range agents {
-				// Sentinels (names beginning with "_", e.g. "_ui_only_" written
-				// by `meshctl start --ui` standalone) have no PID file by design
-				// — they exist solely to keep the deps file non-empty so refcount
-				// reports the service as in-use. Never reap them as "dead PID";
-				// only `meshctl stop` (no args) clears them, via PruneSentinelDeps.
-				if strings.HasPrefix(a, "_") {
-					alive = append(alive, a)
+				if os.IsNotExist(err) {
 					continue
 				}
-				pidPath := PIDFile(a)
-				pid, _ := readPIDFromFile(pidPath)
-				if pid > 0 && processAliveFn(pid) {
-					alive = append(alive, a)
-				} else {
-					r.StaleDepsEntries++
-				}
+				return err
 			}
-			if len(alive) == 0 {
-				if os.Remove(path) == nil {
-					r.EmptyDepsFilesRemoved++
+			for _, de := range depEntries {
+				if de.IsDir() {
+					continue
 				}
-				continue
-			}
-			if len(alive) != len(agents) {
-				_ = writeDepsAtomic(path, alive)
+				n := de.Name()
+				if strings.HasSuffix(n, ".tmp") {
+					// Leftover from interrupted writeDepsAtomic — safe to drop.
+					_ = os.Remove(filepath.Join(dir, n))
+					continue
+				}
+				path := filepath.Join(dir, n)
+				agents, err := readDeps(path)
+				if err != nil {
+					continue
+				}
+				var alive []string
+				for _, a := range agents {
+					// Sentinels (names beginning with "_", e.g. "_ui_only_" written
+					// by `meshctl start --ui` standalone) have no PID file by design
+					// — they exist solely to keep the deps file non-empty so refcount
+					// reports the service as in-use. Never reap them as "dead PID";
+					// only `meshctl stop` (no args) clears them, via PruneSentinelDeps.
+					if strings.HasPrefix(a, "_") {
+						alive = append(alive, a)
+						continue
+					}
+					pidPath := PIDFile(a)
+					pid, _ := readPIDFromFile(pidPath)
+					if pid > 0 && processAliveFn(pid) {
+						alive = append(alive, a)
+					} else {
+						r.StaleDepsEntries++
+					}
+				}
+				if len(alive) == 0 {
+					if os.Remove(path) == nil {
+						r.EmptyDepsFilesRemoved++
+					}
+					continue
+				}
+				if len(alive) != len(agents) {
+					_ = writeDepsAtomic(path, alive)
+				}
 			}
 		}
+		return nil
+	}); err != nil {
+		return r, err
 	}
 
 	// Step 4: orphan .group files (no matching .pid). Done after step 1 so a

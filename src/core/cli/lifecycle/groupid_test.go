@@ -50,13 +50,14 @@ func TestParseRejectsGarbage(t *testing.T) {
 		"",
 		"plain",
 		"123",
-		"a-b-c",            // non-numeric segments
-		"123-abc",          // mixed
-		"123-",             // empty trailing
-		"-123",             // empty leading
-		"1-2-3-4",          // too many segments
-		"123-456/789",      // path separator
-		"123-456\x00",      // NUL
+		"a-b-c",       // non-numeric segments
+		"123-abc",     // mixed
+		"123-",        // empty trailing
+		"-123",        // empty leading
+		"1-2-3-4",     // too many segments
+		"123-456",     // legacy 2-segment form (no longer accepted)
+		"123-456/789", // path separator
+		"123-456\x00", // NUL
 	}
 	for _, s := range bad {
 		if _, err := Parse(s); err == nil {

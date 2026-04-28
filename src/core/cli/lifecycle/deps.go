@@ -19,24 +19,23 @@ const (
 )
 
 // depsDirFor returns the absolute path to the deps directory for a service.
-func depsDirFor(service string) (string, error) {
+// Panics on unknown service — callers pass package-level constants
+// (ServiceRegistry, ServiceUI), so an unknown value is always a programmer
+// error, never a runtime condition we can recover from.
+func depsDirFor(service string) string {
 	switch service {
 	case ServiceRegistry:
-		return RegistryDepsDir(), nil
+		return RegistryDepsDir()
 	case ServiceUI:
-		return UIDepsDir(), nil
+		return UIDepsDir()
 	default:
-		return "", fmt.Errorf("lifecycle: unknown service %q", service)
+		panic("lifecycle: unknown service: " + service)
 	}
 }
 
 // depsFileFor returns the absolute path to the deps file for a (service, group).
-func depsFileFor(service string, group GroupID) (string, error) {
-	dir, err := depsDirFor(service)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, group.String()), nil
+func depsFileFor(service string, group GroupID) string {
+	return filepath.Join(depsDirFor(service), group.String())
 }
 
 // withLifecycleLock acquires the global flock at LockFile() for the duration
@@ -87,15 +86,21 @@ func readDeps(path string) ([]string, error) {
 
 // writeDepsAtomic writes the deps file via tmp+rename so an interrupted write
 // never leaves a half-written file. Sorts and deduplicates entries first.
+//
+// If the deduplicated set is empty, the existing file (if any) is removed
+// rather than rewritten as a zero-byte file. Empty files would confuse
+// IsServiceRefcountZero (which keys off file existence in DepsForService) and
+// every caller already wants the file gone in that case.
 func writeDepsAtomic(path string, agents []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
 	dedup := dedupSort(agents)
 	if len(dedup) == 0 {
-		// Empty deps file — caller invariant is to delete instead. Done at the
-		// caller level so this helper stays a pure write.
-		return os.WriteFile(path, nil, 0644)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
 	}
 	var buf bytes.Buffer
 	for _, a := range dedup {
@@ -137,10 +142,7 @@ func RegisterDep(service string, group GroupID, agents []string) error {
 	if len(agents) == 0 {
 		return nil
 	}
-	path, err := depsFileFor(service, group)
-	if err != nil {
-		return err
-	}
+	path := depsFileFor(service, group)
 	return withLifecycleLock(func() error {
 		existing, err := readDeps(path)
 		if err != nil {
@@ -159,10 +161,7 @@ func UnregisterDep(service string, group GroupID, agents []string) error {
 	if len(agents) == 0 {
 		return nil
 	}
-	path, err := depsFileFor(service, group)
-	if err != nil {
-		return err
-	}
+	path := depsFileFor(service, group)
 	return withLifecycleLock(func() error {
 		existing, err := readDeps(path)
 		if err != nil {
@@ -195,10 +194,7 @@ func UnregisterDep(service string, group GroupID, agents []string) error {
 // the service. Used by stop --registry/--ui to print the WARN line listing
 // dependent groups before forcing the kill.
 func DepsForService(service string) ([]GroupID, error) {
-	dir, err := depsDirFor(service)
-	if err != nil {
-		return nil, err
-	}
+	dir := depsDirFor(service)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -235,11 +231,7 @@ func DepsForService(service string) ([]GroupID, error) {
 // AgentsInGroup returns the agents listed in the deps file for (service,
 // group). Empty slice if the file is missing or empty.
 func AgentsInGroup(service string, group GroupID) ([]string, error) {
-	path, err := depsFileFor(service, group)
-	if err != nil {
-		return nil, err
-	}
-	return readDeps(path)
+	return readDeps(depsFileFor(service, group))
 }
 
 // IsServiceRefcountZero reports whether no group has any agents listed for the
@@ -263,10 +255,7 @@ func IsServiceRefcountZero(service string) (bool, error) {
 // not bring down a separately-started UI), but a no-args stop is the
 // universal shutdown and must not be blocked by them.
 func PruneSentinelDeps(service string) error {
-	dir, err := depsDirFor(service)
-	if err != nil {
-		return err
-	}
+	dir := depsDirFor(service)
 	return withLifecycleLock(func() error {
 		entries, err := os.ReadDir(dir)
 		if err != nil {

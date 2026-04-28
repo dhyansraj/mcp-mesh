@@ -16,7 +16,8 @@ import (
 var processAliveFn = IsAlive
 
 // isZombieFn is overridable for tests; production checks the OS process state.
-var isZombieFn = isZombie
+// Returns (zombie, err); see isZombie for the err-handling contract.
+var isZombieFn func(pid int) (bool, error) = isZombie
 
 // IsAlive reports whether a PID is alive — signal 0 returns nil for any
 // process the kernel still has an entry for. Zombies are reported alive by
@@ -40,24 +41,40 @@ func IsAlive(pid int) bool {
 // stop verification.
 //
 // Implementation: shell out to `ps -o stat= -p <pid>`. The "stat" column is
-// portable enough across macOS and Linux: both report 'Z' for zombies. If ps
-// itself errors (process disappeared between alive-check and stat-check),
-// that's also "dead" for our purposes.
-func isZombie(pid int) bool {
+// portable enough across macOS and Linux: both report 'Z' for zombies.
+//
+// Returns (zombie bool, err error):
+//   - zombie=true, err=nil  -> kernel reports state 'Z' (defunct)
+//   - zombie=false, err=nil -> process exists with a non-zombie state, OR ps
+//     reported "no such process" (exit code 1, empty output). The aliveness
+//     judgement belongs to processAliveFn — isZombie only differentiates
+//     zombie-vs-not when the process is known to exist.
+//   - zombie=false, err!=nil -> ps failed for some OTHER reason (e.g. EAGAIN
+//     on fork under load, RLIMIT_NPROC, transient resource exhaustion). The
+//     caller MUST NOT interpret this as "dead" — that flips death detection
+//     to true while the process is still alive, orphaning everything.
+func isZombie(pid int) (bool, error) {
 	if pid <= 0 {
-		return false
+		return false, nil
 	}
-	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	cmd := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid))
+	out, err := cmd.Output()
 	if err != nil {
-		// ps exits non-zero when the PID doesn't exist — treat as dead.
-		return true
+		// `ps -p <missing>` exits 1 with empty stdout. Distinguish that from a
+		// real failure (couldn't fork, kernel busy, etc.) by checking exit
+		// code AND output content.
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 && len(out) == 0 {
+			return false, nil
+		}
+		return false, fmt.Errorf("lifecycle: ps probe pid %d: %w", pid, err)
 	}
 	state := strings.TrimSpace(string(out))
 	if state == "" {
-		return true
+		// ps exited 0 but printed nothing — treat as "process exists but state
+		// unknown", which is NOT zombie. Aliveness check still wins.
+		return false, nil
 	}
-	// First character is the primary state. 'Z' = zombie (defunct).
-	return state[0] == 'Z'
+	return state[0] == 'Z', nil
 }
 
 // readPIDFromFile reads and parses a PID file. Returns (0, nil) if missing.
@@ -88,13 +105,18 @@ func readPIDFromFile(path string) (int, error) {
 // detached agents whose parent meshctl has already exited, the reaper is init,
 // which can take longer than our timeout. Treating Z as dead avoids the
 // false-negative "still alive after SIGKILL" error.
+//
+// CRITICAL: a zombie-probe error (ps failed for a transient reason) is
+// inconclusive — we MUST NOT interpret it as "dead". Doing so would let a
+// transient EAGAIN under load cause us to remove the PID file of a still-live
+// process. We keep polling on probe errors instead.
 func pollUntilDead(pid int, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if !processAliveFn(pid) {
 			return true
 		}
-		if isZombieFn(pid) {
+		if z, err := isZombieFn(pid); err == nil && z {
 			return true
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -102,7 +124,10 @@ func pollUntilDead(pid int, timeout time.Duration) bool {
 	if !processAliveFn(pid) {
 		return true
 	}
-	return isZombieFn(pid)
+	if z, err := isZombieFn(pid); err == nil && z {
+		return true
+	}
+	return false
 }
 
 // signalGroupOrPID sends sig first to the process group (negative PID) and

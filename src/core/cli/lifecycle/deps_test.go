@@ -156,16 +156,30 @@ func TestConcurrentRegisterFlock(t *testing.T) {
 	}
 }
 
-func TestUnknownServiceErrors(t *testing.T) {
+func TestUnknownServicePanics(t *testing.T) {
 	tmp := t.TempDir()
 	defer WithRoot(tmp)()
 	g := NewGroupID()
-	if err := RegisterDep("bogus", g, []string{"x"}); err == nil {
-		t.Error("expected error for unknown service")
-	}
-	if _, err := DepsForService("bogus"); err == nil {
-		t.Error("expected error for unknown service")
-	}
+
+	// depsDirFor panics on unknown service — programmer error since callers
+	// pass package constants. Both routes (RegisterDep, DepsForService) flow
+	// through it; verify they panic rather than silently returning.
+	assertPanics(t, "RegisterDep(bogus)", func() {
+		_ = RegisterDep("bogus", g, []string{"x"})
+	})
+	assertPanics(t, "DepsForService(bogus)", func() {
+		_, _ = DepsForService("bogus")
+	})
+}
+
+func assertPanics(t *testing.T, label string, fn func()) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("%s: expected panic, got none", label)
+		}
+	}()
+	fn()
 }
 
 func equalSorted(a, b []string) bool {

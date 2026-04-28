@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -177,8 +178,14 @@ func stopSpecificAgent(pm *PIDManager, name string, timeout time.Duration, quiet
 
 	// Read the group BEFORE killing — KillVerifyAndCleanup removes the .group
 	// file on success, after which we'd no longer be able to find the right
-	// deps file to unregister from.
-	group, _ := lifecycle.LookupGroup(name)
+	// deps file to unregister from. Distinguish "no .group file" (fine — older
+	// agent or services) from "garbled .group file" (loud warn — silently
+	// treating corruption as no-group would orphan deps entries forever).
+	group, gErr := lifecycle.LookupGroup(name)
+	if gErr != nil && !errors.Is(gErr, lifecycle.ErrNoGroup) {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", gErr)
+		group = ""
+	}
 
 	// Watch-mode wrapper: if a watcher meshctl owns this agent, kill it FIRST.
 	// Otherwise the watcher would respawn the agent the moment the next file
@@ -524,6 +531,8 @@ func stopServiceForce(service, displayName string, timeout time.Duration, quiet 
 	return nil
 }
 
+// formatGroups joins GroupIDs into a comma-separated display string. Order
+// is whatever DepsForService returned (already sorted lexicographically).
 func formatGroups(groups []lifecycle.GroupID) string {
 	if len(groups) == 0 {
 		return ""
@@ -532,7 +541,6 @@ func formatGroups(groups []lifecycle.GroupID) string {
 	for i, g := range groups {
 		out[i] = g.String()
 	}
-	sort.Strings(out)
 	return strings.Join(out, ", ")
 }
 

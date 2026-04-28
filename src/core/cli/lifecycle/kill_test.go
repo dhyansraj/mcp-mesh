@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"sync"
@@ -31,9 +32,9 @@ func useStubAlive(t *testing.T, alive map[int]bool) {
 		return stubAlivePIDs.pids[pid]
 	}
 	// Tests that stub aliveness must also stub zombie detection — otherwise
-	// the real isZombie would shell out to ps and treat fake test PIDs as
-	// "not found = dead" which contradicts the test's intent.
-	isZombieFn = func(pid int) bool { return false }
+	// the real isZombie would shell out to ps. Since these tests use fake
+	// PIDs, the stub always reports "not a zombie, no error".
+	isZombieFn = func(pid int) (bool, error) { return false, nil }
 	stubAlivePIDs.Unlock()
 	t.Cleanup(func() {
 		stubAlivePIDs.Lock()
@@ -176,5 +177,27 @@ func TestKillVerifyFailureLeavesFile(t *testing.T) {
 	}
 	if _, statErr := os.Stat(PIDFile("undead")); statErr != nil {
 		t.Errorf("PID file should be preserved on verify failure: %v", statErr)
+	}
+}
+
+// TestPollUntilDeadIgnoresZombieProbeError guards the invariant that a
+// transient ps failure (EAGAIN under load, RLIMIT_NPROC, etc.) must NEVER
+// be interpreted as "process is dead". Pre-fix, isZombie returned bool only
+// and any ps error was treated as dead — that flipped death detection to
+// true while the process was still alive, orphaning the agent.
+func TestPollUntilDeadIgnoresZombieProbeError(t *testing.T) {
+	// Process is alive; zombie probe always fails with a transient error.
+	prevAlive, prevZombie := processAliveFn, isZombieFn
+	processAliveFn = func(pid int) bool { return true }
+	isZombieFn = func(pid int) (bool, error) {
+		return false, fmt.Errorf("simulated transient ps failure")
+	}
+	t.Cleanup(func() {
+		processAliveFn = prevAlive
+		isZombieFn = prevZombie
+	})
+
+	if pollUntilDead(12345, 100*time.Millisecond) {
+		t.Error("pollUntilDead must return false when process is alive and zombie probe errored — probe failure is inconclusive, not a death signal")
 	}
 }

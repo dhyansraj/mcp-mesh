@@ -38,8 +38,9 @@ func (g GroupID) String() string { return string(g) }
 // Parse validates a group-id string and returns it. Format check only — does
 // not verify that any process currently owns the group. Returns an error for
 // anything that wouldn't be safe as a filename component or that doesn't match
-// the expected "<int>-<int>-<int>" shape (also accepts the legacy 2-segment
-// form for any old files lingering from in-flight test runs).
+// the canonical "<ms>-<pid>-<seq>" 3-segment shape. The PR explicitly drops
+// backward compat with the old PID-file layout, so the legacy 2-segment form
+// is rejected.
 func Parse(s string) (GroupID, error) {
 	if s == "" {
 		return "", fmt.Errorf("group-id is empty")
@@ -48,8 +49,8 @@ func Parse(s string) (GroupID, error) {
 		return "", fmt.Errorf("group-id %q contains invalid characters", s)
 	}
 	parts := strings.Split(s, "-")
-	if len(parts) < 2 || len(parts) > 3 {
-		return "", fmt.Errorf("group-id %q has wrong shape, want <ms>-<pid>[-<seq>]", s)
+	if len(parts) != 3 {
+		return "", fmt.Errorf("group-id %q has wrong shape, want <ms>-<pid>-<seq>", s)
 	}
 	for _, p := range parts {
 		if p == "" {
@@ -65,6 +66,8 @@ func Parse(s string) (GroupID, error) {
 // LookupGroup reads <root>/pids/<agent>.group and returns the group-id that
 // owns the agent. Returns ErrNoGroup when the file is missing — callers that
 // want best-effort cleanup of unowned agents should check for this sentinel.
+// Parse failures are wrapped with ErrGroupParse so callers can distinguish
+// "no .group file (fine)" from "garbled .group file (warn loudly)".
 func LookupGroup(agent string) (GroupID, error) {
 	data, err := os.ReadFile(GroupFile(agent))
 	if err != nil {
@@ -73,13 +76,23 @@ func LookupGroup(agent string) (GroupID, error) {
 		}
 		return "", err
 	}
-	return Parse(strings.TrimSpace(string(data)))
+	g, err := Parse(strings.TrimSpace(string(data)))
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %v", ErrGroupParse, GroupFile(agent), err)
+	}
+	return g, nil
 }
 
 // ErrNoGroup is returned by LookupGroup when no .group file exists for the
 // requested agent. Caller can treat this as a soft "agent not tracked by the
 // new lifecycle layer" signal.
 var ErrNoGroup = fmt.Errorf("lifecycle: no group file for agent")
+
+// ErrGroupParse is returned by LookupGroup when the .group file exists but its
+// contents do not parse as a valid group-id. Distinct from ErrNoGroup so
+// callers can warn loudly on corruption instead of silently treating it as
+// "agent has no owner" (which would orphan deps entries forever).
+var ErrGroupParse = fmt.Errorf("lifecycle: group file unparseable")
 
 // resetSeqForTests is exposed for the test package only via this helper.
 // Plain tests (same package) can call it; external code cannot.

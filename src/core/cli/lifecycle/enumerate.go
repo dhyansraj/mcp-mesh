@@ -1,6 +1,8 @@
 package lifecycle
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 )
@@ -60,9 +62,14 @@ func ListAgents() ([]AgentEntry, error) {
 		}
 		entry := AgentEntry{Name: base, PID: pid, Alive: processAliveFn(pid)}
 		// Best-effort group lookup; missing .group means the agent was written
-		// by some non-current code path (or via WriteService) — treat as no group.
-		if g, err := LookupGroup(base); err == nil {
+		// by some non-current code path (or via WriteService) — treat as no
+		// group. A parse error is loud: half-written/corrupt .group files
+		// would otherwise silently orphan deps entries forever.
+		g, gErr := LookupGroup(base)
+		if gErr == nil {
 			entry.Group = g
+		} else if !errors.Is(gErr, ErrNoGroup) {
+			fmt.Fprintf(os.Stderr, "warning: %v\n", gErr)
 		}
 		out = append(out, entry)
 	}
@@ -104,8 +111,11 @@ func LookupAgent(name string) (*AgentEntry, error) {
 		return nil, nil
 	}
 	entry := &AgentEntry{Name: name, PID: pid, Alive: processAliveFn(pid)}
-	if g, err := LookupGroup(name); err == nil {
+	g, gErr := LookupGroup(name)
+	if gErr == nil {
 		entry.Group = g
+	} else if !errors.Is(gErr, ErrNoGroup) {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", gErr)
 	}
 	return entry, nil
 }
@@ -140,10 +150,4 @@ func isServiceName(base string) bool {
 		return true
 	}
 	return false
-}
-
-// agentPIDFileExists is a sanity helper — used by tests and validators.
-func agentPIDFileExists(name string) bool {
-	_, err := os.Stat(PIDFile(name))
-	return err == nil
 }
