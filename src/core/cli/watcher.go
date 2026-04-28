@@ -330,9 +330,18 @@ func (aw *AgentWatcher) shutdownCurrentForRestart() error {
 
 	name := aw.config.AgentName
 	if name != "" {
-		if _, err := lifecycle.KillVerifyAndCleanup(name, aw.config.StopTimeout); err == nil {
+		// Use the killed boolean as the success indicator, not just err==nil.
+		// (false, nil) from KillVerifyAndCleanup means "PID file missing" or
+		// "process already dead per the lifecycle layer's view" — but the
+		// watcher holds cmd.Process.Pid for a process IT spawned, which the
+		// lifecycle layer might not know about (e.g., agent name lookup
+		// failed at startup and WriteAgent was never called). Fall through
+		// to the direct-PID fallback in that case.
+		killed, err := lifecycle.KillVerifyAndCleanup(name, aw.config.StopTimeout)
+		if err == nil && killed {
 			return nil
-		} else if !aw.quiet {
+		}
+		if err != nil && !aw.quiet {
 			// Non-fatal — fall through to the direct-PID fallback so we still
 			// try to stop the process even if the .pid file lookup misfired.
 			fmt.Printf("[watch] lifecycle kill for %s reported: %v (falling back to direct signal)\n", name, err)
@@ -344,7 +353,10 @@ func (aw *AgentWatcher) shutdownCurrentForRestart() error {
 	_ = syscall.Kill(-pgid, syscall.SIGTERM)
 	deadline := time.Now().Add(aw.config.StopTimeout)
 	for time.Now().Before(deadline) {
-		if err := syscall.Kill(-pgid, 0); err != nil {
+		// Only ESRCH definitively means the process group is gone. Other
+		// errors (EPERM, etc.) mean we can't tell — keep polling rather
+		// than declare success prematurely.
+		if err := syscall.Kill(-pgid, 0); err == syscall.ESRCH {
 			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -352,12 +364,12 @@ func (aw *AgentWatcher) shutdownCurrentForRestart() error {
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	deadline = time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {
-		if err := syscall.Kill(-pgid, 0); err != nil {
+		if err := syscall.Kill(-pgid, 0); err == syscall.ESRCH {
 			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if err := syscall.Kill(-pgid, 0); err == nil {
+	if err := syscall.Kill(-pgid, 0); err != syscall.ESRCH {
 		return fmt.Errorf("process %d still alive after SIGKILL", pid)
 	}
 	return nil
