@@ -2,7 +2,7 @@
 class McpMesh < Formula
   desc "Kubernetes-native platform for distributed MCP applications"
   homepage "https://github.com/dhyansraj/mcp-mesh"
-  version "1.3.4"  # Will be updated by release automation
+  version "1.4.0"  # Will be updated by release automation
 
   if OS.mac?
     if Hardware::CPU.arm?

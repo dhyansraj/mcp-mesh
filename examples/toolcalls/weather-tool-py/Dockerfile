@@ -1,5 +1,5 @@
 # Dockerfile for weather-tool-py MCP Mesh agent
-FROM mcpmesh/python-runtime:1.3.4
+FROM mcpmesh/python-runtime:1.4.0
 
 WORKDIR /app
 

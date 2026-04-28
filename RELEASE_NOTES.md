@@ -1,5 +1,38 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.3.4...v1.4.0)
+
+## v1.4.0 (2026-04-28)
+
+Reliability + provider expansion. The marquee item is a clean-cutover redesign of meshctl's process lifecycle that eliminates a class of bugs around orphaned registry/UI servers, same-name agent re-starts, and watch-mode races. Vertex AI joins the LLM provider lineup across all three runtimes with IAM-based auth instead of API keys. Python and TypeScript agents no longer have their health endpoints blocked by long-running tool calls (k8s pod-restart fix). Claude structured output goes HINT-first to eliminate silent hangs.
+
+### 🛠️ meshctl Process Lifecycle Redesign
+
+- **Refcount-based service ownership** (#827): `meshctl stop <agent>` no longer orphans the registry or UI when other agents in different start groups still depend on them. New `lifecycle/` package introduces per-invocation group IDs, per-group dependency files under `~/.mcp-mesh/registry/deps/<group-id>` and `~/.mcp-mesh/ui/deps/<group-id>`, and a single `KillVerifyAndCleanup` helper that all stop paths funnel through (TERM-then-KILL with poll, treats zombie state as dead, 3s window)
+- **Single-instance enforcement**: `meshctl start <agent>` exits non-zero if the same agent name is already running, with a helpful message including the live PID and remediation. Uniform across MCP agents and REST API apps. Eliminates the silent `<agent>.pid`/`<agent>.group` overwrites that previously corrupted refcount bookkeeping
+- **Watch-mode wait-for-death**: File-change reload now waits for the old process to be confirmed dead (PID file removed) before respawning. Loud failure on timeout, no silent retry. The old `MCP_MESH_HTTP_PORT=0` random-port workaround is gone — agents respawn on the same configured port, and `@mesh.route` REST API apps can now use `-w` (previously forbidden)
+- **Stop semantics**: `meshctl stop` (no args) shuts down everything (sentinels pruned first); `meshctl stop <agent>` only reaps registry/UI when their refcount truly hits zero (and `--keep-registry` / `--keep-ui` flags aren't set); `meshctl stop --registry` / `--ui` force-kill with stderr WARN listing dependent groups
+- **Sentinel handling**: Standalone `meshctl start --ui` (no agents) is reliably tracked across stop operations via a `_ui_only_` sentinel that survives GC sweeps
+- **Watch-mode bookkeeping unified**: The legacy `<name>.<ppid>.pid` namespacing was retired; group-id supersedes it. Watch wrappers tracked via `<agent>.watcher.pid` sidecar so stop kills them BEFORE the agent (closes the respawn race)
+- **GC sweeps** stale PID files and dead deps entries on every start/stop, but never kills services. Concurrent meshctl invocations serialized via `flock` on the start path
+
+### 🌟 Vertex AI (Gemini via IAM)
+
+- **`vertex_ai/<model>` provider prefix across Python, TypeScript, Java** (#824): Use Gemini through Vertex AI with IAM authentication via Application Default Credentials — no AI Studio API key required. Routes through `@mesh.llm` decorator (Python), `mesh.addLlmProvider` (TypeScript), and `@MeshLlm(provider = "vertex_ai")` (Java)
+- **Per-runtime integration**: Python uses LiteLLM's `vertex_ai/` path with `google-auth`; TypeScript uses `@ai-sdk/google-vertex`; Java uses `spring-ai-starter-model-vertex-ai-gemini` with reflection-based dep loading so AI-Studio-only consumers don't hit `NoClassDefFoundError`
+- **Working examples** for all three runtimes under `examples/{python,typescript,java}/vertex-ai-agent/`, plus per-runtime env-var matrix in `docs/environment-variables.md`
+- **Integration tests** (tc34/35/36) cover the Vertex path end-to-end for each language
+
+### 🔁 Tool Execution Isolation (Python + TypeScript)
+
+- **Python worker pool** (#819): Tool execution now runs in an isolated worker thread pool with proper contextvars propagation. Health endpoints no longer block during long-running MCP tool calls — fixes k8s pod restarts where the readiness probe couldn't get a response while a slow tool was executing. Concurrent calls to the same tool no longer serialize
+- **TypeScript worker_threads** (#821): Equivalent isolation using Node's `worker_threads`, V8 isolate boundary, with tsx loader resolution. Same health-endpoint fix as Python
+- **Per-loop httpx pool** in Python prevents the cross-loop binding errors that surfaced after worker isolation
+
+### 💎 Claude HINT-First Structured Output
+
+- **Faster + more reliable** (#822): The Claude provider tries HINT mode first (schema in the system prompt) and falls back to STRICT mode only if HINT fails. HINT mode is sufficient for most cases and is significantly faster than STRICT, eliminating the silent hangs that occasionally surfaced with STRICT-mode JSON enforcement
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.3.3...v1.3.4)
 
 ## v1.3.4 (2026-04-18)
