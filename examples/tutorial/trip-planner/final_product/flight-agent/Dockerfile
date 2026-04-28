@@ -1,5 +1,5 @@
 # Dockerfile for flight-agent MCP Mesh agent
-FROM mcpmesh/python-runtime:1.4.0
+FROM mcpmesh/python-runtime:1.4.1
 
 WORKDIR /app
 

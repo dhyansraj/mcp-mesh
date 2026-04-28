@@ -85,17 +85,17 @@ docker compose version
 
 | Image                            | Description                 |
 | -------------------------------- | --------------------------- |
-| `mcpmesh/registry:1.4.0`           | Registry service            |
-| `mcpmesh/python-runtime:1.4.0`     | Python runtime with SDK     |
-| `mcpmesh/java-runtime:1.4.0`       | Java runtime with SDK       |
-| `mcpmesh/typescript-runtime:1.4.0` | TypeScript runtime with SDK |
+| `mcpmesh/registry:1.4.1`           | Registry service            |
+| `mcpmesh/python-runtime:1.4.1`     | Python runtime with SDK     |
+| `mcpmesh/java-runtime:1.4.1`       | Java runtime with SDK       |
+| `mcpmesh/typescript-runtime:1.4.1` | TypeScript runtime with SDK |
 
 ```bash
 # Pull images
-docker pull mcpmesh/registry:1.4.0
-docker pull mcpmesh/python-runtime:1.4.0
-docker pull mcpmesh/java-runtime:1.4.0
-docker pull mcpmesh/typescript-runtime:1.4.0
+docker pull mcpmesh/registry:1.4.1
+docker pull mcpmesh/python-runtime:1.4.1
+docker pull mcpmesh/java-runtime:1.4.1
+docker pull mcpmesh/typescript-runtime:1.4.1
 ```
 
 ### Generate Docker Compose

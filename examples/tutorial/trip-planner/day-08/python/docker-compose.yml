@@ -49,7 +49,7 @@ services:
       - trip-planner-network
 
   registry:
-    image: mcpmesh/registry:1.4.0
+    image: mcpmesh/registry:1.4.1
     container_name: trip-planner-registry
     hostname: registry
     ports:
@@ -81,7 +81,7 @@ services:
 
   # --8<-- [start:mesh_ui]
   mesh-ui:
-    image: mcpmesh/ui:1.4.0
+    image: mcpmesh/ui:1.4.1
     container_name: trip-planner-mesh-ui
     hostname: mesh-ui
     ports:
@@ -172,7 +172,7 @@ services:
   # --8<-- [start:gateway]
   # FastAPI Gateway: manually added (scaffold detects @mesh.agent, not @mesh.route)
   gateway:
-    image: mcpmesh/python-runtime:1.4.0
+    image: mcpmesh/python-runtime:1.4.1
     container_name: trip-planner-gateway
     hostname: gateway
     user: root
@@ -213,7 +213,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   adventure-advisor:
-    image: mcpmesh/python-runtime:1.4.0
+    image: mcpmesh/python-runtime:1.4.1
     container_name: trip-planner-adventure-advisor
     hostname: adventure-advisor
     user: root
@@ -256,7 +256,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   budget-analyst:
-    image: mcpmesh/python-runtime:1.4.0
+    image: mcpmesh/python-runtime:1.4.1
     container_name: trip-planner-budget-analyst
     hostname: budget-analyst
     user: root
@@ -299,7 +299,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   chat-history-agent:
-    image: mcpmesh/python-runtime:1.4.0
+    image: mcpmesh/python-runtime:1.4.1
     container_name: trip-planner-chat-history-agent
     hostname: chat-history-agent
     user: root
@@ -342,7 +342,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   claude-provider:
-    image: mcpmesh/python-runtime:1.4.0
+    image: mcpmesh/python-runtime:1.4.1
     container_name: trip-planner-claude-provider
     hostname: claude-provider
     user: root
@@ -386,7 +386,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   flight-agent:
-    image: mcpmesh/python-runtime:1.4.0
+    image: mcpmesh/python-runtime:1.4.1
     container_name: trip-planner-flight-agent
     hostname: flight-agent
     user: root
@@ -429,7 +429,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   hotel-agent:
-    image: mcpmesh/python-runtime:1.4.0
+    image: mcpmesh/python-runtime:1.4.1
     container_name: trip-planner-hotel-agent
     hostname: hotel-agent
     user: root
@@ -472,7 +472,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   logistics-planner:
-    image: mcpmesh/python-runtime:1.4.0
+    image: mcpmesh/python-runtime:1.4.1
     container_name: trip-planner-logistics-planner
     hostname: logistics-planner
     user: root
@@ -515,7 +515,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   openai-provider:
-    image: mcpmesh/python-runtime:1.4.0
+    image: mcpmesh/python-runtime:1.4.1
     container_name: trip-planner-openai-provider
     hostname: openai-provider
     user: root
@@ -559,7 +559,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   planner-agent:
-    image: mcpmesh/python-runtime:1.4.0
+    image: mcpmesh/python-runtime:1.4.1
     container_name: trip-planner-planner-agent
     hostname: planner-agent
     user: root
@@ -602,7 +602,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   poi-agent:
-    image: mcpmesh/python-runtime:1.4.0
+    image: mcpmesh/python-runtime:1.4.1
     container_name: trip-planner-poi-agent
     hostname: poi-agent
     user: root
@@ -645,7 +645,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   user-prefs-agent:
-    image: mcpmesh/python-runtime:1.4.0
+    image: mcpmesh/python-runtime:1.4.1
     container_name: trip-planner-user-prefs-agent
     hostname: user-prefs-agent
     user: root
@@ -688,7 +688,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   weather-agent:
-    image: mcpmesh/python-runtime:1.4.0
+    image: mcpmesh/python-runtime:1.4.1
     container_name: trip-planner-weather-agent
     hostname: weather-agent
     user: root
