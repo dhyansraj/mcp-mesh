@@ -85,12 +85,23 @@ func RemoveService(service string) error {
 }
 
 // WriteWrapperPID writes the transient wrapper-<group>.pid marker used by GC.
+// Atomic via tmp+rename for symmetry with the other PID writers in this
+// package — a crash between mkdir and write should never leave a half-written
+// marker that GC would treat as an orphan and remove.
 func WriteWrapperPID(group GroupID, pid int) error {
 	if err := os.MkdirAll(PIDsDir(), 0755); err != nil {
 		return fmt.Errorf("lifecycle: mkdir pids: %w", err)
 	}
 	path := WrapperPIDFile(group)
-	return os.WriteFile(path, []byte(fmt.Sprintf("%d", pid)), 0644)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
+		return fmt.Errorf("lifecycle: write wrapper pid tmp: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("lifecycle: rename wrapper pid: %w", err)
+	}
+	return nil
 }
 
 // RemoveWrapperPID removes a wrapper-<group>.pid marker. Idempotent.

@@ -24,6 +24,12 @@ import (
 // <agent>.group, leaving dangling state that makes refcount-based service
 // shutdown unsafe.
 func validateAgentsNotRunning(agentPaths []string) error {
+	// Track names seen within THIS invocation so we catch the case where two
+	// distinct paths normalize to the same agent name (e.g. two different
+	// files both named "agent.py" with no @mesh.agent name override). Without
+	// this, both paths pass the per-path live check (neither is on disk yet),
+	// then the second spawn overwrites the first's .pid file.
+	seen := make(map[string]string)
 	for _, agentPath := range agentPaths {
 		absPath, err := AbsolutePath(agentPath)
 		if err != nil {
@@ -32,6 +38,18 @@ func validateAgentsNotRunning(agentPaths []string) error {
 			continue
 		}
 		name := extractAgentName(absPath)
+		if prevPath, dup := seen[name]; dup {
+			return &PrerequisiteError{
+				Check: "Duplicate agent name in invocation",
+				Message: fmt.Sprintf("agents '%s' and '%s' both resolve to the name '%s'. meshctl tracks one .pid file per name, so the second would overwrite the first.",
+					prevPath, agentPath, name),
+				Remediation: `To fix this issue:
+  1. Set a unique agent name in each agent's @mesh.agent decorator
+  2. Or start the agents in separate meshctl invocations
+  3. Then start again`,
+			}
+		}
+		seen[name] = agentPath
 		running, pid, err := lifecycle.IsAgentRunning(name)
 		if err != nil {
 			return &PrerequisiteError{

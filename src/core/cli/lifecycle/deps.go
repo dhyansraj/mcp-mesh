@@ -38,13 +38,28 @@ func depsFileFor(service string, group GroupID) string {
 	return filepath.Join(depsDirFor(service), group.String())
 }
 
-// withLifecycleLock acquires the global flock at LockFile() for the duration
+// WithLifecycleLock acquires the global flock at LockFile() for the duration
 // of fn. Used to serialize all deps register/unregister calls so concurrent
 // `meshctl start` invocations don't lose entries to a race.
+//
+// Exported so the cli package can hold the lock across a stop sequence
+// (refcount-check + service-kill) — without that, a concurrent `meshctl start`
+// could RegisterDep between the check and the kill, tearing down a service
+// that just acquired a new dependent.
 //
 // Creates the lockfile if missing (and its parent directory). The lock is
 // released by closing the underlying file descriptor — Linux/macOS treat that
 // as an unlock automatically.
+//
+// IMPORTANT: do NOT call any other lifecycle function that itself acquires
+// this lock (RegisterDep, UnregisterDep, PruneSentinelDeps, Sweep) from
+// inside fn — Linux flock(LOCK_EX) is non-recursive on the same fd but will
+// block on a fresh fd, deadlocking. Functions that internally lock are
+// documented as such; the cli package layer composes them at the same level.
+func WithLifecycleLock(fn func() error) error {
+	return withLifecycleLock(fn)
+}
+
 func withLifecycleLock(fn func() error) error {
 	if err := os.MkdirAll(filepath.Dir(LockFile()), 0755); err != nil {
 		return fmt.Errorf("lifecycle: create lock dir: %w", err)
@@ -169,7 +184,11 @@ func UnregisterDep(service string, group GroupID, agents []string) error {
 		}
 		if len(existing) == 0 {
 			// File missing or already empty — try to remove the empty file too.
-			os.Remove(path)
+			// Missing file is success (idempotent); other errors propagate so the
+			// caller knows bookkeeping is in an unexpected state.
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
 			return nil
 		}
 		drop := make(map[string]struct{}, len(agents))
@@ -184,7 +203,11 @@ func UnregisterDep(service string, group GroupID, agents []string) error {
 			remaining = append(remaining, a)
 		}
 		if len(remaining) == 0 {
-			return os.Remove(path)
+			// Missing file is success (idempotent).
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			return nil
 		}
 		return writeDepsAtomic(path, remaining)
 	})
@@ -271,7 +294,7 @@ func PruneSentinelDeps(service string) error {
 			path := filepath.Join(dir, e.Name())
 			agents, err := readDeps(path)
 			if err != nil {
-				continue
+				return fmt.Errorf("lifecycle: read deps %s: %w", path, err)
 			}
 			var kept []string
 			for _, a := range agents {
@@ -284,10 +307,14 @@ func PruneSentinelDeps(service string) error {
 				continue
 			}
 			if len(kept) == 0 {
-				_ = os.Remove(path)
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("lifecycle: remove deps %s: %w", path, err)
+				}
 				continue
 			}
-			_ = writeDepsAtomic(path, kept)
+			if err := writeDepsAtomic(path, kept); err != nil {
+				return fmt.Errorf("lifecycle: rewrite deps %s: %w", path, err)
+			}
 		}
 		return nil
 	})

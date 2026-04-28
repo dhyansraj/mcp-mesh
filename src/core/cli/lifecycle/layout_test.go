@@ -8,11 +8,12 @@ import (
 )
 
 func TestRootDefault(t *testing.T) {
-	// Clear any existing override and env var.
+	// Clear any existing override and env var. We use t.Setenv to register the
+	// auto-restore (via t.Cleanup), then immediately Unsetenv so Root() falls
+	// through to the home-dir default. Cleanup restores the original value.
 	defer WithRoot("")()
-	prev := os.Getenv(envHome)
+	t.Setenv(envHome, "")
 	os.Unsetenv(envHome)
-	defer os.Setenv(envHome, prev)
 
 	got := Root()
 	home, err := os.UserHomeDir()
@@ -27,12 +28,11 @@ func TestRootDefault(t *testing.T) {
 
 func TestRootEnvOverride(t *testing.T) {
 	defer WithRoot("")()
-	prev := os.Getenv(envHome)
-	defer os.Setenv(envHome, prev)
-	os.Setenv(envHome, "/tmp/custom-mesh-root")
+	override := filepath.Join(t.TempDir(), "custom-mesh-root")
+	t.Setenv(envHome, override)
 
-	if got := Root(); got != "/tmp/custom-mesh-root" {
-		t.Errorf("Root() with env = %q, want /tmp/custom-mesh-root", got)
+	if got := Root(); got != override {
+		t.Errorf("Root() with env = %q, want %q", got, override)
 	}
 }
 
@@ -50,21 +50,22 @@ func TestWithRoot(t *testing.T) {
 }
 
 func TestPathHelpers(t *testing.T) {
-	defer WithRoot("/tmp/lc-test")()
+	root := t.TempDir()
+	defer WithRoot(root)()
 
 	cases := map[string]string{
-		PIDFile("foo"):                                   "/tmp/lc-test/pids/foo.pid",
-		GroupFile("foo"):                                 "/tmp/lc-test/pids/foo.group",
-		WrapperPIDFile(GroupID("g1")):                    "/tmp/lc-test/pids/wrapper-g1.pid",
-		RegistryDepsFile(GroupID("g1")):                  "/tmp/lc-test/registry/deps/g1",
-		UIDepsFile(GroupID("g1")):                        "/tmp/lc-test/ui/deps/g1",
-		LockFile():                                       "/tmp/lc-test/lifecycle.lock",
-		RegistryStartLock():                              "/tmp/lc-test/registry/start.lock",
-		UIStartLock():                                    "/tmp/lc-test/ui/start.lock",
-		PIDsDir():                                        "/tmp/lc-test/pids",
-		RegistryDepsDir():                                "/tmp/lc-test/registry/deps",
-		UIDepsDir():                                      "/tmp/lc-test/ui/deps",
-		filepath.Join(PIDsDir(), "wrapper-some.group.pid"): "/tmp/lc-test/pids/wrapper-some.group.pid",
+		PIDFile("foo"):                  filepath.Join(root, "pids", "foo.pid"),
+		GroupFile("foo"):                filepath.Join(root, "pids", "foo.group"),
+		WrapperPIDFile(GroupID("g1")):   filepath.Join(root, "pids", "wrapper-g1.pid"),
+		RegistryDepsFile(GroupID("g1")): filepath.Join(root, "registry", "deps", "g1"),
+		UIDepsFile(GroupID("g1")):       filepath.Join(root, "ui", "deps", "g1"),
+		LockFile():                      filepath.Join(root, "lifecycle.lock"),
+		RegistryStartLock():             filepath.Join(root, "registry", "start.lock"),
+		UIStartLock():                   filepath.Join(root, "ui", "start.lock"),
+		PIDsDir():                       filepath.Join(root, "pids"),
+		RegistryDepsDir():               filepath.Join(root, "registry", "deps"),
+		UIDepsDir():                     filepath.Join(root, "ui", "deps"),
+		filepath.Join(PIDsDir(), "wrapper-some.group.pid"): filepath.Join(root, "pids", "wrapper-some.group.pid"),
 	}
 	for got, want := range cases {
 		if got != want {

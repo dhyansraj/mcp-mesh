@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 
@@ -21,17 +22,22 @@ import (
 // Bracketed in lifecycle.WithStartLock(ServiceUI, ...) so concurrent
 // meshctl invocations racing to start the UI cleanly serialize: only one
 // wins the spawn, others see the now-running UI and reuse it.
-func maybeStartUIServer(cmd *cobra.Command, config *CLIConfig, registryURL string) {
+//
+// Returns an error if the start-lock acquisition itself fails (e.g., flock
+// syscall failure or unable to create the lock file). Spawn failures inside
+// the locked region are warned but not surfaced as errors so the caller can
+// continue without the dashboard.
+func maybeStartUIServer(cmd *cobra.Command, config *CLIConfig, registryURL string) error {
 	startUI, _ := cmd.Flags().GetBool("ui")
 	if !startUI {
-		return
+		return nil
 	}
 
 	quiet, _ := cmd.Flags().GetBool("quiet")
 	uiPort, _ := cmd.Flags().GetInt("ui-port")
 	openDashboard, _ := cmd.Flags().GetBool("dashboard")
 
-	_ = lifecycle.WithStartLock(lifecycle.ServiceUI, func() error {
+	if err := lifecycle.WithStartLock(lifecycle.ServiceUI, func() error {
 		// Re-check inside the lock so the loser of the race takes the reuse
 		// branch instead of double-starting.
 		if IsUIRunning(uiPort) {
@@ -75,7 +81,11 @@ func maybeStartUIServer(cmd *cobra.Command, config *CLIConfig, registryURL strin
 			openBrowser(fmt.Sprintf("http://localhost:%d", actualPort))
 		}
 		return nil
-	})
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: UI start lock acquisition failed: %v\n", err)
+		return fmt.Errorf("ui start lock: %w", err)
+	}
+	return nil
 }
 
 // openBrowser opens the default browser to the given URL

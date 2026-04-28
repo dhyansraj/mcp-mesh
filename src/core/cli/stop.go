@@ -109,7 +109,7 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 	if len(args) > 0 {
 		var failures []string
 		for _, name := range args {
-			if err := stopSpecificAgent(pm, name, shutdownTimeout, quiet, keepRegistry, keepUI); err != nil {
+			if err := stopSpecificAgent(name, shutdownTimeout, quiet, keepRegistry, keepUI); err != nil {
 				failures = append(failures, fmt.Sprintf("%s: %v", name, err))
 				if !quiet {
 					fmt.Printf("Warning: failed to stop %s: %v\n", name, err)
@@ -161,14 +161,14 @@ func runStopCommand(cmd *cobra.Command, args []string) error {
 // hint), or if the kill couldn't be verified within the timeout. A successful
 // stop removes both <agent>.pid and <agent>.group, and unregisters the agent
 // from registry/deps and ui/deps for its group.
-func stopSpecificAgent(pm *PIDManager, name string, timeout time.Duration, quiet, keepRegistry, keepUI bool) error {
+func stopSpecificAgent(name string, timeout time.Duration, quiet, keepRegistry, keepUI bool) error {
 	entry, err := lifecycle.LookupAgent(name)
 	if err != nil {
 		return fmt.Errorf("lookup %s: %w", name, err)
 	}
 	if entry == nil {
 		// Agent not tracked. Suggest similar names if any are running.
-		suggestions := suggestAgentNames(pm, name)
+		suggestions := suggestAgentNames(name)
 		if len(suggestions) > 0 {
 			return fmt.Errorf("agent '%s' is not running. Did you mean: %s?",
 				name, strings.Join(quoteStrings(suggestions), ", "))
@@ -448,44 +448,57 @@ func stopAll(timeout time.Duration, quiet, keepRegistry, keepUI bool) error {
 // stopServiceIfRefcountZero stops the service ONLY when no group has agents
 // listed in its deps directory. Otherwise leaves it alone — another live
 // `meshctl start` group still depends on it.
+//
+// The whole refcount-check + LookupService + KillVerifyAndCleanup sequence is
+// held inside WithLifecycleLock so a concurrent `meshctl start` cannot
+// RegisterDep between the check and the kill — without the lock, a winning
+// start would write the dep right after IsServiceRefcountZero returns true,
+// then we'd kill the service the new dependent just registered against.
+//
+// Holding the lock across KillVerifyAndCleanup is safe: that helper only
+// touches the .pid file via os.Remove + sends signals; it does NOT itself
+// acquire the lifecycle lock, so no recursive-flock deadlock.
 func stopServiceIfRefcountZero(service, displayName string, timeout time.Duration, quiet bool) {
-	zero, err := lifecycle.IsServiceRefcountZero(service)
-	if err != nil {
-		if !quiet {
-			fmt.Printf("Warning: refcount check for %s failed: %v\n", displayName, err)
+	_ = lifecycle.WithLifecycleLock(func() error {
+		zero, err := lifecycle.IsServiceRefcountZero(service)
+		if err != nil {
+			if !quiet {
+				fmt.Printf("Warning: refcount check for %s failed: %v\n", displayName, err)
+			}
+			return nil
 		}
-		return
-	}
-	if !zero {
-		groups, _ := lifecycle.DepsForService(service)
-		if !quiet {
-			fmt.Printf("Keeping %s alive (refcount=%d, group(s): %s)\n",
-				displayName, len(groups), formatGroups(groups))
+		if !zero {
+			groups, _ := lifecycle.DepsForService(service)
+			if !quiet {
+				fmt.Printf("Keeping %s alive (refcount=%d, group(s): %s)\n",
+					displayName, len(groups), formatGroups(groups))
+			}
+			return nil
 		}
-		return
-	}
 
-	// Only stop the service if its PID file is present and the process is alive.
-	info, err := lifecycle.LookupService(service)
-	if err != nil || info == nil {
-		return
-	}
-	if !info.Alive {
-		_ = lifecycle.RemoveService(service)
-		return
-	}
-	if !quiet {
-		fmt.Printf("Stopping %s (PID: %d)...\n", displayName, info.PID)
-	}
-	if _, err := lifecycle.KillVerifyAndCleanup(service, timeout); err != nil {
-		if !quiet {
-			fmt.Printf("Failed to stop %s: %v\n", displayName, err)
+		// Only stop the service if its PID file is present and the process is alive.
+		info, err := lifecycle.LookupService(service)
+		if err != nil || info == nil {
+			return nil
 		}
-		return
-	}
-	if !quiet {
-		fmt.Printf("%s stopped\n", displayName)
-	}
+		if !info.Alive {
+			_ = lifecycle.RemoveService(service)
+			return nil
+		}
+		if !quiet {
+			fmt.Printf("Stopping %s (PID: %d)...\n", displayName, info.PID)
+		}
+		if _, err := lifecycle.KillVerifyAndCleanup(service, timeout); err != nil {
+			if !quiet {
+				fmt.Printf("Failed to stop %s: %v\n", displayName, err)
+			}
+			return nil
+		}
+		if !quiet {
+			fmt.Printf("%s stopped\n", displayName)
+		}
+		return nil
+	})
 }
 
 // stopServiceForce always kills the service. If groups still depend on it,
@@ -647,7 +660,7 @@ func cleanupAllFiles(pm *PIDManager, quiet bool) error {
 // suggestAgentNames returns up to 3 names of running agents that look similar
 // to the queried name. Used by stopSpecificAgent to provide "Did you mean?"
 // hints when the exact name isn't tracked.
-func suggestAgentNames(_ *PIDManager, query string) []string {
+func suggestAgentNames(query string) []string {
 	agents, err := lifecycle.ListAgents()
 	if err != nil {
 		return nil

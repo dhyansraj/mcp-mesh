@@ -132,8 +132,9 @@ func startStandardMode(cmd *cobra.Command, args []string, config *CLIConfig) err
 		}
 	}
 
-	// Start UI server if --ui flag is set (before agents, which may block in foreground)
-	maybeStartUIServer(cmd, config, registryURL)
+	// Start UI server if --ui flag is set (before agents, which may block in foreground).
+	// Lock-acquire failure is non-fatal: warn (inside helper) and continue without UI.
+	_ = maybeStartUIServer(cmd, config, registryURL)
 
 	// Build environment for agents
 	agentEnv := buildAgentEnvironment(cmd, registryURL, config)

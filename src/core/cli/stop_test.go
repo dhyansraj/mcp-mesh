@@ -33,7 +33,7 @@ func TestSuggestAgentNames(t *testing.T) {
 		{"", nil},
 	}
 	for _, tc := range tests {
-		got := suggestAgentNames(nil, tc.query)
+		got := suggestAgentNames(tc.query)
 		if !equalStringSlices(got, tc.want) {
 			t.Errorf("suggestAgentNames(%q) = %v, want %v", tc.query, got, tc.want)
 		}
@@ -57,7 +57,7 @@ func TestSuggestAgentNamesCapped(t *testing.T) {
 		}
 	}
 
-	got := suggestAgentNames(nil, "agent")
+	got := suggestAgentNames("agent")
 	if len(got) != 3 {
 		t.Fatalf("suggestAgentNames(\"agent\") returned %d results, want exactly 3: %v", len(got), got)
 	}

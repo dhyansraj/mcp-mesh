@@ -60,7 +60,7 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 			if !quiet {
 				fmt.Printf("Registry already running at %s, starting UI server only\n", registryURL)
 			}
-			maybeStartUIServer(cmd, config, registryURL)
+			_ = maybeStartUIServer(cmd, config, registryURL)
 			// Register the UI sentinel so refcount sees this group as a UI dep.
 			registerInvocationDeps(group, nil, true, quiet)
 
@@ -114,23 +114,8 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 		}
 	}
 
-	// Check if port is available (secondary check for better error messages)
-	if !IsPortAvailable(config.RegistryHost, config.RegistryPort) {
-		return fmt.Errorf("port %d is already in use on %s - another service may be using this port", config.RegistryPort, config.RegistryHost)
-	}
-
-	// Port is free, but another registry might be running on a different port.
-	// The PID guard catches this case without interfering with concurrent starts
-	// on the same port (handled by port check above).
-	pidMgr, pidErr := NewPIDManager()
-	if pidErr == nil {
-		existingPID, err := pidMgr.ReadPID("registry")
-		if err == nil && existingPID > 0 && existingPID != os.Getpid() && IsProcessAlive(existingPID) {
-			return fmt.Errorf("a registry is already running (PID %d). Stop it with 'meshctl stop --registry' before starting a new one, or use '--connect-only --registry-url <url>' to connect to a remote registry", existingPID)
-		}
-	}
-
-	// Setup security if specified
+	// Setup security if specified (validation outside the spawn lock so we
+	// fast-fail user errors before serializing on flock).
 	secure, _ := cmd.Flags().GetBool("secure")
 	if secure {
 		certFile, _ := cmd.Flags().GetString("cert-file")
@@ -141,14 +126,47 @@ func startRegistryOnlyMode(cmd *cobra.Command, config *CLIConfig) error {
 		// TODO: Implement TLS configuration
 	}
 
-	// Start registry using process manager
-	metadata := map[string]interface{}{
-		"secure": secure,
-	}
+	// Spawn the registry under WithStartLock so two concurrent
+	// `meshctl start --registry-only` invocations cleanly serialize: the loser
+	// of the flock race re-checks IsRegistryRunning inside the locked region,
+	// finds it true, and falls into the reuse branch instead of double-spawning.
+	var processInfo *ProcessInfo
+	if err := lifecycle.WithStartLock(lifecycle.ServiceRegistry, func() error {
+		// Re-check inside the lock — winner of the race already started it.
+		if IsRegistryRunning(registryURL) {
+			// Surface the same "already running" message as the pre-lock branch.
+			// We can't return an error here without conflating it with a real
+			// spawn failure, so set processInfo=nil and the caller bails below.
+			return fmt.Errorf("registry is already running at %s", registryURL)
+		}
 
-	processInfo, err := pm.StartRegistryProcess(config.RegistryPort, config.DBPath, metadata)
-	if err != nil {
-		return fmt.Errorf("failed to start registry: %w", err)
+		// Check if port is available (secondary check for better error messages).
+		if !IsPortAvailable(config.RegistryHost, config.RegistryPort) {
+			return fmt.Errorf("port %d is already in use on %s - another service may be using this port", config.RegistryPort, config.RegistryHost)
+		}
+
+		// Port is free, but another registry might be running on a different
+		// port. The PID guard catches this case without interfering with
+		// concurrent starts on the same port (handled by port check above).
+		pidMgr, pidErr := NewPIDManager()
+		if pidErr == nil {
+			existingPID, err := pidMgr.ReadPID("registry")
+			if err == nil && existingPID > 0 && existingPID != os.Getpid() && IsProcessAlive(existingPID) {
+				return fmt.Errorf("a registry is already running (PID %d). Stop it with 'meshctl stop --registry' before starting a new one, or use '--connect-only --registry-url <url>' to connect to a remote registry", existingPID)
+			}
+		}
+
+		metadata := map[string]interface{}{
+			"secure": secure,
+		}
+		pi, err := pm.StartRegistryProcess(config.RegistryPort, config.DBPath, metadata)
+		if err != nil {
+			return fmt.Errorf("failed to start registry: %w", err)
+		}
+		processInfo = pi
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	// Register explicit cleanup so the registry subprocess is killed even if
