@@ -3231,7 +3231,7 @@ remove volumes too:</p>
 <pre class="shell"><code>$ docker compose down -v</code></pre>
 <h2 id="troubleshooting-7">Troubleshooting</h2>
 <p><strong>Docker build fails with missing requirements.</strong> The
-compose file uses <code>mcpmesh/python-runtime:1.4.0</code> images with
+compose file uses <code>mcpmesh/python-runtime:1.4.1</code> images with
 a dev-mode entrypoint that installs <code>requirements.txt</code> on
 startup. If an agent has dependencies not in the base image, check that
 <code>requirements.txt</code> exists in the agent directory and lists
@@ -3451,7 +3451,7 @@ did locally. No code change needed.</p>
 <p>The <code>mcp-mesh-core</code> chart deploys the registry,
 PostgreSQL, Redis, Tempo, and Grafana as a single Helm release:</p>
 <pre class="shell"><code>$ helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-    --version 1.4.0 \
+    --version 1.4.1 \
     -n trip-planner \
     -f helm/values-core.yaml \
     --wait --timeout 5m</code></pre>
@@ -3474,7 +3474,7 @@ $ for agent in &quot;${AGENTS[@]}&quot;; do
     echo &quot;Installing $agent...&quot;
     helm install &quot;$agent&quot; \
       oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-      --version 1.4.0 \
+      --version 1.4.1 \
       -n trip-planner \
       -f &quot;helm/values-${agent}.yaml&quot;
   done</code></pre>
