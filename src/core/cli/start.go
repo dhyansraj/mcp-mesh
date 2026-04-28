@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"mcp-mesh/src/core/cli/lifecycle"
 )
 
 // Language constants for agent detection
@@ -100,6 +102,20 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load configuration: %w", err)
 	}
 
+	// Ensure lifecycle directories exist and run a GC sweep so stale entries
+	// from previous crashed runs don't confuse refcount checks. Sweep NEVER
+	// kills processes — it only removes bookkeeping for already-dead PIDs.
+	if err := lifecycle.EnsureDirs(); err != nil {
+		return fmt.Errorf("failed to create lifecycle dirs: %w", err)
+	}
+	if _, err := lifecycle.Sweep(); err != nil {
+		// GC failures are non-fatal — log and continue.
+		quiet, _ := cmd.Flags().GetBool("quiet")
+		if !quiet {
+			fmt.Printf("Warning: GC sweep at startup: %v\n", err)
+		}
+	}
+
 	// Load environment file if specified
 	envFile, _ := cmd.Flags().GetString("env-file")
 	if envFile != "" {
@@ -171,6 +187,18 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 	quiet, _ = cmd.Flags().GetBool("quiet")
 	if len(resolvedArgs) > 0 {
 		if err := runPrerequisiteValidation(resolvedArgs, quiet); err != nil {
+			return err
+		}
+		// Refuse same-name re-start: if any requested agent already has a live
+		// PID file, fail fast on the parent terminal BEFORE forking to detach.
+		// Surfacing the error here (instead of in the forked child's log file)
+		// gives the user an immediate exit code != 0 with a clear remediation.
+		if err := validateAgentsNotRunning(resolvedArgs); err != nil {
+			if prereqErr, ok := err.(*PrerequisiteError); ok {
+				fmt.Printf("\n❌ %s\n\n", prereqErr.Message)
+				fmt.Printf("%s\n", prereqErr.Remediation)
+				return fmt.Errorf("agent already running")
+			}
 			return err
 		}
 	}

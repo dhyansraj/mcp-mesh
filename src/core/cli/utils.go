@@ -152,6 +152,24 @@ func IsRegistryRunning(registryURL string) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
+// IsUIRunning checks whether the dashboard UI server is currently responding
+// at /api/ui-health. Used by maybeStartUIServer for protocol-driven reuse
+// decisions (so two concurrent meshctl starts don't both try to bind the
+// same UI port).
+func IsUIRunning(port int) bool {
+	if port == 0 {
+		port = 3080
+	}
+	healthURL := fmt.Sprintf("http://localhost:%d/api/ui-health", port)
+	client := newTLSSkipVerifyClient()
+	resp, err := client.Get(healthURL)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
 // PythonProcessFile represents the Python CLI process file format
 type PythonProcessFile struct {
 	Processes     map[string]interface{} `json:"processes"`

@@ -10,7 +10,70 @@ import (
 	"strings"
 
 	"mcp-mesh/src/core/cli/handlers"
+	"mcp-mesh/src/core/cli/lifecycle"
 )
+
+// validateAgentsNotRunning checks that none of the requested agents already
+// have a live process recorded on disk. Returns the first conflict as a
+// PrerequisiteError so the caller can surface it the same way as other
+// pre-flight failures.
+//
+// Run BEFORE any spawn (and BEFORE forkToBackground in detach mode) so the
+// user sees the error immediately on the controlling terminal. Without this
+// check, a second `meshctl start <agent>` silently overwrites <agent>.pid /
+// <agent>.group, leaving dangling state that makes refcount-based service
+// shutdown unsafe.
+func validateAgentsNotRunning(agentPaths []string) error {
+	// Track names seen within THIS invocation so we catch the case where two
+	// distinct paths normalize to the same agent name (e.g. two different
+	// files both named "agent.py" with no @mesh.agent name override). Without
+	// this, both paths pass the per-path live check (neither is on disk yet),
+	// then the second spawn overwrites the first's .pid file.
+	seen := make(map[string]string)
+	for _, agentPath := range agentPaths {
+		absPath, err := AbsolutePath(agentPath)
+		if err != nil {
+			// Path resolution errors are caught by validateAgentPrerequisites;
+			// skip here so the user sees the better message from there.
+			continue
+		}
+		name := extractAgentName(absPath)
+		if prevPath, dup := seen[name]; dup {
+			return &PrerequisiteError{
+				Check: "Duplicate agent name in invocation",
+				Message: fmt.Sprintf("agents '%s' and '%s' both resolve to the name '%s'. meshctl tracks one .pid file per name, so the second would overwrite the first.",
+					prevPath, agentPath, name),
+				Remediation: `To fix this issue:
+  1. Set a unique agent name in each agent's @mesh.agent decorator
+  2. Or start the agents in separate meshctl invocations
+  3. Then start again`,
+			}
+		}
+		seen[name] = agentPath
+		running, pid, err := lifecycle.IsAgentRunning(name)
+		if err != nil {
+			return &PrerequisiteError{
+				Check:   "Agent already running",
+				Message: fmt.Sprintf("Could not check whether agent '%s' is already running: %v", name, err),
+				Remediation: `To fix this issue:
+  1. Verify ~/.mcp-mesh/pids/ is readable
+  2. Remove any stale files manually if needed
+  3. Run meshctl start again`,
+			}
+		}
+		if running {
+			return &PrerequisiteError{
+				Check:   "Agent already running",
+				Message: fmt.Sprintf("agent '%s' is already running (PID %d). Stop it first with 'meshctl stop %s'.", name, pid, name),
+				Remediation: fmt.Sprintf(`To fix this issue:
+  1. Stop the running agent: meshctl stop %s
+  2. Or list all running agents: meshctl list
+  3. Then start it again`, name),
+			}
+		}
+	}
+	return nil
+}
 
 // PrerequisiteError represents a failed prerequisite check with remediation info
 type PrerequisiteError struct {
