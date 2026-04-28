@@ -189,6 +189,18 @@ func runStartCommand(cmd *cobra.Command, args []string) error {
 		if err := runPrerequisiteValidation(resolvedArgs, quiet); err != nil {
 			return err
 		}
+		// Refuse same-name re-start: if any requested agent already has a live
+		// PID file, fail fast on the parent terminal BEFORE forking to detach.
+		// Surfacing the error here (instead of in the forked child's log file)
+		// gives the user an immediate exit code != 0 with a clear remediation.
+		if err := validateAgentsNotRunning(resolvedArgs); err != nil {
+			if prereqErr, ok := err.(*PrerequisiteError); ok {
+				fmt.Printf("\n❌ %s\n\n", prereqErr.Message)
+				fmt.Printf("%s\n", prereqErr.Remediation)
+				return fmt.Errorf("agent already running")
+			}
+			return err
+		}
 	}
 
 	// Handle detach mode FIRST - before other modes

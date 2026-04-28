@@ -115,6 +115,15 @@ func Sweep() (Report, error) {
 			}
 			var alive []string
 			for _, a := range agents {
+				// Sentinels (names beginning with "_", e.g. "_ui_only_" written
+				// by `meshctl start --ui` standalone) have no PID file by design
+				// — they exist solely to keep the deps file non-empty so refcount
+				// reports the service as in-use. Never reap them as "dead PID";
+				// only `meshctl stop` (no args) clears them, via PruneSentinelDeps.
+				if strings.HasPrefix(a, "_") {
+					alive = append(alive, a)
+					continue
+				}
 				pidPath := PIDFile(a)
 				pid, _ := readPIDFromFile(pidPath)
 				if pid > 0 && processAliveFn(pid) {

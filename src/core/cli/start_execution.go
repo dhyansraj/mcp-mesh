@@ -30,6 +30,12 @@ const envGroupID = "MCP_MESH_GROUP_ID"
 // uiOnlyDepSentinel is the placeholder agent name used to keep a UI deps file
 // non-empty when `meshctl start --ui` is called with no agents. Lets the
 // refcount machinery report "UI is in use" even with no real agents.
+//
+// NOTE: All sentinel names MUST start with "_". The lifecycle layer (gc.go,
+// enumerate.go) treats any deps entry beginning with "_" as a sentinel: GC
+// never reaps it for "missing PID" liveness, ListAgents never returns it, and
+// only `meshctl stop` (no args) clears it via lifecycle.PruneSentinelDeps so a
+// "stop everything" command can bring down a standalone --ui session.
 const uiOnlyDepSentinel = "_ui_only_"
 
 // resolveGroupID returns the active group-id for this meshctl invocation.
@@ -266,6 +272,21 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 		absPath, err := AbsolutePath(agentPath)
 		if err != nil {
 			return fmt.Errorf("invalid agent path %s: %w", agentPath, err)
+		}
+
+		// Defense-in-depth: refuse-if-running. The parent runStartCommand
+		// already performs this check before forkToBackground, but foreground
+		// + connect-only callers reach here directly. Re-checking here also
+		// closes a tiny race where another meshctl could win between the
+		// parent check and the child spawn.
+		if name := extractAgentName(absPath); name != "" {
+			running, pid, rerr := lifecycle.IsAgentRunning(name)
+			if rerr != nil {
+				return fmt.Errorf("failed to check if agent %s is running: %w", name, rerr)
+			}
+			if running {
+				return fmt.Errorf("agent '%s' is already running (PID %d). Stop it first with 'meshctl stop %s'.", name, pid, name)
+			}
 		}
 
 		if !quiet {

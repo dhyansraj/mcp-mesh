@@ -251,3 +251,55 @@ func IsServiceRefcountZero(service string) (bool, error) {
 	}
 	return len(groups) == 0, nil
 }
+
+// PruneSentinelDeps removes all sentinel entries (names starting with "_",
+// e.g. "_ui_only_") from every deps file under the service. If a deps file
+// becomes empty as a result, it is deleted so IsServiceRefcountZero reports
+// truly zero.
+//
+// Used by `meshctl stop` (no args) so a standalone --ui session does not
+// keep the UI alive past a "stop everything" command. Sentinels exist to
+// protect the per-agent stop path (where killing an unrelated agent must
+// not bring down a separately-started UI), but a no-args stop is the
+// universal shutdown and must not be blocked by them.
+func PruneSentinelDeps(service string) error {
+	dir, err := depsDirFor(service)
+	if err != nil {
+		return err
+	}
+	return withLifecycleLock(func() error {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		for _, e := range entries {
+			if e.IsDir() || strings.HasSuffix(e.Name(), ".tmp") {
+				continue
+			}
+			path := filepath.Join(dir, e.Name())
+			agents, err := readDeps(path)
+			if err != nil {
+				continue
+			}
+			var kept []string
+			for _, a := range agents {
+				if strings.HasPrefix(a, "_") {
+					continue
+				}
+				kept = append(kept, a)
+			}
+			if len(kept) == len(agents) {
+				continue
+			}
+			if len(kept) == 0 {
+				_ = os.Remove(path)
+				continue
+			}
+			_ = writeDepsAtomic(path, kept)
+		}
+		return nil
+	})
+}

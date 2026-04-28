@@ -45,6 +45,12 @@ func ListAgents() ([]AgentEntry, error) {
 		if strings.HasPrefix(base, "wrapper-") {
 			continue
 		}
+		// Sentinel placeholders (names starting with "_", e.g. "_ui_only_")
+		// are bookkeeping markers in deps files only; they should never have
+		// a .pid file, but skip defensively so they never appear as agents.
+		if strings.HasPrefix(base, "_") {
+			continue
+		}
 		if isServiceName(base) {
 			continue
 		}
@@ -61,6 +67,30 @@ func ListAgents() ([]AgentEntry, error) {
 		out = append(out, entry)
 	}
 	return out, nil
+}
+
+// IsAgentRunning reports whether an agent with the given name has a live
+// process recorded on disk. Returns (true, pid, nil) when the .pid file
+// exists AND the kernel still has an entry for that PID. Returns
+// (false, 0, nil) when no .pid file is present, the file is empty, or the
+// recorded PID is dead. Errors are only returned for unexpected I/O failures
+// reading the .pid file (e.g., permission denied) — "no such file" is not an
+// error.
+//
+// Used by `meshctl start` to refuse same-name re-starts before a duplicate
+// process can clobber the on-disk PID/group bookkeeping.
+func IsAgentRunning(name string) (bool, int, error) {
+	pid, err := readPIDFromFile(PIDFile(name))
+	if err != nil {
+		return false, 0, err
+	}
+	if pid == 0 {
+		return false, 0, nil
+	}
+	if !processAliveFn(pid) {
+		return false, pid, nil
+	}
+	return true, pid, nil
 }
 
 // LookupAgent returns the on-disk record for a single agent, or (nil, nil)

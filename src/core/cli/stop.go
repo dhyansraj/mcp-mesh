@@ -409,6 +409,19 @@ func stopAll(timeout time.Duration, quiet, keepRegistry, keepUI bool) error {
 		}
 	}
 
+	// Drop sentinel deps entries (e.g. "_ui_only_" from a standalone
+	// `meshctl start --ui`) before refcount checks. Sentinels exist to keep
+	// per-agent stops from accidentally tearing down a separately-started
+	// service, but a no-args `meshctl stop` is the universal shutdown — the
+	// user's intent is "everything off", and a standalone UI must come down
+	// with it (only --keep-ui can save it).
+	if !keepUI {
+		_ = lifecycle.PruneSentinelDeps(lifecycle.ServiceUI)
+	}
+	if !keepRegistry {
+		_ = lifecycle.PruneSentinelDeps(lifecycle.ServiceRegistry)
+	}
+
 	// UI before registry (UI depends on registry).
 	if !keepUI {
 		stopServiceIfRefcountZero(lifecycle.ServiceUI, "UI server", timeout, quiet)
