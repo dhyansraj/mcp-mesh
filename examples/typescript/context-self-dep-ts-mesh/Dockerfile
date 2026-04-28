@@ -1,5 +1,5 @@
 # Dockerfile for context-self-dep-ts-mesh MCP Mesh LLM agent
-FROM mcpmesh/typescript-runtime:1.3.4
+FROM mcpmesh/typescript-runtime:1.4.0
 
 WORKDIR /app
 
