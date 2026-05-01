@@ -28,6 +28,7 @@ type Server struct {
 	startTime      time.Time
 	handlers       *EntBusinessLogicHandlers
 	healthMonitor  *AgentHealthMonitor
+	sweepJob       *SweepJob
 	tracingManager *tracing.TracingManager
 	trustChain     *trust.TrustChain
 	logger         *logger.Logger
@@ -45,6 +46,10 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	heartbeatTimeout := time.Duration(config.DefaultTimeoutThreshold) * time.Second
 	checkInterval := time.Duration(config.HealthCheckInterval) * time.Second
 	healthMonitor := NewAgentHealthMonitor(entService, logger, heartbeatTimeout, checkInterval)
+
+	// Create sweep job (issue #835): purge stale agents and old registry events.
+	sweepCfg := LoadSweepConfigFromEnv(logger)
+	sweepJob := NewSweepJob(sweepCfg, entDB, entService, logger)
 
 	// Initialize distributed tracing if enabled
 	var tracingManager *tracing.TracingManager
@@ -92,6 +97,7 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 		startTime:      time.Now().UTC(),
 		handlers:       handlers,
 		healthMonitor:  healthMonitor,
+		sweepJob:       sweepJob,
 		tracingManager: tracingManager,
 		trustChain:     trustChain,
 		logger:         logger,
@@ -119,6 +125,11 @@ func (s *Server) Run(addr string) error {
 
 	// Start health monitor
 	s.healthMonitor.Start()
+
+	// Start sweep job (issue #835)
+	if s.sweepJob != nil {
+		s.sweepJob.Start(context.Background())
+	}
 
 	// Start distributed tracing if enabled
 	if s.tracingManager != nil {
@@ -152,6 +163,11 @@ func (s *Server) Start() error {
 func (s *Server) Stop() error {
 	// Stop health monitor
 	s.healthMonitor.Stop()
+
+	// Stop sweep job
+	if s.sweepJob != nil {
+		s.sweepJob.Stop()
+	}
 
 	// Stop distributed tracing if enabled
 	if s.tracingManager != nil {
@@ -249,9 +265,9 @@ func (s *Server) handleTracingStats(c *gin.Context) {
 	stats := s.tracingManager.GetStats()
 	if stats == nil {
 		c.JSON(200, map[string]interface{}{
-			"enabled": true,
+			"enabled":         true,
 			"stats_available": false,
-			"reason": "statistics collection not enabled",
+			"reason":          "statistics collection not enabled",
 		})
 		return
 	}

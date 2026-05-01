@@ -42,7 +42,7 @@ Shows agent status, dependency resolution, uptime, and endpoint information
 in a docker-compose-style format for easy monitoring.
 
 By default, only healthy agents are shown. Use --all to see all agents
-including unhealthy/expired ones.
+including unhealthy ones (purged after MCP_MESH_RETENTION, default 1h).
 
 Examples:
   meshctl list                                    # Show healthy agents only (default)
@@ -72,7 +72,7 @@ Tools listing:
 
 	// New enhanced filtering and display options
 	cmd.Flags().String("since", "", "Show agents active since duration (e.g., 1h, 30m, 24h)")
-	cmd.Flags().Bool("all", false, "Show all agents including unhealthy/expired (default: healthy only)")
+	cmd.Flags().Bool("all", false, "Show all agents including unhealthy (default: healthy only)")
 
 	// Tools listing - use --tools to list all, --tools=<name> for specific tool details
 	cmd.Flags().StringP("tools", "t", "", "List tools: use --tools or -t to list all, --tools=<tool> for details")
@@ -111,28 +111,28 @@ type RegistryStatus struct {
 
 // EnhancedAgent contains comprehensive agent information for display
 type EnhancedAgent struct {
-	ID                       string                   `json:"id"`
-	Name                     string                   `json:"name"`
-	AgentType                string                   `json:"agent_type"`
-	Status                   string                   `json:"status"`
-	Runtime                  string                   `json:"runtime,omitempty"`
-	Endpoint                 string                   `json:"endpoint"`
-	Tools                    []ToolInfo               `json:"tools"`
-	Dependencies             []Dependency             `json:"dependencies"`
-	DependencyResolutions    []DependencyResolution   `json:"dependency_resolutions,omitempty"`
-	LLMToolResolutions       []LLMToolResolution      `json:"llm_tool_resolutions,omitempty"`
-	LLMProviderResolutions   []LLMProviderResolution  `json:"llm_provider_resolutions,omitempty"`
-	DependenciesResolved     int                      `json:"dependencies_resolved"`
-	DependenciesTotal        int                      `json:"dependencies_total"`
-	LastHeartbeat            *time.Time               `json:"last_heartbeat,omitempty"`
-	CreatedAt                time.Time                `json:"created_at"`
-	UpdatedAt                time.Time                `json:"updated_at"`
-	Version                  string                   `json:"version,omitempty"`
-	PID                      int                      `json:"pid,omitempty"`
-	FilePath                 string                   `json:"file_path,omitempty"`
-	StartTime                time.Time                `json:"start_time,omitempty"`
-	Config                   map[string]interface{}   `json:"config,omitempty"`
-	Labels                   map[string]interface{}   `json:"labels,omitempty"`
+	ID                     string                  `json:"id"`
+	Name                   string                  `json:"name"`
+	AgentType              string                  `json:"agent_type"`
+	Status                 string                  `json:"status"`
+	Runtime                string                  `json:"runtime,omitempty"`
+	Endpoint               string                  `json:"endpoint"`
+	Tools                  []ToolInfo              `json:"tools"`
+	Dependencies           []Dependency            `json:"dependencies"`
+	DependencyResolutions  []DependencyResolution  `json:"dependency_resolutions,omitempty"`
+	LLMToolResolutions     []LLMToolResolution     `json:"llm_tool_resolutions,omitempty"`
+	LLMProviderResolutions []LLMProviderResolution `json:"llm_provider_resolutions,omitempty"`
+	DependenciesResolved   int                     `json:"dependencies_resolved"`
+	DependenciesTotal      int                     `json:"dependencies_total"`
+	LastHeartbeat          *time.Time              `json:"last_heartbeat,omitempty"`
+	CreatedAt              time.Time               `json:"created_at"`
+	UpdatedAt              time.Time               `json:"updated_at"`
+	Version                string                  `json:"version,omitempty"`
+	PID                    int                     `json:"pid,omitempty"`
+	FilePath               string                  `json:"file_path,omitempty"`
+	StartTime              time.Time               `json:"start_time,omitempty"`
+	Config                 map[string]interface{}  `json:"config,omitempty"`
+	Labels                 map[string]interface{}  `json:"labels,omitempty"`
 }
 
 // ToolFilter represents a single filter specification for matching tools
@@ -354,17 +354,17 @@ func getRegistryStatus(registryURL string) RegistryStatus {
 
 // AgentInfoAPI represents the agent structure returned by the registry API
 type AgentInfoAPI struct {
-	ID                   string      `json:"id"`
-	Name                 string      `json:"name"`
-	AgentType            string      `json:"agent_type"`
-	Status               string      `json:"status"`
-	Runtime              *string     `json:"runtime,omitempty"`
-	Endpoint             string      `json:"endpoint"`
-	Version              *string     `json:"version,omitempty"`
-	CreatedAt            *time.Time  `json:"created_at,omitempty"`
-	LastSeen             *time.Time  `json:"last_seen,omitempty"`
-	TotalDependencies    int         `json:"total_dependencies"`
-	DependenciesResolved int         `json:"dependencies_resolved"`
+	ID                   string     `json:"id"`
+	Name                 string     `json:"name"`
+	AgentType            string     `json:"agent_type"`
+	Status               string     `json:"status"`
+	Runtime              *string    `json:"runtime,omitempty"`
+	Endpoint             string     `json:"endpoint"`
+	Version              *string    `json:"version,omitempty"`
+	CreatedAt            *time.Time `json:"created_at,omitempty"`
+	LastSeen             *time.Time `json:"last_seen,omitempty"`
+	TotalDependencies    int        `json:"total_dependencies"`
+	DependenciesResolved int        `json:"dependencies_resolved"`
 	Capabilities         []struct {
 		Name         string         `json:"name"`
 		Version      string         `json:"version"`
@@ -544,12 +544,12 @@ func getDetailedAgents(registryURL string) ([]map[string]interface{}, error) {
 			llmProviderRes := make([]interface{}, len(agent.LLMProviderResolutions))
 			for j, res := range agent.LLMProviderResolutions {
 				resMap := map[string]interface{}{
-					"function_name":     res.ConsumerFunctionName,
+					"function_name":       res.ConsumerFunctionName,
 					"required_capability": res.RequiredCapability,
-					"provider_agent_id": res.ProviderAgentID,
-					"mcp_tool":          res.ProviderFunctionName,
-					"endpoint":          res.Endpoint,
-					"status":            res.Status,
+					"provider_agent_id":   res.ProviderAgentID,
+					"mcp_tool":            res.ProviderFunctionName,
+					"endpoint":            res.Endpoint,
+					"status":              res.Status,
 				}
 				if len(res.RequiredTags) > 0 {
 					resMap["required_tags"] = res.RequiredTags
@@ -629,8 +629,8 @@ func processAgentData(data map[string]interface{}) EnhancedAgent {
 		for _, cap := range capabilities {
 			if capMap, ok := cap.(map[string]interface{}); ok {
 				tool := ToolInfo{
-					Name:         getString(capMap, "name"),        // capability name from API
-					Capability:   getString(capMap, "name"),        // same as name
+					Name:         getString(capMap, "name"), // capability name from API
+					Capability:   getString(capMap, "name"), // same as name
 					FunctionName: getString(capMap, "function_name"),
 					Version:      getString(capMap, "version"),
 				}
@@ -1016,7 +1016,7 @@ func showRegistryStatus(registry RegistryStatus) {
 		// Show healthy/unhealthy breakdown
 		fmt.Printf(" - %s%d healthy%s", colorGreen, registry.HealthyCount, colorReset)
 		if registry.UnhealthyCount > 0 {
-			fmt.Printf(", %s%d unhealthy/expired%s", colorGray, registry.UnhealthyCount, colorReset)
+			fmt.Printf(", %s%d unhealthy%s", colorGray, registry.UnhealthyCount, colorReset)
 		}
 	}
 
@@ -1046,7 +1046,7 @@ func formatAgentTypeDisplay(agentType string) string {
 
 // calculateColumnWidths determines optimal column widths for table alignment
 func calculateColumnWidths(agents []EnhancedAgent, wide bool) (nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth int) {
-	nameWidth = 15 // minimum width
+	nameWidth = 15    // minimum width
 	runtimeWidth = 12 // minimum width for "RUNTIME" header + padding (TypeScript = 10 chars)
 	statusWidth = 10
 	typeWidth = 5 // minimum width for "Type"
@@ -1240,7 +1240,7 @@ func formatDependencies(resolved, total int) string {
 	color := colorGreen
 	if resolved < total {
 		if resolved == 0 {
-			color = colorRed    // No dependencies resolved
+			color = colorRed // No dependencies resolved
 		} else {
 			color = colorYellow // Partially resolved
 		}

@@ -188,6 +188,29 @@ export HEALTH_CHECK_INTERVAL=10
 export DEFAULT_EVICTION_THRESHOLD=60
 ```
 
+### Registry Sweep / Retention
+
+```bash
+# How long unhealthy/unknown agents are kept in the registry before the
+# sweep job purges them. Go duration string (e.g. "30m", "2h", "48h").
+# Default: 1h. Set to "0" to disable the sweep entirely (forensic mode —
+# keeps all rows). Affects both `meshctl list` (purged agents disappear
+# from output) and the underlying RegistryEvent table (event rows are
+# governed by a separate hardcoded 100,000 rolling cap, not by this
+# variable).
+export MCP_MESH_RETENTION=1h
+```
+
+**Notes:**
+
+- The sweep runs on a hardcoded 5-minute interval, so actual purge can
+  lag retention by up to ~5 minutes.
+- Setting `MCP_MESH_RETENTION` shorter than 5m (e.g. `1m`) will not
+  speed up the purge cadence — it only affects when an agent becomes
+  eligible for purge.
+- Hardcoded internal constants: sweep interval = 5m, event hard cap =
+  100,000 rows.
+
 ### Cache and Performance
 
 ```bash

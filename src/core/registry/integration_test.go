@@ -212,3 +212,67 @@ func TestEntServiceStatusChangeIntegration(t *testing.T) {
 
 	t.Logf("Integration test completed successfully with %d status change events", hookEvents)
 }
+
+// TestSweepJobIntegration exercises the sweep job end-to-end against a real
+// EntService: register an agent via the public API, force its updated_at and
+// status to look stale, run one sweep tick, and verify ListAgents no longer
+// returns it.
+func TestSweepJobIntegration(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:sweep_integration?mode=memory&cache=shared&_fk=1")
+	defer client.Close()
+
+	testConfig := &config.Config{LogLevel: "INFO"}
+	testLogger := logger.New(testConfig)
+	entDB := &database.EntDatabase{Client: client}
+	service := NewEntService(entDB, nil, testLogger)
+
+	ctx := context.Background()
+
+	registerReq := &AgentRegistrationRequest{
+		AgentID:   "sweep-target",
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Metadata: map[string]interface{}{
+			"agent_type": "mcp_agent",
+			"name":       "sweep-target",
+			"version":    "1.0.0",
+		},
+	}
+	if _, err := service.RegisterAgent(registerReq); err != nil {
+		t.Fatalf("Failed to register agent: %v", err)
+	}
+
+	// Force the agent into a stale unhealthy state: timestamp > AgentRetention
+	// in the past, status=unhealthy. This mimics a real-world agent whose
+	// heartbeat stopped over an hour ago and was already flagged by the
+	// health monitor.
+	twoHoursAgo := time.Now().UTC().Add(-2 * time.Hour)
+	if _, err := entDB.Client.Agent.UpdateOneID("sweep-target").
+		SetStatus(agent.StatusUnhealthy).
+		SetUpdatedAt(twoHoursAgo).
+		Save(ctx); err != nil {
+		t.Fatalf("Failed to force stale state: %v", err)
+	}
+
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	job := NewSweepJob(cfg, entDB, service, testLogger)
+
+	purgedAgents, _, err := job.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if purgedAgents != 1 {
+		t.Errorf("expected 1 agent purged, got %d", purgedAgents)
+	}
+
+	// Sanity-check via the public ListAgents API: the agent must be gone
+	// from both the default (healthy-only) and unfiltered views.
+	resp, err := service.ListAgents(&AgentQueryParams{})
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	for _, a := range resp.Agents {
+		if a.Id == "sweep-target" {
+			t.Errorf("sweep-target still present in ListAgents after purge")
+		}
+	}
+}
