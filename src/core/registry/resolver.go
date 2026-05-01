@@ -166,18 +166,48 @@ func (s *EntService) ResolveLLMToolsFromMetadata(ctx context.Context, agentID st
 	return llmTools, nil
 }
 
-// findHealthyProviderWithTTL finds a healthy provider using TTL check and strict matching using Ent queries
+// findHealthyProviderWithTTL finds a healthy provider using TTL check and strict matching using Ent queries.
+// Backwards-compatible wrapper around findHealthyProviderWithTrace; the trace is discarded.
 func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResolution {
+	resolution, _ := s.findHealthyProviderWithTrace(dep)
+	return resolution
+}
+
+// candidateWithHealth bundles a Candidate with its health verdict so the trace
+// can record per-stage health evictions with typed reasons.
+type candidateWithHealth struct {
+	Candidate
+	Healthy          bool
+	UnhealthyReason  EvictionReason
+	UnhealthyDetails map[string]interface{}
+}
+
+// scoredCandidateWithHealth augments candidateWithHealth with a tag-match score
+// for tiebreaker ranking.
+type scoredCandidateWithHealth struct {
+	candidateWithHealth
+	Score int
+}
+
+// findHealthyProviderWithTrace runs the multi-stage candidate-filtering pipeline
+// and returns both the resolution and a stage-by-stage audit trace.
+// Stages run in fixed order: capability_match → tags → version → schema → health → tiebreaker.
+// The schema stage is a no-op in v1; reserved for #547.
+func (s *EntService) findHealthyProviderWithTrace(dep Dependency) (*DependencyResolution, *AuditTrace) {
 	ctx := context.Background()
 
-	// Use Info level to ensure it gets logged
 	s.logger.Debug("Looking for provider for capability: %s, version: %s, tags: %v", dep.Capability, dep.Version, dep.Tags)
 
-	// Calculate TTL threshold
-	// Health status checking is now handled by the health monitor
-	// No need for TTL threshold calculations here
+	trace := &AuditTrace{
+		Spec: AuditSpec{
+			Capability:        dep.Capability,
+			Tags:              dep.Tags,
+			VersionConstraint: dep.Version,
+			SchemaMode:        "none", // v1; #547 will widen this
+		},
+	}
 
-	// Query capabilities with healthy agents using Ent with retry logic for database locks
+	// --- Query capabilities (capability_match stage) -----------------------
 	var capabilities []*ent.Capability
 	var err error
 	maxRetries := 3
@@ -188,42 +218,31 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 			All(ctx)
 
 		if err == nil {
-			break // Success
+			break
 		}
 
-		// Check if it's a database lock error
 		if isDatabaseLockError(err) {
 			s.logger.Warning("Database lock detected on attempt %d for capability %s, retrying...", attempt+1, dep.Capability)
-			time.Sleep(time.Duration(50*(1<<attempt)) * time.Millisecond) // Exponential backoff: 50, 100, 200, 400, 800ms
+			time.Sleep(time.Duration(50*(1<<attempt)) * time.Millisecond)
 			continue
 		}
-
-		// Non-lock error, don't retry
 		break
 	}
 
 	if err != nil {
 		s.logger.Error("Error finding healthy providers for %s after %d attempts: %v", dep.Capability, maxRetries, err)
-		return nil
+		return nil, trace
 	}
 
-	// Convert to candidates using the Candidate type (eliminates repeated anonymous structs)
-	var candidates []Candidate
-
+	// Build the post-capability candidate set. We retain unhealthy candidates
+	// so the health stage can record them as evictions with typed reasons.
+	all := make([]candidateWithHealth, 0, len(capabilities))
 	for _, cap := range capabilities {
 		if cap.Edges.Agent == nil {
-			continue // Skip if agent not loaded
+			continue // structurally invalid; skip silently
 		}
 
-		// Check agent health status - only return healthy agents as available
-		// Health monitor is responsible for marking agents unhealthy based on timestamps
-		if cap.Edges.Agent.Status != agent.StatusHealthy {
-			s.logger.Debug("Skipping unhealthy agent %s: Status=%v",
-				cap.Edges.Agent.ID, cap.Edges.Agent.Status)
-			continue // Skip unhealthy agents
-		}
-
-		candidates = append(candidates, Candidate{
+		c := Candidate{
 			AgentID:      cap.Edges.Agent.ID,
 			FunctionName: cap.FunctionName,
 			Capability:   cap.Capability,
@@ -232,87 +251,187 @@ func (s *EntService) findHealthyProviderWithTTL(dep Dependency) *DependencyResol
 			HttpHost:     cap.Edges.Agent.HTTPHost,
 			HttpPort:     cap.Edges.Agent.HTTPPort,
 			EntityID:     derefString(cap.Edges.Agent.EntityID),
-		})
-	}
+		}
 
-	s.logger.Debug("Total candidates found for %s: %d", dep.Capability, len(candidates))
-
-	// Filter by version constraint using Matcher
-	if dep.Version != "" && len(candidates) > 0 {
-		filtered := make([]Candidate, 0)
-		for _, c := range candidates {
-			if s.matcher.MatchVersion(c.Version, dep.Version) {
-				filtered = append(filtered, c)
+		tc := candidateWithHealth{Candidate: c, Healthy: cap.Edges.Agent.Status == agent.StatusHealthy}
+		if !tc.Healthy {
+			tc.UnhealthyReason = ReasonUnhealthy
+			tc.UnhealthyDetails = map[string]interface{}{
+				"status": cap.Edges.Agent.Status.String(),
 			}
 		}
-		candidates = filtered
+		all = append(all, tc)
 	}
 
-	// Filter by tags using Matcher with priority scoring
-	if (len(dep.Tags) > 0 || len(dep.TagAlternatives) > 0) && len(candidates) > 0 {
-		scoredCandidates := make([]ScoredCandidate, 0)
+	// Stage 1: capability_match — every candidate above passed by definition.
+	capStage := AuditStage{Stage: StageCapabilityMatch, Kept: idsFromCandidates(all)}
+	trace.Stages = append(trace.Stages, capStage)
 
-		for _, c := range candidates {
-			matches, score := s.matcher.MatchTags(c.Tags, dep.Tags, dep.TagAlternatives)
-			if matches {
-				scoredCandidates = append(scoredCandidates, ScoredCandidate{
-					Candidate: c,
-					Score:     score,
-				})
-			}
-		}
-
-		// Sort by score descending (highest score = best match first) - O(n log n)
-		sort.Slice(scoredCandidates, func(i, j int) bool {
-			return scoredCandidates[i].Score > scoredCandidates[j].Score
-		})
-
-		// Extract candidates from scored list
-		candidates = make([]Candidate, len(scoredCandidates))
-		for i, sc := range scoredCandidates {
-			candidates[i] = sc.Candidate
-		}
+	if len(all) == 0 {
+		s.logger.Debug("No healthy providers found for %s (no candidates with capability)", dep.Capability)
+		return nil, trace
 	}
 
-	// Return first match (deterministic selection)
-	if len(candidates) > 0 {
-		c := candidates[0]
-
-		// Build endpoint
-		endpoint := "stdio://" + c.AgentID // Default
-		if c.HttpHost != "" && c.HttpPort > 0 {
-			scheme := "http"
-			if c.EntityID != "" {
-				scheme = "https"
-			}
-			endpoint = fmt.Sprintf("%s://%s:%d", scheme, c.HttpHost, c.HttpPort)
+	// Stage 2: tags — apply MatchTags with scoring; record per-candidate evictions.
+	var afterTags []scoredCandidateWithHealth
+	tagStage := AuditStage{Stage: StageTags}
+	hasTagFilter := len(dep.Tags) > 0 || len(dep.TagAlternatives) > 0
+	for _, tc := range all {
+		if !hasTagFilter {
+			afterTags = append(afterTags, scoredCandidateWithHealth{candidateWithHealth: tc, Score: 0})
+			continue
 		}
-
-		return &DependencyResolution{
-			AgentID:      c.AgentID,
-			FunctionName: c.FunctionName,
-			Endpoint:     endpoint,
-			Capability:   c.Capability,
-			Status:       "available",
+		matches, score := s.matcher.MatchTags(tc.Tags, dep.Tags, dep.TagAlternatives)
+		if matches {
+			afterTags = append(afterTags, scoredCandidateWithHealth{candidateWithHealth: tc, Score: score})
+		} else {
+			reason, details := classifyTagFailure(tc.Tags, dep.Tags, dep.TagAlternatives)
+			tagStage.Evicted = append(tagStage.Evicted, AuditEvicted{
+				ID:      candidateID(tc.AgentID, tc.FunctionName),
+				Reason:  reason,
+				Details: details,
+			})
 		}
 	}
+	tagStage.Kept = idsFromScored(afterTags)
+	trace.Stages = append(trace.Stages, tagStage)
 
-	s.logger.Debug("No healthy providers found for %s (version: %s, tags: %v)", dep.Capability, dep.Version, dep.Tags)
-	return nil
+	if len(afterTags) == 0 {
+		return nil, trace
+	}
+
+	// Stage 3: version — apply MatchVersion; record per-candidate evictions.
+	var afterVersion []scoredCandidateWithHealth
+	versionStage := AuditStage{Stage: StageVersion}
+	for _, st := range afterTags {
+		if dep.Version == "" || s.matcher.MatchVersion(st.Version, dep.Version) {
+			afterVersion = append(afterVersion, st)
+		} else {
+			versionStage.Evicted = append(versionStage.Evicted, AuditEvicted{
+				ID:     candidateID(st.AgentID, st.FunctionName),
+				Reason: ReasonVersionConstraintFailed,
+				Details: map[string]interface{}{
+					"version":    st.Version,
+					"constraint": dep.Version,
+				},
+			})
+		}
+	}
+	versionStage.Kept = idsFromScored(afterVersion)
+	trace.Stages = append(trace.Stages, versionStage)
+
+	if len(afterVersion) == 0 {
+		return nil, trace
+	}
+
+	// Stage 4: schema — reserved for #547 (no-op in v1).
+	schemaStage := AuditStage{Stage: StageSchema, Kept: idsFromScored(afterVersion)}
+	trace.Stages = append(trace.Stages, schemaStage)
+
+	// Stage 5: health — drop unhealthy candidates with typed reason.
+	var afterHealth []scoredCandidateWithHealth
+	healthStage := AuditStage{Stage: StageHealth}
+	for _, st := range afterVersion {
+		if st.Healthy {
+			afterHealth = append(afterHealth, st)
+		} else {
+			healthStage.Evicted = append(healthStage.Evicted, AuditEvicted{
+				ID:      candidateID(st.AgentID, st.FunctionName),
+				Reason:  st.UnhealthyReason,
+				Details: st.UnhealthyDetails,
+			})
+		}
+	}
+	healthStage.Kept = idsFromScored(afterHealth)
+	trace.Stages = append(trace.Stages, healthStage)
+
+	if len(afterHealth) == 0 {
+		s.logger.Debug("No healthy providers found for %s (version: %s, tags: %v)", dep.Capability, dep.Version, dep.Tags)
+		return nil, trace
+	}
+
+	// Stage 6: tiebreaker — sort by score DESC then take the head. Document
+	// the algorithm name in the audit so changes are visible.
+	sort.SliceStable(afterHealth, func(i, j int) bool {
+		return afterHealth[i].Score > afterHealth[j].Score
+	})
+	winner := afterHealth[0]
+	trace.Stages = append(trace.Stages, AuditStage{
+		Stage:  StageTiebreaker,
+		Kept:   idsFromScored(afterHealth),
+		Chosen: candidateID(winner.AgentID, winner.FunctionName),
+		Reason: TiebreakerHighestScoreFirst,
+	})
+
+	endpoint := "stdio://" + winner.AgentID
+	if winner.HttpHost != "" && winner.HttpPort > 0 {
+		scheme := "http"
+		if winner.EntityID != "" {
+			scheme = "https"
+		}
+		endpoint = fmt.Sprintf("%s://%s:%d", scheme, winner.HttpHost, winner.HttpPort)
+	}
+
+	resolution := &DependencyResolution{
+		AgentID:      winner.AgentID,
+		FunctionName: winner.FunctionName,
+		Endpoint:     endpoint,
+		Capability:   winner.Capability,
+		Status:       "available",
+	}
+	trace.Chosen = &AuditChosen{
+		AgentID:      winner.AgentID,
+		Endpoint:     endpoint,
+		FunctionName: winner.FunctionName,
+	}
+	return resolution, trace
+}
+
+// candidateID returns the per-stage candidate identifier in the form
+// "<agent_id>:<function_name>". Two functions on the same agent providing
+// the same capability with different tags must be distinguishable in the
+// trace, so the trace identifier carries both. See AuditStage doc.
+func candidateID(agentID, functionName string) string {
+	return fmt.Sprintf("%s:%s", agentID, functionName)
+}
+
+// idsFromCandidates returns "<agent_id>:<function_name>" identifiers from a
+// candidateWithHealth slice.
+func idsFromCandidates(xs []candidateWithHealth) []string {
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[i] = candidateID(x.AgentID, x.FunctionName)
+	}
+	return out
+}
+
+// idsFromScored returns "<agent_id>:<function_name>" identifiers from a
+// scoredCandidateWithHealth slice.
+func idsFromScored(xs []scoredCandidateWithHealth) []string {
+	out := make([]string, len(xs))
+	for i, x := range xs {
+		out[i] = candidateID(x.AgentID, x.FunctionName)
+	}
+	return out
 }
 
 // resolveSingle is the SINGLE SOURCE OF TRUTH for all dependency matching logic.
 // It takes a DependencySpec and returns a resolved dependency or nil if not found.
 // All resolution logic (capability + version + tags) happens here.
 func (s *EntService) resolveSingle(spec DependencySpec) *DependencyResolution {
-	// Convert DependencySpec to Dependency for the existing findHealthyProviderWithTTL
+	resolution, _ := s.resolveSingleWithTrace(spec)
+	return resolution
+}
+
+// resolveSingleWithTrace mirrors resolveSingle but returns the audit trace too.
+func (s *EntService) resolveSingleWithTrace(spec DependencySpec) (*DependencyResolution, *AuditTrace) {
 	dep := Dependency{
 		Capability:      spec.Capability,
 		Version:         spec.Version,
 		Tags:            spec.Tags,
 		TagAlternatives: spec.TagAlternatives,
 	}
-	return s.findHealthyProviderWithTTL(dep)
+	return s.findHealthyProviderWithTrace(dep)
 }
 
 // resolveAtPosition handles resolution for a single position in the dependency array.
@@ -326,6 +445,7 @@ func (s *EntService) resolveAtPosition(depIndex int, depData interface{}) Indexe
 	if alternatives, ok := depData.([]interface{}); ok {
 		// OR alternatives: try each spec in order until one resolves
 		var firstSpec DependencySpec
+		var lastTrace *AuditTrace
 
 		for i, alt := range alternatives {
 			altMap, ok := alt.(map[string]interface{})
@@ -343,24 +463,28 @@ func (s *EntService) resolveAtPosition(depIndex int, depData interface{}) Indexe
 			s.logger.Debug("Trying OR alternative %d at position %d: capability=%s, tags=%v",
 				i, depIndex, spec.Capability, spec.Tags)
 
-			if resolved := s.resolveSingle(spec); resolved != nil {
+			resolved, trace := s.resolveSingleWithTrace(spec)
+			if resolved != nil {
 				s.logger.Debug("OR alternative %d matched: %s -> %s", i, spec.Capability, resolved.FunctionName)
 				return IndexedResolution{
 					DepIndex:   depIndex,
-					Spec:       spec, // The spec that matched
+					Spec:       spec,
 					Resolution: resolved,
 					Status:     "available",
+					Trace:      trace,
 				}
 			}
+			lastTrace = trace
 		}
 
 		// None of the alternatives resolved
 		s.logger.Debug("All OR alternatives at position %d unresolved", depIndex)
 		return IndexedResolution{
 			DepIndex:   depIndex,
-			Spec:       firstSpec, // Store first spec for reference
+			Spec:       firstSpec,
 			Resolution: nil,
 			Status:     "unresolved",
+			Trace:      lastTrace,
 		}
 	}
 
@@ -380,13 +504,14 @@ func (s *EntService) resolveAtPosition(depIndex int, depData interface{}) Indexe
 		s.logger.Debug("Resolving single spec at position %d: capability=%s, tags=%v",
 			depIndex, spec.Capability, spec.Tags)
 
-		resolved := s.resolveSingle(spec)
+		resolved, trace := s.resolveSingleWithTrace(spec)
 		if resolved != nil {
 			return IndexedResolution{
 				DepIndex:   depIndex,
 				Spec:       spec,
 				Resolution: resolved,
 				Status:     "available",
+				Trace:      trace,
 			}
 		}
 
@@ -395,6 +520,7 @@ func (s *EntService) resolveAtPosition(depIndex int, depData interface{}) Indexe
 			Spec:       spec,
 			Resolution: nil,
 			Status:     "unresolved",
+			Trace:      trace,
 		}
 	}
 
@@ -414,4 +540,65 @@ func derefString(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// classifyTagFailure inspects which tag rule failed for a given provider so the
+// audit can carry typed reasons (MissingTag vs ExtraTagDisallowed) plus details.
+// Inspects required tags first, then OR alternatives. Returns ReasonMissingTag
+// as a fallback when nothing more specific can be identified.
+func classifyTagFailure(providerTags, requiredTags []string, tagAlternatives [][]string) (EvictionReason, map[string]interface{}) {
+	var missing []string
+	for _, req := range requiredTags {
+		if len(req) == 0 {
+			continue
+		}
+		switch req[0] {
+		case '-':
+			ex := req[1:]
+			if ex != "" && containsTag(providerTags, ex) {
+				return ReasonExtraTagDisallowed, map[string]interface{}{"disallowed": []string{ex}}
+			}
+		case '+':
+			// preferred — never a failure
+		default:
+			if !containsTag(providerTags, req) {
+				missing = append(missing, req)
+			}
+		}
+	}
+
+	if len(missing) > 0 {
+		return ReasonMissingTag, map[string]interface{}{"missing": missing}
+	}
+
+	// OR group failures: find a group with no satisfying tag.
+	for _, group := range tagAlternatives {
+		groupMatched := false
+		for _, alt := range group {
+			if len(alt) == 0 {
+				continue
+			}
+			switch alt[0] {
+			case '-':
+				ex := alt[1:]
+				if ex != "" && containsTag(providerTags, ex) {
+					return ReasonExtraTagDisallowed, map[string]interface{}{"disallowed": []string{ex}}
+				}
+			case '+':
+				if containsTag(providerTags, alt[1:]) {
+					groupMatched = true
+				}
+			default:
+				if containsTag(providerTags, alt) {
+					groupMatched = true
+				}
+			}
+		}
+		if !groupMatched {
+			return ReasonMissingTag, map[string]interface{}{"missing_one_of": group}
+		}
+	}
+
+	// No specific failure found — generic missing-tag fallback.
+	return ReasonMissingTag, nil
 }

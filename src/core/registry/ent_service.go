@@ -117,6 +117,7 @@ type IndexedResolution struct {
 	Spec         DependencySpec        // The spec that matched (or first spec if unresolved)
 	Resolution   *DependencyResolution // nil if unresolved
 	Status       string                // "available", "unavailable", "unresolved"
+	Trace        *AuditTrace           // Stage-by-stage audit trail; nil when not produced (e.g., OR-alternative misses)
 }
 
 // parseDependencySpec parses a map into a DependencySpec
@@ -688,6 +689,16 @@ func (s *EntService) StoreDependencyResolutions(
 			}
 			s.logger.Debug("Saved dependency resolution: %s/%s[%d] -> %s => %s (status: %s)",
 				agentID, result.FunctionName, result.DepIndex, result.Spec.Capability, providerFn, savedResolution.Status)
+		}
+
+		// Emit dependency-resolution audit event when warranted.
+		// Trace will be nil for malformed dep specs (capability == "") — no event in that case.
+		if result.Trace != nil {
+			if err := s.emitAuditEventIfInteresting(ctx, agentID, result.FunctionName, result.DepIndex, result.Trace, result.Resolution); err != nil {
+				// Don't fail registration on audit emission failure; just warn.
+				s.logger.Warning("Failed to emit dependency audit event for %s/%s[%d]: %v",
+					agentID, result.FunctionName, result.DepIndex, err)
+			}
 		}
 	}
 
@@ -2150,6 +2161,13 @@ type RegistryEventWithAgent struct {
 // ListRecentEvents queries recent registry events, optionally filtered by event type.
 // Results are ordered by timestamp DESC and limited to the requested count.
 func (s *EntService) ListRecentEvents(limit int, eventType string) ([]RegistryEventWithAgent, error) {
+	return s.ListRecentEventsFiltered(limit, eventType, "", "")
+}
+
+// ListRecentEventsFiltered queries recent registry events with optional filters
+// for event type, agent ID, and function name. Results are ordered by timestamp
+// DESC and capped to the requested count. Empty-string filters are ignored.
+func (s *EntService) ListRecentEventsFiltered(limit int, eventType, agentID, functionName string) ([]RegistryEventWithAgent, error) {
 	ctx := context.Background()
 
 	query := s.entDB.Client.RegistryEvent.Query().
@@ -2159,6 +2177,12 @@ func (s *EntService) ListRecentEvents(limit int, eventType string) ([]RegistryEv
 
 	if eventType != "" {
 		query = query.Where(registryevent.EventTypeEQ(registryevent.EventType(eventType)))
+	}
+	if agentID != "" {
+		query = query.Where(registryevent.HasAgentWith(agent.IDEQ(agentID)))
+	}
+	if functionName != "" {
+		query = query.Where(registryevent.FunctionNameEQ(functionName))
 	}
 
 	events, err := query.All(ctx)
