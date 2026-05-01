@@ -38,15 +38,23 @@ type SweepConfig struct {
 //
 // Only MCP_MESH_RETENTION is honored:
 //   - unset / empty: defaults to 1h
-//   - any time.ParseDuration value (e.g. "2h", "30m"): use that value
+//   - any positive time.ParseDuration value (e.g. "2h", "30m"): use that value
 //   - "0" / "0s": disables the sweep job entirely
+//   - negative (e.g. "-1h"): warn and fall back to default (likely a typo;
+//     0 is the documented disable mechanism)
 //   - invalid: warn and fall back to default
 func LoadSweepConfigFromEnv(log *logger.Logger) SweepConfig {
 	cfg := SweepConfig{Retention: defaultRetention}
 
 	if v := os.Getenv("MCP_MESH_RETENTION"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
-			cfg.Retention = d
+			if d < 0 {
+				if log != nil {
+					log.Warning("Invalid MCP_MESH_RETENTION %q: negative durations are not allowed (use 0 to disable); using default %s", v, cfg.Retention)
+				}
+			} else {
+				cfg.Retention = d
+			}
 		} else if log != nil {
 			log.Warning("Invalid MCP_MESH_RETENTION %q, using default %s: %v", v, cfg.Retention, err)
 		}

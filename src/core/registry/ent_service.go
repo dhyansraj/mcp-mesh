@@ -1954,6 +1954,13 @@ func (s *EntService) markAgentStaleAttempt(ctx context.Context, staleAgent *ent.
 
 	// Optimistic conditional update - only update if agent hasn't changed since we queried it.
 	// This prevents overwriting a concurrent heartbeat that may have updated the agent.
+	//
+	// We deliberately do NOT bump UpdatedAt here: that field is the agent's
+	// last-heartbeat timestamp from the sweep job's perspective
+	// (purgeStaleAgents filters on UpdatedAtLT(now-retention)). Bumping it
+	// would make every just-marked-stale agent survive the immediate sweep
+	// tick even if it had been silent for hours/days. The status change is
+	// still recorded via the RegistryEvent below, which uses `now`.
 	affected, err := tx.Agent.
 		Update().
 		Where(
@@ -1962,7 +1969,6 @@ func (s *EntService) markAgentStaleAttempt(ctx context.Context, staleAgent *ent.
 			agent.StatusEQ(staleAgent.Status),
 		).
 		SetStatus(agent.StatusUnhealthy).
-		SetUpdatedAt(now).
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to update agent: %w", err)

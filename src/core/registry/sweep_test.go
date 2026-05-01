@@ -534,4 +534,16 @@ func TestLoadSweepConfigFromEnv(t *testing.T) {
 			t.Errorf("Retention with invalid value = %s, want %s (default)", cfg.Retention, defaultRetention)
 		}
 	})
+
+	t.Run("negative falls back to default", func(t *testing.T) {
+		// Negative durations parse successfully via time.ParseDuration but
+		// would silently disable sweep via the Retention<=0 check in Start().
+		// Treat them as a typo (likely meant a positive value) and keep the
+		// default; 0 remains the documented disable mechanism.
+		t.Setenv("MCP_MESH_RETENTION", "-1h")
+		cfg := LoadSweepConfigFromEnv(nil)
+		if cfg.Retention != defaultRetention {
+			t.Errorf("Retention with negative value = %s, want %s (default)", cfg.Retention, defaultRetention)
+		}
+	})
 }
