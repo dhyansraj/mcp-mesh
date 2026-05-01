@@ -148,6 +148,211 @@ func TestAgentMatchResult_FormattedError(t *testing.T) {
 	})
 }
 
+// TestResolveAgentByPrefix_HealthyPreference covers the disambiguation rule
+// where multiple agents share a name/prefix and the resolver should prefer
+// healthy over unhealthy.
+//
+// Bug background: the registry can hold a stale unhealthy row alongside the
+// current healthy agent (same Name, different ID). Sweeping eventually purges
+// the stale row, but until then `meshctl audit <name>` (which calls with
+// healthyOnly=false) used to lex-sort and pick the unhealthy one.
+//
+// The new rule: when multiple matches exist and at least one is healthy,
+// prefer healthy. When all are unhealthy, return lex-first deterministically.
+func TestResolveAgentByPrefix_HealthyPreference(t *testing.T) {
+	// Agents share name "api"; lex-smaller ID is the unhealthy stale row.
+	// Callers pass agents pre-sorted by ID (see getEnhancedAgents), so we
+	// mirror that here.
+	apiUnhealthyFirst := []EnhancedAgent{
+		{ID: "api-12e47b97", Name: "api", Status: "unhealthy"},
+		{ID: "api-bd59c884", Name: "api", Status: "healthy"},
+	}
+	apiBothHealthy := []EnhancedAgent{
+		{ID: "api-12e47b97", Name: "api", Status: "healthy"},
+		{ID: "api-bd59c884", Name: "api", Status: "healthy"},
+	}
+	apiBothUnhealthy := []EnhancedAgent{
+		{ID: "api-12e47b97", Name: "api", Status: "unhealthy"},
+		{ID: "api-bd59c884", Name: "api", Status: "degraded"},
+	}
+	apiSingleHealthy := []EnhancedAgent{
+		{ID: "api-12e47b97", Name: "api", Status: "healthy"},
+	}
+	apiSingleUnhealthy := []EnhancedAgent{
+		{ID: "api-12e47b97", Name: "api", Status: "unhealthy"},
+	}
+
+	t.Run("exact: single healthy match returned", func(t *testing.T) {
+		r := ResolveAgentByPrefix(apiSingleHealthy, "api", false)
+		if r.Error != nil || r.Agent == nil {
+			t.Fatalf("expected match, got err=%v agent=%v", r.Error, r.Agent)
+		}
+		if r.Agent.ID != "api-12e47b97" {
+			t.Errorf("got ID %s", r.Agent.ID)
+		}
+		if !r.IsExact {
+			t.Error("expected IsExact=true")
+		}
+	})
+
+	t.Run("exact: single unhealthy match returned", func(t *testing.T) {
+		r := ResolveAgentByPrefix(apiSingleUnhealthy, "api", false)
+		if r.Error != nil || r.Agent == nil {
+			t.Fatalf("expected match, got err=%v agent=%v", r.Error, r.Agent)
+		}
+		if r.Agent.ID != "api-12e47b97" {
+			t.Errorf("got ID %s", r.Agent.ID)
+		}
+	})
+
+	t.Run("exact: multiple matches, prefer healthy (the bug)", func(t *testing.T) {
+		// Original bug: returned unhealthy api-12e47b97 because lex-first.
+		// New behavior: returns healthy api-bd59c884.
+		r := ResolveAgentByPrefix(apiUnhealthyFirst, "api", false)
+		if r.Error != nil {
+			t.Fatalf("expected no error, got %v", r.Error)
+		}
+		if r.Agent == nil {
+			t.Fatal("expected agent, got nil")
+		}
+		if r.Agent.ID != "api-bd59c884" {
+			t.Errorf("expected healthy api-bd59c884, got %s (status=%s)", r.Agent.ID, r.Agent.Status)
+		}
+		if !r.IsExact {
+			t.Error("expected IsExact=true (matched on Name)")
+		}
+	})
+
+	t.Run("exact: multiple healthy, error to disambiguate", func(t *testing.T) {
+		r := ResolveAgentByPrefix(apiBothHealthy, "api", false)
+		if r.Error == nil {
+			t.Fatal("expected error for multiple healthy matches")
+		}
+		if !strings.Contains(r.Error.Error(), "multiple agents match") {
+			t.Errorf("expected 'multiple agents match' error, got: %v", r.Error)
+		}
+		if len(r.Matches) != 2 {
+			t.Errorf("expected 2 matches in disambiguation list, got %d", len(r.Matches))
+		}
+	})
+
+	t.Run("exact: all unhealthy, return lex-first deterministically", func(t *testing.T) {
+		r := ResolveAgentByPrefix(apiBothUnhealthy, "api", false)
+		if r.Error != nil {
+			t.Fatalf("expected no error for all-unhealthy multi-match, got %v", r.Error)
+		}
+		if r.Agent == nil {
+			t.Fatal("expected agent, got nil")
+		}
+		// Lex-first by ID is api-12e47b97
+		if r.Agent.ID != "api-12e47b97" {
+			t.Errorf("expected lex-first api-12e47b97, got %s", r.Agent.ID)
+		}
+	})
+
+	// Prefix-phase variants of the same rules
+	prefixUnhealthyFirst := []EnhancedAgent{
+		{ID: "apex-1", Name: "apex", Status: "unhealthy"},
+		{ID: "apple-2", Name: "apple", Status: "healthy"},
+	}
+	prefixBothHealthy := []EnhancedAgent{
+		{ID: "apex-1", Name: "apex", Status: "healthy"},
+		{ID: "apple-2", Name: "apple", Status: "healthy"},
+	}
+	prefixBothUnhealthy := []EnhancedAgent{
+		{ID: "apex-1", Name: "apex", Status: "unhealthy"},
+		{ID: "apple-2", Name: "apple", Status: "degraded"},
+	}
+	prefixSingleHealthy := []EnhancedAgent{
+		{ID: "apex-1", Name: "apex", Status: "healthy"},
+	}
+
+	t.Run("prefix: single healthy match returned", func(t *testing.T) {
+		r := ResolveAgentByPrefix(prefixSingleHealthy, "ap", false)
+		if r.Error != nil || r.Agent == nil {
+			t.Fatalf("expected match, got err=%v agent=%v", r.Error, r.Agent)
+		}
+		if r.Agent.Name != "apex" {
+			t.Errorf("got name %s", r.Agent.Name)
+		}
+		if r.IsExact {
+			t.Error("expected IsExact=false (prefix match)")
+		}
+	})
+
+	t.Run("prefix: multiple matches, prefer healthy", func(t *testing.T) {
+		r := ResolveAgentByPrefix(prefixUnhealthyFirst, "ap", false)
+		if r.Error != nil {
+			t.Fatalf("expected no error, got %v", r.Error)
+		}
+		if r.Agent == nil {
+			t.Fatal("expected agent, got nil")
+		}
+		if r.Agent.Name != "apple" || r.Agent.Status != "healthy" {
+			t.Errorf("expected healthy apple, got name=%s status=%s", r.Agent.Name, r.Agent.Status)
+		}
+		if r.IsExact {
+			t.Error("expected IsExact=false (prefix match)")
+		}
+	})
+
+	t.Run("prefix: multiple healthy, error to disambiguate", func(t *testing.T) {
+		r := ResolveAgentByPrefix(prefixBothHealthy, "ap", false)
+		if r.Error == nil {
+			t.Fatal("expected error for multiple healthy matches")
+		}
+		if !strings.Contains(r.Error.Error(), "multiple agents match") {
+			t.Errorf("expected 'multiple agents match' error, got: %v", r.Error)
+		}
+	})
+
+	t.Run("prefix: all unhealthy, return lex-first deterministically", func(t *testing.T) {
+		r := ResolveAgentByPrefix(prefixBothUnhealthy, "ap", false)
+		if r.Error != nil {
+			t.Fatalf("expected no error for all-unhealthy multi-match, got %v", r.Error)
+		}
+		if r.Agent == nil {
+			t.Fatal("expected agent, got nil")
+		}
+		// Lex-first by ID is apex-1
+		if r.Agent.ID != "apex-1" {
+			t.Errorf("expected lex-first apex-1, got %s", r.Agent.ID)
+		}
+	})
+
+	t.Run("no match returns error", func(t *testing.T) {
+		r := ResolveAgentByPrefix(apiBothHealthy, "zzz", false)
+		if r.Error == nil {
+			t.Fatal("expected error for no match")
+		}
+		if r.Agent != nil {
+			t.Errorf("expected nil agent, got %v", r.Agent)
+		}
+	})
+
+	t.Run("healthyOnly=true pre-filters unhealthy then resolves", func(t *testing.T) {
+		// Unhealthy stale + healthy current; healthyOnly=true should leave
+		// only the healthy one as a candidate, returning it as a single match.
+		r := ResolveAgentByPrefix(apiUnhealthyFirst, "api", true)
+		if r.Error != nil {
+			t.Fatalf("expected no error, got %v", r.Error)
+		}
+		if r.Agent == nil || r.Agent.ID != "api-bd59c884" {
+			t.Errorf("expected healthy api-bd59c884, got %v", r.Agent)
+		}
+	})
+
+	t.Run("healthyOnly=true with all unhealthy errors", func(t *testing.T) {
+		r := ResolveAgentByPrefix(apiBothUnhealthy, "api", true)
+		if r.Error == nil {
+			t.Fatal("expected error when no healthy candidates and healthyOnly=true")
+		}
+		if r.Agent != nil {
+			t.Errorf("expected nil agent, got %v", r.Agent)
+		}
+	})
+}
+
 func TestFormatAgentMatchOptions(t *testing.T) {
 	matches := []EnhancedAgent{
 		{ID: "agent-1234", Name: "agent-one", Status: "healthy"},

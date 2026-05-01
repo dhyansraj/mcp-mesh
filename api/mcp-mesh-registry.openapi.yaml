@@ -37,6 +37,8 @@ tags:
     description: Agent registration and management
   - name: dependencies
     description: Dependency resolution and discovery
+  - name: events
+    description: Registry event history (lifecycle and dependency-resolution audit)
 paths:
   /health:
     get:
@@ -207,6 +209,82 @@ paths:
           description: Agent unregistered successfully
         "404":
           description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /events:
+    get:
+      tags: [events]
+      summary: List recent registry events with filters
+      description: |
+        Query the registry event history with optional filters by event type,
+        agent ID, and function name. Used by `meshctl audit` to inspect
+        dependency-resolution decisions persisted as `dependency_resolved` /
+        `dependency_unresolved` events.
+
+        Lifecycle events (register, heartbeat, expire, update, unregister,
+        unhealthy, rotate) are also queryable through this endpoint.
+
+        Results are returned newest-first.
+      operationId: listEvents
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum:
+              [
+                register,
+                heartbeat,
+                expire,
+                update,
+                unregister,
+                unhealthy,
+                rotate,
+                dependency_resolved,
+                dependency_unresolved,
+              ]
+          description: Filter by event type
+        - name: agent_id
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: "^[a-zA-Z0-9_-]+$"
+          description: Filter by agent ID (for dependency events this is the consumer)
+        - name: function_name
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by function name (relevant for function-level events)
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 50
+          description: Maximum number of events to return
+      responses:
+        "200":
+          description: Events matching the filters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventsHistoryResponse"
+        "400":
+          description: Invalid query parameters
           content:
             application/json:
               schema:
@@ -1678,14 +1756,27 @@ components:
       type: object
       required: [event_type, agent_id, timestamp]
       description: |
-        A single registry lifecycle event.
-        Events are created automatically by status hooks when agent state changes.
+        A single registry event. Lifecycle events (register, unregister, etc.)
+        are created automatically by status hooks when agent state changes.
+        Dependency-resolution events (dependency_resolved, dependency_unresolved)
+        are emitted by the resolver and used by `meshctl audit`.
       properties:
         event_type:
           type: string
-          enum: [register, unregister, unhealthy, update, expire, rotate]
+          enum:
+            [
+              register,
+              heartbeat,
+              expire,
+              update,
+              unregister,
+              unhealthy,
+              rotate,
+              dependency_resolved,
+              dependency_unresolved,
+            ]
           example: "register"
-          description: Type of lifecycle event
+          description: Type of registry event
         agent_id:
           type: string
           example: "hello-world-abc123"

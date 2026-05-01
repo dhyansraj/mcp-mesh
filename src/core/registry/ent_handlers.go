@@ -438,6 +438,72 @@ func (h *EntBusinessLogicHandlers) UnregisterAgent(c *gin.Context, agentId strin
 	c.Status(http.StatusNoContent)
 }
 
+// ListEvents implements GET /events
+// Returns recent registry events with optional filters by event type, agent ID,
+// and function name. Used by `meshctl audit` to surface dependency-resolution
+// decisions; lifecycle events are also queryable through this endpoint.
+func (h *EntBusinessLogicHandlers) ListEvents(c *gin.Context, params generated.ListEventsParams) {
+	limit := 50
+	if params.Limit != nil {
+		limit = *params.Limit
+		if limit < 1 {
+			limit = 1
+		}
+		if limit > 500 {
+			limit = 500
+		}
+	}
+
+	eventType := ""
+	if params.Type != nil {
+		eventType = string(*params.Type)
+	}
+	agentID := ""
+	if params.AgentId != nil {
+		agentID = *params.AgentId
+	}
+	functionName := ""
+	if params.FunctionName != nil {
+		functionName = *params.FunctionName
+	}
+
+	events, err := h.entService.ListRecentEventsFiltered(limit, eventType, agentID, functionName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Failed to query events: %v", err),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	eventInfos := make([]generated.RegistryEventInfo, 0, len(events))
+	for _, e := range events {
+		info := generated.RegistryEventInfo{
+			EventType: generated.RegistryEventInfoEventType(e.EventType),
+			AgentId:   e.AgentID,
+			Timestamp: e.Timestamp,
+		}
+		if e.AgentName != "" {
+			name := e.AgentName
+			info.AgentName = &name
+		}
+		if e.FunctionName != "" {
+			fn := e.FunctionName
+			info.FunctionName = &fn
+		}
+		if len(e.Data) > 0 {
+			data := e.Data
+			info.Data = &data
+		}
+		eventInfos = append(eventInfos, info)
+	}
+
+	c.JSON(http.StatusOK, generated.EventsHistoryResponse{
+		Count:  len(eventInfos),
+		Events: eventInfos,
+	})
+}
+
 // ProxyMcpRequest implements POST /proxy/{target}
 // Acts as a reverse proxy for MCP requests to internal agents
 func (h *EntBusinessLogicHandlers) ProxyMcpRequest(c *gin.Context, target string) {

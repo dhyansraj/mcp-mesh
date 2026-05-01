@@ -290,6 +290,11 @@ func (h *TestHandlers) UnregisterAgent(c *gin.Context, agentId string) {
 	c.Status(204) // No content - successfully unregistered (idempotent)
 }
 
+// ListEvents implements the GET /events endpoint (test stub).
+func (h *TestHandlers) ListEvents(c *gin.Context, params generated.ListEventsParams) {
+	c.JSON(200, gin.H{"events": []interface{}{}, "count": 0})
+}
+
 // TestHealthMonitor tests the background health monitoring functionality
 func TestHealthMonitor(t *testing.T) {
 	tests := []struct {

@@ -303,7 +303,7 @@ var (
 	// RegistryEventsColumns holds the columns for the "registry_events" table.
 	RegistryEventsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
-		{Name: "event_type", Type: field.TypeEnum, Enums: []string{"register", "heartbeat", "expire", "update", "unregister", "unhealthy", "rotate"}},
+		{Name: "event_type", Type: field.TypeEnum, Enums: []string{"register", "heartbeat", "expire", "update", "unregister", "unhealthy", "rotate", "dependency_resolved", "dependency_unresolved"}},
 		{Name: "function_name", Type: field.TypeString, Nullable: true},
 		{Name: "timestamp", Type: field.TypeTime},
 		{Name: "data", Type: field.TypeJSON},

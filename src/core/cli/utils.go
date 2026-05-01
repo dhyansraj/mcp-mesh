@@ -467,6 +467,19 @@ func (r *AgentMatchResult) FormattedError() error {
 // ResolveAgentByPrefix finds agents matching the given name or ID prefix.
 // It first checks for exact matches (Name or ID), then falls back to
 // case-insensitive prefix matching.
+//
+// Disambiguation rules (applied to both exact and prefix phases):
+//  1. Exactly one match -> return it (whether healthy or unhealthy)
+//  2. Multiple matches with >=1 healthy -> filter to healthy:
+//     - exactly one healthy -> return it
+//     - multiple healthy -> error with disambiguation list
+//  3. Multiple matches all unhealthy -> return lex-first deterministically.
+//     The sweep job actively purges unhealthy agents, so by the time a user
+//     reads a disambiguation error and picks one, the unhealthy candidates
+//     may already be gone. Just pick deterministically and be done.
+//
+// Callers pass `agents` already sorted by ID (see getEnhancedAgents in
+// list.go), so "lex-first" is just matches[0].
 func ResolveAgentByPrefix(agents []EnhancedAgent, prefix string, healthyOnly bool) *AgentMatchResult {
 	result := &AgentMatchResult{}
 
@@ -479,18 +492,19 @@ func ResolveAgentByPrefix(agents []EnhancedAgent, prefix string, healthyOnly boo
 		candidateAgents = append(candidateAgents, agent)
 	}
 
-	// First, check for exact match (prioritize exact matches)
-	for i := range candidateAgents {
-		agent := candidateAgents[i]
+	// Phase 1: collect ALL exact matches (Name or ID)
+	var exactMatches []EnhancedAgent
+	for _, agent := range candidateAgents {
 		if agent.Name == prefix || agent.ID == prefix {
-			result.Agent = &candidateAgents[i]
-			result.IsExact = true
-			return result
+			exactMatches = append(exactMatches, agent)
 		}
 	}
+	if len(exactMatches) > 0 {
+		return pickWithHealthyPreference(result, exactMatches, prefix, true /* isExact */)
+	}
 
-	// If no exact match, try case-insensitive prefix matching
-	var matches []EnhancedAgent
+	// Phase 2: case-insensitive prefix matching
+	var prefixMatches []EnhancedAgent
 	prefixLower := strings.ToLower(prefix)
 
 	for _, agent := range candidateAgents {
@@ -499,27 +513,64 @@ func ResolveAgentByPrefix(agents []EnhancedAgent, prefix string, healthyOnly boo
 
 		if strings.HasPrefix(nameLower, prefixLower) ||
 			strings.HasPrefix(idLower, prefixLower) {
-			matches = append(matches, agent)
+			prefixMatches = append(prefixMatches, agent)
 		}
 	}
 
-	// Evaluate results
-	switch len(matches) {
-	case 0:
+	if len(prefixMatches) == 0 {
 		if healthyOnly {
 			result.Error = fmt.Errorf("no healthy agent found matching '%s'", prefix)
 		} else {
 			result.Error = fmt.Errorf("no agent found matching '%s'", prefix)
 		}
-	case 1:
-		result.Agent = &matches[0]
-		result.IsExact = false
-		result.Matches = matches
-	default:
-		result.Matches = matches
-		result.Error = fmt.Errorf("multiple agents match '%s'", prefix)
+		return result
 	}
 
+	return pickWithHealthyPreference(result, prefixMatches, prefix, false /* isExact */)
+}
+
+// pickWithHealthyPreference applies the disambiguation rule for a set of
+// matches (either exact or prefix). See ResolveAgentByPrefix doc for the
+// full rule.
+func pickWithHealthyPreference(result *AgentMatchResult, matches []EnhancedAgent, prefix string, isExact bool) *AgentMatchResult {
+	if len(matches) == 1 {
+		result.Agent = &matches[0]
+		result.IsExact = isExact
+		result.Matches = matches
+		return result
+	}
+
+	// Multiple matches — separate healthy from unhealthy
+	var healthy []EnhancedAgent
+	for i := range matches {
+		if strings.ToLower(matches[i].Status) == "healthy" {
+			healthy = append(healthy, matches[i])
+		}
+	}
+
+	if len(healthy) == 1 {
+		// Exactly one healthy among the matches — auto-pick it
+		result.Agent = &healthy[0]
+		result.IsExact = isExact
+		result.Matches = healthy
+		return result
+	}
+	if len(healthy) > 1 {
+		// Multiple healthy — must disambiguate. Note: we deliberately omit
+		// unhealthy candidates from result.Matches even when they share the
+		// prefix, mirroring `meshctl list` default behavior (unhealthy hidden).
+		// Showing dead agents in "Did you mean..." would be confusing.
+		result.Matches = healthy
+		result.Error = fmt.Errorf("multiple agents match '%s'", prefix)
+		return result
+	}
+
+	// Zero healthy among multiple unhealthy — pick lex-first deterministically.
+	// Matches are already in the sort order callers passed in (ID-sorted from
+	// getEnhancedAgents), so matches[0] is the lex-first ID.
+	result.Agent = &matches[0]
+	result.IsExact = isExact
+	result.Matches = matches
 	return result
 }
 
