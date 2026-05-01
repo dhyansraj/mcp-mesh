@@ -36,8 +36,8 @@ var ErrEntityIDMismatch = errors.New("entity_id mismatch")
 // Replaces the old database.Dependency from GORM models
 type Dependency struct {
 	Capability      string     `json:"capability"`
-	Version         string     `json:"version,omitempty"`         // e.g., ">=1.0.0"
-	Tags            []string   `json:"tags,omitempty"`            // e.g., ["production", "US_EAST"]
+	Version         string     `json:"version,omitempty"`          // e.g., ">=1.0.0"
+	Tags            []string   `json:"tags,omitempty"`             // e.g., ["production", "US_EAST"]
 	TagAlternatives [][]string `json:"tag_alternatives,omitempty"` // OR alternatives, e.g., [["python", "typescript"]]
 }
 
@@ -47,9 +47,9 @@ type RegistryConfig struct {
 	DefaultTimeoutThreshold  int
 	DefaultEvictionThreshold int
 	HealthCheckInterval      int
-	StartupCleanupThreshold  int  // Threshold in seconds for marking stale agents on startup (default: 30)
+	StartupCleanupThreshold  int // Threshold in seconds for marking stale agents on startup (default: 30)
 	EnableResponseCache      bool
-	TracingEnabled           bool // Enable distributed tracing
+	TracingEnabled           bool   // Enable distributed tracing
 	TlsMode                  string // "off", "auto", "strict" — from MCP_MESH_TLS_MODE
 	TrustBackend             string // comma-separated backend names — from MCP_MESH_TRUST_BACKEND
 	TlsCertFile              string // registry server cert — from MCP_MESH_TLS_CERT
@@ -103,7 +103,7 @@ type DependencyResolution struct {
 // e.g., tags: ["addition", ["python", "typescript"]] means addition AND (python OR typescript)
 type DependencySpec struct {
 	Capability      string     `json:"capability"`
-	Tags            []string   `json:"tags,omitempty"`            // Simple required tags
+	Tags            []string   `json:"tags,omitempty"`             // Simple required tags
 	TagAlternatives [][]string `json:"tag_alternatives,omitempty"` // OR alternatives (each inner array is an OR group)
 	Version         string     `json:"version,omitempty"`
 	Namespace       string     `json:"namespace,omitempty"`
@@ -694,16 +694,39 @@ func (s *EntService) StoreDependencyResolutions(
 	return nil
 }
 
-// UpdateDependencyStatusOnAgentOffline marks all dependencies provided by an agent as unavailable
+// UpdateDependencyStatusOnAgentOffline marks all resolutions provided by an
+// agent as unavailable. This covers all three resolution tables that hold a
+// nullable provider_agent_id with OnDelete: SetNull:
+//   - dependency_resolution    (@mesh.tool deps)
+//   - llm_tool_resolution      (@mesh.llm tool filter)
+//   - llm_provider_resolution  (@mesh.llm provider config)
+//
+// All three need to be flipped together when an agent goes offline so that
+// consumer-side state stays consistent before the FK-driven SetNull leaves
+// the rows dangling with status=available.
 func (s *EntService) UpdateDependencyStatusOnAgentOffline(ctx context.Context, agentID string) error {
-	_, err := s.entDB.DependencyResolution.Update().
+	if _, err := s.entDB.DependencyResolution.Update().
 		Where(dependencyresolution.ProviderAgentIDEQ(agentID)).
 		SetStatus(dependencyresolution.StatusUnavailable).
 		ClearResolvedAt().
-		Save(ctx)
-
-	if err != nil {
+		Save(ctx); err != nil {
 		return fmt.Errorf("failed to update dependency status: %w", err)
+	}
+
+	if _, err := s.entDB.LLMToolResolution.Update().
+		Where(llmtoolresolution.ProviderAgentIDEQ(agentID)).
+		SetStatus(llmtoolresolution.StatusUnavailable).
+		ClearResolvedAt().
+		Save(ctx); err != nil {
+		return fmt.Errorf("failed to update llm tool resolution status: %w", err)
+	}
+
+	if _, err := s.entDB.LLMProviderResolution.Update().
+		Where(llmproviderresolution.ProviderAgentIDEQ(agentID)).
+		SetStatus(llmproviderresolution.StatusUnavailable).
+		ClearResolvedAt().
+		Save(ctx); err != nil {
+		return fmt.Errorf("failed to update llm provider resolution status: %w", err)
 	}
 
 	s.logger.Info("Updated dependency status for offline agent %s", agentID)
@@ -1015,7 +1038,7 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 					}
 					return &HeartbeatResponse{
 						Status:    "error",
-						Timestamp:    now.Format(time.RFC3339),
+						Timestamp: now.Format(time.RFC3339),
 						Message:   err.Error(),
 					}, nil
 				}
@@ -1556,8 +1579,8 @@ func (s *EntService) Health() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"status":        "healthy",
-		"service":       "mcp-mesh-registry",
+		"status":  "healthy",
+		"service": "mcp-mesh-registry",
 		"database_type": func() string {
 			if s.entDB.IsPostgreSQL() {
 				return "postgresql"
@@ -1931,6 +1954,13 @@ func (s *EntService) markAgentStaleAttempt(ctx context.Context, staleAgent *ent.
 
 	// Optimistic conditional update - only update if agent hasn't changed since we queried it.
 	// This prevents overwriting a concurrent heartbeat that may have updated the agent.
+	//
+	// We deliberately do NOT bump UpdatedAt here: that field is the agent's
+	// last-heartbeat timestamp from the sweep job's perspective
+	// (purgeStaleAgents filters on UpdatedAtLT(now-retention)). Bumping it
+	// would make every just-marked-stale agent survive the immediate sweep
+	// tick even if it had been silent for hours/days. The status change is
+	// still recorded via the RegistryEvent below, which uses `now`.
 	affected, err := tx.Agent.
 		Update().
 		Where(
@@ -1939,7 +1969,6 @@ func (s *EntService) markAgentStaleAttempt(ctx context.Context, staleAgent *ent.
 			agent.StatusEQ(staleAgent.Status),
 		).
 		SetStatus(agent.StatusUnhealthy).
-		SetUpdatedAt(now).
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to update agent: %w", err)
