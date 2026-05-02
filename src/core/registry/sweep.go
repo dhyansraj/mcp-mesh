@@ -420,29 +420,86 @@ func (s *SweepJob) enforceEventCap(ctx context.Context) (int, error) {
 // for content-addressed dedup across agents), so they can outlive every
 // referrer. This sweep step closes that gap.
 //
+// Two-phase candidate selection: we first collect the set of currently-
+// referenced schema hashes from the capabilities table (bounded by
+// num_capabilities × 2 hash columns — typically dozens to a few hundred
+// in a real mesh) and then filter the stale-schema_entries query against
+// that set with HashNotIn. This guarantees the Limit(1000) per-tick cap
+// is spent on TRUE orphans only — without the DB-side filter, a registry
+// with >1000 stale-but-still-referenced schemas would hit the same
+// referenced rows on every tick and never make progress on the orphans
+// past position 1000 in the default order.
+//
 // Race-safety: candidates are queried outside any transaction; each
 // candidate is then re-checked and deleted inside its own per-row
-// SERIALIZABLE transaction (see purgeOneSchemaEntry). On Postgres SSI
-// will abort one side of any predicate-conflicting transaction, so a
-// concurrent registration creating a capability referencing the hash
-// cannot race past the delete. SQLite's single-writer model achieves
-// the same property automatically.
+// SERIALIZABLE transaction (see purgeOneSchemaEntry). The per-row tx
+// re-check still provides race protection against capabilities created
+// between the candidate scan and the per-row tx commit; the DB-side
+// filter just makes the candidate list correct under the steady state.
+// On Postgres SSI will abort one side of any predicate-conflicting
+// transaction, so a concurrent registration creating a capability
+// referencing the hash cannot race past the delete. SQLite's
+// single-writer model achieves the same property automatically.
 func (s *SweepJob) purgeOrphanSchemaEntries(ctx context.Context, now time.Time) (int, error) {
 	threshold := now.Add(-s.cfg.Retention)
 
-	// Bounded to avoid loading all stale schema_entries into memory in
-	// pathological cases; remaining candidates picked up next tick.
+	// Phase 1: collect all currently-referenced schema hashes from the
+	// capabilities table. Bounded by num_capabilities × 2 hash columns
+	// (typically small — dozens to a few hundred in a real mesh).
+	referencedSet := make(map[string]struct{})
+
+	var inputHashes []string
+	if err := s.entDB.Client.Capability.Query().
+		Where(capability.InputSchemaHashNotNil()).
+		Select(capability.FieldInputSchemaHash).
+		Scan(ctx, &inputHashes); err != nil {
+		return 0, fmt.Errorf("collect referenced input schema hashes: %w", err)
+	}
+	for _, h := range inputHashes {
+		if h != "" {
+			referencedSet[h] = struct{}{}
+		}
+	}
+
+	var outputHashes []string
+	if err := s.entDB.Client.Capability.Query().
+		Where(capability.OutputSchemaHashNotNil()).
+		Select(capability.FieldOutputSchemaHash).
+		Scan(ctx, &outputHashes); err != nil {
+		return 0, fmt.Errorf("collect referenced output schema hashes: %w", err)
+	}
+	for _, h := range outputHashes {
+		if h != "" {
+			referencedSet[h] = struct{}{}
+		}
+	}
+
+	referencedHashes := make([]string, 0, len(referencedSet))
+	for h := range referencedSet {
+		referencedHashes = append(referencedHashes, h)
+	}
+
+	// Phase 2: candidates are stale schema_entries NOT in the referenced
+	// set. Bounded by Limit(1000) per tick as defense-in-depth; the
+	// HashNotIn filter ensures the limit is spent on true orphans only,
+	// so any remainder picked up next tick is genuine new work and not
+	// the same referenced rows again.
+	//
 	// Select only the hash column to skip hydrating the canonical JSON
 	// blob (which can be large for big tool schemas) — the per-row tx
 	// re-reads the row anyway with the staleness predicate.
+	candidatesQuery := s.entDB.Client.SchemaEntry.Query().
+		Where(schemaentry.CreatedAtLT(threshold))
+	if len(referencedHashes) > 0 {
+		candidatesQuery = candidatesQuery.Where(schemaentry.HashNotIn(referencedHashes...))
+	}
+
 	var candidates []string
-	err := s.entDB.Client.SchemaEntry.Query().
-		Where(schemaentry.CreatedAtLT(threshold)).
+	if err := candidatesQuery.
 		Limit(1000).
 		Select(schemaentry.FieldHash).
-		Scan(ctx, &candidates)
-	if err != nil {
-		return 0, fmt.Errorf("query schema entries: %w", err)
+		Scan(ctx, &candidates); err != nil {
+		return 0, fmt.Errorf("query orphan schema candidates: %w", err)
 	}
 
 	if len(candidates) == 0 {
@@ -489,6 +546,12 @@ func (s *SweepJob) purgeOrphanSchemaEntries(ctx context.Context, now time.Time) 
 // we never delete a schema_entry that a concurrent registration is in
 // the process of referencing. SQLite's single-writer model already
 // serializes these writes, so this is a no-op there.
+//
+// NOTE: A Postgres-backed integration test that exercises the mid-tx SSI
+// race window is intentionally deferred. The unit tests in this package
+// run against SQLite (single-writer model, no SSI). Adding a Postgres
+// integration test would require new test infrastructure (testcontainers,
+// build tags); track in a follow-up issue if that infra is needed.
 func (s *SweepJob) purgeOneSchemaEntry(ctx context.Context, hash string, threshold time.Time) (bool, error) {
 	var deleted bool
 

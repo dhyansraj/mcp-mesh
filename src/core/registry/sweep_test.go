@@ -745,3 +745,89 @@ func TestSweep_PurgeOrphanSchemaEntries_RefCheckPreventsDelete(t *testing.T) {
 		t.Errorf("expected racing schema_entry preserved, got count=%d", count)
 	}
 }
+
+// TestSweep_PurgeOrphanSchemaEntries_SkipsReferencedAcrossLargeBatch
+// verifies the DB-side HashNotIn filter on the candidate scan: when
+// stale schema_entries include a mix of referenced and orphan rows,
+// runOnce must purge ONLY the true orphans and never spend the per-tick
+// limit on referenced rows.
+//
+// Without the DB-side filter, a registry with stale-but-still-referenced
+// schemas would have those rows fill the Limit(1000) candidate slot on
+// every tick and the true orphans past that position would never get
+// purged. We use small N here (well below 1000) but the assertion is
+// the same — every referenced row must be excluded from the candidate
+// list, so the deletion count equals exactly N_orphans regardless of
+// how many referenced rows would otherwise have come first in the
+// default order.
+func TestSweep_PurgeOrphanSchemaEntries_SkipsReferencedAcrossLargeBatch(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, job, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Seed a healthy provider to host capabilities that reference schemas.
+	seedAgent(t, client, "provider", agent.StatusHealthy, now)
+
+	// 20 stale schema entries (well past 1h retention). The first 10
+	// (by insertion order) will be referenced by capabilities; the last
+	// 10 are true orphans. Without the DB-side filter, the referenced
+	// rows would have come first in the default order and consumed the
+	// candidate slots on each tick.
+	const total = 20
+	const referenced = 10
+	staleAt := now.Add(-2 * time.Hour)
+	for i := 0; i < total; i++ {
+		hash := "sha256:entry-" + string(rune('a'+i))
+		seedSchemaEntryAt(t, client, hash, staleAt)
+	}
+
+	// Reference the first `referenced` schemas via a capability per row
+	// (alternating input vs output to exercise both code paths).
+	for i := 0; i < referenced; i++ {
+		hash := "sha256:entry-" + string(rune('a'+i))
+		create := client.Capability.Create().
+			SetAgentID("provider").
+			SetFunctionName("fn-" + string(rune('a'+i))).
+			SetCapability("cap-" + string(rune('a'+i)))
+		if i%2 == 0 {
+			create = create.SetInputSchemaHash(hash)
+		} else {
+			create = create.SetOutputSchemaHash(hash)
+		}
+		if _, err := create.Save(ctx); err != nil {
+			t.Fatalf("seed capability for %s: %v", hash, err)
+		}
+	}
+
+	_, _, schemasPurged, err := job.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+
+	wantPurged := total - referenced
+	if schemasPurged != wantPurged {
+		t.Errorf("expected %d schemas purged (total=%d, referenced=%d), got %d", wantPurged, total, referenced, schemasPurged)
+	}
+
+	// Verify the surviving rows are exactly the referenced ones.
+	remaining, err := client.SchemaEntry.Query().
+		Order(ent.Asc(schemaentry.FieldHash)).
+		All(ctx)
+	if err != nil {
+		t.Fatalf("query remaining schema entries: %v", err)
+	}
+	if len(remaining) != referenced {
+		t.Fatalf("expected %d schema entries remaining, got %d", referenced, len(remaining))
+	}
+	for _, e := range remaining {
+		// Each surviving entry must be one of the first `referenced` we seeded.
+		// e.Hash format: "sha256:entry-<letter>" where letter is in [a, a+referenced).
+		idx := int(e.Hash[len(e.Hash)-1] - 'a')
+		if idx < 0 || idx >= referenced {
+			t.Errorf("unexpected surviving entry %s (idx=%d, want < %d)", e.Hash, idx, referenced)
+		}
+	}
+}
