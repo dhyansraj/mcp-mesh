@@ -836,11 +836,12 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 }
 
 // forkSyncBarrierTimeout bounds how long forkToBackground waits for the forked
-// child to write its PID file(s). Generous by design: Java/Maven warmup can be
-// 30+ seconds on a cold cache. Not user-configurable for now — if 45s isn't
-// enough for some legitimate use, the error message ("did not register within
-// 45s") is clear enough that we can expose a flag in a follow-up.
-const forkSyncBarrierTimeout = 45 * time.Second
+// child to write its PID file(s). Generous default to handle Java/Maven
+// cold-cache warmup (60-90s observed) plus multi-agent starts where the
+// slowest agent gates the barrier. If insufficient for some legitimate use,
+// the error message is self-explanatory and we can expose a flag in a
+// follow-up.
+const forkSyncBarrierTimeout = 90 * time.Second
 
 // determineExpectedPIDFiles returns the absolute PID file paths that the
 // forked child meshctl is expected to write. Used by the post-fork sync

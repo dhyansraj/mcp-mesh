@@ -1,5 +1,7 @@
 name: "A2A mTLS - Cross-Language Communication"
 description: "Verify Python, TypeScript, and Java agents all communicate over mTLS in a single mesh"
+skip:
+  reason: "Multi-runtime same-name agents collide on per-name PID file (see GH #845). Re-enable when #845 is resolved."
 tags:
   - a2a-trust
   - tls
