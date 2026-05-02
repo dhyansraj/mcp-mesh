@@ -10,10 +10,12 @@ import (
 	"mcp-mesh/src/core/database"
 	"mcp-mesh/src/core/ent"
 	"mcp-mesh/src/core/ent/agent"
+	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
 	"mcp-mesh/src/core/ent/llmproviderresolution"
 	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
+	"mcp-mesh/src/core/ent/schemaentry"
 	"mcp-mesh/src/core/logger"
 )
 
@@ -63,7 +65,8 @@ func LoadSweepConfigFromEnv(log *logger.Logger) SweepConfig {
 	return cfg
 }
 
-// SweepJob purges stale agents and old registry events on a periodic timer.
+// SweepJob purges stale agents, old registry events, and orphan schema
+// entries on a periodic timer.
 //
 // On each tick the job runs (in order):
 //  1. Purge agents in unhealthy/unknown status whose updated_at is older
@@ -73,6 +76,10 @@ func LoadSweepConfigFromEnv(log *logger.Logger) SweepConfig {
 //  2. If the event row count exceeds the internal hard cap (100,000),
 //     delete oldest rows until back under the cap. Events are governed
 //     solely by row count, not age.
+//  3. Purge orphan schema_entries (no capability still references the
+//     hash) older than Retention. Runs after step 1 so newly-orphaned
+//     schemas (whose last referencing capability got cascade-deleted)
+//     are caught in the same sweep cycle.
 type SweepJob struct {
 	cfg     SweepConfig
 	entDB   *database.EntDatabase
@@ -181,7 +188,7 @@ func (s *SweepJob) Stop() {
 // not surfaced; the next tick will retry.
 func (s *SweepJob) tick(ctx context.Context) {
 	start := s.clock()
-	agentsPurged, eventsPurged, err := s.runOnce(ctx)
+	agentsPurged, eventsPurged, schemasPurged, err := s.runOnce(ctx)
 	took := time.Since(start)
 
 	if err != nil {
@@ -192,8 +199,8 @@ func (s *SweepJob) tick(ctx context.Context) {
 	}
 
 	if s.logger != nil {
-		if agentsPurged > 0 || eventsPurged > 0 {
-			s.logger.Info("sweep: purged %d agents, %d events (took %s)", agentsPurged, eventsPurged, took)
+		if agentsPurged > 0 || eventsPurged > 0 || schemasPurged > 0 {
+			s.logger.Info("sweep: purged %d agents, %d events, %d orphan schemas (took %s)", agentsPurged, eventsPurged, schemasPurged, took)
 		} else {
 			s.logger.Debug("sweep: nothing to purge (took %s)", took)
 		}
@@ -201,27 +208,35 @@ func (s *SweepJob) tick(ctx context.Context) {
 }
 
 // runOnce performs a single sweep iteration and returns the number of
-// agents and events purged. Exported (lower-cased but callable from
-// tests in the same package) for unit tests; production callers should
-// use Start.
-func (s *SweepJob) runOnce(ctx context.Context) (agentsPurged, eventsPurged int, err error) {
+// agents, events, and orphan schema_entries purged. Exported (lower-cased
+// but callable from tests in the same package) for unit tests; production
+// callers should use Start.
+func (s *SweepJob) runOnce(ctx context.Context) (agentsPurged, eventsPurged, schemasPurged int, err error) {
 	now := s.clock()
 
 	if s.cfg.Retention > 0 {
 		n, err := s.purgeStaleAgents(ctx, now)
 		if err != nil {
-			return 0, 0, fmt.Errorf("purge stale agents: %w", err)
+			return 0, 0, 0, fmt.Errorf("purge stale agents: %w", err)
 		}
 		agentsPurged = n
 	}
 
 	n, err := s.enforceEventCap(ctx)
 	if err != nil {
-		return agentsPurged, 0, fmt.Errorf("enforce event cap: %w", err)
+		return agentsPurged, 0, 0, fmt.Errorf("enforce event cap: %w", err)
 	}
 	eventsPurged = n
 
-	return agentsPurged, eventsPurged, nil
+	if s.cfg.Retention > 0 {
+		n, err := s.purgeOrphanSchemaEntries(ctx, now)
+		if err != nil {
+			return agentsPurged, eventsPurged, 0, fmt.Errorf("purge orphan schemas: %w", err)
+		}
+		schemasPurged = n
+	}
+
+	return agentsPurged, eventsPurged, schemasPurged, nil
 }
 
 // purgeStaleAgents deletes agents in unhealthy/unknown status that have
@@ -386,4 +401,112 @@ func (s *SweepJob) enforceEventCap(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("delete excess events: %w", err)
 	}
 	return n, nil
+}
+
+// purgeOrphanSchemaEntries deletes schema_entries rows older than Retention
+// that are no longer referenced by any capability's input_schema_hash or
+// output_schema_hash. Runs after agent purge so newly-orphaned schemas
+// (whose last referencing capability got cascade-deleted) are caught in
+// the same sweep cycle.
+//
+// Schemas are intentionally not FK-bound to capabilities (loose coupling
+// for content-addressed dedup across agents), so they can outlive every
+// referrer. This sweep step closes that gap.
+//
+// Race-safety: candidates are queried outside any transaction; each
+// candidate is then re-checked inside its own per-row transaction
+// (staleness predicate + reference count) before deletion. A concurrent
+// agent registration that creates a capability referencing the hash
+// will be visible to the re-check and the delete is skipped.
+func (s *SweepJob) purgeOrphanSchemaEntries(ctx context.Context, now time.Time) (int, error) {
+	threshold := now.Add(-s.cfg.Retention)
+
+	candidates, err := s.entDB.Client.SchemaEntry.Query().
+		Where(schemaentry.CreatedAtLT(threshold)).
+		All(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("query schema entries: %w", err)
+	}
+
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+
+	var purged int
+	for _, e := range candidates {
+		deleted, err := s.purgeOneSchemaEntry(ctx, e.Hash, threshold)
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Error("sweep: failed to purge schema_entry %s: %v", e.Hash, err)
+			}
+			continue
+		}
+		if deleted {
+			purged++
+		}
+	}
+	return purged, nil
+}
+
+// purgeOneSchemaEntry deletes a single schema_entry row inside a
+// transaction after re-verifying both its staleness and that no
+// capability still references it. Returns (true, nil) when deleted,
+// (false, nil) when a concurrent registration created a reference or
+// the entry was already gone / no longer stale, (false, err) on other
+// failures.
+func (s *SweepJob) purgeOneSchemaEntry(ctx context.Context, hash string, threshold time.Time) (bool, error) {
+	var deleted bool
+
+	err := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
+		// Re-verify staleness inside the tx (the entry could have been
+		// deleted by another sweep, or — in theory — re-inserted with a
+		// fresh created_at if upstream code ever does that).
+		entry, err := tx.SchemaEntry.Query().
+			Where(
+				schemaentry.HashEQ(hash),
+				schemaentry.CreatedAtLT(threshold),
+			).
+			First(ctx)
+		if err != nil {
+			if ent.IsNotFound(err) {
+				// Already deleted or no longer stale — both OK.
+				return nil
+			}
+			return fmt.Errorf("re-query schema entry %s: %w", hash, err)
+		}
+
+		// Re-verify orphan-ness inside the tx. If a concurrent
+		// registration created a capability referencing this hash
+		// between the candidate scan and now, skip the delete.
+		refCount, err := tx.Capability.Query().
+			Where(capability.Or(
+				capability.InputSchemaHashEQ(hash),
+				capability.OutputSchemaHashEQ(hash),
+			)).
+			Count(ctx)
+		if err != nil {
+			return fmt.Errorf("count capability refs for %s: %w", hash, err)
+		}
+		if refCount > 0 {
+			if s.logger != nil {
+				s.logger.Debug("sweep: skipped purge of schema_entry %s (now referenced by %d capability rows)", hash, refCount)
+			}
+			return nil
+		}
+
+		if err := tx.SchemaEntry.DeleteOne(entry).Exec(ctx); err != nil {
+			return fmt.Errorf("delete schema entry %s: %w", hash, err)
+		}
+
+		deleted = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+
+	if deleted && s.logger != nil {
+		s.logger.Debug("sweep: purged orphan schema_entry %s", hash)
+	}
+	return deleted, nil
 }

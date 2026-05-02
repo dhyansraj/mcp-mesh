@@ -402,6 +402,14 @@ export DEFAULT_TIMEOUT_THRESHOLD=20   # Mark unhealthy (seconds)
 export HEALTH_CHECK_INTERVAL=10       # Scan frequency (seconds)
 export DEFAULT_EVICTION_THRESHOLD=60  # Evict stale agents (seconds)
 
+# Sweep retention — controls how long unhealthy/unknown agents and
+# orphan schema_entries (content-addressed schemas no longer referenced
+# by any capability; #842) are retained before the periodic sweep job
+# purges them. Go duration string (e.g. "30m", "2h"). Default: 1h.
+# Set to "0" to disable the sweep entirely (forensic mode — keeps all
+# rows). Event rows are governed by a separate hardcoded 100k row cap.
+export MCP_MESH_RETENTION=1h
+
 # Caching
 export CACHE_TTL=30
 export ENABLE_RESPONSE_CACHE=true
