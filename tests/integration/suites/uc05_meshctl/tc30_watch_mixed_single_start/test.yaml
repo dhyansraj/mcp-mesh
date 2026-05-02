@@ -56,6 +56,7 @@ test:
     workdir: /workspace
     command: "meshctl start py-math-agent/main.py ts-math-agent/src/index.ts /workspace/java-greeter-agent -d -w"
     capture: start_output
+    timeout: 240
 
   # ========== WAIT FOR REGISTRATION ==========
 
