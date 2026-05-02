@@ -782,17 +782,17 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 		fmt.Printf("Warning: failed to write wrapper marker: %v\n", err)
 	}
 
-	if !quiet {
-		// Extract agent names from args for display (use decorator name if available)
-		var agentNames []string
-		for _, arg := range args {
-			if isAgentFile(arg) {
-				absPath, _ := filepath.Abs(arg)
-				name := extractAgentName(absPath)
-				agentNames = append(agentNames, name)
-			}
+	// Extract agent names from args (used for both display and the sync barrier).
+	var agentNames []string
+	for _, arg := range args {
+		if isAgentFile(arg) {
+			absPath, _ := filepath.Abs(arg)
+			name := extractAgentName(absPath)
+			agentNames = append(agentNames, name)
 		}
+	}
 
+	if !quiet {
 		if len(agentNames) == 1 {
 			fmt.Printf("Started '%s' in detach\n", agentNames[0])
 			fmt.Printf("Logs: ~/.mcp-mesh/logs/%s.log\n", agentNames[0])
@@ -807,7 +807,125 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 		}
 	}
 
+	// Sync barrier: wait for the forked child to write the PID file(s) we expect
+	// before returning. Without this, an immediate follow-up `meshctl stop` or
+	// `meshctl start` (e.g. in lifecycle tests) races against the child's
+	// startup work (validators, Maven warmup, language runtime init) and either
+	// sees "no agents running" or trips an "already running" check on a
+	// late-arriving PID file. See GitHub issue #844.
+	uiEnabled, _ := cobraCmd.Flags().GetBool("ui")
+	connectOnly, _ := cobraCmd.Flags().GetBool("connect-only")
+	expectedFiles := determineExpectedPIDFiles(agentNames, registryOnly, connectOnly, uiEnabled)
+	if len(expectedFiles) == 0 {
+		// Nothing meaningful to wait for (e.g. malformed args). Return without
+		// barrier rather than block forever — the wrapper marker is still in
+		// place so GC can clean up if the child died.
+		return nil
+	}
+	if err := waitForChildPIDFiles(cmd, expectedFiles, forkSyncBarrierTimeout); err != nil {
+		// Hard error: the contract of `meshctl start -d` is "after this returns,
+		// the agent is registered." Soft-warning here would let the original
+		// race resurface for any caller (tests, scripts, humans) that relied on
+		// the contract. Drop the wrapper marker so a retry isn't blocked by a
+		// stale wrapper-<group>.pid pointing at the failed fork.
+		_ = lifecycle.RemoveWrapperPID(group)
+		return fmt.Errorf("forked meshctl did not register within %v: %w", forkSyncBarrierTimeout, err)
+	}
+
 	return nil
+}
+
+// forkSyncBarrierTimeout bounds how long forkToBackground waits for the forked
+// child to write its PID file(s). Generous by design: Java/Maven warmup can be
+// 30+ seconds on a cold cache. Not user-configurable for now — if 45s isn't
+// enough for some legitimate use, the error message ("did not register within
+// 45s") is clear enough that we can expose a flag in a follow-up.
+const forkSyncBarrierTimeout = 45 * time.Second
+
+// determineExpectedPIDFiles returns the absolute PID file paths that the
+// forked child meshctl is expected to write. Used by the post-fork sync
+// barrier to know when the child has finished registering.
+//
+// Rationale for which files we wait for:
+//   - registry-only / no-args: child runs registry-only mode → registry.pid.
+//   - --connect-only: registry is external; child only writes per-agent .pid.
+//   - agents present: per-agent .pid files (registry.pid is conditional on
+//     whether the registry was already running, so we can't reliably wait
+//     for it — the agent .pid implies the child got past registry setup).
+//   - --ui only (no agents, not registry-only): standalone UI session →
+//     ui.pid.
+func determineExpectedPIDFiles(agentNames []string, registryOnly, connectOnly, uiEnabled bool) []string {
+	if registryOnly {
+		return []string{lifecycle.PIDFile(lifecycle.ServiceRegistry)}
+	}
+	if len(agentNames) > 0 {
+		out := make([]string, 0, len(agentNames))
+		for _, n := range agentNames {
+			out = append(out, lifecycle.PIDFile(n))
+		}
+		return out
+	}
+	if uiEnabled {
+		return []string{lifecycle.PIDFile(lifecycle.ServiceUI)}
+	}
+	if !connectOnly {
+		// No agents and not UI-only: child will fall into the "no agents
+		// specified, starting registry only" branch in start.go.
+		return []string{lifecycle.PIDFile(lifecycle.ServiceRegistry)}
+	}
+	return nil
+}
+
+// waitForChildPIDFiles polls until all expectedFiles exist or the child exits
+// or the timeout fires. 50ms poll interval is below human perception and
+// negligible relative to the multi-second startup costs we're guarding
+// against. A pipe-based handshake would be tighter but requires plumbing a
+// signal mechanism into the child meshctl — the polling design keeps the
+// child unchanged.
+//
+// Child-exit detection uses a background Wait() goroutine rather than
+// Signal(0): a freshly-exited unwaited child is a zombie, and Signal(0)
+// returns nil for zombies on Linux/Darwin, which would let us spin until the
+// timeout instead of failing fast.
+func waitForChildPIDFiles(cmd *exec.Cmd, expectedFiles []string, timeout time.Duration) error {
+	exited := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(exited)
+	}()
+
+	deadline := time.After(timeout)
+	const pollInterval = 50 * time.Millisecond
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	check := func() bool {
+		for _, f := range expectedFiles {
+			if _, err := os.Stat(f); err != nil {
+				return false
+			}
+		}
+		return true
+	}
+
+	if check() {
+		return nil
+	}
+	for {
+		select {
+		case <-exited:
+			if check() {
+				return nil
+			}
+			return fmt.Errorf("forked child (pid %d) exited before writing PID file(s) %v", cmd.Process.Pid, expectedFiles)
+		case <-deadline:
+			return fmt.Errorf("timed out after %v waiting for PID file(s) %v", timeout, expectedFiles)
+		case <-ticker.C:
+			if check() {
+				return nil
+			}
+		}
+	}
 }
 
 // isTerminal checks if the given file is a terminal (TTY)
