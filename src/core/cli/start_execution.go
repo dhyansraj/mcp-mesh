@@ -836,12 +836,11 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 }
 
 // forkSyncBarrierTimeout bounds how long forkToBackground waits for the forked
-// child to write its PID file(s). Generous default to handle Java/Maven
-// cold-cache warmup (60-90s observed) plus multi-agent starts where the
-// slowest agent gates the barrier. If insufficient for some legitimate use,
-// the error message is self-explanatory and we can expose a flag in a
-// follow-up.
-const forkSyncBarrierTimeout = 90 * time.Second
+// child to write its PID file(s). Generous default — Java/Maven cold-cache +
+// Spring Boot startup observed up to 120s; multi-agent starts gate on slowest,
+// with CPU/memory contention adding overhead. If insufficient, error message
+// is self-explanatory.
+const forkSyncBarrierTimeout = 180 * time.Second
 
 // determineExpectedPIDFiles returns the absolute PID file paths that the
 // forked child meshctl is expected to write. Used by the post-fork sync
