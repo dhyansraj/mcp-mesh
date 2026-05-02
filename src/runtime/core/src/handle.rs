@@ -298,6 +298,7 @@ mod tests {
                 "weather-agent".to_string(),
                 "test-tool".to_string(),
                 0,
+                None,
             ))
             .await
             .unwrap();

@@ -69,6 +69,10 @@ struct DepKey {
 }
 
 /// Resolved dependency value with all details.
+///
+/// `kwargs` carries the producer's @mesh.tool kwargs as a JSON string so it
+/// can travel through the FFI boundary without GIL acquisition. SDKs decode
+/// it on receipt to configure the consumer-side proxy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DepValue {
     /// The capability name
@@ -79,6 +83,8 @@ struct DepValue {
     function_name: String,
     /// The agent providing this dependency
     agent_id: String,
+    /// Producer's @mesh.tool kwargs serialized as JSON; None if absent.
+    kwargs: Option<String>,
 }
 
 /// Topology state - tracks current dependency endpoints.
@@ -421,6 +427,10 @@ impl AgentRuntime {
                     endpoint: provider.endpoint.clone(),
                     function_name: provider.function_name.clone(),
                     agent_id: provider.agent_id.clone(),
+                    kwargs: provider
+                        .kwargs
+                        .as_ref()
+                        .and_then(|v| serde_json::to_string(v).ok()),
                 };
 
                 new_deps.insert(key, value);
@@ -451,6 +461,7 @@ impl AgentRuntime {
                 Some(old_value) => {
                     old_value.endpoint != value.endpoint
                         || old_value.function_name != value.function_name
+                        || old_value.kwargs != value.kwargs
                 }
                 None => true,
             };
@@ -517,6 +528,7 @@ impl AgentRuntime {
                     value.agent_id.clone(),
                     key.requesting_function.clone(),
                     key.dep_index,
+                    value.kwargs.clone(),
                 )
             } else {
                 MeshEvent::dependency_changed(
@@ -526,6 +538,7 @@ impl AgentRuntime {
                     value.agent_id.clone(),
                     key.requesting_function.clone(),
                     key.dep_index,
+                    value.kwargs.clone(),
                 )
             };
             let _ = self.event_tx.send(event).await;

@@ -7,7 +7,9 @@ Provides automatic agentic loop for LLM-based agents with tool integration.
 import asyncio
 import json
 import logging
+import os
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
@@ -36,9 +38,10 @@ except ImportError:
 
 # Import litellm at module level for mocking in tests
 try:
-    from litellm import completion
+    from litellm import acompletion, completion
 except ImportError:
     completion = None
+    acompletion = None
 
 logger = logging.getLogger(__name__)
 
@@ -702,6 +705,126 @@ class MeshLlmAgent:
 
         return parts
 
+    async def _build_messages_for_run(
+        self,
+        message: Union[str, list[dict[str, Any]]],
+        media: Union[list, None],
+        context: Union[dict, None, object],
+        context_mode: Literal["replace", "append", "prepend"],
+    ) -> list[dict[str, Any]]:
+        """Resolve context, render system prompt, and assemble the messages array.
+
+        Shared by ``__call__`` and ``stream``: identical setup must produce
+        the same conversation regardless of whether the final response is
+        buffered or streamed.
+        """
+        effective_context = self._resolve_context(context, context_mode)
+        base_system_prompt = self._render_system_prompt(effective_context)
+
+        if self._is_mesh_delegated:
+            system_content = base_system_prompt
+            if self._tool_schemas:
+                if self._parallel_tool_calls:
+                    system_content += "\n\nYou have access to tools. You CAN and SHOULD call multiple tools simultaneously when the calls are independent."
+                else:
+                    system_content += "\n\nYou have access to tools. Use them when needed to gather information."
+        else:
+            system_content = self._provider_handler.format_system_prompt(
+                base_prompt=base_system_prompt,
+                tool_schemas=self._tool_schemas,
+                output_type=self.output_type,
+            )
+            if self._parallel_tool_calls and self._tool_schemas:
+                system_content += "\n\nYou CAN and SHOULD call multiple tools simultaneously when the calls are independent. Return all independent tool calls in a single response."
+
+        logger.debug(
+            f"📝 System prompt (formatted by {self._provider_handler}): {system_content[:200]}..."
+        )
+
+        media_parts: list[dict] = []
+        if media:
+            media_parts = await self._resolve_media_inputs(media)
+            if media_parts:
+                logger.info(f"Resolved {len(media_parts)} media items for user message")
+
+        if isinstance(message, list):
+            messages = message.copy()
+            if system_content:
+                if not messages or messages[0].get("role") != "system":
+                    messages.insert(0, {"role": "system", "content": system_content})
+                else:
+                    messages[0] = {"role": "system", "content": system_content}
+            if media_parts:
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i].get("role") == "user":
+                        existing_content = messages[i].get("content", "")
+                        if isinstance(existing_content, str):
+                            messages[i] = {
+                                "role": "user",
+                                "content": [
+                                    {"type": "text", "text": existing_content},
+                                    *media_parts,
+                                ],
+                            }
+                        elif isinstance(existing_content, list):
+                            messages[i] = {
+                                "role": "user",
+                                "content": existing_content + media_parts,
+                            }
+                        break
+            logger.info(
+                f"🚀 Starting agentic loop with {len(messages)} messages in history"
+            )
+        else:
+            if media_parts:
+                user_content: Union[str, list] = [
+                    {"type": "text", "text": message},
+                    *media_parts,
+                ]
+            else:
+                user_content = message
+
+            if system_content:
+                messages = [
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": user_content},
+                ]
+            else:
+                messages = [
+                    {"role": "user", "content": user_content},
+                ]
+
+            log_msg = message if isinstance(message, str) else str(message)
+            logger.info(f"🚀 Starting agentic loop for message: {log_msg[:100]}...")
+
+        return messages
+
+    def _build_request_params(self, messages: list[dict[str, Any]], **kwargs) -> dict:
+        """Run the provider handler over ``messages`` to produce LiteLLM-ready kwargs.
+
+        Mirrors the ``__call__`` per-iteration request build; extracted so
+        ``stream()`` can reuse it without duplicating provider-handler logic.
+        """
+        effective_kwargs = {**self._default_model_params, **kwargs}
+        if self._parallel_tool_calls:
+            effective_kwargs["parallel_tool_calls"] = True
+        call_kwargs = (
+            {**effective_kwargs, "output_mode": self.output_mode}
+            if self.output_mode
+            else effective_kwargs
+        )
+        effective_tools = (
+            self._enrich_tools_with_endpoints()
+            if self._is_mesh_delegated and self._tool_schemas
+            else (self._tool_schemas if self._tool_schemas else None)
+        )
+        return self._provider_handler.prepare_request(
+            messages=messages,
+            tools=effective_tools if effective_tools else None,
+            output_type=self.output_type,
+            **call_kwargs,
+        )
+
     async def __call__(
         self,
         message: Union[str, list[dict[str, Any]]],
@@ -775,110 +898,9 @@ class MeshLlmAgent:
                 "litellm is required for MeshLlmAgent. Install with: pip install litellm"
             )
 
-        # Resolve effective context (merge auto-populated with runtime context)
-        effective_context = self._resolve_context(context, context_mode)
-
-        # Render base system prompt (from template or literal) with effective context
-        base_system_prompt = self._render_system_prompt(effective_context)
-
-        # Phase 2: Format system prompt
-        if self._is_mesh_delegated:
-            # Delegate path: Just use base prompt + basic tool instructions
-            # Provider will add vendor-specific formatting
-            system_content = base_system_prompt
-            if self._tool_schemas:
-                if self._parallel_tool_calls:
-                    system_content += "\n\nYou have access to tools. You CAN and SHOULD call multiple tools simultaneously when the calls are independent."
-                else:
-                    system_content += "\n\nYou have access to tools. Use them when needed to gather information."
-        else:
-            # Direct path: Use vendor handler for vendor-specific optimizations
-            system_content = self._provider_handler.format_system_prompt(
-                base_prompt=base_system_prompt,
-                tool_schemas=self._tool_schemas,
-                output_type=self.output_type,
-            )
-            # Append parallel tool calling instruction for direct mode
-            if self._parallel_tool_calls and self._tool_schemas:
-                system_content += "\n\nYou CAN and SHOULD call multiple tools simultaneously when the calls are independent. Return all independent tool calls in a single response."
-
-        # Debug: Log system prompt (truncated for privacy)
-        logger.debug(
-            f"📝 System prompt (formatted by {self._provider_handler}): {system_content[:200]}..."
+        messages = await self._build_messages_for_run(
+            message, media, context, context_mode
         )
-
-        # Resolve media inputs to image content blocks (if provided)
-        media_parts: list[dict] = []
-        if media:
-            media_parts = await self._resolve_media_inputs(media)
-            if media_parts:
-                logger.info(f"Resolved {len(media_parts)} media items for user message")
-
-        # Build messages array based on input type
-        if isinstance(message, list):
-            # Multi-turn conversation - use provided messages array
-            messages = message.copy()
-
-            # Only add/update system message if we have non-empty content
-            # (Claude API rejects empty system messages - though decorator provides default)
-            if system_content:
-                if not messages or messages[0].get("role") != "system":
-                    messages.insert(0, {"role": "system", "content": system_content})
-                else:
-                    # Replace existing system message with our constructed one
-                    messages[0] = {"role": "system", "content": system_content}
-
-            # If media provided, find the last user message and append media parts
-            if media_parts:
-                for i in range(len(messages) - 1, -1, -1):
-                    if messages[i].get("role") == "user":
-                        existing_content = messages[i].get("content", "")
-                        if isinstance(existing_content, str):
-                            # Convert text to multipart array
-                            messages[i] = {
-                                "role": "user",
-                                "content": [
-                                    {"type": "text", "text": existing_content},
-                                    *media_parts,
-                                ],
-                            }
-                        elif isinstance(existing_content, list):
-                            # Already multipart — append media
-                            messages[i] = {
-                                "role": "user",
-                                "content": existing_content + media_parts,
-                            }
-                        break
-
-            # Log conversation history
-            logger.info(
-                f"🚀 Starting agentic loop with {len(messages)} messages in history"
-            )
-        else:
-            # Single-turn - build messages array from string
-            # Build user content: plain text or multipart with media
-            if media_parts:
-                user_content: Union[str, list] = [
-                    {"type": "text", "text": message},
-                    *media_parts,
-                ]
-            else:
-                user_content = message
-
-            # Only include system message if non-empty (Claude API rejects empty system messages)
-            if system_content:
-                messages = [
-                    {"role": "system", "content": system_content},
-                    {"role": "user", "content": user_content},
-                ]
-            else:
-                # Fallback for edge case where system_content is explicitly empty
-                messages = [
-                    {"role": "user", "content": user_content},
-                ]
-
-            log_msg = message if isinstance(message, str) else str(message)
-            logger.info(f"🚀 Starting agentic loop for message: {log_msg[:100]}...")
 
         # Import once before loop (avoid per-iteration import overhead)
         from _mcp_mesh.tracing.context import set_llm_metadata
@@ -893,35 +915,11 @@ class MeshLlmAgent:
             try:
                 # Call LLM (either direct LiteLLM or mesh-delegated)
                 try:
-                    # Merge decorator-level defaults with call-time kwargs
-                    # Call-time kwargs take precedence over defaults
-                    effective_kwargs = {**self._default_model_params, **kwargs}
-
-                    # Pass parallel_tool_calls to the LLM API for providers that support it
-                    # (e.g., OpenAI). Provider handlers that don't support it will strip it.
-                    if self._parallel_tool_calls:
-                        effective_kwargs["parallel_tool_calls"] = True
-
-                    # Build kwargs with output_mode override if set
-                    call_kwargs = (
-                        {**effective_kwargs, "output_mode": self.output_mode}
-                        if self.output_mode
-                        else effective_kwargs
-                    )
-
-                    # Use provider handler to prepare vendor-specific request
-                    # For mesh delegation, enrich tools with endpoint URLs
-                    # so the provider can execute tools directly
+                    request_params = self._build_request_params(messages, **kwargs)
                     effective_tools = (
                         self._enrich_tools_with_endpoints()
                         if self._is_mesh_delegated and self._tool_schemas
                         else (self._tool_schemas if self._tool_schemas else None)
-                    )
-                    request_params = self._provider_handler.prepare_request(
-                        messages=messages,
-                        tools=effective_tools if effective_tools else None,
-                        output_type=self.output_type,
-                        **call_kwargs,
                     )
 
                     if self._is_mesh_delegated:
@@ -1239,3 +1237,339 @@ class MeshLlmAgent:
             return content
 
         return ResponseParser.parse(content, self.output_type)
+
+    @staticmethod
+    def _merge_streamed_tool_calls(buffered: list[Any]) -> list[dict]:
+        """Reassemble fragmented ``tool_calls`` deltas into complete tool calls.
+
+        LiteLLM yields ``tool_calls`` across chunks: ``id``/``type``/``name``
+        arrive once with ``index=N``, and JSON ``arguments`` accrue across
+        subsequent chunks at the same index. We coalesce by index and drop
+        any partial entries (defensive — providers very rarely truncate
+        mid-stream, but the math still works).
+        """
+        merged: dict[int, dict[str, Any]] = {}
+        for chunk in buffered:
+            choices = getattr(chunk, "choices", None) or []
+            if not choices:
+                continue
+            delta = getattr(choices[0], "delta", None)
+            if delta is None:
+                continue
+            tcs = getattr(delta, "tool_calls", None)
+            if not tcs:
+                continue
+            for tc in tcs:
+                idx = getattr(tc, "index", 0) or 0
+                slot = merged.setdefault(
+                    idx,
+                    {
+                        "id": None,
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    },
+                )
+                if getattr(tc, "id", None):
+                    slot["id"] = tc.id
+                if getattr(tc, "type", None):
+                    slot["type"] = tc.type
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    if getattr(fn, "name", None):
+                        slot["function"]["name"] = fn.name
+                    if getattr(fn, "arguments", None):
+                        slot["function"]["arguments"] += fn.arguments
+        return [tc for tc in merged.values() if tc["id"] is not None]
+
+    @staticmethod
+    def _stream_peek_window_seconds() -> float:
+        """Read the peek window from ``MESH_LLM_STREAM_PEEK_MS`` (default 100ms)."""
+        try:
+            return max(0, int(os.environ.get("MESH_LLM_STREAM_PEEK_MS", "100"))) / 1000.0
+        except ValueError:
+            return 0.1
+
+    async def stream(
+        self,
+        message: Union[str, list[dict[str, Any]]],
+        *,
+        media: Union[list, None] = None,
+        context: Union[dict, None, object] = _CONTEXT_NOT_PROVIDED,
+        context_mode: Literal["replace", "append", "prepend"] = "append",
+        **kwargs,
+    ) -> AsyncIterator[str]:
+        """Stream the final assistant text token-by-token via the agentic loop.
+
+        Each iteration uses ``litellm.acompletion(stream=True, ...)``. We
+        peek the first chunks within ``MESH_LLM_STREAM_PEEK_MS`` (default
+        100ms) — if any contain ``tool_calls`` we drain the rest, reconstruct
+        a non-streaming response, run the existing tool branch, and continue
+        the loop. If only text is observed we emit buffered chunks first
+        and then live chunks until the stream completes.
+
+        Token usage is captured AFTER full stream consumption (LiteLLM emits
+        ``usage`` in the final chunk when ``stream_options={"include_usage":
+        True}`` is requested) so ExecutionTracer's post-call read still sees
+        accurate counts.
+
+        Constraints:
+            - Direct mode only. Mesh-delegated providers (``provider`` is a
+              dict / @mesh.llm_provider) raise ``NotImplementedError``;
+              provider-mode streaming is a separate phase.
+            - String output only — typed Pydantic outputs cannot be
+              meaningfully streamed and would defeat token-by-token UX.
+
+        Yields:
+            ``str`` chunks from the final assistant message.
+        """
+        if self._is_mesh_delegated:
+            raise NotImplementedError(
+                "MeshLlmAgent.stream() is direct-mode only. Streaming with "
+                "provider={'capability': ...} (mesh-delegated providers) is "
+                "not supported in this phase."
+            )
+        if self.output_type is not str:
+            raise NotImplementedError(
+                "MeshLlmAgent.stream() supports only str output_type; got "
+                f"{getattr(self.output_type, '__name__', self.output_type)!r}. "
+                "Use MeshLlmAgent.__call__() for typed responses."
+            )
+        if acompletion is None:
+            raise ImportError(
+                "litellm is required for MeshLlmAgent.stream(). "
+                "Install with: pip install litellm"
+            )
+
+        from _mcp_mesh.tracing.context import set_llm_metadata
+
+        self._iteration_count = 0
+        total_input_tokens = 0
+        total_output_tokens = 0
+        effective_model = self.model
+        peek_window = self._stream_peek_window_seconds()
+
+        messages = await self._build_messages_for_run(
+            message, media, context, context_mode
+        )
+
+        while self._iteration_count < self.max_iterations:
+            self._iteration_count += 1
+            logger.debug(
+                f"🔄 stream iteration {self._iteration_count}/{self.max_iterations}"
+            )
+
+            try:
+                request_params = self._build_request_params(messages, **kwargs)
+            except Exception as e:
+                logger.error(f"❌ stream: failed to build request params: {e}")
+                raise LLMAPIError(
+                    provider=str(self.provider),
+                    model=self.model,
+                    original_error=e,
+                ) from e
+
+            request_params["model"] = self.model
+            request_params["api_key"] = self.api_key
+            request_params["stream"] = True
+            existing_stream_opts = request_params.get("stream_options") or {}
+            request_params["stream_options"] = {
+                **existing_stream_opts,
+                "include_usage": True,
+            }
+
+            try:
+                stream_iter = await acompletion(**request_params)
+            except Exception as e:
+                logger.error(f"❌ stream: acompletion failed: {e}")
+                raise LLMAPIError(
+                    provider=str(self.provider),
+                    model=self.model,
+                    original_error=e,
+                ) from e
+
+            buffered: list[Any] = []
+            saw_tool_call = False
+            peek_deadline = asyncio.get_event_loop().time() + peek_window
+            stream_aiter = stream_iter.__aiter__()
+            stream_completed = False
+
+            try:
+                while True:
+                    remaining = peek_deadline - asyncio.get_event_loop().time()
+                    if remaining <= 0:
+                        break
+                    try:
+                        chunk = await asyncio.wait_for(
+                            stream_aiter.__anext__(), timeout=remaining
+                        )
+                    except StopAsyncIteration:
+                        stream_completed = True
+                        break
+                    except asyncio.TimeoutError:
+                        break
+                    buffered.append(chunk)
+                    if self._chunk_has_tool_call(chunk):
+                        saw_tool_call = True
+                        break
+
+                if saw_tool_call:
+                    async for chunk in stream_aiter:
+                        buffered.append(chunk)
+                    stream_completed = True
+
+                    final_usage = self._extract_usage_from_chunks(buffered)
+                    if final_usage:
+                        total_input_tokens += final_usage.get("prompt_tokens", 0) or 0
+                        total_output_tokens += (
+                            final_usage.get("completion_tokens", 0) or 0
+                        )
+
+                    merged_tool_calls = self._merge_streamed_tool_calls(buffered)
+                    if not merged_tool_calls:
+                        raise LLMAPIError(
+                            provider=str(self.provider),
+                            model=self.model,
+                            original_error=RuntimeError(
+                                "stream produced tool_call deltas but no complete "
+                                "tool_call could be merged"
+                            ),
+                        )
+
+                    buffered_text = self._join_text_from_chunks(buffered)
+                    mock = _MockResponse(
+                        {
+                            "role": "assistant",
+                            "content": buffered_text or None,
+                            "tool_calls": merged_tool_calls,
+                        }
+                    )
+                    model_from_chunks = self._extract_model_from_chunks(buffered)
+                    if model_from_chunks:
+                        effective_model = model_from_chunks
+
+                    set_llm_metadata(
+                        model=effective_model,
+                        provider=str(self.provider) if self.provider else "",
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
+                    )
+
+                    assistant_message = mock.choices[0].message
+                    logger.info(
+                        f"🛠️  stream: LLM requested {len(assistant_message.tool_calls)} tool calls"
+                    )
+                    messages.append(assistant_message.model_dump())
+
+                    if (
+                        self._parallel_tool_calls
+                        and len(assistant_message.tool_calls) > 1
+                    ):
+                        tool_results = await self._execute_tool_calls_parallel(
+                            assistant_message.tool_calls
+                        )
+                    else:
+                        tool_results = await self._execute_tool_calls(
+                            assistant_message.tool_calls
+                        )
+                    tool_results = await self._resolve_media_in_tool_results(
+                        tool_results
+                    )
+                    for tr in tool_results:
+                        messages.append(tr)
+                    continue
+
+                for chunk in buffered:
+                    text = self._extract_text_from_chunk(chunk)
+                    if text:
+                        yield text
+
+                async for chunk in stream_aiter:
+                    buffered.append(chunk)
+                    text = self._extract_text_from_chunk(chunk)
+                    if text:
+                        yield text
+                stream_completed = True
+
+                final_usage = self._extract_usage_from_chunks(buffered)
+                if final_usage:
+                    total_input_tokens += final_usage.get("prompt_tokens", 0) or 0
+                    total_output_tokens += final_usage.get("completion_tokens", 0) or 0
+                model_from_chunks = self._extract_model_from_chunks(buffered)
+                if model_from_chunks:
+                    effective_model = model_from_chunks
+
+                set_llm_metadata(
+                    model=effective_model,
+                    provider=str(self.provider) if self.provider else "",
+                    input_tokens=total_input_tokens,
+                    output_tokens=total_output_tokens,
+                )
+                return
+            finally:
+                if not stream_completed:
+                    aclose = getattr(stream_iter, "aclose", None)
+                    if aclose is not None:
+                        try:
+                            await aclose()
+                        except Exception as e:
+                            logger.debug(
+                                f"stream: aclose() failed during teardown: {e}"
+                            )
+
+        logger.error(
+            f"❌ stream: max iterations ({self.max_iterations}) exceeded without final response"
+        )
+        raise MaxIterationsError(
+            iteration_count=self._iteration_count,
+            max_allowed=self.max_iterations,
+        )
+
+    @staticmethod
+    def _chunk_has_tool_call(chunk: Any) -> bool:
+        """True iff a streaming chunk carries any ``tool_calls`` delta."""
+        choices = getattr(chunk, "choices", None) or []
+        if not choices:
+            return False
+        delta = getattr(choices[0], "delta", None)
+        if delta is None:
+            return False
+        return bool(getattr(delta, "tool_calls", None))
+
+    @staticmethod
+    def _extract_text_from_chunk(chunk: Any) -> str:
+        """Pull ``delta.content`` from a streaming chunk; '' if none."""
+        choices = getattr(chunk, "choices", None) or []
+        if not choices:
+            return ""
+        delta = getattr(choices[0], "delta", None)
+        if delta is None:
+            return ""
+        content = getattr(delta, "content", None)
+        return content or ""
+
+    @staticmethod
+    def _join_text_from_chunks(chunks: list[Any]) -> str:
+        return "".join(
+            MeshLlmAgent._extract_text_from_chunk(c) for c in chunks
+        )
+
+    @staticmethod
+    def _extract_usage_from_chunks(chunks: list[Any]) -> dict[str, int] | None:
+        """Last non-empty ``usage`` block across ``chunks`` (LiteLLM emits at end)."""
+        for chunk in reversed(chunks):
+            usage = getattr(chunk, "usage", None)
+            if usage is None:
+                continue
+            return {
+                "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+            }
+        return None
+
+    @staticmethod
+    def _extract_model_from_chunks(chunks: list[Any]) -> str | None:
+        for chunk in chunks:
+            model = getattr(chunk, "model", None)
+            if model:
+                return model
+        return None

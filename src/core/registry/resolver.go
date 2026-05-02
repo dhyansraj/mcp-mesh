@@ -262,6 +262,7 @@ func (s *EntService) findHealthyProviderWithTrace(dep Dependency) (*DependencyRe
 			HttpPort:         cap.Edges.Agent.HTTPPort,
 			EntityID:         derefString(cap.Edges.Agent.EntityID),
 			OutputSchemaHash: derefString(cap.OutputSchemaHash),
+			Kwargs:           cap.Kwargs,
 		}
 
 		tc := candidateWithHealth{Candidate: c, Healthy: cap.Edges.Agent.Status == agent.StatusHealthy}
@@ -475,6 +476,7 @@ func (s *EntService) findHealthyProviderWithTrace(dep Dependency) (*DependencyRe
 		Endpoint:     endpoint,
 		Capability:   winner.Capability,
 		Status:       "available",
+		Kwargs:       winner.Kwargs,
 	}
 	trace.Chosen = &AuditChosen{
 		AgentID:      winner.AgentID,

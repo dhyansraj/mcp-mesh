@@ -26,6 +26,7 @@ from .types import (
     MeshContextModel,
     MeshLlmAgent,
     MeshLlmRequest,
+    Stream,
 )
 
 # Note: helpers.llm_provider is imported lazily in __getattr__ to avoid
@@ -119,6 +120,8 @@ def __getattr__(name):
         return MeshLlmRequest
     elif name == "LlmMeta":
         return LlmMeta
+    elif name == "Stream":
+        return Stream
     elif name == "create_server":
         return create_server
     elif name == "MediaParam":

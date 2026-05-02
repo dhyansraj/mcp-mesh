@@ -208,6 +208,11 @@ pub struct MeshEvent {
     /// This allows SDKs to inject the resolved dependency at the correct position.
     pub dep_index: Option<u32>,
 
+    /// Producer's @mesh.tool kwargs as a JSON string (for dependency_available
+    /// and dependency_changed). SDKs decode this to configure the consumer-side
+    /// proxy from the producer's advertised behavior (issue #645 bug 2).
+    pub kwargs: Option<String>,
+
     // Fields for LLM tools events
     /// Function ID of the LLM agent (for llm_tools_updated)
     pub function_id: Option<String>,
@@ -272,6 +277,11 @@ impl MeshEvent {
     #[getter]
     fn dep_index(&self) -> Option<u32> {
         self.dep_index
+    }
+
+    #[getter]
+    fn kwargs(&self) -> Option<String> {
+        self.kwargs.clone()
     }
 
     #[getter]
@@ -351,6 +361,7 @@ impl MeshEvent {
     /// - agent_id: The agent providing this dependency
     /// - requesting_function: The function that requested this dependency
     /// - dep_index: The index of this dependency in the requesting function's dependencies array
+    /// - kwargs: Producer's @mesh.tool kwargs serialized as JSON (issue #645 bug 2)
     pub fn dependency_available(
         capability: String,
         endpoint: String,
@@ -358,6 +369,7 @@ impl MeshEvent {
         agent_id: String,
         requesting_function: String,
         dep_index: u32,
+        kwargs: Option<String>,
     ) -> Self {
         Self {
             event_type: EventType::DependencyAvailable,
@@ -367,6 +379,7 @@ impl MeshEvent {
             agent_id: Some(agent_id),
             requesting_function: Some(requesting_function),
             dep_index: Some(dep_index),
+            kwargs,
             ..Default::default()
         }
     }
@@ -391,7 +404,7 @@ impl MeshEvent {
         }
     }
 
-    /// Create a "dependency_changed" event (endpoint or function changed)
+    /// Create a "dependency_changed" event (endpoint, function, or kwargs changed)
     ///
     /// Args:
     /// - capability: The capability name being provided
@@ -400,6 +413,7 @@ impl MeshEvent {
     /// - agent_id: The agent providing this dependency
     /// - requesting_function: The function that requested this dependency
     /// - dep_index: The index of this dependency in the requesting function's dependencies array
+    /// - kwargs: Producer's @mesh.tool kwargs serialized as JSON (issue #645 bug 2)
     pub fn dependency_changed(
         capability: String,
         endpoint: String,
@@ -407,6 +421,7 @@ impl MeshEvent {
         agent_id: String,
         requesting_function: String,
         dep_index: u32,
+        kwargs: Option<String>,
     ) -> Self {
         Self {
             event_type: EventType::DependencyChanged,
@@ -416,6 +431,7 @@ impl MeshEvent {
             agent_id: Some(agent_id),
             requesting_function: Some(requesting_function),
             dep_index: Some(dep_index),
+            kwargs,
             ..Default::default()
         }
     }
@@ -495,6 +511,7 @@ mod tests {
             "date-service-abc123".to_string(),
             "my-tool".to_string(),
             0,
+            Some(r#"{"stream_type":"text"}"#.to_string()),
         );
 
         assert_eq!(event.event_type, EventType::DependencyAvailable);
@@ -503,6 +520,10 @@ mod tests {
         assert_eq!(event.endpoint, Some("http://localhost:9001".to_string()));
         assert_eq!(event.requesting_function, Some("my-tool".to_string()));
         assert_eq!(event.dep_index, Some(0));
+        assert_eq!(
+            event.kwargs,
+            Some(r#"{"stream_type":"text"}"#.to_string())
+        );
     }
 
     #[test]

@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>MCP Mesh Streaming Chat Demo</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2em auto; padding: 0 1em; }
+  textarea { width: 100%; height: 4em; }
+  #out { white-space: pre-wrap; border: 1px solid #ccc; padding: 1em; min-height: 4em; }
+  button { margin-right: 0.5em; }
+</style>
+<h1>MCP Mesh Streaming Chat</h1>
+<textarea id="prompt">Tell me a short story about a cat.</textarea>
+<p>
+  <button id="send">Stream via /api/chat</button>
+  <button id="send-multi">Stream via /api/chat-multihop</button>
+</p>
+<div id="out"></div>
+<script>
+async function streamFrom(path) {
+  const out = document.getElementById('out');
+  out.textContent = '';
+  const resp = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt: document.getElementById('prompt').value }),
+  });
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buffer.indexOf('\n\n')) !== -1) {
+      const event = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      const data = event.split('\n')
+        .filter(l => l.startsWith('data: '))
+        .map(l => l.slice(6))
+        .join('\n');
+      if (data === '[DONE]') return;
+      out.textContent += data;
+    }
+  }
+}
+document.getElementById('send').onclick = () => streamFrom('/api/chat');
+document.getElementById('send-multi').onclick = () => streamFrom('/api/chat-multihop');
+</script>

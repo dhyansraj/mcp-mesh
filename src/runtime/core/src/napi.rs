@@ -277,6 +277,10 @@ pub struct JsMeshEvent {
     /// Dependency index within the requesting function (for dependency events)
     /// This allows SDKs to inject the resolved dependency at the correct position.
     pub dep_index: Option<u32>,
+    /// Producer's @mesh.tool kwargs as a JSON string (for dependency_available
+    /// and dependency_changed). SDKs decode this to configure the consumer-side
+    /// proxy from the producer's advertised behavior (issue #645 bug 2).
+    pub kwargs: Option<String>,
     /// Function ID of the LLM agent (for llm_tools_updated, llm_provider_available)
     pub function_id: Option<String>,
     /// List of available tools (for llm_tools_updated event)
@@ -299,6 +303,7 @@ impl From<MeshEvent> for JsMeshEvent {
             agent_id: event.agent_id,
             requesting_function: event.requesting_function,
             dep_index: event.dep_index,
+            kwargs: event.kwargs,
             function_id: event.function_id,
             tools: event.tools.map(|t| t.into_iter().map(|info| info.into()).collect()),
             provider_info: event.provider_info.map(|p| p.into()),

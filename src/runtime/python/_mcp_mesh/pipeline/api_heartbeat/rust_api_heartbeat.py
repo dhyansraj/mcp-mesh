@@ -191,6 +191,7 @@ async def _handle_api_mesh_event(event: Any, context: dict[str, Any]) -> None:
             agent_id=event.agent_id,
             available=True,
             context=context,
+            producer_kwargs=getattr(event, "kwargs", None),
         )
 
     elif event_type == "dependency_changed":
@@ -201,6 +202,7 @@ async def _handle_api_mesh_event(event: Any, context: dict[str, Any]) -> None:
             agent_id=event.agent_id,
             available=True,
             context=context,
+            producer_kwargs=getattr(event, "kwargs", None),
         )
 
     elif event_type == "dependency_unavailable":
@@ -211,6 +213,7 @@ async def _handle_api_mesh_event(event: Any, context: dict[str, Any]) -> None:
             agent_id=None,
             available=False,
             context=context,
+            producer_kwargs=None,
         )
 
     elif event_type == "llm_tools_updated":
@@ -237,12 +240,17 @@ async def _handle_api_dependency_change(
     agent_id: Optional[str],
     available: bool,
     context: dict[str, Any],
+    producer_kwargs: Optional[str] = None,
 ) -> None:
     """
     Handle dependency availability change for API services.
 
     Updates route wrappers with new/changed/removed dependencies.
     API services use route wrappers which have direct _mesh_update_dependency methods.
+
+    ``producer_kwargs`` is the producer's @mesh.tool kwargs as a JSON string
+    (issue #645 bug 1+2). The proxy is configured from this so cross-agent
+    streaming, custom timeouts, etc. work for API gateways too.
     """
     logger.info(
         f"API dependency change: {capability} -> "
@@ -252,6 +260,16 @@ async def _handle_api_dependency_change(
 
     from ...engine.decorator_registry import DecoratorRegistry
     from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
+
+    parsed_producer_kwargs: dict = {}
+    if producer_kwargs:
+        try:
+            parsed_producer_kwargs = json.loads(producer_kwargs) or {}
+        except (TypeError, ValueError) as e:
+            logger.warning(
+                f"Could not parse producer kwargs for {capability}: {e}; "
+                f"falling back to empty config"
+            )
 
     route_wrappers = DecoratorRegistry.get_all_route_wrappers()
 
@@ -318,14 +336,24 @@ async def _handle_api_dependency_change(
                         )
                     else:
                         # Fallback to HTTP proxy
-                        proxy = EnhancedUnifiedMCPProxy(endpoint, function_name)
+                        proxy = EnhancedUnifiedMCPProxy(
+                            endpoint,
+                            function_name,
+                            kwargs_config=dict(parsed_producer_kwargs),
+                        )
                         logger.debug(
                             f"Created EnhancedUnifiedMCPProxy (fallback) for API route "
                             f"'{route_id}' dependency '{capability}'"
                         )
                 else:
-                    # Cross-service dependency - create HTTP proxy
-                    proxy = EnhancedUnifiedMCPProxy(endpoint, function_name)
+                    # Cross-service dependency - create HTTP proxy.
+                    # Issue #645 bug 1: forward producer's @mesh.tool kwargs
+                    # so the gateway-side proxy knows about streaming etc.
+                    proxy = EnhancedUnifiedMCPProxy(
+                        endpoint,
+                        function_name,
+                        kwargs_config=dict(parsed_producer_kwargs),
+                    )
                     logger.debug(
                         f"Created EnhancedUnifiedMCPProxy for API route '{route_id}' "
                         f"dependency '{capability}' -> {endpoint}"

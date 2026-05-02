@@ -1,0 +1,208 @@
+# Test Case: tc01 - Single-hop streaming (gateway -> chatbot)
+# GitHub issue #645 - auto-streaming text responses
+#
+# Verifies:
+#   - P1: server-side mesh.Stream[str] tool yields chunks via Context.report_progress
+#   - P2: MCP-native consumer (fastmcp.Client) receives each chunk as a separate
+#         progress notification (NOT a single buffered final result)
+#   - P3: @mesh.route returning Stream[str] auto-emits SSE
+#         (text/event-stream, "data: <chunk>\n\n", "data: [DONE]\n\n")
+#   - P3.5: kwargs propagation from @mesh.route to the upstream tool
+#   - Non-streaming regression: plain JSON routes on the same gateway still work
+#
+# Uses dry-run mode on chatbot-agent (MESH_LLM_DRY_RUN=1) so no real LLM is needed.
+# Dry-run yields 9 deterministic chunks: "Hello", " ", "world", "!", " This",
+# " is", " a", " test", " response."
+
+name: "Streaming: single-hop SSE (gateway -> chatbot)"
+description: "Verify single-hop SSE streaming, MCP-native progress consumer, and non-streaming regression"
+tags:
+  - streaming
+  - sse
+  - py
+  - slow
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  # gateway-agent uses FastAPI; install it into the venv (matches uc20/tc05 pattern)
+  - handler: shell
+    command: "/workspace/.venv/bin/pip install fastapi uvicorn"
+
+test:
+  - name: "Copy chatbot + gateway agents to workspace"
+    handler: shell
+    command: |
+      mkdir -p /workspace/streaming
+      cp -rL /uc-artifacts/streaming/chatbot-agent /workspace/streaming/
+      cp -rL /uc-artifacts/streaming/gateway-agent /workspace/streaming/
+      ls /workspace/streaming/
+    capture: copy_output
+
+  - name: "Start chatbot-agent (port 9170, dry-run mode)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start streaming/chatbot-agent/main.py --env MESH_LLM_DRY_RUN=1 -d"
+    capture: start_chatbot
+
+  - name: "Start gateway-agent (port 9172)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start streaming/gateway-agent/main.py -d"
+    capture: start_gateway
+
+  - name: "Wait for both agents registered AND gateway deps resolved"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="chatbot-agent gateway-agent"
+      EXPECTED_COUNT=2
+      echo "Waiting for $EXPECTED_COUNT agents to register and gateway deps to resolve..."
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        TOOLS=$(meshctl list --tools 2>/dev/null || true)
+        COUNT=0
+        for agent in $EXPECTED; do
+          if echo "$AGENTS" | grep -q "$agent"; then
+            COUNT=$((COUNT + 1))
+          fi
+        done
+        # Gateway has 1 dependency (chat). Look for "1/1" resolution marker on its line.
+        GW_RESOLVED=false
+        if echo "$TOOLS" | grep -i "gateway-agent" | grep -q "1/1"; then
+          GW_RESOLVED=true
+        fi
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ] && [ "$GW_RESOLVED" = "true" ]; then
+          echo "All $EXPECTED_COUNT agents registered and gateway deps resolved after $((i * 2))s"
+          meshctl list
+          meshctl list --tools
+          exit 0
+        fi
+        echo "  $COUNT/$EXPECTED_COUNT agents registered, gw_resolved=$GW_RESOLVED (attempt $i/60)..."
+        sleep 2
+      done
+      echo "ERROR: not all agents registered or gateway deps unresolved within 120s"
+      meshctl list 2>/dev/null || true
+      meshctl list --tools 2>/dev/null || true
+      exit 1
+    capture: wait_output
+    timeout: 150
+
+  - name: "Curl POST /api/chat (capture full SSE stream body)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -N -X POST http://localhost:9172/api/chat \
+        -H "Content-Type: application/json" \
+        -d '{"prompt":"hi"}' 2>&1
+    capture: sse_output
+    timeout: 60
+
+  - name: "Curl HEAD /api/chat (capture SSE headers)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # -sI does HEAD by default which some servers reject for POST endpoints,
+      # so we use -D - to dump headers from a real POST and discard the body.
+      curl -s -D - -X POST http://localhost:9172/api/chat \
+        -H "Content-Type: application/json" \
+        -d '{"prompt":"hi"}' \
+        -o /dev/null 2>&1
+    capture: sse_headers
+    timeout: 60
+
+  - name: "Curl GET /api/health (non-streaming regression)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s http://localhost:9172/api/health 2>&1
+    capture: health_output
+    timeout: 30
+
+  - name: "Write inline MCP-native consumer script"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cat > /workspace/mcp_consumer.py <<'PYEOF'
+      """Inline MCP-native consumer for tc01.
+
+      Connects directly to chatbot-agent's MCP endpoint (no mesh proxy in the
+      middle) and verifies that each Stream[str] chunk arrives as its OWN
+      progress notification - i.e. the proxy bridge from P2 actually streams
+      and does not buffer everything into the final tool result.
+      """
+      import asyncio
+      import sys
+
+      from fastmcp import Client
+
+
+      async def main() -> int:
+          chunks: list[str] = []
+
+          async def progress_handler(progress: float, total, message):
+              if message is not None:
+                  print(f"CHUNK: {message}", flush=True)
+                  chunks.append(message)
+
+          async with Client("http://localhost:9170/mcp") as client:
+              result = await client.call_tool(
+                  "chat",
+                  {"prompt": "hi"},
+                  progress_handler=progress_handler,
+                  timeout=30,
+              )
+
+          print(f"TOTAL_CHUNKS: {len(chunks)}", flush=True)
+          # Final tool result is also surfaced (joined string), but the proof
+          # that streaming actually happened is the per-chunk progress callback.
+          if hasattr(result, "data"):
+              print(f"FINAL_RESULT: {result.data!r}", flush=True)
+          return 0
+
+
+      if __name__ == "__main__":
+          sys.exit(asyncio.run(main()))
+      PYEOF
+      echo "wrote mcp_consumer.py"
+
+  - name: "Run inline MCP-native consumer (proves per-chunk delivery)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      /workspace/.venv/bin/pip install --quiet fastmcp 2>&1 | tail -5 || true
+      /workspace/.venv/bin/python /workspace/mcp_consumer.py 2>&1
+    capture: mcp_consumer_output
+    timeout: 90
+
+assertions:
+  # --- SSE body assertions ---
+  - expr: "${captured.sse_output} contains 'data: Hello'"
+    message: "SSE stream must contain first dry-run chunk 'Hello' wrapped as 'data: Hello'"
+  - expr: "${captured.sse_output} contains 'data: world'"
+    message: "SSE stream must contain mid dry-run chunk 'world' wrapped as 'data: world'"
+  - expr: "${captured.sse_output} contains 'data: [DONE]'"
+    message: "SSE stream must end with the 'data: [DONE]' terminator"
+
+  # --- SSE header assertions ---
+  - expr: "${captured.sse_headers} contains 'text/event-stream'"
+    message: "Response Content-Type must be text/event-stream for SSE adapter"
+
+  # --- Non-streaming regression ---
+  - expr: "${captured.health_output} contains '\"status\":\"ok\"'"
+    message: "Plain JSON /api/health route must still return {\"status\":\"ok\"}"
+  - expr: "${captured.health_output} not contains 'data:'"
+    message: "Plain JSON route must NOT be wrapped in SSE framing (would mean SSE adapter leaked)"
+
+  # --- MCP-native progress assertions (P2 proxy bridge) ---
+  - expr: "${captured.mcp_consumer_output} contains 'CHUNK: Hello'"
+    message: "MCP-native consumer must receive 'Hello' as a progress notification"
+  - expr: "${captured.mcp_consumer_output} contains 'CHUNK: world'"
+    message: "MCP-native consumer must receive 'world' as a SEPARATE progress notification (proves chunks are NOT buffered into a single result)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

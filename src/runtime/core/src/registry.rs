@@ -88,6 +88,10 @@ impl FastHeartbeatStatus {
 }
 
 /// Resolved dependency information from registry response.
+///
+/// `kwargs` carries the producer's @mesh.tool kwargs (e.g. `stream_type`,
+/// `timeout`) so the consumer's proxy can configure itself from the
+/// producer's advertised behavior. Issue #645 bug 2.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ResolvedDependency {
     pub agent_id: String,
@@ -97,6 +101,8 @@ pub struct ResolvedDependency {
     pub status: String,
     #[serde(default)]
     pub ttl: u64,
+    #[serde(default)]
+    pub kwargs: Option<serde_json::Value>,
 }
 
 /// Tool information for LLM agents.

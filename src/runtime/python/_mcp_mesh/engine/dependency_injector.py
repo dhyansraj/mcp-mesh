@@ -12,7 +12,7 @@ import inspect
 import logging
 import weakref
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Optional
 
 from ..shared.logging_config import (
     format_log_value,
@@ -22,6 +22,183 @@ from ..shared.logging_config import (
 from .signature_analyzer import get_mesh_agent_positions, has_llm_agent_parameter
 
 logger = logging.getLogger(__name__)
+
+# Cached convention for ctx.report_progress; resolved lazily per FastMCP
+# version. Newer FastMCP exposes a ``message`` kwarg; older builds only accept
+# ``(progress, total)`` positionally with a third positional ``message``.
+_REPORT_PROGRESS_CONVENTION: Optional[str] = None
+
+
+def _resolve_report_progress_convention(report_progress: Callable) -> str:
+    """Detect whether ``ctx.report_progress`` accepts ``message`` as a kwarg.
+
+    Returns ``"kwarg"`` when the bound method advertises a ``message``
+    parameter; otherwise ``"positional"`` (fall back to passing the chunk as
+    the third positional argument). Cached after the first probe.
+    """
+    global _REPORT_PROGRESS_CONVENTION
+    if _REPORT_PROGRESS_CONVENTION is not None:
+        return _REPORT_PROGRESS_CONVENTION
+    try:
+        sig = inspect.signature(report_progress)
+        if "message" in sig.parameters:
+            _REPORT_PROGRESS_CONVENTION = "kwarg"
+        else:
+            _REPORT_PROGRESS_CONVENTION = "positional"
+    except (TypeError, ValueError):
+        _REPORT_PROGRESS_CONVENTION = "positional"
+    return _REPORT_PROGRESS_CONVENTION
+
+
+async def _forward_chunk(ctx: Any, index: int, chunk: str) -> None:
+    """Send a streaming chunk to the MCP client via ``ctx.report_progress``.
+
+    No-ops gracefully when ``ctx`` is None (caller did not pass a
+    ``progressToken``) or when the report itself fails — a transport hiccup
+    must not abort the rest of the stream.
+    """
+    if ctx is None:
+        return
+    report = getattr(ctx, "report_progress", None)
+    if report is None:
+        return
+    try:
+        if _resolve_report_progress_convention(report) == "kwarg":
+            await report(index, None, message=chunk)
+        else:
+            await report(index, None, chunk)
+    except Exception as e:
+        logger.debug(
+            "stream wrapper: ctx.report_progress failed at index %d: %s", index, e
+        )
+
+
+def _is_stream_tool(func: Callable) -> bool:
+    """True iff the user function should be wrapped as a streaming tool.
+
+    Combines two signals: the metadata stamped by ``@mesh.tool`` /
+    ``@mesh.llm`` (``stream_type == "text"``) and the runtime check
+    ``inspect.isasyncgenfunction``. Either alone is sufficient — the
+    metadata covers ``async def f() -> Stream[str]: yield ...`` (which is
+    an async-generator function) and also any callable returning an async
+    iterator (e.g. a coroutine that constructs and returns one).
+    """
+    if inspect.isasyncgenfunction(func):
+        return True
+    meta = getattr(func, "_mesh_tool_metadata", None)
+    if isinstance(meta, dict) and meta.get("stream_type") == "text":
+        return True
+    return False
+
+
+def _build_stream_signature(func: Callable) -> inspect.Signature:
+    """Construct the FastMCP-facing signature for a streaming wrapper.
+
+    Starts from the user function's clean signature (McpMeshTool /
+    MeshLlmAgent params already removed) and appends a keyword-only
+    ``ctx: Context | None = None`` so FastMCP's
+    ``transform_context_annotations`` auto-fills it at call time without
+    exposing it on the tool's input schema.
+    """
+    from fastmcp import Context
+
+    base = _build_clean_signature(func)
+    if base is None:
+        try:
+            base = inspect.signature(func)
+        except (TypeError, ValueError):
+            base = inspect.Signature(parameters=[])
+
+    if "ctx" in base.parameters:
+        return base
+
+    params = list(base.parameters.values())
+    ctx_param = inspect.Parameter(
+        "ctx",
+        kind=inspect.Parameter.KEYWORD_ONLY,
+        default=None,
+        annotation=Optional[Context],
+    )
+    return base.replace(parameters=params + [ctx_param])
+
+
+def _make_stream_wrapper(
+    func: Callable,
+    mesh_positions: list[int],
+    dependencies: list[str],
+    get_dependency_fn: Callable[[str], Any | None],
+    log: logging.Logger,
+) -> Callable:
+    """Build a wrapper that drives an async-iterator tool over MCP progress.
+
+    The returned coroutine accepts an optional ``ctx`` keyword (FastMCP
+    auto-fills it for tools whose signature declares a ``Context``-typed
+    param). Each chunk yielded by the user function is forwarded via
+    ``ctx.report_progress`` as a progress notification, then accumulated;
+    the final return value is the concatenated text so non-streaming
+    consumers still get the full response in the ``CallToolResult``.
+
+    Cancellation by the consumer propagates back to the user function via
+    ``gen.aclose()`` so generators can run their ``finally`` blocks.
+    """
+    from fastmcp import Context
+
+    @functools.wraps(func)
+    async def stream_wrapper(*args, ctx: Context | None = None, **kwargs):
+        final_kwargs, injected_count = _prepare_injection_kwargs(
+            func,
+            kwargs,
+            mesh_positions,
+            dependencies,
+            stream_wrapper._mesh_injected_deps,
+            get_dependency_fn,
+            log,
+        )
+
+        original = func._mesh_original_func
+
+        if inspect.isasyncgenfunction(original):
+            gen = original(*args, **final_kwargs)
+        else:
+            produced = original(*args, **final_kwargs)
+            if inspect.iscoroutine(produced):
+                produced = await produced
+            gen = produced
+
+        if not hasattr(gen, "__aiter__"):
+            raise TypeError(
+                f"Stream tool '{func.__name__}' did not return an async iterator "
+                f"(got {type(gen).__name__})."
+            )
+
+        chunks: list[str] = []
+        index = 0
+        try:
+            async for chunk in gen:
+                if not isinstance(chunk, str):
+                    raise TypeError(
+                        f"Stream tool '{func.__name__}' yielded non-str chunk "
+                        f"of type {type(chunk).__name__}; v1 supports str only."
+                    )
+                chunks.append(chunk)
+                await _forward_chunk(ctx, index, chunk)
+                index += 1
+        except asyncio.CancelledError:
+            aclose = getattr(gen, "aclose", None)
+            if aclose is not None:
+                try:
+                    await aclose()
+                except Exception as e:
+                    log.debug(
+                        f"stream wrapper: aclose() failed during cancel: {e}"
+                    )
+            raise
+
+        result = "".join(chunks)
+        _log_wrapper_result(func, result, log)
+        return result
+
+    return stream_wrapper
 
 
 def _build_clean_signature(func: Any) -> inspect.Signature | None:
@@ -514,14 +691,23 @@ class DependencyInjector:
         # Capture logger in local scope to avoid NameError
         wrapper_logger = logger
 
+        is_stream = _is_stream_tool(func)
+
         # If no mesh positions to inject, create minimal wrapper for tracking
         if not mesh_positions:
             logger.debug(
                 f"🔧 No injection positions for {func.__name__}, creating minimal wrapper for tracking"
             )
 
-            # Check if we need async wrapper for minimal case
-            if inspect.iscoroutinefunction(func):
+            if is_stream:
+                minimal_wrapper = _make_stream_wrapper(
+                    func,
+                    mesh_positions,
+                    dependencies,
+                    self.get_dependency,
+                    wrapper_logger,
+                )
+            elif inspect.iscoroutinefunction(func):
 
                 @functools.wraps(func)
                 async def minimal_wrapper(*args, **kwargs):
@@ -560,9 +746,12 @@ class DependencyInjector:
             minimal_wrapper._mesh_original_func = func
 
             # Override signature to hide injectable parameters from FastMCP
-            clean_sig = _build_clean_signature(func)
-            if clean_sig is not None:
-                minimal_wrapper.__signature__ = clean_sig
+            if is_stream:
+                minimal_wrapper.__signature__ = _build_stream_signature(func)
+            else:
+                clean_sig = _build_clean_signature(func)
+                if clean_sig is not None:
+                    minimal_wrapper.__signature__ = clean_sig
 
             def update_dependency(dep_index: int, instance: Any | None) -> None:
                 """No-op update for functions without injection positions."""
@@ -581,7 +770,15 @@ class DependencyInjector:
         # Determine if we need async wrapper
         need_async_wrapper = inspect.iscoroutinefunction(func)
 
-        if need_async_wrapper:
+        if is_stream:
+            dependency_wrapper = _make_stream_wrapper(
+                func,
+                mesh_positions,
+                dependencies,
+                self.get_dependency,
+                wrapper_logger,
+            )
+        elif need_async_wrapper:
 
             @functools.wraps(func)
             async def dependency_wrapper(*args, **kwargs):
@@ -640,9 +837,12 @@ class DependencyInjector:
                 return result
 
         # Override signature to hide injectable parameters from FastMCP schema generation
-        clean_sig = _build_clean_signature(func)
-        if clean_sig is not None:
-            dependency_wrapper.__signature__ = clean_sig
+        if is_stream:
+            dependency_wrapper.__signature__ = _build_stream_signature(func)
+        else:
+            clean_sig = _build_clean_signature(func)
+            if clean_sig is not None:
+                dependency_wrapper.__signature__ = clean_sig
 
         # Store dependency state on wrapper as array (indexed by position)
         dependency_wrapper._mesh_injected_deps = [None] * len(dependencies)

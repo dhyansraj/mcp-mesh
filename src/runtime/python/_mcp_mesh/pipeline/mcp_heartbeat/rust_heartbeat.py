@@ -501,6 +501,7 @@ async def _handle_mesh_event(event: Any, context: dict[str, Any]) -> None:
             context=context,
             requesting_function=getattr(event, "requesting_function", None),
             dep_index=getattr(event, "dep_index", None),
+            producer_kwargs=getattr(event, "kwargs", None),
         )
 
     elif event_type == "dependency_changed":
@@ -513,6 +514,7 @@ async def _handle_mesh_event(event: Any, context: dict[str, Any]) -> None:
             context=context,
             requesting_function=getattr(event, "requesting_function", None),
             dep_index=getattr(event, "dep_index", None),
+            producer_kwargs=getattr(event, "kwargs", None),
         )
 
     elif event_type == "dependency_unavailable":
@@ -525,6 +527,7 @@ async def _handle_mesh_event(event: Any, context: dict[str, Any]) -> None:
             context=context,
             requesting_function=getattr(event, "requesting_function", None),
             dep_index=getattr(event, "dep_index", None),
+            producer_kwargs=None,
         )
 
     elif event_type == "llm_tools_updated":
@@ -573,6 +576,7 @@ async def _handle_dependency_change(
     context: dict[str, Any],
     requesting_function: str | None = None,
     dep_index: int | None = None,
+    producer_kwargs: str | None = None,
 ) -> None:
     """
     Handle dependency availability change.
@@ -582,7 +586,21 @@ async def _handle_dependency_change(
     If requesting_function and dep_index are provided (new behavior from Rust core),
     we can directly register/unregister at the exact position. Otherwise, we fall
     back to capability-based matching (backward compatibility).
+
+    ``producer_kwargs`` is the producer's @mesh.tool kwargs as a JSON string
+    (issue #645 bug 2). The proxy is configured from this — NOT from the
+    consumer's locally-declared dep kwargs (which are almost always empty
+    because consumers don't predict producer behavior).
     """
+    parsed_producer_kwargs: dict = {}
+    if producer_kwargs:
+        try:
+            parsed_producer_kwargs = json.loads(producer_kwargs) or {}
+        except (TypeError, ValueError) as e:
+            logger.warning(
+                f"Could not parse producer kwargs for {capability}: {e}; "
+                f"falling back to empty config"
+            )
     logger.info(
         f"Dependency change: {capability} -> "
         f"{'available' if available else 'unavailable'} "
@@ -621,15 +639,13 @@ async def _handle_dependency_change(
             logger.info(f"Unregistered dependency: {dep_key}")
             return
 
-        # Get kwargs from the tool metadata
-        kwargs_config = {}
-        for tool_name, decorated_func in mesh_tools.items():
-            if tool_name == requesting_function:
-                tool_metadata = decorated_func.metadata or {}
-                dependencies = tool_metadata.get("dependencies", [])
-                if dep_index < len(dependencies):
-                    kwargs_config = dependencies[dep_index].get("kwargs", {})
-                break
+        # Issue #645 bug 2: kwargs_config must be the *producer's* @mesh.tool
+        # kwargs, not the consumer's dep declaration. The consumer typically
+        # declares no kwargs since it doesn't predict producer behavior. The
+        # producer-side kwargs travel back from the registry on the resolved
+        # dependency (event.kwargs) so the consumer's proxy can configure
+        # itself against the producer's advertised behavior (e.g. stream_type).
+        kwargs_config = dict(parsed_producer_kwargs)
 
         # Check for self-dependency
         current_agent_id = None
@@ -652,7 +668,9 @@ async def _handle_dependency_change(
                 proxy = SelfDependencyProxy(wrapper_func.function, function_name)
                 logger.debug(f"Created SelfDependencyProxy for {capability}")
             else:
-                proxy = EnhancedUnifiedMCPProxy(endpoint, function_name)
+                proxy = EnhancedUnifiedMCPProxy(
+                    endpoint, function_name, kwargs_config=kwargs_config
+                )
                 logger.debug(
                     f"Created EnhancedUnifiedMCPProxy (fallback) for {capability}"
                 )
@@ -722,14 +740,30 @@ async def _handle_dependency_change(
                         )
                         logger.debug(f"Created SelfDependencyProxy for {capability}")
                     else:
-                        # Fallback to HTTP proxy
-                        proxy = EnhancedUnifiedMCPProxy(endpoint, function_name)
+                        # Fallback to HTTP proxy. Forward producer kwargs
+                        # so streaming etc. still works in the fallback.
+                        proxy = EnhancedUnifiedMCPProxy(
+                            endpoint,
+                            function_name,
+                            kwargs_config=(
+                                dict(parsed_producer_kwargs)
+                                if parsed_producer_kwargs
+                                else dep_info.get("kwargs", {})
+                            ),
+                        )
                         logger.debug(
                             f"Created EnhancedUnifiedMCPProxy (fallback) for {capability}"
                         )
                 else:
-                    # Create cross-service proxy
-                    kwargs_config = dep_info.get("kwargs", {})
+                    # Create cross-service proxy. Issue #645 bug 2: prefer
+                    # the producer's kwargs from the registry event over the
+                    # consumer's declared dep kwargs (which won't carry
+                    # producer behavior like stream_type).
+                    kwargs_config = (
+                        dict(parsed_producer_kwargs)
+                        if parsed_producer_kwargs
+                        else dep_info.get("kwargs", {})
+                    )
                     proxy = EnhancedUnifiedMCPProxy(
                         endpoint, function_name, kwargs_config=kwargs_config
                     )
