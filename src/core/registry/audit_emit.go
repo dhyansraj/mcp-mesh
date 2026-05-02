@@ -123,7 +123,9 @@ func (s *EntService) emitAuditEventIfInteresting(
 	// stable mesh re-runs resolution every heartbeat and produces an identical
 	// trace — we don't want to fill the audit log with copies. The lookup
 	// considers BOTH resolved and unresolved prior events so unresolved→unresolved
-	// sequences also dedupe.
+	// sequences also dedupe; without this the relaxed `hasEvictions` rule above
+	// would flood the audit log when a transient unhealthy producer re-evicts
+	// every heartbeat (see TestAudit_UnresolvedFloodIsDeduped).
 	newHash, err := canonicalTraceHash(trace)
 	if err != nil {
 		return fmt.Errorf("audit: canonicalize trace: %w", err)

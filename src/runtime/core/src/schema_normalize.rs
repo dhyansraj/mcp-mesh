@@ -472,12 +472,18 @@ fn normalize(v: &Value, ctx: &mut Ctx) -> Value {
                 node.remove(*key);
             }
 
-            // Rule: oneOf -> anyOf canonicalization. For our structural-disambiguation
-            // purpose, `oneOf` and `anyOf` are treated as equivalent (both are unions of
-            // alternative shapes). Different generators emit different keywords for
-            // discriminated unions (Pydantic: oneOf; Zod/Jackson: anyOf). We canonicalize
-            // to `anyOf` here, but only if `oneOf` was not already collapsed by the
-            // nullable rule above. Skip if the value has a null branch left.
+            // Rule (opinionated): rewrite oneOf -> anyOf unconditionally. Per the
+            // #547 spec, this is one of 7 documented opinionated normalizer
+            // policies — for structural disambiguation we don't need exclusive-
+            // match semantics, and Pydantic/Zod/Jackson don't agree on which
+            // keyword to emit for discriminated unions (Pydantic: oneOf;
+            // Zod/Jackson: anyOf). Canonicalizing both keywords to `anyOf` is
+            // what makes cross-runtime hashes converge.
+            //
+            // Note: the earlier nullable rule may have already collapsed `oneOf`
+            // into a top-level type array (when there was exactly one non-null
+            // branch + a null branch); in that case `node.remove("oneOf")`
+            // returns None and this block is a no-op.
             if let Some(Value::Array(branches)) = node.remove("oneOf") {
                 node.insert("anyOf".into(), Value::Array(branches));
             }

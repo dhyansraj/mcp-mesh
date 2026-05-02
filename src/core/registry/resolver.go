@@ -373,7 +373,27 @@ func (s *EntService) findHealthyProviderWithTrace(dep Dependency) (*DependencyRe
 		}
 		candidateHash := st.OutputSchemaHash
 		if candidateHash == "" {
-			// Legacy/unextracted producer — keep so the rollout doesn't blackhole.
+			// Legacy/unextracted producer (no published output_schema_hash).
+			// Behavior splits per match_mode:
+			//   - subset: keep so consumer rollouts don't blackhole producers
+			//     that haven't shipped schema extraction yet.
+			//   - strict: evict. The consumer asked for byte-equal hashes; a
+			//     producer with no published hash cannot satisfy that contract.
+			if dep.MatchMode == "strict" {
+				schemaStage.Evicted = append(schemaStage.Evicted, AuditEvicted{
+					ID:     candidateID(st.AgentID, st.FunctionName),
+					Reason: ReasonSchemaIncompatible,
+					Details: map[string]interface{}{
+						"mode":          "strict",
+						"consumer_hash": dep.ExpectedSchemaHash,
+						"producer_hash": "",
+						"reasons": []map[string]interface{}{
+							{"kind": "no_published_hash"},
+						},
+					},
+				})
+				continue
+			}
 			afterSchema = append(afterSchema, st)
 			continue
 		}

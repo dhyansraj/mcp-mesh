@@ -252,6 +252,63 @@ func TestAudit_SchemaStage_LegacyProducerKept(t *testing.T) {
 	assert.Len(t, schemaStage.Kept, 2)
 }
 
+// TestAudit_SchemaStage_StrictLegacyProducerEvicted asserts the #547 review
+// B2 fix: in strict mode, a producer with no published output_schema_hash
+// must be evicted (the consumer asked for byte-equal hashes; a producer
+// with no published hash cannot satisfy that contract). Subset mode tolerates
+// legacy producers (covered by TestAudit_SchemaStage_LegacyProducerKept);
+// strict mode does not.
+func TestAudit_SchemaStage_StrictLegacyProducerEvicted(t *testing.T) {
+	client, service, cleanup := newAuditTestEnv(t)
+	defer cleanup()
+
+	seedConsumer(t, client, "consumer-1")
+
+	consumerHash := "sha256:consumer-abc"
+
+	// Producer-A: hash matches → kept via short-circuit.
+	seedProducerWithSchema(t, client, "prod-a", "employee", "1.0.0", []string{"api"}, consumerHash)
+
+	// Producer-legacy: no output_schema_hash on the capability. Under strict,
+	// must be evicted with reason=SchemaIncompatible and details indicating
+	// no_published_hash.
+	seedProducerWithSchema(t, client, "prod-legacy", "employee", "1.0.0", []string{"api"}, "")
+
+	meta := metadataForDep(map[string]interface{}{
+		"capability":           "employee",
+		"tags":                 []interface{}{"api"},
+		"match_mode":           "strict",
+		"expected_schema_hash": consumerHash,
+	})
+
+	resolutions := service.ResolveAllDependenciesIndexed(meta)
+	require.Len(t, resolutions, 1)
+	require.NotNil(t, resolutions[0].Resolution, "prod-a must win")
+	assert.Equal(t, "prod-a", resolutions[0].Resolution.AgentID)
+
+	tr := resolutions[0].Trace
+	require.NotNil(t, tr)
+	assert.Equal(t, "strict", tr.Spec.SchemaMode)
+
+	schemaStage := tr.Stages[4]
+	require.Equal(t, StageSchema, schemaStage.Stage)
+	require.Len(t, schemaStage.Kept, 1)
+	assert.Equal(t, "prod-a:do_thing", schemaStage.Kept[0])
+
+	require.Len(t, schemaStage.Evicted, 1, "legacy producer must be evicted in strict mode")
+	ev := schemaStage.Evicted[0]
+	assert.Equal(t, "prod-legacy:do_thing", ev.ID)
+	assert.Equal(t, ReasonSchemaIncompatible, ev.Reason)
+	assert.Equal(t, "strict", ev.Details["mode"])
+	assert.Equal(t, consumerHash, ev.Details["consumer_hash"])
+	assert.Equal(t, "", ev.Details["producer_hash"])
+
+	reasons, ok := ev.Details["reasons"].([]map[string]interface{})
+	require.True(t, ok, "reasons must carry typed payload")
+	require.Len(t, reasons, 1)
+	assert.Equal(t, "no_published_hash", reasons[0]["kind"])
+}
+
 // TestAudit_SchemaStage_NoMatchModeIsPassThrough: when the consumer didn't opt
 // in, the schema stage is a pure pass-through and the trace records SchemaMode
 // as "none" (preserves the v1 default behavior all existing audit tests rely

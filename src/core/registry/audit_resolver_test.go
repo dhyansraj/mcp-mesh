@@ -814,3 +814,58 @@ func TestAudit_UnresolvedToResolved_EmitsEvenWithSingleCandidate(t *testing.T) {
 	assert.Equal(t, registryevent.EventTypeDependencyUnresolved, rows[0].EventType)
 	assert.Equal(t, registryevent.EventTypeDependencyResolved, rows[1].EventType)
 }
+
+// TestAudit_UnresolvedFloodIsDeduped guards against the audit-log flooding
+// scenario described in #547 review B1: with the relaxed `hasEvictions`
+// gating rule, a transient unhealthy producer in the capability query results
+// becomes a stage-eviction on every heartbeat. Without the canonical-hash
+// dedupe also covering unresolved→unresolved sequences, every heartbeat would
+// emit a fresh dependency_unresolved event.
+//
+// Setup: a single rogue producer, evicted at the tag stage, no resolution.
+// Run resolve+store N times. Expect exactly ONE unresolved event in the
+// audit log — the first one — with all N-1 follow-ups suppressed by dedupe.
+func TestAudit_UnresolvedFloodIsDeduped(t *testing.T) {
+	client, service, cleanup := newAuditTestEnv(t)
+	defer cleanup()
+
+	seedConsumer(t, client, "consumer-1")
+	// Single producer with the wrong tag → evicted at the tag stage.
+	// hasEvictions=true so the gating allows emit; without dedupe the same
+	// trace would emit on every heartbeat.
+	seedProducer(t, client, "rogue", "ping", "1.0.0", []string{"foo"})
+
+	meta := metadataForDep(map[string]interface{}{
+		"capability": "ping",
+		"tags":       []interface{}{"required"},
+	})
+
+	ctx := context.Background()
+
+	// Heartbeat #1: emits the first unresolved event.
+	res1 := service.ResolveAllDependenciesIndexed(meta)
+	require.Len(t, res1, 1)
+	require.Nil(t, res1[0].Resolution)
+	require.NoError(t, service.StoreDependencyResolutions(ctx, "consumer-1", res1))
+
+	// Heartbeats #2..#5: identical world state → identical trace → dedupe.
+	for i := 0; i < 4; i++ {
+		resN := service.ResolveAllDependenciesIndexed(meta)
+		require.Len(t, resN, 1)
+		require.Nil(t, resN[0].Resolution)
+		require.NoError(t, service.StoreDependencyResolutions(ctx, "consumer-1", resN))
+	}
+
+	events := listAuditEventsFor(t, client, "consumer-1")
+	require.Len(t, events, 1,
+		"unresolved-flood guard: only the first identical unresolved trace should be persisted; heartbeats with the same trace must be deduped")
+
+	// Confirm the persisted event is unresolved (not accidentally resolved).
+	rows, err := client.RegistryEvent.Query().
+		Where(registryevent.HasAgentWith(agent.IDEQ("consumer-1"))).
+		Order(registryevent.ByTimestamp(sql.OrderAsc())).
+		All(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, registryevent.EventTypeDependencyUnresolved, rows[0].EventType)
+}
