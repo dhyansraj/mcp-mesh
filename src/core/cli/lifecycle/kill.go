@@ -3,7 +3,6 @@ package lifecycle
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -15,15 +14,15 @@ import (
 // in IsAlive below.
 var processAliveFn = IsAlive
 
-// isZombieFn is overridable for tests; production checks the OS process state.
-// Returns (zombie, err); see isZombie for the err-handling contract.
+// isZombieFn is overridable for tests; production checks the OS process state
+// via the platform-specific isZombie implementation (kill_zombie_linux.go,
+// kill_zombie_darwin.go, kill_zombie_other.go).
 var isZombieFn func(pid int) (bool, error) = isZombie
 
 // IsAlive reports whether a PID is alive — signal 0 returns nil for any
 // process the kernel still has an entry for. Zombies are reported alive by
-// signal 0 alone; for meshctl's purposes we treat zombies as effectively dead
-// (the agent can't do any more work) and the cli package layer does the
-// platform-specific zombie filter. lifecycle stays platform-agnostic.
+// signal 0 alone; pollUntilDead pairs this with isZombie to treat zombies as
+// effectively dead (the agent can't do any more work).
 func IsAlive(pid int) bool {
 	if pid <= 0 {
 		return false
@@ -33,48 +32,6 @@ func IsAlive(pid int) bool {
 		return false
 	}
 	return proc.Signal(syscall.Signal(0)) == nil
-}
-
-// isZombie reports whether the process is in zombie state. Zombies are
-// kernel-tracked but functionally dead — kill -0 returns success on them but
-// the process can never run again. We treat them as dead for the purpose of
-// stop verification.
-//
-// Implementation: shell out to `ps -o stat= -p <pid>`. The "stat" column is
-// portable enough across macOS and Linux: both report 'Z' for zombies.
-//
-// Returns (zombie bool, err error):
-//   - zombie=true, err=nil  -> kernel reports state 'Z' (defunct)
-//   - zombie=false, err=nil -> process exists with a non-zombie state, OR ps
-//     reported "no such process" (exit code 1, empty output). The aliveness
-//     judgement belongs to processAliveFn — isZombie only differentiates
-//     zombie-vs-not when the process is known to exist.
-//   - zombie=false, err!=nil -> ps failed for some OTHER reason (e.g. EAGAIN
-//     on fork under load, RLIMIT_NPROC, transient resource exhaustion). The
-//     caller MUST NOT interpret this as "dead" — that flips death detection
-//     to true while the process is still alive, orphaning everything.
-func isZombie(pid int) (bool, error) {
-	if pid <= 0 {
-		return false, nil
-	}
-	cmd := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid))
-	out, err := cmd.Output()
-	if err != nil {
-		// `ps -p <missing>` exits 1 with empty stdout. Distinguish that from a
-		// real failure (couldn't fork, kernel busy, etc.) by checking exit
-		// code AND output content.
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 && len(out) == 0 {
-			return false, nil
-		}
-		return false, fmt.Errorf("lifecycle: ps probe pid %d: %w", pid, err)
-	}
-	state := strings.TrimSpace(string(out))
-	if state == "" {
-		// ps exited 0 but printed nothing — treat as "process exists but state
-		// unknown", which is NOT zombie. Aliveness check still wins.
-		return false, nil
-	}
-	return state[0] == 'Z', nil
 }
 
 // readPIDFromFile reads and parses a PID file. Returns (0, nil) if missing.
