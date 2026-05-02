@@ -14,6 +14,25 @@ MCP Mesh provides automatic dependency injection (DI) that connects agents based
 4. **Injection**: Mesh injects `McpMeshTool<T>` instances as method parameters
 5. **Invocation**: Calling the proxy routes to the remote agent
 
+## Resolution Pipeline
+
+When the registry resolves one of your dependencies, candidate providers flow through a fixed sequence of filter stages:
+
+```
+health → capability_match → tags → version → schema → tiebreaker
+```
+
+| Stage              | What it filters on                                                          |
+| ------------------ | --------------------------------------------------------------------------- |
+| `health`           | Drops unhealthy / deregistering candidates first                            |
+| `capability_match` | Indexed query on the capability name                                        |
+| `tags`             | Required / preferred / excluded tag filter (with scoring)                   |
+| `version`          | Semver constraint (`>=2.0.0`, `^1.4`, ...)                                  |
+| `schema`           | Opt-in schema check (issue #547) — see below                                |
+| `tiebreaker`       | `HighestScoreFirst` from the surviving set                                  |
+
+Every decision the registry makes is recorded as a `dependency_resolved` (or `dependency_unresolved`) event. Use `meshctl audit <agent>` to read them back — see `meshctl man audit`.
+
 ## Declaring Dependencies
 
 ### Simple Dependency
@@ -55,6 +74,44 @@ public String generateReport(
     return dataService.call("query", query);
 }
 ```
+
+### Schema-Aware Filtering (issue #547)
+
+Add `expectedType` (and optionally `schemaMode`) to the `@Selector` to opt the dependency into the schema stage. Producers whose published `outputSchema` doesn't satisfy the expected type are evicted with `SchemaIncompatible`.
+
+```java
+@MeshTool(
+    capability = "hr_report",
+    dependencies = @Selector(
+        capability   = "lookup_employee",
+        expectedType = Employee.class,
+        schemaMode   = SchemaMode.SUBSET   // or STRICT; defaults to SUBSET when expectedType is set
+    )
+)
+public Report hrReport(McpMeshTool<Employee> employeeLookup) { ... }
+
+public record Employee(@NotNull String id,
+                       @NotNull String name,
+                       @NotNull String department) {}
+```
+
+For Spring web routes, the equivalent annotation is `@MeshDependency` (used inside `@MeshRoute(dependencies = {...})`):
+
+```java
+@MeshRoute(dependencies = {
+    @MeshDependency(
+        capability   = "lookup_employee",
+        expectedType = Employee.class,
+        schemaMode   = SchemaMode.SUBSET
+    )
+})
+@PostMapping("/report")
+public ResponseEntity<Report> report(McpMeshTool<Employee> employeeLookup) { ... }
+```
+
+> Note: Use `@NotNull` (`jakarta.validation.constraints`) on required fields. Java reference types are nullable by default; `@NotNull` is required for cross-language `STRICT` matching with Python/TypeScript counterparts.
+
+See `meshctl man schema-matching` for `SUBSET` vs `STRICT` semantics, the cross-language convention table, and the `MCP_MESH_SCHEMA_STRICT` env knob.
 
 ## `McpMeshTool<T>` API Reference
 
@@ -294,4 +351,6 @@ public class AssistantAgentApplication {
 
 - `meshctl man capabilities --java` - Declaring capabilities
 - `meshctl man tags --java` - Tag-based selection
+- `meshctl man schema-matching` - Schema-aware capability filtering (#547)
+- `meshctl man audit` - Inspecting resolution decisions
 - `meshctl man decorators --java` - All Java annotations

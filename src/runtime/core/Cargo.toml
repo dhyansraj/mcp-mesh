@@ -35,8 +35,10 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 simd-json = { version = "0.14", optional = true }
+sha2 = "0.10"
+hex = "0.4"
 
 # Utilities
 async-trait = "0.1"

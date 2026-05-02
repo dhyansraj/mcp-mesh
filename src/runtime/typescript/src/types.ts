@@ -91,6 +91,16 @@ export type DependencySpec =
       tags?: TagSpec[];
       /** Version constraint (e.g., ">=2.0.0") */
       version?: string;
+      /** Issue #547: optional Zod schema describing the expected provider response.
+       * When set, the registry uses the canonical hash to filter producers
+       * whose output schema matches under {@link matchMode}. Backward compat:
+       * if omitted, no schema check is performed.
+       */
+      expectedSchema?: z.ZodType<unknown>;
+      /** Issue #547: how to compare producer output schema against
+       * {@link expectedSchema}. Defaults to "subset" when expectedSchema is set.
+       */
+      matchMode?: "subset" | "strict";
     };
 
 /**
@@ -100,6 +110,13 @@ export interface NormalizedDependency {
   capability: string;
   tags: TagSpec[];
   version?: string;
+  /** Issue #547: raw JSON Schema (post-zodToJsonSchema) for the expected
+   * dependency response. Normalization is deferred to the heartbeat pipeline
+   * to keep decorator-time work cheap and consistent with Python parity.
+   */
+  expectedSchemaRaw?: object;
+  /** Issue #547: schema match mode ("subset" or "strict"). */
+  matchMode?: "subset" | "strict";
 }
 
 /**
@@ -199,6 +216,28 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
   version?: string;
   /** Zod schema for input parameters */
   parameters: T;
+  /**
+   * Issue #547: Zod schema for the tool's return value.
+   *
+   * Optional, opt-in. When provided, the SDK extracts and normalizes the
+   * output schema and ships it to the registry alongside the input schema
+   * so consumers can match producers by canonical schema hash.
+   *
+   * Zod cannot infer the return type from the handler signature (unlike
+   * Python's reflection on Pydantic return annotations), so users must
+   * provide this explicitly.
+   */
+  outputSchema?: z.ZodType<unknown>;
+  /**
+   * Issue #547 Phase 4: per-tool override for the schema verdict policy.
+   *
+   * When `true` (default), a BLOCK verdict from the schema normalizer
+   * refuses agent startup. Set to `false` as a producer-side escape hatch
+   * to demote BLOCK to WARN for this specific tool. Wins even when the
+   * cluster-wide `MCP_MESH_SCHEMA_STRICT=true` env var is set (which
+   * otherwise promotes WARN to BLOCK across all tools).
+   */
+  outputSchemaStrict?: boolean;
   /**
    * Dependencies required by this tool.
    * Injected positionally as McpMeshTool params after args.
@@ -326,6 +365,12 @@ export interface ToolMeta {
   tags: string[];
   description: string;
   inputSchema?: string;
+  /** Issue #547: raw JSON Schema (post-zodToJsonSchema) for return type. */
+  outputSchemaRaw?: object;
+  /** Issue #547 Phase 4: per-tool override for the schema verdict policy
+   * (default true). When false, a BLOCK verdict for this tool is demoted
+   * to WARN instead of refusing startup. */
+  outputSchemaStrict?: boolean;
   /** Normalized dependencies for this tool */
   dependencies: NormalizedDependency[];
   /** Per-dependency configuration indexed by position (matches dependencies array) */

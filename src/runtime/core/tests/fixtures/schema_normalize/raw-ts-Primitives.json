@@ -1,0 +1,1 @@
+{"$ref":"#/definitions/Primitives","definitions":{"Primitives":{"type":"object","properties":{"id":{"type":"string"},"age":{"type":"integer"},"active":{"type":"boolean"},"score":{"type":"number"}},"required":["id","age","active","score"],"additionalProperties":false}},"$schema":"http://json-schema.org/draft-07/schema#"}

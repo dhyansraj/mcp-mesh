@@ -224,6 +224,8 @@ nav:
       - Registry: concepts/registry.md
       - Health & Discovery: concepts/health-discovery.md
       - Tag Matching: concepts/tag-matching.md
+      - Schema Matching: concepts/schema-matching.md
+      - Audit Trail: concepts/audit.md
 
   - Multimodal:
       - Getting Started: multimodal/getting-started.md

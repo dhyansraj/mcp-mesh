@@ -1,0 +1,1 @@
+{"$ref":"#/definitions/WithDate","definitions":{"WithDate":{"type":"object","properties":{"hireDate":{"type":"string","format":"date"}},"required":["hireDate"],"additionalProperties":false}},"$schema":"http://json-schema.org/draft-07/schema#"}

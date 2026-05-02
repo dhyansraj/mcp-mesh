@@ -14,6 +14,25 @@ MCP Mesh provides automatic dependency injection (DI) that connects agents based
 4. **Injection**: Mesh creates proxy objects for each dependency
 5. **Invocation**: Calling the proxy routes to the remote agent
 
+## Resolution Pipeline
+
+When the registry resolves one of your dependencies, candidate providers flow through a fixed sequence of filter stages:
+
+```
+health → capability_match → tags → version → schema → tiebreaker
+```
+
+| Stage              | What it filters on                                                          |
+| ------------------ | --------------------------------------------------------------------------- |
+| `health`           | Drops unhealthy / deregistering candidates first                            |
+| `capability_match` | Indexed query on the capability name                                        |
+| `tags`             | Required / preferred / excluded tag filter (with scoring)                   |
+| `version`          | Semver constraint (`>=2.0.0`, `^1.4`, ...)                                  |
+| `schema`           | Opt-in schema check (issue #547) — see below                                |
+| `tiebreaker`       | `HighestScoreFirst` from the surviving set                                  |
+
+Every decision the registry makes is recorded as a `dependency_resolved` (or `dependency_unresolved`) event. Use `meshctl audit <agent>` to read them back — see `meshctl man audit`.
+
 ## Declaring Dependencies
 
 ### Simple Dependencies
@@ -62,6 +81,36 @@ agent.addTool({
   },
 });
 ```
+
+### Schema-Aware Filtering (issue #547)
+
+Add `expectedSchema` (and optionally `matchMode`) to opt the dependency into the schema stage of the pipeline. Producers whose published `outputSchema` doesn't satisfy your expected shape are evicted with `SchemaIncompatible`.
+
+```typescript
+import { z } from "zod";
+
+const EmployeeSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  department: z.string(),
+});
+
+agent.addTool({
+  name: "hr_report",
+  capability: "hr_report",
+  dependencies: [
+    {
+      capability: "lookup_employee",
+      expectedSchema: EmployeeSchema,
+      matchMode: "subset",  // default opt-in; or "strict"
+    },
+  ],
+  parameters: z.object({}),
+  execute: async ({}, { lookup_employee }) => { /* ... */ },
+});
+```
+
+`matchMode` defaults to `"subset"` when `expectedSchema` is set. See `meshctl man schema-matching` for `subset` vs `strict` semantics, the cross-language convention table, and the `MCP_MESH_SCHEMA_STRICT` env knob.
 
 ### OR Alternatives (Tag-Level)
 
@@ -292,5 +341,7 @@ agent.addTool({
 
 - `meshctl man capabilities --typescript` - Declaring capabilities
 - `meshctl man tags --typescript` - Tag-based selection
+- `meshctl man schema-matching` - Schema-aware capability filtering (#547)
+- `meshctl man audit` - Inspecting resolution decisions
 - `meshctl man health --typescript` - Health monitoring
 - `meshctl man proxies --typescript` - Proxy details

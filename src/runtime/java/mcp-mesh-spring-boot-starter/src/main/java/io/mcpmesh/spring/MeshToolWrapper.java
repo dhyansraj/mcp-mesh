@@ -1,14 +1,7 @@
 package io.mcpmesh.spring;
 
 import tools.jackson.databind.JsonNode;
-import com.github.victools.jsonschema.generator.Option;
-import com.github.victools.jsonschema.generator.OptionPreset;
 import com.github.victools.jsonschema.generator.SchemaGenerator;
-import com.github.victools.jsonschema.generator.SchemaGeneratorConfig;
-import com.github.victools.jsonschema.generator.SchemaGeneratorConfigBuilder;
-import com.github.victools.jsonschema.generator.SchemaVersion;
-import com.github.victools.jsonschema.module.jackson.JacksonSchemaModule;
-import com.github.victools.jsonschema.module.jackson.JacksonOption;
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.Param;
 import io.mcpmesh.spring.tracing.ExecutionTracer;
@@ -26,7 +19,6 @@ import java.lang.reflect.Parameter;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.*;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -56,47 +48,7 @@ public class MeshToolWrapper implements McpToolHandler {
 
     private static final Logger log = LoggerFactory.getLogger(MeshToolWrapper.class);
     private static final long ASYNC_TIMEOUT_SECONDS = 30;
-    private static final SchemaGenerator SCHEMA_GENERATOR;
-
-    static {
-        JacksonSchemaModule jacksonModule = new JacksonSchemaModule(
-            JacksonOption.RESPECT_JSONPROPERTY_REQUIRED,
-            JacksonOption.FLATTENED_ENUMS_FROM_JSONVALUE
-        );
-        SchemaGeneratorConfigBuilder configBuilder = new SchemaGeneratorConfigBuilder(
-                SchemaVersion.DRAFT_2020_12, OptionPreset.PLAIN_JSON)
-            .with(jacksonModule)
-            .with(Option.PLAIN_DEFINITION_KEYS)
-            .with(Option.DEFINITIONS_FOR_ALL_OBJECTS)          // Use $defs for nested types
-            .with(Option.NULLABLE_FIELDS_BY_DEFAULT)           // Optional fields get anyOf with null
-            .with(Option.NULLABLE_ALWAYS_AS_ANYOF)             // Use anyOf pattern for nullables
-            .without(Option.SCHEMA_VERSION_INDICATOR);
-
-        // Mark non-null fields as required
-        configBuilder.forFields()
-            .withRequiredCheck(field -> {
-                // Primitive types are always required
-                if (field.getType().getErasedType().isPrimitive()) {
-                    return true;
-                }
-                // Check for @JsonProperty(required = true)
-                com.fasterxml.jackson.annotation.JsonProperty jsonProp =
-                    field.getAnnotationConsideringFieldAndGetter(com.fasterxml.jackson.annotation.JsonProperty.class);
-                if (jsonProp != null) {
-                    return jsonProp.required();
-                }
-                // For records, check if the component has a default value (Optional types are not required)
-                Class<?> fieldType = field.getType().getErasedType();
-                if (Optional.class.isAssignableFrom(fieldType)) {
-                    return false;
-                }
-                // By default, reference types in records are required (can't be null in constructor)
-                return field.getDeclaringType().getErasedType().isRecord();
-            });
-
-        SchemaGeneratorConfig config = configBuilder.build();
-        SCHEMA_GENERATOR = new SchemaGenerator(config);
-    }
+    private static final SchemaGenerator SCHEMA_GENERATOR = MeshSchemaSupport.generator();
 
     private final String funcId;
     private final String capability;

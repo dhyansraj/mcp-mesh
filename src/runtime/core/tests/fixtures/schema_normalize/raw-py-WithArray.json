@@ -1,0 +1,1 @@
+{"properties":{"tags":{"items":{"type":"string"},"title":"Tags","type":"array"}},"required":["tags"],"title":"WithArray","type":"object"}

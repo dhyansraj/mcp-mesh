@@ -1,0 +1,1 @@
+{"$defs":{"Manager":{"properties":{"name":{"title":"Name","type":"string"},"dept":{"title":"Dept","type":"string"},"reports":{"title":"Reports","type":"integer"}},"required":["name","dept","reports"],"title":"Manager","type":"object"}},"properties":{"person":{"$ref":"#/$defs/Manager"}},"required":["person"],"title":"WithManager","type":"object"}

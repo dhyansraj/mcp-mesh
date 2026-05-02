@@ -1,0 +1,21 @@
+{
+  "name": "schema-test-ts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Issue #547 schema-registry cross-runtime test fixtures (TypeScript)",
+  "scripts": {
+    "good": "tsx producer_good.ts",
+    "bad": "tsx producer_bad.ts",
+    "consumer": "tsx consumer.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "file:../../../src/runtime/typescript",
+    "fastmcp": "^3.34.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

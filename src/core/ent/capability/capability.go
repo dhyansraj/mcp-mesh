@@ -24,6 +24,12 @@ const (
 	FieldDescription = "description"
 	// FieldInputSchema holds the string denoting the input_schema field in the database.
 	FieldInputSchema = "input_schema"
+	// FieldInputSchemaHash holds the string denoting the input_schema_hash field in the database.
+	FieldInputSchemaHash = "input_schema_hash"
+	// FieldOutputSchemaHash holds the string denoting the output_schema_hash field in the database.
+	FieldOutputSchemaHash = "output_schema_hash"
+	// FieldSchemaWarnings holds the string denoting the schema_warnings field in the database.
+	FieldSchemaWarnings = "schema_warnings"
 	// FieldLlmFilter holds the string denoting the llm_filter field in the database.
 	FieldLlmFilter = "llm_filter"
 	// FieldLlmProvider holds the string denoting the llm_provider field in the database.
@@ -61,6 +67,9 @@ var Columns = []string{
 	FieldVersion,
 	FieldDescription,
 	FieldInputSchema,
+	FieldInputSchemaHash,
+	FieldOutputSchemaHash,
+	FieldSchemaWarnings,
 	FieldLlmFilter,
 	FieldLlmProvider,
 	FieldTags,
@@ -130,6 +139,16 @@ func ByVersion(opts ...sql.OrderTermOption) OrderOption {
 // ByDescription orders the results by the description field.
 func ByDescription(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldDescription, opts...).ToFunc()
+}
+
+// ByInputSchemaHash orders the results by the input_schema_hash field.
+func ByInputSchemaHash(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldInputSchemaHash, opts...).ToFunc()
+}
+
+// ByOutputSchemaHash orders the results by the output_schema_hash field.
+func ByOutputSchemaHash(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldOutputSchemaHash, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

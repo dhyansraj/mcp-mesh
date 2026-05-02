@@ -1,0 +1,120 @@
+# Test Case: tc08 - Cross-runtime subset (Python producers + Java consumer)
+# Issue #547 Phase 4: cross-runtime canonical-form parity (Pydantic <-> Java POJO).
+#
+# producer-good-py + producer-bad-py + consumer-java (subset, Employee.class).
+# Java consumer must wire to producer-good-py via canonical hash equality.
+
+name: "Schema Registry: cross-runtime — PY producers + JAVA consumer"
+description: "Java schema-aware consumer wires to Python producer-good (canonical-form parity Pydantic<->POJO+@NotNull)"
+tags:
+  - schema_registry
+  - cross_runtime
+  - py
+  - java
+  - subset
+  - slow
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy schema-py producers + schema-java consumer to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/schema-py /workspace/schema-java
+      cp /uc-artifacts/schema-py/producer_good.py /workspace/schema-py/
+      cp /uc-artifacts/schema-py/producer_bad.py /workspace/schema-py/
+      cp -r /uc-artifacts/schema-java/pom.xml /workspace/schema-java/
+      cp -r /uc-artifacts/schema-java/consumer /workspace/schema-java/
+      ls -la /workspace/schema-py/ /workspace/schema-java/
+
+  - name: "Install Maven deps for consumer"
+    handler: maven-install
+    path: /workspace/schema-java/consumer
+    timeout: 600
+
+  - name: "Start producer-good-py"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/producer_good.py -d"
+
+  - name: "Start producer-bad-py"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/producer_bad.py -d"
+
+  - name: "Wait for python producers"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 30); do
+        LIST=$(meshctl list 2>/dev/null || true)
+        if echo "$LIST" | grep -q "producer-good-py" && echo "$LIST" | grep -q "producer-bad-py"; then
+          echo "Both python producers registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: python producers did not register within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_producers
+    timeout: 90
+
+  - name: "Start consumer-java"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/schema-java/consumer --env MCP_MESH_HTTP_PORT=0 -d"
+
+  - name: "Wait for Java consumer cold start + dep resolution"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "consumer-java" && echo "$AGENTS" | grep "consumer-java" | grep -q "1/1"; then
+          echo "consumer-java registered + deps resolved after $((i*3))s"
+          echo "$AGENTS"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: consumer-java did not register or resolve deps within 180s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_consumer
+    timeout: 210
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Audit consumer-java JSON"
+    handler: shell
+    workdir: /workspace
+    command: meshctl audit consumer-java --json --function lookupWithSchema --dep 0
+    capture: audit_json
+
+assertions:
+  - expr: "${captured.agent_list} contains 'producer-good-py'"
+  - expr: "${captured.agent_list} contains 'producer-bad-py'"
+  - expr: "${captured.agent_list} contains 'consumer-java'"
+  - expr: ${jq:captured.audit_json:.events[0].trace.chosen.agent_id} contains 'producer-good-py'
+    message: "Java consumer should wire to Python producer-good (cross-runtime hash equality)"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].id} contains 'producer-bad-py'
+    message: "Python producer-bad should be evicted at schema stage"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot" 2>/dev/null || true
+      pkill -f "java.*consumer" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

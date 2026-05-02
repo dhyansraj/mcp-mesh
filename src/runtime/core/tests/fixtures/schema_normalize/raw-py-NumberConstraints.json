@@ -1,0 +1,1 @@
+{"properties":{"value":{"maximum":100,"minimum":0,"title":"Value","type":"integer"}},"required":["value"],"title":"WithScore","type":"object"}

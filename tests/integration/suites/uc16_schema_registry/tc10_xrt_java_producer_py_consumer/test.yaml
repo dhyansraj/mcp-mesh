@@ -1,0 +1,127 @@
+# Test Case: tc10 - Cross-runtime subset (Java producers + Python consumer)
+# Issue #547 Phase 4: cross-runtime canonical-form parity (Java+@NotNull -> Pydantic).
+#
+# producer-good-java + producer-bad-java + consumer-py (subset, Pydantic Employee).
+# Python consumer must wire to producer-good-java via canonical hash equality.
+# Validates JakartaValidationModule path (victools sees @NotNull -> non-null in schema).
+
+name: "Schema Registry: cross-runtime — JAVA producers + PY consumer"
+description: "Python schema-aware consumer wires to Java producer-good (canonical-form parity POJO+@NotNull<->Pydantic)"
+tags:
+  - schema_registry
+  - cross_runtime
+  - py
+  - java
+  - subset
+  - slow
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy schema-java producers + schema-py consumer to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/schema-java /workspace/schema-py
+      cp -r /uc-artifacts/schema-java/pom.xml /workspace/schema-java/
+      cp -r /uc-artifacts/schema-java/producer-good /workspace/schema-java/
+      cp -r /uc-artifacts/schema-java/producer-bad /workspace/schema-java/
+      cp /uc-artifacts/schema-py/consumer.py /workspace/schema-py/
+      ls -la /workspace/schema-java/ /workspace/schema-py/
+
+  - name: "Install Maven deps for producer-good"
+    handler: maven-install
+    path: /workspace/schema-java/producer-good
+    timeout: 600
+
+  - name: "Install Maven deps for producer-bad"
+    handler: maven-install
+    path: /workspace/schema-java/producer-bad
+    timeout: 600
+
+  - name: "Start producer-good-java"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/schema-java/producer-good --env MCP_MESH_HTTP_PORT=0 -d"
+
+  - name: "Start producer-bad-java"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/schema-java/producer-bad --env MCP_MESH_HTTP_PORT=0 -d"
+
+  - name: "Wait for Java producers (cold start)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        LIST=$(meshctl list 2>/dev/null)
+        if echo "$LIST" | grep -q "producer-good-java" && echo "$LIST" | grep -q "producer-bad-java"; then
+          echo "Both Java producers registered after $((i*3))s"
+          echo "$LIST"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Java producers did not register within 180s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_producers
+    timeout: 210
+
+  - name: "Start consumer-py"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/consumer.py -d"
+
+  - name: "Wait for consumer + dep resolution"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "consumer-py" && echo "$AGENTS" | grep "consumer-py" | grep -q "1/1"; then
+          echo "consumer-py registered + deps resolved after $((i*2))s"
+          echo "$AGENTS"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: consumer-py did not register or resolve deps within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_consumer
+    timeout: 90
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Audit consumer-py JSON"
+    handler: shell
+    workdir: /workspace
+    command: meshctl audit consumer-py --json --function lookup_with_schema --dep 0
+    capture: audit_json
+
+assertions:
+  - expr: "${captured.agent_list} contains 'producer-good-java'"
+  - expr: "${captured.agent_list} contains 'producer-bad-java'"
+  - expr: "${captured.agent_list} contains 'consumer-py'"
+  - expr: ${jq:captured.audit_json:.events[0].trace.chosen.agent_id} contains 'producer-good-java'
+    message: "Python consumer should wire to Java producer-good (cross-runtime hash equality)"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].id} contains 'producer-bad-java'
+    message: "Java producer-bad should be evicted at schema stage"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot" 2>/dev/null || true
+      pkill -f "java.*producer" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

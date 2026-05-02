@@ -1,0 +1,116 @@
+# Test Case: tc03 - Consumer absent match_mode -> schema stage is no-op
+# Issue #547 Phase 4: schema check is consumer-side opt-in.
+#
+# Verifies that producer-bad (Hardware shape) is NOT evicted when the consumer
+# does not declare match_mode. Pairs with tc04 (subset eviction) to bracket
+# the opt-in surface.
+
+name: "Schema Registry: consumer without match_mode keeps producer-bad"
+description: "An absent match_mode should make the schema stage a pass-through (producer-bad NOT evicted)"
+tags:
+  - schema_registry
+  - py
+  - backcompat
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy producer-bad to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/schema-py
+      cp /uc-artifacts/schema-py/producer_bad.py /workspace/schema-py/
+
+  - name: "Write consumer WITHOUT match_mode"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cat > /workspace/schema-py/consumer_no_match_mode.py <<'PYEOF'
+      """Consumer without match_mode (#547 tc03).
+
+      Depends on employee_lookup but does NOT pass expected_type / match_mode,
+      so the schema stage must be a pass-through.
+      """
+      import mesh
+      from fastmcp import FastMCP
+
+      app = FastMCP("Consumer No MatchMode (Python)")
+
+      @app.tool()
+      @mesh.tool(
+          capability="no_match_mode_consumer_py",
+          description="No match_mode -> schema stage is no-op",
+          dependencies=[{"capability": "employee_lookup"}],
+      )
+      async def lookup(emp_id: str, lookup: mesh.McpMeshTool | None = None) -> str:
+          if lookup is None:
+              return f"no producer for {emp_id}"
+          result = await lookup(item_id=emp_id)
+          return f"got: {result}"
+
+      @mesh.agent(
+          name="consumer-nomode-py",
+          version="1.0.0",
+          description="Consumer (no match_mode) for #547 tc03",
+          http_port=9102,
+          enable_http=True,
+          auto_run=True,
+      )
+      class ConsumerNoModeAgent:
+          pass
+      PYEOF
+
+  - name: "Start producer-bad"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/producer_bad.py -d"
+    capture: start_producer
+
+  - name: "Wait for producer"
+    handler: wait
+    seconds: 10
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/consumer_no_match_mode.py -d"
+    capture: start_consumer
+
+  - name: "Wait for consumer + dep resolution"
+    handler: wait
+    seconds: 15
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Call consumer to verify wiring"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call lookup '{"emp_id": "I1"}' 2>&1 || true
+    capture: call_result
+
+assertions:
+  - expr: "${captured.agent_list} contains 'producer-bad-py'"
+    message: "Producer-bad should be registered"
+  - expr: "${captured.agent_list} contains 'consumer-nomode-py'"
+    message: "Consumer should be registered"
+  - expr: "${captured.call_result} contains 'got:'"
+    message: "Consumer without match_mode should wire to producer-bad (Hardware shape) — no schema check"
+  - expr: "${captured.call_result} contains 'X1 Carbon'"
+    message: "Consumer must receive Hardware payload from producer-bad"
+  - expr: "${captured.call_result} not contains 'no producer'"
+    message: "Consumer must NOT report missing producer"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

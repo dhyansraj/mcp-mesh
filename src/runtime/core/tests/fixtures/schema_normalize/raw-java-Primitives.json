@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"active":{"type":"boolean"},"age":{"type":"integer"},"id":{"type":"string"},"score":{"type":"number"}},"required":["active","age","id","score"]}

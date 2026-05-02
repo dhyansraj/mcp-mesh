@@ -24,6 +24,11 @@ type AuditEvent struct {
 	FunctionName string                 `json:"function_name,omitempty"`
 	Timestamp    time.Time              `json:"timestamp"`
 	Data         map[string]interface{} `json:"data,omitempty"`
+	// Trace is the parsed audit-trace shape (added for --json output so jq queries
+	// can use `.events[].trace.chosen.agent_id` directly without diving through
+	// the generic Data map). Only populated when serializing for --json; nil on
+	// the wire from the registry.
+	Trace        *auditTraceCLI         `json:"trace,omitempty"`
 }
 
 // AuditEventsResponse is the envelope returned by GET /events.
@@ -185,6 +190,14 @@ func runAuditCommand(cmd *cobra.Command, args []string) error {
 	}
 
 	if jsonOut {
+		// Promote each event's Data into a typed Trace field so jq queries
+		// can use `.events[].trace.<field>` directly (issue #547 testing).
+		// Failures to decode just leave Trace nil; Data is preserved either way.
+		for i := range filtered {
+			if t, err := decodeTrace(filtered[i].Data); err == nil {
+				filtered[i].Trace = t
+			}
+		}
 		envelope := AuditEventsResponse{Events: filtered, Count: len(filtered)}
 		out, err := json.MarshalIndent(envelope, "", "  ")
 		if err != nil {

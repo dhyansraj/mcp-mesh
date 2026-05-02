@@ -78,6 +78,19 @@ export MCP_MESH_AUTH_TOKEN=secret-token
 export MCP_MESH_DEBOUNCE_DELAY=1.0
 ```
 
+### Schema Verdict Policy (issue #547)
+
+```bash
+# Cluster-wide schema strictness — when "true", agent treats schema-normalizer
+# WARN verdicts as BLOCK and refuses to start. Default: false. Production
+# hardening knob; per-tool output_schema_strict=false (Python) /
+# outputSchemaStrict: false (TS) / outputSchemaStrict = false (Java)
+# overrides this for that one tool.
+export MCP_MESH_SCHEMA_STRICT=true
+```
+
+See `meshctl man schema-matching` for the verdict tiers and per-tool overrides.
+
 ## LLM Provider Configuration
 
 Required for `@mesh.llm_provider` agents:

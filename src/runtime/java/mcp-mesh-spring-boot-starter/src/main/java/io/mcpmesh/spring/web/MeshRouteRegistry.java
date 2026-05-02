@@ -1,6 +1,9 @@
 package io.mcpmesh.spring.web;
 
+import io.mcpmesh.SchemaMode;
 import io.mcpmesh.core.AgentSpec;
+import io.mcpmesh.core.MeshCoreBridge;
+import io.mcpmesh.spring.MeshSchemaSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -110,6 +113,8 @@ public class MeshRouteRegistry {
     public List<AgentSpec.DependencySpec> getUniqueDependencySpecs() {
         Set<String> seenCapabilities = new HashSet<>();
         List<AgentSpec.DependencySpec> specs = new ArrayList<>();
+        // Issue #547 Phase 4: cluster-wide strict knob promotes WARN→BLOCK.
+        boolean clusterStrict = MeshSchemaSupport.clusterStrictEnabled();
 
         for (RouteMetadata route : routesByPath.values()) {
             for (DependencySpec dep : route.getDependencies()) {
@@ -122,12 +127,62 @@ public class MeshRouteRegistry {
                     if (dep.hasVersion()) {
                         agentDep.setVersion(dep.getVersion());
                     }
+                    applySchemaMatching(agentDep, dep, clusterStrict);
                     specs.add(agentDep);
                 }
             }
         }
 
         return specs;
+    }
+
+    /**
+     * Apply issue #547 schema-aware matching fields to the outgoing AgentSpec
+     * dependency. Mirrors the Python ({@code mesh.tool} decorator) and TypeScript
+     * (Zod expectedSchema) behaviors:
+     *
+     * <ul>
+     *   <li>{@code expectedType} set, {@code schemaMode} unset → default mode SUBSET</li>
+     *   <li>{@code schemaMode} set, {@code expectedType} unset → log warning, no schema check</li>
+     *   <li>{@code expectedType} set + {@code schemaMode} != NONE → normalize and ship</li>
+     *   <li>both unset → backward-compatible no-op</li>
+     * </ul>
+     *
+     * <p>Phase 4: cluster-wide strict knob promotes WARN→BLOCK on the consumer
+     * side too. There's no per-tool override here — the override is producer-side.
+     */
+    private static void applySchemaMatching(
+            AgentSpec.DependencySpec target, DependencySpec source, boolean clusterStrict) {
+        Class<?> expectedType = source.getExpectedType();
+        SchemaMode mode = source.getSchemaMode();
+        boolean modeRequested = mode != null && mode != SchemaMode.NONE;
+
+        if (expectedType == null && !modeRequested) {
+            return; // backward-compatible: nothing to do
+        }
+        if (expectedType == null) {
+            log.warn("Dependency '{}' sets schemaMode={} but no expectedType — ignoring schema match",
+                source.getCapability(), mode);
+            return;
+        }
+        // Default mode SUBSET when caller provides expectedType only (parity with Python).
+        SchemaMode effectiveMode = modeRequested ? mode : SchemaMode.SUBSET;
+
+        String rawJson = MeshSchemaSupport.generateRawSchemaJson(expectedType);
+        if (rawJson == null) {
+            log.warn("Dependency '{}': failed to generate JSON Schema for expectedType {} — skipping schema match",
+                source.getCapability(), expectedType.getName());
+            return;
+        }
+        MeshCoreBridge.NormalizeResult result = MeshSchemaSupport.normalizeWithPolicy(
+            rawJson, "java", "dependency '" + source.getCapability() + "' expected schema",
+            clusterStrict, true);
+        if (result == null) {
+            return;
+        }
+        target.setExpectedSchemaCanonical(result.canonicalJson());
+        target.setExpectedSchemaHash(result.hash());
+        target.setMatchMode(effectiveMode == SchemaMode.STRICT ? "strict" : "subset");
     }
 
     private String buildRouteId(String httpMethod, String path) {
@@ -223,13 +278,22 @@ public class MeshRouteRegistry {
         private final String[] tags;
         private final String version;
         private final String parameterName;
+        private final Class<?> expectedType;
+        private final SchemaMode schemaMode;
         private Type returnType;  // Set by BeanPostProcessor after construction
 
         public DependencySpec(String capability, String[] tags, String version, String parameterName) {
+            this(capability, tags, version, parameterName, null, SchemaMode.NONE);
+        }
+
+        public DependencySpec(String capability, String[] tags, String version, String parameterName,
+                              Class<?> expectedType, SchemaMode schemaMode) {
             this.capability = capability;
             this.tags = tags != null ? tags : new String[0];
             this.version = version;
             this.parameterName = parameterName;
+            this.expectedType = expectedType;
+            this.schemaMode = schemaMode != null ? schemaMode : SchemaMode.NONE;
         }
 
         /**
@@ -241,11 +305,17 @@ public class MeshRouteRegistry {
                 // Convert capability to camelCase for parameter name
                 paramName = toCamelCase(annotation.capability());
             }
+            Class<?> expectedType = annotation.expectedType();
+            if (expectedType == Void.class || expectedType == void.class) {
+                expectedType = null;
+            }
             return new DependencySpec(
                 annotation.capability(),
                 annotation.tags(),
                 annotation.version(),
-                paramName
+                paramName,
+                expectedType,
+                annotation.schemaMode()
             );
         }
 
@@ -274,6 +344,24 @@ public class MeshRouteRegistry {
 
         public String getParameterName() {
             return parameterName;
+        }
+
+        /**
+         * Optional expected response type for schema-aware capability matching (issue #547).
+         *
+         * @return the type from {@link MeshDependency#expectedType()}, or null if not set
+         */
+        public Class<?> getExpectedType() {
+            return expectedType;
+        }
+
+        /**
+         * Schema match mode for this dependency (issue #547).
+         *
+         * @return the mode (defaults to {@link SchemaMode#NONE})
+         */
+        public SchemaMode getSchemaMode() {
+            return schemaMode;
         }
 
         public Type getReturnType() { return returnType; }

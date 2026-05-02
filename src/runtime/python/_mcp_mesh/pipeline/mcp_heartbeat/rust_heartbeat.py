@@ -15,9 +15,48 @@ Python handles:
 import asyncio
 import json
 import logging
+import os
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _cluster_strict_enabled() -> bool:
+    """Issue #547 Phase 4: read MCP_MESH_SCHEMA_STRICT env var (cluster-wide knob).
+
+    When true, WARN verdicts are promoted to BLOCK so ops can harden a whole
+    cluster without changing every consumer.
+    """
+    return os.environ.get("MCP_MESH_SCHEMA_STRICT", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+def _should_refuse_startup(
+    verdict: str, cluster_strict: bool, tool_strict: bool
+) -> bool:
+    """Issue #547 Phase 4: schema verdict policy.
+
+    Composes two knobs:
+      * cluster_strict (env MCP_MESH_SCHEMA_STRICT): promotes WARN→BLOCK.
+      * tool_strict (per-tool output_schema_strict, default True): producer-side
+        escape hatch. When False, BLOCK is demoted to WARN for that tool.
+
+    Truth table:
+      verdict=BLOCK + tool_strict=True  -> refuse
+      verdict=BLOCK + tool_strict=False -> log only (override wins)
+      verdict=WARN  + cluster_strict=True + tool_strict=True  -> refuse
+      verdict=WARN  + cluster_strict=True + tool_strict=False -> log only
+      verdict=WARN  + cluster_strict=False -> log only
+      verdict=OK -> never refuse
+    """
+    if verdict == "BLOCK":
+        return tool_strict
+    if verdict == "WARN":
+        return cluster_strict and tool_strict
+    return False
 
 # Lazy import to avoid ImportError if Rust core not built
 _rust_core = None
@@ -110,9 +149,13 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
         f"FastMCP servers for schema extraction: {list(fastmcp_servers.keys())}"
     )
 
+    cluster_strict = _cluster_strict_enabled()
+
     for tool_name, decorated_func in mesh_tools.items():
         tool_metadata = decorated_func.metadata or {}
         current_function = decorated_func.function
+        # Issue #547 Phase 4: per-tool override (default True = current behavior).
+        tool_strict = bool(tool_metadata.get("output_schema_strict", True))
 
         # Build dependency specs
         deps = []
@@ -120,10 +163,65 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
             # Serialize tags to JSON to support nested arrays for OR alternatives
             # e.g., ["addition", ["python", "typescript"]] -> addition AND (python OR typescript)
             tags_json = json.dumps(dep_info.get("tags", []))
+
+            # Issue #547 Phase 1D: normalize the consumer's expected schema
+            # via the Rust normalizer (deferred from decorator time to keep
+            # import cheap and consistent with producer-side normalization).
+            expected_canonical: Optional[str] = None
+            expected_hash: Optional[str] = None
+            match_mode = dep_info.get("match_mode")
+            expected_raw = dep_info.get("expected_schema_raw")
+            if expected_raw is not None:
+                try:
+                    normalize_fn = getattr(core, "normalize_schema_py", None)
+                    if normalize_fn is None:
+                        raise AttributeError(
+                            "normalize_schema_py not in mcp_mesh_core"
+                        )
+                    result = json.loads(
+                        normalize_fn(json.dumps(expected_raw), "python")
+                    )
+                    verdict = result.get("verdict", "OK")
+                    warnings_list = result.get("warnings") or []
+                    # Issue #547 Phase 4: there's no per-tool override on the
+                    # consumer side (the override is producer-side); use
+                    # tool_strict=True so cluster_strict still promotes WARN.
+                    if _should_refuse_startup(verdict, cluster_strict, True):
+                        promoted = (
+                            " (MCP_MESH_SCHEMA_STRICT=true upgraded WARN→BLOCK)"
+                            if verdict == "WARN"
+                            else ""
+                        )
+                        raise RuntimeError(
+                            f"Schema normalization {verdict} for dependency on "
+                            f"'{dep_info.get('capability', '')}'{promoted}: "
+                            f"{warnings_list}. Cannot start agent."
+                        )
+                    if verdict == "WARN":
+                        logger.warning(
+                            f"Schema WARN for dependency on "
+                            f"'{dep_info.get('capability', '')}': {warnings_list}"
+                        )
+                    if result.get("canonical"):
+                        expected_canonical = json.dumps(result["canonical"])
+                        expected_hash = result.get("hash")
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    logger.warning(
+                        f"Could not normalize expected schema for dep "
+                        f"'{dep_info.get('capability', '')}': {e}"
+                    )
+                    expected_canonical = None
+                    expected_hash = None
+
             dep_spec = core.DependencySpec(
                 capability=dep_info.get("capability", ""),
                 tags=tags_json,
                 version=dep_info.get("version"),
+                expected_schema_canonical=expected_canonical,
+                expected_schema_hash=expected_hash,
+                match_mode=match_mode,
             )
             deps.append(dep_spec)
 
@@ -151,6 +249,87 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
                 else:
                     logger.warning(f"⚠️ No inputSchema found for {tool_name}")
         input_schema_json = json.dumps(input_schema) if input_schema else None
+
+        # Issue #547: Extract output schema (best-effort, return type may not be annotated)
+        output_schema = FastMCPSchemaExtractor.extract_output_schema(current_function)
+        output_schema_json = json.dumps(output_schema) if output_schema else None
+
+        # Issue #547: Normalize input + output schemas via Rust normalizer.
+        # If the wheel hasn't been rebuilt to expose normalize_schema_py yet,
+        # we register without schema fields so legacy environments keep working.
+        input_canonical_json: Optional[str] = None
+        input_hash: Optional[str] = None
+        output_canonical_json: Optional[str] = None
+        output_hash: Optional[str] = None
+        combined_warnings: list[str] = []
+
+        try:
+            normalize_fn = getattr(core, "normalize_schema_py", None)
+            if normalize_fn is None:
+                raise AttributeError("normalize_schema_py not in mcp_mesh_core")
+
+            def _apply_schema_policy(result: dict, kind: str) -> None:
+                """Issue #547 Phase 4: enforce verdict policy for one schema slot.
+
+                Mutates combined_warnings; raises RuntimeError when startup
+                must be refused.
+                """
+                verdict = result.get("verdict", "OK")
+                warnings_list = result.get("warnings") or []
+                if _should_refuse_startup(verdict, cluster_strict, tool_strict):
+                    promoted = (
+                        " (MCP_MESH_SCHEMA_STRICT=true upgraded WARN→BLOCK)"
+                        if verdict == "WARN"
+                        else ""
+                    )
+                    raise RuntimeError(
+                        f"Schema normalization {verdict} for tool "
+                        f"'{tool_name}' {kind}{promoted}: {warnings_list}. "
+                        "Cannot start agent."
+                    )
+                if verdict == "BLOCK":
+                    # Demoted by per-tool override — log loudly + tag warnings.
+                    logger.warning(
+                        f"Schema BLOCK demoted to WARN for tool '{tool_name}' "
+                        f"{kind} (output_schema_strict=False): {warnings_list}"
+                    )
+                    warnings_list = [
+                        f"[demoted from BLOCK] {w}" for w in warnings_list
+                    ]
+                elif verdict == "WARN":
+                    logger.warning(
+                        f"Schema WARN for tool '{tool_name}' {kind}: {warnings_list}"
+                    )
+                combined_warnings.extend(warnings_list)
+
+            if input_schema:
+                result = json.loads(normalize_fn(json.dumps(input_schema), "python"))
+                _apply_schema_policy(result, "input")
+                if result.get("canonical"):
+                    input_canonical_json = json.dumps(result["canonical"])
+                    input_hash = result.get("hash")
+
+            if output_schema:
+                result = json.loads(normalize_fn(json.dumps(output_schema), "python"))
+                _apply_schema_policy(result, "output")
+                if result.get("canonical"):
+                    output_canonical_json = json.dumps(result["canonical"])
+                    output_hash = result.get("hash")
+        except RuntimeError:
+            # BLOCK verdict (or WARN promoted to BLOCK) - refuse agent startup.
+            raise
+        except Exception as e:
+            logger.warning(
+                f"Schema normalization unavailable for {tool_name} "
+                f"(rebuild Rust wheel to enable): {e}"
+            )
+            input_canonical_json = None
+            input_hash = None
+            output_canonical_json = None
+            output_hash = None
+            combined_warnings = []
+
+        schema_warnings = combined_warnings if combined_warnings else None
 
         # Get LLM filter/provider from mesh_llm_agents by matching function name
         # (The @mesh.llm decorator stores these, not @mesh.tool)
@@ -210,6 +389,8 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
             "description",
             "dependencies",
             "input_schema",
+            # Issue #547 Phase 4: SDK-internal verdict policy flag — don't ship.
+            "output_schema_strict",
         }
         kwargs_data = {
             k: v for k, v in tool_metadata.items() if k not in standard_fields
@@ -224,6 +405,12 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
             tags=tool_metadata.get("tags", []),
             dependencies=deps if deps else None,
             input_schema=input_schema_json,
+            output_schema=output_schema_json,
+            input_schema_canonical=input_canonical_json,
+            input_schema_hash=input_hash,
+            output_schema_canonical=output_canonical_json,
+            output_schema_hash=output_hash,
+            schema_warnings=schema_warnings,
             llm_filter=llm_filter_json,
             llm_provider=llm_provider_json,
             kwargs=kwargs_json,

@@ -1,0 +1,4 @@
+# Schema Registry UC-level Routines (Issue #547)
+# Empty — global routines + per-test inline steps suffice.
+
+routines: {}

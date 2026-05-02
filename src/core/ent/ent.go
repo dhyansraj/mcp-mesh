@@ -12,6 +12,7 @@ import (
 	"mcp-mesh/src/core/ent/llmproviderresolution"
 	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
+	"mcp-mesh/src/core/ent/schemaentry"
 	"reflect"
 	"sync"
 
@@ -84,6 +85,7 @@ func checkColumn(table, column string) error {
 			llmproviderresolution.Table: llmproviderresolution.ValidColumn,
 			llmtoolresolution.Table:     llmtoolresolution.ValidColumn,
 			registryevent.Table:         registryevent.ValidColumn,
+			schemaentry.Table:           schemaentry.ValidColumn,
 		})
 	})
 	return columnCheck(table, column)

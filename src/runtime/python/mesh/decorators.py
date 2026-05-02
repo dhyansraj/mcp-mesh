@@ -739,6 +739,7 @@ def tool(
     version: str = "1.0.0",
     dependencies: list[dict[str, Any]] | list[str] | None = None,
     description: str | None = None,
+    output_schema_strict: bool = True,
     **kwargs: Any,
 ) -> Callable[[T], T]:
     """
@@ -759,8 +760,25 @@ def tool(
         capability: Optional capability name this tool provides (default: None)
         tags: Optional list of tags for discovery (default: [])
         version: Tool version (default: "1.0.0")
-        dependencies: Optional list of dependencies (default: [])
+        dependencies: Optional list of dependencies (default: []). Each entry
+            is either a capability string or a dict with keys:
+              - capability (required, str)
+              - tags (optional, list[str | list[str]])
+              - version (optional, str)
+              - expected_type (optional, type | dict): Python type (Pydantic
+                model, dataclass, TypedDict, primitive, etc.) or pre-built
+                JSON Schema dict describing the expected response shape.
+                Issue #547 Phase 1D.
+              - match_mode (optional, "subset" | "strict"): Schema check mode
+                when expected_type is set. Defaults to "subset" if
+                expected_type is provided. Issue #547 Phase 1D.
         description: Optional description (default: function docstring)
+        output_schema_strict: Whether a BLOCK verdict from the schema normalizer
+            should refuse agent startup for this specific tool (default: True).
+            Set to False as a per-tool escape hatch when the producer's output
+            schema cannot be canonicalized but the tool should still register.
+            Wins even when the cluster-wide MCP_MESH_SCHEMA_STRICT=true env var
+            promotes WARN→BLOCK. Issue #547 Phase 4.
         **kwargs: Additional metadata
 
     Returns:
@@ -772,6 +790,9 @@ def tool(
         # Validate optional capability
         if capability is not None and not isinstance(capability, str):
             raise ValueError("capability must be a string")
+
+        if not isinstance(output_schema_strict, bool):
+            raise ValueError("output_schema_strict must be a boolean")
 
         # Validate optional parameters
         if tags is not None:
@@ -834,12 +855,55 @@ def tool(
                     if dep_version is not None and not isinstance(dep_version, str):
                         raise ValueError("dependency version must be a string")
 
+                    # Issue #547 Phase 1D: optional consumer-side schema declaration.
+                    # expected_type may be a Python type (Pydantic model, dataclass,
+                    # TypedDict, primitive, etc.) OR a pre-built JSON Schema dict.
+                    # match_mode is "subset" (default opt-in) or "strict".
+                    expected_type = dep.get("expected_type")
+                    match_mode = dep.get("match_mode")
+
+                    if match_mode is not None and match_mode not in ("subset", "strict"):
+                        raise ValueError(
+                            "dependency match_mode must be 'subset' or 'strict'"
+                        )
+
                     dependency_dict = {
                         "capability": dep["capability"],
                         "tags": dep_tags,
                     }
                     if dep_version is not None:
                         dependency_dict["version"] = dep_version
+
+                    if expected_type is not None:
+                        # Default match_mode to "subset" (most permissive opt-in)
+                        # when caller provides expected_type without match_mode.
+                        if match_mode is None:
+                            match_mode = "subset"
+                        if isinstance(expected_type, dict):
+                            # Caller supplied a pre-built JSON Schema; pass through.
+                            dependency_dict["expected_schema_raw"] = expected_type
+                        else:
+                            # Defer Rust-normalizer call to the heartbeat pipeline
+                            # (decorator runs at import time; keep it cheap).
+                            from _mcp_mesh.utils.fastmcp_schema_extractor import (
+                                FastMCPSchemaExtractor,
+                            )
+
+                            schema = FastMCPSchemaExtractor.extract_type_schema(
+                                expected_type
+                            )
+                            if schema is not None:
+                                dependency_dict["expected_schema_raw"] = schema
+                            # else: extraction failed; warning already logged.
+                    elif match_mode is not None:
+                        logger.warning(
+                            f"dependency '{dep['capability']}': match_mode set "
+                            "but no expected_type; schema check will be skipped"
+                        )
+
+                    if match_mode is not None:
+                        dependency_dict["match_mode"] = match_mode
+
                     validated_dependencies.append(dependency_dict)
                 else:
                     raise ValueError("dependencies must be strings or dictionaries")
@@ -853,6 +917,8 @@ def tool(
             "version": version,
             "dependencies": validated_dependencies,
             "description": description or getattr(target, "__doc__", None),
+            # Issue #547 Phase 4: per-tool override for the schema verdict policy.
+            "output_schema_strict": output_schema_strict,
             **kwargs,
         }
 

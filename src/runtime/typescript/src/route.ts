@@ -102,6 +102,10 @@ export interface RouteMetadata {
     capability: string;
     tags: TagSpec[];
     version?: string;
+    /** Issue #547: raw expected output schema (post-zodToJsonSchema). */
+    expectedSchemaRaw?: object;
+    /** Issue #547: schema match mode. */
+    matchMode?: "subset" | "strict";
   }>;
   /** Per-dependency kwargs */
   dependencyKwargs?: DependencyKwargs[];

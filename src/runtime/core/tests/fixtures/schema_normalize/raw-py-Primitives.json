@@ -1,0 +1,1 @@
+{"properties":{"id":{"title":"Id","type":"string"},"age":{"title":"Age","type":"integer"},"active":{"title":"Active","type":"boolean"},"score":{"title":"Score","type":"number"}},"required":["id","age","active","score"],"title":"Primitives","type":"object"}

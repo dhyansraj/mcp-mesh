@@ -10,6 +10,7 @@ import (
 	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
 	"mcp-mesh/src/core/ent/schema"
+	"mcp-mesh/src/core/ent/schemaentry"
 	"time"
 )
 
@@ -50,15 +51,15 @@ func init() {
 	// capability.DefaultVersion holds the default value on creation for the version field.
 	capability.DefaultVersion = capabilityDescVersion.Default.(string)
 	// capabilityDescTags is the schema descriptor for tags field.
-	capabilityDescTags := capabilityFields[7].Descriptor()
+	capabilityDescTags := capabilityFields[10].Descriptor()
 	// capability.DefaultTags holds the default value on creation for the tags field.
 	capability.DefaultTags = capabilityDescTags.Default.([]string)
 	// capabilityDescCreatedAt is the schema descriptor for created_at field.
-	capabilityDescCreatedAt := capabilityFields[10].Descriptor()
+	capabilityDescCreatedAt := capabilityFields[13].Descriptor()
 	// capability.DefaultCreatedAt holds the default value on creation for the created_at field.
 	capability.DefaultCreatedAt = capabilityDescCreatedAt.Default.(func() time.Time)
 	// capabilityDescUpdatedAt is the schema descriptor for updated_at field.
-	capabilityDescUpdatedAt := capabilityFields[11].Descriptor()
+	capabilityDescUpdatedAt := capabilityFields[14].Descriptor()
 	// capability.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	capability.DefaultUpdatedAt = capabilityDescUpdatedAt.Default.(func() time.Time)
 	// capability.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
@@ -127,4 +128,14 @@ func init() {
 	registryeventDescData := registryeventFields[3].Descriptor()
 	// registryevent.DefaultData holds the default value on creation for the data field.
 	registryevent.DefaultData = registryeventDescData.Default.(map[string]interface{})
+	schemaentryFields := schema.SchemaEntry{}.Fields()
+	_ = schemaentryFields
+	// schemaentryDescHash is the schema descriptor for hash field.
+	schemaentryDescHash := schemaentryFields[0].Descriptor()
+	// schemaentry.HashValidator is a validator for the "hash" field. It is called by the builders before save.
+	schemaentry.HashValidator = schemaentryDescHash.Validators[0].(func(string) error)
+	// schemaentryDescCreatedAt is the schema descriptor for created_at field.
+	schemaentryDescCreatedAt := schemaentryFields[3].Descriptor()
+	// schemaentry.DefaultCreatedAt holds the default value on creation for the created_at field.
+	schemaentry.DefaultCreatedAt = schemaentryDescCreatedAt.Default.(func() time.Time)
 }

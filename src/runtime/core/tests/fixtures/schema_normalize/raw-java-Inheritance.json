@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"person":{"type":"object","properties":{"dept":{"type":"string"},"name":{"type":"string"},"reports":{"type":"integer"}},"required":["dept","name","reports"]}},"required":["person"]}

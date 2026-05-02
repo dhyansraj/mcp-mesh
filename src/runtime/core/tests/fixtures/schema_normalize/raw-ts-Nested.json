@@ -1,0 +1,1 @@
+{"$ref":"#/definitions/Nested","definitions":{"Nested":{"type":"object","properties":{"employee":{"type":"object","properties":{"name":{"type":"string"},"dept":{"type":"string"}},"required":["name","dept"],"additionalProperties":false}},"required":["employee"],"additionalProperties":false}},"$schema":"http://json-schema.org/draft-07/schema#"}

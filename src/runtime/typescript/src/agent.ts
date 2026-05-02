@@ -35,6 +35,10 @@ import { resolveConfig, generateAgentIdSuffix, findAvailablePort } from "./confi
 import { enrichSchemaWithMediaTypes } from "./media-param.js";
 import { createProxy, normalizeDependency, runWithTraceContext, runWithPropagatedHeaders, PROXY_DISPATCH_META } from "./proxy.js";
 import {
+  clusterStrictEnabled,
+  normalizeSchemaWithPolicy,
+} from "./schema-normalize.js";
+import {
   initTracing,
   generateTraceId,
   generateSpanId,
@@ -396,12 +400,21 @@ export class MeshAgent {
     // Store mesh metadata with JSON Schema for LLM tool resolution
     const inputSchema = this.convertZodToJsonSchema(def.parameters);
     enrichSchemaWithMediaTypes(inputSchema as Record<string, unknown>);
+    // Issue #547: extract output schema if user supplied one. Zod cannot
+    // infer return types from the handler signature, so this is opt-in.
+    let outputSchemaRaw: object | undefined;
+    if (def.outputSchema) {
+      outputSchemaRaw = this.convertZodToJsonSchema(def.outputSchema);
+    }
     this.tools.set(toolName, {
       capability: def.capability ?? toolName,
       version: def.version ?? "1.0.0",
       tags: def.tags ?? [],
       description: def.description ?? "",
       inputSchema: JSON.stringify(inputSchema),
+      outputSchemaRaw,
+      // Issue #547 Phase 4: per-tool override (default true = current behavior).
+      outputSchemaStrict: def.outputSchemaStrict !== false,
       dependencies: normalizedDeps,
       dependencyKwargs: def.dependencyKwargs,
     });
@@ -472,7 +485,12 @@ export class MeshAgent {
    * Convert Zod schema to JSON Schema.
    */
   private convertZodToJsonSchema(schema: z.ZodType): object {
-    return zodToJsonSchema(schema, { $refStrategy: "none" });
+    // $refStrategy: "root" preserves $ref + definitions for recursive Zod
+    // schemas (e.g. z.lazy(...)). With "none", zod-to-json-schema can't expand
+    // the cycle and falls back to {} (empty), which erases the recursion from
+    // the canonical hash. Non-recursive shapes are unchanged because they have
+    // no references to inline.
+    return zodToJsonSchema(schema, { $refStrategy: "root" });
   }
 
   /**
@@ -670,6 +688,10 @@ export class MeshAgent {
     // Get LLM tool registry for llmFilter/llmProvider
     const llmRegistry = LlmToolRegistry.getInstance();
 
+    // Issue #547 Phase 4: read cluster strict knob once; per-tool override
+    // is read inside the loop below.
+    const clusterStrict = clusterStrictEnabled();
+
     // Build the agent spec for Rust core
     const tools: JsToolSpec[] = Array.from(this.tools.entries()).map(
       ([name, meta]) => {
@@ -694,6 +716,50 @@ export class MeshAgent {
           });
         }
 
+        // Issue #547 / Phase 4: normalize via Rust core and apply verdict policy.
+        // Throws on (effective) BLOCK to refuse agent startup; demoted BLOCKs
+        // and WARNs are logged loudly and shipped in schemaWarnings.
+        const toolStrict = meta.outputSchemaStrict !== false;
+        let inputSchemaCanonical: string | undefined;
+        let inputSchemaHash: string | undefined;
+        let outputSchemaCanonical: string | undefined;
+        let outputSchemaHash: string | undefined;
+        const combinedWarnings: string[] = [];
+
+        if (meta.inputSchema) {
+          let inputRaw: object | undefined;
+          try {
+            inputRaw = JSON.parse(meta.inputSchema);
+          } catch {
+            // shouldn't happen, but fall through without normalizing
+          }
+          if (inputRaw) {
+            const r = normalizeSchemaWithPolicy(
+              inputRaw,
+              `tool '${name}' input`,
+              clusterStrict,
+              toolStrict
+            );
+            inputSchemaCanonical = r.canonicalJson ?? undefined;
+            inputSchemaHash = r.hash ?? undefined;
+            combinedWarnings.push(...r.warnings);
+          }
+        }
+
+        let outputSchemaJson: string | undefined;
+        if (meta.outputSchemaRaw) {
+          outputSchemaJson = JSON.stringify(meta.outputSchemaRaw);
+          const r = normalizeSchemaWithPolicy(
+            meta.outputSchemaRaw,
+            `tool '${name}' output`,
+            clusterStrict,
+            toolStrict
+          );
+          outputSchemaCanonical = r.canonicalJson ?? undefined;
+          outputSchemaHash = r.hash ?? undefined;
+          combinedWarnings.push(...r.warnings);
+        }
+
         return {
           functionName: name,
           capability: meta.capability,
@@ -704,13 +770,39 @@ export class MeshAgent {
           // Note: tags may contain nested arrays for OR alternatives (TagSpec[])
           // Serialize to JSON for Rust binding - preserves nested structure
           dependencies: meta.dependencies.map(
-            (dep): JsDependencySpec => ({
-              capability: dep.capability,
-              tags: JSON.stringify(dep.tags ?? []),
-              version: dep.version,
-            })
+            (dep): JsDependencySpec => {
+              // Issue #547: normalize per-dep expectedSchemaRaw. There's no
+              // per-tool override on the consumer side (override is producer-
+              // side); we still apply cluster strict so WARN→BLOCK works.
+              let expectedCanonical: string | undefined;
+              let expectedHash: string | undefined;
+              if (dep.expectedSchemaRaw) {
+                const r = normalizeSchemaWithPolicy(
+                  dep.expectedSchemaRaw,
+                  `dependency on '${dep.capability}'`,
+                  clusterStrict,
+                  true
+                );
+                expectedCanonical = r.canonicalJson ?? undefined;
+                expectedHash = r.hash ?? undefined;
+              }
+              return {
+                capability: dep.capability,
+                tags: JSON.stringify(dep.tags ?? []),
+                version: dep.version,
+                expectedSchemaCanonical: expectedCanonical,
+                expectedSchemaHash: expectedHash,
+                matchMode: dep.matchMode,
+              };
+            }
           ),
           inputSchema: meta.inputSchema,
+          outputSchema: outputSchemaJson,
+          inputSchemaCanonical,
+          inputSchemaHash,
+          outputSchemaCanonical,
+          outputSchemaHash,
+          schemaWarnings: combinedWarnings.length > 0 ? combinedWarnings : undefined,
           // LLM filter/provider as JSON strings (matches Python format)
           llmFilter,
           llmProvider,

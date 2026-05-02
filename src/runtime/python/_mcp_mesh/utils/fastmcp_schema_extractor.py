@@ -407,6 +407,117 @@ class FastMCPSchemaExtractor:
         return filtered_schema
 
     @staticmethod
+    def extract_type_schema(t: Any) -> Optional[dict[str, Any]]:
+        """
+        Extract a JSON Schema from a Python type.
+
+        Handles Pydantic models, dataclasses, TypedDict, primitives,
+        Optional, Union. Strips wrapper types per the issue #547 spec:
+        - Awaitable[T] -> T
+        - AsyncIterator[T] -> T
+        - Coroutine[Any, Any, T] -> T
+
+        Used by issue #547 schema registry for both producer output schemas
+        (via extract_output_schema) and consumer expected schemas. Returns
+        None on extraction failure (logged at warning level).
+        """
+        if t is None or t is type(None):
+            return None
+
+        try:
+            from collections.abc import AsyncIterator as AbcAsyncIterator
+            from collections.abc import Awaitable as AbcAwaitable
+            from collections.abc import Coroutine as AbcCoroutine
+            from typing import AsyncIterator, Awaitable, Coroutine
+
+            unwrapped = t
+            for _ in range(4):
+                origin = get_origin(unwrapped)
+                if origin in (
+                    Awaitable,
+                    AbcAwaitable,
+                    AsyncIterator,
+                    AbcAsyncIterator,
+                ):
+                    args = get_args(unwrapped)
+                    if not args:
+                        break
+                    unwrapped = args[0]
+                    continue
+                if origin in (Coroutine, AbcCoroutine):
+                    args = get_args(unwrapped)
+                    if len(args) < 3:
+                        break
+                    unwrapped = args[2]
+                    continue
+                break
+
+            if unwrapped is None or unwrapped is type(None):
+                return None
+
+            from pydantic import BaseModel, TypeAdapter
+
+            # BaseModel detection: prefer direct issubclass, but fall back to
+            # MRO-name inspection. Direct issubclass can return False when the
+            # same BaseModel symbol is reachable via multiple module identities
+            # (e.g. agent auto_run path importing pydantic differently than the
+            # user module did). The MRO-name check sidesteps that mismatch.
+            is_basemodel = inspect.isclass(unwrapped) and (
+                issubclass(unwrapped, BaseModel)
+                or any(b.__name__ == "BaseModel" for b in unwrapped.__mro__)
+            )
+
+            if is_basemodel:
+                # Resolve forward references before extraction. Multi-class files
+                # that cross-reference each other (e.g. Address inside Nested,
+                # Dog/Cat inside WithAnimal) leave TypeAdapter "not fully defined"
+                # until model_rebuild() walks the namespace.
+                try:
+                    unwrapped.model_rebuild()
+                except Exception as rebuild_err:
+                    logger.debug(
+                        f"model_rebuild() noop/failed for "
+                        f"{getattr(unwrapped, '__module__', '?')}."
+                        f"{getattr(unwrapped, '__qualname__', '?')}: {rebuild_err}"
+                    )
+                return unwrapped.model_json_schema()
+
+            return TypeAdapter(unwrapped).json_schema()
+        except Exception as e:
+            type_module = getattr(t, "__module__", "?")
+            type_qualname = getattr(t, "__qualname__", repr(t))
+            logger.warning(
+                f"Failed to extract schema for type {type_module}.{type_qualname}: {e}"
+            )
+            return None
+
+    @staticmethod
+    def extract_output_schema(function: Any) -> Optional[dict[str, Any]]:
+        """
+        Extract JSON Schema for the function's return type.
+
+        Used by issue #547 schema registry; output type is best-effort - many
+        functions don't have explicit return annotations and that's OK.
+
+        Delegates to extract_type_schema for type-to-schema conversion (which
+        handles primitives, Optional, Union, dataclasses, TypedDict,
+        BaseModel subclasses, and async wrapper stripping).
+        """
+        try:
+            sig = inspect.signature(function)
+        except (TypeError, ValueError) as e:
+            logger.debug(
+                f"Cannot inspect signature of {getattr(function, '__name__', '<unknown>')}: {e}"
+            )
+            return None
+
+        return_annotation = sig.return_annotation
+        if return_annotation is inspect.Signature.empty:
+            return None
+
+        return FastMCPSchemaExtractor.extract_type_schema(return_annotation)
+
+    @staticmethod
     def extract_input_schema(function: Any) -> Optional[dict[str, Any]]:
         """
         Extract inputSchema from a function that may have a FastMCP tool attached.

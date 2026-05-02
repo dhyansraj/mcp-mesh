@@ -76,6 +76,50 @@ async def greet(name: str, date_svc: mesh.McpMeshTool = None) -> str:
 | `mesh.McpMeshTool`  | Tool calls via proxy                   |
 | `mesh.MeshLlmAgent` | LLM agent injection (with `@mesh.llm`) |
 
+### Schema-aware capabilities (issue #547)
+
+The mesh can match producers and consumers by their canonical response schemas, not just by capability name. This is opt-in per dependency.
+
+**Producer side** — the output schema is inferred from the function's return type annotation. Use a Pydantic model for highest fidelity:
+
+```python
+from pydantic import BaseModel
+
+class Employee(BaseModel):
+    id: int
+    name: str
+    department: str
+
+@mesh.tool(capability="lookup_employee")
+def lookup_employee(id: int) -> Employee:
+    ...
+```
+
+**Consumer side** — add `expected_type` (and optionally `match_mode`) to the dependency dict:
+
+```python
+@mesh.tool(
+    capability="hr_report",
+    dependencies=[
+        {
+            "capability": "lookup_employee",
+            "expected_type": Employee,
+            "match_mode": "subset",  # or "strict"; defaults to "subset" if expected_type is set
+        },
+    ],
+)
+async def hr_report(employee_lookup: mesh.McpMeshTool = None): ...
+```
+
+**Per-tool strict knob** — set `output_schema_strict=False` on a producer tool to demote a BLOCK schema verdict to a WARN for that one tool. Wins even when the cluster-wide `MCP_MESH_SCHEMA_STRICT=true` env var promotes WARN→BLOCK.
+
+```python
+@mesh.tool(capability="experimental_thing", output_schema_strict=False)
+def experimental(...) -> SomeRecursiveType: ...
+```
+
+See `meshctl man schema-matching` for modes, the cross-language convention table, and verdict tiers. See `meshctl man dependency-injection` for the full filter pipeline.
+
 ## @mesh.llm
 
 Enables LLM-powered tools with automatic tool discovery.

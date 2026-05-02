@@ -4,6 +4,8 @@ import jnr.ffi.Pointer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.function.Function;
 import java.util.function.ToIntFunction;
 
@@ -125,6 +127,90 @@ public final class MeshCoreBridge {
     public static boolean isSimpleSchema(String schemaJson) {
         if (schemaJson == null) return true;
         return callNativeInt(c -> c.mesh_is_simple_schema(schemaJson)) == 1;
+    }
+
+    /**
+     * Normalize a raw JSON Schema into canonical form + SHA256 hash (issue #547).
+     *
+     * <p>Mirrors {@code normalize_schema_py} (Python) and {@code normalizeSchema}
+     * (TypeScript napi). Identical semantic schemas across runtimes (Pydantic,
+     * Zod, Jackson) normalize to the same canonical JSON and produce the same
+     * SHA256 hash, so capability matching reduces to byte-equal hash comparison.
+     *
+     * @param rawJson Raw JSON Schema string
+     * @param origin  Origin runtime hint ("python", "typescript", "java"); may be null
+     * @return Normalized result envelope (never null; on error returns a result
+     *         with verdict="BLOCK" and the cause in warnings)
+     */
+    public static NormalizeResult normalizeSchema(String rawJson, String origin) {
+        if (rawJson == null) {
+            return new NormalizeResult(null, "", "BLOCK", List.of("rawJson is null"));
+        }
+        String envelope = callNativeString(c -> c.mesh_normalize_schema(rawJson, origin));
+        if (envelope == null) {
+            return new NormalizeResult(null, "", "BLOCK", List.of("native normalize_schema returned null"));
+        }
+        return parseNormalizeEnvelope(envelope);
+    }
+
+    private static NormalizeResult parseNormalizeEnvelope(String envelope) {
+        try {
+            tools.jackson.databind.ObjectMapper mapper = MeshObjectMappers.create();
+            tools.jackson.databind.JsonNode root = mapper.readTree(envelope);
+            tools.jackson.databind.JsonNode canonicalNode = root.get("canonical");
+            String canonicalJson = (canonicalNode == null || canonicalNode.isNull())
+                ? null
+                : mapper.writeValueAsString(canonicalNode);
+            String hash = textOrEmpty(root.get("hash"));
+            String verdict = textOrEmpty(root.get("verdict"));
+            List<String> warnings;
+            tools.jackson.databind.JsonNode warningsNode = root.get("warnings");
+            if (warningsNode == null || !warningsNode.isArray()) {
+                warnings = Collections.emptyList();
+            } else {
+                java.util.List<String> tmp = new java.util.ArrayList<>(warningsNode.size());
+                for (tools.jackson.databind.JsonNode w : warningsNode) {
+                    tmp.add(w.asText(""));
+                }
+                warnings = Collections.unmodifiableList(tmp);
+            }
+            return new NormalizeResult(canonicalJson, hash, verdict, warnings);
+        } catch (Exception e) {
+            log.warn("Failed to parse normalize_schema envelope: {}", e.getMessage());
+            return new NormalizeResult(null, "", "BLOCK",
+                List.of("failed to parse envelope: " + e.getMessage()));
+        }
+    }
+
+    private static String textOrEmpty(tools.jackson.databind.JsonNode node) {
+        return (node == null || node.isNull()) ? "" : node.asText("");
+    }
+
+    /**
+     * Result of {@link #normalizeSchema(String, String)}.
+     *
+     * @param canonicalJson Canonical JSON Schema as a serialized JSON string,
+     *                      or null when verdict is "BLOCK"
+     * @param hash          SHA256 content hash in the form "sha256:&lt;hex&gt;",
+     *                      or empty string on BLOCK
+     * @param verdict       "OK", "WARN", or "BLOCK"
+     * @param warnings      Non-null list of warning messages (empty when none)
+     */
+    public record NormalizeResult(
+        String canonicalJson,
+        String hash,
+        String verdict,
+        List<String> warnings
+    ) {
+        /** True when normalization completed without a hard failure. */
+        public boolean isOk() {
+            return !"BLOCK".equals(verdict);
+        }
+
+        /** True when normalization failed and the result must not be used. */
+        public boolean isBlocked() {
+            return "BLOCK".equals(verdict);
+        }
     }
 
     // =========================================================================

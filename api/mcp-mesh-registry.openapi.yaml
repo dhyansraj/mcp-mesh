@@ -39,6 +39,8 @@ tags:
     description: Dependency resolution and discovery
   - name: events
     description: Registry event history (lifecycle and dependency-resolution audit)
+  - name: schemas
+    description: Canonical schema registry (issue #547)
 paths:
   /health:
     get:
@@ -296,6 +298,75 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /schemas:
+    get:
+      tags: [schemas]
+      summary: List registered canonical schemas
+      description: |
+        Returns the content-addressed schema entries persisted in the registry.
+        Issue #547. Used by `meshctl list --schemas` and `meshctl schema diff`.
+      operationId: listSchemas
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+          description: Maximum number of schemas to return.
+      responses:
+        "200":
+          description: Schema entries listing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SchemaEntriesResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /schemas/{hash}:
+    get:
+      tags: [schemas]
+      summary: Get a single canonical schema by content hash
+      description: |
+        Returns the canonical normalized JSON Schema for the given content hash.
+        Issue #547. Used by `meshctl schema diff` to fetch both sides of a
+        comparison.
+      operationId: getSchema
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^sha256:[0-9a-f]{64}$"
+          description: Content hash (sha256:<hex>)
+      responses:
+        "200":
+          description: Schema entry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SchemaEntryInfo"
+        "404":
+          description: Schema not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   # Note: /proxy/{target} endpoint is implemented as an operational endpoint
   # (not in OpenAPI) because it requires wildcard path matching which OpenAPI
   # path parameters don't support. See server.go setupOperationalEndpoints().
@@ -451,6 +522,45 @@ components:
               X-API-Version: v2
             streaming: true
             auth_required: true
+        outputSchema:
+          type: object
+          additionalProperties: true
+          description: |
+            Raw JSON Schema for function return value (MCP tool format).
+            Auto-generated from return type annotation by FastMCP / Pydantic / Zod / Jackson.
+            Used for debugging; the canonical form (outputSchemaCanonical) is what the
+            registry indexes for capability matching.
+        inputSchemaCanonical:
+          type: object
+          additionalProperties: true
+          description: |
+            Canonical normalized JSON Schema for function input AFTER stripping mesh DI parameters.
+            Produced by the Rust schema_normalizer. Content-addressed by inputSchemaHash.
+            This is the contract used for cross-runtime capability matching.
+        inputSchemaHash:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+          description: |
+            SHA256 hash of inputSchemaCanonical (format "sha256:<hex>"). Used as
+            content-addressed key into the schemas table. Two tools with the same
+            hash have structurally identical input schemas.
+        outputSchemaCanonical:
+          type: object
+          additionalProperties: true
+          description: |
+            Canonical normalized JSON Schema for function output. See inputSchemaCanonical.
+        outputSchemaHash:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+          description: |
+            SHA256 hash of outputSchemaCanonical (format "sha256:<hex>").
+        schemaWarnings:
+          type: array
+          items:
+            type: string
+          description: |
+            Normalizer warnings (e.g., "stripped additionalProperties: true").
+            Surfaced via meshctl status. Empty list when no warnings.
 
     MeshToolDependencyRegistration:
       type: object
@@ -489,6 +599,28 @@ components:
           default: "default"
           example: "default"
           description: Namespace filter
+        expectedSchemaCanonical:
+          type: object
+          additionalProperties: true
+          description: |
+            Optional canonical normalized JSON Schema for the expected response type.
+            Produced by the Rust schema_normalizer from the consumer's declared type
+            (e.g., from a Pydantic model passed via mesh.Dependency(expected_type=...)).
+            When present together with matchMode, the registry filters out producers
+            whose outputSchemaCanonical doesn't satisfy the consumer's expectation.
+        expectedSchemaHash:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+          description: |
+            SHA256 hash of expectedSchemaCanonical.
+        matchMode:
+          type: string
+          enum: [subset, strict]
+          description: |
+            Schema compatibility mode:
+              - subset: producer's output must contain all fields the consumer requires (default semantics)
+              - strict: full match (list-order-insensitive, with cross-runtime type relaxation)
+            Omit this field to skip schema-based filtering entirely (current behavior).
       additionalProperties: false
 
     LLMProvider:
@@ -1818,3 +1950,46 @@ components:
           minimum: 0
           example: 25
           description: Number of events returned
+
+    # Schema registry (issue #547) — content-addressed canonical schemas.
+    SchemaEntryInfo:
+      type: object
+      required: [hash, canonical, runtime_origin, created_at]
+      description: |
+        A single canonical normalized JSON Schema entry persisted in the
+        registry's `schema_entries` table. Schemas are content-addressed by
+        sha256 hash; identical canonical content always shares one row.
+      properties:
+        hash:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+          description: Content hash (sha256:<hex>)
+        canonical:
+          type: object
+          additionalProperties: true
+          description: Canonical normalized JSON Schema
+        runtime_origin:
+          type: string
+          enum: [python, typescript, java, unknown]
+          description: |
+            Runtime that first produced this canonical form. Informational only —
+            content-addressed dedup means subsequent runtimes share the row.
+        created_at:
+          type: string
+          format: date-time
+          description: When this canonical schema was first registered
+
+    SchemaEntriesResponse:
+      type: object
+      required: [schemas, count]
+      description: Response containing canonical schema entries
+      properties:
+        schemas:
+          type: array
+          items:
+            $ref: "#/components/schemas/SchemaEntryInfo"
+          description: Schema entries, most recent first
+        count:
+          type: integer
+          minimum: 0
+          description: Number of schemas in this response (≤ limit)

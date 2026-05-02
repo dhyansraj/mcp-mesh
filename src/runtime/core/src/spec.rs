@@ -19,15 +19,45 @@ pub struct DependencySpec {
 
     /// Version constraint (e.g., ">=2.0.0")
     pub version: Option<String>,
+
+    /// Canonical normalized expected-response schema (consumer side, post-normalize) - serialized JSON string
+    pub expected_schema_canonical: Option<String>,
+
+    /// SHA256 hash (sha256:<hex>) of expected_schema_canonical
+    pub expected_schema_hash: Option<String>,
+
+    /// Schema match mode: "subset" (default semantics) or "strict". None = no schema check.
+    pub match_mode: Option<String>,
 }
 
 #[cfg(feature = "python")]
 #[pymethods]
 impl DependencySpec {
     #[new]
-    #[pyo3(signature = (capability, tags=None, version=None))]
-    pub fn py_new(capability: String, tags: Option<String>, version: Option<String>) -> Self {
-        Self::new(capability, tags, version)
+    #[pyo3(signature = (
+        capability,
+        tags=None,
+        version=None,
+        expected_schema_canonical=None,
+        expected_schema_hash=None,
+        match_mode=None
+    ))]
+    pub fn py_new(
+        capability: String,
+        tags: Option<String>,
+        version: Option<String>,
+        expected_schema_canonical: Option<String>,
+        expected_schema_hash: Option<String>,
+        match_mode: Option<String>,
+    ) -> Self {
+        Self::new(
+            capability,
+            tags,
+            version,
+            expected_schema_canonical,
+            expected_schema_hash,
+            match_mode,
+        )
     }
 
     fn __repr__(&self) -> String {
@@ -37,11 +67,21 @@ impl DependencySpec {
 
 impl DependencySpec {
     /// Create a new DependencySpec (language-agnostic)
-    pub fn new(capability: String, tags: Option<String>, version: Option<String>) -> Self {
+    pub fn new(
+        capability: String,
+        tags: Option<String>,
+        version: Option<String>,
+        expected_schema_canonical: Option<String>,
+        expected_schema_hash: Option<String>,
+        match_mode: Option<String>,
+    ) -> Self {
         Self {
             capability,
             tags: tags.unwrap_or_else(|| "[]".to_string()),
             version,
+            expected_schema_canonical,
+            expected_schema_hash,
+            match_mode,
         }
     }
 }
@@ -71,6 +111,24 @@ pub struct ToolSpec {
     /// JSON Schema for input parameters (MCP format) - serialized JSON string
     pub input_schema: Option<String>,
 
+    /// Raw JSON Schema for output (return type) - serialized JSON string
+    pub output_schema: Option<String>,
+
+    /// Canonical normalized input schema (post-DI-strip, post-normalize) - serialized JSON string
+    pub input_schema_canonical: Option<String>,
+
+    /// SHA256 hash (sha256:<hex>) of input_schema_canonical
+    pub input_schema_hash: Option<String>,
+
+    /// Canonical normalized output schema - serialized JSON string
+    pub output_schema_canonical: Option<String>,
+
+    /// SHA256 hash (sha256:<hex>) of output_schema_canonical
+    pub output_schema_hash: Option<String>,
+
+    /// Normalizer warnings (list of strings)
+    pub schema_warnings: Option<Vec<String>>,
+
     /// LLM filter specification (for @mesh.llm decorated functions) - serialized JSON string
     pub llm_filter: Option<String>,
 
@@ -93,6 +151,12 @@ impl ToolSpec {
         tags=None,
         dependencies=None,
         input_schema=None,
+        output_schema=None,
+        input_schema_canonical=None,
+        input_schema_hash=None,
+        output_schema_canonical=None,
+        output_schema_hash=None,
+        schema_warnings=None,
         llm_filter=None,
         llm_provider=None,
         kwargs=None
@@ -106,6 +170,12 @@ impl ToolSpec {
         tags: Option<Vec<String>>,
         dependencies: Option<Vec<DependencySpec>>,
         input_schema: Option<String>,
+        output_schema: Option<String>,
+        input_schema_canonical: Option<String>,
+        input_schema_hash: Option<String>,
+        output_schema_canonical: Option<String>,
+        output_schema_hash: Option<String>,
+        schema_warnings: Option<Vec<String>>,
         llm_filter: Option<String>,
         llm_provider: Option<String>,
         kwargs: Option<String>,
@@ -118,6 +188,12 @@ impl ToolSpec {
             tags,
             dependencies,
             input_schema,
+            output_schema,
+            input_schema_canonical,
+            input_schema_hash,
+            output_schema_canonical,
+            output_schema_hash,
+            schema_warnings,
             llm_filter,
             llm_provider,
             kwargs,
@@ -143,6 +219,12 @@ impl ToolSpec {
         tags: Option<Vec<String>>,
         dependencies: Option<Vec<DependencySpec>>,
         input_schema: Option<String>,
+        output_schema: Option<String>,
+        input_schema_canonical: Option<String>,
+        input_schema_hash: Option<String>,
+        output_schema_canonical: Option<String>,
+        output_schema_hash: Option<String>,
+        schema_warnings: Option<Vec<String>>,
         llm_filter: Option<String>,
         llm_provider: Option<String>,
         kwargs: Option<String>,
@@ -155,6 +237,12 @@ impl ToolSpec {
             tags: tags.unwrap_or_default(),
             dependencies: dependencies.unwrap_or_default(),
             input_schema,
+            output_schema,
+            input_schema_canonical,
+            input_schema_hash,
+            output_schema_canonical,
+            output_schema_hash,
+            schema_warnings,
             llm_filter,
             llm_provider,
             kwargs,
@@ -701,9 +789,15 @@ mod tests {
                 "".to_string(),
                 None,
                 Some(vec![
-                    DependencySpec::new("date-service".to_string(), None, None),
-                    DependencySpec::new("weather-service".to_string(), None, None),
+                    DependencySpec::new("date-service".to_string(), None, None, None, None, None),
+                    DependencySpec::new("weather-service".to_string(), None, None, None, None, None),
                 ]),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
                 None,
                 None,
                 None,
@@ -715,7 +809,13 @@ mod tests {
                 "1.0.0".to_string(),
                 "".to_string(),
                 None,
-                Some(vec![DependencySpec::new("date-service".to_string(), None, None)]),
+                Some(vec![DependencySpec::new("date-service".to_string(), None, None, None, None, None)]),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
                 None,
                 None,
                 None,

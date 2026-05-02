@@ -8,14 +8,15 @@ import (
 // Candidate represents a potential dependency provider.
 // This consolidates the repeated anonymous struct definitions throughout the codebase.
 type Candidate struct {
-	AgentID      string
-	FunctionName string
-	Capability   string
-	Version      string
-	Tags         []string
-	HttpHost     string
-	HttpPort     int
-	EntityID     string // Non-empty when agent registered with TLS cert
+	AgentID          string
+	FunctionName     string
+	Capability       string
+	Version          string
+	Tags             []string
+	HttpHost         string
+	HttpPort         int
+	EntityID         string // Non-empty when agent registered with TLS cert
+	OutputSchemaHash string // sha256:<hex>; empty if producer didn't send a schema
 }
 
 // ScoredCandidate adds priority scoring to Candidate for ranking.

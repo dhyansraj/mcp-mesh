@@ -3,8 +3,10 @@ package io.mcpmesh.spring;
 import io.mcpmesh.MediaParam;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
+import io.mcpmesh.SchemaMode;
 import io.mcpmesh.Selector;
 import io.mcpmesh.core.AgentSpec;
+import io.mcpmesh.core.MeshCoreBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.json.JsonMapper;
@@ -36,6 +38,11 @@ public class MeshToolRegistry {
     public void registerTool(Object bean, Method method, MeshTool annotation) {
         String capability = annotation.capability();
 
+        Class<?> outputType = annotation.outputType();
+        if (outputType == Void.class || outputType == void.class) {
+            outputType = null;
+        }
+
         ToolMetadata metadata = new ToolMetadata(
             capability,
             annotation.description(),
@@ -43,6 +50,9 @@ public class MeshToolRegistry {
             Arrays.asList(annotation.tags()),
             extractDependencies(annotation.dependencies()),
             extractInputSchema(method),
+            outputType,
+            // Issue #547 Phase 4: per-tool override (default true = current behavior).
+            annotation.outputSchemaStrict(),
             bean,
             method
         );
@@ -60,6 +70,10 @@ public class MeshToolRegistry {
         List<AgentSpec.ToolSpec> specs = new ArrayList<>();
         var jsonMapper = JsonMapper.builder().build();
 
+        // Issue #547 Phase 4: cluster-wide strict knob (env var). Per-tool
+        // override is read from each tool's metadata inside the loop.
+        boolean clusterStrict = MeshSchemaSupport.clusterStrictEnabled();
+
         for (ToolMetadata meta : tools.values()) {
             AgentSpec.ToolSpec spec = new AgentSpec.ToolSpec();
             spec.setFunctionName(meta.method().getName());
@@ -68,11 +82,47 @@ public class MeshToolRegistry {
             spec.setVersion(meta.version());
             spec.setTags(meta.tags());
 
-            // Convert input schema Map to JSON string
+            // Convert input schema Map to JSON string. The input schema is built
+            // from @Param annotations only, so mesh DI parameters (McpMeshTool /
+            // MeshLlmAgent) are already excluded by construction (#547).
+            String inputSchemaJson;
             try {
-                spec.setInputSchema(jsonMapper.writeValueAsString(meta.inputSchema()));
+                inputSchemaJson = jsonMapper.writeValueAsString(meta.inputSchema());
             } catch (Exception e) {
-                spec.setInputSchema("{}");
+                inputSchemaJson = "{}";
+            }
+            spec.setInputSchema(inputSchemaJson);
+
+            // Issue #547 / Phase 4: normalize input + output schemas via Rust core
+            // and apply the verdict policy (cluster strict + per-tool override).
+            List<String> warnings = new ArrayList<>();
+            String contextBase = "tool '" + meta.capability() + "'";
+            boolean toolStrict = meta.outputSchemaStrict();
+
+            MeshCoreBridge.NormalizeResult inputResult = MeshSchemaSupport.normalizeWithPolicy(
+                inputSchemaJson, "java", contextBase + " input", clusterStrict, toolStrict);
+            if (inputResult != null) {
+                spec.setInputSchemaCanonical(inputResult.canonicalJson());
+                spec.setInputSchemaHash(inputResult.hash());
+                MeshSchemaSupport.mergeWarnings(warnings, inputResult.warnings());
+            }
+
+            if (meta.outputType() != null) {
+                String outputSchemaJson = MeshSchemaSupport.generateRawSchemaJson(meta.outputType());
+                if (outputSchemaJson != null) {
+                    spec.setOutputSchema(outputSchemaJson);
+                    MeshCoreBridge.NormalizeResult outputResult = MeshSchemaSupport.normalizeWithPolicy(
+                        outputSchemaJson, "java", contextBase + " output", clusterStrict, toolStrict);
+                    if (outputResult != null) {
+                        spec.setOutputSchemaCanonical(outputResult.canonicalJson());
+                        spec.setOutputSchemaHash(outputResult.hash());
+                        MeshSchemaSupport.mergeWarnings(warnings, outputResult.warnings());
+                    }
+                }
+            }
+
+            if (!warnings.isEmpty()) {
+                spec.setSchemaWarnings(warnings);
             }
 
             // Add dependencies to the tool spec
@@ -85,6 +135,7 @@ public class MeshToolRegistry {
                     depSpec.setTags("[]");
                 }
                 depSpec.setVersion(dep.version());
+                applySchemaMatching(depSpec, dep, clusterStrict);
                 spec.getDependencies().add(depSpec);
             }
 
@@ -120,6 +171,7 @@ public class MeshToolRegistry {
      */
     public List<AgentSpec.DependencySpec> getDependencySpecs() {
         List<AgentSpec.DependencySpec> deps = new ArrayList<>();
+        boolean clusterStrict = MeshSchemaSupport.clusterStrictEnabled();
 
         for (ToolMetadata meta : tools.values()) {
             for (DependencyInfo dep : meta.dependencies()) {
@@ -133,6 +185,7 @@ public class MeshToolRegistry {
                     spec.setTags("[]");
                 }
                 spec.setVersion(dep.version());
+                applySchemaMatching(spec, dep, clusterStrict);
                 deps.add(spec);
             }
         }
@@ -144,14 +197,67 @@ public class MeshToolRegistry {
         List<DependencyInfo> deps = new ArrayList<>();
         for (Selector sel : selectors) {
             if (!sel.capability().isEmpty()) {
+                Class<?> expectedType = sel.expectedType();
+                if (expectedType == Void.class || expectedType == void.class) {
+                    expectedType = null;
+                }
                 deps.add(new DependencyInfo(
                     sel.capability(),
                     Arrays.asList(sel.tags()),
-                    sel.version()
+                    sel.version(),
+                    expectedType,
+                    sel.schemaMode()
                 ));
             }
         }
         return deps;
+    }
+
+    /**
+     * Apply issue #547 schema-aware matching fields to the outgoing AgentSpec
+     * dependency. Mirrors {@code MeshRouteRegistry.applySchemaMatching}:
+     *
+     * <ul>
+     *   <li>{@code expectedType} set, {@code schemaMode} unset → default mode SUBSET</li>
+     *   <li>{@code schemaMode} set, {@code expectedType} unset → log warning, no schema check</li>
+     *   <li>{@code expectedType} set + {@code schemaMode} != NONE → normalize and ship</li>
+     *   <li>both unset → backward-compatible no-op</li>
+     * </ul>
+     *
+     * <p>Phase 4: cluster-wide strict knob promotes WARN→BLOCK on the consumer
+     * side too. There's no per-tool override here — the override is producer-side.
+     */
+    private static void applySchemaMatching(
+            AgentSpec.DependencySpec target, DependencyInfo source, boolean clusterStrict) {
+        Class<?> expectedType = source.expectedType();
+        SchemaMode mode = source.schemaMode();
+        boolean modeRequested = mode != null && mode != SchemaMode.NONE;
+
+        if (expectedType == null && !modeRequested) {
+            return;
+        }
+        if (expectedType == null) {
+            log.warn("Dependency '{}' sets schemaMode={} but no expectedType — ignoring schema match",
+                source.capability(), mode);
+            return;
+        }
+        SchemaMode effectiveMode = modeRequested ? mode : SchemaMode.SUBSET;
+
+        String rawJson = MeshSchemaSupport.generateRawSchemaJson(expectedType);
+        if (rawJson == null) {
+            log.warn("Dependency '{}': failed to generate JSON Schema for expectedType {} — skipping schema match",
+                source.capability(), expectedType.getName());
+            return;
+        }
+        MeshCoreBridge.NormalizeResult result = MeshSchemaSupport.normalizeWithPolicy(
+            rawJson, "java", "dependency '" + source.capability() + "' expected schema",
+            clusterStrict, true);
+        if (result == null) {
+            return;
+        }
+        target.setExpectedSchemaCanonical(result.canonicalJson());
+        target.setExpectedSchemaHash(result.hash());
+        target.setMatchMode(effectiveMode == SchemaMode.STRICT ? "strict" : "subset");
     }
 
     private Map<String, Object> extractInputSchema(Method method) {
@@ -217,6 +323,13 @@ public class MeshToolRegistry {
 
     /**
      * Metadata about a registered tool.
+     *
+     * <p>{@code outputType} is the optional return type from {@link MeshTool#outputType()},
+     * used for output-schema generation (issue #547). Null when the user did not opt in.
+     *
+     * <p>{@code outputSchemaStrict} mirrors {@link MeshTool#outputSchemaStrict()} —
+     * when false, BLOCK verdicts for this tool are demoted to WARN instead of
+     * refusing startup (issue #547 Phase 4).
      */
     public record ToolMetadata(
         String capability,
@@ -225,16 +338,29 @@ public class MeshToolRegistry {
         List<String> tags,
         List<DependencyInfo> dependencies,
         Map<String, Object> inputSchema,
+        Class<?> outputType,
+        boolean outputSchemaStrict,
         Object bean,
         Method method
     ) {}
 
     /**
      * Information about a tool dependency.
+     *
+     * <p>{@code expectedType} and {@code schemaMode} carry the issue #547
+     * schema-aware matching opt-in from {@link Selector#expectedType()} and
+     * {@link Selector#schemaMode()}. {@code expectedType} is null when not set;
+     * {@code schemaMode} defaults to {@link SchemaMode#NONE}.
      */
     public record DependencyInfo(
         String capability,
         List<String> tags,
-        String version
-    ) {}
+        String version,
+        Class<?> expectedType,
+        SchemaMode schemaMode
+    ) {
+        public DependencyInfo(String capability, List<String> tags, String version) {
+            this(capability, tags, version, null, SchemaMode.NONE);
+        }
+    }
 }

@@ -1,0 +1,81 @@
+# Test Case: tc12 - Strict-mode evicts mismatched hash, dep stays unresolved
+# Issue #547 Phase 4: strict mode rejects any non-equal canonical hash.
+#
+# Only producer-bad-py (Hardware) is running; consumer expects Employee with
+# match_mode="strict". Hash mismatch -> evict at schema stage with details
+# {mode: "strict", consumer_hash != producer_hash}; dep remains unresolved.
+
+name: "Schema Registry: strict-mode evicts on hash mismatch (no candidate left)"
+description: "Strict-mode consumer evicts producer-bad and leaves dep unresolved"
+tags:
+  - schema_registry
+  - py
+  - strict
+  - unresolved
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy producer-bad + consumer to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/schema-py
+      cp /uc-artifacts/schema-py/producer_bad.py /workspace/schema-py/
+      cp /uc-artifacts/schema-py/consumer.py /workspace/schema-py/
+
+  - name: "Flip consumer match_mode to strict"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/"match_mode": "subset"/"match_mode": "strict"/g' /workspace/schema-py/consumer.py
+      grep -n match_mode /workspace/schema-py/consumer.py
+
+  - name: "Start producer-bad"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/producer_bad.py -d"
+
+  - name: "Wait for producer"
+    handler: wait
+    seconds: 10
+
+  - name: "Start consumer (strict)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/consumer.py -d"
+
+  - name: "Wait for consumer + resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Audit consumer JSON"
+    handler: shell
+    workdir: /workspace
+    command: meshctl audit consumer-py --json --function lookup_with_schema --dep 0
+    capture: audit_json
+
+assertions:
+  - expr: "${captured.agent_list} contains 'producer-bad-py'"
+  - expr: "${captured.agent_list} contains 'consumer-py'"
+  - expr: ${jq:captured.audit_json:.events[0].event_type} == 'dependency_unresolved'
+    message: "Strict-mode hash mismatch should result in dependency_unresolved"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].reason} == 'SchemaIncompatible'
+    message: "producer-bad should be evicted at schema stage in strict mode"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].details.mode} == 'strict'
+    message: "Eviction details.mode must be 'strict'"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

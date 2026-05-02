@@ -5,6 +5,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import type { McpMeshTool, DependencyKwargs, DependencySpec, NormalizedDependency } from "./types.js";
 import type { TraceContext } from "./tracing.js";
 import {
@@ -596,14 +597,44 @@ function sleep(ms: number): Promise<void> {
 /**
  * Normalize a DependencySpec to canonical form.
  * Handles both simple string dependencies and full specs with tag-level OR alternatives.
+ *
+ * Issue #547: when expectedSchema (Zod) is supplied, eagerly extract the raw
+ * JSON Schema (cheap) but defer Rust-normalizer invocation to the heartbeat
+ * pipeline (Python parity). matchMode defaults to "subset" when expectedSchema
+ * is set; a matchMode without expectedSchema logs a warning and is dropped.
  */
 export function normalizeDependency(dep: DependencySpec): NormalizedDependency {
   if (typeof dep === "string") {
     return { capability: dep, tags: [] };
   }
-  return {
+  const result: NormalizedDependency = {
     capability: dep.capability,
     tags: dep.tags ?? [],
     version: dep.version,
   };
+
+  if (dep.expectedSchema !== undefined) {
+    let raw: object | undefined;
+    try {
+      // $refStrategy: "root" so recursive expectedSchema definitions survive
+      // (mirrors agent.ts producer-side conversion).
+      raw = zodToJsonSchema(dep.expectedSchema, { $refStrategy: "root" }) as object;
+    } catch (err) {
+      console.warn(
+        `[mesh] dependency '${dep.capability}': failed to convert expectedSchema to JSON Schema: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+    if (raw !== undefined) {
+      result.expectedSchemaRaw = raw;
+      result.matchMode = dep.matchMode ?? "subset";
+    }
+  } else if (dep.matchMode !== undefined) {
+    console.warn(
+      `[mesh] dependency '${dep.capability}': matchMode set but no expectedSchema; schema check will be skipped`
+    );
+  }
+
+  return result;
 }

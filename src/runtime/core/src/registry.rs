@@ -164,6 +164,18 @@ pub struct ToolRegistration {
     pub dependencies: Vec<DependencyRegistration>,
     #[serde(rename = "inputSchema", skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<serde_json::Value>,
+    #[serde(rename = "outputSchema", skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
+    #[serde(rename = "inputSchemaCanonical", skip_serializing_if = "Option::is_none")]
+    pub input_schema_canonical: Option<serde_json::Value>,
+    #[serde(rename = "inputSchemaHash", skip_serializing_if = "Option::is_none")]
+    pub input_schema_hash: Option<String>,
+    #[serde(rename = "outputSchemaCanonical", skip_serializing_if = "Option::is_none")]
+    pub output_schema_canonical: Option<serde_json::Value>,
+    #[serde(rename = "outputSchemaHash", skip_serializing_if = "Option::is_none")]
+    pub output_schema_hash: Option<String>,
+    #[serde(rename = "schemaWarnings", skip_serializing_if = "Option::is_none")]
+    pub schema_warnings: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub llm_filter: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -181,6 +193,12 @@ pub struct DependencyRegistration {
     pub tags: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    #[serde(rename = "expectedSchemaCanonical", skip_serializing_if = "Option::is_none")]
+    pub expected_schema_canonical: Option<serde_json::Value>,
+    #[serde(rename = "expectedSchemaHash", skip_serializing_if = "Option::is_none")]
+    pub expected_schema_hash: Option<String>,
+    #[serde(rename = "matchMode", skip_serializing_if = "Option::is_none")]
+    pub match_mode: Option<String>,
 }
 
 /// Helper to check if tags array is empty
@@ -242,9 +260,18 @@ impl HeartbeatRequest {
                         // Parse tags JSON string to Value for nested array support
                         tags: serde_json::from_str(&d.tags).unwrap_or(serde_json::Value::Array(vec![])),
                         version: d.version.clone(),
+                        expected_schema_canonical: d.expected_schema_canonical.as_ref().and_then(|s| serde_json::from_str(s).ok()),
+                        expected_schema_hash: d.expected_schema_hash.clone(),
+                        match_mode: d.match_mode.clone(),
                     })
                     .collect(),
                 input_schema: t.input_schema.as_ref().and_then(|s| serde_json::from_str(s).ok()),
+                output_schema: t.output_schema.as_ref().and_then(|s| serde_json::from_str(s).ok()),
+                input_schema_canonical: t.input_schema_canonical.as_ref().and_then(|s| serde_json::from_str(s).ok()),
+                input_schema_hash: t.input_schema_hash.clone(),
+                output_schema_canonical: t.output_schema_canonical.as_ref().and_then(|s| serde_json::from_str(s).ok()),
+                output_schema_hash: t.output_schema_hash.clone(),
+                schema_warnings: t.schema_warnings.clone(),
                 llm_filter: t.llm_filter.as_ref().and_then(|f| serde_json::from_str(f).ok()),
                 llm_provider: t.llm_provider.as_ref().and_then(|p| serde_json::from_str(p).ok()),
                 kwargs: t.kwargs.as_ref().and_then(|k| serde_json::from_str(k).ok()),
@@ -556,6 +583,12 @@ mod tests {
                 "1.0.0".to_string(),
                 "Greeting tool".to_string(),
                 Some(vec!["utility".to_string()]),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
                 None,
                 None,
                 None,

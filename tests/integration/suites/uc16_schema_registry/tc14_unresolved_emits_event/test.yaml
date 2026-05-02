@@ -1,0 +1,74 @@
+# Test Case: tc14 - Unresolved dep emits event when only producer-bad is up
+# Issue #547 Phase 4: dependency_unresolved event for schema eviction.
+#
+# consumer-py (subset, expects Employee) + ONLY producer-bad-py running.
+# After eviction the candidate set is empty -> dependency_unresolved event.
+# meshctl list output should reflect partially-resolved deps for the consumer.
+
+name: "Schema Registry: unresolved dep emits dependency_unresolved event"
+description: "When schema stage evicts the only candidate, registry emits dependency_unresolved"
+tags:
+  - schema_registry
+  - py
+  - subset
+  - unresolved
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy producer-bad + consumer to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/schema-py
+      cp /uc-artifacts/schema-py/producer_bad.py /workspace/schema-py/
+      cp /uc-artifacts/schema-py/consumer.py /workspace/schema-py/
+
+  - name: "Start producer-bad"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/producer_bad.py -d"
+
+  - name: "Wait for producer"
+    handler: wait
+    seconds: 10
+
+  - name: "Start consumer (subset)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/consumer.py -d"
+
+  - name: "Wait for consumer + resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Audit consumer JSON"
+    handler: shell
+    workdir: /workspace
+    command: meshctl audit consumer-py --json --function lookup_with_schema --dep 0
+    capture: audit_json
+
+assertions:
+  - expr: "${captured.agent_list} contains 'producer-bad-py'"
+  - expr: "${captured.agent_list} contains 'consumer-py'"
+  - expr: ${jq:captured.audit_json:.events[0].event_type} == 'dependency_unresolved'
+    message: "Last event should be dependency_unresolved when no candidate survives schema stage"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].reason} == 'SchemaIncompatible'
+    message: "Eviction reason must be SchemaIncompatible"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].id} contains 'producer-bad-py'
+    message: "Evicted candidate id should reference producer-bad-py"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -1,0 +1,1 @@
+{"properties":{"value":{"anyOf":[{"type":"string"},{"type":"integer"}],"title":"Value"}},"required":["value"],"title":"WithEither","type":"object"}

@@ -1,0 +1,259 @@
+# Test Case: tc16 - Cross-runtime canonical-form parity for the 12-pattern corpus
+# Issue #547 Phase 7 — HEADLINE INTEGRATION PROOF.
+#
+# Three multi-pattern producer agents (Python + TypeScript + Java) each declare
+# twelve tools, one per pattern from the spike's 12-pattern matrix:
+#
+#   1.  Primitives             7.  CaseConversion
+#   2.  Optional               8.  DiscriminatedUnion
+#   3.  WithDate               9.  Recursive
+#   4.  WithEnum               10. Inheritance
+#   5.  Nested                 11. NumberConstraints
+#   6.  WithArray              12. UntaggedUnion (EXCLUDED — see note below)
+#
+# After registration, the registry's content-addressed schema_entries table
+# (exposed via GET /schemas, used by `meshctl list --schemas --json`) deduplicates
+# identical canonical bytes by sha256 hash. With 33 producer tools across the
+# 11 cross-runtime patterns (plus UntaggedUnion's 3 inherently-divergent tools),
+# we expect at most 11 distinct *output* hashes from the parity-asserted set.
+#
+# Cross-runtime hash equality is already validated at the Rust normalizer unit
+# level (49 cargo tests in src/runtime/core/src/schema_normalize.rs). This test
+# proves the same parity holds end-to-end through real agents → registry pipeline.
+#
+# UntaggedUnion exclusion: Java has no native union type — the corpus uses
+# {@code Object} as the field type, so Jackson's schema generator emits an open
+# shape ({}) rather than {@code anyOf:[string,integer]}. Per the Phase 0 spike's
+# notes, this pattern is fundamentally untranslatable to Java and was flagged
+# as fragile. We therefore exclude it from cross-runtime parity assertions.
+# A future tc17 (py↔ts only) could probe the shared union case if needed.
+#
+# Per-pattern probe strategy: for each remaining pattern, filter .schemas by a
+# distinguishing canonical predicate (truthy {@code select(...)} only — see note
+# on tsuite jq substitution below) and assert exactly ONE distinct hash exists.
+# If any pattern's hashes diverge across runtimes, the per-pattern assertion's
+# message points to which one broke.
+#
+# tsuite jq substitution note: the {@code ${jq:captured.X:.expr}} template
+# mishandles nested {@code ==} comparisons and array-literal matches like
+# {@code keys == ["role"]}, returning {@code <nil>}. All predicates below use
+# truthy {@code select(...)} filters and emit {@code | tostring} so the outer
+# operator compares strings (e.g. {@code == '1'}) — the safe shape.
+#
+# Spike reference: ~/workspace/schema-spike-547/results.md (all 12 confirmed match
+# at the spike level; tc16 asserts parity for 11 — UntaggedUnion is py↔ts only).
+
+name: "Schema Registry: 12-pattern corpus cross-runtime hash parity"
+description: "Validates Phase 0 spike's 12-pattern matrix end-to-end through real agents (issue #547 Phase 7)"
+tags:
+  - schema_registry
+  - cross_runtime
+  - corpus
+  - py
+  - ts
+  - java
+  - slow
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_typescript_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy corpus agents to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -r /uc-artifacts/corpus-py /workspace/
+      cp -r /uc-artifacts/corpus-ts /workspace/
+      cp -r /uc-artifacts/corpus-java /workspace/
+      ls -la /workspace/corpus-py/ /workspace/corpus-ts/ /workspace/corpus-java/
+
+  - name: "Install TypeScript dependencies"
+    handler: npm-install
+    path: /workspace/corpus-ts
+
+  - name: "Install Maven dependencies for corpus-java"
+    handler: maven-install
+    path: /workspace/corpus-java
+    timeout: 600
+
+  - name: "Start corpus-py (port 9200)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start corpus-py/main.py -d"
+
+  - name: "Start corpus-ts (port 9210)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start corpus-ts/index.ts -d"
+
+  - name: "Start corpus-java"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/corpus-java -d"
+
+  - name: "Wait for all three corpus producers to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 80); do
+        LIST=$(meshctl list 2>/dev/null || true)
+        if echo "$LIST" | grep -q "corpus-py" \
+           && echo "$LIST" | grep -q "corpus-ts" \
+           && echo "$LIST" | grep -q "corpus-java"; then
+          echo "All three corpus producers registered after $((i*3))s"
+          # Let registry persist all 36 schema_entries rows
+          sleep 8
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Not all corpus producers registered after 240s"
+      meshctl list 2>&1 || true
+      exit 1
+    capture: wait_producers
+    timeout: 270
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Capture all schema entries from registry"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list --schemas --limit 500 --json
+    capture: schemas_json
+
+  # Smoke: print summary of distinct hashes + properties for diagnostics
+  - name: "Diagnostic: show per-hash property summary"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl list --schemas --limit 500 --json | jq -r \
+        '.schemas | sort_by(.hash) | .[] | "\(.hash[0:24])  origin=\(.runtime_origin)  props=\(.canonical.properties // .canonical | keys | join(","))"'
+    capture: hash_summary
+    ignore_errors: true
+
+assertions:
+  # ============================================================================
+  # All three producers registered (sanity)
+  # ============================================================================
+  - expr: "${captured.agent_list} contains 'corpus-py'"
+    message: "Python corpus producer must be registered"
+  - expr: "${captured.agent_list} contains 'corpus-ts'"
+    message: "TypeScript corpus producer must be registered"
+  - expr: "${captured.agent_list} contains 'corpus-java'"
+    message: "Java corpus producer must be registered"
+
+  # ============================================================================
+  # HEADLINE PROOF: distinct schema count is bounded.
+  #
+  # 11 distinct output canonical hashes (patterns 1-11, deduped across runtimes)
+  # + ~3 UntaggedUnion hashes (one per runtime — Java diverges by design)
+  # + 1 distinct input hash (all 36 tools take no parameters → identical empty input)
+  # = ~15 unique entries when all parity-asserted patterns dedup correctly.
+  #
+  # We assert >= 12 to ensure all 12 patterns produced output schemas, and
+  # <= 20 as a sanity ceiling. If any parity-asserted pattern's hashes diverge
+  # (e.g. one runtime emits a different shape that survives normalization),
+  # the count climbs by 1 or 2 per divergent pattern. The per-pattern probes
+  # below pinpoint which.
+  #
+  # Note: tsuite's jq substitution returns numeric results as numbers; the outer
+  # operator handles `>= 12` correctly for the count check (no `tostring` needed
+  # for these two simple bounds).
+  # ============================================================================
+  - expr: ${jq:captured.schemas_json:.schemas | length} >= 12
+    message: "Registry must contain at least 12 distinct schemas (one per pattern)"
+  - expr: ${jq:captured.schemas_json:.schemas | length} <= 20
+    message: "Registry must contain at most ~20 distinct schemas — higher means cross-runtime hash parity is broken for one or more patterns (12 patterns + small baseline)"
+
+  # ============================================================================
+  # PER-PATTERN PROBES: for each parity-asserted pattern, identify the entries
+  # by a distinguishing canonical predicate and assert exactly ONE distinct hash
+  # exists for that pattern (proving all 3 runtimes converged on the same hash).
+  #
+  # Probe shape (tsuite-safe):
+  #   ${jq:captured.X:[.schemas[] | select(<truthy predicate>)] | map(.hash)
+  #     | unique | length | tostring} == '1'
+  #
+  # Why truthy + tostring?
+  #   - tsuite's ${jq:...} substitution mishandles nested `==` and array-literal
+  #     comparisons like `keys == ["role"]`, returning <nil> instead of a real
+  #     value. We therefore avoid those and use truthy field-presence checks.
+  #   - Emitting the result as a string via `| tostring` and comparing against a
+  #     quoted target (`'1'`) keeps the comparison in the safe string-equality
+  #     code path of tsuite's outer operator.
+  # ============================================================================
+
+  # Pattern 1: Primitives — properties = {id, age, active, score}
+  - expr: ${jq:captured.schemas_json:[.schemas[] | select(.canonical.properties.id and .canonical.properties.age and .canonical.properties.active and .canonical.properties.score)] | map(.hash) | unique | length | tostring} == '1'
+    message: "Pattern 1 (Primitives) — all 3 runtimes must produce the same canonical hash"
+
+  # Pattern 2: Optional — distinguishing field is `nickname` (unique to this
+  # pattern in the corpus). Truthy presence is enough — no length comparison
+  # needed because no other corpus pattern has a `nickname` property.
+  - expr: ${jq:captured.schemas_json:[.schemas[] | select(.canonical.properties.nickname)] | map(.hash) | unique | length | tostring} == '1'
+    message: "Pattern 2 (Optional) — all 3 runtimes must produce the same canonical hash"
+
+  # Pattern 3: WithDate — disambiguate from CaseConversion (which also has
+  # hireDate) by requiring NO marketCap. `not` on truthy presence is safe under
+  # tsuite's jq substitution (no `==`, no array literal). If a runtime drops
+  # format=date, the resulting hash will diverge and unique|length == 1 will
+  # fail loudly.
+  - expr: ${jq:captured.schemas_json:[.schemas[] | select(.canonical.properties.hireDate) | select(.canonical.properties.marketCap | not)] | map(.hash) | unique | length | tostring} == '1'
+    message: "Pattern 3 (WithDate) — all 3 runtimes must produce the same canonical hash"
+
+  # Pattern 4: WithEnum — single field role with truthy enum array.
+  - expr: ${jq:captured.schemas_json:[.schemas[] | select(.canonical.properties.role.enum)] | map(.hash) | unique | length | tostring} == '1'
+    message: "Pattern 4 (WithEnum) — all 3 runtimes must produce the same canonical hash"
+
+  # Pattern 5: Nested — single field employee with nested {name, dept}.
+  - expr: ${jq:captured.schemas_json:[.schemas[] | select(.canonical.properties.employee.properties.name and .canonical.properties.employee.properties.dept)] | map(.hash) | unique | length | tostring} == '1'
+    message: "Pattern 5 (Nested) — all 3 runtimes must produce the same canonical hash"
+
+  # Pattern 6: WithArray — single field tags whose items have a truthy type.
+  - expr: ${jq:captured.schemas_json:[.schemas[] | select(.canonical.properties.tags.items.type)] | map(.hash) | unique | length | tostring} == '1'
+    message: "Pattern 6 (WithArray) — all 3 runtimes must produce the same canonical hash"
+
+  # Pattern 7: CaseConversion — properties = {marketCap, hireDate, isActive}.
+  - expr: ${jq:captured.schemas_json:[.schemas[] | select(.canonical.properties.marketCap and .canonical.properties.hireDate and .canonical.properties.isActive)] | map(.hash) | unique | length | tostring} == '1'
+    message: "Pattern 7 (CaseConversion) — all 3 runtimes must produce the same canonical hash (snake_case<->camelCase normalization)"
+
+  # Pattern 8: DiscriminatedUnion — single field pet with truthy anyOf array.
+  - expr: ${jq:captured.schemas_json:[.schemas[] | select(.canonical.properties.pet.anyOf)] | map(.hash) | unique | length | tostring} == '1'
+    message: "Pattern 8 (DiscriminatedUnion) — all 3 runtimes must produce the same canonical hash (oneOf->anyOf + discriminator strip)"
+
+  # Pattern 9: Recursive — canonical contains $defs (truthy presence check).
+  # The `.canonical."$defs"` form is required because $defs is a JSON Schema
+  # reserved key starting with a dollar sign.
+  - expr: ${jq:captured.schemas_json:[.schemas[] | select(.canonical."$defs")] | map(.hash) | unique | length | tostring} == '1'
+    message: "Pattern 9 (Recursive) — all 3 runtimes must produce the same canonical hash (hash-based def rename for cycles)"
+
+  # Pattern 10: Inheritance — person with nested .reports (unique to Manager).
+  - expr: ${jq:captured.schemas_json:[.schemas[] | select(.canonical.properties.person.properties.reports)] | map(.hash) | unique | length | tostring} == '1'
+    message: "Pattern 10 (Inheritance) — all 3 runtimes must produce the same canonical hash (flattened inheritance)"
+
+  # Pattern 11: NumberConstraints — single field value with truthy maximum.
+  # Truthy on `maximum` (= 100) avoids the `minimum == 0` problem (0 is falsy).
+  - expr: ${jq:captured.schemas_json:[.schemas[] | select(.canonical.properties.value.maximum)] | map(.hash) | unique | length | tostring} == '1'
+    message: "Pattern 11 (NumberConstraints) — all 3 runtimes must produce the same canonical hash"
+
+  # Pattern 12: UntaggedUnion — INTENTIONALLY EXCLUDED from cross-runtime parity.
+  # Java has no native union type; the corpus uses {@code Object} → schema is
+  # {} (no constraints). Per Phase 0 spike notes, this pattern is fundamentally
+  # untranslatable to Java. py↔ts parity could be probed in a separate tc17.
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot" 2>/dev/null || true
+      pkill -f "java.*corpus" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -30,6 +30,17 @@ func (Capability) Fields() []ent.Field {
 		field.JSON("input_schema", map[string]interface{}{}).
 			Optional().
 			Comment("JSON Schema for function parameters (MCP tool format). Auto-generated from function signature by FastMCP. Used by LLM agents to understand how to call this tool."),
+		field.String("input_schema_hash").
+			Optional().
+			Nillable().
+			Comment("Hash (sha256:...) of normalized input schema after stripping mesh DI parameters. References schema_entries.hash. NULL when consumer opted out or normalization failed."),
+		field.String("output_schema_hash").
+			Optional().
+			Nillable().
+			Comment("Hash (sha256:...) of normalized output schema. References schema_entries.hash. NULL when output type isn't extractable from the function signature."),
+		field.JSON("schema_warnings", []string{}).
+			Optional().
+			Comment("Normalizer warnings emitted while canonicalizing this capability's schemas (e.g., 'stripped additionalProperties: true'). Surfaced in meshctl status."),
 		field.JSON("llm_filter", map[string]interface{}{}).
 			Optional().
 			Comment("LLM tool filter specification when function is decorated with @mesh.llm. Defines which tools this LLM agent needs access to."),

@@ -206,5 +206,8 @@ meshctl call my_tool  # See which provider was selected
 ## See Also
 
 - [Architecture](architecture.md) - System overview
+- [Schema Matching](schema-matching.md) - Per-shape disambiguator that runs after version
+- [Audit Trail](audit.md) - Debug "why did my dep wire to producer X?"
+- [DDDI](dddi.md) - Distributed Dynamic Dependency Injection overview
 - [Dependency Injection](../python/dependency-injection.md) - DI patterns
 - [Capabilities & Tags](../python/capabilities-tags.md) - Full reference

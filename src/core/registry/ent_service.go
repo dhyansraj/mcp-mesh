@@ -17,6 +17,7 @@ import (
 	"mcp-mesh/src/core/ent/llmproviderresolution"
 	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
+	"mcp-mesh/src/core/ent/schemaentry"
 	"mcp-mesh/src/core/logger"
 	"mcp-mesh/src/core/registry/generated"
 
@@ -39,6 +40,13 @@ type Dependency struct {
 	Version         string     `json:"version,omitempty"`          // e.g., ">=1.0.0"
 	Tags            []string   `json:"tags,omitempty"`             // e.g., ["production", "US_EAST"]
 	TagAlternatives [][]string `json:"tag_alternatives,omitempty"` // OR alternatives, e.g., [["python", "typescript"]]
+
+	// Schema-aware filtering inputs (issue #547). All three are populated together
+	// when the consumer opts into schema matching; otherwise MatchMode is "" and
+	// the resolver's schema stage is a pass-through.
+	ExpectedSchemaHash      string                 `json:"expected_schema_hash,omitempty"`
+	ExpectedSchemaCanonical map[string]interface{} `json:"expected_schema_canonical,omitempty"`
+	MatchMode               string                 `json:"match_mode,omitempty"` // "subset" | "strict" | ""
 }
 
 // RegistryConfig holds registry-specific configuration
@@ -107,6 +115,11 @@ type DependencySpec struct {
 	TagAlternatives [][]string `json:"tag_alternatives,omitempty"` // OR alternatives (each inner array is an OR group)
 	Version         string     `json:"version,omitempty"`
 	Namespace       string     `json:"namespace,omitempty"`
+
+	// Schema-aware filtering inputs (issue #547); see Dependency.MatchMode.
+	ExpectedSchemaHash      string                 `json:"expected_schema_hash,omitempty"`
+	ExpectedSchemaCanonical map[string]interface{} `json:"expected_schema_canonical,omitempty"`
+	MatchMode               string                 `json:"match_mode,omitempty"`
 }
 
 // IndexedResolution is the result of resolving a positional dependency.
@@ -169,6 +182,18 @@ func parseDependencySpec(m map[string]interface{}) DependencySpec {
 		} else if stringSlice, ok := tags.([]string); ok {
 			spec.Tags = stringSlice
 		}
+	}
+
+	// Schema-aware filtering fields (issue #547). MatchMode being "" means the
+	// consumer didn't opt in; the resolver's schema stage becomes a pass-through.
+	if mode, ok := m["match_mode"].(string); ok {
+		spec.MatchMode = mode
+	}
+	if hash, ok := m["expected_schema_hash"].(string); ok {
+		spec.ExpectedSchemaHash = hash
+	}
+	if canonical, ok := m["expected_schema_canonical"].(map[string]interface{}); ok {
+		spec.ExpectedSchemaCanonical = canonical
 	}
 
 	return spec
@@ -299,6 +324,55 @@ func extractAgentMetadata(agentID string, metadata map[string]interface{}) agent
 	}
 
 	return m
+}
+
+// upsertSchemaEntry inserts a canonical schema row keyed by content hash, or
+// no-ops if a row with the same hash already exists. Schemas are content-
+// addressed: identical canonical content => identical hash => same row.
+//
+// The runtime_origin field is informational; for an existing row we keep the
+// original origin (first runtime to produce this canonical form). Doesn't
+// matter operationally — the canonical form is what counts.
+func (s *EntService) upsertSchemaEntry(
+	ctx context.Context,
+	tx *ent.Tx,
+	hash string,
+	canonical map[string]interface{},
+	runtimeOrigin string,
+) error {
+	exists, err := tx.SchemaEntry.Query().Where(schemaentry.HashEQ(hash)).Exist(ctx)
+	if err != nil {
+		return fmt.Errorf("query schema_entries hash=%s: %w", hash, err)
+	}
+	if exists {
+		return nil
+	}
+
+	origin := schemaentry.RuntimeOriginUnknown
+	switch strings.ToLower(runtimeOrigin) {
+	case "python":
+		origin = schemaentry.RuntimeOriginPython
+	case "typescript":
+		origin = schemaentry.RuntimeOriginTypescript
+	case "java":
+		origin = schemaentry.RuntimeOriginJava
+	}
+
+	err = tx.SchemaEntry.Create().
+		SetHash(hash).
+		SetCanonical(canonical).
+		SetRuntimeOrigin(origin).
+		Exec(ctx)
+	if err != nil {
+		// A concurrent inserter may have raced us in between Exist and Create —
+		// the unique constraint on hash will reject the duplicate, which is the
+		// expected steady-state for content-addressed dedup.
+		if ent.IsConstraintError(err) {
+			return nil
+		}
+		return fmt.Errorf("insert schema_entries hash=%s: %w", hash, err)
+	}
+	return nil
 }
 
 // checkEntityOwnership verifies that req's entity_id matches the existing
@@ -460,6 +534,42 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 							if inputSchemaInterface, ok := toolMap["inputSchema"]; ok {
 								if inputSchema, ok := inputSchemaInterface.(map[string]interface{}); ok {
 									capCreate = capCreate.SetInputSchema(inputSchema)
+								}
+							}
+
+							// Schema canonical-form storage (issue #547). Producers send
+							// pre-normalized canonical schemas plus their content hash; the
+							// registry dedups via the content-addressed schema_entries table
+							// and stores the hash on the capability for cross-runtime matching.
+							if hashIface, ok := toolMap["inputSchemaHash"].(string); ok && hashIface != "" {
+								if canonical, ok := toolMap["inputSchemaCanonical"].(map[string]interface{}); ok {
+									if err := s.upsertSchemaEntry(ctx, tx, hashIface, canonical, meta.runtime); err != nil {
+										return fmt.Errorf("upsert input schema for %s: %w", functionName, err)
+									}
+									capCreate = capCreate.SetInputSchemaHash(hashIface)
+								}
+							}
+							if hashIface, ok := toolMap["outputSchemaHash"].(string); ok && hashIface != "" {
+								if canonical, ok := toolMap["outputSchemaCanonical"].(map[string]interface{}); ok {
+									if err := s.upsertSchemaEntry(ctx, tx, hashIface, canonical, meta.runtime); err != nil {
+										return fmt.Errorf("upsert output schema for %s: %w", functionName, err)
+									}
+									capCreate = capCreate.SetOutputSchemaHash(hashIface)
+								}
+							}
+							if warningsIface, ok := toolMap["schemaWarnings"]; ok {
+								warnings := []string{}
+								if arr, ok := warningsIface.([]interface{}); ok {
+									for _, w := range arr {
+										if ws, ok := w.(string); ok {
+											warnings = append(warnings, ws)
+										}
+									}
+								} else if arr, ok := warningsIface.([]string); ok {
+									warnings = arr
+								}
+								if len(warnings) > 0 {
+									capCreate = capCreate.SetSchemaWarnings(warnings)
 								}
 							}
 
@@ -1192,6 +1302,42 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 									if inputSchemaInterface, ok := toolMap["inputSchema"]; ok {
 										if inputSchema, ok := inputSchemaInterface.(map[string]interface{}); ok {
 											capCreate = capCreate.SetInputSchema(inputSchema)
+										}
+									}
+
+									// Schema canonical-form storage (issue #547). Producers send
+									// pre-normalized canonical schemas plus their content hash; the
+									// registry dedups via the content-addressed schema_entries table
+									// and stores the hash on the capability for cross-runtime matching.
+									if hashIface, ok := toolMap["inputSchemaHash"].(string); ok && hashIface != "" {
+										if canonical, ok := toolMap["inputSchemaCanonical"].(map[string]interface{}); ok {
+											if err := s.upsertSchemaEntry(ctx, tx, hashIface, canonical, meta.runtime); err != nil {
+												return fmt.Errorf("upsert input schema for %s: %w", functionName, err)
+											}
+											capCreate = capCreate.SetInputSchemaHash(hashIface)
+										}
+									}
+									if hashIface, ok := toolMap["outputSchemaHash"].(string); ok && hashIface != "" {
+										if canonical, ok := toolMap["outputSchemaCanonical"].(map[string]interface{}); ok {
+											if err := s.upsertSchemaEntry(ctx, tx, hashIface, canonical, meta.runtime); err != nil {
+												return fmt.Errorf("upsert output schema for %s: %w", functionName, err)
+											}
+											capCreate = capCreate.SetOutputSchemaHash(hashIface)
+										}
+									}
+									if warningsIface, ok := toolMap["schemaWarnings"]; ok {
+										warnings := []string{}
+										if arr, ok := warningsIface.([]interface{}); ok {
+											for _, w := range arr {
+												if ws, ok := w.(string); ok {
+													warnings = append(warnings, ws)
+												}
+											}
+										} else if arr, ok := warningsIface.([]string); ok {
+											warnings = arr
+										}
+										if len(warnings) > 0 {
+											capCreate = capCreate.SetSchemaWarnings(warnings)
 										}
 									}
 

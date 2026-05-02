@@ -1,0 +1,137 @@
+# Test Case: tc13 - Strict-mode wires cross-runtime (Java @NotNull -> Python)
+# Issue #547 Phase 4: validates JakartaValidationModule produces a hash that
+# matches Pydantic's. Strict mode requires byte-for-byte canonical equality.
+#
+# producer-good-java (@NotNull String fields) + consumer-py (strict, Pydantic Employee).
+# Hash: sha256:48882e31915113ed70ee620b2245bfcf856e4e146e2eb6e37700809d7338e732
+#
+# A successful strict-mode wire across Java <-> Python is proof that @NotNull
+# yields the canonical Employee hash (strict mode requires byte-equal hashes;
+# no structural diff). No DB introspection needed.
+
+name: "Schema Registry: strict-mode cross-runtime — Java @NotNull <-> Pydantic"
+description: "Strict-mode Python consumer wires to Java producer-good only if @NotNull yields the canonical Employee hash"
+tags:
+  - schema_registry
+  - cross_runtime
+  - py
+  - java
+  - strict
+  - slow
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy producer-good-java + consumer-py to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/schema-java /workspace/schema-py
+      cp -r /uc-artifacts/schema-java/pom.xml /workspace/schema-java/
+      cp -r /uc-artifacts/schema-java/producer-good /workspace/schema-java/
+      cp /uc-artifacts/schema-py/consumer.py /workspace/schema-py/
+
+  - name: "Flip consumer match_mode to strict"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/"match_mode": "subset"/"match_mode": "strict"/g' /workspace/schema-py/consumer.py
+      grep -n match_mode /workspace/schema-py/consumer.py
+
+  - name: "Install Maven deps for producer-good-java"
+    handler: maven-install
+    path: /workspace/schema-java/producer-good
+    timeout: 600
+
+  - name: "Start producer-good-java"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/schema-java/producer-good --env MCP_MESH_HTTP_PORT=0 -d"
+
+  - name: "Wait for Java producer (cold start)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        if meshctl list 2>/dev/null | grep -q "producer-good-java"; then
+          echo "producer-good-java registered after $((i*3))s"
+          meshctl list 2>/dev/null || true
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: producer-good-java did not register within 180s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_producer
+    timeout: 210
+
+  - name: "Start consumer-py (strict)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/consumer.py -d"
+
+  - name: "Wait for consumer + dep resolution"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "consumer-py" && echo "$AGENTS" | grep "consumer-py" | grep -q "1/1"; then
+          echo "consumer-py registered + deps resolved after $((i*2))s"
+          echo "$AGENTS"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: consumer-py did not register or resolve deps within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_consumer
+    timeout: 90
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Call consumer to verify wiring"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call lookup_with_schema '{"emp_id": "E1"}' 2>&1 || true
+    capture: call_result
+
+# Note: only one Java producer registers `employee_lookup` in this test, so the
+# audit pipeline emits no event (single-candidate resolved is forced choice =
+# no decision drama, by design). The successful `meshctl call` returning the
+# Java producer's Employee payload IS the headline proof that:
+#   - producer-good-java registered with its @NotNull outputSchema
+#   - JakartaValidationModule produced the canonical Employee hash
+#   - Python strict-mode consumer matched byte-for-byte (cross-runtime hash equality)
+#   - the resolver wired through and HTTP transport carried the typed payload back
+assertions:
+  - expr: "${captured.agent_list} contains 'producer-good-java'"
+  - expr: "${captured.agent_list} contains 'consumer-py'"
+  - expr: "${captured.call_result} contains 'got:'"
+    message: "Strict-mode Python consumer should wire to Java producer-good (cross-runtime hash equality proves @NotNull yields canonical Employee hash)"
+  - expr: "${captured.call_result} contains 'Alice'"
+    message: "Consumer must receive Java producer's Employee payload (proves JakartaValidationModule emits canonical Employee hash matching Pydantic)"
+  - expr: "${captured.call_result} contains 'Engineering'"
+    message: "Consumer must receive Employee.dept field from Java producer-good"
+  - expr: "${captured.call_result} not contains 'no compatible'"
+    message: "Consumer must NOT report missing producer"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot" 2>/dev/null || true
+      pkill -f "java.*producer" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

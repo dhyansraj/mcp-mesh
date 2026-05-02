@@ -67,6 +67,9 @@ var (
 		{Name: "version", Type: field.TypeString, Default: "1.0.0"},
 		{Name: "description", Type: field.TypeString, Nullable: true},
 		{Name: "input_schema", Type: field.TypeJSON, Nullable: true},
+		{Name: "input_schema_hash", Type: field.TypeString, Nullable: true},
+		{Name: "output_schema_hash", Type: field.TypeString, Nullable: true},
+		{Name: "schema_warnings", Type: field.TypeJSON, Nullable: true},
 		{Name: "llm_filter", Type: field.TypeJSON, Nullable: true},
 		{Name: "llm_provider", Type: field.TypeJSON, Nullable: true},
 		{Name: "tags", Type: field.TypeJSON},
@@ -84,7 +87,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "capabilities_agents_capabilities",
-				Columns:    []*schema.Column{CapabilitiesColumns[13]},
+				Columns:    []*schema.Column{CapabilitiesColumns[16]},
 				RefColumns: []*schema.Column{AgentsColumns[0]},
 				OnDelete:   schema.Cascade,
 			},
@@ -335,6 +338,27 @@ var (
 			},
 		},
 	}
+	// SchemaEntriesColumns holds the columns for the "schema_entries" table.
+	SchemaEntriesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "hash", Type: field.TypeString, Unique: true},
+		{Name: "canonical", Type: field.TypeJSON},
+		{Name: "runtime_origin", Type: field.TypeEnum, Enums: []string{"python", "typescript", "java", "unknown"}, Default: "unknown"},
+		{Name: "created_at", Type: field.TypeTime},
+	}
+	// SchemaEntriesTable holds the schema information for the "schema_entries" table.
+	SchemaEntriesTable = &schema.Table{
+		Name:       "schema_entries",
+		Columns:    SchemaEntriesColumns,
+		PrimaryKey: []*schema.Column{SchemaEntriesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "schemaentry_hash",
+				Unique:  true,
+				Columns: []*schema.Column{SchemaEntriesColumns[1]},
+			},
+		},
+	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
 		AgentsTable,
@@ -343,6 +367,7 @@ var (
 		LlmProviderResolutionsTable,
 		LlmToolResolutionsTable,
 		RegistryEventsTable,
+		SchemaEntriesTable,
 	}
 )
 

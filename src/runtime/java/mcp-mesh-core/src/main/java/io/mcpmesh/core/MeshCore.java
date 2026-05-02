@@ -288,6 +288,24 @@ public interface MeshCore {
      */
     int mesh_is_simple_schema(String schemaJson);
 
+    /**
+     * Normalize a raw JSON Schema and return a JSON envelope with
+     * {@code {canonical, hash, verdict, warnings}} (issue #547).
+     *
+     * <p>Mirrors the Python {@code normalize_schema_py} and napi
+     * {@code normalizeSchema} bindings so Java agents emit identical
+     * canonical forms and content hashes for cross-runtime capability matching.
+     *
+     * <p>On error returns a JSON envelope with {@code verdict="BLOCK"} rather
+     * than null so callers can always parse the response.
+     *
+     * @param rawJson Raw JSON Schema string
+     * @param origin  Origin runtime hint: "python", "typescript", "java", or unknown.
+     *                May be null.
+     * @return JSON envelope (caller must free with mesh_free_string)
+     */
+    Pointer mesh_normalize_schema(String rawJson, String origin);
+
     // ==========================================================================
     // Trace Context Functions
     // ==========================================================================

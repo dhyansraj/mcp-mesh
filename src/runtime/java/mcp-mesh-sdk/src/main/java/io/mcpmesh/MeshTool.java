@@ -99,4 +99,42 @@ public @interface MeshTool {
      * the parameter will be {@code null} (graceful degradation).
      */
     Selector[] dependencies() default {};
+
+    /**
+     * Optional output schema type for capability matching (issue #547).
+     *
+     * <p>Java cannot reliably infer return-type schemas from method signatures
+     * (generics erasure, polymorphism), so users opt in by pointing to the
+     * concrete class. The class is run through victools/jsonschema-generator,
+     * normalized via the Rust normalizer, and shipped to the registry alongside
+     * the input schema. Consumers using {@code @MeshDependency(expectedType=...)}
+     * can then be matched against this output schema.
+     *
+     * <p>Default {@code Void.class} means "not set" — backward-compatible with
+     * existing tools that don't ship an output schema.
+     *
+     * <p>Example:
+     * <pre>{@code
+     * @MeshTool(capability = "lookup_employee", outputType = Employee.class)
+     * public Employee lookupEmployee(@Param("id") String id) { ... }
+     * }</pre>
+     */
+    Class<?> outputType() default Void.class;
+
+    /**
+     * Per-tool override for the schema verdict policy (issue #547 Phase 4).
+     *
+     * <p>When {@code true} (default), a BLOCK verdict from the schema normalizer
+     * refuses agent startup. Set to {@code false} as a producer-side escape
+     * hatch to demote BLOCK to WARN for this specific tool. Wins even when
+     * the cluster-wide {@code MCP_MESH_SCHEMA_STRICT=true} env var is set
+     * (which otherwise promotes WARN to BLOCK across all tools).
+     *
+     * <p>Example:
+     * <pre>{@code
+     * @MeshTool(capability = "experimental_tool", outputSchemaStrict = false)
+     * public Object experimental(...) { ... }
+     * }</pre>
+     */
+    boolean outputSchemaStrict() default true;
 }

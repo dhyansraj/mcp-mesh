@@ -16,6 +16,25 @@ MCP Mesh implements **Distributed Dynamic Dependency Injection (DDDI)** — unli
 4. **Injection**: Mesh creates proxy objects for each dependency
 5. **Invocation**: Calling the proxy routes to the remote agent
 
+## Resolution Pipeline
+
+When the registry resolves one of your dependencies, candidate providers flow through a fixed sequence of filter stages:
+
+```
+health → capability_match → tags → version → schema → tiebreaker
+```
+
+| Stage              | What it filters on                                                          |
+| ------------------ | --------------------------------------------------------------------------- |
+| `health`           | Drops unhealthy / deregistering candidates first                            |
+| `capability_match` | Indexed query on the capability name                                        |
+| `tags`             | Required / preferred / excluded tag filter (with scoring)                   |
+| `version`          | Semver constraint (`>=2.0.0`, `^1.4`, ...)                                  |
+| `schema`           | Opt-in schema check (issue #547) — see below                                |
+| `tiebreaker`       | `HighestScoreFirst` from the surviving set                                  |
+
+Every decision the registry makes is recorded as a `dependency_resolved` (or `dependency_unresolved`) event. Use `meshctl audit <agent>` to read them back — see `meshctl man audit`.
+
 ## Declaring Dependencies
 
 ### Simple Dependencies
@@ -55,6 +74,34 @@ async def generate_report(
     data = await data_svc(query="sales")
     return await formatter(data=data)
 ```
+
+### Schema-Aware Filtering (issue #547)
+
+Add `expected_type` (and optionally `match_mode`) to opt the dependency into the schema stage of the pipeline. Producers whose published `outputSchema` doesn't satisfy your expected type are evicted with `SchemaIncompatible`.
+
+```python
+from pydantic import BaseModel
+
+class Employee(BaseModel):
+    id: int
+    name: str
+    department: str
+
+@app.tool()
+@mesh.tool(
+    capability="hr_report",
+    dependencies=[
+        {
+            "capability": "lookup_employee",
+            "expected_type": Employee,
+            "match_mode": "subset",   # default opt-in; or "strict"
+        },
+    ],
+)
+async def hr_report(employee_lookup: mesh.McpMeshTool = None): ...
+```
+
+`match_mode` defaults to `"subset"` when `expected_type` is provided. See `meshctl man schema-matching` for `subset` vs `strict` semantics, the cross-language convention table, and the `MCP_MESH_SCHEMA_STRICT` env knob.
 
 ### OR Alternatives (Tag-Level)
 
@@ -176,5 +223,7 @@ No code changes needed - happens transparently.
 
 - `meshctl man capabilities` - Declaring capabilities
 - `meshctl man tags` - Tag-based selection
+- `meshctl man schema-matching` - Schema-aware capability filtering (#547)
+- `meshctl man audit` - Inspecting resolution decisions
 - `meshctl man health` - Health monitoring
 - `meshctl man proxies` - Proxy details

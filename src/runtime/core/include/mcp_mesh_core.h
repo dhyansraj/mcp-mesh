@@ -379,6 +379,31 @@ int32_t mesh_detect_media_params(const char *schema_json);
 // * `schema_json` must be a valid null-terminated C string
 int32_t mesh_is_simple_schema(const char *schema_json);
 
+// Normalize a raw JSON Schema and return a JSON envelope with
+// `{canonical, hash, verdict, warnings}`.
+//
+// This is the C FFI wrapper around `schema_normalize::normalize_schema`
+// (issue #547). Mirrors the Python (`normalize_schema_py`) and napi
+// (`normalize_schema`) bindings so Java SDKs can produce identical
+// canonical forms and hashes for cross-runtime capability matching.
+//
+// # Arguments
+// * `raw_json` - Raw JSON Schema string
+// * `origin` - Origin runtime hint: "python", "typescript", "java", or unknown.
+//   May be NULL.
+//
+// # Returns
+// JSON string with fields `canonical`, `hash`, `verdict`, `warnings`
+// (caller must free with `mesh_free_string`). On error returns a JSON
+// envelope with `verdict="BLOCK"` rather than NULL so callers can always
+// parse the response.
+//
+// # Safety
+// * `raw_json` must be a valid null-terminated C string
+// * `origin` may be NULL or a valid null-terminated C string
+// * The returned string must be freed with `mesh_free_string`
+char *mesh_normalize_schema(const char *raw_json, const char *origin);
+
 // Generate OpenTelemetry-compliant trace ID (32-char hex, 128-bit).
 //
 // # Returns
