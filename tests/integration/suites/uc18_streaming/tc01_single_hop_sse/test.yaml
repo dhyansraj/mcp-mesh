@@ -51,42 +51,50 @@ test:
     command: "meshctl start streaming/gateway-agent/main.py -d"
     capture: start_gateway
 
-  - name: "Wait for both agents registered AND gateway deps resolved"
+  # NOTE: gateway-agent registers as "api-<hash>" (mesh.route-only services do not
+  # get a stable name like @mesh.agent decorations do — see uc20/tc05 for the
+  # same pattern). We only wait for the named chatbot-agent here. The gateway's
+  # `chat_passthrough` route depends on a tool that is NOT started in this
+  # single-hop scenario, so its deps will perpetually show 1/2 — checking
+  # "fully resolved" would never succeed. End-to-end curl steps below
+  # implicitly prove the `chat` dep resolved.
+  - name: "Wait for chatbot-agent registered"
     handler: shell
     workdir: /workspace
     command: |
-      EXPECTED="chatbot-agent gateway-agent"
-      EXPECTED_COUNT=2
-      echo "Waiting for $EXPECTED_COUNT agents to register and gateway deps to resolve..."
+      EXPECTED="chatbot-agent"
+      EXPECTED_COUNT=1
+      echo "Waiting for $EXPECTED_COUNT named agent to register..."
       for i in $(seq 1 60); do
         AGENTS=$(meshctl list 2>/dev/null || true)
-        TOOLS=$(meshctl list --tools 2>/dev/null || true)
         COUNT=0
         for agent in $EXPECTED; do
           if echo "$AGENTS" | grep -q "$agent"; then
             COUNT=$((COUNT + 1))
           fi
         done
-        # Gateway has 1 dependency (chat). Look for "1/1" resolution marker on its line.
-        GW_RESOLVED=false
-        if echo "$TOOLS" | grep -i "gateway-agent" | grep -q "1/1"; then
-          GW_RESOLVED=true
-        fi
-        if [ "$COUNT" -ge "$EXPECTED_COUNT" ] && [ "$GW_RESOLVED" = "true" ]; then
-          echo "All $EXPECTED_COUNT agents registered and gateway deps resolved after $((i * 2))s"
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "Named agent registered after $((i * 2))s"
           meshctl list
           meshctl list --tools
           exit 0
         fi
-        echo "  $COUNT/$EXPECTED_COUNT agents registered, gw_resolved=$GW_RESOLVED (attempt $i/60)..."
+        echo "  $COUNT/$EXPECTED_COUNT agents registered (attempt $i/60)..."
         sleep 2
       done
-      echo "ERROR: not all agents registered or gateway deps unresolved within 120s"
+      echo "ERROR: chatbot-agent not registered within 120s"
       meshctl list 2>/dev/null || true
       meshctl list --tools 2>/dev/null || true
       exit 1
     capture: wait_output
     timeout: 150
+
+  # Small additional sleep to let the gateway's `chat` dep resolve before
+  # curl tests fire. End-to-end SSE assertions below will fail loudly if it
+  # didn't, so this just avoids a flaky first-call race.
+  - name: "Brief settle for gateway chat dep resolution"
+    handler: wait
+    seconds: 5
 
   - name: "Curl POST /api/chat (capture full SSE stream body)"
     handler: shell

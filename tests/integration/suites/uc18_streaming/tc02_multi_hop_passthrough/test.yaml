@@ -53,55 +53,47 @@ test:
     command: "meshctl start streaming/gateway-agent/main.py -d"
     capture: start_gateway
 
-  - name: "Wait for all three agents registered AND deps fully resolved"
+  # NOTE: gateway-agent registers as "api-<hash>" (mesh.route-only services do
+  # not get a stable name like @mesh.agent decorations do — see uc20/tc05 for
+  # the same pattern). We only wait for the named agents here; the multi-hop
+  # curl below implicitly proves the gateway's `chat_passthrough` dep resolved.
+  - name: "Wait for chatbot-agent and passthrough-agent registered"
     handler: shell
     workdir: /workspace
     command: |
-      EXPECTED="chatbot-agent passthrough-agent gateway-agent"
-      EXPECTED_COUNT=3
-      echo "Waiting for $EXPECTED_COUNT agents to register and deps to resolve..."
+      EXPECTED="chatbot-agent passthrough-agent"
+      EXPECTED_COUNT=2
+      echo "Waiting for $EXPECTED_COUNT named agents to register..."
       for i in $(seq 1 60); do
         AGENTS=$(meshctl list 2>/dev/null || true)
-        TOOLS=$(meshctl list --tools 2>/dev/null || true)
         COUNT=0
         for agent in $EXPECTED; do
           if echo "$AGENTS" | grep -q "$agent"; then
             COUNT=$((COUNT + 1))
           fi
         done
-        # passthrough-agent declares 1 dependency (chat)
-        # gateway-agent declares 2 routes; chat route depends on 'chat',
-        # chat-multihop route depends on 'chat_passthrough'.
-        # Both must show fully-resolved markers. We grep the per-agent line in
-        # `meshctl list --tools` for "<resolved>/<total>" with resolved == total.
-        PT_OK=false
-        GW_OK=false
-        if echo "$TOOLS" | grep -i "passthrough-agent" | grep -q "1/1"; then
-          PT_OK=true
-        fi
-        # gateway has 2 mesh.route declarations -> typically shown as 2/2.
-        # Be permissive: accept either "2/2" or two separate "1/1" entries
-        # under gateway-agent in case the listing format differs.
-        if echo "$TOOLS" | grep -i "gateway-agent" | grep -q "2/2"; then
-          GW_OK=true
-        elif [ "$(echo "$TOOLS" | grep -i "gateway-agent" | grep -c '1/1')" -ge 2 ]; then
-          GW_OK=true
-        fi
-        if [ "$COUNT" -ge "$EXPECTED_COUNT" ] && [ "$PT_OK" = "true" ] && [ "$GW_OK" = "true" ]; then
-          echo "All $EXPECTED_COUNT agents registered and deps resolved after $((i * 2))s"
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "All $EXPECTED_COUNT named agents registered after $((i * 2))s"
           meshctl list
           meshctl list --tools
           exit 0
         fi
-        echo "  $COUNT/$EXPECTED_COUNT agents registered, pt_ok=$PT_OK gw_ok=$GW_OK (attempt $i/60)..."
+        echo "  $COUNT/$EXPECTED_COUNT agents registered (attempt $i/60)..."
         sleep 2
       done
-      echo "ERROR: not all agents registered or deps unresolved within 120s"
+      echo "ERROR: not all named agents registered within 120s"
       meshctl list 2>/dev/null || true
       meshctl list --tools 2>/dev/null || true
       exit 1
     capture: wait_output
     timeout: 150
+
+  # Small additional sleep to let the gateway's `chat` and `chat_passthrough`
+  # deps resolve before the multi-hop curl fires. The per-chunk SSE assertions
+  # below will fail loudly if resolution didn't complete.
+  - name: "Brief settle for gateway dep resolution"
+    handler: wait
+    seconds: 5
 
   - name: "Curl POST /api/chat-multihop (capture full multi-hop SSE stream body)"
     handler: shell
