@@ -256,7 +256,7 @@ func TestSweepJobIntegration(t *testing.T) {
 	cfg := SweepConfig{Retention: 1 * time.Hour}
 	job := NewSweepJob(cfg, entDB, service, testLogger)
 
-	purgedAgents, _, err := job.runOnce(ctx)
+	purgedAgents, _, _, err := job.runOnce(ctx)
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}

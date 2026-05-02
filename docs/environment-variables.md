@@ -194,10 +194,12 @@ export DEFAULT_EVICTION_THRESHOLD=60
 # How long unhealthy/unknown agents are kept in the registry before the
 # sweep job purges them. Go duration string (e.g. "30m", "2h", "48h").
 # Default: 1h. Set to "0" to disable the sweep entirely (forensic mode —
-# keeps all rows). Affects both `meshctl list` (purged agents disappear
-# from output) and the underlying RegistryEvent table (event rows are
-# governed by a separate hardcoded 100,000 rolling cap, not by this
-# variable).
+# keeps all rows). Affects `meshctl list` (purged agents disappear from
+# output), the underlying RegistryEvent table (event rows are governed
+# by a separate hardcoded 100,000 rolling cap, not by this variable),
+# and orphan schema_entries (rows in the content-addressed schema store
+# that are no longer referenced by any capability — purged when both
+# orphan and older than this retention window; #842).
 export MCP_MESH_RETENTION=1h
 ```
 

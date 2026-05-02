@@ -14,6 +14,7 @@ import (
 	"mcp-mesh/src/core/ent/llmproviderresolution"
 	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
+	"mcp-mesh/src/core/ent/schemaentry"
 	"mcp-mesh/src/core/logger"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -97,7 +98,7 @@ func TestSweepStaleAgentsOnly(t *testing.T) {
 	// Recently unhealthy: should NOT be purged (updated_at within retention).
 	seedAgent(t, client, "fresh-unhealthy", agent.StatusUnhealthy, now.Add(-30*time.Minute))
 
-	purgedAgents, purgedEvents, err := job.runOnce(context.Background())
+	purgedAgents, purgedEvents, _, err := job.runOnce(context.Background())
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
@@ -143,7 +144,7 @@ func TestSweepBoth(t *testing.T) {
 	seedEvent(t, client, "host", now.Add(-2*24*time.Hour))
 	seedEvent(t, client, "host", now.Add(-1*time.Minute))
 
-	purgedAgents, purgedEvents, err := job.runOnce(context.Background())
+	purgedAgents, purgedEvents, _, err := job.runOnce(context.Background())
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
@@ -170,7 +171,7 @@ func TestSweepEventMaxRowsUnderCap(t *testing.T) {
 		seedEvent(t, client, "host", now.Add(-time.Duration(5-i)*time.Minute))
 	}
 
-	purgedAgents, purgedEvents, err := job.runOnce(context.Background())
+	purgedAgents, purgedEvents, _, err := job.runOnce(context.Background())
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
@@ -213,7 +214,7 @@ func TestSweepEventMaxRowsOverCap(t *testing.T) {
 		seedEvent(t, client, "host", timestamps[i])
 	}
 
-	purgedAgents, purgedEvents, err := job.runOnce(context.Background())
+	purgedAgents, purgedEvents, _, err := job.runOnce(context.Background())
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
@@ -259,7 +260,7 @@ func TestSweepDisabledRetention(t *testing.T) {
 	seedAgent(t, client, "stale", agent.StatusUnhealthy, now.Add(-100*24*time.Hour))
 	seedEvent(t, client, "stale", now.Add(-100*24*time.Hour))
 
-	purgedAgents, _, err := job.runOnce(context.Background())
+	purgedAgents, _, _, err := job.runOnce(context.Background())
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
@@ -357,7 +358,7 @@ func TestSweepFixesOrphanProviderResolutions(t *testing.T) {
 		t.Fatalf("seed llm provider resolution: %v", err)
 	}
 
-	if _, _, err := job.runOnce(ctx); err != nil {
+	if _, _, _, err := job.runOnce(ctx); err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
 
@@ -546,4 +547,287 @@ func TestLoadSweepConfigFromEnv(t *testing.T) {
 			t.Errorf("Retention with negative value = %s, want %s (default)", cfg.Retention, defaultRetention)
 		}
 	})
+}
+
+// seedSchemaEntryAt inserts a schema_entry directly via Ent with the given
+// hash and created_at, bypassing the upsert path used by RegisterAgent.
+func seedSchemaEntryAt(t *testing.T, client *ent.Client, hash string, createdAt time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := client.SchemaEntry.Create().
+		SetHash(hash).
+		SetCanonical(map[string]interface{}{"type": "object"}).
+		SetCreatedAt(createdAt).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("seed schema_entry %s: %v", hash, err)
+	}
+}
+
+// TestSweep_PurgeOrphanSchemaEntries_DeletesOrphan verifies that a
+// schema_entry with no referencing capability and a created_at older
+// than retention is purged.
+func TestSweep_PurgeOrphanSchemaEntries_DeletesOrphan(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, job, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Orphan schema entry, well past retention.
+	seedSchemaEntryAt(t, client, "sha256:orphan", now.Add(-2*time.Hour))
+
+	_, _, schemasPurged, err := job.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if schemasPurged != 1 {
+		t.Errorf("expected 1 schema purged, got %d", schemasPurged)
+	}
+
+	count, err := client.SchemaEntry.Query().Count(ctx)
+	if err != nil {
+		t.Fatalf("count schema entries: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 schema entries remaining, got %d", count)
+	}
+}
+
+// TestSweep_PurgeOrphanSchemaEntries_KeepsReferenced verifies that a
+// schema_entry referenced by a capability's input_schema_hash or
+// output_schema_hash is NOT purged, even when older than retention.
+func TestSweep_PurgeOrphanSchemaEntries_KeepsReferenced(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, job, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Healthy provider agent.
+	seedAgent(t, client, "provider", agent.StatusHealthy, now)
+
+	// Two stale schema entries: one referenced by input_schema_hash,
+	// one by output_schema_hash. Neither should be purged.
+	seedSchemaEntryAt(t, client, "sha256:input", now.Add(-2*time.Hour))
+	seedSchemaEntryAt(t, client, "sha256:output", now.Add(-2*time.Hour))
+
+	inHash := "sha256:input"
+	outHash := "sha256:output"
+	_, err := client.Capability.Create().
+		SetAgentID("provider").
+		SetFunctionName("do_thing").
+		SetCapability("widget").
+		SetInputSchemaHash(inHash).
+		SetOutputSchemaHash(outHash).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("seed capability: %v", err)
+	}
+
+	_, _, schemasPurged, err := job.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if schemasPurged != 0 {
+		t.Errorf("expected 0 schemas purged (both referenced), got %d", schemasPurged)
+	}
+
+	count, err := client.SchemaEntry.Query().Count(ctx)
+	if err != nil {
+		t.Fatalf("count schema entries: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 schema entries remaining, got %d", count)
+	}
+}
+
+// TestSweep_PurgeOrphanSchemaEntries_KeepsRecent verifies that an orphan
+// schema_entry younger than the retention window is NOT purged.
+func TestSweep_PurgeOrphanSchemaEntries_KeepsRecent(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, job, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Orphan, but only 30 minutes old (within 1h retention).
+	seedSchemaEntryAt(t, client, "sha256:fresh-orphan", now.Add(-30*time.Minute))
+
+	_, _, schemasPurged, err := job.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if schemasPurged != 0 {
+		t.Errorf("expected 0 schemas purged (within retention), got %d", schemasPurged)
+	}
+
+	count, err := client.SchemaEntry.Query().Count(ctx)
+	if err != nil {
+		t.Fatalf("count schema entries: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 schema entry remaining, got %d", count)
+	}
+}
+
+// TestSweep_PurgeOrphanSchemaEntries_RefCheckPreventsDelete verifies
+// that when a capability already references a stale schema_entry by
+// the time the per-row delete tx runs, the in-tx ref-count returns >0
+// and the delete is skipped. This covers the "ref appeared before tx
+// open" arm of the race; the tighter "ref appears mid-tx" arm is
+// handled by SERIALIZABLE isolation in purgeOneSchemaEntry but cannot
+// be exercised in the SQLite unit-test environment (single-writer
+// model serializes the writes inherently). An integration test against
+// Postgres would be needed to verify SSI-level race prevention end-to-
+// end; this is tracked as follow-up work for the dedicated Postgres
+// integration suite.
+func TestSweep_PurgeOrphanSchemaEntries_RefCheckPreventsDelete(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, job, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// 1. Orphan schema entry, past retention. Would be purged on a
+	//    naive sweep.
+	seedSchemaEntryAt(t, client, "sha256:racing", now.Add(-2*time.Hour))
+
+	// 2. Snapshot the candidate scan and confirm it would pick this
+	//    entry up.
+	threshold := now.Add(-cfg.Retention)
+	candidates, err := client.SchemaEntry.Query().
+		Where(schemaentry.CreatedAtLT(threshold)).
+		All(ctx)
+	if err != nil {
+		t.Fatalf("query candidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].Hash != "sha256:racing" {
+		t.Fatalf("expected exactly one candidate (sha256:racing), got %v", candidates)
+	}
+
+	// 3. Simulate a concurrent registration: a capability now references
+	//    the hash. This is what the in-tx re-query must catch.
+	seedAgent(t, client, "racing-provider", agent.StatusHealthy, now)
+	racingHash := "sha256:racing"
+	_, err = client.Capability.Create().
+		SetAgentID("racing-provider").
+		SetFunctionName("late_arrival").
+		SetCapability("widget").
+		SetInputSchemaHash(racingHash).
+		Save(ctx)
+	if err != nil {
+		t.Fatalf("seed racing capability: %v", err)
+	}
+
+	// 4. Run the per-row delete. The in-tx Capability ref-count must
+	//    return >0 and the delete must be skipped.
+	deleted, err := job.purgeOneSchemaEntry(ctx, "sha256:racing", threshold)
+	if err != nil {
+		t.Fatalf("purgeOneSchemaEntry: %v", err)
+	}
+	if deleted {
+		t.Errorf("expected purge to be skipped (race lost), got deleted=true")
+	}
+
+	// 5. Schema entry must still exist.
+	count, err := client.SchemaEntry.Query().
+		Where(schemaentry.HashEQ("sha256:racing")).
+		Count(ctx)
+	if err != nil {
+		t.Fatalf("query schema entry: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected racing schema_entry preserved, got count=%d", count)
+	}
+}
+
+// TestSweep_PurgeOrphanSchemaEntries_SkipsReferencedAcrossLargeBatch
+// verifies the DB-side HashNotIn filter on the candidate scan: when
+// stale schema_entries include a mix of referenced and orphan rows,
+// runOnce must purge ONLY the true orphans and never spend the per-tick
+// limit on referenced rows.
+//
+// Without the DB-side filter, a registry with stale-but-still-referenced
+// schemas would have those rows fill the Limit(1000) candidate slot on
+// every tick and the true orphans past that position would never get
+// purged. We use small N here (well below 1000) but the assertion is
+// the same — every referenced row must be excluded from the candidate
+// list, so the deletion count equals exactly N_orphans regardless of
+// how many referenced rows would otherwise have come first in the
+// default order.
+func TestSweep_PurgeOrphanSchemaEntries_SkipsReferencedAcrossLargeBatch(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, job, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Seed a healthy provider to host capabilities that reference schemas.
+	seedAgent(t, client, "provider", agent.StatusHealthy, now)
+
+	// 20 stale schema entries (well past 1h retention). The first 10
+	// (by insertion order) will be referenced by capabilities; the last
+	// 10 are true orphans. Without the DB-side filter, the referenced
+	// rows would have come first in the default order and consumed the
+	// candidate slots on each tick.
+	const total = 20
+	const referenced = 10
+	staleAt := now.Add(-2 * time.Hour)
+	for i := 0; i < total; i++ {
+		hash := "sha256:entry-" + string(rune('a'+i))
+		seedSchemaEntryAt(t, client, hash, staleAt)
+	}
+
+	// Reference the first `referenced` schemas via a capability per row
+	// (alternating input vs output to exercise both code paths).
+	for i := 0; i < referenced; i++ {
+		hash := "sha256:entry-" + string(rune('a'+i))
+		create := client.Capability.Create().
+			SetAgentID("provider").
+			SetFunctionName("fn-" + string(rune('a'+i))).
+			SetCapability("cap-" + string(rune('a'+i)))
+		if i%2 == 0 {
+			create = create.SetInputSchemaHash(hash)
+		} else {
+			create = create.SetOutputSchemaHash(hash)
+		}
+		if _, err := create.Save(ctx); err != nil {
+			t.Fatalf("seed capability for %s: %v", hash, err)
+		}
+	}
+
+	_, _, schemasPurged, err := job.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+
+	wantPurged := total - referenced
+	if schemasPurged != wantPurged {
+		t.Errorf("expected %d schemas purged (total=%d, referenced=%d), got %d", wantPurged, total, referenced, schemasPurged)
+	}
+
+	// Verify the surviving rows are exactly the referenced ones.
+	remaining, err := client.SchemaEntry.Query().
+		Order(ent.Asc(schemaentry.FieldHash)).
+		All(ctx)
+	if err != nil {
+		t.Fatalf("query remaining schema entries: %v", err)
+	}
+	if len(remaining) != referenced {
+		t.Fatalf("expected %d schema entries remaining, got %d", referenced, len(remaining))
+	}
+	for _, e := range remaining {
+		// Each surviving entry must be one of the first `referenced` we seeded.
+		// e.Hash format: "sha256:entry-<letter>" where letter is in [a, a+referenced).
+		idx := int(e.Hash[len(e.Hash)-1] - 'a')
+		if idx < 0 || idx >= referenced {
+			t.Errorf("unexpected surviving entry %s (idx=%d, want < %d)", e.Hash, idx, referenced)
+		}
+	}
 }

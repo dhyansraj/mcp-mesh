@@ -268,3 +268,37 @@ func (db *EntDatabase) Transaction(ctx context.Context, fn func(*ent.Tx) error) 
 
 	return nil
 }
+
+// TransactionWithOptions executes a function within a database transaction
+// using the supplied sql.TxOptions (e.g. to request SERIALIZABLE isolation).
+//
+// On Postgres this enables Serializable Snapshot Isolation (SSI), which
+// can return a 40001 "could not serialize access" error at commit time;
+// callers must be prepared to handle that as a retryable condition.
+// SQLite uses SERIALIZABLE by default (single-writer model), so the
+// option is a no-op there.
+func (db *EntDatabase) TransactionWithOptions(ctx context.Context, opts *sql.TxOptions, fn func(*ent.Tx) error) error {
+	tx, err := db.Client.BeginTx(ctx, opts)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if v := recover(); v != nil {
+			tx.Rollback()
+			panic(v)
+		}
+	}()
+
+	if err := fn(tx); err != nil {
+		if rerr := tx.Rollback(); rerr != nil {
+			return fmt.Errorf("rolling back transaction: %w", rerr)
+		}
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing transaction: %w", err)
+	}
+
+	return nil
+}
