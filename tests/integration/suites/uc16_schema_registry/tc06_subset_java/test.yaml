@@ -1,0 +1,132 @@
+# Test Case: tc06 - Subset-mode eviction (all Java)
+# Issue #547 Phase 4: Java baseline parity with Python/TS.
+#
+# producer_good (@NotNull Employee) + producer_bad (Hardware) + consumer
+# (@Selector(expectedType=Employee, schemaMode=SUBSET)). Audit must show
+# producer-bad-java evicted at schema stage; chosen = producer-good-java.
+
+name: "Schema Registry: subset-mode eviction (Java <-> Java)"
+description: "Schema-aware Java consumer evicts producer-bad-java and wires to producer-good-java"
+tags:
+  - schema_registry
+  - java
+  - subset
+  - slow
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy schema-java agents to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/schema-java
+      cp -r /uc-artifacts/schema-java/pom.xml /workspace/schema-java/
+      cp -r /uc-artifacts/schema-java/producer-good /workspace/schema-java/
+      cp -r /uc-artifacts/schema-java/producer-bad /workspace/schema-java/
+      cp -r /uc-artifacts/schema-java/consumer /workspace/schema-java/
+      ls -la /workspace/schema-java/
+
+  - name: "Install Maven deps for producer-good"
+    handler: maven-install
+    path: /workspace/schema-java/producer-good
+    timeout: 600
+
+  - name: "Install Maven deps for producer-bad"
+    handler: maven-install
+    path: /workspace/schema-java/producer-bad
+    timeout: 600
+
+  - name: "Install Maven deps for consumer"
+    handler: maven-install
+    path: /workspace/schema-java/consumer
+    timeout: 600
+
+  - name: "Start producer-good-java"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/schema-java/producer-good --env MCP_MESH_HTTP_PORT=0 -d"
+
+  - name: "Start producer-bad-java"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/schema-java/producer-bad --env MCP_MESH_HTTP_PORT=0 -d"
+
+  - name: "Wait for Java producers (cold start)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        LIST=$(meshctl list 2>/dev/null)
+        if echo "$LIST" | grep -q "producer-good-java" && echo "$LIST" | grep -q "producer-bad-java"; then
+          echo "Both Java producers registered after $((i*3))s"
+          echo "$LIST"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Java producers did not register within 180s"
+      meshctl list 2>&1 || true
+      exit 1
+    capture: wait_producers
+    timeout: 210
+
+  - name: "Start consumer-java"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/schema-java/consumer --env MCP_MESH_HTTP_PORT=0 -d"
+
+  - name: "Wait for consumer-java cold start + dep resolution"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "consumer-java" && echo "$AGENTS" | grep "consumer-java" | grep -q "1/1"; then
+          echo "consumer-java registered + deps resolved after $((i*3))s"
+          echo "$AGENTS"
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: consumer-java did not register or resolve deps within 180s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_consumer
+    timeout: 210
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Audit consumer JSON"
+    handler: shell
+    workdir: /workspace
+    command: meshctl audit consumer-java --json --function lookupWithSchema --dep 0
+    capture: audit_json
+
+assertions:
+  - expr: "${captured.agent_list} contains 'producer-good-java'"
+  - expr: "${captured.agent_list} contains 'producer-bad-java'"
+  - expr: "${captured.agent_list} contains 'consumer-java'"
+  - expr: ${jq:captured.audit_json:.events[0].trace.chosen.agent_id} contains 'producer-good-java'
+    message: "Java consumer should wire to producer-good-java"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].reason} == 'SchemaIncompatible'
+    message: "producer-bad-java should be evicted at schema stage"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].id} contains 'producer-bad-java'
+    message: "Evicted candidate id should reference producer-bad-java"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot" 2>/dev/null || true
+      pkill -f "java.*producer" 2>/dev/null || true
+      pkill -f "java.*consumer" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

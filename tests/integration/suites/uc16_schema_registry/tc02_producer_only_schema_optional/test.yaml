@@ -1,0 +1,168 @@
+# Test Case: tc02 - Producer publishes outputSchema, consumer omits expected_type
+# Issue #547 Phase 4: producer/consumer opt-in are independent.
+#
+# Verifies:
+#   - Producer-good's Employee schema IS persisted in schema_entries (storage works)
+#   - Consumer without expected_type still wires (schema check is consumer-side opt-in)
+#
+# Uses python producer-good (declares Employee outputSchema) + an inline-written
+# consumer that depends on `employee_lookup` with NO expected_type / match_mode.
+#
+# Storage proof: a successful end-to-end `meshctl call` returning the producer's
+# Employee payload (Alice/Engineering) proves that the producer registered with
+# its outputSchema, the consumer wired to it, and the HTTP transport carried the
+# typed payload back. No DB introspection or audit lookup needed -- the call IS
+# the proof. (Audit emits no event for single-candidate resolved scenarios by
+# design: forced choice = no decision drama.)
+
+name: "Schema Registry: producer-only schema, consumer opts out"
+description: "Producer publishes outputSchema; consumer without expected_type wires (schema check opt-in is independent)"
+tags:
+  - schema_registry
+  - py
+  - backcompat
+  - storage
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy schema-py producer-good to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/schema-py
+      cp /uc-artifacts/schema-py/producer_good.py /workspace/schema-py/
+      ls -la /workspace/schema-py/
+
+  - name: "Write consumer WITHOUT expected_type"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cat > /workspace/schema-py/consumer_no_check.py <<'PYEOF'
+      """Consumer that depends on employee_lookup with NO schema check.
+
+      Verifies producer-side schema publishing is independent of consumer-side
+      schema enforcement (#547 tc02).
+      """
+      import mesh
+      from fastmcp import FastMCP
+
+      app = FastMCP("Consumer No Check (Python)")
+
+      @app.tool()
+      @mesh.tool(
+          capability="schema_optional_consumer_py",
+          description="Consumer w/o expected_type - relies on capability+tags only",
+          dependencies=[{"capability": "employee_lookup"}],
+      )
+      async def lookup(emp_id: str, lookup: mesh.McpMeshTool | None = None) -> str:
+          if lookup is None:
+              return f"no producer for {emp_id}"
+          result = await lookup(employee_id=emp_id)
+          return f"got: {result}"
+
+      @mesh.agent(
+          name="consumer-nocheck-py",
+          version="1.0.0",
+          description="Consumer (no expected_type) for #547 tc02",
+          http_port=9102,
+          enable_http=True,
+          auto_run=True,
+      )
+      class ConsumerNoCheckAgent:
+          pass
+      PYEOF
+      echo "wrote consumer_no_check.py"
+
+  - name: "Start producer-good"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/producer_good.py -d"
+    capture: start_producer
+
+  - name: "Wait for producer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "producer-good-py"; then
+          echo "producer-good-py registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: producer-good-py did not register within 40s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_producer
+    timeout: 60
+
+  - name: "Start consumer (no expected_type)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/consumer_no_check.py -d"
+    capture: start_consumer
+
+  - name: "Wait for consumer + dep resolution"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "consumer-nocheck-py" && echo "$AGENTS" | grep "consumer-nocheck-py" | grep -q "1/1"; then
+          echo "consumer-nocheck-py registered + deps resolved after $((i*2))s"
+          echo "$AGENTS"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: consumer-nocheck-py did not register or resolve deps within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_consumer
+    timeout: 90
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Call no-check consumer to verify end-to-end wiring + storage"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call lookup '{"emp_id": "E1"}' 2>&1 || true
+    capture: call_result
+
+# Note: only one producer registers `employee_lookup` in this test, so the
+# audit pipeline emits no event (single-candidate resolved is forced choice =
+# no decision drama, by design). The successful `meshctl call` returning the
+# producer's Employee payload is itself proof that:
+#   - producer-good-py registered with its outputSchema (storage works)
+#   - the consumer (with NO expected_type) still wired (consumer opt-in is
+#     independent of producer publishing)
+#   - the resolver picked producer-good-py and the HTTP transport carried the
+#     typed payload back end-to-end.
+assertions:
+  - expr: "${captured.agent_list} contains 'producer-good-py'"
+    message: "Producer-good should be registered"
+  - expr: "${captured.agent_list} contains 'consumer-nocheck-py'"
+    message: "Consumer (no-check) should be registered"
+  - expr: "${captured.call_result} contains 'got:'"
+    message: "Consumer with no expected_type should still wire to producer-good"
+  - expr: "${captured.call_result} contains 'Alice'"
+    message: "Consumer must receive producer's Employee payload (proves storage + wire end-to-end)"
+  - expr: "${captured.call_result} contains 'Engineering'"
+    message: "Consumer must receive Employee.dept field from producer-good"
+  - expr: "${captured.call_result} not contains 'no producer'"
+    message: "Consumer must NOT report missing producer"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

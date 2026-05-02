@@ -1,0 +1,86 @@
+# Test Case: tc07 - Cross-runtime subset (Python producers + TS consumer)
+# Issue #547 Phase 4: cross-runtime canonical-form parity (Pydantic <-> Zod).
+#
+# producer-good-py + producer-bad-py + consumer-ts (subset, Zod Employee).
+# TS consumer must wire to producer-good-py via canonical hash equality.
+
+name: "Schema Registry: cross-runtime — PY producers + TS consumer"
+description: "TS schema-aware consumer wires to Python producer-good (canonical-form parity Pydantic<->Zod)"
+tags:
+  - schema_registry
+  - cross_runtime
+  - py
+  - ts
+  - subset
+timeout: 240
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy schema-py producers + schema-ts consumer to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/schema-py /workspace/schema-ts
+      cp /uc-artifacts/schema-py/producer_good.py /workspace/schema-py/
+      cp /uc-artifacts/schema-py/producer_bad.py /workspace/schema-py/
+      cp /uc-artifacts/schema-ts/consumer.ts /workspace/schema-ts/
+      cp /uc-artifacts/schema-ts/package.json /workspace/schema-ts/
+      ls -la /workspace/schema-py/ /workspace/schema-ts/
+
+  - name: "Install TypeScript dependencies"
+    handler: npm-install
+    path: /workspace/schema-ts
+
+  - name: "Start producer-good-py (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/producer_good.py -d"
+
+  - name: "Start producer-bad-py (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/producer_bad.py -d"
+
+  - name: "Wait for python producers"
+    handler: wait
+    seconds: 12
+
+  - name: "Start consumer-ts (port 9112)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-ts/consumer.ts -d"
+
+  - name: "Wait for TS consumer + dep resolution"
+    handler: wait
+    seconds: 25
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Audit consumer-ts JSON"
+    handler: shell
+    workdir: /workspace
+    command: meshctl audit consumer-ts --json --function lookup_with_schema --dep 0
+    capture: audit_json
+
+assertions:
+  - expr: "${captured.agent_list} contains 'producer-good-py'"
+  - expr: "${captured.agent_list} contains 'producer-bad-py'"
+  - expr: "${captured.agent_list} contains 'consumer-ts'"
+  - expr: ${jq:captured.audit_json:.events[0].trace.chosen.agent_id} contains 'producer-good-py'
+    message: "TS consumer should wire to Python producer-good (cross-runtime canonical hash equality)"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].id} contains 'producer-bad-py'
+    message: "Python producer-bad should be evicted at schema stage"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

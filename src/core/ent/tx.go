@@ -24,6 +24,8 @@ type Tx struct {
 	LLMToolResolution *LLMToolResolutionClient
 	// RegistryEvent is the client for interacting with the RegistryEvent builders.
 	RegistryEvent *RegistryEventClient
+	// SchemaEntry is the client for interacting with the SchemaEntry builders.
+	SchemaEntry *SchemaEntryClient
 
 	// lazily loaded.
 	client     *Client
@@ -161,6 +163,7 @@ func (tx *Tx) init() {
 	tx.LLMProviderResolution = NewLLMProviderResolutionClient(tx.config)
 	tx.LLMToolResolution = NewLLMToolResolutionClient(tx.config)
 	tx.RegistryEvent = NewRegistryEventClient(tx.config)
+	tx.SchemaEntry = NewSchemaEntryClient(tx.config)
 }
 
 // txDriver wraps the given dialect.Tx with a nop dialect.Driver implementation.

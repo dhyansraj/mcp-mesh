@@ -123,3 +123,5 @@ post_run:
       meshctl stop 2>/dev/null || true
     ignore_errors: true
   - routine: global.cleanup_workspace
+
+disabled: true # TEMP disabled: Gemini RESOURCE_EXHAUSTED 429 quota issue (#840)

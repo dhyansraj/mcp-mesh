@@ -295,6 +295,16 @@ func (h *TestHandlers) ListEvents(c *gin.Context, params generated.ListEventsPar
 	c.JSON(200, gin.H{"events": []interface{}{}, "count": 0})
 }
 
+// ListSchemas implements the GET /schemas endpoint (test stub, issue #547).
+func (h *TestHandlers) ListSchemas(c *gin.Context, params generated.ListSchemasParams) {
+	c.JSON(200, gin.H{"schemas": []interface{}{}, "count": 0})
+}
+
+// GetSchema implements the GET /schemas/{hash} endpoint (test stub, issue #547).
+func (h *TestHandlers) GetSchema(c *gin.Context, hash string) {
+	c.JSON(404, gin.H{"error": "not found", "timestamp": time.Now().UTC()})
+}
+
 // TestHealthMonitor tests the background health monitoring functionality
 func TestHealthMonitor(t *testing.T) {
 	tests := []struct {

@@ -17,6 +17,7 @@ import (
 	"mcp-mesh/src/core/ent/llmproviderresolution"
 	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
+	"mcp-mesh/src/core/ent/schemaentry"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect"
@@ -41,6 +42,8 @@ type Client struct {
 	LLMToolResolution *LLMToolResolutionClient
 	// RegistryEvent is the client for interacting with the RegistryEvent builders.
 	RegistryEvent *RegistryEventClient
+	// SchemaEntry is the client for interacting with the SchemaEntry builders.
+	SchemaEntry *SchemaEntryClient
 }
 
 // NewClient creates a new client configured with the given options.
@@ -58,6 +61,7 @@ func (c *Client) init() {
 	c.LLMProviderResolution = NewLLMProviderResolutionClient(c.config)
 	c.LLMToolResolution = NewLLMToolResolutionClient(c.config)
 	c.RegistryEvent = NewRegistryEventClient(c.config)
+	c.SchemaEntry = NewSchemaEntryClient(c.config)
 }
 
 type (
@@ -156,6 +160,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		LLMProviderResolution: NewLLMProviderResolutionClient(cfg),
 		LLMToolResolution:     NewLLMToolResolutionClient(cfg),
 		RegistryEvent:         NewRegistryEventClient(cfg),
+		SchemaEntry:           NewSchemaEntryClient(cfg),
 	}, nil
 }
 
@@ -181,6 +186,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		LLMProviderResolution: NewLLMProviderResolutionClient(cfg),
 		LLMToolResolution:     NewLLMToolResolutionClient(cfg),
 		RegistryEvent:         NewRegistryEventClient(cfg),
+		SchemaEntry:           NewSchemaEntryClient(cfg),
 	}, nil
 }
 
@@ -211,7 +217,7 @@ func (c *Client) Close() error {
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.Agent, c.Capability, c.DependencyResolution, c.LLMProviderResolution,
-		c.LLMToolResolution, c.RegistryEvent,
+		c.LLMToolResolution, c.RegistryEvent, c.SchemaEntry,
 	} {
 		n.Use(hooks...)
 	}
@@ -222,7 +228,7 @@ func (c *Client) Use(hooks ...Hook) {
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.Agent, c.Capability, c.DependencyResolution, c.LLMProviderResolution,
-		c.LLMToolResolution, c.RegistryEvent,
+		c.LLMToolResolution, c.RegistryEvent, c.SchemaEntry,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -243,6 +249,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.LLMToolResolution.mutate(ctx, m)
 	case *RegistryEventMutation:
 		return c.RegistryEvent.mutate(ctx, m)
+	case *SchemaEntryMutation:
+		return c.SchemaEntry.mutate(ctx, m)
 	default:
 		return nil, fmt.Errorf("ent: unknown mutation type %T", m)
 	}
@@ -1254,14 +1262,147 @@ func (c *RegistryEventClient) mutate(ctx context.Context, m *RegistryEventMutati
 	}
 }
 
+// SchemaEntryClient is a client for the SchemaEntry schema.
+type SchemaEntryClient struct {
+	config
+}
+
+// NewSchemaEntryClient returns a client for the SchemaEntry from the given config.
+func NewSchemaEntryClient(c config) *SchemaEntryClient {
+	return &SchemaEntryClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `schemaentry.Hooks(f(g(h())))`.
+func (c *SchemaEntryClient) Use(hooks ...Hook) {
+	c.hooks.SchemaEntry = append(c.hooks.SchemaEntry, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `schemaentry.Intercept(f(g(h())))`.
+func (c *SchemaEntryClient) Intercept(interceptors ...Interceptor) {
+	c.inters.SchemaEntry = append(c.inters.SchemaEntry, interceptors...)
+}
+
+// Create returns a builder for creating a SchemaEntry entity.
+func (c *SchemaEntryClient) Create() *SchemaEntryCreate {
+	mutation := newSchemaEntryMutation(c.config, OpCreate)
+	return &SchemaEntryCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of SchemaEntry entities.
+func (c *SchemaEntryClient) CreateBulk(builders ...*SchemaEntryCreate) *SchemaEntryCreateBulk {
+	return &SchemaEntryCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *SchemaEntryClient) MapCreateBulk(slice any, setFunc func(*SchemaEntryCreate, int)) *SchemaEntryCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &SchemaEntryCreateBulk{err: fmt.Errorf("calling to SchemaEntryClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*SchemaEntryCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &SchemaEntryCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for SchemaEntry.
+func (c *SchemaEntryClient) Update() *SchemaEntryUpdate {
+	mutation := newSchemaEntryMutation(c.config, OpUpdate)
+	return &SchemaEntryUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *SchemaEntryClient) UpdateOne(se *SchemaEntry) *SchemaEntryUpdateOne {
+	mutation := newSchemaEntryMutation(c.config, OpUpdateOne, withSchemaEntry(se))
+	return &SchemaEntryUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *SchemaEntryClient) UpdateOneID(id int) *SchemaEntryUpdateOne {
+	mutation := newSchemaEntryMutation(c.config, OpUpdateOne, withSchemaEntryID(id))
+	return &SchemaEntryUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for SchemaEntry.
+func (c *SchemaEntryClient) Delete() *SchemaEntryDelete {
+	mutation := newSchemaEntryMutation(c.config, OpDelete)
+	return &SchemaEntryDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *SchemaEntryClient) DeleteOne(se *SchemaEntry) *SchemaEntryDeleteOne {
+	return c.DeleteOneID(se.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *SchemaEntryClient) DeleteOneID(id int) *SchemaEntryDeleteOne {
+	builder := c.Delete().Where(schemaentry.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &SchemaEntryDeleteOne{builder}
+}
+
+// Query returns a query builder for SchemaEntry.
+func (c *SchemaEntryClient) Query() *SchemaEntryQuery {
+	return &SchemaEntryQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeSchemaEntry},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a SchemaEntry entity by its id.
+func (c *SchemaEntryClient) Get(ctx context.Context, id int) (*SchemaEntry, error) {
+	return c.Query().Where(schemaentry.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *SchemaEntryClient) GetX(ctx context.Context, id int) *SchemaEntry {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *SchemaEntryClient) Hooks() []Hook {
+	return c.hooks.SchemaEntry
+}
+
+// Interceptors returns the client interceptors.
+func (c *SchemaEntryClient) Interceptors() []Interceptor {
+	return c.inters.SchemaEntry
+}
+
+func (c *SchemaEntryClient) mutate(ctx context.Context, m *SchemaEntryMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&SchemaEntryCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&SchemaEntryUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&SchemaEntryUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&SchemaEntryDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown SchemaEntry mutation op: %q", m.Op())
+	}
+}
+
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
 		Agent, Capability, DependencyResolution, LLMProviderResolution,
-		LLMToolResolution, RegistryEvent []ent.Hook
+		LLMToolResolution, RegistryEvent, SchemaEntry []ent.Hook
 	}
 	inters struct {
 		Agent, Capability, DependencyResolution, LLMProviderResolution,
-		LLMToolResolution, RegistryEvent []ent.Interceptor
+		LLMToolResolution, RegistryEvent, SchemaEntry []ent.Interceptor
 	}
 )

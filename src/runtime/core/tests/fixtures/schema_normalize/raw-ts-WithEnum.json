@@ -1,0 +1,1 @@
+{"$ref":"#/definitions/WithEnum","definitions":{"WithEnum":{"type":"object","properties":{"role":{"type":"string","enum":["admin","user","guest"]}},"required":["role"],"additionalProperties":false}},"$schema":"http://json-schema.org/draft-07/schema#"}

@@ -1,0 +1,1 @@
+{"$ref":"#/definitions/CaseConversion","definitions":{"CaseConversion":{"type":"object","properties":{"marketCap":{"type":"number"},"hireDate":{"type":"string","format":"date"},"isActive":{"type":"boolean"}},"required":["marketCap","hireDate","isActive"],"additionalProperties":false}},"$schema":"http://json-schema.org/draft-07/schema#"}

@@ -28,11 +28,24 @@ pub struct JsDependencySpec {
     pub tags: String,
     /// Version constraint (e.g., ">=2.0.0")
     pub version: Option<String>,
+    /// Issue #547: canonical normalized expected schema (serialized JSON string)
+    pub expected_schema_canonical: Option<String>,
+    /// Issue #547: SHA256 hash (sha256:<hex>) of expected_schema_canonical
+    pub expected_schema_hash: Option<String>,
+    /// Issue #547: schema match mode ("subset" or "strict")
+    pub match_mode: Option<String>,
 }
 
 impl From<JsDependencySpec> for RustDependencySpec {
     fn from(js: JsDependencySpec) -> Self {
-        RustDependencySpec::new(js.capability, Some(js.tags), js.version)
+        RustDependencySpec::new(
+            js.capability,
+            Some(js.tags),
+            js.version,
+            js.expected_schema_canonical,
+            js.expected_schema_hash,
+            js.match_mode,
+        )
     }
 }
 
@@ -148,6 +161,18 @@ pub struct JsToolSpec {
     pub dependencies: Vec<JsDependencySpec>,
     /// JSON Schema for input parameters (MCP format) - serialized JSON string
     pub input_schema: Option<String>,
+    /// Issue #547: raw JSON Schema for output (return type) - serialized JSON string
+    pub output_schema: Option<String>,
+    /// Issue #547: canonical normalized input schema (post-normalize) - serialized JSON string
+    pub input_schema_canonical: Option<String>,
+    /// Issue #547: SHA256 hash (sha256:<hex>) of input_schema_canonical
+    pub input_schema_hash: Option<String>,
+    /// Issue #547: canonical normalized output schema - serialized JSON string
+    pub output_schema_canonical: Option<String>,
+    /// Issue #547: SHA256 hash (sha256:<hex>) of output_schema_canonical
+    pub output_schema_hash: Option<String>,
+    /// Issue #547: normalizer warnings (list of strings)
+    pub schema_warnings: Option<Vec<String>>,
     /// LLM filter specification (for @mesh.llm decorated functions) - serialized JSON string
     pub llm_filter: Option<String>,
     /// LLM provider specification (for mesh delegation) - serialized JSON string
@@ -164,6 +189,12 @@ impl From<JsToolSpec> for RustToolSpec {
             Some(js.tags),
             Some(js.dependencies.into_iter().map(|d| d.into()).collect()),
             js.input_schema,
+            js.output_schema,
+            js.input_schema_canonical,
+            js.input_schema_hash,
+            js.output_schema_canonical,
+            js.output_schema_hash,
+            js.schema_warnings,
             js.llm_filter,
             js.llm_provider,
             None, // kwargs - not needed for TypeScript
@@ -626,6 +657,29 @@ pub fn is_simple_schema(schema_json: String) -> bool {
     crate::schema::is_simple_schema(&schema_json)
 }
 
+/// Normalize a raw JSON schema into canonical form + SHA256 hash (Issue #547).
+///
+/// Returns a JSON string with fields: canonical, hash, verdict, warnings.
+/// Mirrors the Python `normalize_schema_py` binding so TypeScript runtimes can
+/// emit the same canonical form + hash as Python producers/consumers.
+#[napi]
+pub fn normalize_schema(raw_json: String, origin: Option<String>) -> napi::Result<String> {
+    let origin_enum = match origin.as_deref() {
+        Some("typescript") => crate::schema_normalize::SchemaOrigin::TypeScript,
+        Some("python") => crate::schema_normalize::SchemaOrigin::Python,
+        Some("java") => crate::schema_normalize::SchemaOrigin::Java,
+        _ => crate::schema_normalize::SchemaOrigin::Unknown,
+    };
+    let result = crate::schema_normalize::normalize_schema(&raw_json, origin_enum);
+    let out = serde_json::json!({
+        "canonical": result.canonical,
+        "hash": result.hash,
+        "verdict": result.verdict,
+        "warnings": result.warnings,
+    });
+    serde_json::to_string(&out).map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
 // =============================================================================
 // Trace Context
 // =============================================================================
@@ -1017,6 +1071,12 @@ mod tests {
                 description: "LLM-powered assistant".to_string(),
                 dependencies: vec![],
                 input_schema: None,
+                output_schema: None,
+                input_schema_canonical: None,
+                input_schema_hash: None,
+                output_schema_canonical: None,
+                output_schema_hash: None,
+                schema_warnings: None,
                 llm_filter: Some(r#"[{"capability": "calculator"}]"#.to_string()),
                 llm_provider: Some(r#"{"capability": "llm"}"#.to_string()),
             }],

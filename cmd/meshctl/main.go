@@ -43,7 +43,8 @@ func main() {
 	rootCmd.AddCommand(cli.NewConfigCommand())
 	rootCmd.AddCommand(cli.NewScaffoldCommand())
 	rootCmd.AddCommand(cli.NewTraceCommand()) // Issue #310
-	rootCmd.AddCommand(cli.NewAuditCommand()) // Issue #836
+	rootCmd.AddCommand(cli.NewAuditCommand())  // Issue #836
+	rootCmd.AddCommand(cli.NewSchemaCommand()) // Issue #547
 	rootCmd.AddCommand(cli.NewEntityCommand())
 	rootCmd.AddCommand(man.NewManCommand())
 

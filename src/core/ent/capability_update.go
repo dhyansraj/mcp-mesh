@@ -104,6 +104,64 @@ func (cu *CapabilityUpdate) ClearInputSchema() *CapabilityUpdate {
 	return cu
 }
 
+// SetInputSchemaHash sets the "input_schema_hash" field.
+func (cu *CapabilityUpdate) SetInputSchemaHash(s string) *CapabilityUpdate {
+	cu.mutation.SetInputSchemaHash(s)
+	return cu
+}
+
+// SetNillableInputSchemaHash sets the "input_schema_hash" field if the given value is not nil.
+func (cu *CapabilityUpdate) SetNillableInputSchemaHash(s *string) *CapabilityUpdate {
+	if s != nil {
+		cu.SetInputSchemaHash(*s)
+	}
+	return cu
+}
+
+// ClearInputSchemaHash clears the value of the "input_schema_hash" field.
+func (cu *CapabilityUpdate) ClearInputSchemaHash() *CapabilityUpdate {
+	cu.mutation.ClearInputSchemaHash()
+	return cu
+}
+
+// SetOutputSchemaHash sets the "output_schema_hash" field.
+func (cu *CapabilityUpdate) SetOutputSchemaHash(s string) *CapabilityUpdate {
+	cu.mutation.SetOutputSchemaHash(s)
+	return cu
+}
+
+// SetNillableOutputSchemaHash sets the "output_schema_hash" field if the given value is not nil.
+func (cu *CapabilityUpdate) SetNillableOutputSchemaHash(s *string) *CapabilityUpdate {
+	if s != nil {
+		cu.SetOutputSchemaHash(*s)
+	}
+	return cu
+}
+
+// ClearOutputSchemaHash clears the value of the "output_schema_hash" field.
+func (cu *CapabilityUpdate) ClearOutputSchemaHash() *CapabilityUpdate {
+	cu.mutation.ClearOutputSchemaHash()
+	return cu
+}
+
+// SetSchemaWarnings sets the "schema_warnings" field.
+func (cu *CapabilityUpdate) SetSchemaWarnings(s []string) *CapabilityUpdate {
+	cu.mutation.SetSchemaWarnings(s)
+	return cu
+}
+
+// AppendSchemaWarnings appends s to the "schema_warnings" field.
+func (cu *CapabilityUpdate) AppendSchemaWarnings(s []string) *CapabilityUpdate {
+	cu.mutation.AppendSchemaWarnings(s)
+	return cu
+}
+
+// ClearSchemaWarnings clears the value of the "schema_warnings" field.
+func (cu *CapabilityUpdate) ClearSchemaWarnings() *CapabilityUpdate {
+	cu.mutation.ClearSchemaWarnings()
+	return cu
+}
+
 // SetLlmFilter sets the "llm_filter" field.
 func (cu *CapabilityUpdate) SetLlmFilter(m map[string]interface{}) *CapabilityUpdate {
 	cu.mutation.SetLlmFilter(m)
@@ -275,6 +333,29 @@ func (cu *CapabilityUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	if cu.mutation.InputSchemaCleared() {
 		_spec.ClearField(capability.FieldInputSchema, field.TypeJSON)
 	}
+	if value, ok := cu.mutation.InputSchemaHash(); ok {
+		_spec.SetField(capability.FieldInputSchemaHash, field.TypeString, value)
+	}
+	if cu.mutation.InputSchemaHashCleared() {
+		_spec.ClearField(capability.FieldInputSchemaHash, field.TypeString)
+	}
+	if value, ok := cu.mutation.OutputSchemaHash(); ok {
+		_spec.SetField(capability.FieldOutputSchemaHash, field.TypeString, value)
+	}
+	if cu.mutation.OutputSchemaHashCleared() {
+		_spec.ClearField(capability.FieldOutputSchemaHash, field.TypeString)
+	}
+	if value, ok := cu.mutation.SchemaWarnings(); ok {
+		_spec.SetField(capability.FieldSchemaWarnings, field.TypeJSON, value)
+	}
+	if value, ok := cu.mutation.AppendedSchemaWarnings(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, capability.FieldSchemaWarnings, value)
+		})
+	}
+	if cu.mutation.SchemaWarningsCleared() {
+		_spec.ClearField(capability.FieldSchemaWarnings, field.TypeJSON)
+	}
 	if value, ok := cu.mutation.LlmFilter(); ok {
 		_spec.SetField(capability.FieldLlmFilter, field.TypeJSON, value)
 	}
@@ -435,6 +516,64 @@ func (cuo *CapabilityUpdateOne) SetInputSchema(m map[string]interface{}) *Capabi
 // ClearInputSchema clears the value of the "input_schema" field.
 func (cuo *CapabilityUpdateOne) ClearInputSchema() *CapabilityUpdateOne {
 	cuo.mutation.ClearInputSchema()
+	return cuo
+}
+
+// SetInputSchemaHash sets the "input_schema_hash" field.
+func (cuo *CapabilityUpdateOne) SetInputSchemaHash(s string) *CapabilityUpdateOne {
+	cuo.mutation.SetInputSchemaHash(s)
+	return cuo
+}
+
+// SetNillableInputSchemaHash sets the "input_schema_hash" field if the given value is not nil.
+func (cuo *CapabilityUpdateOne) SetNillableInputSchemaHash(s *string) *CapabilityUpdateOne {
+	if s != nil {
+		cuo.SetInputSchemaHash(*s)
+	}
+	return cuo
+}
+
+// ClearInputSchemaHash clears the value of the "input_schema_hash" field.
+func (cuo *CapabilityUpdateOne) ClearInputSchemaHash() *CapabilityUpdateOne {
+	cuo.mutation.ClearInputSchemaHash()
+	return cuo
+}
+
+// SetOutputSchemaHash sets the "output_schema_hash" field.
+func (cuo *CapabilityUpdateOne) SetOutputSchemaHash(s string) *CapabilityUpdateOne {
+	cuo.mutation.SetOutputSchemaHash(s)
+	return cuo
+}
+
+// SetNillableOutputSchemaHash sets the "output_schema_hash" field if the given value is not nil.
+func (cuo *CapabilityUpdateOne) SetNillableOutputSchemaHash(s *string) *CapabilityUpdateOne {
+	if s != nil {
+		cuo.SetOutputSchemaHash(*s)
+	}
+	return cuo
+}
+
+// ClearOutputSchemaHash clears the value of the "output_schema_hash" field.
+func (cuo *CapabilityUpdateOne) ClearOutputSchemaHash() *CapabilityUpdateOne {
+	cuo.mutation.ClearOutputSchemaHash()
+	return cuo
+}
+
+// SetSchemaWarnings sets the "schema_warnings" field.
+func (cuo *CapabilityUpdateOne) SetSchemaWarnings(s []string) *CapabilityUpdateOne {
+	cuo.mutation.SetSchemaWarnings(s)
+	return cuo
+}
+
+// AppendSchemaWarnings appends s to the "schema_warnings" field.
+func (cuo *CapabilityUpdateOne) AppendSchemaWarnings(s []string) *CapabilityUpdateOne {
+	cuo.mutation.AppendSchemaWarnings(s)
+	return cuo
+}
+
+// ClearSchemaWarnings clears the value of the "schema_warnings" field.
+func (cuo *CapabilityUpdateOne) ClearSchemaWarnings() *CapabilityUpdateOne {
+	cuo.mutation.ClearSchemaWarnings()
 	return cuo
 }
 
@@ -638,6 +777,29 @@ func (cuo *CapabilityUpdateOne) sqlSave(ctx context.Context) (_node *Capability,
 	}
 	if cuo.mutation.InputSchemaCleared() {
 		_spec.ClearField(capability.FieldInputSchema, field.TypeJSON)
+	}
+	if value, ok := cuo.mutation.InputSchemaHash(); ok {
+		_spec.SetField(capability.FieldInputSchemaHash, field.TypeString, value)
+	}
+	if cuo.mutation.InputSchemaHashCleared() {
+		_spec.ClearField(capability.FieldInputSchemaHash, field.TypeString)
+	}
+	if value, ok := cuo.mutation.OutputSchemaHash(); ok {
+		_spec.SetField(capability.FieldOutputSchemaHash, field.TypeString, value)
+	}
+	if cuo.mutation.OutputSchemaHashCleared() {
+		_spec.ClearField(capability.FieldOutputSchemaHash, field.TypeString)
+	}
+	if value, ok := cuo.mutation.SchemaWarnings(); ok {
+		_spec.SetField(capability.FieldSchemaWarnings, field.TypeJSON, value)
+	}
+	if value, ok := cuo.mutation.AppendedSchemaWarnings(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, capability.FieldSchemaWarnings, value)
+		})
+	}
+	if cuo.mutation.SchemaWarningsCleared() {
+		_spec.ClearField(capability.FieldSchemaWarnings, field.TypeJSON)
 	}
 	if value, ok := cuo.mutation.LlmFilter(); ok {
 		_spec.SetField(capability.FieldLlmFilter, field.TypeJSON, value)

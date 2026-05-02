@@ -77,6 +77,62 @@ agent.addTool({
 | `McpMeshTool`  | Tool calls via proxy                   |
 | `null`          | Dependency unavailable                 |
 
+### Schema-aware capabilities (issue #547)
+
+The mesh can match producers and consumers by their canonical response schemas, not just by capability name. This is opt-in per dependency.
+
+**Producer side** — pass a Zod schema as `outputSchema`:
+
+```typescript
+import { z } from "zod";
+
+const EmployeeSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  department: z.string(),
+});
+
+agent.addTool({
+  name: "lookup_employee",
+  capability: "lookup_employee",
+  parameters: z.object({ id: z.number().int() }),
+  outputSchema: EmployeeSchema,
+  execute: async ({ id }) => ({ id, name: "Ada", department: "Engineering" }),
+});
+```
+
+**Consumer side** — `expectedSchema` + `matchMode` on the dependency:
+
+```typescript
+agent.addTool({
+  name: "hr_report",
+  capability: "hr_report",
+  dependencies: [
+    {
+      capability: "lookup_employee",
+      expectedSchema: EmployeeSchema,
+      matchMode: "subset",  // or "strict"; defaults to "subset" if expectedSchema is set
+    },
+  ],
+  parameters: z.object({}),
+  execute: async ({}, { lookup_employee }) => { /* ... */ },
+});
+```
+
+**Per-tool strict knob** — set `outputSchemaStrict: false` on a producer tool to demote a BLOCK schema verdict to a WARN for that one tool. Wins even when the cluster-wide `MCP_MESH_SCHEMA_STRICT=true` env var promotes WARN→BLOCK.
+
+```typescript
+agent.addTool({
+  name: "experimental",
+  capability: "experimental_thing",
+  outputSchema: SomeRecursiveSchema,
+  outputSchemaStrict: false,
+  // ...
+});
+```
+
+See `meshctl man schema-matching` for modes, the cross-language convention table, and verdict tiers. See `meshctl man dependency-injection --typescript` for the full filter pipeline.
+
 ## mesh.llm()
 
 Creates an LLM-powered tool with automatic tool discovery.

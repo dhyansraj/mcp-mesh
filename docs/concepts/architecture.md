@@ -89,6 +89,21 @@ async def my_function(database: mesh.McpMeshTool = None):
     result = await database(query="SELECT *")
 ```
 
+### Resolver disambiguators
+
+When several producers register the same capability, the registry runs four filter stages in order to pick a winner:
+
+```
+capability → tags → version → schema → tiebreaker
+```
+
+- **capability** — exact-name match on the indexed capability registry.
+- **tags** — required / preferred / excluded tag scoring. See [Tag Matching](tag-matching.md).
+- **version** — semver constraint (`>=2.0.0`, `^1.4`, etc.).
+- **schema** — opt-in canonical-shape check on the producer's `outputSchema`. See [Schema Matching](schema-matching.md).
+
+The tiebreaker (`HighestScoreFirst`) picks the winner from the surviving set. Every non-trivial decision is recorded in the registry event log so you can replay it with `meshctl audit` — see [Audit Trail](audit.md).
+
 ## Service Discovery
 
 ### Capability-Based
@@ -237,3 +252,5 @@ See [Multimodal documentation](../multimodal/getting-started.md) for usage guide
 - [Registry](registry.md) - Registry details
 - [Health & Discovery](health-discovery.md) - Health system
 - [Tag Matching](tag-matching.md) - Selection algorithm
+- [Schema Matching](schema-matching.md) - Per-shape disambiguator
+- [Audit Trail](audit.md) - Replay resolver decisions

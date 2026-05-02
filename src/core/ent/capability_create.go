@@ -67,6 +67,40 @@ func (cc *CapabilityCreate) SetInputSchema(m map[string]interface{}) *Capability
 	return cc
 }
 
+// SetInputSchemaHash sets the "input_schema_hash" field.
+func (cc *CapabilityCreate) SetInputSchemaHash(s string) *CapabilityCreate {
+	cc.mutation.SetInputSchemaHash(s)
+	return cc
+}
+
+// SetNillableInputSchemaHash sets the "input_schema_hash" field if the given value is not nil.
+func (cc *CapabilityCreate) SetNillableInputSchemaHash(s *string) *CapabilityCreate {
+	if s != nil {
+		cc.SetInputSchemaHash(*s)
+	}
+	return cc
+}
+
+// SetOutputSchemaHash sets the "output_schema_hash" field.
+func (cc *CapabilityCreate) SetOutputSchemaHash(s string) *CapabilityCreate {
+	cc.mutation.SetOutputSchemaHash(s)
+	return cc
+}
+
+// SetNillableOutputSchemaHash sets the "output_schema_hash" field if the given value is not nil.
+func (cc *CapabilityCreate) SetNillableOutputSchemaHash(s *string) *CapabilityCreate {
+	if s != nil {
+		cc.SetOutputSchemaHash(*s)
+	}
+	return cc
+}
+
+// SetSchemaWarnings sets the "schema_warnings" field.
+func (cc *CapabilityCreate) SetSchemaWarnings(s []string) *CapabilityCreate {
+	cc.mutation.SetSchemaWarnings(s)
+	return cc
+}
+
 // SetLlmFilter sets the "llm_filter" field.
 func (cc *CapabilityCreate) SetLlmFilter(m map[string]interface{}) *CapabilityCreate {
 	cc.mutation.SetLlmFilter(m)
@@ -257,6 +291,18 @@ func (cc *CapabilityCreate) createSpec() (*Capability, *sqlgraph.CreateSpec) {
 	if value, ok := cc.mutation.InputSchema(); ok {
 		_spec.SetField(capability.FieldInputSchema, field.TypeJSON, value)
 		_node.InputSchema = value
+	}
+	if value, ok := cc.mutation.InputSchemaHash(); ok {
+		_spec.SetField(capability.FieldInputSchemaHash, field.TypeString, value)
+		_node.InputSchemaHash = &value
+	}
+	if value, ok := cc.mutation.OutputSchemaHash(); ok {
+		_spec.SetField(capability.FieldOutputSchemaHash, field.TypeString, value)
+		_node.OutputSchemaHash = &value
+	}
+	if value, ok := cc.mutation.SchemaWarnings(); ok {
+		_spec.SetField(capability.FieldSchemaWarnings, field.TypeJSON, value)
+		_node.SchemaWarnings = value
 	}
 	if value, ok := cc.mutation.LlmFilter(); ok {
 		_spec.SetField(capability.FieldLlmFilter, field.TypeJSON, value)

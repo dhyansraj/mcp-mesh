@@ -13,6 +13,7 @@ import (
 	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/predicate"
 	"mcp-mesh/src/core/ent/registryevent"
+	"mcp-mesh/src/core/ent/schemaentry"
 	"sync"
 	"time"
 
@@ -35,6 +36,7 @@ const (
 	TypeLLMProviderResolution = "LLMProviderResolution"
 	TypeLLMToolResolution     = "LLMToolResolution"
 	TypeRegistryEvent         = "RegistryEvent"
+	TypeSchemaEntry           = "SchemaEntry"
 )
 
 // AgentMutation represents an operation that mutates the Agent nodes in the graph.
@@ -1700,29 +1702,33 @@ func (m *AgentMutation) ResetEdge(name string) error {
 // CapabilityMutation represents an operation that mutates the Capability nodes in the graph.
 type CapabilityMutation struct {
 	config
-	op                 Op
-	typ                string
-	id                 *int
-	function_name      *string
-	capability         *string
-	version            *string
-	description        *string
-	input_schema       *map[string]interface{}
-	llm_filter         *map[string]interface{}
-	llm_provider       *map[string]interface{}
-	tags               *[]string
-	appendtags         []string
-	kwargs             *map[string]interface{}
-	dependencies       *[]map[string]interface{}
-	appenddependencies []map[string]interface{}
-	created_at         *time.Time
-	updated_at         *time.Time
-	clearedFields      map[string]struct{}
-	agent              *string
-	clearedagent       bool
-	done               bool
-	oldValue           func(context.Context) (*Capability, error)
-	predicates         []predicate.Capability
+	op                    Op
+	typ                   string
+	id                    *int
+	function_name         *string
+	capability            *string
+	version               *string
+	description           *string
+	input_schema          *map[string]interface{}
+	input_schema_hash     *string
+	output_schema_hash    *string
+	schema_warnings       *[]string
+	appendschema_warnings []string
+	llm_filter            *map[string]interface{}
+	llm_provider          *map[string]interface{}
+	tags                  *[]string
+	appendtags            []string
+	kwargs                *map[string]interface{}
+	dependencies          *[]map[string]interface{}
+	appenddependencies    []map[string]interface{}
+	created_at            *time.Time
+	updated_at            *time.Time
+	clearedFields         map[string]struct{}
+	agent                 *string
+	clearedagent          bool
+	done                  bool
+	oldValue              func(context.Context) (*Capability, error)
+	predicates            []predicate.Capability
 }
 
 var _ ent.Mutation = (*CapabilityMutation)(nil)
@@ -2027,6 +2033,169 @@ func (m *CapabilityMutation) InputSchemaCleared() bool {
 func (m *CapabilityMutation) ResetInputSchema() {
 	m.input_schema = nil
 	delete(m.clearedFields, capability.FieldInputSchema)
+}
+
+// SetInputSchemaHash sets the "input_schema_hash" field.
+func (m *CapabilityMutation) SetInputSchemaHash(s string) {
+	m.input_schema_hash = &s
+}
+
+// InputSchemaHash returns the value of the "input_schema_hash" field in the mutation.
+func (m *CapabilityMutation) InputSchemaHash() (r string, exists bool) {
+	v := m.input_schema_hash
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldInputSchemaHash returns the old "input_schema_hash" field's value of the Capability entity.
+// If the Capability object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CapabilityMutation) OldInputSchemaHash(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldInputSchemaHash is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldInputSchemaHash requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldInputSchemaHash: %w", err)
+	}
+	return oldValue.InputSchemaHash, nil
+}
+
+// ClearInputSchemaHash clears the value of the "input_schema_hash" field.
+func (m *CapabilityMutation) ClearInputSchemaHash() {
+	m.input_schema_hash = nil
+	m.clearedFields[capability.FieldInputSchemaHash] = struct{}{}
+}
+
+// InputSchemaHashCleared returns if the "input_schema_hash" field was cleared in this mutation.
+func (m *CapabilityMutation) InputSchemaHashCleared() bool {
+	_, ok := m.clearedFields[capability.FieldInputSchemaHash]
+	return ok
+}
+
+// ResetInputSchemaHash resets all changes to the "input_schema_hash" field.
+func (m *CapabilityMutation) ResetInputSchemaHash() {
+	m.input_schema_hash = nil
+	delete(m.clearedFields, capability.FieldInputSchemaHash)
+}
+
+// SetOutputSchemaHash sets the "output_schema_hash" field.
+func (m *CapabilityMutation) SetOutputSchemaHash(s string) {
+	m.output_schema_hash = &s
+}
+
+// OutputSchemaHash returns the value of the "output_schema_hash" field in the mutation.
+func (m *CapabilityMutation) OutputSchemaHash() (r string, exists bool) {
+	v := m.output_schema_hash
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOutputSchemaHash returns the old "output_schema_hash" field's value of the Capability entity.
+// If the Capability object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CapabilityMutation) OldOutputSchemaHash(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOutputSchemaHash is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOutputSchemaHash requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOutputSchemaHash: %w", err)
+	}
+	return oldValue.OutputSchemaHash, nil
+}
+
+// ClearOutputSchemaHash clears the value of the "output_schema_hash" field.
+func (m *CapabilityMutation) ClearOutputSchemaHash() {
+	m.output_schema_hash = nil
+	m.clearedFields[capability.FieldOutputSchemaHash] = struct{}{}
+}
+
+// OutputSchemaHashCleared returns if the "output_schema_hash" field was cleared in this mutation.
+func (m *CapabilityMutation) OutputSchemaHashCleared() bool {
+	_, ok := m.clearedFields[capability.FieldOutputSchemaHash]
+	return ok
+}
+
+// ResetOutputSchemaHash resets all changes to the "output_schema_hash" field.
+func (m *CapabilityMutation) ResetOutputSchemaHash() {
+	m.output_schema_hash = nil
+	delete(m.clearedFields, capability.FieldOutputSchemaHash)
+}
+
+// SetSchemaWarnings sets the "schema_warnings" field.
+func (m *CapabilityMutation) SetSchemaWarnings(s []string) {
+	m.schema_warnings = &s
+	m.appendschema_warnings = nil
+}
+
+// SchemaWarnings returns the value of the "schema_warnings" field in the mutation.
+func (m *CapabilityMutation) SchemaWarnings() (r []string, exists bool) {
+	v := m.schema_warnings
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSchemaWarnings returns the old "schema_warnings" field's value of the Capability entity.
+// If the Capability object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CapabilityMutation) OldSchemaWarnings(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSchemaWarnings is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSchemaWarnings requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSchemaWarnings: %w", err)
+	}
+	return oldValue.SchemaWarnings, nil
+}
+
+// AppendSchemaWarnings adds s to the "schema_warnings" field.
+func (m *CapabilityMutation) AppendSchemaWarnings(s []string) {
+	m.appendschema_warnings = append(m.appendschema_warnings, s...)
+}
+
+// AppendedSchemaWarnings returns the list of values that were appended to the "schema_warnings" field in this mutation.
+func (m *CapabilityMutation) AppendedSchemaWarnings() ([]string, bool) {
+	if len(m.appendschema_warnings) == 0 {
+		return nil, false
+	}
+	return m.appendschema_warnings, true
+}
+
+// ClearSchemaWarnings clears the value of the "schema_warnings" field.
+func (m *CapabilityMutation) ClearSchemaWarnings() {
+	m.schema_warnings = nil
+	m.appendschema_warnings = nil
+	m.clearedFields[capability.FieldSchemaWarnings] = struct{}{}
+}
+
+// SchemaWarningsCleared returns if the "schema_warnings" field was cleared in this mutation.
+func (m *CapabilityMutation) SchemaWarningsCleared() bool {
+	_, ok := m.clearedFields[capability.FieldSchemaWarnings]
+	return ok
+}
+
+// ResetSchemaWarnings resets all changes to the "schema_warnings" field.
+func (m *CapabilityMutation) ResetSchemaWarnings() {
+	m.schema_warnings = nil
+	m.appendschema_warnings = nil
+	delete(m.clearedFields, capability.FieldSchemaWarnings)
 }
 
 // SetLlmFilter sets the "llm_filter" field.
@@ -2437,7 +2606,7 @@ func (m *CapabilityMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *CapabilityMutation) Fields() []string {
-	fields := make([]string, 0, 12)
+	fields := make([]string, 0, 15)
 	if m.function_name != nil {
 		fields = append(fields, capability.FieldFunctionName)
 	}
@@ -2452,6 +2621,15 @@ func (m *CapabilityMutation) Fields() []string {
 	}
 	if m.input_schema != nil {
 		fields = append(fields, capability.FieldInputSchema)
+	}
+	if m.input_schema_hash != nil {
+		fields = append(fields, capability.FieldInputSchemaHash)
+	}
+	if m.output_schema_hash != nil {
+		fields = append(fields, capability.FieldOutputSchemaHash)
+	}
+	if m.schema_warnings != nil {
+		fields = append(fields, capability.FieldSchemaWarnings)
 	}
 	if m.llm_filter != nil {
 		fields = append(fields, capability.FieldLlmFilter)
@@ -2492,6 +2670,12 @@ func (m *CapabilityMutation) Field(name string) (ent.Value, bool) {
 		return m.Description()
 	case capability.FieldInputSchema:
 		return m.InputSchema()
+	case capability.FieldInputSchemaHash:
+		return m.InputSchemaHash()
+	case capability.FieldOutputSchemaHash:
+		return m.OutputSchemaHash()
+	case capability.FieldSchemaWarnings:
+		return m.SchemaWarnings()
 	case capability.FieldLlmFilter:
 		return m.LlmFilter()
 	case capability.FieldLlmProvider:
@@ -2525,6 +2709,12 @@ func (m *CapabilityMutation) OldField(ctx context.Context, name string) (ent.Val
 		return m.OldDescription(ctx)
 	case capability.FieldInputSchema:
 		return m.OldInputSchema(ctx)
+	case capability.FieldInputSchemaHash:
+		return m.OldInputSchemaHash(ctx)
+	case capability.FieldOutputSchemaHash:
+		return m.OldOutputSchemaHash(ctx)
+	case capability.FieldSchemaWarnings:
+		return m.OldSchemaWarnings(ctx)
 	case capability.FieldLlmFilter:
 		return m.OldLlmFilter(ctx)
 	case capability.FieldLlmProvider:
@@ -2582,6 +2772,27 @@ func (m *CapabilityMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetInputSchema(v)
+		return nil
+	case capability.FieldInputSchemaHash:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetInputSchemaHash(v)
+		return nil
+	case capability.FieldOutputSchemaHash:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOutputSchemaHash(v)
+		return nil
+	case capability.FieldSchemaWarnings:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSchemaWarnings(v)
 		return nil
 	case capability.FieldLlmFilter:
 		v, ok := value.(map[string]interface{})
@@ -2668,6 +2879,15 @@ func (m *CapabilityMutation) ClearedFields() []string {
 	if m.FieldCleared(capability.FieldInputSchema) {
 		fields = append(fields, capability.FieldInputSchema)
 	}
+	if m.FieldCleared(capability.FieldInputSchemaHash) {
+		fields = append(fields, capability.FieldInputSchemaHash)
+	}
+	if m.FieldCleared(capability.FieldOutputSchemaHash) {
+		fields = append(fields, capability.FieldOutputSchemaHash)
+	}
+	if m.FieldCleared(capability.FieldSchemaWarnings) {
+		fields = append(fields, capability.FieldSchemaWarnings)
+	}
 	if m.FieldCleared(capability.FieldLlmFilter) {
 		fields = append(fields, capability.FieldLlmFilter)
 	}
@@ -2699,6 +2919,15 @@ func (m *CapabilityMutation) ClearField(name string) error {
 		return nil
 	case capability.FieldInputSchema:
 		m.ClearInputSchema()
+		return nil
+	case capability.FieldInputSchemaHash:
+		m.ClearInputSchemaHash()
+		return nil
+	case capability.FieldOutputSchemaHash:
+		m.ClearOutputSchemaHash()
+		return nil
+	case capability.FieldSchemaWarnings:
+		m.ClearSchemaWarnings()
 		return nil
 	case capability.FieldLlmFilter:
 		m.ClearLlmFilter()
@@ -2734,6 +2963,15 @@ func (m *CapabilityMutation) ResetField(name string) error {
 		return nil
 	case capability.FieldInputSchema:
 		m.ResetInputSchema()
+		return nil
+	case capability.FieldInputSchemaHash:
+		m.ResetInputSchemaHash()
+		return nil
+	case capability.FieldOutputSchemaHash:
+		m.ResetOutputSchemaHash()
+		return nil
+	case capability.FieldSchemaWarnings:
+		m.ResetSchemaWarnings()
 		return nil
 	case capability.FieldLlmFilter:
 		m.ResetLlmFilter()
@@ -7142,4 +7380,492 @@ func (m *RegistryEventMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown RegistryEvent edge %s", name)
+}
+
+// SchemaEntryMutation represents an operation that mutates the SchemaEntry nodes in the graph.
+type SchemaEntryMutation struct {
+	config
+	op             Op
+	typ            string
+	id             *int
+	hash           *string
+	canonical      *map[string]interface{}
+	runtime_origin *schemaentry.RuntimeOrigin
+	created_at     *time.Time
+	clearedFields  map[string]struct{}
+	done           bool
+	oldValue       func(context.Context) (*SchemaEntry, error)
+	predicates     []predicate.SchemaEntry
+}
+
+var _ ent.Mutation = (*SchemaEntryMutation)(nil)
+
+// schemaentryOption allows management of the mutation configuration using functional options.
+type schemaentryOption func(*SchemaEntryMutation)
+
+// newSchemaEntryMutation creates new mutation for the SchemaEntry entity.
+func newSchemaEntryMutation(c config, op Op, opts ...schemaentryOption) *SchemaEntryMutation {
+	m := &SchemaEntryMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeSchemaEntry,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withSchemaEntryID sets the ID field of the mutation.
+func withSchemaEntryID(id int) schemaentryOption {
+	return func(m *SchemaEntryMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *SchemaEntry
+		)
+		m.oldValue = func(ctx context.Context) (*SchemaEntry, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().SchemaEntry.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withSchemaEntry sets the old SchemaEntry of the mutation.
+func withSchemaEntry(node *SchemaEntry) schemaentryOption {
+	return func(m *SchemaEntryMutation) {
+		m.oldValue = func(context.Context) (*SchemaEntry, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m SchemaEntryMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m SchemaEntryMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *SchemaEntryMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *SchemaEntryMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().SchemaEntry.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetHash sets the "hash" field.
+func (m *SchemaEntryMutation) SetHash(s string) {
+	m.hash = &s
+}
+
+// Hash returns the value of the "hash" field in the mutation.
+func (m *SchemaEntryMutation) Hash() (r string, exists bool) {
+	v := m.hash
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHash returns the old "hash" field's value of the SchemaEntry entity.
+// If the SchemaEntry object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SchemaEntryMutation) OldHash(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHash is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHash requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHash: %w", err)
+	}
+	return oldValue.Hash, nil
+}
+
+// ResetHash resets all changes to the "hash" field.
+func (m *SchemaEntryMutation) ResetHash() {
+	m.hash = nil
+}
+
+// SetCanonical sets the "canonical" field.
+func (m *SchemaEntryMutation) SetCanonical(value map[string]interface{}) {
+	m.canonical = &value
+}
+
+// Canonical returns the value of the "canonical" field in the mutation.
+func (m *SchemaEntryMutation) Canonical() (r map[string]interface{}, exists bool) {
+	v := m.canonical
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCanonical returns the old "canonical" field's value of the SchemaEntry entity.
+// If the SchemaEntry object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SchemaEntryMutation) OldCanonical(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCanonical is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCanonical requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCanonical: %w", err)
+	}
+	return oldValue.Canonical, nil
+}
+
+// ResetCanonical resets all changes to the "canonical" field.
+func (m *SchemaEntryMutation) ResetCanonical() {
+	m.canonical = nil
+}
+
+// SetRuntimeOrigin sets the "runtime_origin" field.
+func (m *SchemaEntryMutation) SetRuntimeOrigin(so schemaentry.RuntimeOrigin) {
+	m.runtime_origin = &so
+}
+
+// RuntimeOrigin returns the value of the "runtime_origin" field in the mutation.
+func (m *SchemaEntryMutation) RuntimeOrigin() (r schemaentry.RuntimeOrigin, exists bool) {
+	v := m.runtime_origin
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRuntimeOrigin returns the old "runtime_origin" field's value of the SchemaEntry entity.
+// If the SchemaEntry object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SchemaEntryMutation) OldRuntimeOrigin(ctx context.Context) (v schemaentry.RuntimeOrigin, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRuntimeOrigin is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRuntimeOrigin requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRuntimeOrigin: %w", err)
+	}
+	return oldValue.RuntimeOrigin, nil
+}
+
+// ResetRuntimeOrigin resets all changes to the "runtime_origin" field.
+func (m *SchemaEntryMutation) ResetRuntimeOrigin() {
+	m.runtime_origin = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *SchemaEntryMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *SchemaEntryMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the SchemaEntry entity.
+// If the SchemaEntry object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SchemaEntryMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *SchemaEntryMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// Where appends a list predicates to the SchemaEntryMutation builder.
+func (m *SchemaEntryMutation) Where(ps ...predicate.SchemaEntry) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the SchemaEntryMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *SchemaEntryMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.SchemaEntry, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *SchemaEntryMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *SchemaEntryMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (SchemaEntry).
+func (m *SchemaEntryMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *SchemaEntryMutation) Fields() []string {
+	fields := make([]string, 0, 4)
+	if m.hash != nil {
+		fields = append(fields, schemaentry.FieldHash)
+	}
+	if m.canonical != nil {
+		fields = append(fields, schemaentry.FieldCanonical)
+	}
+	if m.runtime_origin != nil {
+		fields = append(fields, schemaentry.FieldRuntimeOrigin)
+	}
+	if m.created_at != nil {
+		fields = append(fields, schemaentry.FieldCreatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *SchemaEntryMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case schemaentry.FieldHash:
+		return m.Hash()
+	case schemaentry.FieldCanonical:
+		return m.Canonical()
+	case schemaentry.FieldRuntimeOrigin:
+		return m.RuntimeOrigin()
+	case schemaentry.FieldCreatedAt:
+		return m.CreatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *SchemaEntryMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case schemaentry.FieldHash:
+		return m.OldHash(ctx)
+	case schemaentry.FieldCanonical:
+		return m.OldCanonical(ctx)
+	case schemaentry.FieldRuntimeOrigin:
+		return m.OldRuntimeOrigin(ctx)
+	case schemaentry.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown SchemaEntry field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *SchemaEntryMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case schemaentry.FieldHash:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHash(v)
+		return nil
+	case schemaentry.FieldCanonical:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCanonical(v)
+		return nil
+	case schemaentry.FieldRuntimeOrigin:
+		v, ok := value.(schemaentry.RuntimeOrigin)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRuntimeOrigin(v)
+		return nil
+	case schemaentry.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown SchemaEntry field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *SchemaEntryMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *SchemaEntryMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *SchemaEntryMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown SchemaEntry numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *SchemaEntryMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *SchemaEntryMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *SchemaEntryMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown SchemaEntry nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *SchemaEntryMutation) ResetField(name string) error {
+	switch name {
+	case schemaentry.FieldHash:
+		m.ResetHash()
+		return nil
+	case schemaentry.FieldCanonical:
+		m.ResetCanonical()
+		return nil
+	case schemaentry.FieldRuntimeOrigin:
+		m.ResetRuntimeOrigin()
+		return nil
+	case schemaentry.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown SchemaEntry field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *SchemaEntryMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *SchemaEntryMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *SchemaEntryMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *SchemaEntryMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *SchemaEntryMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *SchemaEntryMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *SchemaEntryMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown SchemaEntry unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *SchemaEntryMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown SchemaEntry edge %s", name)
 }

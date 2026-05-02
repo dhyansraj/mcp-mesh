@@ -1,0 +1,1 @@
+{"$defs":{"Employee":{"properties":{"name":{"title":"Name","type":"string"},"dept":{"title":"Dept","type":"string"}},"required":["name","dept"],"title":"Employee","type":"object"}},"properties":{"employee":{"$ref":"#/$defs/Employee"}},"required":["employee"],"title":"Nested","type":"object"}

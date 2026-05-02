@@ -335,6 +335,26 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 		if tool.InputSchema != nil {
 			toolData["inputSchema"] = *tool.InputSchema
 		}
+		// Schema-aware filtering inputs (issue #547). Forwarded to ent_service
+		// upsertSchemaEntry; absence preserves legacy behavior (no canonical stored).
+		if tool.OutputSchema != nil {
+			toolData["outputSchema"] = *tool.OutputSchema
+		}
+		if tool.InputSchemaCanonical != nil {
+			toolData["inputSchemaCanonical"] = *tool.InputSchemaCanonical
+		}
+		if tool.InputSchemaHash != nil {
+			toolData["inputSchemaHash"] = *tool.InputSchemaHash
+		}
+		if tool.OutputSchemaCanonical != nil {
+			toolData["outputSchemaCanonical"] = *tool.OutputSchemaCanonical
+		}
+		if tool.OutputSchemaHash != nil {
+			toolData["outputSchemaHash"] = *tool.OutputSchemaHash
+		}
+		if tool.SchemaWarnings != nil {
+			toolData["schemaWarnings"] = *tool.SchemaWarnings
+		}
 		if tool.LlmFilter != nil {
 			toolData["llm_filter"] = *tool.LlmFilter
 		}
@@ -370,6 +390,17 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 				}
 				if dep.Version != nil {
 					depData["version"] = *dep.Version
+				}
+				// Schema-aware filtering inputs (issue #547). Forwarded to the
+				// resolver's schema stage; absence keeps the stage a pass-through.
+				if dep.MatchMode != nil {
+					depData["match_mode"] = string(*dep.MatchMode)
+				}
+				if dep.ExpectedSchemaHash != nil {
+					depData["expected_schema_hash"] = *dep.ExpectedSchemaHash
+				}
+				if dep.ExpectedSchemaCanonical != nil {
+					depData["expected_schema_canonical"] = *dep.ExpectedSchemaCanonical
 				}
 				deps[j] = depData
 			}

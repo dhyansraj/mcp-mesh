@@ -1,0 +1,1 @@
+{"$ref":"#/definitions/Optional","definitions":{"Optional":{"type":"object","properties":{"name":{"type":"string"},"nickname":{"type":["string","null"]}},"required":["name"],"additionalProperties":false}},"$schema":"http://json-schema.org/draft-07/schema#"}

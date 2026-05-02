@@ -29,6 +29,12 @@ type Capability struct {
 	Description string `json:"description,omitempty"`
 	// JSON Schema for function parameters (MCP tool format). Auto-generated from function signature by FastMCP. Used by LLM agents to understand how to call this tool.
 	InputSchema map[string]interface{} `json:"input_schema,omitempty"`
+	// Hash (sha256:...) of normalized input schema after stripping mesh DI parameters. References schema_entries.hash. NULL when consumer opted out or normalization failed.
+	InputSchemaHash *string `json:"input_schema_hash,omitempty"`
+	// Hash (sha256:...) of normalized output schema. References schema_entries.hash. NULL when output type isn't extractable from the function signature.
+	OutputSchemaHash *string `json:"output_schema_hash,omitempty"`
+	// Normalizer warnings emitted while canonicalizing this capability's schemas (e.g., 'stripped additionalProperties: true'). Surfaced in meshctl status.
+	SchemaWarnings []string `json:"schema_warnings,omitempty"`
 	// LLM tool filter specification when function is decorated with @mesh.llm. Defines which tools this LLM agent needs access to.
 	LlmFilter map[string]interface{} `json:"llm_filter,omitempty"`
 	// LLM provider specification for mesh delegation mode (v0.6.1). When present, this function uses mesh DI to find and delegate LLM calls to a matching provider agent instead of calling LiteLLM directly.
@@ -75,11 +81,11 @@ func (*Capability) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case capability.FieldInputSchema, capability.FieldLlmFilter, capability.FieldLlmProvider, capability.FieldTags, capability.FieldKwargs, capability.FieldDependencies:
+		case capability.FieldInputSchema, capability.FieldSchemaWarnings, capability.FieldLlmFilter, capability.FieldLlmProvider, capability.FieldTags, capability.FieldKwargs, capability.FieldDependencies:
 			values[i] = new([]byte)
 		case capability.FieldID:
 			values[i] = new(sql.NullInt64)
-		case capability.FieldFunctionName, capability.FieldCapability, capability.FieldVersion, capability.FieldDescription:
+		case capability.FieldFunctionName, capability.FieldCapability, capability.FieldVersion, capability.FieldDescription, capability.FieldInputSchemaHash, capability.FieldOutputSchemaHash:
 			values[i] = new(sql.NullString)
 		case capability.FieldCreatedAt, capability.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -136,6 +142,28 @@ func (c *Capability) assignValues(columns []string, values []any) error {
 			} else if value != nil && len(*value) > 0 {
 				if err := json.Unmarshal(*value, &c.InputSchema); err != nil {
 					return fmt.Errorf("unmarshal field input_schema: %w", err)
+				}
+			}
+		case capability.FieldInputSchemaHash:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field input_schema_hash", values[i])
+			} else if value.Valid {
+				c.InputSchemaHash = new(string)
+				*c.InputSchemaHash = value.String
+			}
+		case capability.FieldOutputSchemaHash:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field output_schema_hash", values[i])
+			} else if value.Valid {
+				c.OutputSchemaHash = new(string)
+				*c.OutputSchemaHash = value.String
+			}
+		case capability.FieldSchemaWarnings:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field schema_warnings", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &c.SchemaWarnings); err != nil {
+					return fmt.Errorf("unmarshal field schema_warnings: %w", err)
 				}
 			}
 		case capability.FieldLlmFilter:
@@ -252,6 +280,19 @@ func (c *Capability) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("input_schema=")
 	builder.WriteString(fmt.Sprintf("%v", c.InputSchema))
+	builder.WriteString(", ")
+	if v := c.InputSchemaHash; v != nil {
+		builder.WriteString("input_schema_hash=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := c.OutputSchemaHash; v != nil {
+		builder.WriteString("output_schema_hash=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	builder.WriteString("schema_warnings=")
+	builder.WriteString(fmt.Sprintf("%v", c.SchemaWarnings))
 	builder.WriteString(", ")
 	builder.WriteString("llm_filter=")
 	builder.WriteString(fmt.Sprintf("%v", c.LlmFilter))

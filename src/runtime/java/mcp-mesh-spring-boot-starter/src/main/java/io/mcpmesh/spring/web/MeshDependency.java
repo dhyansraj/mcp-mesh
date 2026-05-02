@@ -1,5 +1,7 @@
 package io.mcpmesh.spring.web;
 
+import io.mcpmesh.SchemaMode;
+
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
@@ -71,4 +73,32 @@ public @interface MeshDependency {
      * @return parameter name for injection
      */
     String name() default "";
+
+    /**
+     * Optional expected response type for schema-aware capability matching (issue #547).
+     *
+     * <p>When set together with {@link #schemaMode()}, the resolver filters out
+     * candidate producers whose published {@code outputSchema} doesn't satisfy
+     * this expected type under the chosen mode. The Java SDK runs this class
+     * through victools/jsonschema-generator, normalizes via the Rust normalizer,
+     * and ships the canonical schema + hash to the registry.
+     *
+     * <p>Default {@code Void.class} means "not set" — backward-compatible with
+     * existing dependencies that don't opt in to schema matching.
+     *
+     * <p>Pair with {@link #schemaMode()} = {@link SchemaMode#SUBSET} for most
+     * use cases. If {@code expectedType} is set but {@code schemaMode} is
+     * {@link SchemaMode#NONE}, the SDK defaults the mode to SUBSET (parity
+     * with Python).
+     */
+    Class<?> expectedType() default Void.class;
+
+    /**
+     * Schema match mode (issue #547).
+     *
+     * <p>{@link SchemaMode#NONE} (default) means no schema check. Pair with
+     * {@link #expectedType()} to opt into either {@link SchemaMode#SUBSET} or
+     * {@link SchemaMode#STRICT} matching.
+     */
+    SchemaMode schemaMode() default SchemaMode.NONE;
 }

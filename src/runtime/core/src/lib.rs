@@ -41,6 +41,7 @@ pub mod response_parser;
 pub mod runtime;
 pub mod provider;
 pub mod schema;
+pub mod schema_normalize;
 pub mod spec;
 pub mod tls;
 pub mod json_fast;
@@ -216,6 +217,29 @@ fn detect_media_params_py(schema_json: &str) -> bool {
 #[pyfunction]
 fn is_simple_schema_py(schema_json: &str) -> bool {
     schema::is_simple_schema(schema_json)
+}
+
+/// Normalize a raw JSON schema into canonical form + SHA256 hash (Python binding).
+///
+/// Returns a JSON string with fields: canonical, hash, verdict, warnings.
+#[cfg(feature = "python")]
+#[pyfunction]
+#[pyo3(signature = (raw_json, origin="unknown"))]
+fn normalize_schema_py(raw_json: &str, origin: &str) -> PyResult<String> {
+    let origin_enum = match origin {
+        "python" => schema_normalize::SchemaOrigin::Python,
+        "typescript" => schema_normalize::SchemaOrigin::TypeScript,
+        "java" => schema_normalize::SchemaOrigin::Java,
+        _ => schema_normalize::SchemaOrigin::Unknown,
+    };
+    let result = schema_normalize::normalize_schema(raw_json, origin_enum);
+    let out = serde_json::json!({
+        "canonical": result.canonical,
+        "hash": result.hash,
+        "verdict": result.verdict,
+        "warnings": result.warnings,
+    });
+    serde_json::to_string(&out).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
 /// Generate OpenTelemetry-compliant trace ID (Python binding).
@@ -497,6 +521,7 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sanitize_schema_py, m)?)?;
     m.add_function(wrap_pyfunction!(detect_media_params_py, m)?)?;
     m.add_function(wrap_pyfunction!(is_simple_schema_py, m)?)?;
+    m.add_function(wrap_pyfunction!(normalize_schema_py, m)?)?;
 
     // Trace context
     m.add_function(wrap_pyfunction!(generate_trace_id_py, m)?)?;

@@ -1,0 +1,85 @@
+# Test Case: tc05 - Subset-mode eviction (all TypeScript)
+# Issue #547 Phase 4: TypeScript baseline parity with Python.
+#
+# producer_good (Employee, Zod) + producer_bad (Hardware, Zod) + consumer (subset).
+# Audit must show producer-bad-ts evicted at schema stage; chosen = producer-good-ts.
+
+name: "Schema Registry: subset-mode eviction (TypeScript <-> TypeScript)"
+description: "Schema-aware TS consumer evicts producer-bad and wires to producer-good"
+tags:
+  - schema_registry
+  - ts
+  - subset
+timeout: 240
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy schema-ts agents to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/schema-ts
+      cp /uc-artifacts/schema-ts/producer_good.ts /workspace/schema-ts/
+      cp /uc-artifacts/schema-ts/producer_bad.ts /workspace/schema-ts/
+      cp /uc-artifacts/schema-ts/consumer.ts /workspace/schema-ts/
+      cp /uc-artifacts/schema-ts/package.json /workspace/schema-ts/
+      ls -la /workspace/schema-ts/
+
+  - name: "Install TypeScript dependencies"
+    handler: npm-install
+    path: /workspace/schema-ts
+
+  - name: "Start producer-good (port 9110)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-ts/producer_good.ts -d"
+
+  - name: "Start producer-bad (port 9111)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-ts/producer_bad.ts -d"
+
+  - name: "Wait for producers (TS cold start)"
+    handler: wait
+    seconds: 25
+
+  - name: "Start consumer (port 9112)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-ts/consumer.ts -d"
+
+  - name: "Wait for consumer + dep resolution"
+    handler: wait
+    seconds: 25
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Audit consumer JSON"
+    handler: shell
+    workdir: /workspace
+    command: meshctl audit consumer-ts --json --function lookup_with_schema --dep 0
+    capture: audit_json
+
+assertions:
+  - expr: "${captured.agent_list} contains 'producer-good-ts'"
+  - expr: "${captured.agent_list} contains 'producer-bad-ts'"
+  - expr: "${captured.agent_list} contains 'consumer-ts'"
+  - expr: ${jq:captured.audit_json:.events[0].trace.chosen.agent_id} contains 'producer-good-ts'
+    message: "TS consumer should wire to producer-good-ts"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].reason} == 'SchemaIncompatible'
+    message: "producer-bad-ts should be evicted at schema stage"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].id} contains 'producer-bad-ts'
+    message: "Evicted candidate id should reference producer-bad-ts"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

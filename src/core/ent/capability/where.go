@@ -75,6 +75,16 @@ func Description(v string) predicate.Capability {
 	return predicate.Capability(sql.FieldEQ(FieldDescription, v))
 }
 
+// InputSchemaHash applies equality check predicate on the "input_schema_hash" field. It's identical to InputSchemaHashEQ.
+func InputSchemaHash(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldEQ(FieldInputSchemaHash, v))
+}
+
+// OutputSchemaHash applies equality check predicate on the "output_schema_hash" field. It's identical to OutputSchemaHashEQ.
+func OutputSchemaHash(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldEQ(FieldOutputSchemaHash, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.Capability {
 	return predicate.Capability(sql.FieldEQ(FieldCreatedAt, v))
@@ -363,6 +373,166 @@ func InputSchemaIsNil() predicate.Capability {
 // InputSchemaNotNil applies the NotNil predicate on the "input_schema" field.
 func InputSchemaNotNil() predicate.Capability {
 	return predicate.Capability(sql.FieldNotNull(FieldInputSchema))
+}
+
+// InputSchemaHashEQ applies the EQ predicate on the "input_schema_hash" field.
+func InputSchemaHashEQ(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldEQ(FieldInputSchemaHash, v))
+}
+
+// InputSchemaHashNEQ applies the NEQ predicate on the "input_schema_hash" field.
+func InputSchemaHashNEQ(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldNEQ(FieldInputSchemaHash, v))
+}
+
+// InputSchemaHashIn applies the In predicate on the "input_schema_hash" field.
+func InputSchemaHashIn(vs ...string) predicate.Capability {
+	return predicate.Capability(sql.FieldIn(FieldInputSchemaHash, vs...))
+}
+
+// InputSchemaHashNotIn applies the NotIn predicate on the "input_schema_hash" field.
+func InputSchemaHashNotIn(vs ...string) predicate.Capability {
+	return predicate.Capability(sql.FieldNotIn(FieldInputSchemaHash, vs...))
+}
+
+// InputSchemaHashGT applies the GT predicate on the "input_schema_hash" field.
+func InputSchemaHashGT(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldGT(FieldInputSchemaHash, v))
+}
+
+// InputSchemaHashGTE applies the GTE predicate on the "input_schema_hash" field.
+func InputSchemaHashGTE(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldGTE(FieldInputSchemaHash, v))
+}
+
+// InputSchemaHashLT applies the LT predicate on the "input_schema_hash" field.
+func InputSchemaHashLT(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldLT(FieldInputSchemaHash, v))
+}
+
+// InputSchemaHashLTE applies the LTE predicate on the "input_schema_hash" field.
+func InputSchemaHashLTE(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldLTE(FieldInputSchemaHash, v))
+}
+
+// InputSchemaHashContains applies the Contains predicate on the "input_schema_hash" field.
+func InputSchemaHashContains(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldContains(FieldInputSchemaHash, v))
+}
+
+// InputSchemaHashHasPrefix applies the HasPrefix predicate on the "input_schema_hash" field.
+func InputSchemaHashHasPrefix(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldHasPrefix(FieldInputSchemaHash, v))
+}
+
+// InputSchemaHashHasSuffix applies the HasSuffix predicate on the "input_schema_hash" field.
+func InputSchemaHashHasSuffix(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldHasSuffix(FieldInputSchemaHash, v))
+}
+
+// InputSchemaHashIsNil applies the IsNil predicate on the "input_schema_hash" field.
+func InputSchemaHashIsNil() predicate.Capability {
+	return predicate.Capability(sql.FieldIsNull(FieldInputSchemaHash))
+}
+
+// InputSchemaHashNotNil applies the NotNil predicate on the "input_schema_hash" field.
+func InputSchemaHashNotNil() predicate.Capability {
+	return predicate.Capability(sql.FieldNotNull(FieldInputSchemaHash))
+}
+
+// InputSchemaHashEqualFold applies the EqualFold predicate on the "input_schema_hash" field.
+func InputSchemaHashEqualFold(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldEqualFold(FieldInputSchemaHash, v))
+}
+
+// InputSchemaHashContainsFold applies the ContainsFold predicate on the "input_schema_hash" field.
+func InputSchemaHashContainsFold(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldContainsFold(FieldInputSchemaHash, v))
+}
+
+// OutputSchemaHashEQ applies the EQ predicate on the "output_schema_hash" field.
+func OutputSchemaHashEQ(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldEQ(FieldOutputSchemaHash, v))
+}
+
+// OutputSchemaHashNEQ applies the NEQ predicate on the "output_schema_hash" field.
+func OutputSchemaHashNEQ(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldNEQ(FieldOutputSchemaHash, v))
+}
+
+// OutputSchemaHashIn applies the In predicate on the "output_schema_hash" field.
+func OutputSchemaHashIn(vs ...string) predicate.Capability {
+	return predicate.Capability(sql.FieldIn(FieldOutputSchemaHash, vs...))
+}
+
+// OutputSchemaHashNotIn applies the NotIn predicate on the "output_schema_hash" field.
+func OutputSchemaHashNotIn(vs ...string) predicate.Capability {
+	return predicate.Capability(sql.FieldNotIn(FieldOutputSchemaHash, vs...))
+}
+
+// OutputSchemaHashGT applies the GT predicate on the "output_schema_hash" field.
+func OutputSchemaHashGT(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldGT(FieldOutputSchemaHash, v))
+}
+
+// OutputSchemaHashGTE applies the GTE predicate on the "output_schema_hash" field.
+func OutputSchemaHashGTE(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldGTE(FieldOutputSchemaHash, v))
+}
+
+// OutputSchemaHashLT applies the LT predicate on the "output_schema_hash" field.
+func OutputSchemaHashLT(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldLT(FieldOutputSchemaHash, v))
+}
+
+// OutputSchemaHashLTE applies the LTE predicate on the "output_schema_hash" field.
+func OutputSchemaHashLTE(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldLTE(FieldOutputSchemaHash, v))
+}
+
+// OutputSchemaHashContains applies the Contains predicate on the "output_schema_hash" field.
+func OutputSchemaHashContains(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldContains(FieldOutputSchemaHash, v))
+}
+
+// OutputSchemaHashHasPrefix applies the HasPrefix predicate on the "output_schema_hash" field.
+func OutputSchemaHashHasPrefix(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldHasPrefix(FieldOutputSchemaHash, v))
+}
+
+// OutputSchemaHashHasSuffix applies the HasSuffix predicate on the "output_schema_hash" field.
+func OutputSchemaHashHasSuffix(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldHasSuffix(FieldOutputSchemaHash, v))
+}
+
+// OutputSchemaHashIsNil applies the IsNil predicate on the "output_schema_hash" field.
+func OutputSchemaHashIsNil() predicate.Capability {
+	return predicate.Capability(sql.FieldIsNull(FieldOutputSchemaHash))
+}
+
+// OutputSchemaHashNotNil applies the NotNil predicate on the "output_schema_hash" field.
+func OutputSchemaHashNotNil() predicate.Capability {
+	return predicate.Capability(sql.FieldNotNull(FieldOutputSchemaHash))
+}
+
+// OutputSchemaHashEqualFold applies the EqualFold predicate on the "output_schema_hash" field.
+func OutputSchemaHashEqualFold(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldEqualFold(FieldOutputSchemaHash, v))
+}
+
+// OutputSchemaHashContainsFold applies the ContainsFold predicate on the "output_schema_hash" field.
+func OutputSchemaHashContainsFold(v string) predicate.Capability {
+	return predicate.Capability(sql.FieldContainsFold(FieldOutputSchemaHash, v))
+}
+
+// SchemaWarningsIsNil applies the IsNil predicate on the "schema_warnings" field.
+func SchemaWarningsIsNil() predicate.Capability {
+	return predicate.Capability(sql.FieldIsNull(FieldSchemaWarnings))
+}
+
+// SchemaWarningsNotNil applies the NotNil predicate on the "schema_warnings" field.
+func SchemaWarningsNotNil() predicate.Capability {
+	return predicate.Capability(sql.FieldNotNull(FieldSchemaWarnings))
 }
 
 // LlmFilterIsNil applies the IsNil predicate on the "llm_filter" field.

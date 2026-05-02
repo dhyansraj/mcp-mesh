@@ -59,7 +59,12 @@ Tools listing:
   meshctl list --tools                            # List all tools across all agents
   meshctl list -t                                 # Short form (list all tools)
   meshctl list --tools=get_current_time           # Show tool call spec and input schema
-  meshctl list --tools=system-agent:get_time      # Show tool details for specific agent`,
+  meshctl list --tools=system-agent:get_time      # Show tool details for specific agent
+
+Schema registry (issue #547):
+  meshctl list --schemas                          # Most recent 100 canonical schemas
+  meshctl list --schemas --limit 20               # Most recent 20
+  meshctl list --schemas --json                   # Raw envelope from GET /schemas`,
 		RunE: runListCommand,
 	}
 
@@ -77,6 +82,11 @@ Tools listing:
 	// Tools listing - use --tools to list all, --tools=<name> for specific tool details
 	cmd.Flags().StringP("tools", "t", "", "List tools: use --tools or -t to list all, --tools=<tool> for details")
 	cmd.Flags().Lookup("tools").NoOptDefVal = "all" // "all" means list all tools
+
+	// Schema registry listing (issue #547). When set, --schemas short-circuits
+	// the agent listing and queries GET /schemas instead.
+	cmd.Flags().Bool("schemas", false, "List canonical schemas registered in the registry (issue #547)")
+	cmd.Flags().Int("limit", 100, "Maximum number of schemas to list (used with --schemas, max 1000)")
 
 	// Remote registry connection flags
 	cmd.Flags().String("registry-url", "", "Registry URL (overrides host/port)")
@@ -235,6 +245,10 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 	toolsFlag, _ := cmd.Flags().GetString("tools")
 	toolsFlagChanged := cmd.Flags().Changed("tools")
 
+	// Schema registry listing flag (issue #547)
+	schemasFlag, _ := cmd.Flags().GetBool("schemas")
+	limitFlag, _ := cmd.Flags().GetInt("limit")
+
 	// Registry connection flags
 	registryURL, _ := cmd.Flags().GetString("registry-url")
 	registryHost, _ := cmd.Flags().GetString("registry-host")
@@ -248,6 +262,11 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 
 	// Configure HTTP client with timeout and TLS settings
 	configureHTTPClientWithTLS(timeout, insecure)
+
+	// Handle schema registry listing (issue #547)
+	if schemasFlag {
+		return runSchemasListCommand(finalRegistryURL, timeout, insecure, limitFlag, jsonOutput)
+	}
 
 	// Handle tools listing mode
 	if toolsFlagChanged {

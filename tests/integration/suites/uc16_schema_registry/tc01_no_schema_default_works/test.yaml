@@ -1,0 +1,152 @@
+# Test Case: tc01 - No schema fields, default behavior unchanged
+# Issue #547 Phase 4: backward compatibility.
+#
+# Both producer and consumer omit ALL schema fields (no outputType / outputSchema /
+# expected_type / match_mode). Wiring must succeed exactly as it always has —
+# the schema-aware code path is opt-in and must NOT regress baseline matching.
+#
+# Inline-writes a tiny producer/consumer pair to /workspace (the schema example
+# agents under examples/schema/ all declare schema fields by design, so we
+# can't reuse them here).
+
+name: "Schema Registry: no-schema producer + no-schema consumer wires (backcompat)"
+description: "Verify the schema-aware path is fully opt-in and does not regress non-schema wiring"
+tags:
+  - schema_registry
+  - py
+  - backcompat
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Write minimal no-schema producer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/no-schema
+      cat > /workspace/no-schema/producer.py <<'PYEOF'
+      """No-schema producer for backcompat test (#547 tc01).
+
+      Declares NO outputType / no Pydantic return annotation.
+      """
+      import mesh
+      from fastmcp import FastMCP
+
+      app = FastMCP("backcompat-producer-py")
+
+      @app.tool()
+      @mesh.tool(capability="bc_lookup", description="Returns a plain dict, no schema metadata")
+      def lookup(emp_id: str) -> dict:
+          return {"id": emp_id, "name": "Alice"}
+
+      @mesh.agent(
+          name="bc-producer-py",
+          version="1.0.0",
+          description="Backcompat producer (no schema fields)",
+          http_port=9100,
+          enable_http=True,
+          auto_run=True,
+      )
+      class BcProducerAgent:
+          pass
+      PYEOF
+      echo "wrote producer.py"
+
+  - name: "Write minimal no-schema consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cat > /workspace/no-schema/consumer.py <<'PYEOF'
+      """No-schema consumer for backcompat test (#547 tc01).
+
+      Declares dependency on bc_lookup with NO expected_type / match_mode.
+      """
+      import mesh
+      from fastmcp import FastMCP
+
+      app = FastMCP("backcompat-consumer-py")
+
+      @app.tool()
+      @mesh.tool(
+          capability="bc_consumer",
+          description="Backcompat consumer with no schema fields on dep",
+          dependencies=[{"capability": "bc_lookup"}],
+      )
+      async def call_lookup(emp_id: str, lookup: mesh.McpMeshTool | None = None) -> str:
+          if lookup is None:
+              return f"no producer for {emp_id}"
+          result = await lookup(emp_id=emp_id)
+          return f"got: {result}"
+
+      @mesh.agent(
+          name="bc-consumer-py",
+          version="1.0.0",
+          description="Backcompat consumer (no schema fields)",
+          http_port=9102,
+          enable_http=True,
+          auto_run=True,
+      )
+      class BcConsumerAgent:
+          pass
+      PYEOF
+      echo "wrote consumer.py"
+
+  - name: "Start producer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start no-schema/producer.py -d"
+    capture: start_producer
+
+  - name: "Wait for producer"
+    handler: wait
+    seconds: 8
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start no-schema/consumer.py -d"
+    capture: start_consumer
+
+  - name: "Wait for consumer + dep resolution"
+    handler: wait
+    seconds: 15
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Call consumer to verify wiring"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call call_lookup '{"emp_id": "E1"}' 2>&1 || true
+    capture: call_result
+
+  - name: "Verify consumer dependency state shows resolved"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools 2>&1 || meshctl list"
+    capture: tools_list
+
+assertions:
+  - expr: "${captured.agent_list} contains 'bc-producer-py'"
+    message: "Producer should be registered"
+  - expr: "${captured.agent_list} contains 'bc-consumer-py'"
+    message: "Consumer should be registered"
+  - expr: "${captured.call_result} contains 'got:'"
+    message: "Consumer must return 'got: ...' (proves dep wired even with no schema fields)"
+  - expr: "${captured.call_result} contains 'Alice'"
+    message: "Consumer must receive producer's payload (Alice)"
+  - expr: "${captured.call_result} not contains 'no producer'"
+    message: "Consumer must NOT report missing producer"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

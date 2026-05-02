@@ -1099,6 +1099,94 @@ pub unsafe extern "C" fn mesh_is_simple_schema(schema_json: *const c_char) -> i3
     if crate::schema::is_simple_schema(json_str) { 1 } else { 0 }
 }
 
+/// Normalize a raw JSON Schema and return a JSON envelope with
+/// `{canonical, hash, verdict, warnings}`.
+///
+/// This is the C FFI wrapper around `schema_normalize::normalize_schema`
+/// (issue #547). Mirrors the Python (`normalize_schema_py`) and napi
+/// (`normalize_schema`) bindings so Java SDKs can produce identical
+/// canonical forms and hashes for cross-runtime capability matching.
+///
+/// # Arguments
+/// * `raw_json` - Raw JSON Schema string
+/// * `origin` - Origin runtime hint: "python", "typescript", "java", or unknown.
+///   May be NULL.
+///
+/// # Returns
+/// JSON string with fields `canonical`, `hash`, `verdict`, `warnings`
+/// (caller must free with `mesh_free_string`). On error returns a JSON
+/// envelope with `verdict="BLOCK"` rather than NULL so callers can always
+/// parse the response.
+///
+/// # Safety
+/// * `raw_json` must be a valid null-terminated C string
+/// * `origin` may be NULL or a valid null-terminated C string
+/// * The returned string must be freed with `mesh_free_string`
+#[no_mangle]
+pub unsafe extern "C" fn mesh_normalize_schema(
+    raw_json: *const c_char,
+    origin: *const c_char,
+) -> *mut c_char {
+    use crate::schema_normalize::{self, SchemaOrigin};
+
+    fn block_envelope(reason: &str) -> *mut c_char {
+        let envelope = serde_json::json!({
+            "canonical": serde_json::Value::Null,
+            "hash": "",
+            "verdict": "BLOCK",
+            "warnings": [reason],
+        });
+        let s = serde_json::to_string(&envelope)
+            .unwrap_or_else(|_| r#"{"verdict":"BLOCK"}"#.to_string());
+        match CString::new(s) {
+            Ok(c) => c.into_raw(),
+            Err(_) => ptr::null_mut(),
+        }
+    }
+
+    if raw_json.is_null() {
+        return block_envelope("null raw_json pointer");
+    }
+
+    let raw_str = match CStr::from_ptr(raw_json).to_str() {
+        Ok(s) => s,
+        Err(e) => return block_envelope(&format!("Invalid UTF-8 in raw_json: {}", e)),
+    };
+
+    let origin_str = if origin.is_null() {
+        "unknown"
+    } else {
+        match CStr::from_ptr(origin).to_str() {
+            Ok(s) => s,
+            Err(_) => "unknown",
+        }
+    };
+
+    let origin_enum = match origin_str {
+        "python" => SchemaOrigin::Python,
+        "typescript" => SchemaOrigin::TypeScript,
+        "java" => SchemaOrigin::Java,
+        _ => SchemaOrigin::Unknown,
+    };
+
+    let result = schema_normalize::normalize_schema(raw_str, origin_enum);
+    let envelope = serde_json::json!({
+        "canonical": result.canonical,
+        "hash": result.hash,
+        "verdict": result.verdict,
+        "warnings": result.warnings,
+    });
+    let serialized = match serde_json::to_string(&envelope) {
+        Ok(s) => s,
+        Err(e) => return block_envelope(&format!("serialize failed: {}", e)),
+    };
+
+    match CString::new(serialized) {
+        Ok(c) => c.into_raw(),
+        Err(e) => block_envelope(&format!("CString conversion failed: {}", e)),
+    }
+}
+
 // =============================================================================
 // Trace Context Functions
 // =============================================================================

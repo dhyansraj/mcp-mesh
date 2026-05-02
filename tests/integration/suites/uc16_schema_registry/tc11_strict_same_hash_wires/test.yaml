@@ -1,0 +1,122 @@
+# Test Case: tc11 - Strict-mode wires when hashes match (Python)
+# Issue #547 Phase 4: strict mode hash short-circuit.
+#
+# producer-good-py + consumer with match_mode="strict" expecting Employee.
+# Hash equality check should pass without invoking the structural diff.
+# Achieved by sed-rewriting the example consumer to flip subset -> strict.
+#
+# A successful wire under strict mode is itself proof that the producer's
+# canonical Employee hash equals the consumer's expected_type hash — strict
+# mode requires byte-for-byte equality (no structural diff).
+
+name: "Schema Registry: strict-mode wires when consumer/producer hashes match"
+description: "Strict-mode short-circuits via canonical hash equality (no structural diff invoked)"
+tags:
+  - schema_registry
+  - py
+  - strict
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy producer-good + consumer to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/schema-py
+      cp /uc-artifacts/schema-py/producer_good.py /workspace/schema-py/
+      cp /uc-artifacts/schema-py/consumer.py /workspace/schema-py/
+
+  - name: "Flip consumer match_mode to strict"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/"match_mode": "subset"/"match_mode": "strict"/g' /workspace/schema-py/consumer.py
+      grep -n match_mode /workspace/schema-py/consumer.py
+
+  - name: "Start producer-good"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/producer_good.py -d"
+
+  - name: "Wait for producer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 20); do
+        if meshctl list 2>/dev/null | grep -q "producer-good-py"; then
+          echo "producer-good-py registered after $((i*2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: producer-good-py did not register within 40s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_producer
+    timeout: 60
+
+  - name: "Start consumer (strict)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/consumer.py -d"
+
+  - name: "Wait for consumer + dep resolution"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "consumer-py" && echo "$AGENTS" | grep "consumer-py" | grep -q "1/1"; then
+          echo "consumer-py registered + deps resolved after $((i*2))s"
+          echo "$AGENTS"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: consumer-py did not register or resolve deps within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_consumer
+    timeout: 90
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Call consumer to verify wiring"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call lookup_with_schema '{"emp_id": "E1"}' 2>&1 || true
+    capture: call_result
+
+# Note: audit emits no event for single-candidate resolved (forced choice = no
+# decision drama). A successful `meshctl call` returning the Employee payload is
+# itself end-to-end proof that:
+#   - producer-good-py registered with the canonical Employee schema/hash
+#   - consumer's strict-mode expected_type matched (byte-for-byte hash equality)
+#   - the resolver wired through to producer-good-py
+#   - HTTP transport carried the payload back
+assertions:
+  - expr: "${captured.agent_list} contains 'producer-good-py'"
+  - expr: "${captured.agent_list} contains 'consumer-py'"
+  - expr: "${captured.call_result} contains 'got:'"
+    message: "Strict-mode consumer should wire to producer-good via hash equality (proves canonical Employee hashes match byte-for-byte)"
+  - expr: "${captured.call_result} contains 'Alice'"
+    message: "Consumer must receive producer's Employee payload (proves end-to-end wire to producer-good-py under strict mode)"
+  - expr: "${captured.call_result} contains 'Engineering'"
+    message: "Consumer must receive Employee.dept field from producer-good"
+  - expr: "${captured.call_result} not contains 'no compatible'"
+    message: "Consumer must NOT report missing producer"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

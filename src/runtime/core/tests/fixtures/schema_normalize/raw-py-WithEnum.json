@@ -1,0 +1,1 @@
+{"$defs":{"RoleEnum":{"enum":["admin","user","guest"],"title":"RoleEnum","type":"string"}},"properties":{"role":{"$ref":"#/$defs/RoleEnum"}},"required":["role"],"title":"WithEnum","type":"object"}

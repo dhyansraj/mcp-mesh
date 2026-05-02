@@ -1,0 +1,1 @@
+{"properties":{"market_cap":{"title":"Market Cap","type":"number"},"hire_date":{"format":"date","title":"Hire Date","type":"string"},"is_active":{"title":"Is Active","type":"boolean"}},"required":["market_cap","hire_date","is_active"],"title":"CaseConversion","type":"object"}

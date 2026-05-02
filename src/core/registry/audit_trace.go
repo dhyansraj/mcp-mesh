@@ -13,7 +13,8 @@ const (
 	// ReasonVersionConstraintFailed — provider's version does not satisfy the consumer's constraint.
 	ReasonVersionConstraintFailed EvictionReason = "VersionConstraintFailed"
 	// ReasonSchemaIncompatible — provider's schema does not satisfy the consumer's schema mode.
-	// Reserved for #547 (schema-registry feature). v1 never emits this.
+	// Emitted by the schema stage (#547) when the consumer opted in via match_mode and
+	// the producer's canonical output schema doesn't match (subset or strict).
 	ReasonSchemaIncompatible EvictionReason = "SchemaIncompatible"
 	// ReasonUnhealthy — provider is not healthy at resolution time.
 	ReasonUnhealthy EvictionReason = "Unhealthy"
@@ -23,15 +24,18 @@ const (
 	ReasonUnreachable EvictionReason = "Unreachable"
 )
 
-// Audit-trail stage names. Stages run in this order. Each stage records what
-// it kept and what it evicted (with reason). The "tiebreaker" stage records
-// the final pick from the survivors.
+// Audit-trail stage names. Stages run in this order:
+// health → capability_match → tags → version → schema → tiebreaker.
+// Health runs first so subsequent stages don't drag stale unhealthy candidates
+// through every stage's audit listing. Each stage records what it kept and what
+// it evicted (with reason). The "tiebreaker" stage records the final pick from
+// the survivors.
 const (
+	StageHealth          = "health" // catches unhealthy/deregistering
 	StageCapabilityMatch = "capability_match"
 	StageTags            = "tags"
 	StageVersion         = "version"
-	StageSchema          = "schema"     // reserved for #547; no-op in v1
-	StageHealth          = "health"     // catches unhealthy/deregistering
+	StageSchema          = "schema" // opt-in canonical-schema check (#547); no-op when consumer's match_mode is empty
 	StageTiebreaker      = "tiebreaker"
 )
 
@@ -57,7 +61,7 @@ type AuditSpec struct {
 	Capability        string   `json:"capability"`
 	Tags              []string `json:"tags,omitempty"`
 	VersionConstraint string   `json:"version_constraint,omitempty"`
-	SchemaMode        string   `json:"schema_mode"` // always "none" in v1; see #547
+	SchemaMode        string   `json:"schema_mode"` // "none" | "subset" | "strict" (#547)
 }
 
 // AuditStage records what happened at one step of the resolution pipeline.

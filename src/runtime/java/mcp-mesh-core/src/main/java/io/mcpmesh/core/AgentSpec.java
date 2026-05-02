@@ -259,6 +259,30 @@ public class AgentSpec {
         @JsonProperty("input_schema")
         private String inputSchema;
 
+        /** Raw JSON Schema for output (return type) - serialized JSON string. Issue #547. */
+        @JsonProperty("output_schema")
+        private String outputSchema;
+
+        /** Canonical normalized input schema (post-DI-strip, post-normalize) - serialized JSON string. Issue #547. */
+        @JsonProperty("input_schema_canonical")
+        private String inputSchemaCanonical;
+
+        /** SHA256 hash (sha256:&lt;hex&gt;) of inputSchemaCanonical. Issue #547. */
+        @JsonProperty("input_schema_hash")
+        private String inputSchemaHash;
+
+        /** Canonical normalized output schema - serialized JSON string. Issue #547. */
+        @JsonProperty("output_schema_canonical")
+        private String outputSchemaCanonical;
+
+        /** SHA256 hash (sha256:&lt;hex&gt;) of outputSchemaCanonical. Issue #547. */
+        @JsonProperty("output_schema_hash")
+        private String outputSchemaHash;
+
+        /** Normalizer warnings (list of strings). Issue #547. */
+        @JsonProperty("schema_warnings")
+        private List<String> schemaWarnings;
+
         @JsonProperty("llm_filter")
         private String llmFilter;
 
@@ -322,6 +346,36 @@ public class AgentSpec {
             return this;
         }
 
+        public ToolSpec outputSchema(String outputSchema) {
+            this.outputSchema = outputSchema;
+            return this;
+        }
+
+        public ToolSpec inputSchemaCanonical(String inputSchemaCanonical) {
+            this.inputSchemaCanonical = inputSchemaCanonical;
+            return this;
+        }
+
+        public ToolSpec inputSchemaHash(String inputSchemaHash) {
+            this.inputSchemaHash = inputSchemaHash;
+            return this;
+        }
+
+        public ToolSpec outputSchemaCanonical(String outputSchemaCanonical) {
+            this.outputSchemaCanonical = outputSchemaCanonical;
+            return this;
+        }
+
+        public ToolSpec outputSchemaHash(String outputSchemaHash) {
+            this.outputSchemaHash = outputSchemaHash;
+            return this;
+        }
+
+        public ToolSpec schemaWarnings(List<String> schemaWarnings) {
+            this.schemaWarnings = schemaWarnings;
+            return this;
+        }
+
         // Standard getters and setters
 
         public String getFunctionName() {
@@ -380,6 +434,54 @@ public class AgentSpec {
             this.inputSchema = inputSchema;
         }
 
+        public String getOutputSchema() {
+            return outputSchema;
+        }
+
+        public void setOutputSchema(String outputSchema) {
+            this.outputSchema = outputSchema;
+        }
+
+        public String getInputSchemaCanonical() {
+            return inputSchemaCanonical;
+        }
+
+        public void setInputSchemaCanonical(String inputSchemaCanonical) {
+            this.inputSchemaCanonical = inputSchemaCanonical;
+        }
+
+        public String getInputSchemaHash() {
+            return inputSchemaHash;
+        }
+
+        public void setInputSchemaHash(String inputSchemaHash) {
+            this.inputSchemaHash = inputSchemaHash;
+        }
+
+        public String getOutputSchemaCanonical() {
+            return outputSchemaCanonical;
+        }
+
+        public void setOutputSchemaCanonical(String outputSchemaCanonical) {
+            this.outputSchemaCanonical = outputSchemaCanonical;
+        }
+
+        public String getOutputSchemaHash() {
+            return outputSchemaHash;
+        }
+
+        public void setOutputSchemaHash(String outputSchemaHash) {
+            this.outputSchemaHash = outputSchemaHash;
+        }
+
+        public List<String> getSchemaWarnings() {
+            return schemaWarnings;
+        }
+
+        public void setSchemaWarnings(List<String> schemaWarnings) {
+            this.schemaWarnings = schemaWarnings;
+        }
+
         public String getLlmFilter() {
             return llmFilter;
         }
@@ -414,6 +516,18 @@ public class AgentSpec {
         private String tags = "[]";
         private String version;
 
+        /** Canonical normalized expected-response schema (consumer side). Issue #547. */
+        @JsonProperty("expected_schema_canonical")
+        private String expectedSchemaCanonical;
+
+        /** SHA256 hash of expectedSchemaCanonical. Issue #547. */
+        @JsonProperty("expected_schema_hash")
+        private String expectedSchemaHash;
+
+        /** Schema match mode: "subset", "strict", or null for no schema check. Issue #547. */
+        @JsonProperty("match_mode")
+        private String matchMode;
+
         public DependencySpec() {
         }
 
@@ -443,6 +557,21 @@ public class AgentSpec {
             return this;
         }
 
+        public DependencySpec expectedSchemaCanonical(String expectedSchemaCanonical) {
+            this.expectedSchemaCanonical = expectedSchemaCanonical;
+            return this;
+        }
+
+        public DependencySpec expectedSchemaHash(String expectedSchemaHash) {
+            this.expectedSchemaHash = expectedSchemaHash;
+            return this;
+        }
+
+        public DependencySpec matchMode(String matchMode) {
+            this.matchMode = matchMode;
+            return this;
+        }
+
         // Standard getters and setters
 
         public String getCapability() {
@@ -467,6 +596,30 @@ public class AgentSpec {
 
         public void setVersion(String version) {
             this.version = version;
+        }
+
+        public String getExpectedSchemaCanonical() {
+            return expectedSchemaCanonical;
+        }
+
+        public void setExpectedSchemaCanonical(String expectedSchemaCanonical) {
+            this.expectedSchemaCanonical = expectedSchemaCanonical;
+        }
+
+        public String getExpectedSchemaHash() {
+            return expectedSchemaHash;
+        }
+
+        public void setExpectedSchemaHash(String expectedSchemaHash) {
+            this.expectedSchemaHash = expectedSchemaHash;
+        }
+
+        public String getMatchMode() {
+            return matchMode;
+        }
+
+        public void setMatchMode(String matchMode) {
+            this.matchMode = matchMode;
         }
     }
 

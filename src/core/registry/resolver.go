@@ -9,6 +9,7 @@ import (
 	"mcp-mesh/src/core/ent"
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
+	"mcp-mesh/src/core/ent/schemaentry"
 )
 
 // ResolveAllDependenciesIndexed resolves all dependencies and returns full IndexedResolution data.
@@ -191,19 +192,28 @@ type scoredCandidateWithHealth struct {
 
 // findHealthyProviderWithTrace runs the multi-stage candidate-filtering pipeline
 // and returns both the resolution and a stage-by-stage audit trace.
-// Stages run in fixed order: capability_match → tags → version → schema → health → tiebreaker.
-// The schema stage is a no-op in v1; reserved for #547.
+// Stages run in fixed order: health → capability_match → tags → version → schema → tiebreaker.
+// Health runs first so subsequent stages operate on the small healthy set rather
+// than dragging stale unhealthy candidates through every stage's audit listing.
+// The capability_match stage is vestigial — every candidate reaching it already
+// matched via the indexed DB query — but it's kept for diagnostic clarity.
+// The schema stage filters per #547 when the consumer opts in via dep.MatchMode;
+// otherwise it's a pass-through.
 func (s *EntService) findHealthyProviderWithTrace(dep Dependency) (*DependencyResolution, *AuditTrace) {
 	ctx := context.Background()
 
 	s.logger.Debug("Looking for provider for capability: %s, version: %s, tags: %v", dep.Capability, dep.Version, dep.Tags)
 
+	schemaMode := dep.MatchMode
+	if schemaMode == "" {
+		schemaMode = "none"
+	}
 	trace := &AuditTrace{
 		Spec: AuditSpec{
 			Capability:        dep.Capability,
 			Tags:              dep.Tags,
 			VersionConstraint: dep.Version,
-			SchemaMode:        "none", // v1; #547 will widen this
+			SchemaMode:        schemaMode,
 		},
 	}
 
@@ -243,14 +253,15 @@ func (s *EntService) findHealthyProviderWithTrace(dep Dependency) (*DependencyRe
 		}
 
 		c := Candidate{
-			AgentID:      cap.Edges.Agent.ID,
-			FunctionName: cap.FunctionName,
-			Capability:   cap.Capability,
-			Version:      cap.Version,
-			Tags:         cap.Tags,
-			HttpHost:     cap.Edges.Agent.HTTPHost,
-			HttpPort:     cap.Edges.Agent.HTTPPort,
-			EntityID:     derefString(cap.Edges.Agent.EntityID),
+			AgentID:          cap.Edges.Agent.ID,
+			FunctionName:     cap.FunctionName,
+			Capability:       cap.Capability,
+			Version:          cap.Version,
+			Tags:             cap.Tags,
+			HttpHost:         cap.Edges.Agent.HTTPHost,
+			HttpPort:         cap.Edges.Agent.HTTPPort,
+			EntityID:         derefString(cap.Edges.Agent.EntityID),
+			OutputSchemaHash: derefString(cap.OutputSchemaHash),
 		}
 
 		tc := candidateWithHealth{Candidate: c, Healthy: cap.Edges.Agent.Status == agent.StatusHealthy}
@@ -263,20 +274,42 @@ func (s *EntService) findHealthyProviderWithTrace(dep Dependency) (*DependencyRe
 		all = append(all, tc)
 	}
 
-	// Stage 1: capability_match — every candidate above passed by definition.
-	capStage := AuditStage{Stage: StageCapabilityMatch, Kept: idsFromCandidates(all)}
-	trace.Stages = append(trace.Stages, capStage)
+	// Stage 1: health — drop unhealthy candidates first so subsequent stages
+	// operate only on the small healthy set. Eviction reasons are typed
+	// (Unhealthy, Deregistering, etc.); details carry the agent's status string.
+	var afterHealth []candidateWithHealth
+	healthStage := AuditStage{Stage: StageHealth}
+	for _, tc := range all {
+		if tc.Healthy {
+			afterHealth = append(afterHealth, tc)
+		} else {
+			healthStage.Evicted = append(healthStage.Evicted, AuditEvicted{
+				ID:      candidateID(tc.AgentID, tc.FunctionName),
+				Reason:  tc.UnhealthyReason,
+				Details: tc.UnhealthyDetails,
+			})
+		}
+	}
+	healthStage.Kept = idsFromCandidates(afterHealth)
+	trace.Stages = append(trace.Stages, healthStage)
 
-	if len(all) == 0 {
-		s.logger.Debug("No healthy providers found for %s (no candidates with capability)", dep.Capability)
+	if len(afterHealth) == 0 {
+		s.logger.Debug("No healthy providers found for %s (no healthy candidates with capability)", dep.Capability)
 		return nil, trace
 	}
 
-	// Stage 2: tags — apply MatchTags with scoring; record per-candidate evictions.
+	// Stage 2: capability_match — vestigial. Every candidate reaching here came
+	// from the indexed DB query AND survived the health stage; kept = afterHealth.
+	// Retained for diagnostic clarity so operators can see "capability matched"
+	// as an explicit step in the audit.
+	capStage := AuditStage{Stage: StageCapabilityMatch, Kept: idsFromCandidates(afterHealth)}
+	trace.Stages = append(trace.Stages, capStage)
+
+	// Stage 3: tags — apply MatchTags with scoring; record per-candidate evictions.
 	var afterTags []scoredCandidateWithHealth
 	tagStage := AuditStage{Stage: StageTags}
 	hasTagFilter := len(dep.Tags) > 0 || len(dep.TagAlternatives) > 0
-	for _, tc := range all {
+	for _, tc := range afterHealth {
 		if !hasTagFilter {
 			afterTags = append(afterTags, scoredCandidateWithHealth{candidateWithHealth: tc, Score: 0})
 			continue
@@ -300,7 +333,7 @@ func (s *EntService) findHealthyProviderWithTrace(dep Dependency) (*DependencyRe
 		return nil, trace
 	}
 
-	// Stage 3: version — apply MatchVersion; record per-candidate evictions.
+	// Stage 4: version — apply MatchVersion; record per-candidate evictions.
 	var afterVersion []scoredCandidateWithHealth
 	versionStage := AuditStage{Stage: StageVersion}
 	for _, st := range afterTags {
@@ -324,41 +357,105 @@ func (s *EntService) findHealthyProviderWithTrace(dep Dependency) (*DependencyRe
 		return nil, trace
 	}
 
-	// Stage 4: schema — reserved for #547 (no-op in v1).
-	schemaStage := AuditStage{Stage: StageSchema, Kept: idsFromScored(afterVersion)}
+	// Stage 5: schema (#547) — when the consumer opts in via dep.MatchMode,
+	// drop candidates whose output schema can't satisfy the consumer's expected
+	// schema. When the consumer didn't opt in, OR the candidate has no
+	// output_schema_hash on file, this stage is a pass-through (we'd rather keep
+	// a usable producer than break agents during the schema-rollout window;
+	// strict cluster-wide enforcement is the Phase 4 cluster policy).
+	var afterSchema []scoredCandidateWithHealth
+	schemaStage := AuditStage{Stage: StageSchema}
+	schemaCheckEnabled := dep.MatchMode != ""
+	for _, st := range afterVersion {
+		if !schemaCheckEnabled {
+			afterSchema = append(afterSchema, st)
+			continue
+		}
+		candidateHash := st.OutputSchemaHash
+		if candidateHash == "" {
+			// Legacy/unextracted producer (no published output_schema_hash).
+			// Behavior splits per match_mode:
+			//   - subset: keep so consumer rollouts don't blackhole producers
+			//     that haven't shipped schema extraction yet.
+			//   - strict: evict. The consumer asked for byte-equal hashes; a
+			//     producer with no published hash cannot satisfy that contract.
+			if dep.MatchMode == "strict" {
+				schemaStage.Evicted = append(schemaStage.Evicted, AuditEvicted{
+					ID:     candidateID(st.AgentID, st.FunctionName),
+					Reason: ReasonSchemaIncompatible,
+					Details: map[string]interface{}{
+						"mode":          "strict",
+						"consumer_hash": dep.ExpectedSchemaHash,
+						"producer_hash": "",
+						"reasons": []map[string]interface{}{
+							{"kind": "no_published_hash"},
+						},
+					},
+				})
+				continue
+			}
+			afterSchema = append(afterSchema, st)
+			continue
+		}
+		if dep.ExpectedSchemaHash != "" && dep.ExpectedSchemaHash == candidateHash {
+			// Hash equality short-circuit: identical canonical content, no diff needed.
+			afterSchema = append(afterSchema, st)
+			continue
+		}
+		if dep.MatchMode == "strict" {
+			schemaStage.Evicted = append(schemaStage.Evicted, AuditEvicted{
+				ID:     candidateID(st.AgentID, st.FunctionName),
+				Reason: ReasonSchemaIncompatible,
+				Details: map[string]interface{}{
+					"mode":          "strict",
+					"consumer_hash": dep.ExpectedSchemaHash,
+					"producer_hash": candidateHash,
+				},
+			})
+			continue
+		}
+		// Subset (or unknown mode → treat as subset). Load the producer's canonical
+		// schema and run the structural diff. If the load fails or returns nil
+		// (storage hiccup, hash absent from schema_entries), fall through to keep:
+		// don't punish a candidate for a registry storage issue.
+		producerSchema, loadErr := s.loadCanonicalByHash(ctx, candidateHash)
+		if loadErr != nil || producerSchema == nil {
+			afterSchema = append(afterSchema, st)
+			continue
+		}
+		compat := IsSchemaCompatible(dep.ExpectedSchemaCanonical, producerSchema, "subset")
+		if compat.Compatible {
+			afterSchema = append(afterSchema, st)
+			continue
+		}
+		schemaStage.Evicted = append(schemaStage.Evicted, AuditEvicted{
+			ID:     candidateID(st.AgentID, st.FunctionName),
+			Reason: ReasonSchemaIncompatible,
+			Details: map[string]interface{}{
+				"mode":          "subset",
+				"consumer_hash": dep.ExpectedSchemaHash,
+				"producer_hash": candidateHash,
+				"reasons":       compat.Reasons,
+			},
+		})
+	}
+	schemaStage.Kept = idsFromScored(afterSchema)
 	trace.Stages = append(trace.Stages, schemaStage)
 
-	// Stage 5: health — drop unhealthy candidates with typed reason.
-	var afterHealth []scoredCandidateWithHealth
-	healthStage := AuditStage{Stage: StageHealth}
-	for _, st := range afterVersion {
-		if st.Healthy {
-			afterHealth = append(afterHealth, st)
-		} else {
-			healthStage.Evicted = append(healthStage.Evicted, AuditEvicted{
-				ID:      candidateID(st.AgentID, st.FunctionName),
-				Reason:  st.UnhealthyReason,
-				Details: st.UnhealthyDetails,
-			})
-		}
-	}
-	healthStage.Kept = idsFromScored(afterHealth)
-	trace.Stages = append(trace.Stages, healthStage)
-
-	if len(afterHealth) == 0 {
-		s.logger.Debug("No healthy providers found for %s (version: %s, tags: %v)", dep.Capability, dep.Version, dep.Tags)
+	if len(afterSchema) == 0 {
+		s.logger.Debug("No providers survived schema stage for %s (mode: %s)", dep.Capability, dep.MatchMode)
 		return nil, trace
 	}
 
 	// Stage 6: tiebreaker — sort by score DESC then take the head. Document
 	// the algorithm name in the audit so changes are visible.
-	sort.SliceStable(afterHealth, func(i, j int) bool {
-		return afterHealth[i].Score > afterHealth[j].Score
+	sort.SliceStable(afterSchema, func(i, j int) bool {
+		return afterSchema[i].Score > afterSchema[j].Score
 	})
-	winner := afterHealth[0]
+	winner := afterSchema[0]
 	trace.Stages = append(trace.Stages, AuditStage{
 		Stage:  StageTiebreaker,
-		Kept:   idsFromScored(afterHealth),
+		Kept:   idsFromScored(afterSchema),
 		Chosen: candidateID(winner.AgentID, winner.FunctionName),
 		Reason: TiebreakerHighestScoreFirst,
 	})
@@ -426,10 +523,13 @@ func (s *EntService) resolveSingle(spec DependencySpec) *DependencyResolution {
 // resolveSingleWithTrace mirrors resolveSingle but returns the audit trace too.
 func (s *EntService) resolveSingleWithTrace(spec DependencySpec) (*DependencyResolution, *AuditTrace) {
 	dep := Dependency{
-		Capability:      spec.Capability,
-		Version:         spec.Version,
-		Tags:            spec.Tags,
-		TagAlternatives: spec.TagAlternatives,
+		Capability:              spec.Capability,
+		Version:                 spec.Version,
+		Tags:                    spec.Tags,
+		TagAlternatives:         spec.TagAlternatives,
+		ExpectedSchemaHash:      spec.ExpectedSchemaHash,
+		ExpectedSchemaCanonical: spec.ExpectedSchemaCanonical,
+		MatchMode:               spec.MatchMode,
 	}
 	return s.findHealthyProviderWithTrace(dep)
 }
@@ -540,6 +640,25 @@ func derefString(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// loadCanonicalByHash returns the canonical normalized JSON Schema for a given
+// content hash, or (nil, nil) if no row exists. Used by the schema stage to
+// fetch a producer's output schema for the subset diff.
+func (s *EntService) loadCanonicalByHash(ctx context.Context, hash string) (map[string]interface{}, error) {
+	if hash == "" {
+		return nil, nil
+	}
+	entry, err := s.entDB.SchemaEntry.Query().
+		Where(schemaentry.HashEQ(hash)).
+		First(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return entry.Canonical, nil
 }
 
 // classifyTagFailure inspects which tag rule failed for a given provider so the

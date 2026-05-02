@@ -57,12 +57,20 @@ import { createProxy } from "./proxy.js";
 import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
 import { getTlsConfigCached, getTlsOptions, prepareTls, cleanupTls } from "./tls-config.js";
+import {
+  clusterStrictEnabled,
+  normalizeSchemaWithPolicy,
+} from "./schema-normalize.js";
 
 /**
  * Build tool specs from registered routes.
  * Shared helper for consistent tool spec generation.
  */
 function buildToolSpecs(routes: RouteMetadata[]): JsToolSpec[] {
+  // Issue #547 Phase 4: cluster strict knob promotes WARN→BLOCK. Routes are
+  // consumer-side so there's no per-tool override.
+  const clusterStrict = clusterStrictEnabled();
+
   return routes
     .filter((route) => route.dependencies.length > 0)
     .map((route) => ({
@@ -74,11 +82,29 @@ function buildToolSpecs(routes: RouteMetadata[]): JsToolSpec[] {
       // Note: tags may contain nested arrays for OR alternatives (TagSpec[])
       // Serialize to JSON for Rust binding - preserves nested structure
       dependencies: route.dependencies.map(
-        (dep): JsDependencySpec => ({
-          capability: dep.capability,
-          tags: JSON.stringify(dep.tags ?? []),
-          version: dep.version,
-        })
+        (dep): JsDependencySpec => {
+          // Issue #547: per-dep expectedSchema → canonical + hash + matchMode.
+          let expectedCanonical: string | undefined;
+          let expectedHash: string | undefined;
+          if (dep.expectedSchemaRaw) {
+            const r = normalizeSchemaWithPolicy(
+              dep.expectedSchemaRaw,
+              `route ${route.routeId} dependency on '${dep.capability}'`,
+              clusterStrict,
+              true
+            );
+            expectedCanonical = r.canonicalJson ?? undefined;
+            expectedHash = r.hash ?? undefined;
+          }
+          return {
+            capability: dep.capability,
+            tags: JSON.stringify(dep.tags ?? []),
+            version: dep.version,
+            expectedSchemaCanonical: expectedCanonical,
+            expectedSchemaHash: expectedHash,
+            matchMode: dep.matchMode,
+          };
+        }
       ),
       inputSchema: undefined,
     }));

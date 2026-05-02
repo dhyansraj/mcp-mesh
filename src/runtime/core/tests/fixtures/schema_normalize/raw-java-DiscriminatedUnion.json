@@ -1,0 +1,1 @@
+{"type":"object","properties":{"pet":{"anyOf":[{"type":"object","properties":{"kind":{"type":"string","const":"dog"},"breed":{"type":"string"}},"required":["breed","kind"]},{"type":"object","properties":{"kind":{"type":"string","const":"cat"},"indoor":{"type":"boolean"}},"required":["indoor","kind"]}]}},"required":["pet"]}

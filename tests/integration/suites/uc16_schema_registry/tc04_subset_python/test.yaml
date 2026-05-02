@@ -1,0 +1,83 @@
+# Test Case: tc04 - Subset-mode eviction (all Python)
+# Issue #547 Phase 4: same-runtime baseline.
+#
+# producer_good (Employee) + producer_bad (Hardware) + consumer (subset, expects Employee).
+# Audit must show producer-bad evicted at the schema stage with reason
+# SchemaIncompatible (mode=subset, missing_field), and chosen = producer-good.
+
+name: "Schema Registry: subset-mode eviction (Python <-> Python)"
+description: "Schema-aware Python consumer evicts producer-bad at schema stage and wires to producer-good"
+tags:
+  - schema_registry
+  - py
+  - subset
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy schema-py agents to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/schema-py
+      cp /uc-artifacts/schema-py/producer_good.py /workspace/schema-py/
+      cp /uc-artifacts/schema-py/producer_bad.py /workspace/schema-py/
+      cp /uc-artifacts/schema-py/consumer.py /workspace/schema-py/
+      ls -la /workspace/schema-py/
+
+  - name: "Start producer-good (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/producer_good.py -d"
+
+  - name: "Start producer-bad (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/producer_bad.py -d"
+
+  - name: "Wait for producers"
+    handler: wait
+    seconds: 12
+
+  - name: "Start consumer (port 9102)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/consumer.py -d"
+
+  - name: "Wait for consumer + dep resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Audit consumer JSON"
+    handler: shell
+    workdir: /workspace
+    command: meshctl audit consumer-py --json --function lookup_with_schema --dep 0
+    capture: audit_json
+
+assertions:
+  - expr: "${captured.agent_list} contains 'producer-good-py'"
+  - expr: "${captured.agent_list} contains 'producer-bad-py'"
+  - expr: "${captured.agent_list} contains 'consumer-py'"
+  - expr: ${jq:captured.audit_json:.events[0].trace.chosen.agent_id} contains 'producer-good-py'
+    message: "Consumer should wire to producer-good"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].reason} == 'SchemaIncompatible'
+    message: "producer-bad should be evicted at schema stage with reason SchemaIncompatible"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].id} contains 'producer-bad-py'
+    message: "Evicted candidate id should reference producer-bad-py"
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted[0].details.mode} == 'subset'
+    message: "Eviction should be in subset mode"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

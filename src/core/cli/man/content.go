@@ -43,6 +43,18 @@ var guideRegistry = map[string]*Guide{
 		HasTypeScriptVariant: true,
 		HasJavaVariant:       true,
 	},
+	"schema-matching": {
+		Name:        "schema-matching",
+		Aliases:     []string{"schema", "schemas", "output-schema", "schema-registry"},
+		Title:       "Schema Matching",
+		Description: "Opt-in shape compatibility for dependency resolution (issue #547)",
+	},
+	"audit": {
+		Name:        "audit",
+		Aliases:     []string{"audit-trail", "resolution-audit", "di-audit"},
+		Title:       "Dependency Resolution Audit Trail",
+		Description: "Inspect every decision the registry made when wiring an agent's dependencies",
+	},
 	"decorators": {
 		Name:                 "decorators",
 		Aliases:              []string{"decorator"},
@@ -298,8 +310,9 @@ func ListGuides() []*Guide {
 	guides := make([]*Guide, 0, len(guideRegistry))
 	// Return in a consistent order
 	order := []string{
-		"quickstart", "prerequisites", "tutorial", "overview", "capabilities", "tags", "decorators",
-		"dependency-injection", "health", "registry", "llm", "media", "multimodal",
+		"quickstart", "prerequisites", "tutorial", "overview", "capabilities", "tags",
+		"schema-matching", "decorators",
+		"dependency-injection", "audit", "health", "registry", "llm", "media", "multimodal",
 		"proxies", "api", "environment", "deployment", "observability", "headers",
 		"testing", "scaffold", "cli", "security",
 	}

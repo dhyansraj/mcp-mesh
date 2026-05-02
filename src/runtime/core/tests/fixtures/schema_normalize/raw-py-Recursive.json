@@ -1,0 +1,1 @@
+{"$defs":{"TreeNode":{"properties":{"value":{"title":"Value","type":"string"},"children":{"items":{"$ref":"#/$defs/TreeNode"},"title":"Children","type":"array"}},"required":["value","children"],"title":"TreeNode","type":"object"}},"$ref":"#/$defs/TreeNode"}

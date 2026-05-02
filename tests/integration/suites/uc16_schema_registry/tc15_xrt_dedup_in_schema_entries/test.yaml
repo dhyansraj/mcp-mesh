@@ -1,0 +1,151 @@
+# Test Case: tc15 - Cross-runtime canonical-form dedup
+# Issue #547 Phase 4 — HEADLINE PROOF.
+#
+# All 3 producer-good agents (Pydantic + Zod + Java POJO+@NotNull) declare the
+# Employee shape. After Rust normalization, all three must hash to the same
+# canonical bytes — the registry's content-addressed schema_entries table is
+# therefore expected to contain exactly ONE row for that hash, even with three
+# writers.
+#
+# Hash: sha256:48882e31915113ed70ee620b2245bfcf856e4e146e2eb6e37700809d7338e732
+#
+# Storage proof: rather than introspecting the registry DB (sqlite3 isn't in
+# the test container), we add a strict-mode consumer expecting Employee. Strict
+# mode requires byte-equal canonical hashes, so its schema-stage eviction set
+# must be EMPTY (all three same-shape producers survive) and one of the three
+# must be chosen. That is the same end-to-end proof of dedup: same canonical
+# bytes -> same hash -> all three survive a byte-level filter -> one chosen.
+
+name: "Schema Registry: cross-runtime canonical-form dedup (3 producers, all survive strict)"
+description: "Pydantic + Zod + Java POJO Employee schemas all hash to the same canonical bytes (proven via strict-mode consumer)"
+tags:
+  - schema_registry
+  - cross_runtime
+  - py
+  - ts
+  - java
+  - dedup
+  - slow
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_typescript_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy all three producer-good agents + Python consumer to workspace"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /workspace/schema-py /workspace/schema-ts /workspace/schema-java
+      cp /uc-artifacts/schema-py/producer_good.py /workspace/schema-py/
+      cp /uc-artifacts/schema-py/consumer.py /workspace/schema-py/
+      cp /uc-artifacts/schema-ts/producer_good.ts /workspace/schema-ts/
+      cp /uc-artifacts/schema-ts/package.json /workspace/schema-ts/
+      cp -r /uc-artifacts/schema-java/pom.xml /workspace/schema-java/
+      cp -r /uc-artifacts/schema-java/producer-good /workspace/schema-java/
+      ls -la /workspace/schema-py/ /workspace/schema-ts/ /workspace/schema-java/
+
+  - name: "Flip consumer match_mode to strict (byte-level hash check)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      sed -i 's/"match_mode": "subset"/"match_mode": "strict"/g' /workspace/schema-py/consumer.py
+      grep -n match_mode /workspace/schema-py/consumer.py
+
+  - name: "Install TypeScript dependencies"
+    handler: npm-install
+    path: /workspace/schema-ts
+
+  - name: "Install Maven deps for producer-good-java"
+    handler: maven-install
+    path: /workspace/schema-java/producer-good
+    timeout: 600
+
+  - name: "Start producer-good-py (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/producer_good.py -d"
+
+  - name: "Start producer-good-ts (port 9110)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-ts/producer_good.ts -d"
+
+  - name: "Start producer-good-java"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/schema-java/producer-good -d"
+
+  - name: "Wait for all three producers to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 50); do
+        LIST=$(meshctl list 2>/dev/null)
+        if echo "$LIST" | grep -q "producer-good-py" \
+           && echo "$LIST" | grep -q "producer-good-ts" \
+           && echo "$LIST" | grep -q "producer-good-java"; then
+          echo "All three producers registered after $((i*3))s"
+          sleep 5  # let registry persist schema_entries rows
+          exit 0
+        fi
+        sleep 3
+      done
+      echo "ERROR: Not all producers registered"
+      meshctl list 2>&1 || true
+      exit 1
+    capture: wait_producers
+    timeout: 240
+
+  - name: "Start strict-mode consumer-py"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start schema-py/consumer.py -d"
+
+  - name: "Wait for consumer + dep resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "List agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "Audit strict-mode consumer to verify all 3 producers survive"
+    handler: shell
+    workdir: /workspace
+    command: meshctl audit consumer-py --json --function lookup_with_schema --dep 0
+    capture: audit_json
+
+assertions:
+  - expr: "${captured.agent_list} contains 'producer-good-py'"
+  - expr: "${captured.agent_list} contains 'producer-good-ts'"
+  - expr: "${captured.agent_list} contains 'producer-good-java'"
+  - expr: "${captured.agent_list} contains 'consumer-py'"
+
+  # Headline proof: strict mode requires byte-equal hashes. If all 3 producers
+  # canonicalize to the same bytes (and thus the same hash), the schema stage
+  # must evict ZERO of them.
+  - expr: ${jq:captured.audit_json:.events[0].trace.stages[]|select(.stage=="schema")|.evicted|length} == 0
+    message: "Strict-mode schema stage must evict 0 producers — all 3 same-shape producers (Pydantic+Zod+POJO) must hash to the same canonical Employee bytes"
+
+  # And one of the three must be chosen
+  - expr: ${jq:captured.audit_json:.events[0].trace.chosen.agent_id} contains 'producer-good'
+    message: "Strict-mode consumer must wire to one of the three producer-good agents (proves canonical hash equality across runtimes)"
+
+  # Confirm the event represents successful resolution (not unresolved)
+  - expr: ${jq:captured.audit_json:.events[0].event_type} != 'dependency_unresolved'
+    message: "Strict-mode resolution must succeed (not dependency_unresolved)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot" 2>/dev/null || true
+      pkill -f "java.*producer" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

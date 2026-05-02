@@ -27,7 +27,10 @@ const priorTraceLookupLimit = 64
 // event to the RegistryEvent table when warranted. Gating logic:
 //   - Resolved + multi-candidate decision (≥2 candidates entered any stage) → candidate to emit
 //   - Resolved + chosen producer flipped vs prior emission for same (consumer, function, dep_index) → candidate to emit
-//   - Unresolved + ANY candidates entered the pipeline → candidate to emit (so operators can see why nothing matched)
+//   - Unresolved + ≥2 candidates entered any stage → candidate to emit
+//   - Unresolved + at least one candidate was evicted → candidate to emit (single-rogue
+//     eviction is the canonical "why isn't my dep wired" signal)
+//   - Unresolved + prior emission was resolved (resolved→unresolved flip) → candidate to emit
 //   - Single forced choice with no flip → skip (noise)
 //
 // In addition to the rules above, an emission is suppressed when the canonical
@@ -78,10 +81,21 @@ func (s *EntService) emitAuditEventIfInteresting(
 	var eventType registryevent.EventType
 	if resolved == nil {
 		eventType = registryevent.EventTypeDependencyUnresolved
-		// Skip noise: don't emit "unresolved" if there were never any candidates
-		// at all (capability stage empty) AND this isn't a flip from a previous
-		// resolved state.
-		if !trace.IsInteresting() && priorChosen == "" {
+		// Emit unresolved when:
+		//   (a) ≥2 candidates entered the pipeline (real decision), OR
+		//   (b) at least one candidate was evicted (operator needs to see why
+		//       their dep isn't wired — single-rogue eviction is the canonical
+		//       case), OR
+		//   (c) prior emission was a resolved event (now flipping to unresolved).
+		// Skip only the truly-empty case (no candidate ever existed at all).
+		hasEvictions := false
+		for _, st := range trace.Stages {
+			if len(st.Evicted) > 0 {
+				hasEvictions = true
+				break
+			}
+		}
+		if !trace.IsInteresting() && !hasEvictions && priorChosen == "" {
 			return nil
 		}
 	} else {
@@ -109,7 +123,9 @@ func (s *EntService) emitAuditEventIfInteresting(
 	// stable mesh re-runs resolution every heartbeat and produces an identical
 	// trace — we don't want to fill the audit log with copies. The lookup
 	// considers BOTH resolved and unresolved prior events so unresolved→unresolved
-	// sequences also dedupe.
+	// sequences also dedupe; without this the relaxed `hasEvictions` rule above
+	// would flood the audit log when a transient unhealthy producer re-evicts
+	// every heartbeat (see TestAudit_UnresolvedFloodIsDeduped).
 	newHash, err := canonicalTraceHash(trace)
 	if err != nil {
 		return fmt.Errorf("audit: canonicalize trace: %w", err)

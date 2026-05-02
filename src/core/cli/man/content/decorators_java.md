@@ -76,6 +76,65 @@ public GreetingResponse greet(
 
 **Note**: Dependencies are injected as `McpMeshTool<T>` parameters on the method. They may be `null` if unavailable.
 
+### Schema-aware capabilities (issue #547)
+
+The mesh can match producers and consumers by their canonical response schemas, not just by capability name. This is opt-in per tool/selector.
+
+**Producer side** — point `@MeshTool(outputType = ...)` at the concrete class. Java needs an explicit class because generics erasure prevents the SDK from inferring return types reliably:
+
+```java
+@MeshTool(
+    capability = "lookup_employee",
+    outputType = Employee.class
+)
+public Employee lookupEmployee(@Param("id") String id) {
+    return new Employee(id, "Ada", "Engineering");
+}
+
+public record Employee(@NotNull String id,
+                       @NotNull String name,
+                       @NotNull String department) {}
+```
+
+> Note: Use `@NotNull` (`jakarta.validation.constraints`) on required fields. Java reference types are nullable by default; the normalizer drops nullability from the canonical form when `@NotNull` is present, which is required for cross-language `strict` matching.
+
+**Consumer side (`@MeshTool` dependencies)** — add `expectedType` and `schemaMode` to the `@Selector`:
+
+```java
+@MeshTool(
+    capability = "hr_report",
+    dependencies = @Selector(
+        capability   = "lookup_employee",
+        expectedType = Employee.class,
+        schemaMode   = SchemaMode.SUBSET
+    )
+)
+public Report hrReport(McpMeshTool<Employee> employeeLookup) { ... }
+```
+
+**Consumer side (`@MeshRoute` web handlers)** — same fields on `@MeshDependency`:
+
+```java
+@MeshRoute(dependencies = {
+    @MeshDependency(
+        capability   = "lookup_employee",
+        expectedType = Employee.class,
+        schemaMode   = SchemaMode.SUBSET
+    )
+})
+@PostMapping("/report")
+public ResponseEntity<Report> report(McpMeshTool<Employee> employeeLookup) { ... }
+```
+
+**Per-tool strict knob** — set `outputSchemaStrict = false` on `@MeshTool` to demote a BLOCK schema verdict to a WARN for that one tool. Wins even when the cluster-wide `MCP_MESH_SCHEMA_STRICT=true` env var promotes WARN→BLOCK.
+
+```java
+@MeshTool(capability = "experimental_thing", outputSchemaStrict = false)
+public Object experimental(...) { ... }
+```
+
+See `meshctl man schema-matching` for modes, the cross-language convention table, and verdict tiers. See `meshctl man dependency-injection --java` for the full filter pipeline.
+
 ## @Param
 
 Documents tool parameters. Applied to method parameters.

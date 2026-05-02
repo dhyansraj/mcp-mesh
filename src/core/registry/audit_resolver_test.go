@@ -151,24 +151,24 @@ func TestAudit_FourCandidatesMixed(t *testing.T) {
 	assert.Equal(t, "none", tr.Spec.SchemaMode)
 	assert.Empty(t, tr.PriorChosen, "first emission has no prior_chosen")
 
-	// 6 stages: capability_match, tags, version, schema, health, tiebreaker
+	// 6 stages: health, capability_match, tags, version, schema, tiebreaker
 	require.Len(t, tr.Stages, 6, "expected 6 stages")
-	assert.Equal(t, StageCapabilityMatch, tr.Stages[0].Stage)
-	assert.Equal(t, StageTags, tr.Stages[1].Stage)
-	assert.Equal(t, StageVersion, tr.Stages[2].Stage)
-	assert.Equal(t, StageSchema, tr.Stages[3].Stage)
-	assert.Equal(t, StageHealth, tr.Stages[4].Stage)
+	assert.Equal(t, StageHealth, tr.Stages[0].Stage)
+	assert.Equal(t, StageCapabilityMatch, tr.Stages[1].Stage)
+	assert.Equal(t, StageTags, tr.Stages[2].Stage)
+	assert.Equal(t, StageVersion, tr.Stages[3].Stage)
+	assert.Equal(t, StageSchema, tr.Stages[4].Stage)
 	assert.Equal(t, StageTiebreaker, tr.Stages[5].Stage)
 
 	// Tag stage evicted test-emp with MissingTag.
-	require.Len(t, tr.Stages[1].Evicted, 1)
-	tagEv := tr.Stages[1].Evicted[0]
+	require.Len(t, tr.Stages[2].Evicted, 1)
+	tagEv := tr.Stages[2].Evicted[0]
 	assert.Equal(t, "test-emp:do_thing", tagEv.ID)
 	assert.Equal(t, ReasonMissingTag, tagEv.Reason)
 
 	// Version stage evicted hr-v1 with VersionConstraintFailed.
-	require.Len(t, tr.Stages[2].Evicted, 1)
-	verEv := tr.Stages[2].Evicted[0]
+	require.Len(t, tr.Stages[3].Evicted, 1)
+	verEv := tr.Stages[3].Evicted[0]
 	assert.Equal(t, "hr-v1:do_thing", verEv.ID)
 	assert.Equal(t, ReasonVersionConstraintFailed, verEv.Reason)
 	assert.Equal(t, "1.4.0", verEv.Details["version"])
@@ -264,8 +264,9 @@ func TestAudit_OutcomeFlips(t *testing.T) {
 	require.NotEmpty(t, events)
 	last := events[len(events)-1]
 	assert.Equal(t, "v2", last.Chosen.AgentID)
-	// v1 had its eviction recorded in the health stage.
-	healthStage := last.Stages[4]
+	// v1 had its eviction recorded in the health stage (now first).
+	healthStage := last.Stages[0]
+	require.Equal(t, StageHealth, healthStage.Stage)
 	require.Len(t, healthStage.Evicted, 1)
 	assert.Equal(t, "v1:do_thing", healthStage.Evicted[0].ID)
 	assert.Equal(t, ReasonUnhealthy, healthStage.Evicted[0].Reason)
@@ -304,6 +305,65 @@ func TestAudit_NoCandidatesUnresolved(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, all, 1)
 	assert.Equal(t, registryevent.EventTypeDependencyUnresolved, all[0].EventType)
+}
+
+// TestAudit_SingleCandidateEvictedEmitsUnresolved asserts that when exactly one
+// producer enters the pipeline and gets evicted, an unresolved event is emitted
+// even though IsInteresting()=false (only a single candidate). This is the
+// canonical operator-debugging signal: "I had a candidate but it didn't pass
+// [stage]". Suppressing it would leave operators with no audit trail of why
+// their dependency stayed unresolved.
+func TestAudit_SingleCandidateEvictedEmitsUnresolved(t *testing.T) {
+	client, service, cleanup := newAuditTestEnv(t)
+	defer cleanup()
+
+	seedConsumer(t, client, "consumer-1")
+	// Single producer with the wrong tag → evicted at the tag stage. Only one
+	// candidate enters the pipeline, so IsInteresting() returns false.
+	seedProducer(t, client, "rogue", "ping", "1.0.0", []string{"foo"})
+
+	meta := metadataForDep(map[string]interface{}{
+		"capability": "ping",
+		"tags":       []interface{}{"required"},
+	})
+
+	res := service.ResolveAllDependenciesIndexed(meta)
+	require.Len(t, res, 1)
+	require.Nil(t, res[0].Resolution, "single rogue candidate should not resolve")
+
+	// Sanity check: trace must show the eviction but NOT be IsInteresting()
+	// (the new gating rule is what carries the day here, not the existing
+	// multi-candidate path).
+	require.NotNil(t, res[0].Trace)
+	assert.False(t, res[0].Trace.IsInteresting(),
+		"precondition: single-candidate trace must not be IsInteresting() for this test to exercise the new gating")
+
+	require.NoError(t, service.StoreDependencyResolutions(context.Background(), "consumer-1", res))
+
+	events := listAuditEventsFor(t, client, "consumer-1")
+	require.Len(t, events, 1, "single-candidate eviction must still emit an unresolved event for operator visibility")
+
+	tr := events[0]
+	assert.Nil(t, tr.Chosen, "unresolved trace must not have chosen")
+
+	// The eviction details must be present so the operator can diagnose.
+	foundEviction := false
+	for _, st := range tr.Stages {
+		if len(st.Evicted) > 0 {
+			foundEviction = true
+			break
+		}
+	}
+	assert.True(t, foundEviction, "trace must record at least one eviction")
+
+	// And the persisted row's event_type must be dependency_unresolved.
+	ctx := context.Background()
+	rows, err := client.RegistryEvent.Query().
+		Where(registryevent.HasAgentWith(agent.IDEQ("consumer-1"))).
+		All(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, registryevent.EventTypeDependencyUnresolved, rows[0].EventType)
 }
 
 // TestAuditTrace_RoundTrip asserts AuditTrace serializes and deserializes cleanly.
@@ -591,7 +651,8 @@ func TestAudit_DedupeAllowsRealChange(t *testing.T) {
 
 	// And the latest event records the eviction.
 	last := events[len(events)-1]
-	tagStage := last.Stages[1]
+	tagStage := last.Stages[2]
+	require.Equal(t, StageTags, tagStage.Stage)
 	require.NotEmpty(t, tagStage.Evicted)
 	foundBad := false
 	for _, ev := range tagStage.Evicted {
@@ -664,7 +725,7 @@ func TestAudit_DisambiguatesFunctionsOnSameAgent(t *testing.T) {
 	// Tag stage: kept=analyze_storage_and_os, evicted=fetch_system_overview.
 	// Both refer to the same agent — only the function-name suffix
 	// distinguishes them, which is the whole point of the fix.
-	tagStage := tr.Stages[1]
+	tagStage := tr.Stages[2]
 	assert.Equal(t, StageTags, tagStage.Stage)
 	require.Len(t, tagStage.Kept, 1, "exactly one function survives the tag filter")
 	assert.Equal(t, "system-agent:analyze_storage_and_os", tagStage.Kept[0])
@@ -752,4 +813,59 @@ func TestAudit_UnresolvedToResolved_EmitsEvenWithSingleCandidate(t *testing.T) {
 	require.Len(t, rows, 2, "unresolved→resolved must emit, even with a single candidate")
 	assert.Equal(t, registryevent.EventTypeDependencyUnresolved, rows[0].EventType)
 	assert.Equal(t, registryevent.EventTypeDependencyResolved, rows[1].EventType)
+}
+
+// TestAudit_UnresolvedFloodIsDeduped guards against the audit-log flooding
+// scenario described in #547 review B1: with the relaxed `hasEvictions`
+// gating rule, a transient unhealthy producer in the capability query results
+// becomes a stage-eviction on every heartbeat. Without the canonical-hash
+// dedupe also covering unresolved→unresolved sequences, every heartbeat would
+// emit a fresh dependency_unresolved event.
+//
+// Setup: a single rogue producer, evicted at the tag stage, no resolution.
+// Run resolve+store N times. Expect exactly ONE unresolved event in the
+// audit log — the first one — with all N-1 follow-ups suppressed by dedupe.
+func TestAudit_UnresolvedFloodIsDeduped(t *testing.T) {
+	client, service, cleanup := newAuditTestEnv(t)
+	defer cleanup()
+
+	seedConsumer(t, client, "consumer-1")
+	// Single producer with the wrong tag → evicted at the tag stage.
+	// hasEvictions=true so the gating allows emit; without dedupe the same
+	// trace would emit on every heartbeat.
+	seedProducer(t, client, "rogue", "ping", "1.0.0", []string{"foo"})
+
+	meta := metadataForDep(map[string]interface{}{
+		"capability": "ping",
+		"tags":       []interface{}{"required"},
+	})
+
+	ctx := context.Background()
+
+	// Heartbeat #1: emits the first unresolved event.
+	res1 := service.ResolveAllDependenciesIndexed(meta)
+	require.Len(t, res1, 1)
+	require.Nil(t, res1[0].Resolution)
+	require.NoError(t, service.StoreDependencyResolutions(ctx, "consumer-1", res1))
+
+	// Heartbeats #2..#5: identical world state → identical trace → dedupe.
+	for i := 0; i < 4; i++ {
+		resN := service.ResolveAllDependenciesIndexed(meta)
+		require.Len(t, resN, 1)
+		require.Nil(t, resN[0].Resolution)
+		require.NoError(t, service.StoreDependencyResolutions(ctx, "consumer-1", resN))
+	}
+
+	events := listAuditEventsFor(t, client, "consumer-1")
+	require.Len(t, events, 1,
+		"unresolved-flood guard: only the first identical unresolved trace should be persisted; heartbeats with the same trace must be deduped")
+
+	// Confirm the persisted event is unresolved (not accidentally resolved).
+	rows, err := client.RegistryEvent.Query().
+		Where(registryevent.HasAgentWith(agent.IDEQ("consumer-1"))).
+		Order(registryevent.ByTimestamp(sql.OrderAsc())).
+		All(ctx)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, registryevent.EventTypeDependencyUnresolved, rows[0].EventType)
 }

@@ -23,3 +23,6 @@ type LLMToolResolution func(*sql.Selector)
 
 // RegistryEvent is the predicate function for registryevent builders.
 type RegistryEvent func(*sql.Selector)
+
+// SchemaEntry is the predicate function for schemaentry builders.
+type SchemaEntry func(*sql.Selector)
