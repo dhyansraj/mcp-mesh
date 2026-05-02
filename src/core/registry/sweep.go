@@ -2,8 +2,10 @@ package registry
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -406,24 +408,39 @@ func (s *SweepJob) enforceEventCap(ctx context.Context) (int, error) {
 // purgeOrphanSchemaEntries deletes schema_entries rows older than Retention
 // that are no longer referenced by any capability's input_schema_hash or
 // output_schema_hash. Runs after agent purge so newly-orphaned schemas
-// (whose last referencing capability got cascade-deleted) are caught in
-// the same sweep cycle.
+// (whose last referencing capability got cascade-deleted in this tick)
+// are eligible to be reconsidered.
+//
+// Note: a schema that becomes orphaned during this sweep cycle is only
+// purged if its own created_at is also older than Retention. Newly
+// orphaned schemas whose created_at is within the retention window are
+// picked up on a later sweep cycle once they age past the threshold.
 //
 // Schemas are intentionally not FK-bound to capabilities (loose coupling
 // for content-addressed dedup across agents), so they can outlive every
 // referrer. This sweep step closes that gap.
 //
 // Race-safety: candidates are queried outside any transaction; each
-// candidate is then re-checked inside its own per-row transaction
-// (staleness predicate + reference count) before deletion. A concurrent
-// agent registration that creates a capability referencing the hash
-// will be visible to the re-check and the delete is skipped.
+// candidate is then re-checked and deleted inside its own per-row
+// SERIALIZABLE transaction (see purgeOneSchemaEntry). On Postgres SSI
+// will abort one side of any predicate-conflicting transaction, so a
+// concurrent registration creating a capability referencing the hash
+// cannot race past the delete. SQLite's single-writer model achieves
+// the same property automatically.
 func (s *SweepJob) purgeOrphanSchemaEntries(ctx context.Context, now time.Time) (int, error) {
 	threshold := now.Add(-s.cfg.Retention)
 
-	candidates, err := s.entDB.Client.SchemaEntry.Query().
+	// Bounded to avoid loading all stale schema_entries into memory in
+	// pathological cases; remaining candidates picked up next tick.
+	// Select only the hash column to skip hydrating the canonical JSON
+	// blob (which can be large for big tool schemas) — the per-row tx
+	// re-reads the row anyway with the staleness predicate.
+	var candidates []string
+	err := s.entDB.Client.SchemaEntry.Query().
 		Where(schemaentry.CreatedAtLT(threshold)).
-		All(ctx)
+		Limit(1000).
+		Select(schemaentry.FieldHash).
+		Scan(ctx, &candidates)
 	if err != nil {
 		return 0, fmt.Errorf("query schema entries: %w", err)
 	}
@@ -433,11 +450,11 @@ func (s *SweepJob) purgeOrphanSchemaEntries(ctx context.Context, now time.Time) 
 	}
 
 	var purged int
-	for _, e := range candidates {
-		deleted, err := s.purgeOneSchemaEntry(ctx, e.Hash, threshold)
+	for _, hash := range candidates {
+		deleted, err := s.purgeOneSchemaEntry(ctx, hash, threshold)
 		if err != nil {
 			if s.logger != nil {
-				s.logger.Error("sweep: failed to purge schema_entry %s: %v", e.Hash, err)
+				s.logger.Error("sweep: failed to purge schema_entry %s: %v", hash, err)
 			}
 			continue
 		}
@@ -449,15 +466,33 @@ func (s *SweepJob) purgeOrphanSchemaEntries(ctx context.Context, now time.Time) 
 }
 
 // purgeOneSchemaEntry deletes a single schema_entry row inside a
-// transaction after re-verifying both its staleness and that no
-// capability still references it. Returns (true, nil) when deleted,
-// (false, nil) when a concurrent registration created a reference or
-// the entry was already gone / no longer stale, (false, err) on other
-// failures.
+// SERIALIZABLE transaction after re-verifying both its staleness and
+// that no capability still references it. Returns (true, nil) when
+// deleted, (false, nil) when the entry was already gone / no longer
+// stale / now referenced / lost a serialization race, (false, err) on
+// other failures.
+//
+// Race-safety: under READ COMMITTED (the previous default) a concurrent
+// registration could INSERT a capability referencing this hash between
+// the in-tx ref-count and COMMIT, leaving a capability row pointing at
+// a deleted schema_entry. The dependency resolver treats a missing
+// schema_entry as "skip schema check and keep the candidate", so a
+// consumer could end up wired to a producer whose schema check was
+// silently bypassed. The window is brief but the failure mode is
+// hostile (wrong producer selected, no obvious error trail).
+//
+// Using SERIALIZABLE causes Postgres SSI to detect the predicate
+// conflict between this tx (read: count of capabilities referencing
+// hash) and a concurrent INSERT into capability with that hash, and
+// abort one side at COMMIT with SQLSTATE 40001. We treat 40001 as
+// "skip this candidate; the next sweep tick will retry naturally" so
+// we never delete a schema_entry that a concurrent registration is in
+// the process of referencing. SQLite's single-writer model already
+// serializes these writes, so this is a no-op there.
 func (s *SweepJob) purgeOneSchemaEntry(ctx context.Context, hash string, threshold time.Time) (bool, error) {
 	var deleted bool
 
-	err := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
+	err := s.entDB.TransactionWithOptions(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable}, func(tx *ent.Tx) error {
 		// Re-verify staleness inside the tx (the entry could have been
 		// deleted by another sweep, or — in theory — re-inserted with a
 		// fresh created_at if upstream code ever does that).
@@ -477,7 +512,9 @@ func (s *SweepJob) purgeOneSchemaEntry(ctx context.Context, hash string, thresho
 
 		// Re-verify orphan-ness inside the tx. If a concurrent
 		// registration created a capability referencing this hash
-		// between the candidate scan and now, skip the delete.
+		// between the candidate scan and now, skip the delete. Under
+		// SERIALIZABLE this also establishes the predicate that SSI
+		// will use to detect a racing INSERT and abort us at COMMIT.
 		refCount, err := tx.Capability.Query().
 			Where(capability.Or(
 				capability.InputSchemaHashEQ(hash),
@@ -502,6 +539,12 @@ func (s *SweepJob) purgeOneSchemaEntry(ctx context.Context, hash string, thresho
 		return nil
 	})
 	if err != nil {
+		if isSerializationConflict(err) {
+			if s.logger != nil {
+				s.logger.Debug("sweep: schema_entry %s skipped due to serialization conflict; will retry next sweep cycle", hash)
+			}
+			return false, nil
+		}
 		return false, err
 	}
 
@@ -509,4 +552,17 @@ func (s *SweepJob) purgeOneSchemaEntry(ctx context.Context, hash string, thresho
 		s.logger.Debug("sweep: purged orphan schema_entry %s", hash)
 	}
 	return deleted, nil
+}
+
+// isSerializationConflict returns true when err is a Postgres SSI
+// serialization-failure error (SQLSTATE 40001). We string-match rather
+// than depend on a Postgres driver type so this stays portable across
+// the SQLite test path (which never raises 40001) and the Postgres
+// production path. The driver-emitted message contains the SQLSTATE
+// name "could not serialize access" verbatim.
+func isSerializationConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "could not serialize access")
 }

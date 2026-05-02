@@ -674,15 +674,18 @@ func TestSweep_PurgeOrphanSchemaEntries_KeepsRecent(t *testing.T) {
 	}
 }
 
-// TestSweep_PurgeOrphanSchemaEntries_RaceSafety simulates the race where
-// a schema_entry is in the candidate set (orphan + stale) but a
-// concurrent registration creates a capability referencing the hash
-// before the per-row delete tx runs. The in-tx re-check must catch this
-// and skip the delete. We exercise the race by calling
-// purgeOneSchemaEntry directly after seeding the racing capability —
-// this mirrors how TestSweepSkipsAgentRevivedDuringTick exercises the
-// agent purge race.
-func TestSweep_PurgeOrphanSchemaEntries_RaceSafety(t *testing.T) {
+// TestSweep_PurgeOrphanSchemaEntries_RefCheckPreventsDelete verifies
+// that when a capability already references a stale schema_entry by
+// the time the per-row delete tx runs, the in-tx ref-count returns >0
+// and the delete is skipped. This covers the "ref appeared before tx
+// open" arm of the race; the tighter "ref appears mid-tx" arm is
+// handled by SERIALIZABLE isolation in purgeOneSchemaEntry but cannot
+// be exercised in the SQLite unit-test environment (single-writer
+// model serializes the writes inherently). An integration test against
+// Postgres would be needed to verify SSI-level race prevention end-to-
+// end; this is tracked as follow-up work for the dedicated Postgres
+// integration suite.
+func TestSweep_PurgeOrphanSchemaEntries_RefCheckPreventsDelete(t *testing.T) {
 	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
 	cfg := SweepConfig{Retention: 1 * time.Hour}
 	client, _, job, cleanup := newSweepTestEnv(t, cfg, now)
