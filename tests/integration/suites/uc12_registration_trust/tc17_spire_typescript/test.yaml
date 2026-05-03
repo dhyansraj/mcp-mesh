@@ -95,7 +95,7 @@ test:
   - name: "Call greet tool over SPIRE mTLS"
     handler: shell
     command: |
-      meshctl call greeter:greet '{"name":"SPIRE"}' --registry-url https://localhost:8000 --insecure 2>&1
+      meshctl call greeter-ts:greet '{"name":"SPIRE"}' --registry-url https://localhost:8000 --insecure 2>&1
     workdir: /workspace
     capture: call_output
 
@@ -112,7 +112,7 @@ assertions:
   - expr: "${captured.registry_start} contains 'REGISTRY_HEALTH=200'"
     message: "Registry should be healthy"
 
-  - expr: "${captured.agents_json} icontains 'greeter'"
+  - expr: "${captured.agents_json} icontains 'greeter-ts'"
     message: "TypeScript agent should register with SPIRE credentials"
 
   - expr: "${captured.call_output} contains 'Hello, SPIRE'"

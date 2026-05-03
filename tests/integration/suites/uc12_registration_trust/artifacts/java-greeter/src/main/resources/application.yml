@@ -18,7 +18,7 @@ mesh:
   registry:
     url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
   agent:
-    name: ${MCP_MESH_AGENT_NAME:greeter}
+    name: ${MCP_MESH_AGENT_NAME:greeter-java}
     namespace: ${MCP_MESH_NAMESPACE:default}
 
 # Logging

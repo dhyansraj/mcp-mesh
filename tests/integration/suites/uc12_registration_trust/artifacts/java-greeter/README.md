@@ -50,7 +50,7 @@ java -jar target/basic-tool-agent-1.0.0-SNAPSHOT.jar
 ```bash
 # List agents
 meshctl list
-# Output: greeter  healthy  http://localhost:9000
+# Output: greeter-java  healthy  http://localhost:9000
 
 # List tools
 meshctl list -t
@@ -72,13 +72,13 @@ Override settings via environment variables:
 | ----------------------- | --------------- | ----------------------- |
 | `MCP_MESH_REGISTRY_URL` | Registry URL    | `http://localhost:8000` |
 | `MCP_MESH_HTTP_PORT`    | Agent HTTP port | `9000`                  |
-| `MCP_MESH_AGENT_NAME`   | Agent name      | `greeter`               |
+| `MCP_MESH_AGENT_NAME`   | Agent name      | `greeter-java`          |
 | `MCP_MESH_NAMESPACE`    | Mesh namespace  | `default`               |
 
 Example:
 
 ```bash
-MCP_MESH_HTTP_PORT=9001 MCP_MESH_AGENT_NAME=greeter-2 mvn spring-boot:run
+MCP_MESH_HTTP_PORT=9001 MCP_MESH_AGENT_NAME=greeter-java-2 mvn spring-boot:run
 ```
 
 ## Code Structure
@@ -124,7 +124,7 @@ Get information about this agent.
 
 ```json
 {
-  "name": "greeter",
+  "name": "greeter-java",
   "version": "1.0.0",
   "runtime": "Java 17.0.1",
   "platform": "Mac OS X"

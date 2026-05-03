@@ -105,14 +105,14 @@ test:
   - name: "Call greet tool over Vault mTLS"
     handler: shell
     command: |
-      meshctl call greeter:greet '{"name":"Vault"}' --registry-url https://localhost:8000 --insecure 2>&1
+      meshctl call greeter-ts:greet '{"name":"Vault"}' --registry-url https://localhost:8000 --insecure 2>&1
     workdir: /workspace
     capture: call_output
 
   - name: "Check agent logs for Vault flow"
     handler: shell
     command: |
-      cat $HOME/.mcp-mesh/logs/greeter.log 2>/dev/null | grep -i "vault\|certificate.*obtained\|mTLS\|Heartbeat successful\|TLS.*provider" | head -10
+      cat $HOME/.mcp-mesh/logs/greeter-ts.log 2>/dev/null | grep -i "vault\|certificate.*obtained\|mTLS\|Heartbeat successful\|TLS.*provider" | head -10
     workdir: /workspace
     capture: vault_logs
 
@@ -129,7 +129,7 @@ assertions:
   - expr: "${captured.registry_start} contains 'REGISTRY_HEALTH=200'"
     message: "Registry should be healthy"
 
-  - expr: "${captured.agents_json} icontains 'greeter'"
+  - expr: "${captured.agents_json} icontains 'greeter-ts'"
     message: "TypeScript agent should register with Vault credentials"
 
   - expr: "${captured.agents_json} contains 'https://'"

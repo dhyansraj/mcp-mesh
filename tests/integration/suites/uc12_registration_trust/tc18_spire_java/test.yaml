@@ -127,7 +127,7 @@ test:
     handler: shell
     command: |
       for i in $(seq 1 45); do
-        if curl -sk https://localhost:8000/agents 2>/dev/null | grep -q "greeter"; then
+        if curl -sk https://localhost:8000/agents 2>/dev/null | grep -q "greeter-java"; then
           echo "REGISTERED after $((i*2)) seconds"
           exit 0
         fi
@@ -147,7 +147,7 @@ test:
   - name: "Call greet tool over SPIRE mTLS"
     handler: shell
     command: |
-      meshctl call greeter:greet '{"name":"SPIRETest"}' --registry-url https://localhost:8000 --insecure 2>&1
+      meshctl call greeter-java:greet '{"name":"SPIRETest"}' --registry-url https://localhost:8000 --insecure 2>&1
     workdir: /workspace
     capture: call_output
 
@@ -173,7 +173,7 @@ assertions:
   - expr: "${captured.wait_output} contains 'REGISTERED'"
     message: "Java agent should register within timeout"
 
-  - expr: "${captured.agents_json} contains 'greeter'"
+  - expr: "${captured.agents_json} contains 'greeter-java'"
     message: "Java greeter should be registered"
 
   - expr: "${captured.call_output} contains 'Hello'"

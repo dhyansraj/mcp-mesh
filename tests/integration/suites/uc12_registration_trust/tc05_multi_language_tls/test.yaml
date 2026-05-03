@@ -1,6 +1,5 @@
 name: "TLS Auto - Multi-Language Registration"
 description: "Verify Python, TypeScript, and Java agents all register with mTLS in a single mesh"
-disabled: true # Multi-runtime same-name agents collide on per-name PID file from #827 redesign — see GH #845 (re-enable when resolved)
 tags:
   - registration-trust
   - tls
@@ -67,7 +66,7 @@ test:
     handler: shell
     command: |
       for i in $(seq 1 45); do
-        if meshctl list 2>/dev/null | grep -q "greeter.*Java"; then
+        if meshctl list 2>/dev/null | grep -q "greeter-java"; then
           echo "JAVA_REGISTERED after $((i*2)) seconds"
           exit 0
         fi
@@ -120,7 +119,7 @@ test:
     workdir: /workspace
     capture: py_call
 
-  - name: "Call greeter tool over mTLS (TS or Java - both named greeter)"
+  - name: "Call greeter capability over mTLS (TS or Java - both expose 'greet' tool)"
     handler: shell
     command: |
       meshctl call greet '{"name":"MultiLangTest"}' 2>&1
@@ -140,8 +139,11 @@ assertions:
   - expr: "${captured.list_output} contains 'system-agent'"
     message: "Python system agent should be registered"
 
-  - expr: "${captured.list_output} contains 'greeter'"
-    message: "Greeter agent(s) should be registered"
+  - expr: "${captured.list_output} contains 'greeter-ts'"
+    message: "TypeScript greeter should be registered"
+
+  - expr: "${captured.list_output} contains 'greeter-java'"
+    message: "Java greeter should be registered"
 
   - expr: "${captured.list_output} contains 'https://'"
     message: "Registry URL should show HTTPS"

@@ -32,7 +32,7 @@ test:
     handler: shell
     command: |
       for i in $(seq 1 45); do
-        if meshctl list 2>/dev/null | grep -q "greeter"; then
+        if meshctl list 2>/dev/null | grep -q "greeter-java"; then
           echo "REGISTERED after $((i*2)) seconds"
           exit 0
         fi
@@ -61,7 +61,7 @@ test:
   - name: "Call greet tool"
     handler: shell
     command: |
-      meshctl call greeter:greet '{"name":"TLSTest"}' 2>&1
+      meshctl call greeter-java:greet '{"name":"TLSTest"}' 2>&1
     workdir: /workspace
     capture: call_output
 
@@ -78,7 +78,7 @@ assertions:
   - expr: "${captured.wait_output} contains 'REGISTERED'"
     message: "Java agent should register within timeout"
 
-  - expr: "${captured.list_output} contains 'greeter'"
+  - expr: "${captured.list_output} contains 'greeter-java'"
     message: "Java greeter should be registered"
 
   - expr: "${captured.list_output} contains 'https://'"
