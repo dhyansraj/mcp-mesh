@@ -55,6 +55,12 @@ var guideRegistry = map[string]*Guide{
 		Title:       "Dependency Resolution Audit Trail",
 		Description: "Inspect every decision the registry made when wiring an agent's dependencies",
 	},
+	"streaming": {
+		Name:        "streaming",
+		Aliases:     []string{"stream", "sse", "progress", "stream-str"},
+		Title:       "Streaming",
+		Description: "Token-by-token text responses via MCP progress notifications (issue #645)",
+	},
 	"decorators": {
 		Name:                 "decorators",
 		Aliases:              []string{"decorator"},
@@ -312,7 +318,7 @@ func ListGuides() []*Guide {
 	order := []string{
 		"quickstart", "prerequisites", "tutorial", "overview", "capabilities", "tags",
 		"schema-matching", "decorators",
-		"dependency-injection", "audit", "health", "registry", "llm", "media", "multimodal",
+		"dependency-injection", "audit", "streaming", "health", "registry", "llm", "media", "multimodal",
 		"proxies", "api", "environment", "deployment", "observability", "headers",
 		"testing", "scaffold", "cli", "security",
 	}

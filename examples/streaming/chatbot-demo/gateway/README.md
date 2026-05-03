@@ -1,0 +1,87 @@
+# gateway
+
+An MCP Mesh API gateway generated using `meshctl scaffold`.
+
+## Overview
+
+This is an HTTP API gateway that consumes mesh capabilities via `@mesh.route`.
+Unlike tool agents, this agent does not provide tools — it exposes REST endpoints
+that call tools on other agents in the mesh.
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.11+
+- MCP Mesh SDK
+- FastAPI + Uvicorn
+
+### Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+### Running the Agent
+
+```bash
+meshctl start main.py
+```
+
+Or with debug logging:
+
+```bash
+meshctl start main.py --debug
+```
+
+The API gateway will start on port 9182 by default.
+
+## Available Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check |
+| GET | `/api/hello` | Call hello capability |
+| GET | `/` | List available routes |
+
+## Project Structure
+
+```
+gateway/
+├── __init__.py       # Package init
+├── __main__.py       # Module entry point
+├── main.py           # API gateway implementation
+├── README.md         # This file
+└── requirements.txt  # Python dependencies
+```
+
+## Docker
+
+```bash
+# Build the image
+docker build -t gateway:latest .
+
+# Run the container
+docker run -p 9182:9182 gateway:latest
+```
+
+## Kubernetes
+
+```bash
+# Deploy using Helm
+helm install gateway oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
+  -n mcp-mesh \
+  -f helm-values.yaml \
+  --set image.repository=your-registry/gateway \
+  --set image.tag=v1.0.0
+```
+
+## Documentation
+
+- [MCP Mesh Documentation](https://github.com/dhyansraj/mcp-mesh)
+- [Python SDK Reference](https://github.com/dhyansraj/mcp-mesh/tree/main/src/runtime/python)
+- Run `meshctl man decorators` for decorator reference
+
+## License
+
+MIT

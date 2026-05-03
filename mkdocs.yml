@@ -226,6 +226,7 @@ nav:
       - Tag Matching: concepts/tag-matching.md
       - Schema Matching: concepts/schema-matching.md
       - Audit Trail: concepts/audit.md
+      - Streaming: concepts/streaming.md
 
   - Multimodal:
       - Getting Started: multimodal/getting-started.md
