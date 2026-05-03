@@ -554,6 +554,19 @@ class RouteIntegrationStep(PipelineStep):
                                     dependant=route._flat_dependant,
                                     name=route.unique_id,
                                 )
+                            # FastAPI >=0.136 added auto JSONL/SSE streaming for
+                            # generator endpoints. APIRoute.__init__ caches
+                            # is_json_stream and is_sse_stream based on the
+                            # ORIGINAL endpoint's is_async_gen_callable. Our
+                            # wrapped_handler is always a coroutine returning
+                            # StreamingResponse, so those flags must be False —
+                            # otherwise FastAPI's auto-streaming path tries to
+                            # iterate our wrapper and fails with "'coroutine'
+                            # object is not iterable". Older FastAPI versions
+                            # don't have these attributes; setattr is safe.
+                            for attr in ("is_json_stream", "is_sse_stream"):
+                                if hasattr(route, attr):
+                                    setattr(route, attr, False)
                             route.app = request_response(route.get_route_handler())
                         except Exception as e:
                             self.logger.warning(
