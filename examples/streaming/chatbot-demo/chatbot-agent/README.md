@@ -52,7 +52,7 @@ The agent will start on port 9181 by default.
 
 ## Project Structure
 
-```
+```text
 chatbot-agent/
 ├── __init__.py       # Package init
 ├── __main__.py       # Module entry point

@@ -23,6 +23,15 @@ async function streamFrom(path) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt: document.getElementById('prompt').value }),
   });
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => '');
+    out.textContent = 'HTTP ' + resp.status + ': ' + (detail || resp.statusText);
+    return;
+  }
+  if (!resp.body) {
+    out.textContent = 'error: response has no body (browser does not support streaming?)';
+    return;
+  }
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';

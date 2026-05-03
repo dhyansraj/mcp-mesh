@@ -828,6 +828,16 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 		// race resurface for any caller (tests, scripts, humans) that relied on
 		// the contract. Drop the wrapper marker so a retry isn't blocked by a
 		// stale wrapper-<group>.pid pointing at the failed fork.
+		//
+		// The forked child was started with Setpgid:true so it leads its own
+		// process group (pgid == cmd.Process.Pid). Signalling -pgid hits the
+		// child AND any grandchildren it has already spawned (registry, agent
+		// runtimes), preventing orphan processes that the wrapper marker is
+		// now no longer pointing at. Best-effort: SIGTERM, brief grace, then
+		// SIGKILL escalation. Errors are logged but ignored — at this point
+		// we are already returning a failure, and the GC sweep will clean up
+		// any stragglers later.
+		terminateChildProcessGroup(cmd, quiet)
 		_ = lifecycle.RemoveWrapperPID(group)
 		return fmt.Errorf("forked meshctl did not register within %v: %w", forkSyncBarrierTimeout, err)
 	}
@@ -937,6 +947,43 @@ func waitForChildPIDFiles(cmd *exec.Cmd, expectedFiles []string, timeout time.Du
 		if check() {
 			return nil
 		}
+	}
+}
+
+// terminateChildProcessGroup best-effort kills the forked child and any
+// processes it has already spawned. The child was started with Setpgid:true,
+// so signalling -pid hits the entire process group.
+//
+// Sequence: SIGTERM, brief grace, then SIGKILL escalation. Errors are
+// non-fatal — the GC sweep is the safety net for stragglers.
+func terminateChildProcessGroup(cmd *exec.Cmd, quiet bool) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	pid := cmd.Process.Pid
+	if pid <= 0 {
+		return
+	}
+	// Negative PID targets the process group whose pgid == pid (since
+	// Setpgid:true made the child its own group leader).
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && !quiet {
+		fmt.Printf("Warning: failed to SIGTERM forked child group (pgid=%d): %v\n", pid, err)
+	}
+
+	const graceDeadline = 500 * time.Millisecond
+	const pollInterval = 50 * time.Millisecond
+	ppm := NewPlatformProcessManager()
+	deadline := time.Now().Add(graceDeadline)
+	for time.Now().Before(deadline) {
+		if !ppm.isProcessRunning(pid) {
+			return
+		}
+		time.Sleep(pollInterval)
+	}
+
+	// Still alive — escalate.
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !quiet {
+		fmt.Printf("Warning: failed to SIGKILL forked child group (pgid=%d): %v\n", pid, err)
 	}
 }
 

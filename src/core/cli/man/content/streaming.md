@@ -71,7 +71,7 @@ Browsers consume via `fetch` + `ReadableStream` (`EventSource` is GET-only and w
 
 The protocol is unmodified MCP. Any vanilla MCP client (Cursor, Claude Desktop, Cline, `fastmcp.Client`) can subscribe to chunks by passing a `progressToken` in `_meta` and registering a `progress_handler`:
 
-```
+```text
 Client → POST /mcp tools/call {_meta: {progressToken: "abc"}}
 Server ← notifications/progress {progressToken: "abc", message: "Hello"}
 Server ← notifications/progress {progressToken: "abc", message: " world"}

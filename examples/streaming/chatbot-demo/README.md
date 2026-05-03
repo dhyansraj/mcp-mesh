@@ -10,7 +10,7 @@ For the underlying mental model see the [streaming concept doc](../../../docs/co
 
 ## Topology
 
-```
+```text
 Browser (React, fetch + ReadableStream)
    │  POST /api/chat  (SSE response)
    ▼

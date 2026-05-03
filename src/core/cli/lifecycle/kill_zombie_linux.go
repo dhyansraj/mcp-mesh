@@ -30,7 +30,12 @@ func isZombie(pid int) (bool, error) {
 	}
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
-		return false, nil
+		// ReadFile failure means the process is gone (or /proc isn't mounted
+		// the way we expect on this kernel). The caller's aliveness check via
+		// kill(pid, 0) is authoritative for that case — surfacing the I/O
+		// error here would make it look like a zombie probe failure when in
+		// fact "not a zombie" is the correct answer.
+		return false, nil //nolint:nilerr
 	}
 	s := string(data)
 	lastParen := strings.LastIndex(s, ")")

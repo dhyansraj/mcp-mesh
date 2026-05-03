@@ -40,8 +40,7 @@ To override the port, modify the `http_port` parameter in the `@mesh.agent` deco
 
 | Tool | Capability | Description |
 |------|------------|-------------|
-| `hello` | `hello` | Say hello to someone |
-| `echo` | `echo` | Echo a message back |
+| `get_weather` | `get_weather` | Fetch current temperature and conditions for a city via Open-Meteo (no API key required) |
 
 ## Project Structure
 

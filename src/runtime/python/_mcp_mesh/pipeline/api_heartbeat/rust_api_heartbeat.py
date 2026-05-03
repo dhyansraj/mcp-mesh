@@ -264,12 +264,24 @@ async def _handle_api_dependency_change(
     parsed_producer_kwargs: dict = {}
     if producer_kwargs:
         try:
-            parsed_producer_kwargs = json.loads(producer_kwargs) or {}
+            parsed = json.loads(producer_kwargs)
         except (TypeError, ValueError) as e:
             logger.warning(
                 f"Could not parse producer kwargs for {capability}: {e}; "
                 f"falling back to empty config"
             )
+        else:
+            if isinstance(parsed, dict):
+                parsed_producer_kwargs = parsed
+            elif parsed is not None:
+                # JSON parsed to a non-dict (string, list, int, etc.) — the
+                # downstream proxy expects a kwargs mapping, so coerce to
+                # empty rather than raising TypeError on dict() conversion.
+                logger.warning(
+                    f"Producer kwargs for {capability} parsed to "
+                    f"{type(parsed).__name__}, expected dict; "
+                    f"falling back to empty config"
+                )
 
     route_wrappers = DecoratorRegistry.get_all_route_wrappers()
 

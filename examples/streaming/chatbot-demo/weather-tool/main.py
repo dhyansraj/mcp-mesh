@@ -61,17 +61,31 @@ async def get_weather(city: str) -> dict:
                 _GEOCODE_URL, params={"name": city, "count": 1}
             )
             geo_resp.raise_for_status()
-            geo = geo_resp.json()
         except httpx.HTTPError as exc:
             return {"error": f"geocoding failed for {city!r}: {exc}"}
+
+        try:
+            geo = geo_resp.json()
+        except ValueError as exc:
+            return {"error": f"geocoding returned malformed JSON for {city!r}: {exc}"}
+
+        if not isinstance(geo, dict):
+            return {"error": f"geocoding returned unexpected payload for {city!r}"}
 
         results = geo.get("results") or []
         if not results:
             return {"error": f"city not found: {city!r}"}
 
         place = results[0]
-        lat = place["latitude"]
-        lon = place["longitude"]
+        if not isinstance(place, dict):
+            return {"error": f"geocoding returned unexpected result entry for {city!r}"}
+
+        try:
+            lat = place["latitude"]
+            lon = place["longitude"]
+        except (KeyError, TypeError) as exc:
+            return {"error": f"geocoding result missing coordinates for {city!r}: {exc}"}
+
         resolved_name = ", ".join(
             part for part in (place.get("name"), place.get("country")) if part
         )
@@ -86,11 +100,20 @@ async def get_weather(city: str) -> dict:
                 },
             )
             forecast_resp.raise_for_status()
-            forecast = forecast_resp.json()
         except httpx.HTTPError as exc:
             return {"error": f"forecast failed for {city!r}: {exc}"}
 
+        try:
+            forecast = forecast_resp.json()
+        except ValueError as exc:
+            return {"error": f"forecast returned malformed JSON for {city!r}: {exc}"}
+
+        if not isinstance(forecast, dict):
+            return {"error": f"forecast returned unexpected payload for {city!r}"}
+
         current = forecast.get("current") or {}
+        if not isinstance(current, dict):
+            current = {}
         temp_c = current.get("temperature_2m")
         code = current.get("weather_code")
         conditions = _WMO_CODES.get(code, f"unknown (code {code})")

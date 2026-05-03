@@ -65,7 +65,7 @@ A minimal browser demo lives at `static/index.html` and is served at `/`.
 
 ## Project Structure
 
-```
+```text
 gateway-agent/
 ├── __init__.py            # Package init
 ├── __main__.py            # Module entry point

@@ -151,40 +151,48 @@
         let acc = "";
         let firstChunk = true;
         let done = false;
+        let readErr = "";
 
-        while (!done) {
-          const { value, done: rdDone } = await reader.read();
-          if (rdDone) break;
-          buffer += decoder.decode(value, { stream: true });
+        try {
+          while (!done) {
+            const { value, done: rdDone } = await reader.read();
+            if (rdDone) break;
+            buffer += decoder.decode(value, { stream: true });
 
-          let sep;
-          while ((sep = buffer.indexOf("\n\n")) !== -1) {
-            const event = buffer.slice(0, sep);
-            buffer = buffer.slice(sep + 2);
-            const data = event
-              .split("\n")
-              .filter((l) => l.startsWith("data: "))
-              .map((l) => l.slice(6))
-              .join("\n");
-            if (data === "[DONE]") {
-              done = true;
-              break;
+            let sep;
+            while ((sep = buffer.indexOf("\n\n")) !== -1) {
+              const event = buffer.slice(0, sep);
+              buffer = buffer.slice(sep + 2);
+              const data = event
+                .split("\n")
+                .filter((l) => l.startsWith("data: "))
+                .map((l) => l.slice(6))
+                .join("\n");
+              if (data === "[DONE]") {
+                done = true;
+                break;
+              }
+              if (firstChunk) {
+                firstChunk = false;
+                setWaiting(false);
+              }
+              acc += data;
+              setStreaming(acc);
             }
-            if (firstChunk) {
-              firstChunk = false;
-              setWaiting(false);
-            }
-            acc += data;
-            setStreaming(acc);
           }
-        }
-
-        setWaiting(false);
-        setStreaming("");
-        if (acc) {
-          setMessages((m) => [...m, { role: "bot", text: acc }]);
-        } else if (!error) {
-          setError("(no response)");
+        } catch (err) {
+          // Mid-stream read failure: surface the error but preserve any
+          // partial response we've already accumulated.
+          readErr = "stream error: " + (err && err.message ? err.message : String(err));
+          setError(readErr);
+        } finally {
+          setWaiting(false);
+          setStreaming("");
+          if (acc) {
+            setMessages((m) => [...m, { role: "bot", text: acc }]);
+          } else if (!readErr) {
+            setError("(no response)");
+          }
         }
       }
 

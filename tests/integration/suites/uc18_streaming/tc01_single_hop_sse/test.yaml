@@ -178,7 +178,10 @@ test:
     handler: shell
     workdir: /workspace
     command: |
-      /workspace/.venv/bin/pip install --quiet fastmcp 2>&1 | tail -5 || true
+      # Pin to match src/runtime/python/pyproject.toml constraint
+      # (fastmcp>=3.0.0,<4.0.0) so CI can't drift onto an incompatible
+      # major release.
+      /workspace/.venv/bin/pip install --quiet "fastmcp>=3.0.0,<4.0.0" 2>&1 | tail -5 || true
       /workspace/.venv/bin/python /workspace/mcp_consumer.py 2>&1
     capture: mcp_consumer_output
     timeout: 90

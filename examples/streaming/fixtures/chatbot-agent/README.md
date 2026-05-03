@@ -54,7 +54,7 @@ Default port: 9170.
 
 ## Project Structure
 
-```
+```text
 chatbot-agent/
 ├── __init__.py            # Package init
 ├── __main__.py            # Module entry point
