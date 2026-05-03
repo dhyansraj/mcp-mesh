@@ -1281,6 +1281,151 @@ class MeshLlmAgent:
                         slot["function"]["arguments"] += fn.arguments
         return [tc for tc in merged.values() if tc["id"] is not None]
 
+    async def _stream_mesh_delegated(
+        self,
+        message: Union[str, list[dict[str, Any]]],
+        media: Union[list, None],
+        context: Union[dict, None, object],
+        context_mode: Literal["replace", "append", "prepend"],
+        **kwargs,
+    ) -> AsyncIterator[str]:
+        """Stream from a mesh-delegated provider (provider={"capability": ...}).
+
+        Routes to the provider's auto-generated ``<name>_stream`` MCP tool
+        when present (Python providers built with @mesh.llm_provider after
+        Phase 3 expose this side-by-side with the buffered ``<name>``
+        tool). When the provider does NOT expose a streaming variant — for
+        example older Python providers, TS / Java SDK providers, or any
+        provider where the streaming tool was disabled — we soft-fall-back
+        to the buffered ``provider_proxy(request=...)`` and yield its
+        content as a single chunk so the consumer's ``async for`` always
+        observes at least one item on a successful call.
+
+        Request shape is identical to ``_call_mesh_provider``: same five
+        fields go into the ``MeshLlmRequest`` dict (messages, tools,
+        model_params, context, request_id, caller_agent). The provider
+        side reconstructs a ``MeshLlmRequest`` and delegates to its own
+        provider-managed loop (buffered or streaming).
+        """
+        from mesh.types import MeshLlmRequest
+
+        provider_proxy = await self._get_mesh_provider()
+
+        messages = await self._build_messages_for_run(
+            message, media, context, context_mode
+        )
+
+        try:
+            request_params = self._build_request_params(messages, **kwargs)
+        except Exception as e:
+            logger.error(f"❌ stream(mesh): failed to build request params: {e}")
+            raise LLMAPIError(
+                provider=str(self.provider),
+                model=self.model,
+                original_error=e,
+            ) from e
+
+        effective_tools = (
+            self._enrich_tools_with_endpoints()
+            if self._tool_schemas
+            else None
+        )
+
+        # Mesh delegation: extract model_params to send to provider.
+        # Mirrors __call__'s mesh-delegate branch (mesh_llm_agent.py:929-963)
+        # so the streaming and buffered paths land identical request shapes
+        # on the provider side.
+        model_params = {
+            k: v
+            for k, v in request_params.items()
+            if k
+            not in [
+                "messages",
+                "tools",
+                "api_key",
+                "output_mode",
+                "model",
+            ]
+        }
+        if self.model:
+            model_params["model"] = self.model
+        if self.output_type is not str and hasattr(
+            self.output_type, "model_json_schema"
+        ):
+            model_params["output_schema"] = self.output_type.model_json_schema()
+            model_params["output_type_name"] = self.output_type.__name__
+        if self._parallel_tool_calls:
+            model_params["parallel_tool_calls"] = True
+
+        request = MeshLlmRequest(
+            messages=messages,
+            tools=effective_tools if effective_tools else None,
+            model_params=model_params if model_params else None,
+        )
+        request_dict = {
+            "messages": request.messages,
+            "tools": request.tools,
+            "model_params": request.model_params,
+            "context": request.context,
+            "request_id": request.request_id,
+            "caller_agent": request.caller_agent,
+        }
+
+        stream_tool_name = f"{provider_proxy.function_name}_stream"
+        logger.debug(
+            f"📤 stream(mesh): routing to {provider_proxy.endpoint}/"
+            f"{stream_tool_name} (messages={len(messages)}, "
+            f"tools={len(effective_tools) if effective_tools else 0})"
+        )
+
+        try:
+            async for chunk in provider_proxy.stream(
+                name=stream_tool_name, request=request_dict
+            ):
+                yield chunk
+            return
+        except Exception as e:
+            # FastMCP surfaces an unknown tool as fastmcp.exceptions.ToolError
+            # with message "Unknown tool: ..." (server raises NotFoundError,
+            # client._parse_call_tool_result re-raises as ToolError). We only
+            # fall back on that specific shape so genuine provider errors
+            # (timeout, network, model API failure) still surface to the
+            # consumer with the original exception class intact.
+            err_msg = str(e).lower()
+            looks_like_missing_tool = (
+                "unknown tool" in err_msg or "tool not found" in err_msg
+            )
+            if not looks_like_missing_tool:
+                raise
+
+            logger.warning(
+                f"Provider {provider_proxy.endpoint} does not expose streaming "
+                f"variant '{stream_tool_name}'; falling back to buffered "
+                f"single-chunk yield via '{provider_proxy.function_name}'."
+            )
+
+        # Buffered fallback: call the provider's regular tool and yield the
+        # full content as one chunk. Cross-runtime providers (Java, TS) may
+        # return a JSON string instead of a dict; normalize the shape.
+        result = await provider_proxy(request=request_dict)
+        if isinstance(result, str):
+            try:
+                parsed = json.loads(result)
+                message_dict = parsed if isinstance(parsed, dict) else {
+                    "role": "assistant",
+                    "content": result,
+                }
+            except (json.JSONDecodeError, TypeError):
+                message_dict = {"role": "assistant", "content": result}
+        elif isinstance(result, dict):
+            message_dict = result
+        else:
+            message_dict = {"role": "assistant", "content": str(result)}
+
+        content = message_dict.get("content") or ""
+        if content:
+            yield content
+
     async def stream(
         self,
         message: Union[str, list[dict[str, Any]]],
@@ -1319,28 +1464,30 @@ class MeshLlmAgent:
         ExecutionTracer's post-call read still sees accurate counts.
 
         Constraints:
-            - Direct mode only. Mesh-delegated providers (``provider`` is a
-              dict / @mesh.llm_provider) raise ``NotImplementedError``;
-              provider-mode streaming is a separate phase.
             - String output only — typed Pydantic outputs cannot be
               meaningfully streamed and would defeat token-by-token UX.
+            - Mesh-delegated providers route through the provider's
+              auto-generated ``<name>_stream`` tool when present, falling
+              back to a single-chunk yield from the buffered ``<name>``
+              tool when the provider does not advertise a streaming
+              variant (e.g., older Python providers and TS / Java SDKs).
 
         Yields:
             ``str`` chunks from the final assistant message (and any
             preamble text that precedes intermediate tool calls).
         """
-        if self._is_mesh_delegated:
-            raise NotImplementedError(
-                "MeshLlmAgent.stream() is direct-mode only. Streaming with "
-                "provider={'capability': ...} (mesh-delegated providers) is "
-                "not supported in this phase."
-            )
         if self.output_type is not str:
             raise NotImplementedError(
                 "MeshLlmAgent.stream() supports only str output_type; got "
                 f"{getattr(self.output_type, '__name__', self.output_type)!r}. "
                 "Use MeshLlmAgent.__call__() for typed responses."
             )
+
+        if self._is_mesh_delegated:
+            async for chunk in self._stream_mesh_delegated(message, media, context, context_mode):
+                yield chunk
+            return
+
         if acompletion is None:
             raise ImportError(
                 "litellm is required for MeshLlmAgent.stream(). "
