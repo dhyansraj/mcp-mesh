@@ -1527,8 +1527,23 @@ def route(
                 if detect_stream_type(target) == "text":
                     import inspect as _inspect
 
+                    from _mcp_mesh.engine.dependency_injector import (
+                        _MESH_PROGRESS_CTX_PARAM,
+                    )
+
                     wrapper_anns = dict(getattr(wrapped, "__annotations__", {}) or {})
                     wrapper_anns.pop("return", None)
+                    # The streaming wrapper's signature carries an internal
+                    # parameter (``_MESH_PROGRESS_CTX_PARAM``) typed as
+                    # ``Optional[Context]`` so FastMCP's tool path can
+                    # auto-fill the progress channel. FastAPI/Pydantic do not
+                    # tolerate field names with a leading underscore when
+                    # building the route's body model — and the SSE wrapper
+                    # handles streaming through its own pipe (not via
+                    # FastMCP's Context), so the synthesized param has no
+                    # business being visible here. Strip it from both the
+                    # annotations dict and the explicit signature.
+                    wrapper_anns.pop(_MESH_PROGRESS_CTX_PARAM, None)
                     wrapped.__annotations__ = wrapper_anns
                     if hasattr(wrapped, "__wrapped__"):
                         try:
@@ -1537,8 +1552,14 @@ def route(
                             pass
                     explicit_sig = wrapped.__dict__.get("__signature__")
                     if explicit_sig is not None:
+                        cleaned_params = [
+                            p
+                            for n, p in explicit_sig.parameters.items()
+                            if n != _MESH_PROGRESS_CTX_PARAM
+                        ]
                         wrapped.__signature__ = explicit_sig.replace(
-                            return_annotation=_inspect.Signature.empty
+                            parameters=cleaned_params,
+                            return_annotation=_inspect.Signature.empty,
                         )
             except Exception as e:
                 logger.debug(
@@ -1866,6 +1887,27 @@ def llm(
         if llm_stream_type == "text":
             output_type = str
 
+        # Auto-discriminate stream vs buffered LLM provider variants via the
+        # ``ai.mcpmesh.stream`` tag — consumer half of the contract with
+        # ``@mesh.llm_provider``, which stamps the tag on its streaming variant
+        # only. Stream consumers require the tag; buffered consumers exclude
+        # it, so the registry resolver picks the right variant deterministically
+        # via the existing +/- tag-operator semantics. If the user explicitly
+        # set a discrimination tag (any operator form), don't override.
+        if isinstance(resolved_provider, dict):
+            provider_tags = list(resolved_provider.get("tags") or [])
+            has_stream_tag = any(
+                t in ("ai.mcpmesh.stream", "+ai.mcpmesh.stream", "-ai.mcpmesh.stream")
+                for t in provider_tags
+            )
+            if not has_stream_tag:
+                if llm_stream_type == "text":
+                    provider_tags.append("ai.mcpmesh.stream")
+                else:
+                    provider_tags.append("-ai.mcpmesh.stream")
+                resolved_provider = {**resolved_provider, "tags": provider_tags}
+                resolved_config["provider"] = resolved_provider
+
         # Step 3: Find MeshLlmAgent parameter
         from mesh.types import MeshLlmAgent
 
@@ -1980,10 +2022,11 @@ def llm(
 
             # Override signature to hide LLM parameter from FastMCP schema.
             # Start from the existing wrapper's signature (not raw ``func``):
-            # for streaming tools, ``@mesh.tool`` already appended the ``ctx``
-            # keyword so FastMCP can auto-fill it. Reading from ``func`` here
-            # would drop that ``ctx`` and silently disable progress
-            # notifications (issue #645 bug 3).
+            # for streaming tools, ``@mesh.tool`` already appended the
+            # synthesized progress-context keyword so FastMCP can auto-fill
+            # ``Context`` for progress notifications. Reading from ``func``
+            # here would drop that param and silently disable streaming
+            # (issue #645 bug 3).
             try:
                 _sig = (
                     inspect.signature(existing_wrapper)

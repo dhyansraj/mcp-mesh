@@ -30,7 +30,11 @@ pub enum RuntimeCommand {
     UpdatePort(u16),
 }
 
-/// Internal provider tracking (non-PyO3 to avoid GIL issues in tokio thread)
+/// Internal provider tracking (non-PyO3 to avoid GIL issues in tokio thread).
+///
+/// `kwargs` is the provider tool's @mesh.tool kwargs serialized as JSON so it
+/// can travel through the FFI boundary. SDKs decode it to configure the
+/// provider proxy.
 #[derive(Debug, Clone)]
 struct TrackedProvider {
     function_id: String,
@@ -38,6 +42,7 @@ struct TrackedProvider {
     endpoint: String,
     function_name: String,
     model: Option<String>,
+    kwargs: Option<String>,
 }
 
 /// Configuration for the agent runtime.
@@ -625,6 +630,13 @@ impl AgentRuntime {
         llm_providers: &HashMap<String, crate::registry::ResolvedLlmProvider>,
     ) {
         for (function_id, provider) in llm_providers {
+            // Serialize kwargs once so the same JSON string is used for both the
+            // tracking struct (for change detection) and the emitted event.
+            let kwargs_json = provider
+                .kwargs
+                .as_ref()
+                .and_then(|v| serde_json::to_string(v).ok());
+
             // Use internal tracking struct to avoid GIL issues
             let tracked = TrackedProvider {
                 function_id: function_id.clone(),
@@ -632,13 +644,16 @@ impl AgentRuntime {
                 endpoint: provider.endpoint.clone(),
                 function_name: provider.function_name.clone(),
                 model: provider.model.clone(),
+                kwargs: kwargs_json.clone(),
             };
 
-            // Check if changed
+            // Check if changed (kwargs included so kwargs-only changes still
+            // emit a fresh event — mirrors process_dependency_changes).
             let changed = match self.topology.llm_providers.get(function_id) {
                 Some(old_provider) => {
                     old_provider.endpoint != tracked.endpoint
                         || old_provider.function_name != tracked.function_name
+                        || old_provider.kwargs != tracked.kwargs
                 }
                 None => true,
             };
@@ -662,6 +677,7 @@ impl AgentRuntime {
                     function_name: provider.function_name.clone(),
                     model: provider.model.clone(),
                     vendor: provider.vendor.clone(),
+                    kwargs: kwargs_json,
                 };
                 let _ = self
                     .event_tx

@@ -1,5 +1,6 @@
-"""Unit tests for issue #645 bug 3: ``@mesh.llm`` must preserve the ``ctx``
-parameter that ``@mesh.tool`` appended for streaming wrappers.
+"""Unit tests for issue #645 bug 3: ``@mesh.llm`` must preserve the
+synthesized progress-context parameter that ``@mesh.tool`` appended for
+streaming wrappers.
 
 The decoration chain on a streaming LLM tool is:
 
@@ -8,14 +9,19 @@ The decoration chain on a streaming LLM tool is:
     @mesh.tool(...)      # inner (runs first; the result is what @mesh.llm sees)
     async def chat(prompt: str, llm: MeshLlmAgent) -> mesh.Stream[str]: ...
 
-``@mesh.tool`` builds a stream wrapper whose ``__signature__`` exposes
-``ctx: Context | None = None`` so FastMCP auto-fills the progress context.
-``@mesh.llm`` then strips its own ``llm`` parameter from the public signature
-and used to start fresh from the original ``func`` — losing the appended
-``ctx`` and silently disabling progress notifications.
+``@mesh.tool`` builds a stream wrapper whose ``__signature__`` exposes the
+internal ``_mesh_progress_ctx: Context | None = None`` parameter so
+FastMCP auto-fills the progress context. ``@mesh.llm`` then strips its own
+``llm`` parameter from the public signature and used to start fresh from
+the original ``func`` — losing the appended progress-context parameter
+and silently disabling progress notifications.
 
 After the fix, ``@mesh.llm`` reads from the wrapper's already-rebuilt
-signature, so ``ctx`` survives the strip.
+signature, so the synthesized parameter survives the strip.
+
+The parameter is named ``_mesh_progress_ctx`` (not ``ctx``) on purpose —
+see ``_MESH_PROGRESS_CTX_PARAM`` in dependency_injector.py for the
+ctx-collision rationale.
 """
 
 # NOTE: do NOT add ``from __future__ import annotations`` — the @mesh.llm
@@ -28,6 +34,7 @@ import pytest
 
 import mesh
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+from _mcp_mesh.engine.dependency_injector import _MESH_PROGRESS_CTX_PARAM
 
 
 @pytest.fixture(autouse=True)
@@ -38,8 +45,9 @@ def _reset_decorator_registry():
 
 
 class TestMeshLlmPreservesStreamCtx:
-    def test_streaming_tool_with_mesh_llm_keeps_ctx_param(self):
-        """Combined @mesh.llm + @mesh.tool + Stream[str] must keep ``ctx``."""
+    def test_streaming_tool_with_mesh_llm_keeps_progress_ctx_param(self):
+        """Combined @mesh.llm + @mesh.tool + Stream[str] must keep the
+        synthesized progress-context param."""
 
         @mesh.llm(
             provider={"capability": "llm"},
@@ -62,18 +70,22 @@ class TestMeshLlmPreservesStreamCtx:
         assert "llm" not in sig.parameters
         # The ``prompt`` user-facing param must remain.
         assert "prompt" in sig.parameters
-        # The ``ctx`` keyword that @mesh.tool's stream wrapper appended for
-        # FastMCP's progress-handler auto-fill MUST survive @mesh.llm's strip.
-        assert "ctx" in sig.parameters, (
-            "ctx parameter dropped by @mesh.llm — progress notifications will "
-            "no-op. See issue #645 bug 3."
+        # The synthesized progress-context keyword that @mesh.tool's stream
+        # wrapper appended for FastMCP's auto-fill MUST survive @mesh.llm's
+        # strip. (Pre-fix, the param was named ``ctx`` and could collide
+        # with a user-declared ``ctx`` — see issue #645 bug 3 + ctx
+        # collision fix.)
+        assert _MESH_PROGRESS_CTX_PARAM in sig.parameters, (
+            f"{_MESH_PROGRESS_CTX_PARAM} parameter dropped by @mesh.llm — "
+            "progress notifications will no-op. See issue #645 bug 3."
         )
-        ctx_param = sig.parameters["ctx"]
+        ctx_param = sig.parameters[_MESH_PROGRESS_CTX_PARAM]
         assert ctx_param.kind == inspect.Parameter.KEYWORD_ONLY
         assert ctx_param.default is None
 
-    def test_non_streaming_tool_with_mesh_llm_does_not_invent_ctx(self):
-        """No Stream[str] return → no ``ctx`` should appear in the signature."""
+    def test_non_streaming_tool_with_mesh_llm_does_not_invent_progress_ctx(self):
+        """No Stream[str] return → no synthesized progress-ctx param should
+        appear in the signature."""
 
         @mesh.llm(
             provider={"capability": "llm"},
@@ -93,8 +105,8 @@ class TestMeshLlmPreservesStreamCtx:
         sig = inspect.signature(chat)
         assert "llm" not in sig.parameters
         assert "prompt" in sig.parameters
-        # No streaming → @mesh.tool didn't append ctx → it stays absent.
-        assert "ctx" not in sig.parameters
+        # No streaming → @mesh.tool didn't append the progress-ctx param.
+        assert _MESH_PROGRESS_CTX_PARAM not in sig.parameters
 
     def test_mesh_llm_stream_str_normalizes_output_type_to_str(self):
         """``Stream[str]`` return must register output_type=str.

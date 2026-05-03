@@ -142,8 +142,13 @@ class TestStreamingVariantRegistered:
             _drop_module(module_name)
 
     @pytest.mark.asyncio
-    async def test_streaming_tool_shares_capability_and_tags(self):
-        """Soft-fallback works because both tools advertise the same capability+tags."""
+    async def test_streaming_tool_shares_capability_and_version(self):
+        """Soft-fallback works because both tools advertise the same capability+version.
+
+        Tags differ by exactly one entry: the streaming variant carries the
+        ``ai.mcpmesh.stream`` discrimination tag (Phase 5C, issue #849), the
+        buffered variant does not. All user-supplied tags appear on both.
+        """
         module_name = "_test_llm_provider_streaming_caps"
         mod = _make_module_with_app(module_name)
         try:
@@ -164,8 +169,65 @@ class TestStreamingVariantRegistered:
             stream = mesh_tools["claude_provider_stream"].metadata
 
             assert buffered["capability"] == stream["capability"] == "llm"
-            assert buffered["tags"] == stream["tags"]
             assert buffered["version"] == stream["version"] == "2.1.0"
+            # User-supplied tags are present on both variants.
+            for t in ("claude", "fast"):
+                assert t in buffered["tags"]
+                assert t in stream["tags"]
+        finally:
+            _drop_module(module_name)
+
+    @pytest.mark.asyncio
+    async def test_streaming_variant_has_ai_mcpmesh_stream_tag(self):
+        """Producer-side contract for Phase 5C (issue #849): the streaming
+        variant carries ``ai.mcpmesh.stream``; the buffered variant does not.
+
+        The consumer half (@mesh.llm) augments its provider tags filter to
+        require or exclude this tag so the registry resolver picks the right
+        variant deterministically.
+        """
+        module_name = "_test_llm_provider_streaming_tag"
+        mod = _make_module_with_app(module_name)
+        try:
+            _make_provider_in_module(
+                mod,
+                module_name,
+                "claude_provider",
+                model="anthropic/claude-3-5-haiku-20241022",
+                capability="llm",
+                tags=["claude"],
+            )
+
+            from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+
+            mesh_tools = DecoratorRegistry.get_mesh_tools()
+            buffered = mesh_tools["claude_provider"].metadata
+            stream = mesh_tools["claude_provider_stream"].metadata
+
+            assert "ai.mcpmesh.stream" in stream["tags"]
+            assert "ai.mcpmesh.stream" not in buffered["tags"]
+        finally:
+            _drop_module(module_name)
+
+    @pytest.mark.asyncio
+    async def test_streaming_variant_tag_added_when_no_user_tags(self):
+        """``ai.mcpmesh.stream`` is appended even when the user passes no tags."""
+        module_name = "_test_llm_provider_streaming_tag_no_user_tags"
+        mod = _make_module_with_app(module_name)
+        try:
+            _make_provider_in_module(
+                mod,
+                module_name,
+                "claude_provider",
+                model="anthropic/claude-3-5-haiku-20241022",
+                capability="llm",
+            )
+
+            from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+
+            mesh_tools = DecoratorRegistry.get_mesh_tools()
+            stream = mesh_tools["claude_provider_stream"].metadata
+            assert "ai.mcpmesh.stream" in stream["tags"]
         finally:
             _drop_module(module_name)
 

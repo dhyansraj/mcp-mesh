@@ -1371,7 +1371,13 @@ class MeshLlmAgent:
             "caller_agent": request.caller_agent,
         }
 
-        stream_tool_name = f"{provider_proxy.function_name}_stream"
+        # Phase 5C: tag-based discrimination (ai.mcpmesh.stream) makes the
+        # registry resolver return the streaming variant directly when the
+        # consumer's @mesh.llm function returns Stream[str]. provider_proxy
+        # .function_name is already the streaming tool name — no suffix
+        # mangling needed. (Pre-Phase-5C this was f"{name}_stream" because
+        # the resolver was non-deterministic; that's no longer the case.)
+        stream_tool_name = provider_proxy.function_name
         logger.debug(
             f"📤 stream(mesh): routing to {provider_proxy.endpoint}/"
             f"{stream_tool_name} (messages={len(messages)}, "

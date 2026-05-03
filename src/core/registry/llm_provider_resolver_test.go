@@ -325,3 +325,102 @@ func TestResolveLLMProvidersFromMetadata(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveProvider_ReturnsKwargs_OnResolvedLLMProvider verifies that
+// provider tool kwargs (e.g. stream_type=text from @mesh.llm_provider's
+// auto-generated streaming variant) are surfaced on the ResolvedLLMProvider
+// returned to the consumer. This is the registry-side half of the streaming
+// kwargs plumbing for issue #849 Stage A.
+func TestResolveProvider_ReturnsKwargs_OnResolvedLLMProvider(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:ent?mode=memory&cache=shared&_fk=1")
+	defer client.Close()
+
+	ctx := context.Background()
+
+	streamingAgent, err := client.Agent.Create().
+		SetID("claude-streaming-provider").
+		SetName("Claude Streaming Provider").
+		SetNamespace("default").
+		SetHTTPHost("localhost").
+		SetHTTPPort(9030).
+		Save(ctx)
+	require.NoError(t, err)
+
+	// Provider capability with kwargs that mirror what @mesh.llm_provider
+	// stamps onto the auto-generated streaming variant.
+	_, err = client.Capability.Create().
+		SetFunctionName("process_chat_stream").
+		SetCapability("llm").
+		SetDescription("Streaming Claude provider").
+		SetTags([]string{"claude", "stream"}).
+		SetVersion("1.0.0").
+		SetInputSchema(map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"messages": map[string]interface{}{"type": "array"},
+			},
+		}).
+		SetKwargs(map[string]interface{}{
+			"stream_type": "text",
+			"vendor":      "anthropic",
+		}).
+		SetAgent(streamingAgent).
+		Save(ctx)
+	require.NoError(t, err)
+
+	provider, err := ResolveProvider(ctx, client, map[string]interface{}{
+		"capability": "llm",
+		"tags":       []interface{}{"claude", "stream"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, provider)
+
+	require.NotNil(t, provider.Kwargs, "ResolvedLLMProvider.Kwargs must be populated when capability has kwargs")
+	kwargs := *provider.Kwargs
+	assert.Equal(t, "text", kwargs["stream_type"], "stream_type must round-trip through ResolveProvider")
+	assert.Equal(t, "anthropic", kwargs["vendor"], "vendor must round-trip through ResolveProvider")
+}
+
+// TestResolveProvider_NoKwargs_OmitsKwargsField verifies the default case —
+// when a provider capability has no kwargs, ResolvedLLMProvider.Kwargs stays
+// nil. Important for forward-compat: older Rust core with `#[serde(default)]`
+// on the new field won't choke on a missing key.
+func TestResolveProvider_NoKwargs_OmitsKwargsField(t *testing.T) {
+	client := enttest.Open(t, "sqlite3", "file:ent?mode=memory&cache=shared&_fk=1")
+	defer client.Close()
+
+	ctx := context.Background()
+
+	bareAgent, err := client.Agent.Create().
+		SetID("bare-provider").
+		SetName("Bare Provider").
+		SetNamespace("default").
+		SetHTTPHost("localhost").
+		SetHTTPPort(9031).
+		Save(ctx)
+	require.NoError(t, err)
+
+	_, err = client.Capability.Create().
+		SetFunctionName("process_chat").
+		SetCapability("llm").
+		SetDescription("Bare provider with no kwargs").
+		SetTags([]string{"bare"}).
+		SetVersion("1.0.0").
+		SetInputSchema(map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"messages": map[string]interface{}{"type": "array"},
+			},
+		}).
+		SetAgent(bareAgent).
+		Save(ctx)
+	require.NoError(t, err)
+
+	provider, err := ResolveProvider(ctx, client, map[string]interface{}{
+		"capability": "llm",
+		"tags":       []interface{}{"bare"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, provider)
+	assert.Nil(t, provider.Kwargs, "Kwargs must be nil when the provider capability ships no kwargs")
+}

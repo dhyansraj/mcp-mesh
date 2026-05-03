@@ -23,6 +23,20 @@ from .signature_analyzer import get_mesh_agent_positions, has_llm_agent_paramete
 
 logger = logging.getLogger(__name__)
 
+# Internal parameter name used to receive FastMCP's auto-injected ``Context``
+# in streaming wrappers. Must NOT collide with anything a user could plausibly
+# declare on their own ``@mesh.tool`` function.
+#
+# Why not just call it ``ctx``? Users routinely declare ``ctx`` themselves —
+# in particular ``@mesh.llm(context_param="ctx", ...)`` is the natural default
+# and pairs with ``ctx: SomeContextModel`` on the function. If we synthesize a
+# parameter with the same NAME but a different TYPE (``Context``), FastMCP's
+# ``transform_context_annotations`` reads the user's annotation, doesn't see
+# ``Context``, and silently never injects — streaming then degrades to a
+# buffered single-chunk response. The ``_mesh_`` prefix signals "framework
+# internal, don't touch" and avoids any realistic collision.
+_MESH_PROGRESS_CTX_PARAM = "_mesh_progress_ctx"
+
 # Cached convention for ctx.report_progress; resolved lazily per FastMCP
 # version. Newer FastMCP exposes a ``message`` kwarg; older builds only accept
 # ``(progress, total)`` positionally with a third positional ``message``.
@@ -96,9 +110,16 @@ def _build_stream_signature(func: Callable) -> inspect.Signature:
 
     Starts from the user function's clean signature (McpMeshTool /
     MeshLlmAgent params already removed) and appends a keyword-only
-    ``ctx: Context | None = None`` so FastMCP's
+    ``_mesh_progress_ctx: Context | None = None`` so FastMCP's
     ``transform_context_annotations`` auto-fills it at call time without
     exposing it on the tool's input schema.
+
+    The parameter is intentionally NOT named ``ctx``: users can (and often
+    do) have their own ``ctx`` parameter — typically a ``MeshContextModel``
+    paired with ``@mesh.llm(context_param="ctx", ...)``. Reusing the name
+    would silently disable streaming because FastMCP injects ``Context``
+    by type annotation, and the user's annotation wins. See
+    ``_MESH_PROGRESS_CTX_PARAM`` for the full rationale.
     """
     from fastmcp import Context
 
@@ -109,12 +130,15 @@ def _build_stream_signature(func: Callable) -> inspect.Signature:
         except (TypeError, ValueError):
             base = inspect.Signature(parameters=[])
 
-    if "ctx" in base.parameters:
+    # Idempotency: if we've already augmented this signature once, don't add
+    # the synthesized parameter twice. (User parameters cannot collide with
+    # the ``_mesh_`` prefix unless they're deliberately poking at internals.)
+    if _MESH_PROGRESS_CTX_PARAM in base.parameters:
         return base
 
     params = list(base.parameters.values())
     ctx_param = inspect.Parameter(
-        "ctx",
+        _MESH_PROGRESS_CTX_PARAM,
         kind=inspect.Parameter.KEYWORD_ONLY,
         default=None,
         annotation=Optional[Context],
@@ -131,20 +155,29 @@ def _make_stream_wrapper(
 ) -> Callable:
     """Build a wrapper that drives an async-iterator tool over MCP progress.
 
-    The returned coroutine accepts an optional ``ctx`` keyword (FastMCP
-    auto-fills it for tools whose signature declares a ``Context``-typed
-    param). Each chunk yielded by the user function is forwarded via
-    ``ctx.report_progress`` as a progress notification, then accumulated;
-    the final return value is the concatenated text so non-streaming
-    consumers still get the full response in the ``CallToolResult``.
+    FastMCP auto-fills ``Context`` for any tool parameter annotated with
+    it. We declare that parameter under the internal name
+    ``_mesh_progress_ctx`` (see ``_MESH_PROGRESS_CTX_PARAM``) so it cannot
+    collide with the user's own ``ctx`` parameter. The wrapper pops it out
+    of ``**kwargs`` and never forwards it to the user function. Each chunk
+    yielded by the user function is forwarded via ``ctx.report_progress``
+    as a progress notification, then accumulated; the final return value
+    is the concatenated text so non-streaming consumers still get the full
+    response in the ``CallToolResult``.
 
     Cancellation by the consumer propagates back to the user function via
     ``gen.aclose()`` so generators can run their ``finally`` blocks.
     """
-    from fastmcp import Context
+    # Imported for side-effect of validating fastmcp is installed; the
+    # actual Context type is referenced in the synthesized signature.
+    from fastmcp import Context  # noqa: F401
 
     @functools.wraps(func)
-    async def stream_wrapper(*args, ctx: Context | None = None, **kwargs):
+    async def stream_wrapper(*args, **kwargs):
+        # FastMCP injects its Context under our internal name; pop it so
+        # it never leaks into the user function's kwargs.
+        progress_ctx = kwargs.pop(_MESH_PROGRESS_CTX_PARAM, None)
+
         final_kwargs, injected_count = _prepare_injection_kwargs(
             func,
             kwargs,
@@ -181,7 +214,7 @@ def _make_stream_wrapper(
                         f"of type {type(chunk).__name__}; v1 supports str only."
                     )
                 chunks.append(chunk)
-                await _forward_chunk(ctx, index, chunk)
+                await _forward_chunk(progress_ctx, index, chunk)
                 index += 1
         except asyncio.CancelledError:
             aclose = getattr(gen, "aclose", None)

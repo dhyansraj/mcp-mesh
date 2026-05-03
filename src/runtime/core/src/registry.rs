@@ -123,6 +123,10 @@ pub struct LlmToolInfo {
 }
 
 /// Resolved LLM provider information.
+///
+/// `kwargs` carries the provider tool's @mesh.tool kwargs (e.g. `stream_type`)
+/// so the consumer's provider proxy can configure itself from the producer's
+/// advertised behavior. Mirrors `ResolvedDependency.kwargs`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ResolvedLlmProvider {
     pub agent_id: String,
@@ -140,6 +144,8 @@ pub struct ResolvedLlmProvider {
     pub vendor: Option<String>,
     #[serde(default)]
     pub version: Option<String>,
+    #[serde(default)]
+    pub kwargs: Option<serde_json::Value>,
 }
 
 /// Full heartbeat response from registry.

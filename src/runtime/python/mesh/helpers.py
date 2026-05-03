@@ -131,13 +131,27 @@ async def _maybe_run_hint_fallback(
             hint_fallback_timeout,
         )
 
+    # Anthropic's structured output requires additionalProperties: false on every
+    # object type in the schema. Pydantic-generated schemas don't include that by
+    # default. The base apply_structured_output path already strict-ifies via
+    # make_schema_strict; the HINT fallback was missing the same step, causing
+    # Anthropic's "output_format.schema: ... must be explicitly set to false"
+    # rejection on complex schemas (nested BaseModels). add_all_required=False
+    # because Claude — unlike OpenAI/Gemini — does not require every property
+    # to be in 'required'.
+    from _mcp_mesh.engine.provider_handlers.base_provider_handler import (
+        make_schema_strict,
+    )
+
+    strict_hint_schema = make_schema_strict(hint_schema, add_all_required=False)
+
     fallback_args = {
         **base_completion_args,
         "response_format": {
             "type": "json_schema",
             "json_schema": {
                 "name": hint_output_type_name,
-                "schema": hint_schema,
+                "schema": strict_hint_schema,
                 "strict": True,
             },
         },
@@ -1582,9 +1596,17 @@ def llm_provider(
         # Same decorator order for the streaming variant. Same capability /
         # tags / vendor — soft-fallback to the buffered tool is keyed off the
         # ``_stream`` suffix on the tool NAME, not on a separate capability.
+        #
+        # The ``ai.mcpmesh.stream`` tag is the producer half of a contract with
+        # ``@mesh.llm``: the consumer-side decorator augments its provider tags
+        # filter with ``ai.mcpmesh.stream`` (required) when the consumer returns
+        # ``Stream[str]`` and ``-ai.mcpmesh.stream`` (excluded) otherwise. This
+        # lets the registry resolver pick the right variant deterministically
+        # via existing tag-operator semantics — no resolver special-casing.
+        stream_tags = list(tags or []) + ["ai.mcpmesh.stream"]
         process_chat_stream = tool(
             capability=capability,
-            tags=tags,
+            tags=stream_tags,
             version=version,
             vendor=vendor,
         )(process_chat_stream)

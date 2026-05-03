@@ -475,12 +475,15 @@ class TestMeshDelegatedStreaming:
 
     @pytest.mark.asyncio
     async def test_routes_to_stream_variant(self):
-        """When the provider exposes ``<name>_stream``, chunks pass through."""
+        """Per Phase 5C tag-based discrimination, the resolver returns the
+        streaming-variant tool directly (via ai.mcpmesh.stream tag match), so
+        ``provider_proxy.function_name`` IS the streaming tool name. No suffix
+        mangling — call the proxy with that name as-is."""
         agent = _make_mesh_agent()
 
         proxy = MagicMock()
         proxy.endpoint = "http://provider"
-        proxy.function_name = "claude_provider"
+        proxy.function_name = "claude_provider_stream"
 
         captured: dict = {}
 

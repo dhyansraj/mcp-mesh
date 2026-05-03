@@ -353,14 +353,20 @@ class MeshLlmAgentInjector(BaseInjector):
                 f"Provider {function_name} has invalid endpoint (expected string): {endpoint}"
             )
 
-        # Create proxy with endpoint URL
+        # Create proxy with endpoint URL.
+        # Spread provider_data["kwargs"] (the provider tool's @mesh.tool kwargs)
+        # into kwargs_config so producer-advertised behavior — e.g.
+        # stream_type=text — reaches the provider proxy. Mirrors the
+        # producer-kwargs propagation for regular tool deps (issue #849 Stage A).
+        kwargs_config = {
+            "capability": provider_data.get("capability", "llm"),
+            "agent_id": provider_data.get("agent_id"),
+            **(provider_data.get("kwargs") or {}),
+        }
         proxy = UnifiedMCPProxy(
             endpoint=endpoint,
             function_name=function_name,
-            kwargs_config={
-                "capability": provider_data.get("capability", "llm"),
-                "agent_id": provider_data.get("agent_id"),
-            },
+            kwargs_config=kwargs_config,
         )
 
         logger.debug(f"🔧 Created provider proxy for {function_name} at {endpoint}")
