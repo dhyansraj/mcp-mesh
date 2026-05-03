@@ -85,7 +85,6 @@ async def plan_trip(
     budget: str,
     message: str = "",
     session_id: str = "",
-    conversation_history: list[dict] = [],
     user_prefs: mesh.McpMeshTool = None,
     chat_history: mesh.McpMeshTool = None,
     budget_analyst: mesh.McpMeshTool = None,

@@ -358,10 +358,13 @@ class MeshLlmAgentInjector(BaseInjector):
         # into kwargs_config so producer-advertised behavior — e.g.
         # stream_type=text — reaches the provider proxy. Mirrors the
         # producer-kwargs propagation for regular tool deps (issue #849 Stage A).
+        # Producer kwargs first; consumer-config keys (capability, agent_id)
+        # are spread LAST so a producer can never silently shadow them by
+        # advertising those names in their @mesh.tool kwargs.
         kwargs_config = {
+            **(provider_data.get("kwargs") or {}),
             "capability": provider_data.get("capability", "llm"),
             "agent_id": provider_data.get("agent_id"),
-            **(provider_data.get("kwargs") or {}),
         }
         proxy = UnifiedMCPProxy(
             endpoint=endpoint,

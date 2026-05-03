@@ -113,10 +113,10 @@ The two modes share the same author surface; the resolver picks the right varian
 
 | Consumer return type | Resolver matches | Provider tool used |
 |----------------------|------------------|--------------------|
-| `mesh.Stream[str]`   | `+ai.mcpmesh.stream` | `process_chat_stream` (streaming) |
-| `str` / Pydantic     | `-ai.mcpmesh.stream` | `process_chat` (buffered) |
+| `mesh.Stream[str]`   | `ai.mcpmesh.stream` (REQUIRED) | `process_chat_stream` (streaming) |
+| `str` / Pydantic     | `-ai.mcpmesh.stream` (EXCLUDED) | `process_chat` (buffered) |
 
-If the resolved provider is older and never advertised the streaming variant, mesh logs a warning and falls back to a single buffered chunk so the consumer doesn't break.
+The matcher operators are unprefixed = REQUIRED, `+` = PREFERRED (bonus score), `-` = EXCLUDED. The streaming consumer requires the tag — a consumer with `Stream[str]` will fail to resolve a pre-Phase-5 provider that never advertised the tag (rather than silently degrading to buffered). A defensive runtime fallback exists for the rare case where the provider matched on tag but the streaming MCP tool itself errors with "unknown tool" mid-call.
 
 ## What it does NOT do (v1 limitations)
 

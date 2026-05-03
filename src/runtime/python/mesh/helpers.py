@@ -65,10 +65,21 @@ _MESH_HINT_KEYS = (
     "_mesh_hint_output_type_name",
 )
 
+# Single source of truth for the HINT → response_format fallback timeout when
+# a handler did not explicitly inject one. ClaudeHandler now defaults to 90s
+# (configurable via MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT) — keep this in
+# sync so loop paths that bypass the handler don't silently revert to 30.
+_DEFAULT_HINT_FALLBACK_TIMEOUT = 90
+
 
 def _pop_mesh_hint_flags(
     completion_args: dict[str, Any],
-    defaults: tuple[bool, dict | None, int, str] = (False, None, 30, "Response"),
+    defaults: tuple[bool, dict | None, int, str] = (
+        False,
+        None,
+        _DEFAULT_HINT_FALLBACK_TIMEOUT,
+        "Response",
+    ),
 ) -> tuple[bool, dict | None, int, str]:
     """Strip ``_mesh_*`` HINT-mode flags from ``completion_args`` in place.
 
@@ -490,7 +501,7 @@ async def _provider_agentic_loop(
     # Captured outside the loop so the fallback after the loop has access.
     hint_mode = False
     hint_schema: dict[str, Any] | None = None
-    hint_fallback_timeout = 30
+    hint_fallback_timeout = _DEFAULT_HINT_FALLBACK_TIMEOUT
     hint_output_type_name = "Response"
 
     while iteration < max_iterations:
@@ -751,7 +762,7 @@ async def _provider_agentic_loop_stream(
 
     hint_mode = False
     hint_schema: dict[str, Any] | None = None
-    hint_fallback_timeout = 30
+    hint_fallback_timeout = _DEFAULT_HINT_FALLBACK_TIMEOUT
     hint_output_type_name = "Response"
 
     total_input_tokens = 0

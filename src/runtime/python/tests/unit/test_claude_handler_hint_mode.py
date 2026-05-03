@@ -330,7 +330,7 @@ class TestPopMeshHintFlags:
         hint_mode, hint_schema, hint_timeout, hint_name = _pop_mesh_hint_flags(args)
         assert hint_mode is False
         assert hint_schema is None
-        assert hint_timeout == 30
+        assert hint_timeout == 90  # _DEFAULT_HINT_FALLBACK_TIMEOUT
         assert hint_name == "Response"
         # Original args untouched
         assert args == {"model": "x", "messages": []}

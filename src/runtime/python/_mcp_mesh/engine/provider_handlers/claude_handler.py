@@ -367,9 +367,21 @@ class ClaudeHandler(BaseProviderHandler):
         # Fallback timeout: 30s was too tight for complex nested schemas
         # (e.g. list[NestedModel] where Claude generates multi-day itineraries).
         # Configurable via MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT (seconds).
-        fallback_timeout = int(
-            os.environ.get("MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT", "90")
-        )
+        # Fail-open on a malformed env value so a typo can't break the
+        # provider mid-request — log a warning and use the default.
+        _raw_timeout = os.environ.get("MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT")
+        if _raw_timeout is None:
+            fallback_timeout = 90
+        else:
+            try:
+                fallback_timeout = int(_raw_timeout)
+            except ValueError:
+                logger.warning(
+                    "MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT=%r is not an integer; "
+                    "using default 90s",
+                    _raw_timeout,
+                )
+                fallback_timeout = 90
         model_params["_mesh_hint_mode"] = True
         model_params["_mesh_hint_schema"] = sanitized_schema
         model_params["_mesh_hint_fallback_timeout"] = fallback_timeout

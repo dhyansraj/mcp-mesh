@@ -552,7 +552,8 @@ class TestMeshDelegatedStreaming:
         assert collected == ["Buffered final response."]
         assert "request" in captured_call_kwargs
         assert any(
-            "does not expose streaming variant" in rec.message
+            "advertised the streaming variant but tool" in rec.message
+            and "is not exposed" in rec.message
             for rec in caplog.records
         )
 

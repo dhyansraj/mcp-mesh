@@ -1404,10 +1404,18 @@ class MeshLlmAgent:
             if not looks_like_missing_tool:
                 raise
 
+            # With Phase 5C tag-based discrimination the resolver will not
+            # normally hand us a provider that lacks the streaming tool —
+            # this branch fires only in the rare race where a provider
+            # advertised the ai.mcpmesh.stream tag but the streaming MCP
+            # tool itself is unreachable (e.g. transient registration
+            # mismatch). Defensive single-chunk degrade keeps the consumer
+            # alive instead of bubbling a hard failure.
             logger.warning(
-                f"Provider {provider_proxy.endpoint} does not expose streaming "
-                f"variant '{stream_tool_name}'; falling back to buffered "
-                f"single-chunk yield via '{provider_proxy.function_name}'."
+                f"Provider {provider_proxy.endpoint} advertised the streaming "
+                f"variant but tool '{stream_tool_name}' is not exposed; "
+                f"degrading to a single buffered chunk via "
+                f"'{provider_proxy.function_name}'."
             )
 
         # Buffered fallback: call the provider's regular tool and yield the
