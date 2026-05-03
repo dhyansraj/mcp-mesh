@@ -1,0 +1,292 @@
+# Test Case: Day 10 Bonus — Real-time Streaming Trip Planner
+# Validates the Day 10 bonus streaming chapter (#849, stage 2): the bonus-ui
+# planner returns mesh.Stream[str] from llm.stream(), and the bonus-ui gateway
+# wraps it with @mesh.route SSE auto-emission. Verifies tokens stream end-to-end
+# through the deepest pipeline mcp-mesh has been tested with:
+#
+#   curl -> gateway (mesh.route SSE) -> planner (Stream[str], llm.stream())
+#         -> user_prefs + chat_history (Tier-1 deps, buffered)
+#         -> 3 committee agents in parallel (each with own LLM call, buffered)
+#         -> final streaming LLM call with 4 tool deps (flight/hotel/weather/poi
+#            via filter)
+#         -> tokens stream back through entire pipeline to browser
+#
+# 13 agents total = 11 unchanged from day-09 (claude-provider, openai-provider,
+# user-prefs-agent, chat-history-agent, flight/hotel/weather/poi-agents,
+# budget-analyst, adventure-advisor, logistics-planner) + bonus planner-agent
+# + bonus gateway (drop-in replacements that add streaming).
+#
+# Requires ANTHROPIC_API_KEY and OPENAI_API_KEY — tagged with 'llm' so CI can
+# skip without keys. Committee specialists each make their own real LLM call,
+# so a dry-run path would not exercise the full pipeline (matches the opt-in
+# real-LLM pattern from tc04/tc05/tc07).
+
+name: "Tutorial Day 10 Bonus: Real-time Streaming Trip Planner"
+description: "Verify deepest streaming pipeline (gateway SSE -> planner Stream -> committee + tools + LLM) delivers multi-chunk tokens end-to-end"
+tags:
+  - tutorial
+  - day10
+  - bonus
+  - streaming
+  - python
+  - llm
+  - gateway
+timeout: 600
+
+pre_run:
+  - routine: global.start_observability
+
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - handler: shell
+    command: "/workspace/.venv/bin/pip install fastapi uvicorn redis"
+
+test:
+  # Copy all 13 agents to workspace. The bonus planner + gateway come from
+  # day-10/bonus-ui; the other 11 come from day-09 unchanged.
+  - name: "Copy agents to workspace"
+    handler: shell
+    command: |
+      cp -rL /artifacts/flight-agent /workspace/
+      cp -rL /artifacts/hotel-agent /workspace/
+      cp -rL /artifacts/weather-agent /workspace/
+      cp -rL /artifacts/poi-agent /workspace/
+      cp -rL /artifacts/user-prefs-agent /workspace/
+      cp -rL /artifacts/claude-provider /workspace/
+      cp -rL /artifacts/openai-provider /workspace/
+      cp -rL /artifacts/planner-agent /workspace/
+      cp -rL /artifacts/chat-history-agent /workspace/
+      cp -rL /artifacts/gateway /workspace/
+      cp -rL /artifacts/budget-analyst /workspace/
+      cp -rL /artifacts/adventure-advisor /workspace/
+      cp -rL /artifacts/logistics-planner /workspace/
+    capture: copy_output
+
+  # Create env file with secrets (tsuite injects ANTHROPIC_API_KEY +
+  # OPENAI_API_KEY automatically).
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  # Start the 12 named agents (tools, providers, planner, committee). Single
+  # invocation matches tc07 pattern.
+  - name: "Start tool, provider, planner, and specialist agents"
+    handler: shell
+    command: "meshctl start flight-agent/main.py hotel-agent/main.py weather-agent/main.py poi-agent/main.py user-prefs-agent/main.py claude-provider/main.py openai-provider/main.py planner-agent/main.py chat-history-agent/main.py budget-analyst/main.py adventure-advisor/main.py logistics-planner/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_agents_output
+
+  # Wait for registration and DI resolution.
+  - name: "Wait for all agents to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="flight-agent hotel-agent weather-agent poi-agent user-prefs-agent claude-provider openai-provider planner-agent chat-history-agent budget-analyst adventure-advisor logistics-planner"
+      EXPECTED_COUNT=12
+      echo "Waiting for $EXPECTED_COUNT agents to register..."
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        COUNT=0
+        for agent in $EXPECTED; do
+          if echo "$AGENTS" | grep -q "$agent"; then
+            COUNT=$((COUNT + 1))
+          fi
+        done
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "All $EXPECTED_COUNT agents registered after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        echo "  $COUNT/$EXPECTED_COUNT agents registered (attempt $i/30)..."
+        sleep 2
+      done
+      echo "ERROR: Only $COUNT/$EXPECTED_COUNT agents registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_agents_output
+    timeout: 90
+
+  # Start the bonus streaming gateway (port 8080).
+  - name: "Start bonus streaming gateway"
+    handler: shell
+    command: "meshctl start gateway/main.py --env-file .env -d"
+    workdir: /workspace
+    capture: start_gateway_output
+
+  # Wait for the API gateway to register and resolve trip_planning dep.
+  - name: "Wait for gateway to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for API gateway to register..."
+      for i in $(seq 1 30); do
+        if meshctl list 2>/dev/null | grep -qi "API"; then
+          echo "API gateway registered after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        echo "  API gateway not yet registered (attempt $i/30)..."
+        sleep 2
+      done
+      echo "ERROR: API gateway not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_gateway_output
+    timeout: 90
+
+  # Brief settle so the gateway's `trip_planning` dep resolves before the SSE
+  # POST fires (mirrors the uc18/tc01 pattern).
+  - name: "Brief settle for gateway trip_planning dep resolution"
+    handler: wait
+    seconds: 5
+
+  # Verify all 13 agents are registered.
+  - name: "Verify all agents are registered"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  # Verify gateway health endpoint (non-streaming regression — proves the
+  # FastAPI app is up before we hit the streaming endpoint).
+  - name: "Verify gateway health endpoint"
+    handler: shell
+    command: |
+      RESPONSE=$(curl -s http://localhost:8080/health 2>&1)
+      echo "$RESPONSE"
+      if echo "$RESPONSE" | grep -q '"healthy"'; then
+        echo "PASS: gateway health check passed"
+      else
+        echo "FAIL: gateway health check failed"
+        exit 1
+      fi
+    workdir: /workspace
+    capture: health_check
+
+  # Capture SSE response body. -N disables curl buffering so we observe
+  # incremental flushes as separate `data: ` lines. Real-LLM streaming +
+  # 3 committee LLM calls + 4 tool calls can take 30-60s, so timeout 240.
+  - name: "POST /plan and capture full SSE stream body"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -N --max-time 220 -X POST http://localhost:8080/plan \
+        -H "Content-Type: application/json" \
+        -H "X-Session-Id: test-session-day10-bonus" \
+        -d '{"destination":"Tokyo","dates":"June 1-5, 2026","budget":"$3000","message":"family trip"}' \
+        2>&1
+    capture: sse_output
+    timeout: 240
+
+  # Capture response headers separately (-D - dumps headers, -o /dev/null
+  # discards body) to verify Content-Type is text/event-stream.
+  - name: "POST /plan with header dump (verify SSE Content-Type)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -D - --max-time 220 -X POST http://localhost:8080/plan \
+        -H "Content-Type: application/json" \
+        -H "X-Session-Id: test-session-day10-bonus-headers" \
+        -d '{"destination":"Tokyo","dates":"June 1-5, 2026","budget":"$3000","message":"family trip"}' \
+        -o /dev/null 2>&1
+    capture: sse_headers
+    timeout: 240
+
+  # Count the number of `data: ` SSE chunks. > 5 proves the response is
+  # actually streaming (multi-chunk delivery), not a single buffered payload
+  # wrapped in one SSE frame at the end.
+  - name: "Count SSE data chunks (multi-chunk streaming proof)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Re-grep the captured stream from the previous step is not possible
+      # cross-step in shell, so re-run a smaller probe and count `data: ` lines.
+      # We probe the same endpoint independently to avoid any cross-step
+      # state issues. This also doubles as a smoke test that the second call
+      # works (no session-state regressions).
+      RESPONSE=$(curl -s -N --max-time 220 -X POST http://localhost:8080/plan \
+        -H "Content-Type: application/json" \
+        -H "X-Session-Id: test-session-day10-bonus-count" \
+        -d '{"destination":"Tokyo","dates":"June 1-5, 2026","budget":"$3000","message":"family trip"}' \
+        2>&1)
+      DATA_COUNT=$(echo "$RESPONSE" | grep -c '^data: ' || true)
+      echo "DATA_CHUNK_COUNT=$DATA_COUNT"
+      echo "--- last 20 lines of response ---"
+      echo "$RESPONSE" | tail -20
+    capture: chunk_count
+    timeout: 240
+
+assertions:
+  # --- All 13 agents registered ---
+  - expr: "${captured.list_output} contains 'flight-agent'"
+    message: "flight-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'hotel-agent'"
+    message: "hotel-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'weather-agent'"
+    message: "weather-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'poi-agent'"
+    message: "poi-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'user-prefs-agent'"
+    message: "user-prefs-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'claude-provider'"
+    message: "claude-provider should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'openai-provider'"
+    message: "openai-provider should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'planner-agent'"
+    message: "planner-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'chat-history-agent'"
+    message: "chat-history-agent should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'API'"
+    message: "API gateway should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'budget-analyst'"
+    message: "budget-analyst should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'adventure-advisor'"
+    message: "adventure-advisor should appear in meshctl list"
+
+  - expr: "${captured.list_output} contains 'logistics-planner'"
+    message: "logistics-planner should appear in meshctl list"
+
+  # --- Gateway health (non-streaming regression) ---
+  - expr: "${captured.health_check} contains 'PASS'"
+    message: "gateway /health endpoint should return healthy (non-streaming regression)"
+
+  # --- SSE body structural assertions (no exact-text matching on LLM
+  #     output — per project memory feedback_llm_test_assertions.md) ---
+  - expr: "${captured.sse_output} contains 'data: '"
+    message: "SSE stream must contain at least one 'data: ' chunk"
+
+  - expr: "${captured.sse_output} contains '[DONE]'"
+    message: "SSE stream must end with the '[DONE]' terminator (proves @mesh.route SSE auto-emission ran to completion)"
+
+  - expr: "${captured.sse_output} icontains 'tokyo'"
+    message: "SSE stream body must mention the input destination (case-insensitive 'Tokyo'), proving the input traversed gateway -> planner -> committee -> LLM end-to-end"
+
+  # --- SSE header assertion ---
+  - expr: "${captured.sse_headers} contains 'text/event-stream'"
+    message: "Response Content-Type must be text/event-stream (proves @mesh.route SSE adapter wrapped the Stream[str] return)"
+
+  # --- Multi-chunk streaming proof (NOT a single buffered payload) ---
+  # If the response were buffered into one frame, DATA_CHUNK_COUNT would be 1
+  # or 2 (one for the body, one for [DONE]). > 5 proves real streaming.
+  - expr: "${jq:captured.chunk_count:[. | split(\"\\n\")[] | select(startswith(\"DATA_CHUNK_COUNT=\")) | sub(\"DATA_CHUNK_COUNT=\"; \"\") | tonumber] | first} > 5"
+    message: "Expected > 5 SSE data chunks (proves true streaming, not a single buffered payload). Got fewer — the response may be buffered, not streaming."
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
