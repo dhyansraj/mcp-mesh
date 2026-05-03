@@ -119,8 +119,13 @@ async def plan_trip(
             history = history.get("result", [])
     # --8<-- [end:chat_history_fetch]
 
-    user_text = message or (
+    base_request = (
         f"Plan a trip to {destination} from {dates} with a budget of {budget}."
+    )
+    user_text = (
+        f"{base_request} Additional preferences from user: {message}"
+        if message
+        else base_request
     )
 
     # --8<-- [start:committee_prefetch]
