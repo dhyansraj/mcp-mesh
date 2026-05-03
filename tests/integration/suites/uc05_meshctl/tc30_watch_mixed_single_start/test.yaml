@@ -5,7 +5,6 @@
 
 name: "Watch Mode: Mixed Languages Single Start Command"
 description: "Test meshctl start -w with multiple agents in a single command - verify hot reload works for all 3 languages"
-disabled: true # forkToBackground sync barrier from #844 times out on multi-agent + watch + Java — see GH #847 (re-enable when resolved)
 tags:
   - meshctl
   - python

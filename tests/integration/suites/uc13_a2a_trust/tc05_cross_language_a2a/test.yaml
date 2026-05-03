@@ -1,6 +1,5 @@
 name: "A2A mTLS - Cross-Language Communication"
 description: "Verify Python, TypeScript, and Java agents all communicate over mTLS in a single mesh"
-disabled: true # Multi-runtime same-name agents collide on per-name PID file from #827 redesign — see GH #845 (re-enable when resolved)
 tags:
   - a2a-trust
   - tls
@@ -68,7 +67,7 @@ test:
     handler: shell
     command: |
       for i in $(seq 1 45); do
-        if meshctl list 2>/dev/null | grep -q "greeter.*Java"; then
+        if meshctl list 2>/dev/null | grep -q "greeter-java"; then
           echo "JAVA_REGISTERED after $((i*2)) seconds"
           exit 0
         fi
@@ -94,8 +93,11 @@ test:
       echo "=== system-agent logs ==="
       meshctl logs system-agent 2>&1 | tail -30
       echo ""
-      echo "=== greeter logs ==="
-      meshctl logs greeter 2>&1 | tail -30
+      echo "=== greeter-ts logs ==="
+      meshctl logs greeter-ts 2>&1 | tail -30
+      echo ""
+      echo "=== greeter-java logs ==="
+      meshctl logs greeter-java 2>&1 | tail -30
       echo ""
       echo "=== Registry agents API ==="
       curl -sk https://localhost:8000/agents 2>&1 | head -50
@@ -178,8 +180,11 @@ assertions:
   - expr: "${captured.list_output} contains 'system-agent'"
     message: "Python system agent should be registered"
 
-  - expr: "${captured.list_output} contains 'greeter'"
-    message: "Greeter agent(s) should be registered"
+  - expr: "${captured.list_output} contains 'greeter-ts'"
+    message: "TypeScript greeter should be registered"
+
+  - expr: "${captured.list_output} contains 'greeter-java'"
+    message: "Java greeter should be registered"
 
   - expr: "${captured.https_check} contains 'ALL_HTTPS=true'"
     message: "All agents should have HTTPS endpoints"

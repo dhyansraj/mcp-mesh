@@ -49,7 +49,7 @@ test:
   - name: "Call greet tool"
     handler: shell
     command: |
-      meshctl call greeter:greet '{"name":"TLSTest"}' 2>&1
+      meshctl call greeter-ts:greet '{"name":"TLSTest"}' 2>&1
     workdir: /workspace
     capture: call_output
 
@@ -60,7 +60,7 @@ test:
     ignore_errors: true
 
 assertions:
-  - expr: "${captured.list_output} contains 'greeter'"
+  - expr: "${captured.list_output} contains 'greeter-ts'"
     message: "TypeScript greeter should be registered"
 
   - expr: "${captured.list_output} contains 'https://'"

@@ -59,8 +59,8 @@ test:
       echo "=== system-agent logs ==="
       meshctl logs system-agent 2>&1 | tail -30
       echo ""
-      echo "=== greeter logs ==="
-      meshctl logs greeter 2>&1 | tail -30
+      echo "=== greeter-ts logs ==="
+      meshctl logs greeter-ts 2>&1 | tail -30
       echo ""
       echo "=== Registry agents API ==="
       curl -sk https://localhost:8000/agents 2>&1 | head -50
@@ -85,7 +85,7 @@ test:
   - name: "Call greeter tool (triggers a2a call to system-agent)"
     handler: shell
     command: |
-      meshctl call greeter:greet '{"name":"A2ATest"}' 2>&1
+      meshctl call greeter-ts:greet '{"name":"A2ATest"}' 2>&1
     workdir: /workspace
     capture: call_output
 
@@ -99,7 +99,7 @@ assertions:
   - expr: "${captured.list_output} contains 'system-agent'"
     message: "Python system agent should be registered"
 
-  - expr: "${captured.list_output} contains 'greeter'"
+  - expr: "${captured.list_output} contains 'greeter-ts'"
     message: "TypeScript greeter should be registered"
 
   - expr: "${captured.https_check} contains 'HTTPS_COUNT=2'"

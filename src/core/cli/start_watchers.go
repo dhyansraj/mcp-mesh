@@ -77,7 +77,10 @@ func createJavaWatcher(agentPath string, env []string, workingDir, user, group s
 		DebounceDelay: getWatchDebounceDelay(),
 		PortDelay:     getWatchPortDelay(),
 		StopTimeout:   3 * time.Second,
-		AgentName:     filepath.Base(projectRoot),
+		// Use canonical extractor (matches Python watcher + non-watch path) so the
+		// AgentName matches @MeshAgent(name=...) — directory name was a #847 latent
+		// bug exposed by the #844 sync barrier.
+		AgentName: extractAgentName(agentPath),
 	}
 
 	// Pre-restart compile check: validate code compiles before killing agent

@@ -60,7 +60,7 @@ test:
       echo "$REG_CERT" | jq -r '.data.private_key' > /tmp/vault-registry-key.pem
 
       # Pre-issue agent cert (Java EnvironmentPostProcessor needs cert paths at startup)
-      AGENT_CERT=$(vault write -format=json pki_int/issue/mesh-agent common_name="greeter.mcp-mesh.local" ip_sans="$(hostname -i)" ttl=24h)
+      AGENT_CERT=$(vault write -format=json pki_int/issue/mesh-agent common_name="greeter-java.mcp-mesh.local" ip_sans="$(hostname -i)" ttl=24h)
       echo "$AGENT_CERT" | jq -r '.data.certificate' > /tmp/vault-agent-cert.pem
       echo "$AGENT_CERT" | jq -r '.data.ca_chain[]' >> /tmp/vault-agent-cert.pem
       echo "$AGENT_CERT" | jq -r '.data.private_key' > /tmp/vault-agent-key.pem
@@ -101,7 +101,7 @@ test:
     handler: shell
     command: |
       for i in $(seq 1 45); do
-        if curl -sk https://localhost:8000/agents 2>/dev/null | grep -q "greeter"; then
+        if curl -sk https://localhost:8000/agents 2>/dev/null | grep -q "greeter-java"; then
           echo "REGISTERED after $((i*2)) seconds"
           exit 0
         fi
@@ -121,7 +121,7 @@ test:
   - name: "Call greet tool over Vault mTLS"
     handler: shell
     command: |
-      meshctl call greeter:greet '{"name":"VaultTest"}' --registry-url https://localhost:8000 --insecure 2>&1
+      meshctl call greeter-java:greet '{"name":"VaultTest"}' --registry-url https://localhost:8000 --insecure 2>&1
     workdir: /workspace
     capture: call_output
 
@@ -144,7 +144,7 @@ assertions:
   - expr: "${captured.wait_output} contains 'REGISTERED'"
     message: "Java agent should register within timeout"
 
-  - expr: "${captured.agents_json} contains 'greeter'"
+  - expr: "${captured.agents_json} contains 'greeter-java'"
     message: "Java greeter should be registered"
 
   - expr: "${captured.agents_json} contains 'https://'"
