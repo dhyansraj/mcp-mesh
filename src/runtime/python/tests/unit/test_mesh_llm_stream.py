@@ -521,14 +521,28 @@ class TestMeshDelegatedStreaming:
         """
         from fastmcp.exceptions import ToolError
 
-        captured_call_kwargs: dict = {}
+        # Resolver gives us the streaming variant (function_name ends in
+        # "_stream"); the fallback must explicitly invoke the buffered
+        # sibling (without the suffix), not re-call the streaming tool.
+        captured_buffered_name: list[str] = []
+        captured_buffered_args: dict = {}
 
         class _FakeProxy:
             endpoint = "http://provider"
-            function_name = "claude_provider"
+            function_name = "claude_provider_stream"
 
             async def __call__(self, **kwargs):
-                captured_call_kwargs.update(kwargs)
+                # Should NOT be reached — fallback must use call_tool_with_tracing
+                # with the explicit buffered name, not __call__ which would
+                # re-invoke the streaming tool name.
+                raise AssertionError(
+                    "fallback must call call_tool_with_tracing with the "
+                    "buffered name, not provider_proxy(request=...)"
+                )
+
+            async def call_tool_with_tracing(self, name, arguments):
+                captured_buffered_name.append(name)
+                captured_buffered_args.update(arguments)
                 return {
                     "role": "assistant",
                     "content": "Buffered final response.",
@@ -550,7 +564,9 @@ class TestMeshDelegatedStreaming:
                 collected.append(piece)
 
         assert collected == ["Buffered final response."]
-        assert "request" in captured_call_kwargs
+        # Fallback invoked the buffered sibling, NOT the streaming tool name.
+        assert captured_buffered_name == ["claude_provider"]
+        assert "request" in captured_buffered_args
         assert any(
             "advertised the streaming variant but tool" in rec.message
             and "is not exposed" in rec.message

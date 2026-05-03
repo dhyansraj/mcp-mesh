@@ -30,7 +30,8 @@ plans your trip across the committee + tool dependencies.
 
 Set `MESH_LLM_DRY_RUN=1` on the planner. It exercises every dependency
 (committee + chat history + user prefs) and yields a deterministic chunk
-sequence — used by the streaming integration test (uc20 tc06).
+sequence — used by the streaming integration test
+(`uc20/tc11_day10_bonus_streaming`).
 
 ```bash
 MESH_LLM_DRY_RUN=1 meshctl start day-10/bonus-ui/python/planner-agent/main.py -d

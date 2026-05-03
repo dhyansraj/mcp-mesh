@@ -127,6 +127,33 @@ async def plan_trip(
         else base_request
     )
 
+    # --8<-- [start:dry_run]
+    # Dry-run gate fires BEFORE the committee fan-out so unit/integration
+    # tests don't burn LLM tokens on specialist calls. When MESH_LLM_DRY_RUN
+    # is set on the planner, neither the committee nor Claude is invoked.
+    if _dry_run_enabled():
+        accumulated_chunks = []
+        for chunk in _DRY_RUN_CHUNKS:
+            rendered = chunk.replace("{destination}", destination).replace(
+                "{budget}", budget
+            )
+            accumulated_chunks.append(rendered)
+            yield rendered
+
+        if session_id and chat_history:
+            await chat_history.call_tool("save_turn", {
+                "session_id": session_id,
+                "role": "user",
+                "content": user_text,
+            })
+            await chat_history.call_tool("save_turn", {
+                "session_id": session_id,
+                "role": "assistant",
+                "content": "".join(accumulated_chunks),
+            })
+        return
+    # --8<-- [end:dry_run]
+
     # --8<-- [start:committee_prefetch]
     # Run the committee in parallel BEFORE the streaming LLM call so their
     # insights can be injected into the LLM context. The committee remains
@@ -171,30 +198,6 @@ async def plan_trip(
             sections.append(f"### {label}\n{result}")
         committee_insights = "\n\n".join(sections)
     # --8<-- [end:committee_prefetch]
-
-    # --8<-- [start:dry_run]
-    if _dry_run_enabled():
-        accumulated_chunks = []
-        for chunk in _DRY_RUN_CHUNKS:
-            rendered = chunk.replace("{destination}", destination).replace(
-                "{budget}", budget
-            )
-            accumulated_chunks.append(rendered)
-            yield rendered
-
-        if session_id and chat_history:
-            await chat_history.call_tool("save_turn", {
-                "session_id": session_id,
-                "role": "user",
-                "content": user_text,
-            })
-            await chat_history.call_tool("save_turn", {
-                "session_id": session_id,
-                "role": "assistant",
-                "content": "".join(accumulated_chunks),
-            })
-        return
-    # --8<-- [end:dry_run]
 
     if llm is None:
         raise RuntimeError(

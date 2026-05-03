@@ -964,6 +964,23 @@ async def _provider_agentic_loop_stream(
                 if final_content:
                     yield final_content
 
+                # If the HINT fallback actually fired (_resp is not None),
+                # its tokens/model belong in observability metadata. The
+                # streamed attempt's totals already reflect the failed first
+                # try; add the fallback's usage so the trace shows the
+                # true work performed.
+                if _resp is not None and hasattr(_resp, "usage") and _resp.usage:
+                    _fb_usage = _resp.usage
+                    total_input_tokens += (
+                        getattr(_fb_usage, "prompt_tokens", 0) or 0
+                    )
+                    total_output_tokens += (
+                        getattr(_fb_usage, "completion_tokens", 0) or 0
+                    )
+                    _fb_model = getattr(_resp, "model", None)
+                    if _fb_model:
+                        effective_model = _fb_model
+
             set_llm_metadata(
                 model=effective_model,
                 provider=vendor or "",

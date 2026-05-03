@@ -382,6 +382,14 @@ class ClaudeHandler(BaseProviderHandler):
                     _raw_timeout,
                 )
                 fallback_timeout = 90
+            else:
+                if fallback_timeout <= 0:
+                    logger.warning(
+                        "MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT=%r must be positive; "
+                        "using default 90s",
+                        _raw_timeout,
+                    )
+                    fallback_timeout = 90
         model_params["_mesh_hint_mode"] = True
         model_params["_mesh_hint_schema"] = sanitized_schema
         model_params["_mesh_hint_fallback_timeout"] = fallback_timeout

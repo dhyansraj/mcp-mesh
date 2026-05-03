@@ -835,12 +835,24 @@ async def _handle_llm_provider_update(
     parsed_provider_kwargs: dict = {}
     if raw_provider_kwargs:
         try:
-            parsed_provider_kwargs = json.loads(raw_provider_kwargs) or {}
+            _decoded = json.loads(raw_provider_kwargs)
         except (TypeError, ValueError) as e:
             logger.warning(
                 f"Could not parse provider kwargs for {function_id}: {e}; "
                 f"falling back to empty config"
             )
+            _decoded = None
+        if _decoded is None:
+            parsed_provider_kwargs = {}
+        elif isinstance(_decoded, dict):
+            parsed_provider_kwargs = _decoded
+        else:
+            logger.warning(
+                f"Provider kwargs for {function_id} parsed to "
+                f"{type(_decoded).__name__}, expected object; "
+                f"falling back to empty config"
+            )
+            parsed_provider_kwargs = {}
 
     # Import injector
     from ...engine.dependency_injector import get_global_injector

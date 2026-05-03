@@ -53,7 +53,14 @@ async def plan_trip(
             status_code=503, detail="trip_planning capability unavailable"
         )
 
-    body = await request.json()
+    try:
+        body = await request.json()
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=400, detail="request body must be a JSON object"
+        )
     if "destination" not in body or "dates" not in body or "budget" not in body:
         raise HTTPException(
             status_code=400,

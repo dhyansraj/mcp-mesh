@@ -647,12 +647,18 @@ impl AgentRuntime {
                 kwargs: kwargs_json.clone(),
             };
 
-            // Check if changed (kwargs included so kwargs-only changes still
-            // emit a fresh event — mirrors process_dependency_changes).
+            // Check if changed (kwargs/agent_id/model included so any field
+            // change emits a fresh event — mirrors process_dependency_changes).
+            // Note: `vendor` lives on LlmProviderInfo (the emitted event) but
+            // not on TrackedProvider; vendor changes will be picked up via the
+            // model field, which always changes when the LiteLLM model string
+            // (vendor/model) changes.
             let changed = match self.topology.llm_providers.get(function_id) {
                 Some(old_provider) => {
-                    old_provider.endpoint != tracked.endpoint
+                    old_provider.agent_id != tracked.agent_id
+                        || old_provider.endpoint != tracked.endpoint
                         || old_provider.function_name != tracked.function_name
+                        || old_provider.model != tracked.model
                         || old_provider.kwargs != tracked.kwargs
                 }
                 None => true,

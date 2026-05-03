@@ -145,7 +145,9 @@
           while (!done) {
             const { value, done: rdDone } = await reader.read();
             if (rdDone) break;
-            buffer += decoder.decode(value, { stream: true });
+            // Normalize CRLF to LF so the same parser handles either line
+            // ending if a proxy or alternative SSE writer uses CRLF.
+            buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
             let sep;
             while ((sep = buffer.indexOf("\n\n")) !== -1) {
               const event = buffer.slice(0, sep);

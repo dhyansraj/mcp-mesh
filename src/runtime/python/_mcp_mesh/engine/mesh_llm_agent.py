@@ -1418,10 +1418,20 @@ class MeshLlmAgent:
                 f"'{provider_proxy.function_name}'."
             )
 
-        # Buffered fallback: call the provider's regular tool and yield the
-        # full content as one chunk. Cross-runtime providers (Java, TS) may
+        # Buffered fallback: call the provider's NON-streaming sibling tool
+        # (strip the trailing ``_stream`` suffix from the resolved name) and
+        # yield the full content as one chunk. Calling provider_proxy(...)
+        # directly would re-invoke ``self.function_name`` — i.e. the same
+        # streaming tool we just got "unknown tool" for — so we explicitly
+        # name the buffered variant. Cross-runtime providers (Java, TS) may
         # return a JSON string instead of a dict; normalize the shape.
-        result = await provider_proxy(request=request_dict)
+        if stream_tool_name.endswith("_stream"):
+            buffered_tool_name = stream_tool_name[: -len("_stream")]
+        else:
+            buffered_tool_name = stream_tool_name
+        result = await provider_proxy.call_tool_with_tracing(
+            buffered_tool_name, {"request": request_dict}
+        )
         if isinstance(result, str):
             try:
                 parsed = json.loads(result)
@@ -1498,7 +1508,12 @@ class MeshLlmAgent:
             )
 
         if self._is_mesh_delegated:
-            async for chunk in self._stream_mesh_delegated(message, media, context, context_mode):
+            # Forward call-time kwargs (temperature, max_tokens, etc.) so
+            # mesh-delegated streaming honors the same overrides as the
+            # buffered __call__ path.
+            async for chunk in self._stream_mesh_delegated(
+                message, media, context, context_mode, **kwargs
+            ):
                 yield chunk
             return
 
