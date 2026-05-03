@@ -260,6 +260,86 @@ class TestStreamPeekToolCallFallback:
 
 
 # ---------------------------------------------------------------------------
+# Regression: peek timeout must not cancel in-flight __anext__()
+# ---------------------------------------------------------------------------
+
+
+class _SlowChunkStream:
+    """Async iterator that yields each chunk after a real ``sleep`` delay AND
+    fakes litellm's ``CustomStreamWrapper`` failure mode: if a previous
+    ``__anext__()`` was cancelled mid-flight (peek timeout firing on a
+    chunk-in-flight), the stream is permanently broken and all subsequent
+    ``__anext__()`` calls raise ``StopAsyncIteration`` — silently dropping
+    every remaining chunk. That's the exact corruption observed empirically
+    with real Claude streams.
+    """
+
+    def __init__(self, chunks: list[MagicMock], delay_seconds: float):
+        self._chunks = list(chunks)
+        self._delay = delay_seconds
+        self._broken = False
+        self.aclosed = False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        import asyncio as _asyncio
+
+        if self._broken or not self._chunks:
+            raise StopAsyncIteration
+        try:
+            await _asyncio.sleep(self._delay)
+        except _asyncio.CancelledError:
+            self._broken = True
+            raise
+        return self._chunks.pop(0)
+
+    async def aclose(self):
+        self.aclosed = True
+
+
+class TestStreamPeekTimeoutDoesNotCancelInFlightChunk:
+    @pytest.mark.asyncio
+    async def test_yields_all_chunks_when_chunks_arrive_after_peek_timeout(
+        self, monkeypatch
+    ):
+        """Regression: peek must not cancel the in-flight ``__anext__()`` task
+        on timeout — chunks arriving after the peek deadline must still be
+        yielded.
+
+        Bug: ``asyncio.wait_for`` cancels the underlying coroutine on timeout;
+        for litellm's ``CustomStreamWrapper`` that discards the chunk being
+        read AND corrupts the iterator state so the post-peek ``async for``
+        yields nothing. With a 100ms peek window and 50ms inter-chunk gaps,
+        only the first 1–2 chunks arrive before the deadline; without the
+        fix the rest are silently dropped.
+        """
+        monkeypatch.setenv("MESH_LLM_STREAM_PEEK_MS", "100")
+
+        chunk_texts = ["chunk1", "chunk2", "chunk3", "chunk4", "chunk5"]
+        chunks = [_chunk(content=t) for t in chunk_texts] + [
+            _chunk(usage={"prompt_tokens": 3, "completion_tokens": 5})
+        ]
+
+        agent = MeshLlmAgent(
+            config=make_config(),
+            filtered_tools=[],
+            output_type=str,
+        )
+
+        with patch(
+            "_mcp_mesh.engine.mesh_llm_agent.acompletion", new=AsyncMock()
+        ) as mock_acomp:
+            mock_acomp.return_value = _SlowChunkStream(chunks, delay_seconds=0.05)
+            collected = []
+            async for piece in agent.stream("hi"):
+                collected.append(piece)
+
+        assert collected == chunk_texts
+
+
+# ---------------------------------------------------------------------------
 # Constraints: mesh-delegated and typed output reject
 # ---------------------------------------------------------------------------
 

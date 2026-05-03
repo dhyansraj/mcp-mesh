@@ -1392,25 +1392,60 @@ class MeshLlmAgent:
             peek_deadline = asyncio.get_event_loop().time() + peek_window
             stream_aiter = stream_iter.__aiter__()
             stream_completed = False
+            # We use asyncio.wait (not asyncio.wait_for) for the peek timeout
+            # because wait_for cancels the underlying coroutine on timeout. For
+            # litellm's CustomStreamWrapper that discards the chunk currently
+            # being read AND corrupts the iterator's internal state, so the
+            # post-peek async-for yields nothing. asyncio.wait leaves the
+            # pending __anext__() task untouched; we drain it before continuing.
+            pending_peek_task: Optional[asyncio.Task] = None
 
             try:
                 while True:
+                    if pending_peek_task is None:
+                        pending_peek_task = asyncio.ensure_future(
+                            stream_aiter.__anext__()
+                        )
+
                     remaining = peek_deadline - asyncio.get_event_loop().time()
                     if remaining <= 0:
                         break
+
+                    done, _ = await asyncio.wait(
+                        {pending_peek_task}, timeout=remaining
+                    )
+                    if not done:
+                        break
+
+                    completed_task = pending_peek_task
+                    pending_peek_task = None
                     try:
-                        chunk = await asyncio.wait_for(
-                            stream_aiter.__anext__(), timeout=remaining
-                        )
+                        chunk = completed_task.result()
                     except StopAsyncIteration:
                         stream_completed = True
                         break
-                    except asyncio.TimeoutError:
-                        break
+
                     buffered.append(chunk)
                     if self._chunk_has_tool_call(chunk):
                         saw_tool_call = True
                         break
+
+                # Drain the in-flight peek task BEFORE entering either the
+                # tool-call branch or the post-peek async-for. Skipping this
+                # would lose a chunk and (for litellm wrappers) call __anext__
+                # on an iterator that already has an outstanding awaiter.
+                if pending_peek_task is not None:
+                    drained_task = pending_peek_task
+                    try:
+                        chunk = await drained_task
+                    except StopAsyncIteration:
+                        stream_completed = True
+                        pending_peek_task = None
+                    else:
+                        pending_peek_task = None
+                        buffered.append(chunk)
+                        if self._chunk_has_tool_call(chunk):
+                            saw_tool_call = True
 
                 if saw_tool_call:
                     async for chunk in stream_aiter:
@@ -1506,6 +1541,12 @@ class MeshLlmAgent:
                 )
                 return
             finally:
+                if pending_peek_task is not None and not pending_peek_task.done():
+                    pending_peek_task.cancel()
+                    try:
+                        await pending_peek_task
+                    except BaseException:
+                        pass
                 if not stream_completed:
                     aclose = getattr(stream_iter, "aclose", None)
                     if aclose is not None:
