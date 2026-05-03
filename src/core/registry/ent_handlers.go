@@ -186,6 +186,11 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 	// MeshRegistrationResponse type has a fixed anonymous-struct shape that
 	// doesn't carry kwargs; until the OpenAPI spec is regenerated, building
 	// the JSON map by hand keeps the field on the wire (issue #645 bug 2).
+	//
+	// TODO(#850): Replace map[string]interface{} with regenerated typed
+	// struct once the OpenAPI spec includes the ``kwargs`` field on
+	// dependency entries.
+	// Tracking issue: https://github.com/dhyansraj/mcp-mesh/issues/850
 	response := map[string]interface{}{
 		"agent_id":  req.AgentId,
 		"status":    status,

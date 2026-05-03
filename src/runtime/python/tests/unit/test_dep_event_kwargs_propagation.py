@@ -220,6 +220,127 @@ class TestMcpHeartbeatProducerKwargs:
         assert call_kwargs["producer_kwargs"] == json.dumps({"stream_type": "text"})
 
 
+class TestMcpHeartbeatCapabilityFallbackProducerKwargs:
+    """The capability-fallback path (no requesting_function/dep_index in event)
+    must follow the same producer-wins-with-empty-fallback rule as the
+    position-path. Consumer-side kwargs in dep declarations are NOT a fallback
+    source — they would let stale consumer config leak into the proxy when the
+    producer hasn't advertised anything.
+    """
+
+    @pytest.mark.asyncio
+    async def test_capability_fallback_passes_producer_kwargs_to_proxy(self):
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from _mcp_mesh.pipeline.mcp_heartbeat import rust_heartbeat
+
+        DecoratorRegistry.clear_all()
+
+        async def consumer(prompt: str, chat=None):
+            return chat
+
+        DecoratorRegistry.register_mesh_tool(
+            consumer,
+            {
+                "capability": "consumer_tool",
+                "dependencies": [{"capability": "chat"}],
+            },
+        )
+
+        captured_kwargs: dict = {}
+
+        class FakeProxy:
+            def __init__(self, endpoint, function_name, kwargs_config=None):
+                captured_kwargs["endpoint"] = endpoint
+                captured_kwargs["function_name"] = function_name
+                captured_kwargs["kwargs_config"] = kwargs_config
+
+        injector = MagicMock()
+        injector.register_dependency = AsyncMock()
+        injector.unregister_dependency = AsyncMock()
+
+        with patch(
+            "_mcp_mesh.engine.dependency_injector.get_global_injector",
+            return_value=injector,
+        ), patch(
+            "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy", FakeProxy
+        ):
+            # Note: no requesting_function / dep_index — forces capability fallback.
+            await rust_heartbeat._handle_dependency_change(
+                capability="chat",
+                endpoint="http://producer:9170",
+                function_name="chat",
+                agent_id="producer-id",
+                available=True,
+                context={},
+                requesting_function=None,
+                dep_index=None,
+                producer_kwargs=json.dumps({"stream_type": "text", "timeout": 90}),
+            )
+
+        assert captured_kwargs["kwargs_config"] == {
+            "stream_type": "text",
+            "timeout": 90,
+        }
+        injector.register_dependency.assert_awaited_once()
+        DecoratorRegistry.clear_all()
+
+    @pytest.mark.asyncio
+    async def test_capability_fallback_does_not_leak_consumer_kwargs(self):
+        """The consumer's dep declaration kwargs MUST NOT be used as a
+        fallback when the producer ships none. Empty config is correct.
+        """
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from _mcp_mesh.pipeline.mcp_heartbeat import rust_heartbeat
+
+        DecoratorRegistry.clear_all()
+
+        async def consumer(prompt: str, chat=None):
+            return chat
+
+        # Consumer declares kwargs on its dep (e.g., a stale ``timeout=5``).
+        # These must NOT propagate to the proxy.
+        DecoratorRegistry.register_mesh_tool(
+            consumer,
+            {
+                "capability": "consumer_tool",
+                "dependencies": [
+                    {"capability": "chat", "kwargs": {"timeout": 5, "stale": True}}
+                ],
+            },
+        )
+
+        captured_kwargs: dict = {}
+
+        class FakeProxy:
+            def __init__(self, endpoint, function_name, kwargs_config=None):
+                captured_kwargs["kwargs_config"] = kwargs_config
+
+        injector = MagicMock()
+        injector.register_dependency = AsyncMock()
+
+        with patch(
+            "_mcp_mesh.engine.dependency_injector.get_global_injector",
+            return_value=injector,
+        ), patch(
+            "_mcp_mesh.engine.unified_mcp_proxy.EnhancedUnifiedMCPProxy", FakeProxy
+        ):
+            await rust_heartbeat._handle_dependency_change(
+                capability="chat",
+                endpoint="http://producer:9170",
+                function_name="chat",
+                agent_id="producer-id",
+                available=True,
+                context={},
+                requesting_function=None,
+                dep_index=None,
+                producer_kwargs=None,
+            )
+
+        # Empty — consumer's {"timeout": 5, "stale": True} must NOT leak.
+        assert captured_kwargs["kwargs_config"] == {}
+        DecoratorRegistry.clear_all()
+
+
 # ---------------------------------------------------------------------------
 # API heartbeat path (rust_api_heartbeat.py) — issue #645 bug 1
 # ---------------------------------------------------------------------------

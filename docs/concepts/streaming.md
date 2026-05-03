@@ -79,6 +79,32 @@ LLM agentic loops can run multiple iterations: the LLM may call a tool, get a re
 
 In the chatbot-demo this means: a "what's the weather in New York?" prompt produces a brief silent pause (Claude calls `get_weather`, the tool runs, the result is added to context), then the answer streams token-by-token as Claude composes it.
 
+## Pre-stream errors
+
+Once the framework returns `StreamingResponse`, the HTTP status code is locked in as `200 OK`. Errors raised AFTER that point cannot change the status — they surface as `event: error\ndata: {"error": ..., "type": ...}` SSE frames in the body instead.
+
+To raise pre-stream errors that should propagate as proper HTTP status codes (e.g., `503` when a dependency is unavailable, `400` for validation), structure the route as a coroutine that returns a generator instead of an async-generator function with `yield` directly:
+
+```python
+@app.post("/api/chat")
+@mesh.route(dependencies=["chat"])
+async def chat_endpoint(
+    body: ChatRequest,
+    chat: McpMeshTool = None,
+) -> mesh.Stream[str]:
+    if chat is None:
+        raise HTTPException(status_code=503, detail="chat unavailable")
+    return _stream_chat(body, chat)   # returns generator, no yield here
+
+async def _stream_chat(body, chat):
+    async for chunk in chat.stream(prompt=body.prompt):
+        yield chunk
+```
+
+Pre-flight checks in `chat_endpoint` fire BEFORE `StreamingResponse` is built, so `HTTPException` propagates as a proper 503. Errors raised inside `_stream_chat` still surface as SSE error frames (mid-stream errors can't change status).
+
+Both patterns are valid — pick the one that matches the error model. If only mid-stream errors matter, the simpler `async def ... yield` form is fine; if pre-flight failures must be visible to non-SSE clients via HTTP status, use the coroutine-returns-generator pattern.
+
 ## What it does NOT do (v1 limitations)
 
 - **Direct-mode LLM only.** `MeshLlmAgent.stream()` works when the injected provider does direct LiteLLM calls. Mesh-delegated providers (zero-code `@mesh.llm_provider` wrappers) raise `NotImplementedError` for `stream()`. Provider-mode streaming is planned for a follow-up.

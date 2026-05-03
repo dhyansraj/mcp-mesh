@@ -37,9 +37,19 @@ async def chat_endpoint(
     body: ChatRequest,
     chat: McpMeshTool = None,
 ) -> mesh.Stream[str]:
-    """Stream chat response via SSE: gateway -> chatbot -> Claude (+ weather tool)."""
+    """Stream chat response via SSE: gateway -> chatbot -> Claude (+ weather tool).
+
+    Pre-stream errors must be raised here (before returning the generator) so
+    they propagate as proper HTTP status codes. Errors raised inside the
+    generator body fire after StreamingResponse has committed to HTTP 200 and
+    surface as ``event: error`` SSE frames instead.
+    """
     if chat is None:
         raise HTTPException(status_code=503, detail="chat capability unavailable")
+    return _stream_chat(body, chat)
+
+
+async def _stream_chat(body: ChatRequest, chat: McpMeshTool):
     async for chunk in chat.stream(prompt=body.prompt):
         yield chunk
 

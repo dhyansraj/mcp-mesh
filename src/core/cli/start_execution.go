@@ -883,18 +883,19 @@ func determineExpectedPIDFiles(agentNames []string, registryOnly, connectOnly, u
 // signal mechanism into the child meshctl — the polling design keeps the
 // child unchanged.
 //
-// Child-exit detection uses a background Wait() goroutine rather than
-// Signal(0): a freshly-exited unwaited child is a zombie, and Signal(0)
-// returns nil for zombies on Linux/Darwin, which would let us spin until the
-// timeout instead of failing fast.
+// Child-exit detection is non-blocking: the previous implementation spawned
+// a background ``cmd.Wait()`` goroutine, which leaks for the entire lifetime
+// of the detached child (potentially days) since the parent returns long
+// before the detached child exits. We instead probe liveness via
+// ``PlatformProcessManager.isProcessRunning`` (Signal(0) on Unix, OpenProcess
+// + GetExitCodeProcess on Windows). Tradeoff: on Linux/Darwin a zombie
+// (exited but unreaped) reads as "alive", so a child that crashes before
+// writing its PID file will not fail-fast — it will time out at the deadline
+// instead. That is acceptable here: the parent doesn't ``cmd.Wait()`` on the
+// detached child by design, and a crashed child is still a failure either
+// way.
 func waitForChildPIDFiles(cmd *exec.Cmd, expectedFiles []string, timeout time.Duration) error {
-	exited := make(chan struct{})
-	go func() {
-		_ = cmd.Wait()
-		close(exited)
-	}()
-
-	deadline := time.After(timeout)
+	deadline := time.Now().Add(timeout)
 	const pollInterval = 50 * time.Millisecond
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -908,22 +909,33 @@ func waitForChildPIDFiles(cmd *exec.Cmd, expectedFiles []string, timeout time.Du
 		return true
 	}
 
+	ppm := NewPlatformProcessManager()
+
 	if check() {
 		return nil
 	}
 	for {
-		select {
-		case <-exited:
+		// Non-blocking aliveness check. On Unix this is Signal(0); a zombie
+		// reads "alive" so we'll fall through to the deadline branch when
+		// the child crashed without writing its PID file.
+		if cmd.Process == nil || !ppm.isProcessRunning(cmd.Process.Pid) {
 			if check() {
 				return nil
 			}
-			return fmt.Errorf("forked child (pid %d) exited before writing PID file(s) %v", cmd.Process.Pid, expectedFiles)
-		case <-deadline:
+			pid := -1
+			if cmd.Process != nil {
+				pid = cmd.Process.Pid
+			}
+			return fmt.Errorf("forked child (pid %d) exited before writing PID file(s) %v", pid, expectedFiles)
+		}
+
+		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out after %v waiting for PID file(s) %v", timeout, expectedFiles)
-		case <-ticker.C:
-			if check() {
-				return nil
-			}
+		}
+
+		<-ticker.C
+		if check() {
+			return nil
 		}
 	}
 }

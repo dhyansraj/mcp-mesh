@@ -65,9 +65,18 @@ async def chat_endpoint(
     body: ChatRequest,
     chat: McpMeshTool = None,
 ) -> mesh.Stream[str]:
-    """Single-hop streaming chat: gateway -> chatbot."""
+    """Single-hop streaming chat: gateway -> chatbot.
+
+    Pre-stream errors are raised here (before returning the generator) so they
+    propagate as proper HTTP status codes; errors raised inside the generator
+    surface as ``event: error`` SSE frames after the 200 OK is committed.
+    """
     if chat is None:
         raise HTTPException(status_code=503, detail="chat capability unavailable")
+    return _stream_chat(body, chat)
+
+
+async def _stream_chat(body: ChatRequest, chat: McpMeshTool):
     async for chunk in chat.stream(prompt=body.prompt):
         yield chunk
 
@@ -78,11 +87,20 @@ async def chat_multihop_endpoint(
     body: ChatRequest,
     chat_passthrough: McpMeshTool = None,
 ) -> mesh.Stream[str]:
-    """Multi-hop streaming chat: gateway -> passthrough -> chatbot."""
+    """Multi-hop streaming chat: gateway -> passthrough -> chatbot.
+
+    Pre-stream errors are raised here (before returning the generator) so they
+    propagate as proper HTTP status codes; errors raised inside the generator
+    surface as ``event: error`` SSE frames after the 200 OK is committed.
+    """
     if chat_passthrough is None:
         raise HTTPException(
             status_code=503, detail="chat_passthrough capability unavailable"
         )
+    return _stream_chat_multihop(body, chat_passthrough)
+
+
+async def _stream_chat_multihop(body: ChatRequest, chat_passthrough: McpMeshTool):
     async for chunk in chat_passthrough.stream(prompt=body.prompt):
         yield chunk
 

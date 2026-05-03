@@ -729,6 +729,14 @@ async def _handle_dependency_change(
                     current_agent_id and agent_id and current_agent_id == agent_id
                 )
 
+                # Issue #645 bug 2: kwargs_config is *only* the producer's
+                # @mesh.tool kwargs. Consumer-side kwargs in dep declarations
+                # are NOT propagated to the proxy — the producer's advertised
+                # behavior (e.g. stream_type) wins, falling back to empty
+                # when the producer ships nothing. Aligned with the
+                # position-path above.
+                kwargs_config = dict(parsed_producer_kwargs)
+
                 if is_self_dependency:
                     # Create self-dependency proxy
                     from ...engine.self_dependency_proxy import SelfDependencyProxy
@@ -745,25 +753,13 @@ async def _handle_dependency_change(
                         proxy = EnhancedUnifiedMCPProxy(
                             endpoint,
                             function_name,
-                            kwargs_config=(
-                                dict(parsed_producer_kwargs)
-                                if parsed_producer_kwargs
-                                else dep_info.get("kwargs", {})
-                            ),
+                            kwargs_config=kwargs_config,
                         )
                         logger.debug(
                             f"Created EnhancedUnifiedMCPProxy (fallback) for {capability}"
                         )
                 else:
-                    # Create cross-service proxy. Issue #645 bug 2: prefer
-                    # the producer's kwargs from the registry event over the
-                    # consumer's declared dep kwargs (which won't carry
-                    # producer behavior like stream_type).
-                    kwargs_config = (
-                        dict(parsed_producer_kwargs)
-                        if parsed_producer_kwargs
-                        else dep_info.get("kwargs", {})
-                    )
+                    # Create cross-service proxy.
                     proxy = EnhancedUnifiedMCPProxy(
                         endpoint, function_name, kwargs_config=kwargs_config
                     )
