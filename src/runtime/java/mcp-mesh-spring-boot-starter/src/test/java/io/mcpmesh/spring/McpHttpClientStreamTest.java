@@ -198,7 +198,8 @@ class McpHttpClientStreamTest {
 
         // Verify request properties captured by the dispatcher
         assertNotNull(captured.bodyJson, "Dispatcher should have captured the request body");
-        assertEquals("text/event-stream", captured.acceptHeader);
+        // FastMCP requires both content types in Accept (or it returns 406)
+        assertEquals("application/json, text/event-stream", captured.acceptHeader);
         JsonNode bodyJson = mapper.readTree(captured.bodyJson);
         assertEquals("tools/call", bodyJson.get("method").asText());
         assertEquals("stream_chunks", bodyJson.get("params").get("name").asText());

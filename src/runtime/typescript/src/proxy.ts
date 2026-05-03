@@ -529,11 +529,13 @@ export async function* streamMcpTool(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout);
 
-  // Build headers
+  // Build headers — FastMCP stateless HTTP requires BOTH content types in
+  // Accept (it returns SSE for streaming responses; missing application/json
+  // here yields 406 Not Acceptable). Matches the buffered callMcpTool path.
   const headers: Record<string, string> = {
     ...(options.customHeaders ?? {}),
     "Content-Type": "application/json",
-    Accept: "text/event-stream",
+    Accept: "application/json, text/event-stream",
   };
   if (traceCtx && spanId) {
     Object.assign(headers, createTraceHeaders(traceCtx.traceId, spanId));

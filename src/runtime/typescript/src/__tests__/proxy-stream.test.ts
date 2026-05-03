@@ -117,7 +117,8 @@ describe("streamMcpTool", () => {
     expect(body.params._meta.progressToken.length).toBeGreaterThan(0);
     // Verify Accept header
     const headers = (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
-    expect(headers["Accept"]).toBe("text/event-stream");
+    // FastMCP requires both content types in Accept (or it returns 406)
+    expect(headers["Accept"]).toBe("application/json, text/event-stream");
   });
 
   it("does not yield the final result message content", async () => {

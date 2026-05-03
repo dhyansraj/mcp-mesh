@@ -740,7 +740,11 @@ public class McpHttpClient {
                 .url(url)
                 .post(RequestBody.create(requestBody, JSON))
                 .header("Content-Type", "application/json")
-                .header("Accept", "text/event-stream");
+                // FastMCP stateless HTTP requires BOTH content types in
+                // Accept (it returns SSE for streaming responses; missing
+                // application/json yields 406 Not Acceptable). Matches the
+                // buffered callTool() path.
+                .header("Accept", "application/json, text/event-stream");
 
             if (traceInfo != null) {
                 requestBuilder.header("X-Trace-ID", traceInfo.getTraceId());
