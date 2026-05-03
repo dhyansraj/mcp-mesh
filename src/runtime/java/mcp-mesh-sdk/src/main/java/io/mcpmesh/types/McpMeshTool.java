@@ -2,6 +2,7 @@ package io.mcpmesh.types;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Flow;
 
 /**
  * Proxy interface for calling remote mesh tools.
@@ -228,4 +229,51 @@ public interface McpMeshTool<T> {
      * @return true if the tool is available, false otherwise
      */
     boolean isAvailable();
+
+    // =========================================================================
+    // Streaming
+    // =========================================================================
+
+    /**
+     * Stream text chunks from a remote {@code Stream[str]} tool.
+     *
+     * <p>Returns a {@link Flow.Publisher} that emits each chunk as the producer sends it
+     * via MCP {@code notifications/progress}. The final result message ends the stream
+     * — its content is NOT delivered.
+     *
+     * <p>Wire protocol:
+     * <ul>
+     *   <li>POST /mcp with JSON-RPC {@code tools/call} and {@code params._meta.progressToken}</li>
+     *   <li>Server returns {@code text/event-stream} with one SSE event per JSON-RPC message</li>
+     *   <li>{@code notifications/progress} events with matching {@code progressToken} are
+     *       emitted as {@code params.message}</li>
+     *   <li>The final {@code result} event ends the stream</li>
+     *   <li>JSON-RPC {@code error} event delivers {@code onError(...)}</li>
+     * </ul>
+     *
+     * <p>Cancellation: {@link Flow.Subscription#cancel()} aborts the underlying HTTP
+     * request, releasing the connection.
+     *
+     * <p><b>Note:</b> If the producer does not actually emit progress notifications,
+     * the publisher will simply call {@code onComplete()} immediately without emitting
+     * any chunks. (Java does not implement Python's soft-fallback to a single buffered
+     * chunk — matches the TypeScript SDK divergence.)
+     *
+     * @param params Parameters to pass to the remote tool
+     * @return A publisher of text chunks
+     * @throws MeshToolUnavailableException synchronously if the proxy has no resolved endpoint
+     */
+    default Flow.Publisher<String> stream(Map<String, Object> params) {
+        throw new UnsupportedOperationException("stream() not implemented for this McpMeshTool");
+    }
+
+    /**
+     * Stream text chunks from a remote {@code Stream[str]} tool with no parameters.
+     *
+     * @return A publisher of text chunks
+     * @see #stream(Map)
+     */
+    default Flow.Publisher<String> stream() {
+        return stream(Map.of());
+    }
 }

@@ -16,6 +16,7 @@ import java.lang.reflect.Type;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -223,6 +224,21 @@ public class McpMeshToolProxy<T> implements McpMeshTool<T> {
     public boolean isAvailable() {
         EndpointInfo info = endpointRef.get();
         return info != null && info.available();
+    }
+
+    @Override
+    public Flow.Publisher<String> stream(Map<String, Object> params) {
+        EndpointInfo info = endpointRef.get();
+        if (info == null || !info.available()) {
+            throw new MeshToolUnavailableException(capability);
+        }
+        log.debug("Streaming tool {} at {} with params: {}", info.functionName(), info.endpoint(), params);
+        return mcpClient.streamTool(info.endpoint(), info.functionName(), params, null);
+    }
+
+    @Override
+    public Flow.Publisher<String> stream() {
+        return stream(Map.of());
     }
 
     /**

@@ -30,8 +30,16 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Flow;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
@@ -396,6 +404,520 @@ public class McpHttpClient {
     public <T> CompletableFuture<T> callToolAsync(String endpoint, String functionName,
                                                    Map<String, Object> params) {
         return CompletableFuture.supplyAsync(() -> callTool(endpoint, functionName, params));
+    }
+
+    /**
+     * Shared executor for SSE stream readers. One daemon thread per active stream call.
+     * Daemon so it doesn't block JVM shutdown.
+     */
+    private static final Executor STREAM_EXECUTOR = Executors.newCachedThreadPool(new ThreadFactory() {
+        private final AtomicLong counter = new AtomicLong();
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(r, "mesh-proxy-stream-" + counter.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        }
+    });
+
+    /**
+     * Soft warning threshold for unbounded buffering of unconsumed chunks.
+     */
+    private static final int STREAM_BUFFER_WARN_BYTES = 1024 * 1024;
+
+    /**
+     * Stream text chunks from a remote {@code Stream[str]} tool.
+     *
+     * <p>Returns a {@link Flow.Publisher} that, when subscribed, opens an SSE-framed
+     * {@code tools/call} request, parses {@code notifications/progress} messages and
+     * emits each chunk to the subscriber. The final {@code result} message ends the
+     * stream (its content is NOT delivered).
+     *
+     * <p>Wire protocol mirrors the TypeScript SDK Stage 1 implementation: identical
+     * Python producer serves both languages.
+     *
+     * <p>Subscription cancellation aborts the underlying OkHttp call.
+     *
+     * @param endpoint     The MCP server endpoint
+     * @param functionName The remote tool name
+     * @param params       Parameters for the tool call (may be null)
+     * @param extraHeaders Per-call headers (may be null)
+     * @return A publisher emitting text chunks
+     */
+    public Flow.Publisher<String> streamTool(String endpoint,
+                                             String functionName,
+                                             Map<String, Object> params,
+                                             Map<String, String> extraHeaders) {
+        return new StreamToolPublisher(endpoint, functionName, params, extraHeaders);
+    }
+
+    /**
+     * Implementation of {@link Flow.Publisher} that opens a streaming MCP call on
+     * subscribe. One subscriber per publisher (per the Reactive Streams spec for
+     * unicast cold publishers).
+     */
+    private final class StreamToolPublisher implements Flow.Publisher<String> {
+        private final String endpoint;
+        private final String functionName;
+        private final Map<String, Object> params;
+        private final Map<String, String> extraHeaders;
+        private final AtomicBoolean subscribed = new AtomicBoolean(false);
+
+        StreamToolPublisher(String endpoint, String functionName,
+                            Map<String, Object> params, Map<String, String> extraHeaders) {
+            this.endpoint = endpoint;
+            this.functionName = functionName;
+            this.params = params;
+            this.extraHeaders = extraHeaders;
+        }
+
+        @Override
+        public void subscribe(Flow.Subscriber<? super String> subscriber) {
+            if (subscriber == null) {
+                throw new NullPointerException("subscriber");
+            }
+            if (!subscribed.compareAndSet(false, true)) {
+                // Per spec: signal onError to additional subscribers
+                Flow.Subscription noop = new Flow.Subscription() {
+                    @Override public void request(long n) {}
+                    @Override public void cancel() {}
+                };
+                subscriber.onSubscribe(noop);
+                subscriber.onError(new IllegalStateException(
+                    "StreamToolPublisher supports only one subscriber"));
+                return;
+            }
+            StreamToolSubscription sub = new StreamToolSubscription(
+                subscriber, endpoint, functionName, params, extraHeaders);
+            subscriber.onSubscribe(sub);
+            sub.start();
+        }
+    }
+
+    /**
+     * Subscription that drives the actual HTTP call + SSE parsing on a worker thread.
+     *
+     * <p>Backpressure: uses a {@link ConcurrentLinkedQueue} buffer. The reader thread
+     * always parses incoming chunks (does not block OkHttp's read), and a delivery
+     * loop drains the buffer to the subscriber as it requests demand. If the buffer
+     * grows beyond {@link #STREAM_BUFFER_WARN_BYTES} unconsumed bytes, a warning is
+     * logged once per stream.
+     */
+    private final class StreamToolSubscription implements Flow.Subscription {
+        private final Flow.Subscriber<? super String> subscriber;
+        private final String endpoint;
+        private final String functionName;
+        private final Map<String, Object> params;
+        private final Map<String, String> extraHeaders;
+
+        private final ConcurrentLinkedQueue<String> buffer = new ConcurrentLinkedQueue<>();
+        private final AtomicLong demand = new AtomicLong();
+        private final AtomicBoolean cancelled = new AtomicBoolean(false);
+        private final AtomicBoolean terminated = new AtomicBoolean(false);
+        private final AtomicBoolean draining = new AtomicBoolean(false);
+        private final AtomicLong bufferedBytes = new AtomicLong();
+        private final AtomicBoolean warnedOversize = new AtomicBoolean(false);
+
+        // Set when stream completes; drained values still flushed first
+        private volatile boolean upstreamComplete = false;
+        private volatile Throwable upstreamError = null;
+
+        // Underlying OkHttp call, set after start() begins; cancel() aborts it
+        private volatile Call httpCall;
+
+        StreamToolSubscription(Flow.Subscriber<? super String> subscriber,
+                               String endpoint, String functionName,
+                               Map<String, Object> params, Map<String, String> extraHeaders) {
+            this.subscriber = subscriber;
+            this.endpoint = endpoint;
+            this.functionName = functionName;
+            this.params = params;
+            this.extraHeaders = extraHeaders;
+        }
+
+        void start() {
+            STREAM_EXECUTOR.execute(this::run);
+        }
+
+        @Override
+        public void request(long n) {
+            if (n <= 0) {
+                fail(new IllegalArgumentException(
+                    "Flow.Subscription.request: n must be > 0 (got " + n + ")"));
+                return;
+            }
+            // Add demand (saturating add)
+            long updated = demand.updateAndGet(prev -> {
+                long sum = prev + n;
+                return sum < 0 ? Long.MAX_VALUE : sum;
+            });
+            if (updated > 0) {
+                drain();
+            }
+        }
+
+        @Override
+        public void cancel() {
+            if (cancelled.compareAndSet(false, true)) {
+                Call c = this.httpCall;
+                if (c != null) {
+                    try {
+                        c.cancel();
+                    } catch (Exception e) {
+                        log.debug("Error cancelling streaming OkHttp call: {}", e.getMessage());
+                    }
+                }
+            }
+        }
+
+        private void fail(Throwable t) {
+            if (terminated.compareAndSet(false, true)) {
+                cancel(); // best-effort cleanup
+                try {
+                    subscriber.onError(t);
+                } catch (Throwable inner) {
+                    log.warn("Subscriber.onError threw: {}", inner.getMessage());
+                }
+            }
+        }
+
+        /**
+         * Try to push as many buffered chunks as the subscriber has requested.
+         * Re-entrant safe: only one thread drains at a time.
+         */
+        private void drain() {
+            if (!draining.compareAndSet(false, true)) return;
+            try {
+                while (true) {
+                    if (cancelled.get() || terminated.get()) return;
+                    long d = demand.get();
+                    if (d <= 0) {
+                        // No demand right now
+                        if (upstreamComplete && buffer.isEmpty()) {
+                            terminate(upstreamError);
+                        }
+                        return;
+                    }
+                    String item = buffer.poll();
+                    if (item == null) {
+                        if (upstreamComplete) {
+                            terminate(upstreamError);
+                        }
+                        return;
+                    }
+                    bufferedBytes.addAndGet(-(long) item.length());
+                    demand.decrementAndGet();
+                    try {
+                        subscriber.onNext(item);
+                    } catch (Throwable t) {
+                        // Per spec: onNext is not allowed to throw, but defend anyway
+                        fail(t);
+                        return;
+                    }
+                }
+            } finally {
+                draining.set(false);
+                // Re-check: an item may have been added, or demand requested,
+                // between our last poll and clearing the flag
+                if (!cancelled.get() && !terminated.get() && demand.get() > 0 && !buffer.isEmpty()) {
+                    drain();
+                }
+            }
+        }
+
+        private void terminate(Throwable err) {
+            if (!terminated.compareAndSet(false, true)) return;
+            try {
+                if (err != null) {
+                    subscriber.onError(err);
+                } else {
+                    subscriber.onComplete();
+                }
+            } catch (Throwable t) {
+                log.warn("Subscriber terminal callback threw: {}", t.getMessage());
+            }
+        }
+
+        private void offer(String chunk) {
+            buffer.add(chunk);
+            long total = bufferedBytes.addAndGet(chunk.length());
+            if (total > STREAM_BUFFER_WARN_BYTES && warnedOversize.compareAndSet(false, true)) {
+                log.warn("Mesh stream buffer for {} exceeded {} bytes ({} bytes buffered) — "
+                        + "consumer is slower than producer; consider faster Flow.Subscription.request() rate.",
+                    functionName, STREAM_BUFFER_WARN_BYTES, total);
+            }
+            drain();
+        }
+
+        private void run() {
+            try {
+                runImpl();
+            } catch (Throwable t) {
+                upstreamError = t;
+                upstreamComplete = true;
+                drain();
+            }
+        }
+
+        @SuppressWarnings("unchecked")
+        private void runImpl() throws Exception {
+            String url = endpoint.endsWith("/") ? endpoint + "mcp" : endpoint + "/mcp";
+
+            TraceInfo traceInfo = TraceContext.get();
+
+            // Build merged headers: session propagated + per-call (per-call wins)
+            Map<String, String> propagatedHeaders = TraceContext.getPropagatedHeaders();
+            Map<String, String> mergedHeaders = new LinkedHashMap<>(propagatedHeaders);
+            if (extraHeaders != null) {
+                for (Map.Entry<String, String> entry : extraHeaders.entrySet()) {
+                    if (TraceContext.matchesPropagateHeader(entry.getKey())) {
+                        mergedHeaders.put(entry.getKey().toLowerCase(), entry.getValue());
+                    }
+                }
+            }
+
+            // Inject trace context into arguments via Rust core (parity with callTool)
+            Map<String, Object> argsWithTrace;
+            if (traceInfo != null) {
+                try {
+                    String argsJson = objectMapper.writeValueAsString(params != null ? params : Map.of());
+                    String headersJson = mergedHeaders.isEmpty() ? null : objectMapper.writeValueAsString(mergedHeaders);
+                    String injectedJson = MeshCoreBridge.injectTraceContext(
+                        argsJson,
+                        traceInfo.getTraceId(),
+                        traceInfo.getSpanId(),
+                        headersJson
+                    );
+                    if (injectedJson != null) {
+                        argsWithTrace = objectMapper.readValue(injectedJson, new TypeReference<LinkedHashMap<String, Object>>() {});
+                    } else {
+                        argsWithTrace = params != null ? new LinkedHashMap<>(params) : new LinkedHashMap<>();
+                        argsWithTrace.put("_trace_id", traceInfo.getTraceId());
+                        if (traceInfo.getSpanId() != null) {
+                            argsWithTrace.put("_parent_span", traceInfo.getSpanId());
+                        }
+                        if (!mergedHeaders.isEmpty()) {
+                            argsWithTrace.put("_mesh_headers", new LinkedHashMap<>(mergedHeaders));
+                        }
+                    }
+                } catch (Exception e) {
+                    log.debug("Rust inject_trace_context failed (stream), using fallback: {}", e.getMessage());
+                    argsWithTrace = params != null ? new LinkedHashMap<>(params) : new LinkedHashMap<>();
+                    argsWithTrace.put("_trace_id", traceInfo.getTraceId());
+                    if (traceInfo.getSpanId() != null) {
+                        argsWithTrace.put("_parent_span", traceInfo.getSpanId());
+                    }
+                    if (!mergedHeaders.isEmpty()) {
+                        argsWithTrace.put("_mesh_headers", new LinkedHashMap<>(mergedHeaders));
+                    }
+                }
+            } else {
+                argsWithTrace = params != null ? new LinkedHashMap<>(params) : new LinkedHashMap<>();
+                if (!mergedHeaders.isEmpty()) {
+                    argsWithTrace.put("_mesh_headers", new LinkedHashMap<>(mergedHeaders));
+                }
+            }
+
+            // Generate progressToken to correlate notifications with this call
+            String progressToken = UUID.randomUUID().toString();
+            long requestId = System.currentTimeMillis();
+
+            Map<String, Object> request = Map.of(
+                "jsonrpc", "2.0",
+                "id", requestId,
+                "method", "tools/call",
+                "params", Map.of(
+                    "name", functionName,
+                    "arguments", argsWithTrace,
+                    "_meta", Map.of("progressToken", progressToken)
+                )
+            );
+
+            String requestBody = objectMapper.writeValueAsString(request);
+            log.debug("Streaming tool {} at {} (token={})", functionName, url, progressToken);
+
+            Request.Builder requestBuilder = new Request.Builder()
+                .url(url)
+                .post(RequestBody.create(requestBody, JSON))
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream");
+
+            if (traceInfo != null) {
+                requestBuilder.header("X-Trace-ID", traceInfo.getTraceId());
+                if (traceInfo.getSpanId() != null) {
+                    requestBuilder.header("X-Parent-Span", traceInfo.getSpanId());
+                }
+            }
+            for (Map.Entry<String, String> entry : mergedHeaders.entrySet()) {
+                requestBuilder.header(entry.getKey(), entry.getValue());
+            }
+
+            // Determine effective timeout — same logic as callTool() (#769)
+            int effectiveTimeoutSecs = 300;
+            String existingTimeout = mergedHeaders.get("x-mesh-timeout");
+            if (existingTimeout == null) existingTimeout = mergedHeaders.get("X-Mesh-Timeout");
+            if (existingTimeout == null) {
+                String callTimeout = System.getenv("MCP_MESH_CALL_TIMEOUT");
+                if (callTimeout != null && !callTimeout.isEmpty()) {
+                    try { effectiveTimeoutSecs = Integer.parseInt(callTimeout); } catch (NumberFormatException e) {}
+                }
+            } else {
+                try { effectiveTimeoutSecs = Integer.parseInt(existingTimeout); } catch (NumberFormatException e) {}
+            }
+            if (effectiveTimeoutSecs <= 0) effectiveTimeoutSecs = 300;
+
+            if (!mergedHeaders.containsKey("x-mesh-timeout") && !mergedHeaders.containsKey("X-Mesh-Timeout")) {
+                requestBuilder.header("X-Mesh-Timeout", String.valueOf(effectiveTimeoutSecs));
+            }
+
+            Request httpRequest = requestBuilder.build();
+
+            // Streaming call: read timeout governs the GAP between SSE events, not the
+            // total call duration. We disable the per-call read timeout so a long-lived
+            // stream isn't killed by OkHttp's idle-read timer.
+            OkHttpClient perCallClient = httpClient.newBuilder()
+                .readTimeout(0, TimeUnit.MILLISECONDS) // no per-read timeout for SSE
+                .writeTimeout(effectiveTimeoutSecs + 10, TimeUnit.SECONDS)
+                .callTimeout(0, TimeUnit.MILLISECONDS) // no overall timeout — controlled by upstream
+                .build();
+
+            Call call = perCallClient.newCall(httpRequest);
+            this.httpCall = call;
+            if (cancelled.get()) {
+                call.cancel();
+                upstreamComplete = true;
+                drain();
+                return;
+            }
+
+            try (Response response = call.execute()) {
+                if (!response.isSuccessful()) {
+                    upstreamError = new MeshToolCallException(functionName, functionName,
+                        "HTTP " + response.code() + ": " + response.message());
+                    upstreamComplete = true;
+                    drain();
+                    return;
+                }
+
+                ResponseBody body = response.body();
+                if (body == null) {
+                    upstreamError = new MeshToolCallException(functionName, functionName,
+                        "Empty response body");
+                    upstreamComplete = true;
+                    drain();
+                    return;
+                }
+
+                okio.BufferedSource source = body.source();
+                StringBuilder eventBuf = new StringBuilder();
+
+                while (!cancelled.get() && !source.exhausted()) {
+                    // readUtf8Line returns null at EOF, otherwise the line without the
+                    // line terminator. Both \n and \r\n are handled. A blank line is
+                    // returned as "" — that's our SSE event boundary.
+                    String line = source.readUtf8Line();
+                    if (line == null) break;
+                    if (line.isEmpty()) {
+                        // End of one SSE event — process the accumulated buffer
+                        if (eventBuf.length() > 0) {
+                            boolean done = processSseEvent(eventBuf.toString(), progressToken, requestId);
+                            eventBuf.setLength(0);
+                            if (done) break;
+                        }
+                    } else {
+                        eventBuf.append(line).append('\n');
+                    }
+                }
+                // Trailing event without a blank-line terminator (defensive)
+                if (eventBuf.length() > 0 && !cancelled.get()) {
+                    processSseEvent(eventBuf.toString(), progressToken, requestId);
+                }
+            } catch (java.io.IOException e) {
+                if (cancelled.get()) {
+                    // Cancelled by subscriber — that's a clean exit, do not surface error
+                    upstreamComplete = true;
+                    drain();
+                    return;
+                }
+                upstreamError = new MeshToolCallException(functionName, functionName, e);
+            }
+
+            upstreamComplete = true;
+            drain();
+        }
+
+        /**
+         * Parse one accumulated SSE event block. Returns true when the final JSON-RPC
+         * response for our request id has been seen and the stream should terminate.
+         */
+        private boolean processSseEvent(String rawEvent, String progressToken, long requestId) {
+            // Per SSE spec: collect data: lines, joined by \n; ignore other fields.
+            StringBuilder dataBuf = new StringBuilder();
+            for (String line : rawEvent.split("\n")) {
+                if (line.startsWith("data: ")) {
+                    if (dataBuf.length() > 0) dataBuf.append('\n');
+                    dataBuf.append(line, 6, line.length());
+                } else if (line.startsWith("data:")) {
+                    if (dataBuf.length() > 0) dataBuf.append('\n');
+                    dataBuf.append(line, 5, line.length());
+                }
+            }
+            if (dataBuf.length() == 0) return false;
+            String data = dataBuf.toString();
+            if (data.isEmpty()) return false;
+
+            JsonNode msg;
+            try {
+                msg = objectMapper.readTree(data);
+            } catch (Exception e) {
+                // Defensive: ignore non-JSON data events
+                log.trace("Skipping non-JSON SSE data: {}", data);
+                return false;
+            }
+
+            // Progress notification: deliver if it matches our token
+            JsonNode methodNode = msg.get("method");
+            if (methodNode != null && "notifications/progress".equals(methodNode.asText())) {
+                JsonNode params = msg.get("params");
+                if (params != null) {
+                    JsonNode token = params.get("progressToken");
+                    if (token != null && progressToken.equals(token.asText())) {
+                        // FastMCP sends ``message``; some implementations may send ``data``
+                        String chunk = null;
+                        JsonNode messageNode = params.get("message");
+                        if (messageNode != null && messageNode.isTextual()) {
+                            chunk = messageNode.asText();
+                        } else {
+                            JsonNode dataNode = params.get("data");
+                            if (dataNode != null && dataNode.isTextual()) {
+                                chunk = dataNode.asText();
+                            }
+                        }
+                        if (chunk != null) {
+                            offer(chunk);
+                        }
+                    }
+                }
+                return false;
+            }
+
+            // Final response for our request id: end the stream
+            JsonNode idNode = msg.get("id");
+            if (idNode != null && idNode.isNumber() && idNode.asLong() == requestId) {
+                JsonNode errorNode = msg.get("error");
+                if (errorNode != null) {
+                    String em = errorNode.has("message")
+                        ? errorNode.get("message").asText()
+                        : errorNode.toString();
+                    upstreamError = new MeshToolCallException(functionName, functionName, em);
+                }
+                // Final result content is intentionally NOT delivered — matches the
+                // documented contract for streaming consumers.
+                return true;
+            }
+
+            return false;
+        }
     }
 
     /**
