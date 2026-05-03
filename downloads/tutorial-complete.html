@@ -4065,12 +4065,12 @@ a JSON formatter). Include the <code>trace_id</code> from mesh headers
 so log lines correlate with distributed traces. Ship logs to Grafana
 Loki and cross-reference with Tempo traces for full request-level
 observability.</p>
-<h3 id="build-a-mobile-client">Build a mobile client</h3>
-<p>Create a lightweight web UI that talks to the gateway’s
-<code>/plan</code> endpoint. A starter project is waiting in
-<code>examples/tutorial/trip-planner/day-10/bonus-ui/</code> – check the
-README for status. The gateway already exposes a REST API, so the client
-is a standard fetch/axios integration.</p>
+<h3 id="build-a-streaming-mobile-ui">Build a streaming mobile UI</h3>
+<p>Already built — see the <a href="day-10-bonus-streaming-ui.md">Day 10
+Bonus — Streaming UI</a> chapter. It takes the buffered Day 9 mesh and
+makes the user-visible Claude response stream live, token by token, into
+a mobile-first React UI. Two file changes (planner + gateway) plus a
+single HTML file. The deepest pipeline mcp-mesh ships, end to end.</p>
 <hr />
 <h2 id="the-finished-product">The finished product</h2>
 <p>Add a modern web UI, wire in Google authentication, and your ten days
