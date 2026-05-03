@@ -63,7 +63,12 @@ import {
 } from "./llm-provider.js";
 import { ProviderHandlerRegistry } from "./provider-handlers/index.js";
 import { resolveMediaInputs } from "./media/index.js";
-import { getCurrentTraceContext, getCurrentPropagatedHeaders } from "./proxy.js";
+import {
+  getCurrentTraceContext,
+  getCurrentPropagatedHeaders,
+  streamMcpTool,
+  DEFAULT_CALL_OPTIONS,
+} from "./proxy.js";
 import {
   generateSpanId,
   publishTraceSpan,
@@ -691,6 +696,77 @@ export class MeshDelegatedProvider implements LlmProvider {
       }
     }
   }
+
+  /**
+   * Stream chunks from the mesh-delegated provider's streaming variant.
+   *
+   * Builds the same ``{request: <MeshLlmRequest>}`` body that ``complete()``
+   * produces, then calls the streaming MCP tool via ``streamMcpTool()`` from
+   * ``./proxy``. Each ``notifications/progress`` chunk is yielded as a string;
+   * the final ``result`` event ends the stream and is NOT yielded (matches the
+   * Python ``MeshLlmAgent.stream()`` contract).
+   *
+   * The provider's ``functionName`` is expected to already be the streaming
+   * variant — the registry resolver picks it based on the consumer's
+   * ``ai.mcpmesh.stream`` tag opt-in (see ``MeshLlmAgent.stream()``).
+   */
+  async *streamComplete(
+    model: string,
+    messages: LlmMessage[],
+    tools?: LlmToolDefinition[],
+    options?: {
+      maxOutputTokens?: number;
+      temperature?: number;
+      topP?: number;
+      stop?: string[];
+      outputSchema?: { schema: Record<string, unknown>; name: string };
+    }
+  ): AsyncGenerator<string, void, void> {
+    // Build MeshLlmRequest body — same shape as complete()
+    const modelParams: Record<string, unknown> = {};
+    if (model && model !== "default") {
+      modelParams.model = model;
+    }
+    if (options?.maxOutputTokens) modelParams.max_tokens = options.maxOutputTokens;
+    if (options?.temperature !== undefined) modelParams.temperature = options.temperature;
+    if (options?.topP !== undefined) modelParams.top_p = options.topP;
+    if (options?.stop) modelParams.stop = options.stop;
+    if (options?.outputSchema) {
+      modelParams.output_schema = options.outputSchema.schema;
+      modelParams.output_type_name = options.outputSchema.name;
+    }
+    if (this.parallelToolCalls) {
+      modelParams.parallel_tool_calls = true;
+    }
+
+    const request: Record<string, unknown> = { messages };
+    if (Object.keys(modelParams).length > 0) {
+      request.model_params = modelParams;
+    }
+    if (tools && tools.length > 0) {
+      request.tools = tools;
+    }
+
+    const args: Record<string, unknown> = { request };
+
+    // streamMcpTool() handles trace context injection / propagated headers /
+    // dispatcher pooling internally — same path as createProxy().stream().
+    // Long-lived stream: use the larger streamTimeout (DEFAULT_CALL_OPTIONS
+    // already sets streamTimeout=300s; CallOptions.timeout = streamTimeout
+    // is set by streamMcpTool's options-shape contract).
+    const streamOptions = {
+      ...DEFAULT_CALL_OPTIONS,
+      timeout: DEFAULT_CALL_OPTIONS.streamTimeout,
+    };
+
+    yield* streamMcpTool(
+      this.endpoint,
+      this.functionName,
+      args,
+      streamOptions,
+      "mesh-llm-stream",
+    );
+  }
 }
 
 /**
@@ -979,6 +1055,160 @@ export class MeshLlmAgent<T = string> {
   }
 
   /**
+   * Stream the final assistant text token-by-token from a mesh-delegated
+   * provider's streaming variant (Python's ``@mesh.llm_provider`` auto-
+   * generates a ``process_chat_stream`` MCP tool tagged
+   * ``ai.mcpmesh.stream``).
+   *
+   * **Tag opt-in (REQUIRED):** Unlike Python's ``@mesh.llm`` which auto-adds
+   * the ``ai.mcpmesh.stream`` tag based on the function's return-type
+   * (``Stream[str]`` vs ``str``), TypeScript users must EXPLICITLY include
+   * ``"ai.mcpmesh.stream"`` in their provider tag filter to get the
+   * streaming variant of the LLM provider:
+   *
+   * ```ts
+   * server.addTool(mesh.llm({
+   *   name: "chat_stream",
+   *   provider: { capability: "llm", tags: ["+claude", "ai.mcpmesh.stream"] },
+   *   // ...
+   *   execute: async ({ message }, { llm }) => {
+   *     for await (const chunk of llm.stream(message)) {
+   *       process.stdout.write(chunk);
+   *     }
+   *     return llm.meta?.outputTokens ? "ok" : "no-output";
+   *   },
+   * }));
+   * ```
+   *
+   * Without the ``ai.mcpmesh.stream`` tag the resolver returns the
+   * buffered ``process_chat`` tool, and ``stream()`` will yield zero chunks
+   * (the buffered tool emits no progress notifications).
+   *
+   * **Mesh-delegate ONLY:** Direct providers (``LiteLLMProvider``,
+   * ``VercelDirectProvider``) cannot satisfy ``stream()``. Calling this on
+   * an agent configured with ``provider: "claude"`` (string spec) throws.
+   * To enable streaming, configure the agent with a mesh-delegate spec:
+   * ``provider: { capability: "llm", tags: ["ai.mcpmesh.stream"] }``.
+   *
+   * @param messageInput - User message string or multi-turn message array
+   * @param context - Runtime context with tools, mesh provider, and options
+   * @returns AsyncIterable yielding text chunks as the provider emits them
+   */
+  async *stream(
+    messageInput: LlmMessageInput,
+    context: AgentRunContext
+  ): AsyncGenerator<string, void, void> {
+    if (!context.meshProvider) {
+      throw new Error(
+        "MeshLlmAgent.stream() requires a mesh-delegated provider. " +
+          "Configure your agent with provider: { capability: 'llm', tags: ['ai.mcpmesh.stream'] } " +
+          "to use a streaming @mesh.llm_provider. Direct providers (LiteLLM, Vercel) " +
+          "do not support stream() in this SDK release."
+      );
+    }
+
+    // Build the same message list complete()/run() builds (system prompt,
+    // multipart media, multi-turn array unwinding) — without the agentic
+    // loop. The mesh-delegated streaming provider runs its own loop on the
+    // server side and emits text chunks via notifications/progress; the
+    // consumer just yields each one.
+
+    const messages: LlmMessage[] = [];
+    const isMeshDelegated = true; // by definition: we required meshProvider above
+    const toolDefs = this.buildToolDefinitions(context.tools, isMeshDelegated);
+
+    // System prompt with template rendering + tool schema injection.
+    // Mirrors run(): mesh-delegated path skips the output-schema hint
+    // because the provider applies vendor-specific output formatting.
+    const systemPromptTemplate = this.getSystemPrompt();
+    if (systemPromptTemplate) {
+      let systemContent = await renderTemplate(
+        systemPromptTemplate,
+        context.templateContext ?? {}
+      );
+      if (toolDefs.length > 0) {
+        systemContent += this.buildToolSchemaSection(toolDefs);
+      }
+      messages.push({ role: "system", content: systemContent });
+    }
+
+    // Resolve media items to OpenAI-compatible image_url parts
+    const mediaItems = context.options?.media;
+    let mediaParts: Array<{ type: string; [key: string]: unknown }> | null = null;
+    if (mediaItems && mediaItems.length > 0) {
+      mediaParts = await resolveMediaInputs(mediaItems);
+    }
+
+    if (typeof messageInput === "string") {
+      if (mediaParts && mediaParts.length > 0) {
+        messages.push({
+          role: "user",
+          content: [
+            { type: "text", text: messageInput },
+            ...mediaParts,
+          ] as LlmContentPart[],
+        });
+      } else {
+        messages.push({ role: "user", content: messageInput });
+      }
+    } else {
+      for (let i = 0; i < messageInput.length; i++) {
+        const msg = messageInput[i];
+        const isLastUser =
+          mediaParts &&
+          mediaParts.length > 0 &&
+          msg.role === "user" &&
+          i === messageInput.length - 1;
+        if (isLastUser) {
+          messages.push({
+            role: "user",
+            content: [
+              { type: "text", text: msg.content },
+              ...mediaParts!,
+            ] as LlmContentPart[],
+          });
+        } else {
+          messages.push({ role: msg.role, content: msg.content });
+        }
+      }
+    }
+
+    // Effective options (runtime > env > config)
+    const maxTokens = context.options?.maxOutputTokens ?? this.config.maxOutputTokens;
+    const temperature = context.options?.temperature ?? this.config.temperature;
+
+    const model =
+      context.meshProvider?.model ??
+      process.env.MESH_LLM_MODEL ??
+      this.config.model ??
+      this.getDefaultModel();
+
+    let outputSchema: { schema: Record<string, unknown>; name: string } | undefined;
+    if (this.config.returnSchema) {
+      try {
+        const jsonSchema = zodToJsonSchema(this.config.returnSchema) as Record<string, unknown>;
+        const schemaName = (jsonSchema.title as string) ?? "Response";
+        outputSchema = { schema: jsonSchema, name: schemaName };
+      } catch {
+        // skip
+      }
+    }
+
+    const provider = new MeshDelegatedProvider(
+      context.meshProvider.endpoint,
+      context.meshProvider.functionName,
+      this.config.parallelToolCalls ?? false,
+    );
+
+    yield* provider.streamComplete(
+      model,
+      messages,
+      toolDefs.length > 0 ? toolDefs : undefined,
+      { maxOutputTokens: maxTokens, temperature, topP: this.config.topP, stop: this.config.stop, outputSchema },
+    );
+  }
+
+  /**
    * Create a callable LlmAgent interface.
    */
   createCallable(context: AgentRunContext): {
@@ -986,6 +1216,7 @@ export class MeshLlmAgent<T = string> {
     readonly meta: LlmMeta | null;
     readonly tools: LlmToolProxy[];
     setSystemPrompt(prompt: string): void;
+    stream(message: LlmMessageInput, options?: LlmCallOptions): AsyncIterable<string>;
   } {
     const agent = this;
 
@@ -1030,11 +1261,35 @@ export class MeshLlmAgent<T = string> {
       value: (prompt: string) => agent.setSystemPrompt(prompt),
     });
 
+    // Attach stream method — async iterable for token-by-token output.
+    // Mirrors the callable's option-merging semantics so users get the same
+    // "context merge vs replace" behavior as the buffered call.
+    Object.defineProperty(callable, "stream", {
+      value: (message: LlmMessageInput, options?: LlmCallOptions): AsyncIterable<string> => {
+        const contextMode: LlmContextMode = options?.contextMode ?? "merge";
+        let mergedTemplateContext: Record<string, unknown>;
+        if (contextMode === "replace" && options?.context) {
+          mergedTemplateContext = options.context;
+        } else if (options?.context) {
+          mergedTemplateContext = { ...context.templateContext, ...options.context };
+        } else {
+          mergedTemplateContext = context.templateContext ?? {};
+        }
+        const mergedContext: AgentRunContext = {
+          ...context,
+          options: options ? { ...context.options, ...options } : context.options,
+          templateContext: mergedTemplateContext,
+        };
+        return agent.stream(message, mergedContext);
+      },
+    });
+
     return callable as {
       (message: LlmMessageInput, options?: LlmCallOptions): Promise<T>;
       readonly meta: LlmMeta | null;
       readonly tools: LlmToolProxy[];
       setSystemPrompt(prompt: string): void;
+      stream(message: LlmMessageInput, options?: LlmCallOptions): AsyncIterable<string>;
     };
   }
 

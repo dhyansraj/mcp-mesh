@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -236,6 +237,77 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     public String getProvider() {
         ProviderEndpoint provider = providerRef.get();
         return provider != null ? provider.provider() : null;
+    }
+
+    /**
+     * Stream chunks from the resolved mesh-delegated streaming provider.
+     *
+     * <p>Builds the same {@code {request: <MeshLlmRequest>}} body shape that
+     * the buffered {@link MeshLlmAgentProxy.GenerateBuilderImpl#executeAgenticLoop}
+     * produces, then routes the call through {@link McpHttpClient#streamTool}
+     * (Stage 2). The provider's {@code functionName} resolved here is already
+     * the streaming variant — the registry resolver picked it because the
+     * consumer opted into the {@code ai.mcpmesh.stream} tag (see
+     * {@link MeshLlmAgent#stream(List)}).
+     *
+     * <p>Note: this proxy applies <em>no</em> agentic loop to the streaming
+     * call. Tools, system prompt rendering, and template context are still
+     * forwarded so the provider can run its own loop server-side. Tool
+     * results emitted by the provider are surfaced via the same chunk stream
+     * (provider-decided format) — Stage 3 is consumer-side only.
+     *
+     * @param messages Conversation messages to send
+     * @return A {@link Flow.Publisher} of text chunks
+     * @throws IllegalStateException if no mesh provider is currently resolved
+     */
+    @Override
+    public Flow.Publisher<String> stream(List<Message> messages) {
+        ProviderEndpoint provider = providerRef.get();
+        if (provider == null || !provider.isAvailable()) {
+            throw new IllegalStateException(
+                "MeshLlmAgent.stream(): LLM provider not available for " + functionId
+                    + ". Ensure the @MeshLlm providerSelector resolves a streaming @mesh.llm_provider "
+                    + "(must include the 'ai.mcpmesh.stream' tag)."
+            );
+        }
+        if (mcpClient == null) {
+            throw new IllegalStateException(
+                "MeshLlmAgent.stream(): MCP client not configured for LLM agent " + functionId);
+        }
+
+        // Build the LLM messages list — same shape the buffered path produces.
+        List<Map<String, Object>> llmMessages = new ArrayList<>();
+        for (Message msg : messages != null ? messages : List.<Message>of()) {
+            llmMessages.add(Map.of("role", msg.role(), "content", msg.content()));
+        }
+
+        // Build model_params (vendor-agnostic; provider handler maps to its API)
+        Map<String, Object> modelParams = new LinkedHashMap<>();
+        modelParams.put("max_tokens", defaultMaxTokens);
+        modelParams.put("temperature", defaultTemperature);
+        if (parallelToolCalls) {
+            modelParams.put("parallel_tool_calls", true);
+        }
+
+        // Tool definitions (provider executes them server-side in its loop)
+        List<Map<String, Object>> toolDefs = buildToolDefinitions();
+
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("messages", llmMessages);
+        if (!toolDefs.isEmpty()) {
+            request.put("tools", toolDefs);
+        }
+        request.put("model_params", modelParams);
+
+        Map<String, Object> params = Map.of("request", request);
+
+        log.debug("stream(mesh): routing to {}/{} (messages={}, tools={})",
+            provider.endpoint(), provider.functionName(),
+            llmMessages.size(), toolDefs.size());
+
+        // Delegate to McpHttpClient.streamTool — handles SSE parsing,
+        // notifications/progress correlation, trace context, etc.
+        return mcpClient.streamTool(provider.endpoint(), provider.functionName(), params, null);
     }
 
     // =========================================================================
