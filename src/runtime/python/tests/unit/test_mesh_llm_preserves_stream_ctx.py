@@ -95,3 +95,67 @@ class TestMeshLlmPreservesStreamCtx:
         assert "prompt" in sig.parameters
         # No streaming → @mesh.tool didn't append ctx → it stays absent.
         assert "ctx" not in sig.parameters
+
+    def test_mesh_llm_stream_str_normalizes_output_type_to_str(self):
+        """``Stream[str]`` return must register output_type=str.
+
+        ``MeshLlmAgent.stream()`` rejects any output_type other than ``str``.
+        The decorator extracts output_type from the raw return annotation,
+        which for a streaming tool is ``AsyncIterator[str]``. Without
+        normalization the rejection fires for every real-LLM streaming tool —
+        the bug stayed silent because unit tests pass output_type=str directly
+        and dry-run paths never hit ``stream()``.
+        """
+
+        @mesh.llm(provider="claude", model="anthropic/claude-sonnet-4-5")
+        @mesh.tool(capability="chat-stream-output-type-test")
+        async def chat(
+            prompt: str,
+            llm: mesh.MeshLlmAgent = None,
+        ) -> mesh.Stream[str]:
+            yield prompt
+
+        agents = DecoratorRegistry.get_mesh_llm_agents()
+        chat_agents = [
+            a for a in agents.values() if a.function.__name__ == "chat"
+        ]
+        assert len(chat_agents) == 1
+        assert chat_agents[0].output_type is str
+
+    def test_mesh_llm_only_stream_str_normalizes_output_type_to_str(self):
+        """Same normalization without a ``@mesh.tool`` layer underneath."""
+
+        @mesh.llm(provider="claude", model="anthropic/claude-sonnet-4-5")
+        async def chat(
+            prompt: str,
+            llm: mesh.MeshLlmAgent = None,
+        ) -> mesh.Stream[str]:
+            yield prompt
+
+        agents = DecoratorRegistry.get_mesh_llm_agents()
+        chat_agents = [
+            a for a in agents.values() if a.function.__name__ == "chat"
+        ]
+        assert len(chat_agents) == 1
+        assert chat_agents[0].output_type is str
+
+    def test_mesh_llm_pydantic_output_type_preserved(self):
+        """Non-streaming Pydantic return must still be preserved verbatim."""
+        from pydantic import BaseModel
+
+        class Reply(BaseModel):
+            text: str
+
+        @mesh.llm(provider="claude", model="anthropic/claude-sonnet-4-5")
+        async def chat(
+            prompt: str,
+            llm: mesh.MeshLlmAgent = None,
+        ) -> Reply:
+            return Reply(text=prompt)
+
+        agents = DecoratorRegistry.get_mesh_llm_agents()
+        chat_agents = [
+            a for a in agents.values() if a.function.__name__ == "chat"
+        ]
+        assert len(chat_agents) == 1
+        assert chat_agents[0].output_type is Reply

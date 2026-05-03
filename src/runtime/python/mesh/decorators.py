@@ -1858,6 +1858,14 @@ def llm(
                 except ImportError:
                     pass  # Pydantic not available, skip validation
 
+        # Stream[str] is a string-typed contract — chunks of str that accumulate
+        # to a str final result. The chunked-vs-buffered distinction is encoded
+        # separately via stream_type metadata, so the LLM-output type collapses
+        # to str. Without this, MeshLlmAgent.stream() would reject the agent
+        # because output_type would be AsyncIterator[str].
+        if llm_stream_type == "text":
+            output_type = str
+
         # Step 3: Find MeshLlmAgent parameter
         from mesh.types import MeshLlmAgent
 
