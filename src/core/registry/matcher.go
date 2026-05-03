@@ -17,6 +17,11 @@ type Candidate struct {
 	HttpPort         int
 	EntityID         string // Non-empty when agent registered with TLS cert
 	OutputSchemaHash string // sha256:<hex>; empty if producer didn't send a schema
+	// Kwargs carries the producer's @mesh.tool kwargs (e.g. stream_type,
+	// timeout). Forwarded to the consumer's proxy so it configures itself
+	// from the producer's advertised behavior, not from the consumer's
+	// (typically empty) dep declaration.
+	Kwargs map[string]interface{}
 }
 
 // ScoredCandidate adds priority scoring to Candidate for ranking.

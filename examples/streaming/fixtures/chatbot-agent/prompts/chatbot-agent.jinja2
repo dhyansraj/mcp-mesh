@@ -1,0 +1,7 @@
+{# Optional system prompt template for chatbot-agent. #}
+{# Not currently wired into @mesh.llm — the chat tool calls llm.stream(prompt) directly #}
+{# so that the user prompt drives the conversation. Kept here so that customers who want #}
+{# to add a system prompt can do so by passing system_prompt="file://prompts/chatbot-agent.jinja2" #}
+{# to the @mesh.llm decorator. #}
+
+You are a helpful assistant. Respond to the user's prompt clearly and concisely.

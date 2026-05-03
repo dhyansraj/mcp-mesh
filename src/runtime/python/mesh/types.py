@@ -5,7 +5,27 @@ MCP Mesh type definitions for dependency injection.
 import warnings
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Annotated, Any, Optional, Protocol
+from typing import Annotated, Any, Optional, Protocol, TypeAlias, TypeVar
+
+_StreamT = TypeVar("_StreamT")
+Stream: TypeAlias = AsyncIterator[_StreamT]
+"""Return-annotation marker for tools that stream their output.
+
+Tool authors opt in to token-by-token streaming by annotating the return type:
+
+    @mesh.tool
+    async def chat(prompt: str) -> mesh.Stream[str]:
+        async for chunk in llm_stream():
+            yield chunk
+
+When the framework detects ``mesh.Stream[str]`` (or the equivalent
+``AsyncIterator[str]`` / ``AsyncGenerator[str, None]``), it forwards each
+yielded chunk via FastMCP ``Context.report_progress(message=chunk)`` and
+sends the joined text as the final ``CallToolResult`` so non-streaming
+consumers degrade gracefully.
+
+v1 supports ``Stream[str]`` only.
+"""
 
 try:
     from pydantic_core import core_schema

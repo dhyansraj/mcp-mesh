@@ -1,0 +1,2 @@
+# weather-tool dependencies
+httpx

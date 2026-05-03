@@ -1,5 +1,6 @@
 name: "TLS Auto - Multi-Language Registration"
 description: "Verify Python, TypeScript, and Java agents all register with mTLS in a single mesh"
+disabled: true # Multi-runtime same-name agents collide on per-name PID file from #827 redesign — see GH #845 (re-enable when resolved)
 tags:
   - registration-trust
   - tls

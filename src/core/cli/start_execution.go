@@ -782,17 +782,17 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 		fmt.Printf("Warning: failed to write wrapper marker: %v\n", err)
 	}
 
-	if !quiet {
-		// Extract agent names from args for display (use decorator name if available)
-		var agentNames []string
-		for _, arg := range args {
-			if isAgentFile(arg) {
-				absPath, _ := filepath.Abs(arg)
-				name := extractAgentName(absPath)
-				agentNames = append(agentNames, name)
-			}
+	// Extract agent names from args (used for both display and the sync barrier).
+	var agentNames []string
+	for _, arg := range args {
+		if isAgentFile(arg) {
+			absPath, _ := filepath.Abs(arg)
+			name := extractAgentName(absPath)
+			agentNames = append(agentNames, name)
 		}
+	}
 
+	if !quiet {
 		if len(agentNames) == 1 {
 			fmt.Printf("Started '%s' in detach\n", agentNames[0])
 			fmt.Printf("Logs: ~/.mcp-mesh/logs/%s.log\n", agentNames[0])
@@ -807,7 +807,184 @@ func forkToBackground(cobraCmd *cobra.Command, args []string, config *CLIConfig)
 		}
 	}
 
+	// Sync barrier: wait for the forked child to write the PID file(s) we expect
+	// before returning. Without this, an immediate follow-up `meshctl stop` or
+	// `meshctl start` (e.g. in lifecycle tests) races against the child's
+	// startup work (validators, Maven warmup, language runtime init) and either
+	// sees "no agents running" or trips an "already running" check on a
+	// late-arriving PID file. See GitHub issue #844.
+	uiEnabled, _ := cobraCmd.Flags().GetBool("ui")
+	connectOnly, _ := cobraCmd.Flags().GetBool("connect-only")
+	expectedFiles := determineExpectedPIDFiles(agentNames, registryOnly, connectOnly, uiEnabled)
+	if len(expectedFiles) == 0 {
+		// Nothing meaningful to wait for (e.g. malformed args). Return without
+		// barrier rather than block forever — the wrapper marker is still in
+		// place so GC can clean up if the child died.
+		return nil
+	}
+	if err := waitForChildPIDFiles(cmd, expectedFiles, forkSyncBarrierTimeout); err != nil {
+		// Hard error: the contract of `meshctl start -d` is "after this returns,
+		// the agent is registered." Soft-warning here would let the original
+		// race resurface for any caller (tests, scripts, humans) that relied on
+		// the contract. Drop the wrapper marker so a retry isn't blocked by a
+		// stale wrapper-<group>.pid pointing at the failed fork.
+		//
+		// The forked child was started with Setpgid:true so it leads its own
+		// process group (pgid == cmd.Process.Pid). Signalling -pgid hits the
+		// child AND any grandchildren it has already spawned (registry, agent
+		// runtimes), preventing orphan processes that the wrapper marker is
+		// now no longer pointing at. Best-effort: SIGTERM, brief grace, then
+		// SIGKILL escalation. Errors are logged but ignored — at this point
+		// we are already returning a failure, and the GC sweep will clean up
+		// any stragglers later.
+		terminateChildProcessGroup(cmd, quiet)
+		_ = lifecycle.RemoveWrapperPID(group)
+		return fmt.Errorf("forked meshctl did not register within %v: %w", forkSyncBarrierTimeout, err)
+	}
+
 	return nil
+}
+
+// forkSyncBarrierTimeout bounds how long forkToBackground waits for the forked
+// child to write its PID file(s). Generous default — Java/Maven cold-cache +
+// Spring Boot startup observed up to 120s; multi-agent starts gate on slowest,
+// with CPU/memory contention adding overhead. If insufficient, error message
+// is self-explanatory.
+const forkSyncBarrierTimeout = 180 * time.Second
+
+// determineExpectedPIDFiles returns the absolute PID file paths that the
+// forked child meshctl is expected to write. Used by the post-fork sync
+// barrier to know when the child has finished registering.
+//
+// Rationale for which files we wait for:
+//   - registry-only / no-args: child runs registry-only mode → registry.pid.
+//   - --connect-only: registry is external; child only writes per-agent .pid.
+//   - agents present: per-agent .pid files (registry.pid is conditional on
+//     whether the registry was already running, so we can't reliably wait
+//     for it — the agent .pid implies the child got past registry setup).
+//   - --ui only (no agents, not registry-only): standalone UI session →
+//     ui.pid.
+func determineExpectedPIDFiles(agentNames []string, registryOnly, connectOnly, uiEnabled bool) []string {
+	if registryOnly {
+		return []string{lifecycle.PIDFile(lifecycle.ServiceRegistry)}
+	}
+	if len(agentNames) > 0 {
+		out := make([]string, 0, len(agentNames))
+		for _, n := range agentNames {
+			out = append(out, lifecycle.PIDFile(n))
+		}
+		return out
+	}
+	if uiEnabled {
+		return []string{lifecycle.PIDFile(lifecycle.ServiceUI)}
+	}
+	if !connectOnly {
+		// No agents and not UI-only: child will fall into the "no agents
+		// specified, starting registry only" branch in start.go.
+		return []string{lifecycle.PIDFile(lifecycle.ServiceRegistry)}
+	}
+	return nil
+}
+
+// waitForChildPIDFiles polls until all expectedFiles exist or the child exits
+// or the timeout fires. 50ms poll interval is below human perception and
+// negligible relative to the multi-second startup costs we're guarding
+// against. A pipe-based handshake would be tighter but requires plumbing a
+// signal mechanism into the child meshctl — the polling design keeps the
+// child unchanged.
+//
+// Child-exit detection is non-blocking: the previous implementation spawned
+// a background ``cmd.Wait()`` goroutine, which leaks for the entire lifetime
+// of the detached child (potentially days) since the parent returns long
+// before the detached child exits. We instead probe liveness via
+// ``PlatformProcessManager.isProcessRunning`` (Signal(0) on Unix, OpenProcess
+// + GetExitCodeProcess on Windows). Tradeoff: on Linux/Darwin a zombie
+// (exited but unreaped) reads as "alive", so a child that crashes before
+// writing its PID file will not fail-fast — it will time out at the deadline
+// instead. That is acceptable here: the parent doesn't ``cmd.Wait()`` on the
+// detached child by design, and a crashed child is still a failure either
+// way.
+func waitForChildPIDFiles(cmd *exec.Cmd, expectedFiles []string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	const pollInterval = 50 * time.Millisecond
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	check := func() bool {
+		for _, f := range expectedFiles {
+			if _, err := os.Stat(f); err != nil {
+				return false
+			}
+		}
+		return true
+	}
+
+	ppm := NewPlatformProcessManager()
+
+	if check() {
+		return nil
+	}
+	for {
+		// Non-blocking aliveness check. On Unix this is Signal(0); a zombie
+		// reads "alive" so we'll fall through to the deadline branch when
+		// the child crashed without writing its PID file.
+		if cmd.Process == nil || !ppm.isProcessRunning(cmd.Process.Pid) {
+			if check() {
+				return nil
+			}
+			pid := -1
+			if cmd.Process != nil {
+				pid = cmd.Process.Pid
+			}
+			return fmt.Errorf("forked child (pid %d) exited before writing PID file(s) %v", pid, expectedFiles)
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out after %v waiting for PID file(s) %v", timeout, expectedFiles)
+		}
+
+		<-ticker.C
+		if check() {
+			return nil
+		}
+	}
+}
+
+// terminateChildProcessGroup best-effort kills the forked child and any
+// processes it has already spawned. The child was started with Setpgid:true,
+// so signalling -pid hits the entire process group.
+//
+// Sequence: SIGTERM, brief grace, then SIGKILL escalation. Errors are
+// non-fatal — the GC sweep is the safety net for stragglers.
+func terminateChildProcessGroup(cmd *exec.Cmd, quiet bool) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	pid := cmd.Process.Pid
+	if pid <= 0 {
+		return
+	}
+	// Negative PID targets the process group whose pgid == pid (since
+	// Setpgid:true made the child its own group leader).
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && !quiet {
+		fmt.Printf("Warning: failed to SIGTERM forked child group (pgid=%d): %v\n", pid, err)
+	}
+
+	const graceDeadline = 500 * time.Millisecond
+	const pollInterval = 50 * time.Millisecond
+	ppm := NewPlatformProcessManager()
+	deadline := time.Now().Add(graceDeadline)
+	for time.Now().Before(deadline) {
+		if !ppm.isProcessRunning(pid) {
+			return
+		}
+		time.Sleep(pollInterval)
+	}
+
+	// Still alive — escalate.
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !quiet {
+		fmt.Printf("Warning: failed to SIGKILL forked child group (pgid=%d): %v\n", pid, err)
+	}
 }
 
 // isTerminal checks if the given file is a terminal (TTY)

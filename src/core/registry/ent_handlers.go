@@ -19,14 +19,22 @@ import (
 	"mcp-mesh/src/core/registry/generated"
 )
 
-// resolvedDependency is a type alias for the anonymous struct used in heartbeat dependency responses.
-// Using an alias (=) ensures type identity with the generated MeshRegistrationResponse field.
-type resolvedDependency = struct {
+// resolvedDependency is the heartbeat-response shape for a single resolved
+// dependency. It mirrors the anonymous struct in the generated
+// MeshRegistrationResponse plus a ``kwargs`` field that carries the producer's
+// @mesh.tool kwargs (e.g. ``stream_type``) back to the consumer's proxy.
+//
+// Defined as a real type (not a type alias to the generated anonymous struct)
+// so the extra ``kwargs`` field actually serializes in the JSON response.
+// The OpenAPI spec hasn't been regenerated to include this field; the SDK
+// reads it best-effort and tolerates absence. Issue #645 bug 2.
+type resolvedDependency struct {
 	AgentId      string                                                       `json:"agent_id"`
 	Capability   string                                                       `json:"capability"`
 	Endpoint     string                                                       `json:"endpoint"`
 	FunctionName string                                                       `json:"function_name"`
 	Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
+	Kwargs       map[string]interface{}                                       `json:"kwargs,omitempty"`
 }
 
 // Package-level proxy configuration parsed once at init (#769)
@@ -173,11 +181,21 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 		status = generated.MeshRegistrationResponseStatusError
 	}
 
-	response := generated.MeshRegistrationResponse{
-		Status:    status,
-		Timestamp: time.Now().UTC(),
-		Message:   serviceResp.Message,
-		AgentId:   req.AgentId,
+	// We marshal the response as a plain map so we can include the
+	// ``kwargs`` field on each resolved dependency. The generated
+	// MeshRegistrationResponse type has a fixed anonymous-struct shape that
+	// doesn't carry kwargs; until the OpenAPI spec is regenerated, building
+	// the JSON map by hand keeps the field on the wire (issue #645 bug 2).
+	//
+	// TODO(#850): Replace map[string]interface{} with regenerated typed
+	// struct once the OpenAPI spec includes the ``kwargs`` field on
+	// dependency entries.
+	// Tracking issue: https://github.com/dhyansraj/mcp-mesh/issues/850
+	response := map[string]interface{}{
+		"agent_id":  req.AgentId,
+		"status":    status,
+		"timestamp": time.Now().UTC(),
+		"message":   serviceResp.Message,
 	}
 
 	// Include dependency resolution if available (heartbeat with tools should return dependencies)
@@ -194,12 +212,13 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 						Endpoint:     dep.Endpoint,
 						FunctionName: dep.FunctionName,
 						Status:       generated.MeshRegistrationResponseDependenciesResolvedStatus(dep.Status),
+						Kwargs:       dep.Kwargs,
 					}
 				}
 				depsMap[functionName] = depsList
 			}
 		}
-		response.DependenciesResolved = &depsMap
+		response["dependencies_resolved"] = depsMap
 	}
 
 	// Include LLM tools if available
@@ -228,7 +247,7 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 		}
 		// Always include llmToolsMap in response (even if empty)
 		// This enables LLM agents to receive {"function_name": []} for standalone agents
-		response.LlmTools = &llmToolsMap
+		response["llm_tools"] = llmToolsMap
 	}
 
 	// Include LLM providers if available (v0.6.1 mesh delegation)
@@ -239,7 +258,7 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 				llmProvidersMap[functionName] = *provider
 			}
 		}
-		response.LlmProviders = &llmProvidersMap
+		response["llm_providers"] = llmProvidersMap
 	}
 
 	c.JSON(http.StatusOK, response)

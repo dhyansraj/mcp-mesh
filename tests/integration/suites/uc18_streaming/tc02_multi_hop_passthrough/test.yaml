@@ -1,0 +1,139 @@
+# Test Case: tc02 - Multi-hop streaming (gateway -> passthrough -> chatbot)
+# GitHub issue #645 - auto-streaming text responses
+#
+# Verifies that streaming passes through an intermediate hop without buffering:
+# the passthrough agent's body is `async for chunk in chat_proxy.stream(...): yield chunk`
+# which exercises P2's mesh.McpMeshTool.stream() bridge from inside a Stream[str] tool.
+#
+# All 9 dry-run chunks must reach the SSE client - if any one is dropped mid-pipe
+# (e.g. due to a buffering regression), the per-chunk asserts give a precise
+# failure message.
+
+name: "Streaming: multi-hop SSE (gateway -> passthrough -> chatbot)"
+description: "Verify multi-hop SSE streaming end-to-end with no chunk buffering"
+tags:
+  - streaming
+  - sse
+  - multi_hop
+  - py
+  - slow
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - handler: shell
+    command: "/workspace/.venv/bin/pip install fastapi uvicorn"
+
+test:
+  - name: "Copy all three agents to workspace"
+    handler: shell
+    command: |
+      mkdir -p /workspace/streaming
+      cp -rL /uc-artifacts/streaming/chatbot-agent /workspace/streaming/
+      cp -rL /uc-artifacts/streaming/passthrough-agent /workspace/streaming/
+      cp -rL /uc-artifacts/streaming/gateway-agent /workspace/streaming/
+      ls /workspace/streaming/
+    capture: copy_output
+
+  - name: "Start chatbot-agent (port 9170, dry-run mode)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start streaming/chatbot-agent/main.py --env MESH_LLM_DRY_RUN=1 -d"
+    capture: start_chatbot
+
+  - name: "Start passthrough-agent (port 9171, depends on 'chat')"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start streaming/passthrough-agent/main.py -d"
+    capture: start_passthrough
+
+  - name: "Start gateway-agent (port 9172, depends on 'chat' AND 'chat_passthrough')"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start streaming/gateway-agent/main.py -d"
+    capture: start_gateway
+
+  # NOTE: gateway-agent registers as "api-<hash>" (mesh.route-only services do
+  # not get a stable name like @mesh.agent decorations do — see uc20/tc05 for
+  # the same pattern). We only wait for the named agents here; the multi-hop
+  # curl below implicitly proves the gateway's `chat_passthrough` dep resolved.
+  - name: "Wait for chatbot-agent and passthrough-agent registered"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="chatbot-agent passthrough-agent"
+      EXPECTED_COUNT=2
+      echo "Waiting for $EXPECTED_COUNT named agents to register..."
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        COUNT=0
+        for agent in $EXPECTED; do
+          if echo "$AGENTS" | grep -q "$agent"; then
+            COUNT=$((COUNT + 1))
+          fi
+        done
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "All $EXPECTED_COUNT named agents registered after $((i * 2))s"
+          meshctl list
+          meshctl list --tools
+          exit 0
+        fi
+        echo "  $COUNT/$EXPECTED_COUNT agents registered (attempt $i/60)..."
+        sleep 2
+      done
+      echo "ERROR: not all named agents registered within 120s"
+      meshctl list 2>/dev/null || true
+      meshctl list --tools 2>/dev/null || true
+      exit 1
+    capture: wait_output
+    timeout: 150
+
+  # Small additional sleep to let the gateway's `chat` and `chat_passthrough`
+  # deps resolve before the multi-hop curl fires. The per-chunk SSE assertions
+  # below will fail loudly if resolution didn't complete.
+  - name: "Brief settle for gateway dep resolution"
+    handler: wait
+    seconds: 5
+
+  - name: "Curl POST /api/chat-multihop (capture full multi-hop SSE stream body)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -N -X POST http://localhost:9172/api/chat-multihop \
+        -H "Content-Type: application/json" \
+        -d '{"prompt":"hi"}' 2>&1
+    capture: multihop_sse_output
+    timeout: 90
+
+assertions:
+  # Sanity / framing
+  - expr: "${captured.multihop_sse_output} contains 'data: [DONE]'"
+    message: "Multi-hop SSE stream must end with the 'data: [DONE]' terminator"
+
+  # All 9 deterministic dry-run chunks must survive the full
+  # gateway -> passthrough -> chatbot pipeline. Each chunk is asserted
+  # individually so a regression that drops a single chunk gives a precise
+  # failure message instead of a vague "stream incomplete".
+  - expr: "${captured.multihop_sse_output} contains 'data: Hello'"
+    message: "Multi-hop SSE must contain chunk 1: 'Hello'"
+  - expr: "${captured.multihop_sse_output} contains 'data: world'"
+    message: "Multi-hop SSE must contain chunk 3: 'world'"
+  - expr: "${captured.multihop_sse_output} contains 'data: !'"
+    message: "Multi-hop SSE must contain chunk 4: '!'"
+  - expr: "${captured.multihop_sse_output} contains 'data:  This'"
+    message: "Multi-hop SSE must contain chunk 5: ' This' (leading-space chunk preserved)"
+  - expr: "${captured.multihop_sse_output} contains 'data:  is'"
+    message: "Multi-hop SSE must contain chunk 6: ' is'"
+  - expr: "${captured.multihop_sse_output} contains 'data:  a'"
+    message: "Multi-hop SSE must contain chunk 7: ' a'"
+  - expr: "${captured.multihop_sse_output} contains 'data:  test'"
+    message: "Multi-hop SSE must contain chunk 8: ' test'"
+  - expr: "${captured.multihop_sse_output} contains 'data:  response.'"
+    message: "Multi-hop SSE must contain chunk 9: ' response.'"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

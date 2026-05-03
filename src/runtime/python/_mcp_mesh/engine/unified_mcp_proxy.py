@@ -657,6 +657,75 @@ class UnifiedMCPProxy:
             logger_instance=self.logger,
         )
 
+    def _inject_trace_into_args(
+        self,
+        arguments: dict | None,
+        per_call_headers: dict[str, str] | None,
+    ) -> tuple[dict, dict[str, str]]:
+        """Build (args_with_trace, merged_headers) for an outbound tool call.
+
+        Shared by ``call_tool`` (buffered) and ``stream`` so that both transport
+        paths inject trace context and propagate headers identically. The two
+        return values are:
+
+        * ``args_with_trace`` — the original arguments (or empty dict) augmented
+          with ``_trace_id`` / ``_parent_span`` / ``_mesh_headers`` when
+          applicable. Delegates to the Rust core for cross-runtime parity and
+          falls back to a Python implementation if the core is unavailable.
+        * ``merged_headers`` — the resolved set of outbound HTTP headers
+          (session-propagated + ``custom_headers`` + per-call), filtered by the
+          propagate allowlist. Caller is responsible for setting
+          ``_outbound_headers_var`` so the httpx event hook picks them up.
+        """
+        from ..tracing.context import matches_propagate_header
+
+        current_trace = TraceContext.get_current()
+        merged_headers: dict[str, str] = dict(TraceContext.get_propagated_headers())
+
+        if self.custom_headers:
+            for k, v in self.custom_headers.items():
+                if matches_propagate_header(k):
+                    merged_headers[k.lower()] = v
+
+        if per_call_headers:
+            for k, v in per_call_headers.items():
+                if matches_propagate_header(k):
+                    merged_headers[k.lower()] = v
+
+        if current_trace:
+            try:
+                import mcp_mesh_core
+
+                args_json = json.dumps(arguments or {})
+                headers_json = json.dumps(merged_headers) if merged_headers else None
+                injected_json = mcp_mesh_core.inject_trace_context_py(
+                    args_json,
+                    current_trace.trace_id,
+                    current_trace.span_id,
+                    headers_json,
+                )
+                args_with_trace = json.loads(injected_json)
+                tp = get_trace_prefix()
+                self.logger.debug(
+                    f"{tp}🔗 Injecting trace context via Rust core: trace_id={current_trace.trace_id[:8]}..., parent_span={current_trace.span_id[:8]}..."
+                )
+            except Exception as e:
+                tp = get_trace_prefix()
+                self.logger.debug(
+                    f"{tp}Rust inject_trace_context failed, using fallback: {e}"
+                )
+                args_with_trace = dict(arguments) if arguments else {}
+                args_with_trace["_trace_id"] = current_trace.trace_id
+                args_with_trace["_parent_span"] = current_trace.span_id
+                if merged_headers:
+                    args_with_trace["_mesh_headers"] = merged_headers
+        else:
+            args_with_trace = dict(arguments) if arguments else {}
+            if merged_headers:
+                args_with_trace["_mesh_headers"] = merged_headers
+
+        return args_with_trace, merged_headers
+
     async def call_tool(
         self,
         name: str,
@@ -675,57 +744,9 @@ class UnifiedMCPProxy:
         # Get trace prefix if available
         tp = get_trace_prefix()
 
-        # Inject trace context into arguments for downstream agents
-        # This is the fallback mechanism for agents that can't access HTTP headers (e.g., TypeScript)
-        current_trace = TraceContext.get_current()
-
-        # Build merged headers: session propagated + custom_headers + per-call (per-call wins)
-        from ..tracing.context import matches_propagate_header
-
-        merged_headers = dict(TraceContext.get_propagated_headers())
-
-        # Merge custom_headers from kwargs config
-        if self.custom_headers:
-            for k, v in self.custom_headers.items():
-                if matches_propagate_header(k):
-                    merged_headers[k.lower()] = v
-
-        # Merge per-call headers (wins, filtered by allowlist)
-        if per_call_headers:
-            for k, v in per_call_headers.items():
-                if matches_propagate_header(k):
-                    merged_headers[k.lower()] = v
-
-        # Delegate injection to Rust core for cross-runtime consistency
-        if current_trace:
-            try:
-                import mcp_mesh_core
-
-                args_json = json.dumps(arguments or {})
-                headers_json = json.dumps(merged_headers) if merged_headers else None
-                injected_json = mcp_mesh_core.inject_trace_context_py(
-                    args_json,
-                    current_trace.trace_id,
-                    current_trace.span_id,
-                    headers_json,
-                )
-                args_with_trace = json.loads(injected_json)
-                self.logger.debug(
-                    f"{tp}🔗 Injecting trace context via Rust core: trace_id={current_trace.trace_id[:8]}..., parent_span={current_trace.span_id[:8]}..."
-                )
-            except Exception as e:
-                # Fallback to manual injection if Rust core fails
-                self.logger.debug(f"{tp}Rust inject_trace_context failed, using fallback: {e}")
-                args_with_trace = dict(arguments) if arguments else {}
-                args_with_trace["_trace_id"] = current_trace.trace_id
-                args_with_trace["_parent_span"] = current_trace.span_id
-                if merged_headers:
-                    args_with_trace["_mesh_headers"] = merged_headers
-        else:
-            args_with_trace = dict(arguments) if arguments else {}
-            # Still inject propagated headers even without trace context
-            if merged_headers:
-                args_with_trace["_mesh_headers"] = merged_headers
+        args_with_trace, merged_headers = self._inject_trace_into_args(
+            arguments, per_call_headers
+        )
 
         # Log cross-agent call - summary line
         arg_keys = list(arguments.keys()) if arguments else []
@@ -1194,49 +1215,172 @@ class UnifiedMCPProxy:
             self.logger.error(f"❌ HTTP call failed: {type(e).__name__}: {e}")
             raise RuntimeError(f"HTTP call failed: {e}")
 
+    async def stream(
+        self,
+        name: str | None = None,
+        *,
+        per_call_headers: dict[str, str] | None = None,
+        **arguments,
+    ) -> AsyncIterator[str]:
+        """Stream text chunks from a remote ``Stream[str]`` tool.
+
+        Returns an async iterator that yields each chunk as the producer emits
+        it via MCP ``notifications/progress``. The final result (joined
+        accumulated text) is NOT returned separately — callers iterate to get
+        the whole stream.
+
+        If the remote producer does NOT advertise ``stream_type == "text"`` in
+        its kwargs config, no progress notifications will arrive; in that case
+        we degrade gracefully by yielding the buffered final-result text as a
+        single chunk so ``async for`` callers always observe at least one item
+        when the call succeeds.
+
+        Why this method always uses the FastMCP client path: streaming relies
+        on intermediate ``notifications/progress`` messages delivered out-of-
+        band on the same MCP session. The proxy's ``_http_call`` path is a
+        one-shot JSON-RPC POST which structurally cannot surface those mid-
+        stream notifications — only FastMCP's ``Client.call_tool`` exposes a
+        ``progress_handler`` callback.
+
+        Cross-loop safety (#818): the queue, the call_task, and the FastMCP
+        client must all live on the SAME event loop as this coroutine. We
+        construct the queue here (not at the call site) and spawn the call
+        task with ``asyncio.create_task`` so the current ``contextvars.Context``
+        — including ``_outbound_headers_var`` and the trace context — is
+        inherited by the child task automatically.
+        """
+        target_name = name or self.function_name
+
+        producer_stream_type = self.kwargs_config.get("stream_type")
+        if producer_stream_type != "text":
+            self.logger.warning(
+                f"⚠️ stream(): producer for '{target_name}' does not advertise "
+                f"streaming (stream_type={producer_stream_type!r}); the call will "
+                "succeed but chunks will arrive as a single buffered final message."
+            )
+
+        args_with_trace, merged_headers = self._inject_trace_into_args(
+            arguments, per_call_headers
+        )
+
+        tp = get_trace_prefix()
+        self.logger.info(
+            f"{tp}🌊 stream() start: {self.endpoint}/{target_name} "
+            f"(args={list(arguments.keys())})"
+        )
+
+        SENTINEL: object = object()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def progress_handler(
+            progress: float, total: float | None, message: str | None
+        ) -> None:
+            if message is not None:
+                self.logger.debug(
+                    f"{tp}📥 stream() chunk #{int(progress)}: {format_log_value(message)}"
+                )
+                await queue.put(message)
+
+        mcp_endpoint = f"{self.endpoint}/mcp"
+        token = _outbound_headers_var.set(merged_headers if merged_headers else None)
+        try:
+            client_instance = await self._get_or_create_fastmcp_client(
+                mcp_endpoint, self.endpoint, self.stream_timeout
+            )
+            async with client_instance as client:
+                # ``asyncio.create_task`` inherits the current contextvars.Context
+                # by default — so trace-context and ``_outbound_headers_var`` set
+                # above flow into the task without explicit propagation.
+                call_task: asyncio.Task = asyncio.create_task(
+                    client.call_tool(
+                        target_name,
+                        args_with_trace,
+                        progress_handler=progress_handler,
+                    )
+                )
+                call_task.add_done_callback(lambda _t: queue.put_nowait(SENTINEL))
+
+                yielded_any = False
+                consumer_broke = False
+                try:
+                    while True:
+                        item = await queue.get()
+                        if item is SENTINEL:
+                            break
+                        yielded_any = True
+                        yield item
+                except (GeneratorExit, asyncio.CancelledError):
+                    consumer_broke = True
+                    if not call_task.done():
+                        call_task.cancel()
+                    # Best-effort drain so the underlying coroutine can run its
+                    # finally blocks; never mask the GeneratorExit/CancelledError
+                    # with the resulting CancelledError from our own cancel().
+                    try:
+                        await call_task
+                    except BaseException:
+                        pass
+                    raise
+
+                # Normal completion path: drain the task to surface its exception
+                # (timeout, connection error, RaiseToolError, etc.) so the
+                # consumer's ``async for`` sees the original error class.
+                if not call_task.done():
+                    call_task.cancel()
+                    try:
+                        await call_task
+                    except asyncio.CancelledError:
+                        pass
+                    final_result = None
+                else:
+                    final_result = await call_task
+
+                # If the producer was non-streaming and no progress chunks
+                # arrived, extract text from the final CallToolResult and yield
+                # it as one chunk (graceful degradation).
+                if not yielded_any and final_result is not None:
+                    fallback_text = self._extract_text_from_result(final_result)
+                    if fallback_text:
+                        self.logger.info(
+                            f"{tp}🌊 stream() degraded to buffered single-chunk for "
+                            f"'{target_name}' ({len(fallback_text)} chars)"
+                        )
+                        yield fallback_text
+        finally:
+            _outbound_headers_var.reset(token)
+            self.logger.info(f"{tp}🌊 stream() end: {self.endpoint}/{target_name}")
+
     async def call_tool_streaming(
         self,
         name: str,
         arguments: dict = None,
     ) -> AsyncIterator[Any]:
-        """Call a tool with streaming response.
+        """Backwards-compatible alias for :meth:`stream`.
 
-        Note: Currently yields the complete result as a single chunk rather than
-        true chunk-level streaming. FastMCP's call_tool() returns the full response.
-        This method exists for API compatibility with the streaming=True kwarg.
-
-        Args:
-            name: Tool name to call
-            arguments: Tool arguments
-
-        Yields:
-            Tool result (single yield of the complete response)
+        Older callers passed ``arguments`` as a positional dict. ``stream``
+        accepts kwargs to mirror the user-facing ``proxy.stream(prompt=...)``
+        idiom, so we splat the dict here.
         """
-        if not self.streaming_capable:
-            raise ValueError(f"Tool {name} not configured for streaming")
+        async for chunk in self.stream(name, **(arguments or {})):
+            yield chunk
 
-        mcp_endpoint = f"{self.endpoint}/mcp"
+    @staticmethod
+    def _extract_text_from_result(result: Any) -> str | None:
+        """Pull joined text from a FastMCP CallToolResult, if any.
 
-        try:
-            client_instance = await self._get_or_create_fastmcp_client(
-                mcp_endpoint, self.endpoint, self.stream_timeout
-            )
-
-            async with client_instance as client:
-                self.logger.debug(f"🌊 Streaming call to tool '{name}'")
-
-                result = await client.call_tool(name, arguments or {})
-                yield self._convert_mcp_result_to_python(result)
-
-        except ImportError as e:
-            self.logger.warning(
-                f"FastMCP Client not available for streaming: {e}, falling back to HTTP"
-            )
-            result = await self._http_call(name, arguments or {})
-            yield result
-        except Exception as e:
-            self.logger.error(f"❌ Streaming call to '{name}' failed: {e}")
-            raise RuntimeError(f"Streaming call to '{name}' failed: {e}")
+        Returns None when the result has no text-bearing content (e.g. binary
+        image content, empty result). Used by ``stream()`` to provide a single
+        buffered chunk when the producer didn't emit progress notifications.
+        """
+        content = getattr(result, "content", None)
+        if not content:
+            return None
+        parts: list[str] = []
+        for item in content:
+            text = getattr(item, "text", None)
+            if isinstance(text, str):
+                parts.append(text)
+        return "".join(parts) if parts else None
 
     # MCP Protocol Methods - using FastMCP client's superior implementation
     async def list_tools(self) -> list:

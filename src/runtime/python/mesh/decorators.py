@@ -672,6 +672,14 @@ def _wrap_with_isolation(final_func: Callable, func_name: str) -> Callable:
     Only async functions are wrapped — sync tools are already dispatched off
     the main loop by FastMCP via ``anyio.to_thread.run_sync``.
 
+    Stream wrappers are also skipped: they call
+    ``ctx.report_progress(...)`` whose underlying transport is bound to the
+    main loop. Dispatching the wrapper to a worker loop would cause the
+    progress notifications to deadlock on the main-loop session, so we
+    leave streaming tools to FastMCP's normal in-loop dispatch
+    (issue #645 bug). Streaming tools don't typically do blocking syscalls
+    inside the generator — they're shipping LLM tokens.
+
     The isolation wrapper is applied as the OUTERMOST layer so FastMCP sees
     a coroutine function and awaits it on the main loop, while the actual
     user work executes on the worker thread. The decorator chain
@@ -680,6 +688,14 @@ def _wrap_with_isolation(final_func: Callable, func_name: str) -> Callable:
     ``signature_analyzer._get_original_func`` keeps finding the user function.
     """
     if not asyncio.iscoroutinefunction(final_func):
+        return final_func
+
+    meta = getattr(final_func, "_mesh_tool_metadata", None)
+    if isinstance(meta, dict) and meta.get("stream_type") == "text":
+        logger.debug(
+            f"🧵 ISOLATION: Skipping stream tool '{func_name}' "
+            f"(progress notifications must run on the main loop)"
+        )
         return final_func
 
     @wraps(final_func)
@@ -921,6 +937,22 @@ def tool(
             "output_schema_strict": output_schema_strict,
             **kwargs,
         }
+
+        # Issue #645 Phase 1: detect Stream[str] return annotation and stamp
+        # metadata so the heartbeat pipeline propagates it as a kwargs field
+        # (heartbeat_preparation.py:198-214 → rust_heartbeat.py:395-398) and
+        # the runtime wrapper switches on streaming behavior. Re-raise with a
+        # clear message when the user asks for Stream[T] for T != str.
+        from _mcp_mesh.engine.stream_introspection import detect_stream_type
+
+        try:
+            stream_type = detect_stream_type(target)
+        except ValueError as e:
+            raise ValueError(
+                f"@mesh.tool '{getattr(target, '__name__', '?')}': {e}"
+            ) from None
+        if stream_type is not None:
+            metadata["stream_type"] = stream_type
 
         # Store metadata on function
         target._mesh_tool_metadata = metadata
@@ -1480,6 +1512,39 @@ def route(
             # Also store a flag on the wrapper itself so route integration can detect it
             wrapped._mesh_is_injection_wrapper = True
 
+            # FastAPI inspects the endpoint's return annotation (via get_type_hints
+            # following __wrapped__) to build a Pydantic response_field. An
+            # AsyncIterator[str] / Stream[str] return is not a valid Pydantic field
+            # and crashes registration. The route integration step later detects the
+            # stream annotation on the underlying _mesh_original_func and installs an
+            # SSE-emitting endpoint, so the wrapper itself does not need to expose
+            # the streaming return type to FastAPI.
+            try:
+                from _mcp_mesh.engine.stream_introspection import (
+                    detect_stream_type,
+                )
+
+                if detect_stream_type(target) == "text":
+                    import inspect as _inspect
+
+                    wrapper_anns = dict(getattr(wrapped, "__annotations__", {}) or {})
+                    wrapper_anns.pop("return", None)
+                    wrapped.__annotations__ = wrapper_anns
+                    if hasattr(wrapped, "__wrapped__"):
+                        try:
+                            del wrapped.__wrapped__
+                        except AttributeError:
+                            pass
+                    explicit_sig = wrapped.__dict__.get("__signature__")
+                    if explicit_sig is not None:
+                        wrapped.__signature__ = explicit_sig.replace(
+                            return_annotation=_inspect.Signature.empty
+                        )
+            except Exception as e:
+                logger.debug(
+                    f"Stream-route annotation strip skipped for {target.__name__}: {e}"
+                )
+
             # Return the wrapped function - FastAPI will register this wrapper when it runs
             logger.debug(
                 f"✅ Returning injection wrapper for route '{target.__name__}'"
@@ -1757,25 +1822,49 @@ def llm(
         sig = inspect.signature(func)
         return_annotation = sig.return_annotation
 
+        # Issue #645 Phase 1: detect Stream[str] up front. When the function
+        # is a streaming tool, the LLM-output type is implicitly str (the
+        # element type) and the Pydantic-model warning below would be a false
+        # alarm — skip it. ValueError for Stream[non-str] is re-raised with
+        # decorator context.
+        from _mcp_mesh.engine.stream_introspection import detect_stream_type
+
+        try:
+            llm_stream_type = detect_stream_type(func)
+        except ValueError as e:
+            raise ValueError(
+                f"@mesh.llm '{func.__name__}': {e}"
+            ) from None
+
         output_type = None
         if return_annotation and return_annotation != inspect.Signature.empty:
             output_type = return_annotation
 
-            # Warn if not a Pydantic model
-            try:
-                from pydantic import BaseModel
+            # Warn if not a Pydantic model — but skip the warning for streaming
+            # tools where the return annotation is intentionally Stream[str].
+            if llm_stream_type is None:
+                try:
+                    from pydantic import BaseModel
 
-                if not (
-                    inspect.isclass(output_type) and issubclass(output_type, BaseModel)
-                ):
-                    warnings.warn(
-                        f"Function '{func.__name__}' decorated with @mesh.llm should return a Pydantic BaseModel subclass, "
-                        f"got {output_type}. This may cause validation errors at runtime.",
-                        UserWarning,
-                        stacklevel=2,
-                    )
-            except ImportError:
-                pass  # Pydantic not available, skip validation
+                    if not (
+                        inspect.isclass(output_type) and issubclass(output_type, BaseModel)
+                    ):
+                        warnings.warn(
+                            f"Function '{func.__name__}' decorated with @mesh.llm should return a Pydantic BaseModel subclass, "
+                            f"got {output_type}. This may cause validation errors at runtime.",
+                            UserWarning,
+                            stacklevel=2,
+                        )
+                except ImportError:
+                    pass  # Pydantic not available, skip validation
+
+        # Stream[str] is a string-typed contract — chunks of str that accumulate
+        # to a str final result. The chunked-vs-buffered distinction is encoded
+        # separately via stream_type metadata, so the LLM-output type collapses
+        # to str. Without this, MeshLlmAgent.stream() would reject the agent
+        # because output_type would be AsyncIterator[str].
+        if llm_stream_type == "text":
+            output_type = str
 
         # Step 3: Find MeshLlmAgent parameter
         from mesh.types import MeshLlmAgent
@@ -1841,6 +1930,16 @@ def llm(
                 f"🔗 Found existing @mesh.tool wrapper for '{func.__name__}' at {hex(id(existing_wrapper))} - enhancing it"
             )
 
+        # Issue #645 Phase 1: when the LLM tool is declared as Stream[str],
+        # propagate the marker onto the @mesh.tool metadata so heartbeat picks
+        # it up. The detection at the @mesh.tool layer above sees the original
+        # function annotation; this branch makes @mesh.llm-only usage work too
+        # (no @mesh.tool decorator on top, no metadata entry yet).
+        if llm_stream_type is not None:
+            tool_meta = getattr(existing_wrapper, "_mesh_tool_metadata", None)
+            if tool_meta is not None:
+                tool_meta["stream_type"] = llm_stream_type
+
         # Trigger debounced processing
         _trigger_debounced_processing()
 
@@ -1879,9 +1978,18 @@ def llm(
             combined_injection_wrapper._mesh_llm_output_type = output_type
             combined_injection_wrapper.__wrapped__ = func
 
-            # Override signature to hide LLM parameter from FastMCP schema
+            # Override signature to hide LLM parameter from FastMCP schema.
+            # Start from the existing wrapper's signature (not raw ``func``):
+            # for streaming tools, ``@mesh.tool`` already appended the ``ctx``
+            # keyword so FastMCP can auto-fill it. Reading from ``func`` here
+            # would drop that ``ctx`` and silently disable progress
+            # notifications (issue #645 bug 3).
             try:
-                _sig = inspect.signature(func)
+                _sig = (
+                    inspect.signature(existing_wrapper)
+                    if hasattr(existing_wrapper, "__signature__")
+                    else inspect.signature(func)
+                )
                 _clean = [p for n, p in _sig.parameters.items() if n != param_name]
                 combined_injection_wrapper.__signature__ = _sig.replace(
                     parameters=_clean

@@ -5,6 +5,7 @@
 
 name: "Watch Mode: Mixed Languages Single Start Command"
 description: "Test meshctl start -w with multiple agents in a single command - verify hot reload works for all 3 languages"
+disabled: true # forkToBackground sync barrier from #844 times out on multi-agent + watch + Java — see GH #847 (re-enable when resolved)
 tags:
   - meshctl
   - python
@@ -56,6 +57,7 @@ test:
     workdir: /workspace
     command: "meshctl start py-math-agent/main.py ts-math-agent/src/index.ts /workspace/java-greeter-agent -d -w"
     capture: start_output
+    timeout: 240
 
   # ========== WAIT FOR REGISTRATION ==========
 

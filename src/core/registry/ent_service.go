@@ -97,13 +97,21 @@ type AgentRegistrationResponse struct {
 	Metadata             map[string]interface{}             `json:"metadata,omitempty"`
 }
 
-// DependencyResolution represents a resolved dependency in the new format
+// DependencyResolution represents a resolved dependency in the new format.
+//
+// Kwargs carries the *producer's* @mesh.tool kwargs (e.g. ``stream_type``,
+// ``timeout``, ``custom_headers``) so the consumer's proxy can configure
+// itself from the producer's advertised behavior. Without this, consumer
+// proxies have no idea the producer streams, advertises a custom timeout,
+// etc. — they can only see what the consumer pre-declared (almost always
+// empty since consumers don't predict producer behavior).
 type DependencyResolution struct {
-	AgentID      string `json:"agent_id,omitempty"`
-	FunctionName string `json:"function_name,omitempty"`
-	Endpoint     string `json:"endpoint,omitempty"`
-	Capability   string `json:"capability"`
-	Status       string `json:"status"`
+	AgentID      string                 `json:"agent_id,omitempty"`
+	FunctionName string                 `json:"function_name,omitempty"`
+	Endpoint     string                 `json:"endpoint,omitempty"`
+	Capability   string                 `json:"capability"`
+	Status       string                 `json:"status"`
+	Kwargs       map[string]interface{} `json:"kwargs,omitempty"`
 }
 
 // DependencySpec represents a single dependency requirement (capability + tags + version)

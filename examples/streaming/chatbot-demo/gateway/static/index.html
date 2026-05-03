@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Weather Chatbot</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    :root {
+      --bg: #f7f7f8;
+      --fg: #1f2328;
+      --muted: #6b7280;
+      --border: #e5e7eb;
+      --user-bg: #2563eb;
+      --user-fg: #ffffff;
+      --bot-bg: #ffffff;
+      --bot-fg: #1f2328;
+      --accent: #2563eb;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f1115;
+        --fg: #e5e7eb;
+        --muted: #9ca3af;
+        --border: #2a2f3a;
+        --user-bg: #2563eb;
+        --user-fg: #ffffff;
+        --bot-bg: #1a1d23;
+        --bot-fg: #e5e7eb;
+        --accent: #60a5fa;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background: var(--bg); color: var(--fg);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      font-size: 15px; line-height: 1.5;
+    }
+    #root { height: 100%; display: flex; justify-content: center; }
+    .app {
+      width: 100%; max-width: 640px; height: 100%;
+      display: flex; flex-direction: column;
+      padding: 24px 16px 16px; gap: 12px;
+    }
+    header h1 {
+      margin: 0 0 4px; font-size: 18px; font-weight: 600;
+    }
+    header p {
+      margin: 0; color: var(--muted); font-size: 13px;
+    }
+    .messages {
+      flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+      padding: 8px 0;
+    }
+    .msg {
+      max-width: 85%; padding: 10px 14px; border-radius: 14px;
+      white-space: pre-wrap; word-wrap: break-word;
+    }
+    .msg.user {
+      align-self: flex-end; background: var(--user-bg); color: var(--user-fg);
+      border-bottom-right-radius: 4px;
+    }
+    .msg.bot {
+      align-self: flex-start; background: var(--bot-bg); color: var(--bot-fg);
+      border: 1px solid var(--border); border-bottom-left-radius: 4px;
+    }
+    .msg.bot.error { border-color: #ef4444; color: #ef4444; }
+    .spinner {
+      align-self: flex-start; padding: 10px 14px;
+      display: inline-flex; align-items: center; gap: 6px;
+      color: var(--muted); font-size: 13px;
+    }
+    .spinner::before {
+      content: ""; width: 14px; height: 14px; border-radius: 50%;
+      border: 2px solid var(--border); border-top-color: var(--accent);
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    form {
+      display: flex; gap: 8px; padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+    input[type="text"] {
+      flex: 1; padding: 10px 14px; border-radius: 10px;
+      border: 1px solid var(--border); background: var(--bot-bg); color: var(--fg);
+      font: inherit; outline: none;
+    }
+    input[type="text"]:focus { border-color: var(--accent); }
+    button {
+      padding: 10px 18px; border-radius: 10px; border: 0;
+      background: var(--accent); color: white; font: inherit; font-weight: 500;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useRef, useEffect } = React;
+
+    function App() {
+      const [messages, setMessages] = useState([]);
+      const [input, setInput] = useState("what's the weather in New York?");
+      const [waiting, setWaiting] = useState(false);
+      const [streaming, setStreaming] = useState("");
+      const [error, setError] = useState("");
+      const scrollRef = useRef(null);
+
+      useEffect(() => {
+        const el = scrollRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+      }, [messages, streaming, waiting]);
+
+      async function send(e) {
+        e.preventDefault();
+        const prompt = input.trim();
+        if (!prompt || waiting) return;
+        setMessages((m) => [...m, { role: "user", text: prompt }]);
+        setInput("");
+        setWaiting(true);
+        setStreaming("");
+        setError("");
+
+        let resp;
+        try {
+          resp = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt }),
+          });
+        } catch (err) {
+          setWaiting(false);
+          setError("network error: " + err.message);
+          return;
+        }
+
+        if (!resp.ok || !resp.body) {
+          setWaiting(false);
+          const detail = await resp.text().catch(() => "");
+          setError(`HTTP ${resp.status}: ${detail || resp.statusText}`);
+          return;
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let acc = "";
+        let firstChunk = true;
+        let done = false;
+        let readErr = "";
+
+        try {
+          while (!done) {
+            const { value, done: rdDone } = await reader.read();
+            if (rdDone) break;
+            buffer += decoder.decode(value, { stream: true });
+
+            let sep;
+            while ((sep = buffer.indexOf("\n\n")) !== -1) {
+              const event = buffer.slice(0, sep);
+              buffer = buffer.slice(sep + 2);
+              const data = event
+                .split("\n")
+                .filter((l) => l.startsWith("data: "))
+                .map((l) => l.slice(6))
+                .join("\n");
+              if (data === "[DONE]") {
+                done = true;
+                break;
+              }
+              if (firstChunk) {
+                firstChunk = false;
+                setWaiting(false);
+              }
+              acc += data;
+              setStreaming(acc);
+            }
+          }
+        } catch (err) {
+          // Mid-stream read failure: surface the error but preserve any
+          // partial response we've already accumulated.
+          readErr = "stream error: " + (err && err.message ? err.message : String(err));
+          setError(readErr);
+        } finally {
+          setWaiting(false);
+          setStreaming("");
+          if (acc) {
+            setMessages((m) => [...m, { role: "bot", text: acc }]);
+          } else if (!readErr) {
+            setError("(no response)");
+          }
+        }
+      }
+
+      return (
+        <div className="app">
+          <header>
+            <h1>Weather Chatbot</h1>
+            <p>Ask about the weather in any city. Streamed live from Claude.</p>
+          </header>
+          <div className="messages" ref={scrollRef}>
+            {messages.map((m, i) => (
+              <div key={i} className={`msg ${m.role}`}>{m.text}</div>
+            ))}
+            {streaming && <div className="msg bot">{streaming}</div>}
+            {waiting && <div className="spinner">thinking...</div>}
+            {error && <div className="msg bot error">{error}</div>}
+          </div>
+          <form onSubmit={send}>
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Ask about the weather..."
+              disabled={waiting}
+              autoFocus
+            />
+            <button type="submit" disabled={waiting || !input.trim()}>Send</button>
+          </form>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
