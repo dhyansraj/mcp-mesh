@@ -189,56 +189,73 @@ def _extract_text_from_message_content(content: Any) -> str:
     return str(content)
 
 
-async def _provider_agentic_loop(
-    effective_model: str,
-    messages: list,
-    tools: list,
-    tool_endpoints: dict[str, str],
-    model_params: dict,
-    litellm_kwargs: dict,
-    max_iterations: int = 10,
-    loop_logger: logging.Logger | None = None,
-    vendor: str | None = None,
-) -> dict[str, Any]:
-    """Execute tools provider-side and return final response.
+# Vendors that do NOT support images in tool/function result messages.
+# OpenAI strictly rejects images in role:tool messages.
+# For these vendors, images are accumulated and sent as one user message
+# after ALL tool results for the iteration.
+_TOOL_IMAGE_UNSUPPORTED_VENDORS = {"openai", "gemini", "google"}
 
-    Runs a full agentic loop on the provider: calls the LLM, executes any
-    tool calls via MCP proxies, feeds results back, and repeats until the
-    LLM produces a final text response (no tool calls).
+
+async def _execute_tool_calls_for_iteration(
+    message: Any,
+    tool_endpoints: dict[str, str],
+    parallel: bool,
+    vendor: str | None,
+    loop_logger: logging.Logger | None,
+) -> tuple[list[dict], list[dict]]:
+    """Execute one iteration's tool calls (parallel or sequential).
+
+    Encapsulates the per-iteration tool dispatch logic shared by the buffered
+    provider agentic loop (``_provider_agentic_loop``) and the streaming
+    provider agentic loop (Phase 2 of issue #849). Behavior is intentionally
+    identical to the previous inline implementation so that callers can drop
+    in this helper without observable changes.
+
+    For each ``tool_call`` in ``message.tool_calls``:
+      * Look up the MCP endpoint from ``tool_endpoints`` (returns an error
+        tool message if missing).
+      * Dispatch via :class:`UnifiedMCPProxy.call_tool`.
+      * Resolve resource_link items in the tool result to multimodal content
+        using the OpenAI-compatible image_url format (LiteLLM converts to the
+        provider-native format).
+      * For vendors that do not support images in role:tool messages
+        (OpenAI / Gemini / Google), strip image parts out of the tool message
+        and accumulate them so the caller can synthesize a follow-up user
+        message after all tool results.
+      * For vendors that do support images in role:tool messages
+        (Anthropic / Claude via LiteLLM), inline the resolved multimodal
+        content directly in the tool message.
 
     Args:
-        effective_model: LiteLLM model identifier to use.
-        messages: Conversation messages (will be copied internally).
-        tools: OpenAI-format tool schemas (already cleaned of _mesh_endpoint).
+        message: The ``response.choices[0].message`` from LiteLLM whose
+            ``tool_calls`` should be executed. Must have a non-empty
+            ``tool_calls`` attribute — callers are expected to gate on
+            ``message.tool_calls`` themselves.
         tool_endpoints: Mapping of tool_name -> MCP endpoint URL.
-        model_params: Extra model parameters for litellm.completion().
-        litellm_kwargs: Base kwargs captured by the decorator.
-        max_iterations: Safety limit on loop iterations.
-        loop_logger: Logger instance for debug/info output.
-        vendor: Vendor name for media resolution (e.g., "anthropic", "openai").
+        parallel: When True (and there is more than one tool call), execute
+            the tool calls concurrently via :func:`asyncio.gather`. Otherwise
+            execute sequentially in declaration order.
+        vendor: Vendor name extracted from the model string (e.g.,
+            ``"anthropic"``, ``"openai"``, ``"gemini"``). Drives both
+            resource_link resolution and image-handling restrictions. May be
+            ``None`` for unknown vendors — in that case, resource_link
+            resolution is skipped and tool results pass through as JSON.
+        loop_logger: Logger used for debug/info/warning output. May be
+            ``None`` to suppress logging.
 
     Returns:
-        Message dict with role, content, and optionally _mesh_usage.
+        A tuple ``(tool_messages, accumulated_images)`` where:
+          * ``tool_messages`` is the ordered list of
+            ``{role: "tool", tool_call_id: ..., content: ...}`` dicts to be
+            appended to the conversation immediately after the assistant
+            message that requested the tools.
+          * ``accumulated_images`` is the list of image dicts (in
+            OpenAI-compatible format) to be sent in a follow-up user message
+            after all tool results, for vendors that do not support images
+            in role:tool messages. Empty for other vendors.
     """
-    import litellm
-
     from _mcp_mesh.engine.unified_mcp_proxy import UnifiedMCPProxy
     from _mcp_mesh.media.resolver import _has_resource_link, resolve_resource_links
-
-    # Vendors that do NOT support images in tool/function result messages.
-    # OpenAI strictly rejects images in role:tool messages.
-    # For these vendors, images are accumulated and sent as one user message
-    # after ALL tool results for the iteration.
-    _tool_image_unsupported = {"openai", "gemini", "google"}
-
-    iteration = 0
-    current_messages = list(messages)
-
-    # Pop parallel_tool_calls before it reaches completion_args
-    # (Claude handler strips it, but OpenAI would pass it to API)
-    parallel = model_params.pop("parallel_tool_calls", False)
-    if parallel and loop_logger:
-        loop_logger.info("🔀 Provider parallel tool calls enabled — tools will execute concurrently via asyncio.gather()")
 
     async def _execute_single_tool(tc) -> tuple[dict, list[dict]]:
         """Execute a single tool call and return (tool_message, image_parts)."""
@@ -294,7 +311,7 @@ async def _provider_agentic_loop(
                 )
 
                 if has_image:
-                    if vendor in _tool_image_unsupported:
+                    if vendor in _TOOL_IMAGE_UNSUPPORTED_VENDORS:
                         # OpenAI/Gemini: images NOT allowed in tool messages.
                         # Put text-only parts in the tool message, accumulate
                         # images for a single user message after all tool results.
@@ -387,6 +404,73 @@ async def _provider_agentic_loop(
             [],
         )
 
+    tool_messages: list[dict] = []
+    accumulated_images: list[dict] = []
+
+    if parallel and len(message.tool_calls) > 1:
+        # Parallel execution via asyncio.gather
+        if loop_logger:
+            loop_logger.info(
+                f"⚡ Provider executing {len(message.tool_calls)} tool calls in parallel"
+            )
+        results = await asyncio.gather(
+            *[_execute_single_tool(tc) for tc in message.tool_calls]
+        )
+        for tool_msg, images in results:
+            tool_messages.append(tool_msg)
+            accumulated_images.extend(images)
+    else:
+        # Sequential execution (original behavior)
+        for tc in message.tool_calls:
+            tool_msg, images = await _execute_single_tool(tc)
+            tool_messages.append(tool_msg)
+            accumulated_images.extend(images)
+
+    return tool_messages, accumulated_images
+
+
+async def _provider_agentic_loop(
+    effective_model: str,
+    messages: list,
+    tools: list,
+    tool_endpoints: dict[str, str],
+    model_params: dict,
+    litellm_kwargs: dict,
+    max_iterations: int = 10,
+    loop_logger: logging.Logger | None = None,
+    vendor: str | None = None,
+) -> dict[str, Any]:
+    """Execute tools provider-side and return final response.
+
+    Runs a full agentic loop on the provider: calls the LLM, executes any
+    tool calls via MCP proxies, feeds results back, and repeats until the
+    LLM produces a final text response (no tool calls).
+
+    Args:
+        effective_model: LiteLLM model identifier to use.
+        messages: Conversation messages (will be copied internally).
+        tools: OpenAI-format tool schemas (already cleaned of _mesh_endpoint).
+        tool_endpoints: Mapping of tool_name -> MCP endpoint URL.
+        model_params: Extra model parameters for litellm.completion().
+        litellm_kwargs: Base kwargs captured by the decorator.
+        max_iterations: Safety limit on loop iterations.
+        loop_logger: Logger instance for debug/info output.
+        vendor: Vendor name for media resolution (e.g., "anthropic", "openai").
+
+    Returns:
+        Message dict with role, content, and optionally _mesh_usage.
+    """
+    import litellm
+
+    iteration = 0
+    current_messages = list(messages)
+
+    # Pop parallel_tool_calls before it reaches completion_args
+    # (Claude handler strips it, but OpenAI would pass it to API)
+    parallel = model_params.pop("parallel_tool_calls", False)
+    if parallel and loop_logger:
+        loop_logger.info("🔀 Provider parallel tool calls enabled — tools will execute concurrently via asyncio.gather()")
+
     # HINT-mode state (set by ClaudeHandler.apply_structured_output).
     # Captured outside the loop so the fallback after the loop has access.
     hint_mode = False
@@ -455,26 +539,10 @@ async def _provider_agentic_loop(
             }
             current_messages.append(assistant_msg)
 
-            accumulated_images: list[dict] = []
-
-            if parallel and len(message.tool_calls) > 1:
-                # Parallel execution via asyncio.gather
-                if loop_logger:
-                    loop_logger.info(
-                        f"⚡ Provider executing {len(message.tool_calls)} tool calls in parallel"
-                    )
-                results = await asyncio.gather(
-                    *[_execute_single_tool(tc) for tc in message.tool_calls]
-                )
-                for tool_msg, images in results:
-                    current_messages.append(tool_msg)
-                    accumulated_images.extend(images)
-            else:
-                # Sequential execution (original behavior)
-                for tc in message.tool_calls:
-                    tool_msg, images = await _execute_single_tool(tc)
-                    current_messages.append(tool_msg)
-                    accumulated_images.extend(images)
+            tool_messages, accumulated_images = await _execute_tool_calls_for_iteration(
+                message, tool_endpoints, parallel, vendor, loop_logger
+            )
+            current_messages.extend(tool_messages)
 
             # After ALL tool results: inject accumulated images as one user message.
             # Sequence: assistant(tool_calls) -> tool -> tool -> ... -> user(images)
