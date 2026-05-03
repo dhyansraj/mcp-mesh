@@ -293,3 +293,4 @@ src/ui/dist/
 src/ui/node_modules/
 mcp-mesh-ui
 uisample/
+dump.rdb

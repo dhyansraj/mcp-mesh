@@ -353,14 +353,34 @@ class MeshLlmAgentInjector(BaseInjector):
                 f"Provider {function_name} has invalid endpoint (expected string): {endpoint}"
             )
 
-        # Create proxy with endpoint URL
+        # Create proxy with endpoint URL.
+        # Spread provider_data["kwargs"] (the provider tool's @mesh.tool kwargs)
+        # into kwargs_config so producer-advertised behavior — e.g.
+        # stream_type=text — reaches the provider proxy. Mirrors the
+        # producer-kwargs propagation for regular tool deps (issue #849 Stage A).
+        # Producer kwargs first; consumer-config keys (capability, agent_id)
+        # are spread LAST so a producer can never silently shadow them by
+        # advertising those names in their @mesh.tool kwargs. Defensive
+        # type check on producer kwargs: the JSON parse upstream already
+        # validates shape, but if a caller hand-builds provider_data with
+        # a non-mapping value here we coerce to {} rather than raising.
+        from collections.abc import Mapping
+        _raw_provider_kwargs = provider_data.get("kwargs")
+        if _raw_provider_kwargs and not isinstance(_raw_provider_kwargs, Mapping):
+            logger.warning(
+                f"Provider {function_name}: kwargs is not a mapping "
+                f"(got {type(_raw_provider_kwargs).__name__}); ignoring"
+            )
+            _raw_provider_kwargs = None
+        kwargs_config = {
+            **(_raw_provider_kwargs or {}),
+            "capability": provider_data.get("capability", "llm"),
+            "agent_id": provider_data.get("agent_id"),
+        }
         proxy = UnifiedMCPProxy(
             endpoint=endpoint,
             function_name=function_name,
-            kwargs_config={
-                "capability": provider_data.get("capability", "llm"),
-                "agent_id": provider_data.get("agent_id"),
-            },
+            kwargs_config=kwargs_config,
         )
 
         logger.debug(f"🔧 Created provider proxy for {function_name} at {endpoint}")

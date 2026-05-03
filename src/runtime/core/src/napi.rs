@@ -128,6 +128,10 @@ pub struct JsLlmProviderInfo {
     pub model: Option<String>,
     /// Vendor name for handler selection (e.g., "gemini", "anthropic")
     pub vendor: Option<String>,
+    /// Provider tool's @mesh.tool kwargs as a JSON string. SDKs decode this
+    /// to configure the provider proxy from the producer's advertised
+    /// behavior (e.g. `stream_type`).
+    pub kwargs: Option<String>,
 }
 
 impl From<LlmProviderInfo> for JsLlmProviderInfo {
@@ -139,6 +143,7 @@ impl From<LlmProviderInfo> for JsLlmProviderInfo {
             function_name: info.function_name,
             model: info.model,
             vendor: info.vendor,
+            kwargs: info.kwargs,
         }
     }
 }

@@ -364,9 +364,35 @@ class ClaudeHandler(BaseProviderHandler):
         # Internal flags read by _provider_agentic_loop. Prefixed with
         # "_mesh_" so the loop strips them before calling LiteLLM (these
         # are NOT API params).
+        # Fallback timeout: 30s was too tight for complex nested schemas
+        # (e.g. list[NestedModel] where Claude generates multi-day itineraries).
+        # Configurable via MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT (seconds).
+        # Fail-open on a malformed env value so a typo can't break the
+        # provider mid-request — log a warning and use the default.
+        _raw_timeout = os.environ.get("MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT")
+        if _raw_timeout is None:
+            fallback_timeout = 90
+        else:
+            try:
+                fallback_timeout = int(_raw_timeout)
+            except ValueError:
+                logger.warning(
+                    "MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT=%r is not an integer; "
+                    "using default 90s",
+                    _raw_timeout,
+                )
+                fallback_timeout = 90
+            else:
+                if fallback_timeout <= 0:
+                    logger.warning(
+                        "MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT=%r must be positive; "
+                        "using default 90s",
+                        _raw_timeout,
+                    )
+                    fallback_timeout = 90
         model_params["_mesh_hint_mode"] = True
         model_params["_mesh_hint_schema"] = sanitized_schema
-        model_params["_mesh_hint_fallback_timeout"] = 30
+        model_params["_mesh_hint_fallback_timeout"] = fallback_timeout
         model_params["_mesh_hint_output_type_name"] = output_type_name or "Response"
 
         # Explicitly DO NOT set response_format — that's the bug we're avoiding.

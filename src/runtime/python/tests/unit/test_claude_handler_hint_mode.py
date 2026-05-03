@@ -43,11 +43,13 @@ class TestClaudeApplyStructuredOutputHintMode:
         }
 
     def setup_method(self):
-        # Ensure env var doesn't leak between tests in this class
+        # Ensure env vars don't leak between tests in this class
         os.environ.pop("MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT", None)
+        os.environ.pop("MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT", None)
 
     def teardown_method(self):
         os.environ.pop("MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT", None)
+        os.environ.pop("MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT", None)
 
     def test_does_not_set_response_format(self):
         """HINT-mode override must NOT set ``response_format``."""
@@ -105,7 +107,7 @@ class TestClaudeApplyStructuredOutputHintMode:
             self._schema(), "MyType", model_params
         )
 
-        assert result.get("_mesh_hint_fallback_timeout") == 30
+        assert result.get("_mesh_hint_fallback_timeout") == 90
         assert result.get("_mesh_hint_output_type_name") == "MyType"
 
     def test_injects_hint_into_system_prompt(self):
@@ -328,7 +330,7 @@ class TestPopMeshHintFlags:
         hint_mode, hint_schema, hint_timeout, hint_name = _pop_mesh_hint_flags(args)
         assert hint_mode is False
         assert hint_schema is None
-        assert hint_timeout == 30
+        assert hint_timeout == 90  # _DEFAULT_HINT_FALLBACK_TIMEOUT
         assert hint_name == "Response"
         # Original args untouched
         assert args == {"model": "x", "messages": []}

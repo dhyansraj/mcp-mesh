@@ -816,6 +816,12 @@ async def _handle_llm_provider_update(
     Handle LLM provider resolution event.
 
     Updates the LLM provider for the given function via the DI system.
+
+    ``provider_info.kwargs`` is the provider tool's @mesh.tool kwargs as a
+    JSON string (issue #849 Stage A). The provider proxy is configured from
+    this so producer-advertised behavior (e.g. ``stream_type=text``) reaches
+    the consumer-side proxy. Mirrors the producer-kwargs propagation for
+    regular tool dependencies.
     """
     function_id = provider_info.function_id
     logger.info(
@@ -823,14 +829,43 @@ async def _handle_llm_provider_update(
         f"{provider_info.function_name} at {provider_info.endpoint}"
     )
 
+    # Parse provider kwargs (JSON string from Rust event). Defensive parse
+    # mirrors _handle_dependency_change for symmetry with regular tool deps.
+    raw_provider_kwargs = getattr(provider_info, "kwargs", None)
+    parsed_provider_kwargs: dict = {}
+    if raw_provider_kwargs:
+        try:
+            _decoded = json.loads(raw_provider_kwargs)
+        except (TypeError, ValueError) as e:
+            logger.warning(
+                f"Could not parse provider kwargs for {function_id}: {e}; "
+                f"falling back to empty config"
+            )
+            _decoded = None
+        if _decoded is None:
+            parsed_provider_kwargs = {}
+        elif isinstance(_decoded, dict):
+            parsed_provider_kwargs = _decoded
+        else:
+            logger.warning(
+                f"Provider kwargs for {function_id} parsed to "
+                f"{type(_decoded).__name__}, expected object; "
+                f"falling back to empty config"
+            )
+            parsed_provider_kwargs = {}
+
     # Import injector
     from ...engine.dependency_injector import get_global_injector
     from ...engine.unified_mcp_proxy import EnhancedUnifiedMCPProxy
 
-    # Create proxy for the LLM provider
+    # Create proxy for the LLM provider. Forward producer kwargs so streaming
+    # etc. is configured even on this generic-dependency registration path
+    # (MeshLlmAgent uses a different proxy via the injector, but we keep
+    # symmetry here too).
     proxy = EnhancedUnifiedMCPProxy(
         provider_info.endpoint,
         provider_info.function_name,
+        kwargs_config=dict(parsed_provider_kwargs),
     )
 
     # Register as the LLM provider for this function
@@ -838,7 +873,10 @@ async def _handle_llm_provider_update(
     provider_key = f"{function_id}:llm_provider"
     await injector.register_dependency(provider_key, proxy)
 
-    # Also store provider metadata for the mesh agent to use (using "name" for OpenAPI contract)
+    # Also store provider metadata for the mesh agent to use (using "name" for OpenAPI contract).
+    # ``kwargs`` carries the provider tool's @mesh.tool kwargs so the
+    # MeshLlmAgentInjector can lift them onto the provider proxy's
+    # kwargs_config (issue #849 Stage A).
     llm_providers = {
         function_id: {
             "agent_id": provider_info.agent_id,
@@ -846,6 +884,7 @@ async def _handle_llm_provider_update(
             "name": provider_info.function_name,  # OpenAPI contract uses "name"
             "model": provider_info.model,
             "vendor": provider_info.vendor,  # For handler selection
+            "kwargs": parsed_provider_kwargs,  # Producer @mesh.tool kwargs (e.g. stream_type)
         }
     }
     injector.process_llm_providers(llm_providers)

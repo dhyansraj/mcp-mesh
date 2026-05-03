@@ -141,6 +141,12 @@ pub struct LlmProviderInfo {
 
     /// Vendor name for handler selection (e.g., "gemini", "anthropic")
     pub vendor: Option<String>,
+
+    /// Provider tool's @mesh.tool kwargs serialized as JSON; None if absent.
+    /// Mirrors `MeshEvent.kwargs` for regular tool deps so SDKs can configure
+    /// the provider proxy from the producer's advertised behavior (e.g.
+    /// `stream_type`).
+    pub kwargs: Option<String>,
 }
 
 /// Tool specification for LLM tools update event.
@@ -311,7 +317,8 @@ impl MeshEvent {
 
     /// Get provider_info as a Python object with attributes.
     /// Returns None if no provider info, otherwise returns an object with
-    /// function_id, agent_id, endpoint, function_name, and model attributes.
+    /// function_id, agent_id, endpoint, function_name, model, vendor, and
+    /// kwargs attributes (kwargs is a JSON-serialized string or None).
     #[getter]
     fn provider_info(&self, py: Python<'_>) -> PyResult<Option<pyo3::Py<pyo3::PyAny>>> {
         match &self.provider_info {
@@ -325,6 +332,7 @@ impl MeshEvent {
                 kwargs.set_item("function_name", &info.function_name)?;
                 kwargs.set_item("model", &info.model)?;
                 kwargs.set_item("vendor", &info.vendor)?;
+                kwargs.set_item("kwargs", &info.kwargs)?;
                 let obj = provider_class.call((), Some(&kwargs))?;
                 Ok(Some(obj.into()))
             }
@@ -524,6 +532,47 @@ mod tests {
             event.kwargs,
             Some(r#"{"stream_type":"text"}"#.to_string())
         );
+    }
+
+    #[test]
+    fn test_llm_provider_available_event_with_kwargs() {
+        let provider_info = LlmProviderInfo {
+            function_id: "chat_abc123".to_string(),
+            agent_id: "claude-provider".to_string(),
+            endpoint: "http://localhost:9020".to_string(),
+            function_name: "process_chat".to_string(),
+            model: Some("anthropic/claude-sonnet-4-5".to_string()),
+            vendor: Some("anthropic".to_string()),
+            kwargs: Some(r#"{"stream_type":"text"}"#.to_string()),
+        };
+
+        let event = MeshEvent::llm_provider_available(provider_info);
+
+        assert_eq!(event.event_type, EventType::LlmProviderAvailable);
+        assert_eq!(event.event_type.as_str(), "llm_provider_available");
+        let info = event.provider_info.expect("provider_info should be set");
+        assert_eq!(info.function_id, "chat_abc123");
+        assert_eq!(info.endpoint, "http://localhost:9020");
+        assert_eq!(info.function_name, "process_chat");
+        assert_eq!(info.vendor, Some("anthropic".to_string()));
+        assert_eq!(info.kwargs, Some(r#"{"stream_type":"text"}"#.to_string()));
+    }
+
+    #[test]
+    fn test_llm_provider_available_event_without_kwargs() {
+        let provider_info = LlmProviderInfo {
+            function_id: "chat_abc123".to_string(),
+            agent_id: "claude-provider".to_string(),
+            endpoint: "http://localhost:9020".to_string(),
+            function_name: "process_chat".to_string(),
+            model: None,
+            vendor: None,
+            kwargs: None,
+        };
+
+        let event = MeshEvent::llm_provider_available(provider_info);
+        let info = event.provider_info.expect("provider_info should be set");
+        assert!(info.kwargs.is_none());
     }
 
     #[test]
