@@ -105,9 +105,20 @@ Pre-flight checks in `chat_endpoint` fire BEFORE `StreamingResponse` is built, s
 
 Both patterns are valid — pick the one that matches the error model. If only mid-stream errors matter, the simpler `async def ... yield` form is fine; if pre-flight failures must be visible to non-SSE clients via HTTP status, use the coroutine-returns-generator pattern.
 
-## What it does NOT do (v1 limitations)
+## Direct vs mesh-delegate streaming
 
-- **Direct-mode LLM only.** `MeshLlmAgent.stream()` works when the injected provider does direct LiteLLM calls. Mesh-delegated providers (zero-code `@mesh.llm_provider` wrappers) raise `NotImplementedError` for `stream()`. Provider-mode streaming is planned for a follow-up.
+`MeshLlmAgent.stream()` works in both modes. **Direct mode** (consumer-supplied LiteLLM call) streams chunks straight from the vendor SDK. **Mesh-delegate mode** (zero-code `@mesh.llm_provider`) streams through the provider's auto-generated `process_chat_stream` tool — the provider runs the agentic loop, the consumer just iterates chunks.
+
+The two modes share the same author surface; the resolver picks the right variant based on the consumer's return type:
+
+| Consumer return type | Resolver matches | Provider tool used |
+|----------------------|------------------|--------------------|
+| `mesh.Stream[str]`   | `+ai.mcpmesh.stream` | `process_chat_stream` (streaming) |
+| `str` / Pydantic     | `-ai.mcpmesh.stream` | `process_chat` (buffered) |
+
+If the resolved provider is older and never advertised the streaming variant, mesh logs a warning and falls back to a single buffered chunk so the consumer doesn't break.
+
+## What it does NOT do (v1 limitations)
 
 - **`Stream[str]` only.** `Stream[T]` for any `T != str` is rejected at decorator-time with a clear error. Typed Pydantic streaming is intentionally unsupported — the consumer needs complete JSON for schema validation, which contradicts the streaming model.
 

@@ -265,13 +265,14 @@ headers so log lines correlate with distributed traces. Ship logs to Grafana
 Loki and cross-reference with Tempo traces for full request-level
 observability.
 
-### Build a mobile client
+### Build a streaming mobile UI
 
-Create a lightweight web UI that talks to the gateway's `/plan` endpoint.
-A starter project is waiting in
-`examples/tutorial/trip-planner/day-10/bonus-ui/` -- check the README for
-status. The gateway already exposes a REST API, so the client is a standard
-fetch/axios integration.
+Already built — see the
+[Day 10 Bonus — Streaming UI](day-10-bonus-streaming-ui.md) chapter. It
+takes the buffered Day 9 mesh and makes the user-visible Claude response
+stream live, token by token, into a mobile-first React UI. Two file changes
+(planner + gateway) plus a single HTML file. The deepest pipeline mcp-mesh
+ships, end to end.
 
 ---
 
