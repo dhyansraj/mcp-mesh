@@ -1,9 +1,14 @@
 """Unit tests for ``MeshLlmAgent.stream()``.
 
-Covers P5 of issue #645:
+Covers P5 of issue #645 and the v2 follow-up (always-stream, mid-stream
+tool_call detection — Option B):
 - Final-iteration streaming yields chunks in order, returns when done.
-- Peek-then-stream falls back to the tool-call branch correctly when
-  ``tool_calls`` deltas appear in the first chunks.
+- Tool-call deltas in the first chunk route through the tool-call branch
+  with no text yielded.
+- Text preamble that precedes a tool_call IS yielded live, then the
+  tool_call is detected mid-stream, the tool runs, and the next iteration's
+  text streams normally (regression for #645 v2).
+- Chunks arriving with realistic inter-chunk delays still all stream.
 - Token usage is captured AFTER full stream consumption and published
   via ``set_llm_metadata`` for ExecutionTracer.
 - Direct-mode constraint: mesh-delegated providers raise
@@ -176,13 +181,13 @@ class TestStreamYieldsChunks:
 
 
 # ---------------------------------------------------------------------------
-# Peek-then-stream tool-call fallback
+# Mid-stream tool-call detection (Option B)
 # ---------------------------------------------------------------------------
 
 
-class TestStreamPeekToolCallFallback:
+class TestStreamMidStreamToolCall:
     @pytest.mark.asyncio
-    async def test_tool_call_in_first_chunk_falls_back_to_tool_branch(self):
+    async def test_tool_call_in_first_chunk_routes_through_tool_branch(self):
         # Tool call delta arrives in the first chunk, then arguments accrue,
         # then a final text-only iteration completes the stream.
         tool_call_first = _tool_call_delta(
@@ -236,8 +241,8 @@ class TestStreamPeekToolCallFallback:
                 assert mock_acomp.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_no_tool_call_drains_buffered_then_live(self):
-        # First two chunks land within the peek window; remaining arrive after.
+    async def test_text_only_stream_yields_chunks_live(self):
+        # No tool_calls — every text chunk should yield in order as it arrives.
         chunks = [
             _chunk(content="A"),
             _chunk(content="B"),
@@ -258,26 +263,103 @@ class TestStreamPeekToolCallFallback:
                 collected.append(piece)
             assert collected == ["A", "B", "C"]
 
+    @pytest.mark.asyncio
+    async def test_text_preamble_before_tool_call_is_yielded_then_tool_runs(self):
+        """Regression for #645 v2: Claude often emits text BEFORE tool_call.
+
+        The previous peek-then-stream design (Option A) saw text first within
+        the peek window, decided "no tool calls, this is the final response",
+        entered the text-yield branch, ignored the tool_call delta when it
+        arrived after the peek window, and returned after the preamble — the
+        tool was NEVER executed.
+
+        Option B yields the preamble live as it arrives, detects the
+        tool_call mid-stream, drains the rest for full tool_call fragments
+        plus the usage chunk, executes the tool, and continues the outer
+        loop. The next iteration's text streams normally.
+        """
+        # Iter 1: text preamble → tool_call delta(s) → usage
+        tool_call_first = _tool_call_delta(
+            index=0,
+            id="call_weather_1",
+            type="function",
+            name="get_weather",
+            arguments='{"city":',
+        )
+        tool_call_second = _tool_call_delta(
+            index=0, arguments='"Charlotte"}'
+        )
+        first_iter_chunks = [
+            _chunk(content="Let me "),
+            _chunk(content="check "),
+            _chunk(content="the weather..."),
+            _chunk(tool_calls=[tool_call_first]),
+            _chunk(tool_calls=[tool_call_second]),
+            _chunk(usage={"prompt_tokens": 10, "completion_tokens": 8}),
+        ]
+        # Iter 2: pure text final answer
+        second_iter_chunks = [
+            _chunk(content="It is "),
+            _chunk(content="72°F "),
+            _chunk(content="and sunny."),
+            _chunk(usage={"prompt_tokens": 14, "completion_tokens": 6}),
+        ]
+
+        agent = MeshLlmAgent(
+            config=make_config(),
+            filtered_tools=[],
+            output_type=str,
+        )
+
+        with patch(
+            "_mcp_mesh.engine.mesh_llm_agent.acompletion", new=AsyncMock()
+        ) as mock_acomp:
+            mock_acomp.side_effect = [
+                _FakeStream(first_iter_chunks),
+                _FakeStream(second_iter_chunks),
+            ]
+
+            with patch.object(
+                agent, "_execute_tool_calls", new=AsyncMock(return_value=[])
+            ) as mock_exec:
+                collected = []
+                async for piece in agent.stream("what's the weather in Charlotte?"):
+                    collected.append(piece)
+
+        # Preamble + final answer, in order, all yielded live.
+        assert collected == [
+            "Let me ",
+            "check ",
+            "the weather...",
+            "It is ",
+            "72°F ",
+            "and sunny.",
+        ]
+        # Tool branch executed exactly once with the merged tool call.
+        assert mock_exec.call_count == 1
+        tool_calls_arg = mock_exec.call_args.args[0]
+        assert tool_calls_arg[0].function.name == "get_weather"
+        assert tool_calls_arg[0].function.arguments == '{"city":"Charlotte"}'
+        # Two acompletion iterations: tool turn + final-answer turn.
+        assert mock_acomp.call_count == 2
+
 
 # ---------------------------------------------------------------------------
-# Regression: peek timeout must not cancel in-flight __anext__()
+# Realistic inter-chunk delays still stream every chunk
 # ---------------------------------------------------------------------------
 
 
 class _SlowChunkStream:
-    """Async iterator that yields each chunk after a real ``sleep`` delay AND
-    fakes litellm's ``CustomStreamWrapper`` failure mode: if a previous
-    ``__anext__()`` was cancelled mid-flight (peek timeout firing on a
-    chunk-in-flight), the stream is permanently broken and all subsequent
-    ``__anext__()`` calls raise ``StopAsyncIteration`` — silently dropping
-    every remaining chunk. That's the exact corruption observed empirically
-    with real Claude streams.
+    """Async iterator that yields each chunk after a real ``sleep`` delay.
+
+    Mirrors the timing profile of a real Claude stream where chunks arrive
+    tens of milliseconds apart. With Option B (always-stream) there is no
+    peek window, so this just verifies live yielding under realistic delays.
     """
 
     def __init__(self, chunks: list[MagicMock], delay_seconds: float):
         self._chunks = list(chunks)
         self._delay = delay_seconds
-        self._broken = False
         self.aclosed = False
 
     def __aiter__(self):
@@ -286,37 +368,26 @@ class _SlowChunkStream:
     async def __anext__(self):
         import asyncio as _asyncio
 
-        if self._broken or not self._chunks:
+        if not self._chunks:
             raise StopAsyncIteration
-        try:
-            await _asyncio.sleep(self._delay)
-        except _asyncio.CancelledError:
-            self._broken = True
-            raise
+        await _asyncio.sleep(self._delay)
         return self._chunks.pop(0)
 
     async def aclose(self):
         self.aclosed = True
 
 
-class TestStreamPeekTimeoutDoesNotCancelInFlightChunk:
+class TestStreamYieldsChunksWithRealisticDelays:
     @pytest.mark.asyncio
-    async def test_yields_all_chunks_when_chunks_arrive_after_peek_timeout(
-        self, monkeypatch
-    ):
-        """Regression: peek must not cancel the in-flight ``__anext__()`` task
-        on timeout — chunks arriving after the peek deadline must still be
-        yielded.
+    async def test_stream_yields_chunks_with_realistic_delays(self):
+        """Chunks arriving ~50ms apart must all stream live.
 
-        Bug: ``asyncio.wait_for`` cancels the underlying coroutine on timeout;
-        for litellm's ``CustomStreamWrapper`` that discards the chunk being
-        read AND corrupts the iterator state so the post-peek ``async for``
-        yields nothing. With a 100ms peek window and 50ms inter-chunk gaps,
-        only the first 1–2 chunks arrive before the deadline; without the
-        fix the rest are silently dropped.
+        Originally a regression test for peek-timeout cancelling the
+        in-flight ``__anext__()`` task. Option B removes the peek window
+        entirely, so the cancel-on-timeout failure mode no longer exists,
+        but the realistic-delay scenario itself remains valuable: it
+        catches any future regression where buffering re-creeps in.
         """
-        monkeypatch.setenv("MESH_LLM_STREAM_PEEK_MS", "100")
-
         chunk_texts = ["chunk1", "chunk2", "chunk3", "chunk4", "chunk5"]
         chunks = [_chunk(content=t) for t in chunk_texts] + [
             _chunk(usage={"prompt_tokens": 3, "completion_tokens": 5})

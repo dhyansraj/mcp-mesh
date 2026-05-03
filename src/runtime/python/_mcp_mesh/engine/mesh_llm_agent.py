@@ -1281,14 +1281,6 @@ class MeshLlmAgent:
                         slot["function"]["arguments"] += fn.arguments
         return [tc for tc in merged.values() if tc["id"] is not None]
 
-    @staticmethod
-    def _stream_peek_window_seconds() -> float:
-        """Read the peek window from ``MESH_LLM_STREAM_PEEK_MS`` (default 100ms)."""
-        try:
-            return max(0, int(os.environ.get("MESH_LLM_STREAM_PEEK_MS", "100"))) / 1000.0
-        except ValueError:
-            return 0.1
-
     async def stream(
         self,
         message: Union[str, list[dict[str, Any]]],
@@ -1300,17 +1292,31 @@ class MeshLlmAgent:
     ) -> AsyncIterator[str]:
         """Stream the final assistant text token-by-token via the agentic loop.
 
-        Each iteration uses ``litellm.acompletion(stream=True, ...)``. We
-        peek the first chunks within ``MESH_LLM_STREAM_PEEK_MS`` (default
-        100ms) — if any contain ``tool_calls`` we drain the rest, reconstruct
-        a non-streaming response, run the existing tool branch, and continue
-        the loop. If only text is observed we emit buffered chunks first
-        and then live chunks until the stream completes.
+        Each iteration opens ``litellm.acompletion(stream=True, ...)`` and
+        consumes chunks live as they arrive. Text deltas are yielded to the
+        consumer immediately; the moment a ``tool_calls`` delta appears we
+        stop yielding text from this iteration, drain the rest of the stream
+        to collect tool_call argument fragments and the trailing usage block,
+        execute the tools, append assistant + tool messages, and continue
+        the loop. An iteration that produces no tool_calls IS the final
+        answer — we return after the stream exhausts.
 
-        Token usage is captured AFTER full stream consumption (LiteLLM emits
-        ``usage`` in the final chunk when ``stream_options={"include_usage":
-        True}`` is requested) so ExecutionTracer's post-call read still sees
-        accurate counts.
+        Why stop yielding text once a tool_call is seen:
+            Anthropic emits text only BEFORE a tool_call within a single
+            assistant turn (Claude does not interleave text and tool_calls
+            inside one content block). Any further "text" deltas after a
+            tool_call delta are typically empty / whitespace and would just
+            muddy the consumer's view of the preamble. If a future provider
+            DOES interleave, we can revisit. The earlier "peek-then-stream"
+            design (Option A) decided text-vs-tool BEFORE the stream began,
+            which dropped the entire tool_call branch when Claude prefaced
+            its tool calls with text like "I'll check the weather..." —
+            this Option B implementation handles that case correctly.
+
+        Token usage is captured AFTER full stream consumption per iteration
+        (LiteLLM emits ``usage`` in the final chunk when
+        ``stream_options={"include_usage": True}`` is requested) so
+        ExecutionTracer's post-call read still sees accurate counts.
 
         Constraints:
             - Direct mode only. Mesh-delegated providers (``provider`` is a
@@ -1320,7 +1326,8 @@ class MeshLlmAgent:
               meaningfully streamed and would defeat token-by-token UX.
 
         Yields:
-            ``str`` chunks from the final assistant message.
+            ``str`` chunks from the final assistant message (and any
+            preamble text that precedes intermediate tool calls).
         """
         if self._is_mesh_delegated:
             raise NotImplementedError(
@@ -1346,7 +1353,6 @@ class MeshLlmAgent:
         total_input_tokens = 0
         total_output_tokens = 0
         effective_model = self.model
-        peek_window = self._stream_peek_window_seconds()
 
         messages = await self._build_messages_for_run(
             message, media, context, context_mode
@@ -1387,79 +1393,46 @@ class MeshLlmAgent:
                     original_error=e,
                 ) from e
 
-            buffered: list[Any] = []
+            chunks: list[Any] = []
             saw_tool_call = False
-            peek_deadline = asyncio.get_event_loop().time() + peek_window
-            stream_aiter = stream_iter.__aiter__()
             stream_completed = False
-            # We use asyncio.wait (not asyncio.wait_for) for the peek timeout
-            # because wait_for cancels the underlying coroutine on timeout. For
-            # litellm's CustomStreamWrapper that discards the chunk currently
-            # being read AND corrupts the iterator's internal state, so the
-            # post-peek async-for yields nothing. asyncio.wait leaves the
-            # pending __anext__() task untouched; we drain it before continuing.
-            pending_peek_task: Optional[asyncio.Task] = None
 
             try:
-                while True:
-                    if pending_peek_task is None:
-                        pending_peek_task = asyncio.ensure_future(
-                            stream_aiter.__anext__()
-                        )
+                async for chunk in stream_iter:
+                    chunks.append(chunk)
 
-                    remaining = peek_deadline - asyncio.get_event_loop().time()
-                    if remaining <= 0:
-                        break
-
-                    done, _ = await asyncio.wait(
-                        {pending_peek_task}, timeout=remaining
-                    )
-                    if not done:
-                        break
-
-                    completed_task = pending_peek_task
-                    pending_peek_task = None
-                    try:
-                        chunk = completed_task.result()
-                    except StopAsyncIteration:
-                        stream_completed = True
-                        break
-
-                    buffered.append(chunk)
                     if self._chunk_has_tool_call(chunk):
+                        # First tool_call delta of this iteration: stop
+                        # yielding text immediately. We continue draining
+                        # the stream so we collect remaining tool_call
+                        # argument fragments AND the trailing usage chunk;
+                        # we do NOT break out of the loop.
                         saw_tool_call = True
-                        break
+                        continue
 
-                # Drain the in-flight peek task BEFORE entering either the
-                # tool-call branch or the post-peek async-for. Skipping this
-                # would lose a chunk and (for litellm wrappers) call __anext__
-                # on an iterator that already has an outstanding awaiter.
-                if pending_peek_task is not None:
-                    drained_task = pending_peek_task
-                    try:
-                        chunk = await drained_task
-                    except StopAsyncIteration:
-                        stream_completed = True
-                        pending_peek_task = None
-                    else:
-                        pending_peek_task = None
-                        buffered.append(chunk)
-                        if self._chunk_has_tool_call(chunk):
-                            saw_tool_call = True
+                    if saw_tool_call:
+                        # Already in tool-call mode; ignore any further
+                        # text deltas (per the docstring: Claude doesn't
+                        # interleave text and tool_calls).
+                        continue
+
+                    text = self._extract_text_from_chunk(chunk)
+                    if text:
+                        yield text
+                stream_completed = True
+
+                final_usage = self._extract_usage_from_chunks(chunks)
+                if final_usage:
+                    total_input_tokens += final_usage.get("prompt_tokens", 0) or 0
+                    total_output_tokens += (
+                        final_usage.get("completion_tokens", 0) or 0
+                    )
+                model_from_chunks = self._extract_model_from_chunks(chunks)
+                if model_from_chunks:
+                    effective_model = model_from_chunks
 
                 if saw_tool_call:
-                    async for chunk in stream_aiter:
-                        buffered.append(chunk)
-                    stream_completed = True
-
-                    final_usage = self._extract_usage_from_chunks(buffered)
-                    if final_usage:
-                        total_input_tokens += final_usage.get("prompt_tokens", 0) or 0
-                        total_output_tokens += (
-                            final_usage.get("completion_tokens", 0) or 0
-                        )
-
-                    merged_tool_calls = self._merge_streamed_tool_calls(buffered)
+                    merged_tool_calls = self._merge_streamed_tool_calls(chunks)
                     if not merged_tool_calls:
                         raise LLMAPIError(
                             provider=str(self.provider),
@@ -1470,17 +1443,14 @@ class MeshLlmAgent:
                             ),
                         )
 
-                    buffered_text = self._join_text_from_chunks(buffered)
+                    preamble_text = self._join_text_from_chunks(chunks)
                     mock = _MockResponse(
                         {
                             "role": "assistant",
-                            "content": buffered_text or None,
+                            "content": preamble_text or None,
                             "tool_calls": merged_tool_calls,
                         }
                     )
-                    model_from_chunks = self._extract_model_from_chunks(buffered)
-                    if model_from_chunks:
-                        effective_model = model_from_chunks
 
                     set_llm_metadata(
                         model=effective_model,
@@ -1513,26 +1483,9 @@ class MeshLlmAgent:
                         messages.append(tr)
                     continue
 
-                for chunk in buffered:
-                    text = self._extract_text_from_chunk(chunk)
-                    if text:
-                        yield text
-
-                async for chunk in stream_aiter:
-                    buffered.append(chunk)
-                    text = self._extract_text_from_chunk(chunk)
-                    if text:
-                        yield text
-                stream_completed = True
-
-                final_usage = self._extract_usage_from_chunks(buffered)
-                if final_usage:
-                    total_input_tokens += final_usage.get("prompt_tokens", 0) or 0
-                    total_output_tokens += final_usage.get("completion_tokens", 0) or 0
-                model_from_chunks = self._extract_model_from_chunks(buffered)
-                if model_from_chunks:
-                    effective_model = model_from_chunks
-
+                # No tool_calls observed this iteration → final answer.
+                # All text was already yielded live above; usage + model
+                # metadata is published, and we're done.
                 set_llm_metadata(
                     model=effective_model,
                     provider=str(self.provider) if self.provider else "",
@@ -1541,12 +1494,6 @@ class MeshLlmAgent:
                 )
                 return
             finally:
-                if pending_peek_task is not None and not pending_peek_task.done():
-                    pending_peek_task.cancel()
-                    try:
-                        await pending_peek_task
-                    except BaseException:
-                        pass
                 if not stream_completed:
                     aclose = getattr(stream_iter, "aclose", None)
                     if aclose is not None:
