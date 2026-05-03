@@ -55,6 +55,7 @@ import { route, routeWithConfig } from "./route.js";
 import { bindToExpress } from "./api-runtime.js";
 import { llm } from "./llm.js";
 import { llmProvider } from "./llm-provider.js";
+import { sseStream } from "./sse-stream.js";
 
 // Create mesh namespace with route and llm attached
 interface MeshNamespace {
@@ -67,6 +68,8 @@ interface MeshNamespace {
   llm: typeof llm;
   /** Create a zero-code LLM provider tool */
   llmProvider: typeof llmProvider;
+  /** Pipe an AsyncIterable<string> to an Express response as text/event-stream */
+  sseStream: typeof sseStream;
 }
 
 /**
@@ -77,6 +80,7 @@ interface MeshNamespace {
  * - `mesh.bind(app, options)` - Bind to Express, introspect routes
  * - `mesh.llm(config)` - Create LLM-powered tool with agentic loop
  * - `mesh.llmProvider(config)` - Create zero-code LLM provider
+ * - `mesh.sseStream(res, asyncIterable)` - Forward async iterable as SSE
  */
 const mesh: MeshNamespace = Object.assign(meshFn, {
   route,
@@ -84,6 +88,7 @@ const mesh: MeshNamespace = Object.assign(meshFn, {
   bind: bindToExpress,
   llm,
   llmProvider,
+  sseStream,
 });
 
 // Main API
@@ -131,7 +136,7 @@ export {
 } from "./route.js";
 
 // Proxy utilities (for advanced use)
-export { createProxy, normalizeDependency, getCurrentPropagatedHeaders, extractContent, type MultiContentResult } from "./proxy.js";
+export { createProxy, normalizeDependency, getCurrentPropagatedHeaders, extractContent, streamMcpTool, type MultiContentResult } from "./proxy.js";
 
 // Tracing utilities (for advanced use)
 export {
@@ -236,6 +241,7 @@ export {
 
 // SSE utilities
 export { parseSSEResponse, isSSEResponse, parseSSEStream } from "./sse.js";
+export { sseStream } from "./sse-stream.js";
 
 // Debug utilities
 export { debug, createDebug, isAnyDebugEnabled } from "./debug.js";

@@ -331,6 +331,26 @@ export interface McpMeshTool {
   callTool(toolName: string, args?: Record<string, unknown>, options?: { headers?: Record<string, string> }): Promise<unknown>;
 
   /**
+   * Stream text chunks from a remote ``Stream[str]`` tool.
+   *
+   * Returns an async iterable that yields each chunk the producer emits via
+   * MCP ``notifications/progress``. The final result message ends the stream
+   * (its content is NOT yielded — iterate to get the whole stream).
+   *
+   * NOTE: If the producer doesn't actually emit progress notifications, the
+   * underlying SSE response will only contain the final ``result`` and this
+   * iterable will yield nothing.
+   *
+   * @example
+   * ```typescript
+   * for await (const chunk of planner.stream({ destination: "Tokyo" })) {
+   *   process.stdout.write(chunk);
+   * }
+   * ```
+   */
+  stream(args?: Record<string, unknown>, options?: { headers?: Record<string, string> }): AsyncIterable<string>;
+
+  /**
    * Get the endpoint URL for this dependency.
    */
   readonly endpoint: string;

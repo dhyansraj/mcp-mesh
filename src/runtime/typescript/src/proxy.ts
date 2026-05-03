@@ -155,6 +155,12 @@ export function createProxy(
     }
   };
 
+  // Stream options: always honor streamTimeout regardless of the `streaming`
+  // kwarg. The unary path uses `options.timeout` (which is bumped to
+  // streamTimeout only when streaming=true). For stream() the call is by
+  // definition long-lived, so use streamTimeout unconditionally.
+  const streamOptions: CallOptions = { ...options, timeout: options.streamTimeout };
+
   // Attach properties and methods. Public properties are non-enumerable so
   // JSON.stringify(proxy) doesn't leak endpoint/kwargs.customHeaders (which
   // may contain auth tokens). Matches pre-isolation baseline.
@@ -181,6 +187,23 @@ export function createProxy(
         }
       },
       writable: false,
+    },
+    stream: {
+      value: (
+        args?: Record<string, unknown>,
+        callParams?: { headers?: Record<string, string> }
+      ): AsyncIterable<string> => {
+        return streamMcpTool(
+          endpoint,
+          functionName,
+          args,
+          streamOptions,
+          capability,
+          callParams?.headers
+        );
+      },
+      writable: false,
+      enumerable: false,
     },
   });
 
@@ -397,6 +420,294 @@ export async function callMcpTool(
   // All retries failed
   publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, lastError?.message ?? "unknown", "error", requestBytes);
   throw lastError ?? new Error("MCP call failed");
+}
+
+/**
+ * Stream text chunks from a remote ``Stream[str]`` tool.
+ *
+ * Returns an async iterable that yields each chunk as the producer emits it
+ * via MCP ``notifications/progress``. The final result message ends the
+ * stream — its content is NOT yielded (matches Python's contract: "iterate
+ * to get the whole stream").
+ *
+ * Wire protocol:
+ * - POST /mcp with JSON-RPC ``tools/call`` and ``params._meta.progressToken``
+ * - Server returns ``text/event-stream`` with one SSE event per JSON-RPC msg
+ * - ``notifications/progress`` events with matching ``progressToken`` are
+ *   yielded as ``params.message``
+ * - The final ``result`` event ends the stream
+ * - JSON-RPC ``error`` event throws
+ *
+ * NOTE: If the producer does not actually emit progress notifications, the
+ * SSE response will only contain the final ``result`` message and this
+ * iterable will yield nothing. (TS does not currently advertise
+ * ``stream_type=text`` like Python; the soft-fallback isn't implemented.)
+ *
+ * Cancellation: when the consumer breaks out of the iteration, the underlying
+ * ``fetch`` is aborted via ``AbortController`` and the reader is released.
+ */
+export async function* streamMcpTool(
+  endpoint: string,
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+  options: CallOptions,
+  capability: string,
+  extraHeaders?: Record<string, string>
+): AsyncGenerator<string, void, void> {
+  // Ensure endpoint ends with /mcp
+  const mcpEndpoint = endpoint.endsWith("/mcp")
+    ? endpoint
+    : `${endpoint.replace(/\/$/, "")}/mcp`;
+
+  // Tracing: create span for this outgoing proxy stream call
+  const traceCtx = getCurrentTraceContext();
+  const spanId = traceCtx ? generateSpanId() : null;
+  const startTime = Date.now() / 1000;
+
+  // Build merged headers: session propagated + per-call (per-call wins, filtered by allowlist)
+  const propagatedHeaders = getCurrentPropagatedHeaders();
+  const mergedHeaders: Record<string, string> = { ...propagatedHeaders };
+  if (extraHeaders) {
+    for (const [key, value] of Object.entries(extraHeaders)) {
+      if (matchesPropagateHeader(key)) {
+        mergedHeaders[key.toLowerCase()] = value;
+      }
+    }
+  }
+
+  // Build arguments with trace context injection via Rust core
+  let argsWithTrace: Record<string, unknown>;
+  if (traceCtx && spanId) {
+    try {
+      const argsJson = JSON.stringify(args ?? {});
+      const headersJson = Object.keys(mergedHeaders).length > 0 ? JSON.stringify(mergedHeaders) : undefined;
+      const injectedJson = injectTraceContext(argsJson, traceCtx.traceId, spanId, headersJson);
+      argsWithTrace = JSON.parse(injectedJson);
+    } catch {
+      argsWithTrace = { ...(args ?? {}) };
+      argsWithTrace._trace_id = traceCtx.traceId;
+      argsWithTrace._parent_span = spanId;
+      if (Object.keys(mergedHeaders).length > 0) {
+        argsWithTrace._mesh_headers = mergedHeaders;
+      }
+    }
+  } else {
+    argsWithTrace = { ...(args ?? {}) };
+    if (Object.keys(mergedHeaders).length > 0) {
+      argsWithTrace._mesh_headers = mergedHeaders;
+    }
+  }
+
+  // Generate progress token to correlate notifications with this call
+  const progressToken = generateProgressToken();
+  const requestId = generateRequestId();
+
+  const payload = {
+    jsonrpc: "2.0",
+    id: requestId,
+    method: "tools/call",
+    params: {
+      name: toolName,
+      arguments: argsWithTrace,
+      _meta: { progressToken },
+    },
+  };
+
+  // Use X-Mesh-Timeout from propagated headers to override client timeout (#769)
+  let effectiveTimeout = options.timeout;
+  const meshTimeoutStr = mergedHeaders["x-mesh-timeout"];
+  if (meshTimeoutStr) {
+    const meshTimeoutMs = parseInt(meshTimeoutStr, 10) * 1000;
+    if (!isNaN(meshTimeoutMs) && meshTimeoutMs > 0) {
+      effectiveTimeout = meshTimeoutMs;
+    }
+  }
+
+  const bodyStr = JSON.stringify(payload);
+  const requestBytes = Buffer.byteLength(bodyStr, "utf8");
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout);
+
+  // Build headers
+  const headers: Record<string, string> = {
+    ...(options.customHeaders ?? {}),
+    "Content-Type": "application/json",
+    Accept: "text/event-stream",
+  };
+  if (traceCtx && spanId) {
+    Object.assign(headers, createTraceHeaders(traceCtx.traceId, spanId));
+  }
+  for (const [key, value] of Object.entries(mergedHeaders)) {
+    headers[key] = value;
+  }
+  if (!headers["X-Mesh-Timeout"] && !headers["x-mesh-timeout"]) {
+    const callTimeout = process.env.MCP_MESH_CALL_TIMEOUT || String(Math.floor(options.timeout / 1000));
+    headers["X-Mesh-Timeout"] = callTimeout;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fetchOptions: Record<string, any> = {
+    method: "POST",
+    headers,
+    body: bodyStr,
+    signal: controller.signal,
+  };
+  const dispatcher = getDispatcher(mcpEndpoint);
+  if (dispatcher) {
+    fetchOptions.dispatcher = dispatcher;
+  }
+
+  let success = true;
+  let errorMsg: string | null = null;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+
+  try {
+    const response = await fetch(mcpEndpoint, fetchOptions as RequestInit);
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(
+        `MCP stream call failed: ${response.status} ${response.statusText}`
+      );
+    }
+
+    if (!response.body) {
+      throw new Error("MCP stream call: no response body");
+    }
+
+    reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let streamDone = false;
+
+    while (!streamDone) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      // Normalize CRLF to LF so the same parser handles either line ending
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+
+      // SSE events are separated by blank lines (\n\n)
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const rawEvent = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+
+        // Collect data: lines from this event (per spec, multi-line data joined by \n)
+        const dataLines: string[] = [];
+        for (const line of rawEvent.split("\n")) {
+          if (line.startsWith("data: ")) {
+            dataLines.push(line.slice(6));
+          } else if (line.startsWith("data:")) {
+            // Allow "data:" with no space (defensive)
+            dataLines.push(line.slice(5));
+          }
+        }
+        if (dataLines.length === 0) continue;
+        const data = dataLines.join("\n");
+        if (!data) continue;
+
+        // Parse the JSON-RPC message
+        let msg: {
+          jsonrpc?: string;
+          id?: string | number;
+          method?: string;
+          params?: { progressToken?: string | number; message?: string; data?: string };
+          result?: unknown;
+          error?: { message?: string; code?: number };
+        };
+        try {
+          msg = JSON.parse(data);
+        } catch {
+          // Ignore non-JSON data events (defensive)
+          continue;
+        }
+
+        // Progress notification: yield message if it matches our token
+        if (msg.method === "notifications/progress" && msg.params) {
+          if (msg.params.progressToken === progressToken) {
+            // FastMCP sends ``message``; some implementations may send ``data``
+            const chunk =
+              typeof msg.params.message === "string"
+                ? msg.params.message
+                : typeof msg.params.data === "string"
+                  ? msg.params.data
+                  : null;
+            if (chunk !== null) {
+              yield chunk;
+            }
+          }
+          continue;
+        }
+
+        // Final response for our request: end the stream
+        if (msg.id !== undefined && msg.id === requestId) {
+          if (msg.error) {
+            const em = msg.error.message ?? JSON.stringify(msg.error);
+            throw new Error(`MCP error: ${em}`);
+          }
+          // result arrived — done; do NOT yield the buffered final result
+          streamDone = true;
+          break;
+        }
+      }
+    }
+  } catch (err) {
+    success = false;
+    errorMsg = err instanceof Error ? err.message : String(err);
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`MCP stream call timed out after ${effectiveTimeout}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+    // Release the reader; if the caller broke out of the iteration mid-stream
+    // the underlying fetch must be aborted so the connection isn't leaked.
+    if (reader) {
+      try {
+        await reader.cancel();
+      } catch {
+        // ignore
+      }
+    }
+    // Abort the fetch; safe to call even if already completed
+    try {
+      controller.abort();
+    } catch {
+      // ignore
+    }
+    publishProxySpan(
+      traceCtx,
+      spanId,
+      startTime,
+      toolName,
+      capability,
+      endpoint,
+      success,
+      errorMsg,
+      "stream",
+      requestBytes,
+    );
+  }
+}
+
+/**
+ * Generate a short random progress token for correlating notifications
+ * with the originating ``tools/call`` request.
+ */
+function generateProgressToken(): string {
+  // Prefer crypto.randomUUID if available; fall back to a Math.random-based ID
+  // (Node 16+/19+ has crypto.randomUUID; the fallback keeps tests light).
+  try {
+    const cryptoObj = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+    if (cryptoObj && typeof cryptoObj.randomUUID === "function") {
+      return cryptoObj.randomUUID();
+    }
+  } catch {
+    // ignore
+  }
+  return `pt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /**
