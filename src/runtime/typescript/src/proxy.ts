@@ -585,6 +585,19 @@ export async function* streamMcpTool(
       throw new Error("MCP stream call: no response body");
     }
 
+    // Fail fast on non-SSE responses. A proxy or misconfigured server might
+    // downgrade the stream to plain JSON; without this check we'd parse
+    // the body line-by-line as SSE, never see any `data:` frames, and yield
+    // nothing — looks like a "successful" zero-chunk call.
+    const sseContentType = response.headers.get("content-type") ?? "";
+    if (!sseContentType.toLowerCase().includes("text/event-stream")) {
+      throw new Error(
+        `MCP stream call: expected text/event-stream response, got: ${
+          sseContentType || "<no Content-Type header>"
+        }`
+      );
+    }
+
     reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";

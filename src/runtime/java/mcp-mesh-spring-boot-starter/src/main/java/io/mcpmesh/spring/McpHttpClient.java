@@ -536,7 +536,12 @@ public class McpHttpClient {
         }
 
         void start() {
-            STREAM_EXECUTOR.execute(this::run);
+            // Wrap with TraceContext so the worker thread inherits the
+            // caller's tracing + propagated headers (X-Mesh-Timeout, auth,
+            // etc.). Without this, the OkHttp call fires from a fresh
+            // thread with no trace state and downstream spans are
+            // disconnected from the inbound request.
+            STREAM_EXECUTOR.execute(io.mcpmesh.spring.tracing.TraceContext.wrap(this::run));
         }
 
         @Override
@@ -807,6 +812,22 @@ public class McpHttpClient {
                 if (body == null) {
                     upstreamError = new MeshToolCallException(functionName, functionName,
                         "Empty response body");
+                    upstreamComplete = true;
+                    drain();
+                    return;
+                }
+
+                // Fail fast if upstream returned non-SSE (e.g. a plain JSON
+                // response from a proxy that downgraded the stream, or a
+                // misconfigured server returning JSON for tools/call). Without
+                // this we'd silently parse the body line-by-line as SSE,
+                // never see any `data:` lines, and call onComplete with an
+                // empty stream — looks like a successful zero-chunk call.
+                String contentType = response.header("Content-Type");
+                if (contentType == null || !contentType.toLowerCase().contains("text/event-stream")) {
+                    upstreamError = new MeshToolCallException(functionName, functionName,
+                        "Expected text/event-stream response, got: "
+                            + (contentType != null ? contentType : "<no Content-Type header>"));
                     upstreamComplete = true;
                     drain();
                     return;

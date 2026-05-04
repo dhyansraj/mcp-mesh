@@ -751,12 +751,17 @@ export class MeshDelegatedProvider implements LlmProvider {
 
     // streamMcpTool() handles trace context injection / propagated headers /
     // dispatcher pooling internally — same path as createProxy().stream().
-    // Long-lived stream: use the larger streamTimeout (DEFAULT_CALL_OPTIONS
-    // already sets streamTimeout=300s; CallOptions.timeout = streamTimeout
-    // is set by streamMcpTool's options-shape contract).
+    // Match complete()'s env-backed timeout (MESH_PROVIDER_TIMEOUT_MS) so
+    // operators can tune both buffered and streaming provider calls with
+    // the same knob. Default 300s (matches Python SDK's stream_timeout).
+    const providerTimeoutMs = parseInt(
+      process.env.MESH_PROVIDER_TIMEOUT_MS || "300000",
+      10,
+    );
     const streamOptions = {
       ...DEFAULT_CALL_OPTIONS,
-      timeout: DEFAULT_CALL_OPTIONS.streamTimeout,
+      timeout: providerTimeoutMs,
+      streamTimeout: providerTimeoutMs,
     };
 
     yield* streamMcpTool(

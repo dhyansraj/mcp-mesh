@@ -38,6 +38,7 @@ Server ← event: message  data: {"result":{"content":[{"type":"text","text":"He
 
 Each chunk is one progress notification. The complete accumulated text is also sent as the normal `CallToolResult` — consumers that don't subscribe to progress notifications still get the same final value, just all at once at the end.
 
+<!-- markdownlint-disable MD046 -->
 ## Two consumer surfaces
 
 Once a producer streams, two consumer code paths are available — and both work in **all three runtimes** (Python, TypeScript, Java) as of #854.
@@ -113,6 +114,7 @@ Once a producer streams, two consumer code paths are available — and both work
     ```
 
 The Python helper is built into `@mesh.route` (auto-detects `Stream[str]` return type). TS uses the explicit `mesh.sseStream(res, asyncIterable)` Express helper. Java uses `MeshSse.forward(emitter, publisher)` to bridge a `Flow.Publisher<String>` into a Spring `SseEmitter`. All three emit identical wire bytes.
+<!-- markdownlint-enable MD046 -->
 
 ## Multi-hop streaming
 

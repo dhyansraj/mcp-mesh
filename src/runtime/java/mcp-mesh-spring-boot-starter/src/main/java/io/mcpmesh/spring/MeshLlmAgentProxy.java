@@ -275,14 +275,56 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 "MeshLlmAgent.stream(): MCP client not configured for LLM agent " + functionId);
         }
 
-        // Build the LLM messages list — same shape the buffered path produces.
+        // Build the LLM messages list — same shape the buffered
+        // executeAgenticLoop produces, including the rendered system prompt
+        // when the caller didn't supply one. Diverging from generate() here
+        // would mean the same agent renders different prompts depending on
+        // which method the caller picks (silent behavioral drift).
         // Use a LinkedHashMap rather than Map.of: Map.of throws NPE on null
         // values, but Message.content() can legitimately be null for tool /
         // assistant messages that only carry tool_calls. Spec says cold-
         // publisher errors should reach the subscriber via onError, not
         // throw synchronously from stream().
+        List<Message> safeMessages = (messages != null) ? messages : List.<Message>of();
         List<Map<String, Object>> llmMessages = new ArrayList<>();
-        for (Message msg : messages != null ? messages : List.<Message>of()) {
+
+        // Prepend the rendered system prompt template if no explicit system
+        // message is present (matches executeAgenticLoop in generate()).
+        // The renderSystemPrompt() helper lives on the inner GenerateBuilder;
+        // for streaming we inline the equivalent logic against the agent-
+        // level systemPromptTemplate. Per-call FreeMarker variables aren't
+        // exposed on the streaming surface (no builder context), so we
+        // render with an empty context — string-literal templates and
+        // templates that don't depend on per-call vars work; per-call
+        // variable refs render to empty values, matching the no-builder
+        // contract.
+        boolean hasExplicitSystem = safeMessages.stream()
+            .anyMatch(m -> "system".equals(m.role()));
+        if (!hasExplicitSystem
+            && systemPromptTemplate != null
+            && !systemPromptTemplate.isBlank()) {
+            String renderedSystemPrompt = systemPromptTemplate;
+            try {
+                if (templateRenderer != null && templateRenderer.isTemplate(systemPromptTemplate)) {
+                    renderedSystemPrompt = templateRenderer.render(
+                        systemPromptTemplate, java.util.Collections.emptyMap());
+                }
+            } catch (RuntimeException renderErr) {
+                // Match generate()'s leniency: if template rendering fails,
+                // fall back to the raw template string rather than throwing
+                // synchronously from a cold publisher.
+                log.warn("System prompt template render failed for {}, using raw: {}",
+                    functionId, renderErr.getMessage());
+            }
+            if (!renderedSystemPrompt.isBlank()) {
+                Map<String, Object> systemEntry = new LinkedHashMap<>(2);
+                systemEntry.put("role", "system");
+                systemEntry.put("content", renderedSystemPrompt);
+                llmMessages.add(systemEntry);
+            }
+        }
+
+        for (Message msg : safeMessages) {
             Map<String, Object> entry = new LinkedHashMap<>(2);
             entry.put("role", msg.role());
             entry.put("content", msg.content());

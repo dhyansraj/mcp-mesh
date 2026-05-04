@@ -97,12 +97,25 @@ test:
     command: "meshctl start streaming/ts-stream-gateway/src/index.ts --env PORT=8090 -d"
     capture: start_gateway
 
-  # mesh.route gateways register as "api-<hash>" (no @mesh.agent), same as
-  # uc18 tc01's gateway-agent. We can't grep for a stable name, so just
-  # give the runtime a moment to wire the dep before the curl fires.
-  - name: "Brief settle for gateway dep resolution"
-    handler: wait
-    seconds: 5
+  # Active readiness probe — mesh.route gateways register as "api-<hash>"
+  # (no @mesh.agent name to grep), so we poll /health instead. Mirrors
+  # tc05's Java wait pattern. Faster than a fixed sleep when the gateway
+  # is up immediately, safer when DI takes longer than the static budget.
+  - name: "Wait for ts-stream-gateway /health to respond"
+    handler: shell
+    command: |
+      for i in $(seq 1 60); do
+        if curl -sf http://localhost:8090/health 2>/dev/null | grep -q '"status":"ok"'; then
+          echo "ts-stream-gateway healthy after $((i * 2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: ts-stream-gateway /health did not respond within 120s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_gateway
+    timeout: 150
 
   # ===== STAGE 5: Hit the gateway and capture the SSE body =====
   - name: "List agents (sanity)"
