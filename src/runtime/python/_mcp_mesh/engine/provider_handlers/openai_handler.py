@@ -285,7 +285,16 @@ class OpenAIHandler(BaseProviderHandler):
         model: str,
         **kwargs: Any,
     ):
-        """Dispatch a streaming completion to the native OpenAI SDK adapter."""
+        """Streaming completion via the native OpenAI SDK.
+
+        Note: this method is ``async def`` but ``return``s (without
+        awaiting) the async generator from
+        ``openai_native.complete_stream``. Callers ``await`` the handler
+        call (which resolves the coroutine to the AG), then
+        ``async for chunk in stream_iter:`` to consume. Mirrors the
+        dispatch contract used in mesh/helpers.py and matches the
+        ClaudeHandler pattern.
+        """
         from _mcp_mesh.engine.native_clients import openai_native
 
         return openai_native.complete_stream(

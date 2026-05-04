@@ -369,6 +369,12 @@ def _build_client(
 # most things. Anything not in this set (and not in _OPENAI_HANDLED_KWARGS)
 # triggers the once-per-key WARN so the next litellm-only knob we forget
 # to translate is visible early.
+# Note on ``tool_choice``: OpenAI natively supports tool_choice values
+# "auto", "none", "required", and {"type": "function", "function": {"name":
+# "..."}}. We pass through unchanged — no translation needed (unlike
+# Anthropic, which lacks a native "none" semantics and requires us to
+# translate "auto"/"any"/"none" + the {"type": "function", ...} dict shape;
+# see anthropic_native._build_create_kwargs for that mapping).
 _OPENAI_PASSTHROUGH_KWARGS = frozenset({
     "messages",
     "tools",
@@ -436,10 +442,9 @@ def _build_create_kwargs(
         value = request_params.get(key)
         # Drop None values — OpenAI rejects ``max_tokens=None`` etc., and
         # leaving them out matches the "unset → SDK default" semantics that
-        # callers expect.
+        # callers expect. (``request_params.get`` already returns None for
+        # missing keys, so the absence check collapses into the value check.)
         if value is None:
-            continue
-        if key not in request_params:
             continue
         create_kwargs[key] = value
 
