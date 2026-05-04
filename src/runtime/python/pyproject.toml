@@ -42,6 +42,13 @@ requires-python = ">=3.11"
 # dispatch through the native anthropic SDK; without the SDK they would
 # silently fall back to LiteLLM. Heavy backend extras (boto3 for Bedrock)
 # stay opt-in via the [anthropic-bedrock] extra.
+#
+# openai SDK is included by default for native OpenAI dispatch (issue #834
+# PR 2). When MCP_MESH_NATIVE_LLM is unset (default ON), OpenAI provider
+# agents dispatch through the native openai SDK; without it they would
+# silently fall back to LiteLLM. (openai is also a transitive dep of
+# litellm today; promoting to a direct base dep prevents breakage if
+# litellm ever drops it as transitive.)
 dependencies = [
     "fastapi>=0.104.0",
     "uvicorn>=0.24.0",
@@ -57,6 +64,7 @@ dependencies = [
     "fastmcp>=3.0.0,<4.0.0",
     "litellm>=1.80.5,!=1.82.7,!=1.82.8",
     "anthropic>=0.42",
+    "openai>=1.60",
     "prometheus-client>=0.19.0",
     "pyyaml>=6.0",
     "jinja2>=3.1.0",
@@ -108,6 +116,13 @@ anthropic-bedrock = [
     # Install via:
     #   pip install mcp-mesh[anthropic-bedrock]
     "anthropic[bedrock]>=0.42"
+]
+openai = [
+    # Backward-compat alias: ``openai`` is now a base dependency (issue
+    # #834 PR 2 — native dispatch is default ON). This extra is preserved
+    # as a no-op so ``pip install mcp-mesh[openai]`` still resolves cleanly
+    # for users who pinned it from earlier docs.
+    "openai>=1.60"
 ]
 
 [project.urls]
