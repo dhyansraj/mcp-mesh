@@ -538,23 +538,39 @@ class ClaudeHandler(BaseProviderHandler):
         # instruction. Without this, Claude often returns a plain text final
         # answer and skips the synthetic tool entirely (especially on simple
         # questions where the model thinks tool_use is unnecessary).
+        #
+        # IMPORTANT: build a NEW system message dict and REPLACE messages[i]
+        # rather than mutating the existing one. Caller-side shallow-copies
+        # share the original system dict across iterations / requests; mutation
+        # would re-inject the instruction every time a request reuses that
+        # dict (see issue #834 review). Replacement is idempotent — the
+        # instruction is appended exactly once per call regardless of caller
+        # aliasing.
         messages = model_params.get("messages", [])
         instruction_inserted = False
-        for msg in messages:
+        for idx, msg in enumerate(messages):
             if msg.get("role") == "system":
                 base_content = msg.get("content", "")
+                new_msg: dict[str, Any] = {**msg}
                 # Tolerate string OR content-block list (post-prompt-cache).
                 if isinstance(base_content, str):
-                    msg["content"] = base_content + SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION
+                    new_msg["content"] = (
+                        base_content + SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION
+                    )
                 elif isinstance(base_content, list):
-                    # Append a text block with the instruction; cache_control
-                    # on the original blocks is preserved (we don't touch them).
-                    msg["content"] = base_content + [
+                    # Build a NEW list (don't mutate the caller's). Original
+                    # block dicts pass through by reference — that's fine,
+                    # we're not modifying their cache_control.
+                    new_msg["content"] = list(base_content) + [
                         {
                             "type": "text",
                             "text": SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION.lstrip("\n"),
                         }
                     ]
+                else:
+                    # Unknown content shape — leave the dict as-is (best effort).
+                    new_msg["content"] = base_content
+                messages[idx] = new_msg
                 instruction_inserted = True
                 break
 
@@ -659,7 +675,11 @@ class ClaudeHandler(BaseProviderHandler):
         from _mcp_mesh.engine.native_clients import anthropic_native
 
         if not anthropic_native.is_available():
-            anthropic_native.log_fallback_once()
+            # Skip the log call entirely once it has already fired — the
+            # function dedupes internally, but on the no-native hot path
+            # avoiding the call frame altogether is cheaper still.
+            if not anthropic_native.is_fallback_logged():
+                anthropic_native.log_fallback_once()
             return False
 
         return True

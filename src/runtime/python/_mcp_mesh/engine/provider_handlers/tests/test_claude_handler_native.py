@@ -135,7 +135,10 @@ class TestHasNative:
     def test_logs_fallback_once_when_sdk_missing(self):
         """When native is attempted (default ON) but the SDK is missing,
         log_fallback_once() must be invoked so the user sees a single
-        nudge per process."""
+        nudge per process. The handler now also short-circuits the call
+        on subsequent misses via ``is_fallback_logged()`` — verify both:
+        the first call invokes the log function, the second one does not.
+        """
         handler = ClaudeHandler()
         # Default ON path: do NOT set the flag.
         assert "MCP_MESH_NATIVE_LLM" not in os.environ
@@ -148,11 +151,17 @@ class TestHasNative:
             patch(
                 "_mcp_mesh.engine.native_clients.anthropic_native.log_fallback_once"
             ) as mock_log,
+            patch(
+                "_mcp_mesh.engine.native_clients.anthropic_native.is_fallback_logged",
+                side_effect=[False, True],
+            ),
         ):
             handler.has_native()
-            handler.has_native()  # second call — log function still invoked,
-            # but the function itself dedupes.
-            assert mock_log.call_count == 2  # called every time; fn dedupes
+            handler.has_native()
+            # First call invokes log_fallback_once (is_fallback_logged → False);
+            # second call short-circuits at the call site (is_fallback_logged
+            # → True) — total log_fallback_once invocations = 1.
+            assert mock_log.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +378,81 @@ class TestApplyStructuredOutputNative:
         msgs = params["messages"]
         assert msgs[0]["role"] == "system"
         assert "__mesh_format_response" in msgs[0]["content"]
+
+    def test_does_not_double_inject_when_called_twice_on_same_messages(
+        self, _native_on
+    ):
+        """Regression for review fix W#3: caller-side shallow copies of the
+        messages list often share the same system message dict across
+        iterations. The handler must build a NEW system message dict (and
+        replace messages[i]) rather than mutating the existing one — otherwise
+        a second call would re-append the "__mesh_format_response" instruction.
+        """
+        handler = ClaudeHandler()
+        original_system = {"role": "system", "content": "You are helpful."}
+        # Same dict referenced from two distinct message lists (simulates two
+        # back-to-back requests reusing the same system message object).
+        msgs1 = [original_system, {"role": "user", "content": "Q1"}]
+        msgs2 = [original_system, {"role": "user", "content": "Q2"}]
+
+        handler.apply_structured_output(
+            _trip_schema(), "Trip", {"messages": msgs1}
+        )
+        handler.apply_structured_output(
+            _trip_schema(), "Trip", {"messages": msgs2}
+        )
+
+        # Original dict must NOT have been mutated.
+        assert original_system["content"] == "You are helpful.", (
+            "system message dict was mutated — caller-side aliasing would "
+            "cause double injection on reuse"
+        )
+        # Both processed lists should each have the instruction exactly once.
+        instr_count_1 = msgs1[0]["content"].count("__mesh_format_response")
+        instr_count_2 = msgs2[0]["content"].count("__mesh_format_response")
+        assert instr_count_1 == 1, (
+            f"expected 1 instruction in msgs1; got {instr_count_1}"
+        )
+        assert instr_count_2 == 1, (
+            f"expected 1 instruction in msgs2; got {instr_count_2}"
+        )
+
+    def test_does_not_double_inject_block_list(self, _native_on):
+        """Same regression for the content-block list shape (post-prompt-cache).
+        The original list of blocks must not be mutated; replacing the dict
+        must produce a NEW list with the instruction block appended once.
+        """
+        handler = ClaudeHandler()
+        original_block = {
+            "type": "text",
+            "text": "Original system text.",
+            "cache_control": {"type": "ephemeral"},
+        }
+        # One shared system dict referenced from two messages lists.
+        original_system = {"role": "system", "content": [original_block]}
+        msgs1 = [original_system, {"role": "user", "content": "Q1"}]
+        msgs2 = [original_system, {"role": "user", "content": "Q2"}]
+
+        handler.apply_structured_output(
+            _trip_schema(), "Trip", {"messages": msgs1}
+        )
+        handler.apply_structured_output(
+            _trip_schema(), "Trip", {"messages": msgs2}
+        )
+
+        # Original system dict's content list MUST be untouched.
+        assert original_system["content"] == [original_block]
+        # Each processed list got exactly one instruction block.
+        for msgs in (msgs1, msgs2):
+            blocks = msgs[0]["content"]
+            instr_blocks = [
+                b for b in blocks
+                if isinstance(b, dict)
+                and "__mesh_format_response" in b.get("text", "")
+            ]
+            assert len(instr_blocks) == 1, (
+                f"expected 1 instruction block; got {len(instr_blocks)}"
+            )
 
 
 class TestApplyStructuredOutputLiteLLMUnchanged:

@@ -43,6 +43,14 @@ from _mcp_mesh.engine.native_clients import anthropic_native
 
 
 class TestIsAvailable:
+    @pytest.fixture(autouse=True)
+    def _reset_cache(self):
+        """is_available() now caches its result module-wide; reset between
+        tests in this class so each one re-probes the import."""
+        anthropic_native._reset_is_available_cache()
+        yield
+        anthropic_native._reset_is_available_cache()
+
     def test_returns_true_when_sdk_importable(self):
         # The SDK is installed in the test environment; this should be True.
         assert anthropic_native.is_available() is True
@@ -60,6 +68,27 @@ class TestIsAvailable:
         monkeypatch.delitem(sys.modules, "anthropic", raising=False)
         with patch("builtins.__import__", side_effect=_fake_import):
             assert anthropic_native.is_available() is False
+
+    def test_caches_result_across_calls(self, monkeypatch):
+        """Once probed, is_available() must not re-import on every call —
+        the SDK presence does not change at runtime and the per-call import
+        was showing up as needless overhead on the dispatch-decision path.
+        """
+        original_import = builtins.__import__
+        call_count = {"n": 0}
+
+        def _counting_import(name, *args, **kwargs):
+            if name == "anthropic":
+                call_count["n"] += 1
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=_counting_import):
+            anthropic_native.is_available()
+            anthropic_native.is_available()
+            anthropic_native.is_available()
+
+        # Exactly one import attempt across three calls.
+        assert call_count["n"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -846,6 +875,14 @@ class TestCompleteWithoutResponseFormat:
 
 
 class TestUnsupportedKwargWarn:
+    @pytest.fixture(autouse=True)
+    def _reset_dedupe(self):
+        """Reset the per-key WARN dedupe set so tests in this class don't
+        observe state leaked from earlier tests in the same process."""
+        anthropic_native._logged_unsupported_kwargs.clear()
+        yield
+        anthropic_native._logged_unsupported_kwargs.clear()
+
     @pytest.mark.asyncio
     async def test_warn_logs_when_litellm_only_kwarg_dropped(self, caplog):
         """The adapter MUST log a WARN when it drops an unrecognized kwarg —
@@ -1262,3 +1299,320 @@ class TestContentBlockTranslation:
         tool_result = out[0]["content"][0]
         assert tool_result["content"] == "72F sunny"
         assert isinstance(tool_result["content"], str)
+
+
+# ---------------------------------------------------------------------------
+# Stream interruption — best-effort usage emission (review fix BLOCKER)
+# ---------------------------------------------------------------------------
+# When a stream is cut short before ``message_stop`` arrives (server timeout,
+# consumer aclose, network drop), the adapter must still emit a final usage
+# chunk built from the last cumulative counters seen on the wire. Without
+# this, telemetry silently records 0 tokens for any interrupted stream.
+
+
+class TestStreamInterruptionUsage:
+    @pytest.mark.asyncio
+    async def test_emits_best_effort_usage_when_no_message_stop(self):
+        """Stream ends after message_start + message_delta with cumulative
+        output_tokens but BEFORE message_stop. The adapter MUST emit a final
+        usage chunk built from the last seen values so observability still
+        shows non-zero tokens for interrupted generations.
+        """
+        events = [
+            _stream_event(
+                "message_start",
+                message=SimpleNamespace(
+                    model="claude-sonnet-4-5",
+                    usage=SimpleNamespace(input_tokens=42, output_tokens=0),
+                ),
+            ),
+            _stream_event(
+                "content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="text_delta", text="Hello "),
+            ),
+            _stream_event(
+                "message_delta",
+                usage=SimpleNamespace(output_tokens=5),
+            ),
+            _stream_event(
+                "content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="text_delta", text="world"),
+            ),
+            _stream_event(
+                "message_delta",
+                usage=SimpleNamespace(output_tokens=11),
+            ),
+            # Notably NO message_stop — simulates server cutoff / aclose.
+        ]
+        # Final message is irrelevant here (get_final_message would only be
+        # called from message_stop, which never fires).
+        cls_mock, _ = _patched_streaming_anthropic(events, final_message=None)
+
+        with patch("anthropic.AsyncAnthropic", cls_mock):
+            stream = anthropic_native.complete_stream(
+                {"messages": [{"role": "user", "content": "Hi."}]},
+                model="anthropic/claude-sonnet-4-5",
+                api_key="sk-test",
+            )
+            chunks = []
+            async for chunk in stream:
+                chunks.append(chunk)
+
+        # Last chunk should be the best-effort usage — non-None usage with
+        # the cumulative counters we observed.
+        usage_chunks = [c for c in chunks if c.usage is not None]
+        assert len(usage_chunks) == 1, (
+            "expected exactly one usage chunk emitted from the finally block"
+        )
+        u = usage_chunks[0].usage
+        assert u.prompt_tokens == 42, "input_tokens should come from message_start"
+        assert u.completion_tokens == 11, (
+            "completion_tokens should be the LAST cumulative output_tokens "
+            "seen on message_delta"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_double_usage_when_message_stop_present(self):
+        """Sanity check: when message_stop DOES arrive, only the authoritative
+        get_final_message().usage chunk is emitted — the finally fallback
+        must not also fire."""
+        events = [
+            _stream_event(
+                "message_start",
+                message=SimpleNamespace(
+                    model="claude-sonnet-4-5",
+                    usage=SimpleNamespace(input_tokens=8, output_tokens=0),
+                ),
+            ),
+            _stream_event(
+                "content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="text_delta", text="ok"),
+            ),
+            _stream_event(
+                "message_delta",
+                usage=SimpleNamespace(output_tokens=2),
+            ),
+            _stream_event("message_stop"),
+        ]
+        final_msg = SimpleNamespace(
+            usage=SimpleNamespace(input_tokens=8, output_tokens=2),
+            model="claude-sonnet-4-5",
+            stop_reason="end_turn",
+        )
+        cls_mock, _ = _patched_streaming_anthropic(events, final_msg)
+
+        with patch("anthropic.AsyncAnthropic", cls_mock):
+            stream = anthropic_native.complete_stream(
+                {"messages": [{"role": "user", "content": "Hi."}]},
+                model="anthropic/claude-sonnet-4-5",
+                api_key="sk-test",
+            )
+            chunks = []
+            async for chunk in stream:
+                chunks.append(chunk)
+
+        usage_chunks = [c for c in chunks if c.usage is not None]
+        assert len(usage_chunks) == 1
+        # Authoritative tally from get_final_message().
+        assert usage_chunks[0].usage.prompt_tokens == 8
+        assert usage_chunks[0].usage.completion_tokens == 2
+
+
+# ---------------------------------------------------------------------------
+# Bedrock backend: WARN on ignored api_key, forward base_url (review fix W#2)
+# ---------------------------------------------------------------------------
+
+
+class TestBedrockKwargs:
+    @pytest.mark.asyncio
+    async def test_warns_when_api_key_passed_to_bedrock(self, caplog):
+        """``AsyncAnthropicBedrock`` uses AWS credentials — passing ``api_key``
+        is a misconfiguration that previously was silently ignored. Now WARN."""
+        api_resp = _make_anthropic_message(text="ok")
+        bedrock_cls = MagicMock()
+        bedrock_instance = MagicMock()
+        bedrock_instance.messages = MagicMock()
+        bedrock_instance.messages.create = AsyncMock(return_value=api_resp)
+        bedrock_cls.return_value = bedrock_instance
+
+        with patch("anthropic.AsyncAnthropicBedrock", bedrock_cls):
+            with caplog.at_level("WARNING", logger=anthropic_native.logger.name):
+                await anthropic_native.complete(
+                    {"messages": [{"role": "user", "content": "Hi."}]},
+                    model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+                    api_key="sk-mistakenly-passed",
+                )
+
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any(
+            "Bedrock backend ignores api_key" in m for m in warn_msgs
+        ), f"Expected Bedrock api_key WARN; got: {warn_msgs}"
+
+    @pytest.mark.asyncio
+    async def test_base_url_forwarded_to_bedrock(self):
+        """``base_url`` IS honored by AsyncAnthropicBedrock (VPC PrivateLink,
+        LocalStack endpoints) — the adapter must forward it when set."""
+        api_resp = _make_anthropic_message(text="ok")
+        bedrock_cls = MagicMock()
+        bedrock_instance = MagicMock()
+        bedrock_instance.messages = MagicMock()
+        bedrock_instance.messages.create = AsyncMock(return_value=api_resp)
+        bedrock_cls.return_value = bedrock_instance
+
+        with patch("anthropic.AsyncAnthropicBedrock", bedrock_cls):
+            await anthropic_native.complete(
+                {"messages": [{"role": "user", "content": "Hi."}]},
+                model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+                base_url="https://bedrock-runtime.vpce-abc.vpce.amazonaws.com",
+            )
+
+        bedrock_cls.assert_called_once()
+        ctor_kwargs = bedrock_cls.call_args.kwargs
+        assert ctor_kwargs.get("base_url") == (
+            "https://bedrock-runtime.vpce-abc.vpce.amazonaws.com"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_base_url_kwarg_when_none(self):
+        """When ``base_url`` is not provided, the Bedrock ctor must not get
+        a ``base_url=None`` kwarg (would override the SDK default)."""
+        api_resp = _make_anthropic_message(text="ok")
+        bedrock_cls = MagicMock()
+        bedrock_instance = MagicMock()
+        bedrock_instance.messages = MagicMock()
+        bedrock_instance.messages.create = AsyncMock(return_value=api_resp)
+        bedrock_cls.return_value = bedrock_instance
+
+        with patch("anthropic.AsyncAnthropicBedrock", bedrock_cls):
+            await anthropic_native.complete(
+                {"messages": [{"role": "user", "content": "Hi."}]},
+                model="bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+            )
+
+        ctor_kwargs = bedrock_cls.call_args.kwargs
+        assert "base_url" not in ctor_kwargs
+
+
+# ---------------------------------------------------------------------------
+# Upfront credential validation (review fix W#6)
+# ---------------------------------------------------------------------------
+
+
+class TestCredentialValidation:
+    @pytest.mark.asyncio
+    async def test_raises_when_api_key_and_env_both_unset(self, monkeypatch):
+        """No api_key kwarg + no ANTHROPIC_API_KEY env → fail fast with a
+        clear ValueError instead of late-401 from anthropic.messages.create.
+        """
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        with pytest.raises(ValueError) as exc_info:
+            await anthropic_native.complete(
+                {"messages": [{"role": "user", "content": "Hi."}]},
+                model="anthropic/claude-sonnet-4-5",
+                api_key=None,
+            )
+        # Error message points the user at the resolution paths.
+        msg = str(exc_info.value)
+        assert "ANTHROPIC_API_KEY" in msg
+        assert "MCP_MESH_NATIVE_LLM=0" in msg
+
+    @pytest.mark.asyncio
+    async def test_no_raise_when_env_set(self, monkeypatch):
+        """Env var alone is sufficient — adapter forwards control to the SDK
+        without injecting api_key into the constructor (SDK reads env)."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-from-env")
+        api_resp = _make_anthropic_message(text="ok")
+        cls_mock, _, _ = _patched_async_anthropic(api_resp)
+        with patch("anthropic.AsyncAnthropic", cls_mock):
+            await anthropic_native.complete(
+                {"messages": [{"role": "user", "content": "Hi."}]},
+                model="anthropic/claude-sonnet-4-5",
+                api_key=None,
+            )
+        # Constructor was called — no validation error raised.
+        cls_mock.assert_called_once()
+        # api_key kwarg NOT injected when not provided (SDK reads env itself).
+        assert "api_key" not in cls_mock.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_no_raise_when_api_key_passed(self, monkeypatch):
+        """Explicit api_key kwarg is accepted regardless of env state."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        api_resp = _make_anthropic_message(text="ok")
+        cls_mock, _, _ = _patched_async_anthropic(api_resp)
+        with patch("anthropic.AsyncAnthropic", cls_mock):
+            await anthropic_native.complete(
+                {"messages": [{"role": "user", "content": "Hi."}]},
+                model="anthropic/claude-sonnet-4-5",
+                api_key="sk-explicit",
+            )
+        cls_mock.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Per-key WARN dedupe for unsupported kwargs (review fix W#5)
+# ---------------------------------------------------------------------------
+
+
+class TestUnsupportedKwargDedupe:
+    @pytest.fixture(autouse=True)
+    def _reset(self):
+        anthropic_native._logged_unsupported_kwargs.clear()
+        yield
+        anthropic_native._logged_unsupported_kwargs.clear()
+
+    def test_warn_emits_only_once_per_key(self, caplog):
+        with caplog.at_level("WARNING", logger=anthropic_native.logger.name):
+            anthropic_native._warn_unsupported_kwarg_once("parallel_tool_calls")
+            anthropic_native._warn_unsupported_kwarg_once("parallel_tool_calls")
+            anthropic_native._warn_unsupported_kwarg_once("parallel_tool_calls")
+
+        warn_msgs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING"
+            and "parallel_tool_calls" in r.getMessage()
+        ]
+        assert len(warn_msgs) == 1, (
+            f"expected exactly one WARN; got {len(warn_msgs)}: {warn_msgs}"
+        )
+
+    def test_warn_emits_once_per_unique_key(self, caplog):
+        """Distinct kwarg names each get their own one-shot WARN."""
+        with caplog.at_level("WARNING", logger=anthropic_native.logger.name):
+            anthropic_native._warn_unsupported_kwarg_once("parallel_tool_calls")
+            anthropic_native._warn_unsupported_kwarg_once("stream_options")
+            anthropic_native._warn_unsupported_kwarg_once("parallel_tool_calls")
+            anthropic_native._warn_unsupported_kwarg_once("request_timeout")
+
+        warn_msgs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING" and "dropping unsupported kwarg" in r.getMessage()
+        ]
+        # Three distinct keys → three WARNs total.
+        assert len(warn_msgs) == 3
+        # Each key appears exactly once.
+        assert sum("parallel_tool_calls" in m for m in warn_msgs) == 1
+        assert sum("stream_options" in m for m in warn_msgs) == 1
+        assert sum("request_timeout" in m for m in warn_msgs) == 1
+
+
+# ---------------------------------------------------------------------------
+# Fallback-log helper getter (review fix INFO #11)
+# ---------------------------------------------------------------------------
+
+
+class TestIsFallbackLogged:
+    def test_returns_false_initially_then_true_after_log(self, monkeypatch):
+        """``is_fallback_logged()`` lets callers skip the log call entirely
+        on subsequent misses — verify the getter mirrors the global flag."""
+        # Reset module-level state for this test.
+        monkeypatch.setattr(anthropic_native, "_logged_fallback_once", False)
+        assert anthropic_native.is_fallback_logged() is False
+
+        anthropic_native.log_fallback_once()
+        assert anthropic_native.is_fallback_logged() is True

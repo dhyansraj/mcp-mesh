@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -59,6 +60,11 @@ _DATABRICKS_ANTHROPIC_PREFIX = "databricks/anthropic."
 # wrapper — the pool itself carries no credential state, only TCP/TLS
 # connections.
 _CACHED_HTTPX_CLIENT: httpx.AsyncClient | None = None
+# Guards lazy-init / rebuild of the shared httpx client. The pool itself is
+# safe for concurrent use; the lock only protects the check-then-create race
+# at construction. Cheap (uncontended after first call) and correct under
+# threaded harnesses (tests, sync wrapper paths) that touch the cache.
+_CACHED_HTTPX_CLIENT_LOCK = threading.Lock()
 
 
 def _get_shared_httpx_client() -> httpx.AsyncClient:
@@ -71,27 +77,35 @@ def _get_shared_httpx_client() -> httpx.AsyncClient:
     carries no credential state.
     """
     global _CACHED_HTTPX_CLIENT
-    if _CACHED_HTTPX_CLIENT is None or _CACHED_HTTPX_CLIENT.is_closed:
-        _CACHED_HTTPX_CLIENT = httpx.AsyncClient(
-            timeout=httpx.Timeout(
-                connect=10.0,  # connection establishment
-                read=600.0,    # body read — LLM responses can be slow
-                write=30.0,    # request body write
-                pool=5.0,      # waiting for free connection from pool
-            ),
-            limits=httpx.Limits(
-                max_keepalive_connections=20,
-                max_connections=100,
-                keepalive_expiry=30.0,
-            ),
-        )
-    return _CACHED_HTTPX_CLIENT
+    # Fast path — no lock when the cached client is healthy. The check is
+    # benign-racy (worst case: two threads both observe None and both enter
+    # the lock; the second one finds the cache populated under the lock and
+    # returns early).
+    if _CACHED_HTTPX_CLIENT is not None and not _CACHED_HTTPX_CLIENT.is_closed:
+        return _CACHED_HTTPX_CLIENT
+    with _CACHED_HTTPX_CLIENT_LOCK:
+        if _CACHED_HTTPX_CLIENT is None or _CACHED_HTTPX_CLIENT.is_closed:
+            _CACHED_HTTPX_CLIENT = httpx.AsyncClient(
+                timeout=httpx.Timeout(
+                    connect=10.0,  # connection establishment
+                    read=600.0,    # body read — LLM responses can be slow
+                    write=30.0,    # request body write
+                    pool=5.0,      # waiting for free connection from pool
+                ),
+                limits=httpx.Limits(
+                    max_keepalive_connections=20,
+                    max_connections=100,
+                    keepalive_expiry=30.0,
+                ),
+            )
+        return _CACHED_HTTPX_CLIENT
 
 
 def _reset_shared_httpx_client() -> None:
     """For tests — reset the cached client. NOT for production use."""
     global _CACHED_HTTPX_CLIENT
-    _CACHED_HTTPX_CLIENT = None
+    with _CACHED_HTTPX_CLIENT_LOCK:
+        _CACHED_HTTPX_CLIENT = None
 
 
 # ---------------------------------------------------------------------------
@@ -252,13 +266,32 @@ class _StreamFunctionDelta:
 # ---------------------------------------------------------------------------
 
 
+_IS_AVAILABLE_CACHE: bool | None = None
+
+
 def is_available() -> bool:
-    """True if the ``anthropic`` SDK is importable in this process."""
+    """True if the ``anthropic`` SDK is importable in this process.
+
+    Result is cached after the first probe — the SDK presence does not
+    change at runtime, and the import-then-immediately-discard pattern was
+    showing up as needless overhead on the dispatch-decision hot path.
+    """
+    global _IS_AVAILABLE_CACHE
+    if _IS_AVAILABLE_CACHE is not None:
+        return _IS_AVAILABLE_CACHE
     try:
         import anthropic  # noqa: F401
     except ImportError:
+        _IS_AVAILABLE_CACHE = False
         return False
+    _IS_AVAILABLE_CACHE = True
     return True
+
+
+def _reset_is_available_cache() -> None:
+    """For tests — reset the cached availability probe. NOT for production."""
+    global _IS_AVAILABLE_CACHE
+    _IS_AVAILABLE_CACHE = None
 
 
 def supports_model(model: str) -> bool:
@@ -311,21 +344,47 @@ def _build_client(
     process-wide shared ``httpx.AsyncClient`` so the underlying connection
     pool (and its already-established TLS sessions) is reused across calls.
     """
+    import os
+
     import anthropic
 
     if model.startswith(_BEDROCK_ANTHROPIC_PREFIX):
         # AsyncAnthropicBedrock takes AWS credentials from the standard
-        # boto3 chain (env, ~/.aws/credentials, IAM role). base_url is
-        # ignored for Bedrock; we don't pass it.
+        # boto3 chain (env, ~/.aws/credentials, IAM role). ``api_key`` has
+        # no effect on this backend — surface a one-time WARN so users who
+        # mistakenly pass it know the Bedrock auth path ignores it.
+        # ``base_url`` IS honored by AsyncAnthropicBedrock (used for VPC
+        # PrivateLink / LocalStack endpoints) so we forward it when set.
         # TODO(#834): wire the shared httpx client for Bedrock too.
         # AsyncAnthropicBedrock does accept ``http_client=`` (verified
         # against anthropic SDK), but the auth path uses boto3/botocore
         # for SigV4 signing, which has its own connection pooling. Reusing
         # the same httpx client is feasible but needs a separate validation
         # pass to ensure SigV4 signing isn't broken by the swap.
-        return anthropic.AsyncAnthropicBedrock()
+        if api_key:
+            logger.warning(
+                "Bedrock backend ignores api_key (uses AWS credentials chain); "
+                "drop the api_key kwarg or switch to anthropic/* prefix"
+            )
+        bedrock_kwargs: dict[str, Any] = {}
+        if base_url:
+            bedrock_kwargs["base_url"] = base_url
+        return anthropic.AsyncAnthropicBedrock(**bedrock_kwargs)
 
     # Anthropic direct OR Databricks (same SDK class, different base_url).
+    # Validate credentials upfront. Without this, a missing key surfaces as
+    # an opaque late 401 from anthropic.messages.create — much harder to
+    # debug. Databricks uses the same SDK class but supplies a workspace
+    # token via ``api_key`` (or DATABRICKS_TOKEN, etc.); the same env-var
+    # check covers it because Databricks callers pass ``api_key=`` explicitly.
+    if not api_key and not os.environ.get("ANTHROPIC_API_KEY"):
+        raise ValueError(
+            "Native Anthropic dispatch requires ANTHROPIC_API_KEY env var or "
+            "explicit api_key argument. Set ANTHROPIC_API_KEY or pass api_key= "
+            "to @mesh.llm_provider, or set MCP_MESH_NATIVE_LLM=0 to fall back "
+            "to LiteLLM."
+        )
+
     kwargs: dict[str, Any] = {"http_client": _get_shared_httpx_client()}
     if api_key:
         kwargs["api_key"] = api_key
@@ -708,6 +767,8 @@ def _build_create_kwargs(
     # stream_options, request_timeout) before it silently regresses behavior.
     # Internal mesh markers (``_mesh_*``) are not forwarded but should also
     # not warn — they're handled upstream in helpers._pop_mesh_*_flags.
+    # Dedupe per-key so high-volume providers receiving the same litellm-only
+    # kwarg every request don't flood the log (unbounded growth pre-fix).
     for k in request_params:
         if k.startswith("_mesh_"):
             continue
@@ -715,11 +776,7 @@ def _build_create_kwargs(
             continue
         if k in _ANTHROPIC_HANDLED_KWARGS:
             continue
-        logger.warning(
-            "Native Anthropic adapter dropping unsupported kwarg: '%s' "
-            "(LiteLLM-only — not forwarded to anthropic.messages.create)",
-            k,
-        )
+        _warn_unsupported_kwarg_once(k)
 
     return create_kwargs
 
@@ -824,85 +881,130 @@ async def complete_stream(
     tool_use_indices: dict[int, int] = {}  # anthropic block index → tc index
     next_tc_index = 0
 
-    async with client.messages.stream(**create_kwargs) as stream:
-        async for event in stream:
-            event_type = getattr(event, "type", None)
+    # Track the most recent input/output token counts seen on the wire so we
+    # can emit a best-effort final usage chunk if the stream is interrupted
+    # before ``message_stop`` arrives (consumer aclose, server cutoff, etc.).
+    # Without this, telemetry silently records 0 tokens for interrupted
+    # streams. ``input_tokens`` only appears on ``message_start``;
+    # ``output_tokens`` is emitted cumulatively on every ``message_delta``.
+    last_input_tokens = 0
+    last_output_tokens = 0
+    last_model: str | None = None
+    saw_message_stop = False
 
-            if event_type == "message_start":
-                msg_obj = getattr(event, "message", None)
-                model_id = getattr(msg_obj, "model", None) if msg_obj else None
-                if model_id:
-                    yield _StreamChunk(delta=_Delta(), model=model_id)
-                continue
+    try:
+        async with client.messages.stream(**create_kwargs) as stream:
+            async for event in stream:
+                event_type = getattr(event, "type", None)
 
-            if event_type == "content_block_start":
-                block = getattr(event, "content_block", None)
-                idx = getattr(event, "index", 0)
-                block_type = getattr(block, "type", None) if block else None
-                if block_type == "tool_use":
-                    block_name = getattr(block, "name", "")
-                    tc_index = next_tc_index
-                    next_tc_index += 1
-                    tool_use_indices[idx] = tc_index
-                    tc_delta = _StreamToolCallDelta(
-                        index=tc_index,
-                        id=getattr(block, "id", ""),
-                        name=block_name,
+                if event_type == "message_start":
+                    msg_obj = getattr(event, "message", None)
+                    model_id = getattr(msg_obj, "model", None) if msg_obj else None
+                    if model_id:
+                        last_model = model_id
+                        yield _StreamChunk(delta=_Delta(), model=model_id)
+                    msg_usage = getattr(msg_obj, "usage", None) if msg_obj else None
+                    if msg_usage is not None:
+                        last_input_tokens = (
+                            getattr(msg_usage, "input_tokens", 0) or 0
+                        )
+                    continue
+
+                if event_type == "content_block_start":
+                    block = getattr(event, "content_block", None)
+                    idx = getattr(event, "index", 0)
+                    block_type = getattr(block, "type", None) if block else None
+                    if block_type == "tool_use":
+                        block_name = getattr(block, "name", "")
+                        tc_index = next_tc_index
+                        next_tc_index += 1
+                        tool_use_indices[idx] = tc_index
+                        tc_delta = _StreamToolCallDelta(
+                            index=tc_index,
+                            id=getattr(block, "id", ""),
+                            name=block_name,
+                        )
+                        yield _StreamChunk(delta=_Delta(tool_calls=[tc_delta]))
+                    continue
+
+                if event_type == "content_block_delta":
+                    delta_obj = getattr(event, "delta", None)
+                    idx = getattr(event, "index", 0)
+                    delta_type = (
+                        getattr(delta_obj, "type", None) if delta_obj else None
                     )
-                    yield _StreamChunk(delta=_Delta(tool_calls=[tc_delta]))
-                continue
+                    if delta_type == "text_delta":
+                        text = getattr(delta_obj, "text", "") or ""
+                        if text:
+                            yield _StreamChunk(delta=_Delta(content=text))
+                    elif delta_type == "input_json_delta":
+                        tc_index = tool_use_indices.get(idx)
+                        if tc_index is None:
+                            # Fragment for an unknown block — skip rather than
+                            # raise; merger drops malformed entries anyway.
+                            continue
+                        json_fragment = getattr(delta_obj, "partial_json", "") or ""
+                        tc_delta = _StreamToolCallDelta(
+                            index=tc_index,
+                            arguments=json_fragment,
+                        )
+                        yield _StreamChunk(delta=_Delta(tool_calls=[tc_delta]))
+                    continue
 
-            if event_type == "content_block_delta":
-                delta_obj = getattr(event, "delta", None)
-                idx = getattr(event, "index", 0)
-                delta_type = getattr(delta_obj, "type", None) if delta_obj else None
-                if delta_type == "text_delta":
-                    text = getattr(delta_obj, "text", "") or ""
-                    if text:
-                        yield _StreamChunk(delta=_Delta(content=text))
-                elif delta_type == "input_json_delta":
-                    tc_index = tool_use_indices.get(idx)
-                    if tc_index is None:
-                        # Fragment for an unknown block — skip rather than
-                        # raise; merger drops malformed entries anyway.
-                        continue
-                    json_fragment = getattr(delta_obj, "partial_json", "") or ""
-                    tc_delta = _StreamToolCallDelta(
-                        index=tc_index,
-                        arguments=json_fragment,
-                    )
-                    yield _StreamChunk(delta=_Delta(tool_calls=[tc_delta]))
-                continue
+                if event_type == "message_delta":
+                    # Anthropic emits cumulative output_tokens here on every
+                    # message_delta; track the latest so we can publish a
+                    # best-effort usage chunk if the stream is cut short
+                    # before message_stop. The authoritative tally is still
+                    # emitted at message_stop via get_final_message().usage.
+                    usage_obj = getattr(event, "usage", None)
+                    if usage_obj is not None:
+                        last_output_tokens = (
+                            getattr(usage_obj, "output_tokens", 0) or 0
+                        )
+                    continue
 
-            if event_type == "message_delta":
-                usage_obj = getattr(event, "usage", None)
-                if usage_obj is not None:
-                    # Anthropic emits cumulative output_tokens in message_delta;
-                    # input_tokens lives on the original message_start. The
-                    # SDK exposes the final tally on get_final_message().usage,
-                    # but we yield what's available now and rely on a final
-                    # MessageStopEvent (handled below) to publish the totals.
-                    pass
-                continue
-
-            if event_type == "message_stop":
-                # Pull the final aggregated message + usage so we can emit
-                # one definitive usage chunk (matches litellm's "usage in
-                # final chunk when stream_options.include_usage=True").
-                final_msg = await stream.get_final_message()
-                final_usage = getattr(final_msg, "usage", None)
-                if final_usage is not None:
-                    usage = _Usage(
-                        prompt_tokens=getattr(final_usage, "input_tokens", 0) or 0,
-                        completion_tokens=getattr(final_usage, "output_tokens", 0) or 0,
-                    )
-                    yield _StreamChunk(
-                        delta=_Delta(),
-                        usage=usage,
-                        model=getattr(final_msg, "model", None),
-                        finish_reason=getattr(final_msg, "stop_reason", None),
-                    )
-                continue
+                if event_type == "message_stop":
+                    saw_message_stop = True
+                    # Pull the final aggregated message + usage so we can emit
+                    # one definitive usage chunk (matches litellm's "usage in
+                    # final chunk when stream_options.include_usage=True").
+                    final_msg = await stream.get_final_message()
+                    final_usage = getattr(final_msg, "usage", None)
+                    if final_usage is not None:
+                        usage = _Usage(
+                            prompt_tokens=getattr(final_usage, "input_tokens", 0)
+                            or 0,
+                            completion_tokens=getattr(
+                                final_usage, "output_tokens", 0
+                            )
+                            or 0,
+                        )
+                        yield _StreamChunk(
+                            delta=_Delta(),
+                            usage=usage,
+                            model=getattr(final_msg, "model", None),
+                            finish_reason=getattr(final_msg, "stop_reason", None),
+                        )
+                    continue
+    finally:
+        # If the stream ended (or was torn down) WITHOUT a message_stop event,
+        # emit a final usage chunk built from the last cumulative counters we
+        # observed. Otherwise telemetry would silently record zero tokens for
+        # any interrupted stream — masking real cost on partial generations.
+        if not saw_message_stop and (last_input_tokens or last_output_tokens):
+            try:
+                yield _StreamChunk(
+                    delta=_Delta(),
+                    usage=_Usage(
+                        prompt_tokens=last_input_tokens,
+                        completion_tokens=last_output_tokens,
+                    ),
+                    model=last_model,
+                )
+            except GeneratorExit:
+                # Consumer already closed the generator; nothing to publish.
+                raise
 
 
 # ---------------------------------------------------------------------------
@@ -926,4 +1028,38 @@ def log_fallback_once() -> None:
     logger.info(
         "Install `mcp-mesh[anthropic]` for native SDK with full feature "
         "support — falling back to LiteLLM"
+    )
+
+
+def is_fallback_logged() -> bool:
+    """True once :func:`log_fallback_once` has emitted its notice.
+
+    Lets callers (notably ``ClaudeHandler.has_native``) skip the call entirely
+    on the hot path after the first miss — avoids one function-frame per
+    request once we've already published the install nudge.
+    """
+    return _logged_fallback_once
+
+
+# Module-level dedupe set for the unsupported-kwarg WARN. WARN once per
+# unique kwarg name across the lifetime of the process — high-volume
+# providers receiving the same litellm-only kwarg every request would
+# otherwise flood the log with identical messages (unbounded growth).
+_logged_unsupported_kwargs: set[str] = set()
+
+
+def _warn_unsupported_kwarg_once(key: str) -> None:
+    """WARN once per unique unsupported kwarg name.
+
+    Used by ``_build_create_kwargs`` to surface litellm-only knobs the
+    adapter is silently dropping (parallel_tool_calls, stream_options,
+    request_timeout, etc.) without logging on every single request.
+    """
+    if key in _logged_unsupported_kwargs:
+        return
+    _logged_unsupported_kwargs.add(key)
+    logger.warning(
+        "Native Anthropic adapter dropping unsupported kwarg: '%s' "
+        "(LiteLLM-only — not forwarded to anthropic.messages.create)",
+        key,
     )
