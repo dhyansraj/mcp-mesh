@@ -69,18 +69,57 @@ test:
     timeout: 300
 
   # Build Java SDK JARs using docker run
+  #
+  # Cache strategy: mount a host-side dir into /root/.m2 so transitive Spring
+  # Boot / Jackson / OkHttp deps from Maven Central persist across runs. This
+  # avoids hammering Central on every src-tests invocation (Sonatype
+  # introduced per-IP HTTP 429 throttling in 2024 and Maven 3.9+ defaults to
+  # parallel downloads, which trips the throttle quickly).
+  #
+  # To prevent run-to-run contamination of THIS project's snapshots, we wipe
+  # the io/mcp-mesh subtree of the cache before each run. Third-party deps
+  # (content-addressed by GAV — they never change) are kept; project
+  # SNAPSHOTs (which would otherwise leak state across runs) are rebuilt
+  # fresh from the current source.
   - name: "Build Java SDK JARs"
     handler: shell
     command: |
       SOURCE_ABS=$(cd "${suite_path}/${config.source.path}" && pwd)
       OUTPUT_ABS=$(cd "${run_path}/${config.output.base}" && pwd)
+      M2_CACHE_HOST="$HOME/.cache/mcp-mesh-m2"
+      mkdir -p "$M2_CACHE_HOST"
+
+      # Point Maven at Google's mirror of Maven Central. Same artifacts,
+      # same SHA-256s (verified by Maven), but Google's CDN has way more
+      # lenient throttling than Sonatype's repo1.maven.org. Sonatype
+      # introduced per-IP HTTP 429 in 2024 and beelink5-class boxes hit it
+      # immediately. settings.xml lives inside the (mounted) m2 cache so
+      # it persists across runs — no per-run write needed, but we
+      # idempotently rewrite to keep the file in sync with this YAML.
+      cat > "$M2_CACHE_HOST/settings.xml" <<'XML'
+      <?xml version="1.0" encoding="UTF-8"?>
+      <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">
+        <mirrors>
+          <mirror>
+            <id>google-maven-central</id>
+            <name>Google Maven Central Mirror</name>
+            <url>https://maven-central.storage-download.googleapis.com/maven2</url>
+            <mirrorOf>central</mirrorOf>
+          </mirror>
+        </mirrors>
+      </settings>
+      XML
 
       echo "Building Java SDK inside container..."
+      echo "  m2 cache (host): $M2_CACHE_HOST"
+      echo "  Maven mirror: Google CDN (avoids Sonatype 429 throttle)"
       docker run --rm \
         -v "$SOURCE_ABS:/src-host:ro" \
         -v "$OUTPUT_ABS:/out" \
+        -v "$M2_CACHE_HOST:/root/.m2" \
         ${config.build.image} \
         bash -c "
+          rm -rf /root/.m2/repository/io/mcp-mesh && \
           mkdir -p /src/mcp-mesh/src/runtime/java && \
           mkdir -p /out/java-jars && \
           mkdir -p /out/m2-repo && \
