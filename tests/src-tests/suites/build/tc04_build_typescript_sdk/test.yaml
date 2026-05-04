@@ -5,8 +5,12 @@
 # Build commands execute inside src-build:latest via docker run
 
 name: "Build TypeScript SDK"
-depends_on: [tc00_build_environment]
-description: "Build @mcpmesh/sdk npm tarball from source using docker run"
+# Depends on tc02a (which transitively depends on tc02 and tc00) so we can
+# consume the pre-built @mcpmesh/core npm tarball instead of rebuilding the
+# Rust+napi bindings inline. Saves one full Rust compilation per src-tests
+# run; tc04 becomes a pure TypeScript compile.
+depends_on: [tc02a_build_rust_core_nodejs]
+description: "Build @mcpmesh/sdk npm tarball, consuming pre-built @mcpmesh/core from tc02a"
 tags:
   - build
   - typescript
@@ -49,39 +53,32 @@ test:
       echo "Output: $OUTPUT_ABS"
 
       echo "Building TypeScript SDK inside container (clean build)..."
-      # TypeScript SDK depends on @mcpmesh/core (file:../core/typescript), whose
-      # napi-generated index.js / index.d.ts / *.node are NOT in git. We must
-      # build them inline first, then build the SDK. Mirrors tc04a's pattern.
+      # The SDK's package.json declares `@mcpmesh/core: file:../core/typescript`
+      # which (in source) refers to a Rust+napi project that needs building.
+      # tc02a already built it and produced an npm tarball. We extract that
+      # tarball into the expected location so npm install resolves the file:
+      # ref to a ready-to-use package — pure TypeScript build, no Rust here.
       docker run --rm \
         -v "$SOURCE_ABS:/src-host:ro" \
         -v "$OUTPUT_ABS:/out" \
         ${config.build.image} \
         bash -c "
           set -euo pipefail
-          mkdir -p /src/mcp-mesh/src/runtime/typescript /src/mcp-mesh/src/runtime/core && \
-          mkdir -p /out/packages && \
-          # Copy napi core build inputs (full Rust source needed for napi build)
-          cp /src-host/src/runtime/core/Cargo.toml /src/mcp-mesh/src/runtime/core/ && \
-          # Cargo.lock may not exist on a fresh tree; tolerate missing-file
-          # only — any other cp failure (permission, IO) must propagate via
-          # set -euo pipefail.
-          if [ -f /src-host/src/runtime/core/Cargo.lock ]; then \
-            cp /src-host/src/runtime/core/Cargo.lock /src/mcp-mesh/src/runtime/core/; \
+          mkdir -p /src/mcp-mesh/src/runtime/typescript /src/mcp-mesh/src/runtime/core/typescript /out/packages && \
+          # Locate tc02a's @mcpmesh/core tarball
+          CORE_TGZ=\$(ls /out/packages/mcpmesh-core-*.tgz 2>/dev/null | head -1) && \
+          if [ -z \"\$CORE_TGZ\" ]; then \
+            echo 'ERROR: @mcpmesh/core tarball not found in /out/packages/ — tc02a should produce it'; \
+            ls -la /out/packages/ || true; \
+            exit 1; \
           fi && \
-          cp /src-host/src/runtime/core/build.rs /src/mcp-mesh/src/runtime/core/ && \
-          cp -r /src-host/src/runtime/core/src /src/mcp-mesh/src/runtime/core/ && \
-          cp -r /src-host/src/runtime/core/typescript /src/mcp-mesh/src/runtime/core/ && \
+          echo \"Extracting pre-built @mcpmesh/core from \$CORE_TGZ\" && \
+          tar -xzf \"\$CORE_TGZ\" -C /src/mcp-mesh/src/runtime/core/typescript --strip-components=1 && \
           # Copy SDK source
           cp /src-host/src/runtime/typescript/package.json /src/mcp-mesh/src/runtime/typescript/ && \
           cp /src-host/src/runtime/typescript/tsconfig.json /src/mcp-mesh/src/runtime/typescript/ && \
           cp -r /src-host/src/runtime/typescript/src /src/mcp-mesh/src/runtime/typescript/ && \
-          # Build napi core wrappers FIRST (generates index.js, index.d.ts, *.node)
-          echo '=== Building @mcpmesh/core napi wrappers ===' && \
-          cd /src/mcp-mesh/src/runtime/core/typescript && \
-          npm install && \
-          npm run build && \
-          # Then build the SDK
-          echo '=== Building @mcpmesh/sdk ===' && \
+          echo '=== Building @mcpmesh/sdk (consuming pre-built @mcpmesh/core) ===' && \
           cd /src/mcp-mesh/src/runtime/typescript && \
           npm install && \
           npm run build && \
