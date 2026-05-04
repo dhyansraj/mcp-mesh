@@ -155,7 +155,16 @@ public final class MeshSse {
         public void onNext(String chunk) {
             if (terminated.get()) return;
             try {
-                emitter.send(SseEmitter.event().data(chunk));
+                // Prepend a space so the wire bytes are `data: <chunk>\n\n`
+                // (with the conventional space after the colon). Spring's
+                // SseEmitter.event().data() emits `data:<value>\n\n` with
+                // no separator, which is technically valid SSE but breaks
+                // strict client parsers that look for `data: ` (e.g. the
+                // React UI in the day-10 bonus tutorial does
+                // line.startsWith('data: ')). Adding the space here keeps
+                // the wire format byte-identical with Python's
+                // StreamingResponse and TypeScript's mesh.sseStream.
+                emitter.send(SseEmitter.event().data(" " + chunk));
             } catch (IOException | IllegalStateException e) {
                 // Client disconnected or emitter already completed — cancel upstream
                 if (terminated.compareAndSet(false, true)) {
@@ -173,9 +182,11 @@ public final class MeshSse {
         public void onError(Throwable throwable) {
             if (!terminated.compareAndSet(false, true)) return;
             try {
+                // Leading space matches the Python/TS wire format
+                // (`data: <json>\n\n`); see onNext for rationale.
                 emitter.send(SseEmitter.event()
                     .name("error")
-                    .data(buildErrorJson(throwable)));
+                    .data(" " + buildErrorJson(throwable)));
             } catch (IOException | IllegalStateException e) {
                 log.debug("Failed to write SSE error frame: {}", e.getMessage());
             } finally {
@@ -191,7 +202,9 @@ public final class MeshSse {
         public void onComplete() {
             if (!terminated.compareAndSet(false, true)) return;
             try {
-                emitter.send(SseEmitter.event().data("[DONE]"));
+                // Leading space matches Python/TS wire format
+                // (`data: [DONE]\n\n`); see onNext for rationale.
+                emitter.send(SseEmitter.event().data(" [DONE]"));
             } catch (IOException | IllegalStateException e) {
                 log.debug("Failed to write SSE [DONE] frame: {}", e.getMessage());
             } finally {

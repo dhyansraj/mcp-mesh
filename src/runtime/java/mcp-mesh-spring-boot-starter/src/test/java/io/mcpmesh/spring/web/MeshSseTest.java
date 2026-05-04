@@ -134,10 +134,10 @@ class MeshSseTest {
         // 3 data frames + 1 [DONE] frame = 4 total
         assertEquals(4, emitter.frames.size());
         // SSE wire format: "data:<sp><payload>\n\n"
-        assertEquals("data:a\n\n", emitter.frames.get(0));
-        assertEquals("data:b\n\n", emitter.frames.get(1));
-        assertEquals("data:c\n\n", emitter.frames.get(2));
-        assertEquals("data:[DONE]\n\n", emitter.frames.get(3));
+        assertEquals("data: a\n\n", emitter.frames.get(0));
+        assertEquals("data: b\n\n", emitter.frames.get(1));
+        assertEquals("data: c\n\n", emitter.frames.get(2));
+        assertEquals("data: [DONE]\n\n", emitter.frames.get(3));
         assertTrue(emitter.completed.get());
         assertNull(emitter.errored.get());
     }
@@ -150,7 +150,7 @@ class MeshSseTest {
         assertTrue(emitter.awaitTerminal(2000));
 
         assertEquals(1, emitter.frames.size());
-        assertEquals("data:[DONE]\n\n", emitter.frames.get(0));
+        assertEquals("data: [DONE]\n\n", emitter.frames.get(0));
         assertTrue(emitter.completed.get());
     }
 
@@ -167,7 +167,7 @@ class MeshSseTest {
 
         // Should have written: "first" frame, then a JSON error frame; NO [DONE]
         assertEquals(2, emitter.frames.size());
-        assertEquals("data:first\n\n", emitter.frames.get(0));
+        assertEquals("data: first\n\n", emitter.frames.get(0));
         String errorFrame = emitter.frames.get(1);
         // The frame format is "event:error\ndata:<json>\n\n"
         assertTrue(errorFrame.startsWith("event:error\n"),
@@ -176,7 +176,7 @@ class MeshSseTest {
             "Error frame should include exception message, got: " + errorFrame);
         assertTrue(errorFrame.contains("RuntimeException"),
             "Error frame should include exception type, got: " + errorFrame);
-        assertFalse(emitter.frames.contains("data:[DONE]\n\n"),
+        assertFalse(emitter.frames.contains("data: [DONE]\n\n"),
             "[DONE] frame must not be sent when an error occurs");
         assertNotNull(emitter.errored.get(), "completeWithError should have been called");
         assertSame(boom, emitter.errored.get());
@@ -240,10 +240,10 @@ class MeshSseTest {
         // Order: chunks then [DONE]. SubmissionPublisher delivers asynchronously
         // but FIFO per-subscriber, so we can assert the exact sequence.
         assertEquals(List.of(
-            "data:x\n\n",
-            "data:y\n\n",
-            "data:z\n\n",
-            "data:[DONE]\n\n"
+            "data: x\n\n",
+            "data: y\n\n",
+            "data: z\n\n",
+            "data: [DONE]\n\n"
         ), emitter.frames);
         assertTrue(emitter.completed.get());
     }
