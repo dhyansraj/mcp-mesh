@@ -722,8 +722,12 @@ def _build_create_kwargs(
 
     # Anthropic requires max_tokens; litellm/mesh callers may omit it. Pick
     # a generous default (Claude 3.5 Sonnet ceiling) so this isn't the
-    # surprising-hard-fail layer.
-    max_tokens = request_params.get("max_tokens", 8192)
+    # surprising-hard-fail layer. ``.get(..., 8192)`` only kicks in when the
+    # key is absent — callers may also pass ``max_tokens=None`` explicitly,
+    # so guard that case too (Anthropic rejects ``max_tokens=None``).
+    max_tokens = request_params.get("max_tokens")
+    if max_tokens is None:
+        max_tokens = 8192
 
     create_kwargs: dict[str, Any] = {
         "model": _strip_prefix(model),
@@ -747,6 +751,11 @@ def _build_create_kwargs(
         create_kwargs["tool_choice"] = {"type": "auto"}
     elif tool_choice == "any":
         create_kwargs["tool_choice"] = {"type": "any"}
+    elif tool_choice == "none":
+        # OpenAI/litellm "none" → no tools available. Drop tools entirely;
+        # don't set tool_choice (moot when tools absent). Universally
+        # compatible with all Anthropic API versions.
+        converted_tools = []
     elif isinstance(tool_choice, dict):
         # OpenAI/litellm shape: {"type": "function", "function": {"name": "..."}}
         # → Anthropic shape: {"type": "tool", "name": "..."}

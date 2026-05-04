@@ -34,6 +34,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytest.importorskip(
+    "anthropic", reason="native Anthropic adapter requires the anthropic SDK"
+)
+
 from _mcp_mesh.engine.native_clients import anthropic_native
 
 
@@ -316,6 +320,27 @@ class TestCompleteRequestShape:
             )
 
         # Anthropic requires max_tokens; we default to 8192 when caller omits.
+        assert create_mock.call_args.kwargs["max_tokens"] == 8192
+
+    @pytest.mark.asyncio
+    async def test_max_tokens_explicit_none_uses_default(self):
+        """``.get(key, default)`` only applies the default when the key is
+        absent — an explicit ``max_tokens=None`` would otherwise leak through
+        and make Anthropic reject the request. Guard the None case too.
+        """
+        cls_mock, create_mock, _ = _patched_async_anthropic(
+            _make_anthropic_message(text="hi")
+        )
+        with patch("anthropic.AsyncAnthropic", cls_mock):
+            await anthropic_native.complete(
+                {
+                    "messages": [{"role": "user", "content": "Hi."}],
+                    "max_tokens": None,
+                },
+                model="anthropic/claude-sonnet-4-5",
+                api_key="sk-test",
+            )
+
         assert create_mock.call_args.kwargs["max_tokens"] == 8192
 
     @pytest.mark.asyncio
@@ -851,6 +876,40 @@ class TestToolChoicePassThrough:
             "type": "tool",
             "name": "__mesh_format_response",
         }
+
+    @pytest.mark.asyncio
+    async def test_tool_choice_none_omits_tools_and_choice(self):
+        """litellm/OpenAI ``tool_choice="none"`` semantically means "do not
+        call any tools". The universally-compatible Anthropic translation is
+        to omit ``tools`` from the request entirely (and skip ``tool_choice``,
+        which is moot when no tools are advertised).
+        """
+        cls_mock, create_mock, _ = _patched_async_anthropic(
+            _make_anthropic_message(text="ok")
+        )
+        with patch("anthropic.AsyncAnthropic", cls_mock):
+            await anthropic_native.complete(
+                {
+                    "messages": [{"role": "user", "content": "Hi."}],
+                    "tools": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "f",
+                                "description": "",
+                                "parameters": {"type": "object"},
+                            },
+                        }
+                    ],
+                    "tool_choice": "none",
+                },
+                model="anthropic/claude-sonnet-4-5",
+                api_key="sk-test",
+            )
+
+        kwargs = create_mock.call_args.kwargs
+        assert "tools" not in kwargs
+        assert "tool_choice" not in kwargs
 
 
 class TestCompleteWithoutResponseFormat:
