@@ -65,22 +65,43 @@ test:
         bash -c "
           set -euo pipefail
           mkdir -p /src/mcp-mesh/src/runtime/typescript /src/mcp-mesh/src/runtime/core/typescript /out/packages && \
-          # Locate tc02a's @mcpmesh/core tarball
-          CORE_TGZ=\$(ls /out/packages/mcpmesh-core-*.tgz 2>/dev/null | head -1) && \
-          if [ -z \"\$CORE_TGZ\" ]; then \
+          # Locate tc02a's @mcpmesh/core tarball. Use `ls -t` (newest first
+          # by mtime) so a stale older tarball left from a prior failed run
+          # doesn't shadow the fresh one. Fail loudly if multiple unique
+          # versions exist — that's a cleanup signal, not something to
+          # silently pick from.
+          CORE_TGZ_COUNT=\$(ls /out/packages/mcpmesh-core-*.tgz 2>/dev/null | wc -l) && \
+          if [ \"\$CORE_TGZ_COUNT\" -eq 0 ]; then \
             echo 'ERROR: @mcpmesh/core tarball not found in /out/packages/ — tc02a should produce it'; \
             ls -la /out/packages/ || true; \
             exit 1; \
           fi && \
+          if [ \"\$CORE_TGZ_COUNT\" -gt 1 ]; then \
+            echo \"WARNING: multiple @mcpmesh/core tarballs in /out/packages/ — using newest by mtime\"; \
+            ls -la /out/packages/mcpmesh-core-*.tgz; \
+          fi && \
+          CORE_TGZ=\$(ls -t /out/packages/mcpmesh-core-*.tgz | head -1) && \
           echo \"Extracting pre-built @mcpmesh/core from \$CORE_TGZ\" && \
           tar -xzf \"\$CORE_TGZ\" -C /src/mcp-mesh/src/runtime/core/typescript --strip-components=1 && \
+          # The packed @mcpmesh/core package.json still declares
+          # `scripts.build = napi build ...` (the source build pipeline).
+          # Strip the build/install/prepare scripts from the EXTRACTED
+          # package.json so npm doesn't re-invoke napi build (which would
+          # fail — no Rust source / Cargo.toml at the install location).
+          # The packed JS + .node files are already what the SDK needs.
+          if [ -f /src/mcp-mesh/src/runtime/core/typescript/package.json ]; then \
+            node -e \"const fs=require('fs'); const p='/src/mcp-mesh/src/runtime/core/typescript/package.json'; const j=JSON.parse(fs.readFileSync(p)); for (const k of ['build','prepare','prepublish','install','postinstall']) { if (j.scripts) delete j.scripts[k]; } fs.writeFileSync(p, JSON.stringify(j, null, 2));\"; \
+          fi && \
           # Copy SDK source
           cp /src-host/src/runtime/typescript/package.json /src/mcp-mesh/src/runtime/typescript/ && \
           cp /src-host/src/runtime/typescript/tsconfig.json /src/mcp-mesh/src/runtime/typescript/ && \
           cp -r /src-host/src/runtime/typescript/src /src/mcp-mesh/src/runtime/typescript/ && \
           echo '=== Building @mcpmesh/sdk (consuming pre-built @mcpmesh/core) ===' && \
           cd /src/mcp-mesh/src/runtime/typescript && \
-          npm install && \
+          # --ignore-scripts: belt-and-suspenders defense in case the
+          # core/typescript scripts strip above missed anything (or if any
+          # transitive dep tries to run native build steps).
+          npm install --ignore-scripts && \
           npm run build && \
           npm pack --pack-destination /out/packages
         "

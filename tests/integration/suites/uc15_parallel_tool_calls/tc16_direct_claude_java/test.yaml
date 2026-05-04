@@ -95,12 +95,18 @@ test:
     handler: shell
     workdir: /workspace
     command: |
-      RESPONSE=$(meshctl call parallelAnalyze --timeout 120 '{"ctx": {"query": "You MUST call all three tools in parallel for ticker NVDA: get_stock_price, get_company_info, AND get_market_sentiment. Return the raw values from each tool — do not summarize or omit any field. Include the literal sentiment value (Bullish/Bearish/Neutral) and recommendation (Buy/Hold/Sell) from get_market_sentiment.", "ticker": "NVDA"}}' 2>&1)
+      RESPONSE=$(meshctl call parallelAnalyze --timeout 120 '{"ctx": {"query": "You MUST call all three tools in parallel for ticker NVDA: get_stock_price, get_company_info, AND get_market_sentiment. Return the raw values from each tool — do not summarize or omit any field. Include the sentiment value and recommendation (Buy/Hold/Sell) from get_market_sentiment.", "ticker": "NVDA"}}' 2>&1)
       echo "$RESPONSE"
       # Verdict token: did Claude actually call get_market_sentiment? The
       # tool returns one of {Bullish, Bearish, Neutral, Very Bullish, Very
       # Bearish}. tsuite assertion expressions don't support OR, so we
       # collapse the disjunction here in shell.
+      #
+      # IMPORTANT: the verdict words must NOT appear in the prompt itself —
+      # if meshctl ever echoes the request payload back into stdout (debug,
+      # error paths) the verdict would PASS without Claude calling the tool.
+      # The prompt above intentionally avoids the literal "Bullish/Bearish/
+      # Neutral" string for this reason.
       if echo "$RESPONSE" | grep -qE 'Bullish|Bearish|Neutral'; then
         echo "SENTIMENT_TOOL_VERDICT=PASS"
       else

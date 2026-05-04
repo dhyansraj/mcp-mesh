@@ -212,6 +212,9 @@ test:
         -d '{"destination":"Tokyo","dates":"June 1-5, 2026","budget":"$3000","message":"family trip"}' \
         2>&1)
       DATA_COUNT=$(echo "$RESPONSE" | grep -c '^data: ' || true)
+      # Guard against an empty count crashing the numeric comparison below
+      # (would emit neither PASS nor FAIL → silent half-failure).
+      DATA_COUNT=${DATA_COUNT:-0}
       echo "DATA_CHUNK_COUNT=$DATA_COUNT"
       # Emit a verdict token the assertion matches by string-contains. The
       # earlier ${jq:...} expression returned <nil> in tsuite even though
