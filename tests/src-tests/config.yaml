@@ -35,7 +35,7 @@ docker:
 defaults:
   timeout: 600 # 10 minutes per test
 execution:
-  max_workers: 8 # DAG-based parallel builds
+  max_workers: 12 # DAG-based parallel builds
 packages:
   mode: local
 standalone:
