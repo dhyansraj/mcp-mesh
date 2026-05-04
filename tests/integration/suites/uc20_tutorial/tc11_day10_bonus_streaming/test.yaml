@@ -212,7 +212,20 @@ test:
         -d '{"destination":"Tokyo","dates":"June 1-5, 2026","budget":"$3000","message":"family trip"}' \
         2>&1)
       DATA_COUNT=$(echo "$RESPONSE" | grep -c '^data: ' || true)
+      # Guard against an empty count crashing the numeric comparison below
+      # (would emit neither PASS nor FAIL → silent half-failure).
+      DATA_COUNT=${DATA_COUNT:-0}
       echo "DATA_CHUNK_COUNT=$DATA_COUNT"
+      # Emit a verdict token the assertion matches by string-contains. The
+      # earlier ${jq:...} expression returned <nil> in tsuite even though
+      # DATA_CHUNK_COUNT=333 was clearly captured (run 7c9009ac/test 51528).
+      # Verdict pattern avoids the jq round-trip and matches the same
+      # robustness fix applied to uc18 tc04+tc05.
+      if [ "$DATA_COUNT" -gt 5 ]; then
+        echo "MULTI_CHUNK_VERDICT=PASS"
+      else
+        echo "MULTI_CHUNK_VERDICT=FAIL"
+      fi
       echo "--- last 20 lines of response ---"
       echo "$RESPONSE" | tail -20
     capture: chunk_count
@@ -281,8 +294,10 @@ assertions:
   # --- Multi-chunk streaming proof (NOT a single buffered payload) ---
   # If the response were buffered into one frame, DATA_CHUNK_COUNT would be 1
   # or 2 (one for the body, one for [DONE]). > 5 proves real streaming.
-  - expr: "${jq:captured.chunk_count:[. | split(\"\\n\")[] | select(startswith(\"DATA_CHUNK_COUNT=\")) | sub(\"DATA_CHUNK_COUNT=\"; \"\") | tonumber] | first} > 5"
+  - expr: "${captured.chunk_count} contains 'MULTI_CHUNK_VERDICT=PASS'"
     message: "Expected > 5 SSE data chunks (proves true streaming, not a single buffered payload). Got fewer — the response may be buffered, not streaming."
+  - expr: "${captured.chunk_count} not contains 'MULTI_CHUNK_VERDICT=FAIL'"
+    message: "Multi-chunk verdict must be PASS (negative guard against the verdict token regressing)"
 
 post_run:
   - handler: shell

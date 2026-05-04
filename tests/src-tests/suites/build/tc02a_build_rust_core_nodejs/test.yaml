@@ -5,7 +5,13 @@
 # Build commands execute inside src-build:latest via docker run
 
 name: "Build Rust Core (Node.js)"
-depends_on: [tc02_build_rust_core]
+# Only depends on the build environment — does NOT consume tc02's output.
+# Each test runs in an isolated `docker run --rm` container with its own
+# Rust source copy and cargo target/, so tc02a + tc02 + tc04a can all
+# build the Rust core in parallel without contention. Lets the napi build
+# move forward to Wave 2 alongside tc02 (Python wheel) and tc04a (Java
+# FFI), which in turn lets tc04 (TS SDK) start in Wave 3 instead of Wave 4.
+depends_on: [tc00_build_environment]
 description: "Build @mcpmesh/core npm tarball with native bindings using napi-rs"
 tags:
   - build

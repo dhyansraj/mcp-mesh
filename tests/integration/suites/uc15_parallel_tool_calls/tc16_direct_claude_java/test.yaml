@@ -86,11 +86,32 @@ test:
     capture: agent_list
 
   # 7. Call parallelAnalyze with stock query (should trigger all 3 tools)
+  # The prompt is imperative ("MUST call all three") and the verdict step
+  # below checks for tool-returned literal values (Bullish/Bearish/Neutral),
+  # not the word "sentiment" — Claude tends to write "sentiment" in prose
+  # even when get_market_sentiment wasn't called, so the literal-value
+  # check is a more reliable proof that all 3 parallel tools ran.
   - name: "Parallel tool query"
     handler: shell
     workdir: /workspace
     command: |
-      meshctl call parallelAnalyze --timeout 120 '{"ctx": {"query": "Give me a comprehensive analysis of NVDA stock. Get the stock price, company info, and market sentiment.", "ticker": "NVDA"}}'
+      RESPONSE=$(meshctl call parallelAnalyze --timeout 120 '{"ctx": {"query": "You MUST call all three tools in parallel for ticker NVDA: get_stock_price, get_company_info, AND get_market_sentiment. Return the raw values from each tool — do not summarize or omit any field. Include the sentiment value and recommendation (Buy/Hold/Sell) from get_market_sentiment.", "ticker": "NVDA"}}' 2>&1)
+      echo "$RESPONSE"
+      # Verdict token: did Claude actually call get_market_sentiment? The
+      # tool returns one of {Bullish, Bearish, Neutral, Very Bullish, Very
+      # Bearish}. tsuite assertion expressions don't support OR, so we
+      # collapse the disjunction here in shell.
+      #
+      # IMPORTANT: the verdict words must NOT appear in the prompt itself —
+      # if meshctl ever echoes the request payload back into stdout (debug,
+      # error paths) the verdict would PASS without Claude calling the tool.
+      # The prompt above intentionally avoids the literal "Bullish/Bearish/
+      # Neutral" string for this reason.
+      if echo "$RESPONSE" | grep -qE 'Bullish|Bearish|Neutral'; then
+        echo "SENTIMENT_TOOL_VERDICT=PASS"
+      else
+        echo "SENTIMENT_TOOL_VERDICT=FAIL"
+      fi
     capture: parallel_response
     timeout: 180
 
@@ -111,8 +132,15 @@ assertions:
   # Verify response contains data from all 3 tools
   - expr: "${captured.parallel_response} contains 'NVDA'"
     message: "Response should reference the NVDA ticker"
-  - expr: "${captured.parallel_response} contains 'sentiment'"
-    message: "Response should contain sentiment data (from get_market_sentiment)"
+  # Verdict-token pattern: shell collapses the OR-disjunction into a single
+  # PASS/FAIL token because tsuite assertion expressions don't support OR.
+  # PASS = Claude's response contains a sentiment value (Bullish/Bearish/
+  # Neutral) returned by the get_market_sentiment tool, proving all 3
+  # parallel tools were called.
+  - expr: "${captured.parallel_response} contains 'SENTIMENT_TOOL_VERDICT=PASS'"
+    message: "Response should contain a sentiment value (Bullish/Bearish/Neutral) returned by get_market_sentiment, proving all 3 parallel tools ran"
+  - expr: "${captured.parallel_response} not contains 'SENTIMENT_TOOL_VERDICT=FAIL'"
+    message: "Sentiment-tool verdict must be PASS (negative guard)"
 post_run:
   - handler: shell
     workdir: /workspace

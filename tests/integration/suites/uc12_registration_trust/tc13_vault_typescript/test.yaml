@@ -93,8 +93,11 @@ test:
     capture: agent_start
 
   - name: "Wait for agent registration"
+    # 15s was too tight on loaded test boxes — TS agent startup +
+    # Vault credential fetch + register call exceeded the budget on
+    # run 7c9009ac (test 51431, "no healthy agent found").
     handler: wait
-    seconds: 15
+    seconds: 30
 
   - name: "Check agent registered"
     handler: shell
