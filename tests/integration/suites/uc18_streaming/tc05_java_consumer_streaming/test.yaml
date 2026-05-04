@@ -106,7 +106,9 @@ test:
     handler: shell
     command: |
       for i in $(seq 1 60); do
-        if curl -sf http://localhost:8091/health 2>/dev/null | grep -q '"status":"ok"'; then
+        # Framework's MeshHealthController returns {"status":"healthy"}
+        # when the mesh runtime is up — match on that.
+        if curl -sf http://localhost:8091/health 2>/dev/null | grep -q '"status":"healthy"'; then
           echo "java-stream-gateway healthy after $((i * 2))s"
           exit 0
         fi
@@ -178,8 +180,8 @@ assertions:
     message: "trip-producer should be registered with the mesh"
 
   # ===== Non-streaming regression =====
-  - expr: "${captured.health_output} contains '\"status\":\"ok\"'"
-    message: "/health should return plain JSON {\"status\":\"ok\"}"
+  - expr: "${captured.health_output} contains '\"status\":\"healthy\"'"
+    message: "/health should return plain JSON {\"status\":\"healthy\"} (framework MeshHealthController)"
   - expr: "${captured.health_output} not contains 'data:'"
     message: "/health response must NOT be SSE-framed (would mean SSE leaked)"
 

@@ -8,7 +8,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -43,15 +42,12 @@ class GatewayController {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayController.class);
 
-    /**
-     * Plain non-streaming health endpoint — coexists with the SSE route
-     * to verify the SseEmitter path doesn't leak SSE framing into JSON
-     * responses.
-     */
-    @GetMapping("/health")
-    public Map<String, String> health() {
-        return Map.of("status", "ok");
-    }
+    // No custom /health — mcp-mesh-spring-boot-starter ships
+    // io.mcpmesh.spring.MeshHealthController which auto-registers
+    // GET /health returning {"status":"healthy"} when the runtime
+    // is up. The test asserts that response shape directly, and
+    // having both controllers map /health would yield Spring's
+    // "Ambiguous mapping" error at startup.
 
     /**
      * SSE-framed forwarder for the {@code trip_planning} mesh capability.
