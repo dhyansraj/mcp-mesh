@@ -38,28 +38,83 @@ Server ← event: message  data: {"result":{"content":[{"type":"text","text":"He
 
 Each chunk is one progress notification. The complete accumulated text is also sent as the normal `CallToolResult` — consumers that don't subscribe to progress notifications still get the same final value, just all at once at the end.
 
+<!-- markdownlint-disable MD046 -->
 ## Two consumer surfaces
 
-Once a producer streams, two consumer code paths are available:
+Once a producer streams, two consumer code paths are available — and both work in **all three runtimes** (Python, TypeScript, Java) as of #854.
 
-**MCP-native (Python `proxy.stream(...)`)** — when a mesh agent depends on a streaming tool, calling `proxy.stream(...)` returns an `async for`-iterable of chunks. The framework subscribes to progress notifications on the open MCP connection and yields each one to the consumer.
+**MCP-native (`proxy.stream(...)`)** — when a mesh agent depends on a streaming tool, calling `proxy.stream(...)` (or its language equivalent) returns an iterator of chunks. The framework subscribes to progress notifications on the open MCP connection and yields each one to the consumer.
 
-```python
-@mesh.tool(capability="passthrough", dependencies=["chat"])
-async def passthrough(prompt: str, chat: mesh.McpMeshTool = None) -> mesh.Stream[str]:
-    async for chunk in chat.stream(prompt=prompt):
-        yield chunk
-```
+=== "Python"
 
-**Browser-direct (`@mesh.route` + SSE)** — a FastAPI route handler that returns `mesh.Stream[str]` is auto-wrapped as a Server-Sent Events response. Each chunk becomes a `data: <chunk>\n\n` line; the stream terminates with `data: [DONE]\n\n`. Browsers consume it via `fetch` + `ReadableStream` (`EventSource` is GET-only).
+    ```python
+    @mesh.tool(capability="passthrough", dependencies=["chat"])
+    async def passthrough(prompt: str, chat: mesh.McpMeshTool = None) -> mesh.Stream[str]:
+        async for chunk in chat.stream(prompt=prompt):
+            yield chunk
+    ```
 
-```python
-@app.post("/api/chat")
-@mesh.route(dependencies=["chat"])
-async def chat_endpoint(body: ChatRequest, chat: McpMeshTool = None) -> mesh.Stream[str]:
-    async for chunk in chat.stream(prompt=body.prompt):
-        yield chunk
-```
+=== "TypeScript"
+
+    ```typescript
+    // Inside a mesh.route handler:
+    for await (const chunk of chat.stream({ prompt: req.body.prompt })) {
+      // ...
+    }
+    ```
+
+=== "Java"
+
+    ```java
+    // chat is an injected McpMeshTool<String>
+    Flow.Publisher<String> publisher = chat.stream(Map.of("prompt", prompt));
+    publisher.subscribe(/* ... */);
+    ```
+
+**Browser-direct (route handler + SSE)** — every runtime exposes a route layer that auto-wraps the stream as a Server-Sent Events response. Each chunk becomes a `data: <chunk>\n\n` line; the stream terminates with `data: [DONE]\n\n`. Browsers consume it via `fetch` + `ReadableStream` (`EventSource` is GET-only).
+
+=== "Python (FastAPI)"
+
+    ```python
+    @app.post("/api/chat")
+    @mesh.route(dependencies=["chat"])
+    async def chat_endpoint(body: ChatRequest, chat: McpMeshTool = None) -> mesh.Stream[str]:
+        async for chunk in chat.stream(prompt=body.prompt):
+            yield chunk
+    ```
+
+=== "TypeScript (Express)"
+
+    ```typescript
+    import express from "express";
+    import { mesh } from "@mcpmesh/sdk";
+
+    app.post("/api/chat", mesh.route(
+      [{ capability: "chat" }],
+      async (req, res, { chat }) => {
+        if (!chat) return res.status(503).json({ error: "chat unavailable" });
+        await mesh.sseStream(res, chat.stream({ prompt: req.body.prompt }));
+      }
+    ));
+    ```
+
+=== "Java (Spring MVC)"
+
+    ```java
+    @PostMapping("/api/chat")
+    @MeshRoute(dependencies = @MeshDependency(capability = "chat"))
+    public SseEmitter chat(
+        @RequestBody Map<String, Object> body,
+        @MeshInject("chat") McpMeshTool<String> chat
+    ) {
+      SseEmitter emitter = new SseEmitter(0L);
+      MeshSse.forward(emitter, chat.stream(body));
+      return emitter;
+    }
+    ```
+
+The Python helper is built into `@mesh.route` (auto-detects `Stream[str]` return type). TS uses the explicit `mesh.sseStream(res, asyncIterable)` Express helper. Java uses `MeshSse.forward(emitter, publisher)` to bridge a `Flow.Publisher<String>` into a Spring `SseEmitter`. All three emit identical wire bytes.
+<!-- markdownlint-enable MD046 -->
 
 ## Multi-hop streaming
 
@@ -126,7 +181,7 @@ The matcher operators are unprefixed = REQUIRED, `+` = PREFERRED (bonus score), 
 
 - **First chunk may appear instant for short responses.** Anthropic batches small responses, so a 1-token answer can land in a single SSE event with no observable streaming behavior. This is provider behavior, not a mesh issue.
 
-- **Python only for `proxy.stream()`.** TypeScript and Java SDKs do not yet expose a streaming consumer API. Wire-level streaming still works (a TS or Java client calling a Python streaming tool will receive the buffered final result), but per-chunk delivery requires Python on the consumer side. Cross-runtime parity is on the roadmap.
+- **Producers are Python-only (consumers work everywhere).** As of #854 the consumer side has full cross-runtime parity — TS (`proxy.stream()`, `mesh.sseStream`, `MeshLlmAgent.stream()`) and Java (`McpMeshTool.stream()`, `MeshSse.forward()`, `MeshLlmAgent.stream()`) all consume Python streaming tools at per-chunk granularity. **Producer-side streaming** (TS/Java tools that themselves return `Stream<string>` / `Flow.Publisher<String>`) is not yet implemented; that's tracked as Phase B of #854. A TS or Java tool that wants to stream today must delegate to a Python `@mesh.tool` returning `Stream[str]` (or to a Python `@mesh.llm_provider` for LLM streams).
 
 ## Wire protocol
 

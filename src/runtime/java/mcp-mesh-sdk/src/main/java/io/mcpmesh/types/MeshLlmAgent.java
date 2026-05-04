@@ -4,6 +4,7 @@ import java.lang.reflect.Type;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Flow;
 
 /**
  * Interface for LLM-powered agentic capabilities.
@@ -125,6 +126,75 @@ public interface MeshLlmAgent {
      */
     default <T> CompletableFuture<T> generateAsync(String prompt, Class<T> responseType) {
         return request().user(prompt).generateAsync(responseType);
+    }
+
+    /**
+     * Stream the assistant's text response chunk-by-chunk from a streaming
+     * mesh-delegated LLM provider (Python's {@code @mesh.llm_provider}
+     * auto-generates a {@code process_chat_stream} MCP tool tagged
+     * {@code ai.mcpmesh.stream}).
+     *
+     * <h2>Tag opt-in (REQUIRED)</h2>
+     * <p>Unlike Python's {@code @mesh.llm} which auto-adds the
+     * {@code ai.mcpmesh.stream} tag based on the function's
+     * {@code Stream[str]} return type, Java users must EXPLICITLY include
+     * {@code "ai.mcpmesh.stream"} in their {@link io.mcpmesh.MeshLlm#providerSelector()}
+     * tags to discriminate the streaming variant from the buffered one:
+     *
+     * <pre>{@code
+     * @MeshLlm(
+     *     providerSelector = @Selector(
+     *         capability = "llm",
+     *         tags = {"+claude", "ai.mcpmesh.stream"}
+     *     )
+     * )
+     * @MeshTool(capability = "chat_stream")
+     * public String chatStream(@Param("message") String message, MeshLlmAgent llm) {
+     *     StringBuilder out = new StringBuilder();
+     *     llm.stream(List.of(Message.user(message))).subscribe(new Flow.Subscriber<>() {
+     *         public void onSubscribe(Flow.Subscription s) { s.request(Long.MAX_VALUE); }
+     *         public void onNext(String chunk) { out.append(chunk); System.out.print(chunk); }
+     *         public void onError(Throwable t) {}
+     *         public void onComplete() {}
+     *     });
+     *     return out.toString();
+     * }
+     * }</pre>
+     *
+     * <h2>Mesh-delegate ONLY</h2>
+     * <p>Direct providers (Spring AI clients) do not support streaming in
+     * this SDK release. The default implementation throws
+     * {@link UnsupportedOperationException}; mesh-delegate proxies override
+     * it to call {@code process_chat_stream} via the existing streaming
+     * MCP transport.
+     *
+     * @param messages Conversation messages to send to the LLM
+     * @return A {@link Flow.Publisher} that emits text chunks as the
+     *         provider produces them. The final accumulated result is NOT
+     *         emitted (consumers iterate to assemble it themselves).
+     * @throws UnsupportedOperationException for direct (non-mesh) providers
+     */
+    default Flow.Publisher<String> stream(List<Message> messages) {
+        throw new UnsupportedOperationException(
+            "MeshLlmAgent.stream() requires a mesh-delegated provider. "
+                + "Configure @MeshLlm(providerSelector = @Selector(capability = \"llm\", "
+                + "tags = {\"ai.mcpmesh.stream\"})) to use a streaming @mesh.llm_provider. "
+                + "Direct providers (Spring AI clients) do not support stream() in this SDK release."
+        );
+    }
+
+    /**
+     * Stream the assistant's text response from a single user message.
+     *
+     * <p>Convenience wrapper for {@link #stream(List)} that wraps the prompt
+     * in a single user-role message.
+     *
+     * @param prompt The user prompt
+     * @return A {@link Flow.Publisher} that emits text chunks
+     * @throws UnsupportedOperationException for direct (non-mesh) providers
+     */
+    default Flow.Publisher<String> stream(String prompt) {
+        return stream(List.of(Message.user(prompt)));
     }
 
     // =========================================================================

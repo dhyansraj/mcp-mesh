@@ -1,0 +1,232 @@
+# Test Case: tc05 - Cross-runtime streaming, Java gateway -> Python producer
+# GitHub issue #854 Phase A — consumer-side streaming parity
+#
+# Verifies:
+#   - A Spring Boot @MeshRoute gateway (no @MeshAgent — REST consumer-only mode)
+#     can resolve a Python mesh.Stream[str] producer ("trip_planning")
+#   - MeshSse.forward(emitter, proxy.stream(args)) frames each upstream chunk
+#     as `data: <chunk>\n\n` and terminates with `data: [DONE]\n\n`
+#   - The plain /health JSON route on the same gateway still works (no SSE
+#     leakage into non-streaming responses)
+#
+# The Python producer yields 5 deterministic chunks (no LLM). Java compile +
+# Spring Boot startup is slower than Python/TS, so this test allots 600s
+# total and 600s for `maven-install`.
+
+name: "Cross-runtime streaming: Java gateway → Python producer"
+description: "Java Spring Boot gateway (@MeshRoute + MeshSse.forward) consumes a Python mesh.Stream[str] producer and forwards chunks via SSE"
+tags:
+  - streaming
+  - sse
+  - java
+  - cross-runtime
+  - consumer
+  - issue-854
+  - slow
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # ===== STAGE 1: Copy artifacts =====
+  - name: "Copy trip-producer + java-stream-gateway to workspace"
+    handler: shell
+    command: |
+      mkdir -p /workspace/streaming
+      cp -rL /uc-artifacts/streaming/trip-producer /workspace/streaming/
+      cp -rL /uc-artifacts/streaming/java-stream-gateway /workspace/streaming/
+      ls /workspace/streaming/
+    capture: copy_output
+
+  # ===== STAGE 2: Install dependencies =====
+  - name: "Install Python producer deps (fastapi, uvicorn)"
+    handler: shell
+    command: "/workspace/.venv/bin/pip install --quiet fastapi uvicorn"
+
+  - name: "Install java-stream-gateway Maven dependencies"
+    handler: maven-install
+    path: /workspace/streaming/java-stream-gateway
+    timeout: 600
+
+  # ===== STAGE 3: Start producer =====
+  - name: "Start trip-producer (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start streaming/trip-producer/main.py -d"
+    capture: start_producer
+
+  - name: "Wait for trip-producer registration"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="trip-producer"
+      EXPECTED_COUNT=1
+      echo "Waiting for $EXPECTED_COUNT named agent to register..."
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        COUNT=0
+        for agent in $EXPECTED; do
+          if echo "$AGENTS" | grep -q "$agent"; then
+            COUNT=$((COUNT + 1))
+          fi
+        done
+        if [ "$COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "trip-producer registered after $((i * 2))s"
+          meshctl list
+          meshctl list --tools
+          exit 0
+        fi
+        echo "  $COUNT/$EXPECTED_COUNT agents registered (attempt $i/60)..."
+        sleep 2
+      done
+      echo "ERROR: trip-producer not registered within 120s"
+      meshctl list 2>/dev/null || true
+      meshctl logs trip-producer 2>/dev/null | tail -30 || true
+      exit 1
+    capture: wait_producer
+    timeout: 150
+
+  # ===== STAGE 4: Start Java gateway =====
+  # Java + Spring Boot startup is slow. meshctl wraps this as `mvn
+  # spring-boot:run` for Maven projects (matches uc11/tc03 + uc10/tc70).
+  - name: "Start java-stream-gateway (port 8091)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start /workspace/streaming/java-stream-gateway --env PORT=8091 -d"
+    capture: start_gateway
+
+  # Java gateway uses @MeshRoute without @MeshAgent, so it registers as
+  # "api-<hash>" (no stable name). Wait for the HTTP listener to come up
+  # by polling /health rather than grepping `meshctl list`.
+  - name: "Wait for java-stream-gateway /health to respond"
+    handler: shell
+    command: |
+      for i in $(seq 1 60); do
+        # Framework's MeshHealthController returns {"status":"healthy"}
+        # when the mesh runtime is up — match on that.
+        if curl -sf http://localhost:8091/health 2>/dev/null | grep -q '"status":"healthy"'; then
+          echo "java-stream-gateway healthy after $((i * 2))s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: java-stream-gateway /health did not respond within 120s"
+      echo "===== meshctl list ====="
+      meshctl list 2>/dev/null || true
+      echo "===== java-stream-gateway log (last 200 lines) ====="
+      meshctl logs java-stream-gateway --tail=200 2>/dev/null \
+        || tail -200 ~/.mcp-mesh/logs/java-stream-gateway.log 2>/dev/null \
+        || echo "(log unavailable)"
+      echo "===== port 8091 listeners ====="
+      ss -tlnp 2>/dev/null | grep 8091 || netstat -an 2>/dev/null | grep 8091 || true
+      exit 1
+    capture: wait_gateway
+    timeout: 150
+
+  # Brief settle so the @MeshRoute dep has a chance to resolve before the
+  # first /plan call (the dep-resolution loop runs on a heartbeat tick).
+  - name: "Brief settle for gateway dep resolution"
+    handler: wait
+    seconds: 5
+
+  # ===== STAGE 5: Hit the gateway and capture the SSE body =====
+  - name: "List agents (sanity)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: agent_list
+
+  - name: "GET /health (non-streaming regression)"
+    handler: shell
+    command: "curl -s http://localhost:8091/health"
+    capture: health_output
+    timeout: 30
+
+  - name: "POST /plan and capture full SSE body"
+    handler: shell
+    command: |
+      curl -s -N -X POST http://localhost:8091/plan \
+        -H "Content-Type: application/json" \
+        -d '{"destination":"Kyoto"}' 2>&1
+    capture: sse_output
+    timeout: 60
+
+  - name: "POST /plan again to capture response headers"
+    handler: shell
+    command: |
+      curl -s -D - -X POST http://localhost:8091/plan \
+        -H "Content-Type: application/json" \
+        -d '{"destination":"Kyoto"}' \
+        -o /dev/null 2>&1
+    capture: sse_headers
+    timeout: 60
+
+  - name: "Count data: lines in SSE body"
+    handler: shell
+    command: |
+      # Strip CR before counting so the `data:` prefix anchors at
+      # start-of-line regardless of platform line endings. Then PASS/FAIL
+      # on a numeric comparison — assertions match the verdict token rather
+      # than substring-matching numeric counts (which would confuse e.g.
+      # =2 with =20, =21, etc.).
+      COUNT=$(printf '%s' "${captured.sse_output}" | tr -d '\r' | grep -c '^data:' || true)
+      echo "DATA_LINE_COUNT=$COUNT"
+      if [ "$COUNT" -ge 3 ]; then
+        echo "DATA_LINE_COUNT_VERDICT=PASS"
+      else
+        echo "DATA_LINE_COUNT_VERDICT=FAIL"
+      fi
+    capture: data_line_count
+
+assertions:
+  # ===== Producer registered =====
+  - expr: "${captured.agent_list} contains 'trip-producer'"
+    message: "trip-producer should be registered with the mesh"
+
+  # ===== Non-streaming regression =====
+  - expr: "${captured.health_output} contains '\"status\":\"healthy\"'"
+    message: "/health should return plain JSON {\"status\":\"healthy\"} (framework MeshHealthController)"
+  - expr: "${captured.health_output} not contains 'data:'"
+    message: "/health response must NOT be SSE-framed (would mean SSE leaked)"
+
+  # ===== SSE headers =====
+  - expr: "${captured.sse_headers} contains 'text/event-stream'"
+    message: "POST /plan response Content-Type must be text/event-stream"
+
+  # ===== SSE body content (each producer chunk surfaces as a data: frame) =====
+  - expr: "${captured.sse_output} contains 'data: Planning '"
+    message: "SSE body must contain the first producer chunk ('Planning ')"
+  - expr: "${captured.sse_output} contains 'data: trip to Kyoto'"
+    message: "SSE body must contain the destination-templated chunk ('trip to Kyoto')"
+  - expr: "${captured.sse_output} contains 'data: Day 1: Arrival.'"
+    message: "SSE body must contain the 'Day 1: Arrival.' chunk"
+  - expr: "${captured.sse_output} contains 'data: Day 2: Sightseeing.'"
+    message: "SSE body must contain the 'Day 2: Sightseeing.' chunk"
+  - expr: "${captured.sse_output} contains 'data: Day 3: Departure.'"
+    message: "SSE body must contain the final 'Day 3: Departure.' chunk"
+
+  # ===== Stream termination =====
+  - expr: "${captured.sse_output} contains 'data: [DONE]'"
+    message: "SSE body must end with the 'data: [DONE]' terminator"
+
+  # ===== Per-chunk delivery (chunks were NOT collapsed into a single buffered frame) =====
+  - expr: "${captured.data_line_count} contains 'DATA_LINE_COUNT='"
+    message: "Should have captured a DATA_LINE_COUNT line"
+  - expr: "${captured.data_line_count} contains 'DATA_LINE_COUNT_VERDICT=PASS'"
+    message: "Should have at least 3 data: lines (5 producer chunks + [DONE] expected)"
+  - expr: "${captured.data_line_count} not contains 'DATA_LINE_COUNT_VERDICT=FAIL'"
+    message: "Per-chunk delivery verdict must be PASS"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java-stream-gateway" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -41,6 +41,29 @@ RUN curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apac
 ENV MAVEN_HOME=/opt/maven
 ENV PATH="${MAVEN_HOME}/bin:${PATH}"
 
+# Point Maven at Google's mirror of Maven Central. Same byte-for-byte
+# artifacts (Maven verifies SHA-256 from the same response), but Google's
+# CDN has way more lenient throttling than Sonatype's repo1.maven.org.
+# Sonatype introduced per-IP HTTP 429 throttling in 2024 and Maven 3.9+
+# defaults to parallel downloads, which trips the throttle quickly on
+# fresh test containers. Baking this into the image means every test
+# container — including those using the framework `maven-install` handler
+# — gets the mirror automatically; no per-test config needed.
+RUN mkdir -p /root/.m2 && \
+    printf '%s\n' \
+      '<?xml version="1.0" encoding="UTF-8"?>' \
+      '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0">' \
+      '  <mirrors>' \
+      '    <mirror>' \
+      '      <id>google-maven-central</id>' \
+      '      <name>Google Maven Central Mirror</name>' \
+      '      <url>https://maven-central.storage-download.googleapis.com/maven2</url>' \
+      '      <mirrorOf>central</mirrorOf>' \
+      '    </mirror>' \
+      '  </mirrors>' \
+      '</settings>' \
+      > /root/.m2/settings.xml
+
 # Install Tempo for distributed tracing (architecture-aware)
 RUN ARCH=$(dpkg --print-architecture) && \
     curl -fsSL "https://github.com/grafana/tempo/releases/download/v2.7.1/tempo_2.7.1_linux_${ARCH}.deb" -o /tmp/tempo.deb && \

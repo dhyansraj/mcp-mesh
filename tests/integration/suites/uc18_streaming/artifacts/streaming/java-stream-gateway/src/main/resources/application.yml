@@ -1,0 +1,22 @@
+# Java streaming gateway — REST consumer-only mode (no @MeshAgent).
+# The framework auto-starts in agent_type="api" because @MeshRoute is
+# present without @MeshAgent, identical to rest-api-consumer.
+
+server:
+  # Allow PORT env override so the test can pin the port; default to 8091
+  # so it doesn't collide with the TS gateway in tc04 (which uses 8090).
+  port: ${PORT:8091}
+
+spring:
+  application:
+    name: java-stream-gateway
+
+# Only the registry URL is needed for consumer-only mode.
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example.streaming: DEBUG

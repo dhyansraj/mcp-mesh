@@ -331,6 +331,26 @@ export interface McpMeshTool {
   callTool(toolName: string, args?: Record<string, unknown>, options?: { headers?: Record<string, string> }): Promise<unknown>;
 
   /**
+   * Stream text chunks from a remote ``Stream[str]`` tool.
+   *
+   * Returns an async iterable that yields each chunk the producer emits via
+   * MCP ``notifications/progress``. The final result message ends the stream
+   * (its content is NOT yielded — iterate to get the whole stream).
+   *
+   * NOTE: If the producer doesn't actually emit progress notifications, the
+   * underlying SSE response will only contain the final ``result`` and this
+   * iterable will yield nothing.
+   *
+   * @example
+   * ```typescript
+   * for await (const chunk of planner.stream({ destination: "Tokyo" })) {
+   *   process.stdout.write(chunk);
+   * }
+   * ```
+   */
+  stream(args?: Record<string, unknown>, options?: { headers?: Record<string, string> }): AsyncIterable<string>;
+
+  /**
    * Get the endpoint URL for this dependency.
    */
   readonly endpoint: string;
@@ -669,6 +689,42 @@ export interface LlmAgent<T = string> {
    * @param prompt - New system prompt (inline or "file://path.hbs")
    */
   setSystemPrompt(prompt: string): void;
+
+  /**
+   * Stream the assistant's text response chunk-by-chunk from a streaming
+   * mesh-delegated provider (Python's ``@mesh.llm_provider`` exposes a
+   * ``process_chat_stream`` MCP tool tagged ``ai.mcpmesh.stream``).
+   *
+   * **Tag opt-in (REQUIRED):** TypeScript users must explicitly add
+   * ``"ai.mcpmesh.stream"`` to their provider tags to discriminate the
+   * streaming variant from the buffered one. Python's ``@mesh.llm`` does
+   * this automatically based on the function's ``Stream[str]`` return type;
+   * TS does not perform that return-type analysis at decorator time, so the
+   * opt-in must be explicit:
+   *
+   * ```ts
+   * server.addTool(mesh.llm({
+   *   name: "chat_stream",
+   *   provider: { capability: "llm", tags: ["+claude", "ai.mcpmesh.stream"] },
+   *   parameters: z.object({ message: z.string() }),
+   *   execute: async ({ message }, { llm }) => {
+   *     for await (const chunk of llm.stream(message)) {
+   *       process.stdout.write(chunk);
+   *     }
+   *     return "ok";
+   *   },
+   * }));
+   * ```
+   *
+   * **Mesh-delegate ONLY:** Direct providers (LiteLLM, Vercel) are not
+   * supported in this SDK release; ``stream()`` throws when called on an
+   * agent without a mesh provider.
+   *
+   * @param message - User message (string or multi-turn array)
+   * @param options - Same runtime overrides as the callable form
+   * @returns AsyncIterable of text chunks (final accumulated result is NOT yielded)
+   */
+  stream(message: LlmMessageInput, options?: LlmCallOptions): AsyncIterable<string>;
 }
 
 /**
