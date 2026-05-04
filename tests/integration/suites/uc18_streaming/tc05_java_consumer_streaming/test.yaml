@@ -113,7 +113,14 @@ test:
         sleep 2
       done
       echo "ERROR: java-stream-gateway /health did not respond within 120s"
+      echo "===== meshctl list ====="
       meshctl list 2>/dev/null || true
+      echo "===== java-stream-gateway log (last 200 lines) ====="
+      meshctl logs java-stream-gateway --tail=200 2>/dev/null \
+        || tail -200 ~/.mcp-mesh/logs/java-stream-gateway.log 2>/dev/null \
+        || echo "(log unavailable)"
+      echo "===== port 8091 listeners ====="
+      ss -tlnp 2>/dev/null | grep 8091 || netstat -an 2>/dev/null | grep 8091 || true
       exit 1
     capture: wait_gateway
     timeout: 150

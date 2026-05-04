@@ -1,7 +1,6 @@
 package com.example.streaming;
 
 import io.mcpmesh.spring.web.MeshDependency;
-import io.mcpmesh.spring.web.MeshInject;
 import io.mcpmesh.spring.web.MeshRoute;
 import io.mcpmesh.spring.web.MeshSse;
 import io.mcpmesh.types.McpMeshTool;
@@ -61,16 +60,19 @@ class GatewayController {
      * tool's {@code stream(args)} method, mirroring the TS gateway's
      * {@code trip_planning.stream(req.body)}.
      */
+    // Parameter name MUST match the capability name (snake_case → snake_case)
+    // so MeshInjectArgumentResolver resolves the dep by parameter name.
+    // This mirrors the rest-api-consumer example exactly.
     @PostMapping("/plan")
     @MeshRoute(dependencies = @MeshDependency(capability = "trip_planning"))
     public SseEmitter plan(
             @RequestBody(required = false) Map<String, Object> body,
-            @MeshInject("trip_planning") McpMeshTool<String> tripPlanning) {
+            McpMeshTool<String> trip_planning) {
 
         // 0L = no timeout — the producer controls when the stream ends.
         SseEmitter emitter = new SseEmitter(0L);
 
-        if (tripPlanning == null || !tripPlanning.isAvailable()) {
+        if (trip_planning == null || !trip_planning.isAvailable()) {
             log.warn("trip_planning capability is unavailable");
             try {
                 emitter.send(SseEmitter.event()
@@ -85,7 +87,7 @@ class GatewayController {
 
         Map<String, Object> args = (body != null) ? body : Map.of();
         log.info("Forwarding /plan to trip_planning with args={}", args);
-        MeshSse.forward(emitter, tripPlanning.stream(args));
+        MeshSse.forward(emitter, trip_planning.stream(args));
         return emitter;
     }
 }
