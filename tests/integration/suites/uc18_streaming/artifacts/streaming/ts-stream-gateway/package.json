@@ -1,0 +1,22 @@
+{
+  "name": "ts-stream-gateway",
+  "version": "1.0.0",
+  "description": "TypeScript SSE gateway that forwards a Python mesh.Stream[str] producer",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "file:../../../../../../../src/runtime/typescript",
+    "express": "^4.21.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
