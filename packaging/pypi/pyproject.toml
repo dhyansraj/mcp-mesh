@@ -37,6 +37,11 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence"
 ]
 requires-python = ">=3.11"
+# anthropic SDK is included by default for native Claude dispatch (issue #834).
+# When MCP_MESH_NATIVE_LLM is unset (default ON), Claude provider agents
+# dispatch through the native anthropic SDK; without the SDK they would
+# silently fall back to LiteLLM. Heavy backend extras (boto3 for Bedrock)
+# stay opt-in via the [anthropic-bedrock] extra.
 dependencies = [
     # Rust core runtime (required - no Python fallback)
     "mcp-mesh-core>=1.4.1",
@@ -53,6 +58,7 @@ dependencies = [
     "mcp>=1.26.0,<2.0.0",
     "fastmcp>=3.0.0,<4.0.0",
     "litellm>=1.80.5,!=1.82.7,!=1.82.8",
+    "anthropic>=0.42",
     "prometheus-client>=0.19.0,<1.0.0",
     "pyyaml>=6.0,<7.0",
     "jinja2>=3.1.0",
@@ -89,6 +95,18 @@ vertex = [
     # Studio, Claude, OpenAI) don't need it. Install via:
     #   pip install mcp-mesh[vertex]
     "google-auth>=2.0.0"
+]
+anthropic = [
+    # Backward-compat alias: ``anthropic`` is now a base dependency (issue
+    # #834). This entry is kept so existing ``pip install mcp-mesh[anthropic]``
+    # commands continue to work without error.
+    "anthropic>=0.42"
+]
+anthropic-bedrock = [
+    # AWS Bedrock backend for the native Anthropic adapter. Required when
+    # using ``bedrock/anthropic.claude-*`` model strings. Opt-in because
+    # boto3 is a heavy dependency.
+    "anthropic[bedrock]>=0.42"
 ]
 
 [project.urls]

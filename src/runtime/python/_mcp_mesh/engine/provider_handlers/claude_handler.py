@@ -8,12 +8,20 @@ Output strategy:
 - format_system_prompt (direct calls): Uses HINT mode — prompt-based JSON
   instructions with DECISION GUIDE (~95% reliable). This avoids cross-runtime
   incompatibilities when the caller is a non-Python SDK.
-- apply_structured_output (mesh delegation): Uses HINT mode (prompt injection)
-  by default to avoid the Anthropic response_format + tools silent-hang bug
-  (issue #820). The agentic loop validates the final response against the
-  schema and falls back to a bounded-timeout response_format call if the HINT
-  output fails to parse. Set MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT=true to
-  revert to the previous response_format-first behavior.
+- apply_structured_output (mesh delegation, LiteLLM path): Uses HINT mode
+  (prompt injection) by default to avoid the Anthropic response_format + tools
+  silent-hang bug (issue #820). The agentic loop validates the final response
+  against the schema and falls back to a bounded-timeout response_format call
+  if the HINT output fails to parse. Set MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT
+  =true to revert to the previous response_format-first behavior.
+- apply_structured_output (mesh delegation, NATIVE path, issue #834): Uses the
+  synthetic-tool pattern that mirrors the TS (Vercel AI SDK) and Java (Spring
+  AI) runtimes: append a synthetic ``__mesh_format_response`` tool whose
+  ``input_schema`` IS the desired JSON schema, and let Claude pick between
+  real user tools and the synthetic tool with ``tool_choice="auto"``. The
+  agentic loop in mesh.helpers terminates as soon as Claude calls the
+  synthetic tool. This unblocks the broken combo "native + tools + structured
+  output" (the previous force-tool_choice approach suppressed real tool calls).
 
 Features:
 - Automatic prompt caching for system messages (up to 90% cost reduction)
@@ -43,6 +51,75 @@ OUTPUT_MODE_STRICT = (
 )
 OUTPUT_MODE_HINT = "hint"
 OUTPUT_MODE_TEXT = "text"
+
+# Stable name for the synthetic tool that backs structured output on the
+# native Anthropic SDK path (issue #834). Double-underscore prefix marks it
+# as internal — agents must not register a tool with this name. The agentic
+# loop in ``mesh.helpers`` recognizes a call to this name as the model's
+# "I'm done — here's the structured answer" signal and terminates.
+SYNTHETIC_FORMAT_TOOL_NAME = "__mesh_format_response"
+SYNTHETIC_FORMAT_TOOL_DESCRIPTION = (
+    "Use this tool to return your final structured answer matching the "
+    "schema. Call this tool only after gathering all needed data via other "
+    "available tools."
+)
+# System prompt augmentation that goes into the system message when the
+# synthetic tool is in play. Keeps Claude from emitting plain text as the
+# final answer (which would skip the synthetic tool entirely and break
+# downstream Pydantic parsing).
+SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION = (
+    "\n\nIMPORTANT: When you have all the information needed to answer, "
+    "you MUST call the `__mesh_format_response` tool to return your final "
+    "answer in the required structured format. Do NOT respond with plain "
+    "text — always use this tool to format your final answer."
+)
+
+# One-time guard so the dispatch-status DEBUG log fires exactly once per
+# process. Mirrors ``_logged_fallback_once`` in anthropic_native — we
+# deliberately keep the state at module level (not on the handler instance)
+# because mesh constructs a fresh handler per request in some paths.
+_DISPATCH_STATUS_LOGGED = False
+
+
+def _log_dispatch_status_once() -> None:
+    """Log the resolved native-dispatch status once per process at DEBUG level.
+
+    Designed so users running with ``meshctl ... --debug`` can confirm whether
+    a Claude provider agent is using the native anthropic SDK or falling back
+    to LiteLLM. Fires on first call only; subsequent invocations are no-ops.
+    """
+    global _DISPATCH_STATUS_LOGGED
+    if _DISPATCH_STATUS_LOGGED:
+        return
+    _DISPATCH_STATUS_LOGGED = True
+
+    env_value = os.getenv("MCP_MESH_NATIVE_LLM", "").strip().lower()
+
+    if env_value in ("0", "false", "no", "off"):
+        logger.debug(
+            "Claude native dispatch: disabled "
+            "(MCP_MESH_NATIVE_LLM=%s explicitly set; using LiteLLM)",
+            env_value or "<unset>",
+        )
+        return
+
+    from _mcp_mesh.engine.native_clients import anthropic_native
+
+    if anthropic_native.is_available():
+        try:
+            import anthropic
+            version = getattr(anthropic, "__version__", "<unknown>")
+        except Exception:
+            version = "<import-failed>"
+        logger.debug(
+            "Claude native dispatch: enabled (anthropic SDK %s)",
+            version,
+        )
+    else:
+        logger.debug(
+            "Claude native dispatch: disabled "
+            "(anthropic SDK not installed; install mcp-mesh[anthropic] to enable)"
+        )
 
 
 class ClaudeHandler(BaseProviderHandler):
@@ -297,15 +374,29 @@ class ClaudeHandler(BaseProviderHandler):
         """
         Apply Claude-specific structured output for mesh delegation.
 
-        Claude's native ``response_format`` path silently hangs (600s+) on
-        certain content + tools combinations (issue #820). To avoid this,
-        we use HINT mode by default: inject schema instructions into the
-        system prompt and let the agentic loop validate the final response.
-        If validation fails, the loop falls back to a bounded-timeout
-        ``response_format`` call (see ``_provider_agentic_loop``).
+        Two paths, selected by ``has_native()``:
 
-        Set ``MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT=true`` to revert to the
-        previous response_format-first behavior (delegates to base impl).
+        - Native Anthropic SDK path (issue #834, default when the
+          ``anthropic`` SDK is importable): Append a synthetic
+          ``__mesh_format_response`` tool with the schema as
+          ``input_schema`` and let Claude pick between real tools and the
+          synthetic tool with ``tool_choice="auto"``. The agentic loop
+          terminates when the synthetic tool is called. Mirrors the TS
+          (Vercel AI SDK) and Java (Spring AI) runtimes.
+
+        - LiteLLM path (set ``MCP_MESH_NATIVE_LLM=0`` to force, or used
+          automatically when the SDK is missing): HINT mode (prompt
+          injection). Claude's native ``response_format`` path silently
+          hangs (600s+) on certain content + tools combinations (issue
+          #820), so we inject schema instructions into the system prompt
+          and let the agentic loop validate the final response. If
+          validation fails, the loop falls back to a bounded-timeout
+          ``response_format`` call.
+
+        Set ``MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT=true`` to revert the
+        LiteLLM path to native response_format-first (delegates to base
+        impl). The flag is a no-op on the native path — synthetic-tool
+        mode is always used there.
 
         Args:
             output_schema: JSON schema dict from consumer
@@ -313,9 +404,23 @@ class ClaudeHandler(BaseProviderHandler):
             model_params: Current model parameters dict (will be modified)
 
         Returns:
-            Modified model_params with HINT-mode flags + injected system prompt
+            Modified model_params with mode-specific flags + injected
+            system prompt
         """
-        # Backwards-compat env flag: revert to base response_format behavior.
+        sanitized_schema = sanitize_schema_for_structured_output(output_schema)
+
+        # Native path: use synthetic-tool injection (matches TS/Java).
+        # Decided here so the loop doesn't have to re-check the env flag
+        # on every iteration; one resolution at request-prep time.
+        if self.has_native():
+            return self._apply_native_synthetic_format(
+                sanitized_schema, output_type_name, model_params
+            )
+
+        # Backwards-compat env flag: revert LiteLLM path to base response_format.
+        # Intentionally only honored on the LiteLLM path — on native, synthetic
+        # tool injection is always used (the env flag predates native and was a
+        # workaround for HINT-mode failures).
         if os.environ.get("MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT", "").lower() in (
             "1",
             "true",
@@ -328,8 +433,6 @@ class ClaudeHandler(BaseProviderHandler):
             return super().apply_structured_output(
                 output_schema, output_type_name, model_params
             )
-
-        sanitized_schema = sanitize_schema_for_structured_output(output_schema)
 
         # Inject HINT instructions into the first system message.
         # Mesh delegation always involves tools, and Claude's response_format
@@ -405,6 +508,109 @@ class ClaudeHandler(BaseProviderHandler):
         )
         return model_params
 
+    def _apply_native_synthetic_format(
+        self,
+        sanitized_schema: dict[str, Any],
+        output_type_name: str | None,
+        model_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Apply structured output via the synthetic-tool pattern (native SDK).
+
+        Stashes the synthetic tool definition + name in ``model_params`` as
+        ``_mesh_synthetic_format_*`` sentinels (mirrors the existing
+        ``_mesh_hint_*`` flag pattern). The agentic loop in
+        ``mesh.helpers._provider_agentic_loop`` reads these sentinels and:
+
+          1. Appends the synthetic tool to the user's tool list.
+          2. Sets ``tool_choice="auto"`` when there are real user tools, or
+             forces the synthetic tool when there are none (small perf win,
+             deterministic single call).
+          3. Recognizes a tool_call with this name as the final structured
+             answer and terminates the loop, surfacing the JSON arguments
+             as ``message.content``.
+
+        This mirrors the TS (Vercel AI SDK) and Java (Spring AI) patterns:
+        single LLM call per iteration, both real tools AND synthetic format
+        tool in the tools list, ``tool_choice="auto"``, model decides which
+        to call.
+        """
+        # Augment the first system message with the "must call this tool"
+        # instruction. Without this, Claude often returns a plain text final
+        # answer and skips the synthetic tool entirely (especially on simple
+        # questions where the model thinks tool_use is unnecessary).
+        messages = model_params.get("messages", [])
+        instruction_inserted = False
+        for msg in messages:
+            if msg.get("role") == "system":
+                base_content = msg.get("content", "")
+                # Tolerate string OR content-block list (post-prompt-cache).
+                if isinstance(base_content, str):
+                    msg["content"] = base_content + SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION
+                elif isinstance(base_content, list):
+                    # Append a text block with the instruction; cache_control
+                    # on the original blocks is preserved (we don't touch them).
+                    msg["content"] = base_content + [
+                        {
+                            "type": "text",
+                            "text": SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION.lstrip("\n"),
+                        }
+                    ]
+                instruction_inserted = True
+                break
+
+        if not instruction_inserted:
+            # No system message — synthesize one. Without it the model would
+            # never see the "must call this tool" rule and structured output
+            # would silently degrade to plain-text answers.
+            messages.insert(
+                0,
+                {
+                    "role": "system",
+                    "content": SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION.lstrip("\n"),
+                },
+            )
+            model_params["messages"] = messages
+
+        # Build the synthetic tool. Stored as the OpenAI/litellm tool shape
+        # so the upstream `_convert_tools` translator in anthropic_native
+        # picks it up uniformly with user tools — no special-casing.
+        synthetic_tool = {
+            "type": "function",
+            "function": {
+                "name": SYNTHETIC_FORMAT_TOOL_NAME,
+                "description": SYNTHETIC_FORMAT_TOOL_DESCRIPTION,
+                "parameters": sanitized_schema,
+            },
+        }
+
+        # Stash sentinels for the agentic loop. Prefixed ``_mesh_`` so the
+        # adapter's WARN-filter and ``_pop_mesh_*`` helpers know to strip
+        # them before reaching anthropic.messages.create.
+        model_params["_mesh_synthetic_format_tool_name"] = SYNTHETIC_FORMAT_TOOL_NAME
+        model_params["_mesh_synthetic_format_tool"] = synthetic_tool
+        model_params["_mesh_synthetic_format_output_type_name"] = (
+            output_type_name or "Response"
+        )
+
+        # Native path uses synthetic tool — make sure no LiteLLM-only knobs
+        # leak through (defense-in-depth; both response_format and HINT flags
+        # would confuse the loop).
+        model_params.pop("response_format", None)
+        for hint_key in (
+            "_mesh_hint_mode",
+            "_mesh_hint_schema",
+            "_mesh_hint_fallback_timeout",
+            "_mesh_hint_output_type_name",
+        ):
+            model_params.pop(hint_key, None)
+
+        logger.info(
+            "Claude native synthetic-tool mode for '%s' (mesh delegation; "
+            "tool_choice=auto when real tools present, forced otherwise)",
+            output_type_name or "Response",
+        )
+        return model_params
+
     def get_vendor_capabilities(self) -> dict[str, bool]:
         """
         Return Claude-specific capabilities.
@@ -420,3 +626,74 @@ class ClaudeHandler(BaseProviderHandler):
             "json_mode": False,  # No native JSON mode used
             "prompt_caching": True,  # Automatic system prompt caching for cost savings
         }
+
+    # ------------------------------------------------------------------
+    # Native Anthropic SDK dispatch (issue #834, PR 1)
+    # ------------------------------------------------------------------
+    # Default ON when the anthropic SDK is importable. Set
+    # ``MCP_MESH_NATIVE_LLM=0`` (or false/no/off) to force the LiteLLM
+    # fallback path. When the SDK is missing, ``has_native()`` returns
+    # False and the call sites in mesh.helpers fall back to LiteLLM with
+    # a one-time INFO log nudging the user toward
+    # ``pip install mcp-mesh[anthropic]``.
+
+    def has_native(self) -> bool:
+        """Native dispatch is enabled by default when the anthropic SDK is
+        importable. Set ``MCP_MESH_NATIVE_LLM=0`` (or ``false``/``no``/``off``)
+        to disable and force the LiteLLM fallback path. Setting the flag to
+        ``1``/``true``/``yes``/``on`` is accepted as an explicit-enable
+        (same behavior as the default).
+        """
+        # Emit the one-time dispatch-status DEBUG log. Lazy here (vs. at
+        # module/handler init) so it fires when the first dispatch decision
+        # is actually made — the most useful signal for ``--debug`` runs.
+        _log_dispatch_status_once()
+
+        flag = os.environ.get("MCP_MESH_NATIVE_LLM", "").strip().lower()
+        # Explicit opt-out wins over SDK availability.
+        if flag in ("0", "false", "no", "off"):
+            return False
+
+        # Lazy import inside the function so module import does not fail
+        # when the SDK is absent; this mirrors what the call sites do.
+        from _mcp_mesh.engine.native_clients import anthropic_native
+
+        if not anthropic_native.is_available():
+            anthropic_native.log_fallback_once()
+            return False
+
+        return True
+
+    async def complete(
+        self,
+        request_params: dict[str, Any],
+        *,
+        model: str,
+        **kwargs: Any,
+    ) -> Any:
+        """Dispatch a buffered completion to the native Anthropic SDK adapter."""
+        from _mcp_mesh.engine.native_clients import anthropic_native
+
+        return await anthropic_native.complete(
+            request_params,
+            model=model,
+            api_key=kwargs.get("api_key"),
+            base_url=kwargs.get("base_url"),
+        )
+
+    async def complete_stream(
+        self,
+        request_params: dict[str, Any],
+        *,
+        model: str,
+        **kwargs: Any,
+    ):
+        """Dispatch a streaming completion to the native Anthropic SDK adapter."""
+        from _mcp_mesh.engine.native_clients import anthropic_native
+
+        return anthropic_native.complete_stream(
+            request_params,
+            model=model,
+            api_key=kwargs.get("api_key"),
+            base_url=kwargs.get("base_url"),
+        )

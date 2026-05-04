@@ -302,6 +302,63 @@ class BaseProviderHandler(ABC):
 
         return "{\n" + "\n".join(parts) + "\n}"
 
+    # ------------------------------------------------------------------
+    # Native SDK dispatch (issue #834)
+    # ------------------------------------------------------------------
+    # Each subclass that ships a native vendor SDK adapter overrides
+    # ``has_native()`` to gate the dispatch on the relevant SDK actually
+    # being importable. Native dispatch is enabled by default; the
+    # ``MCP_MESH_NATIVE_LLM=0`` env flag is the explicit opt-out.
+    # The default implementation here returns False so the buffered /
+    # streaming call sites in mesh.helpers transparently keep using
+    # LiteLLM for vendors that have not migrated yet.
+
+    def has_native(self) -> bool:
+        """Return True if this handler can dispatch via a native vendor SDK.
+
+        Default: False. Override in subclasses that ship a native adapter.
+        Subclass implementations honor ``MCP_MESH_NATIVE_LLM=0`` as an
+        explicit opt-out and return False when the relevant SDK is not
+        importable.
+        """
+        return False
+
+    async def complete(
+        self,
+        request_params: dict[str, Any],
+        *,
+        model: str,
+        **kwargs: Any,
+    ) -> Any:
+        """Run a buffered completion via the vendor's native SDK.
+
+        Default: NotImplementedError. Subclasses with ``has_native() == True``
+        MUST override this to return a litellm-shaped response object (see
+        ``_mcp_mesh.engine.mesh_llm_agent._MockResponse`` for the shape).
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement native complete()"
+        )
+
+    async def complete_stream(
+        self,
+        request_params: dict[str, Any],
+        *,
+        model: str,
+        **kwargs: Any,
+    ):
+        """Stream a completion via the vendor's native SDK.
+
+        Default: NotImplementedError. Subclasses with ``has_native() == True``
+        MUST override this to return an async iterator yielding chunks
+        matching the litellm streaming shape consumed by
+        ``mesh.helpers._provider_agentic_loop_stream`` and the legacy
+        no-tools branch of ``llm_provider``'s stream tool.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement native complete_stream()"
+        )
+
     def __repr__(self) -> str:
         """String representation of handler."""
         return f"{self.__class__.__name__}(vendor='{self.vendor}')"

@@ -8,6 +8,12 @@ Background:
     directly. We now override it to use HINT mode (prompt injection) plus
     flags that the agentic loop reads to perform a bounded-timeout fallback
     if the HINT response fails to parse.
+
+Note on MCP_MESH_NATIVE_LLM=0: HINT mode is the LiteLLM-path behavior. Now
+that native dispatch is the default (issue #834), these tests force the
+LiteLLM path with ``MCP_MESH_NATIVE_LLM=0`` so ``apply_structured_output``
+takes the HINT branch. Without the flag, it would route through
+``_apply_native_synthetic_format`` and the HINT-flag assertions would fail.
 """
 
 import os
@@ -23,6 +29,17 @@ from mesh.helpers import (
     _maybe_run_hint_fallback,
     _pop_mesh_hint_flags,
 )
+
+
+@pytest.fixture(autouse=True)
+def _force_litellm_path(monkeypatch):
+    """Force the LiteLLM path for every test in this module.
+
+    Issue #834 flipped MCP_MESH_NATIVE_LLM from opt-in to opt-out. HINT
+    mode is the LiteLLM-path behavior under test here, so we explicitly
+    disable native dispatch.
+    """
+    monkeypatch.setenv("MCP_MESH_NATIVE_LLM", "0")
 
 # ---------------------------------------------------------------------------
 # ClaudeHandler.apply_structured_output

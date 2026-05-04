@@ -99,6 +99,93 @@ def _pop_mesh_hint_flags(
     return hint_mode, hint_schema, hint_fallback_timeout, hint_output_type_name
 
 
+# ---------------------------------------------------------------------------
+# Synthetic-format-tool flags (issue #834, native Anthropic SDK path)
+# ---------------------------------------------------------------------------
+# Set by ClaudeHandler.apply_structured_output when on the native path. Read
+# by the agentic loops in this module. Like the HINT keys above, they MUST be
+# stripped before any LLM call so they don't leak into the wire request.
+
+_MESH_SYNTHETIC_FORMAT_KEYS = (
+    "_mesh_synthetic_format_tool_name",
+    "_mesh_synthetic_format_tool",
+    "_mesh_synthetic_format_output_type_name",
+)
+
+
+def _pop_mesh_synthetic_format_flags(
+    completion_args: dict[str, Any],
+    defaults: tuple[str | None, dict | None, str] = (None, None, "Response"),
+) -> tuple[str | None, dict | None, str]:
+    """Strip ``_mesh_synthetic_format_*`` flags from ``completion_args`` in place.
+
+    Returns ``(synthetic_tool_name, synthetic_tool, output_type_name)``. The
+    tool name is the recognition key for the agentic loop ("call to this name
+    means the model is signalling its final structured answer"). The tool is
+    the OpenAI-shape function dict to splice into the tools list. Defaults
+    preserve values across iterations (handlers stamp once per request).
+    """
+    name_default, tool_default, type_name_default = defaults
+    name = completion_args.pop("_mesh_synthetic_format_tool_name", name_default)
+    tool = completion_args.pop("_mesh_synthetic_format_tool", tool_default)
+    type_name = completion_args.pop(
+        "_mesh_synthetic_format_output_type_name", type_name_default
+    )
+    return name, tool, type_name
+
+
+def _inject_synthetic_format_tool(
+    tools: list[dict[str, Any]] | None,
+    synthetic_tool: dict[str, Any],
+    completion_args: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Append the synthetic format tool to ``tools`` and set ``tool_choice``.
+
+    Returns a NEW list (never mutates the caller's). If user has zero real
+    tools, force ``tool_choice`` to the synthetic tool — saves one round-trip
+    and is fully deterministic. Otherwise use ``"auto"`` so Claude can keep
+    invoking real tools across iterations and only pick the synthetic when
+    it's done gathering data (matches TS/Java pattern).
+    """
+    real_tools = list(tools or [])
+    augmented = real_tools + [synthetic_tool]
+    if not real_tools:
+        # No real tools — force the synthetic. Single round-trip, deterministic.
+        completion_args["tool_choice"] = {
+            "type": "function",
+            "function": {"name": synthetic_tool["function"]["name"]},
+        }
+    else:
+        completion_args["tool_choice"] = "auto"
+    return augmented
+
+
+def _extract_synthetic_format_arguments(
+    message: Any,
+    synthetic_tool_name: str,
+) -> str | None:
+    """Return the synthetic tool's JSON arguments string if present, else None.
+
+    Walks ``message.tool_calls`` (litellm/_MockMessage shape) looking for a
+    call to the synthetic tool. Returns the raw ``function.arguments`` string
+    (already JSON per the SDK contract). When the model called real tools
+    AND the synthetic in the same turn, the synthetic still wins — the model
+    signaled "I'm done", and surfacing real-tool execution would defeat the
+    point. Tolerant of malformed JSON: caller validates downstream.
+    """
+    tool_calls = getattr(message, "tool_calls", None) or []
+    for tc in tool_calls:
+        fn = getattr(tc, "function", None)
+        if fn is None:
+            continue
+        if getattr(fn, "name", None) == synthetic_tool_name:
+            args = getattr(fn, "arguments", None)
+            if args is None:
+                return "{}"
+            return args if isinstance(args, str) else json.dumps(args)
+    return None
+
+
 async def _maybe_run_hint_fallback(
     *,
     final_content: str,
@@ -173,9 +260,34 @@ async def _maybe_run_hint_fallback(
     # import litellm before invoking this helper.
     import litellm
 
-    fallback_response = await asyncio.to_thread(
-        litellm.completion, **fallback_args
+    # Native dispatch (issue #834, PR 1): if the vendor handler ships a
+    # native SDK adapter and the feature flag is on, route through it.
+    # Otherwise, fall back to LiteLLM (current default behavior). The
+    # fallback args still target the same model so handler resolution
+    # uses ``base_completion_args["model"]``.
+    from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
+
+    fb_model = fallback_args.get("model")
+    fb_vendor = _extract_vendor_from_model(fb_model) if fb_model else None
+    fb_handler = (
+        ProviderHandlerRegistry.get_handler(fb_vendor) if fb_vendor else None
     )
+    if fb_handler is not None and fb_handler.has_native():
+        fb_native_args = {
+            k: v
+            for k, v in fallback_args.items()
+            if k not in ("model", "api_key", "base_url")
+        }
+        fallback_response = await fb_handler.complete(
+            fb_native_args,
+            model=fb_model,
+            api_key=fallback_args.get("api_key"),
+            base_url=fallback_args.get("base_url"),
+        )
+    else:
+        fallback_response = await asyncio.to_thread(
+            litellm.completion, **fallback_args
+        )
     fb_message = fallback_response.choices[0].message
     fb_content = _extract_text_from_message_content(fb_message.content)
 
@@ -497,12 +609,22 @@ async def _provider_agentic_loop(
     if parallel and loop_logger:
         loop_logger.info("🔀 Provider parallel tool calls enabled — tools will execute concurrently via asyncio.gather()")
 
-    # HINT-mode state (set by ClaudeHandler.apply_structured_output).
-    # Captured outside the loop so the fallback after the loop has access.
+    # HINT-mode state (set by ClaudeHandler.apply_structured_output, LiteLLM
+    # path). Captured outside the loop so the fallback after the loop has
+    # access.
     hint_mode = False
     hint_schema: dict[str, Any] | None = None
     hint_fallback_timeout = _DEFAULT_HINT_FALLBACK_TIMEOUT
     hint_output_type_name = "Response"
+
+    # Synthetic-format-tool state (set by ClaudeHandler.apply_structured_output,
+    # native path). When ``synthetic_tool_name`` is non-None, the loop appends
+    # ``synthetic_tool`` to the tools list, sets tool_choice (auto if real
+    # tools present, forced otherwise), and treats a tool_call to that name
+    # as the model's "I'm done — here's the structured answer" signal.
+    synthetic_tool_name: str | None = None
+    synthetic_tool: dict[str, Any] | None = None
+    synthetic_output_type_name = "Response"
 
     while iteration < max_iterations:
         iteration += 1
@@ -537,8 +659,86 @@ async def _provider_agentic_loop(
             ),
         )
 
-        response = await asyncio.to_thread(litellm.completion, **completion_args)
+        (
+            synthetic_tool_name,
+            synthetic_tool,
+            synthetic_output_type_name,
+        ) = _pop_mesh_synthetic_format_flags(
+            completion_args,
+            defaults=(
+                synthetic_tool_name,
+                synthetic_tool,
+                synthetic_output_type_name,
+            ),
+        )
+
+        # Native dispatch (issue #834, PR 1): route through the vendor's
+        # native SDK adapter by default when the SDK is installed.
+        # Set MCP_MESH_NATIVE_LLM=0 to force the LiteLLM fallback path.
+        from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
+
+        _native_handler = ProviderHandlerRegistry.get_handler(vendor)
+
+        # Inject synthetic format tool when handler signaled it. We rebuild
+        # ``completion_args["tools"]`` per-iteration (rather than mutating
+        # the outer ``tools`` arg) so the user-provided list is preserved
+        # for the next iteration's logic. Tool_choice is set per-iteration
+        # because LiteLLM/Anthropic require it alongside the tools list.
+        if synthetic_tool_name and synthetic_tool:
+            completion_args["tools"] = _inject_synthetic_format_tool(
+                completion_args.get("tools"), synthetic_tool, completion_args
+            )
+
+        if _native_handler.has_native():
+            _native_args = {
+                k: v
+                for k, v in completion_args.items()
+                if k not in ("model", "api_key", "base_url")
+            }
+            response = await _native_handler.complete(
+                _native_args,
+                model=effective_model,
+                api_key=completion_args.get("api_key"),
+                base_url=completion_args.get("base_url"),
+            )
+        else:
+            response = await asyncio.to_thread(
+                litellm.completion, **completion_args
+            )
         message = response.choices[0].message
+
+        # Synthetic-format-tool recognition (native path, structured output).
+        # When the model called the synthetic tool, its arguments ARE the
+        # structured answer — terminate the loop and surface them as content.
+        # Real tool calls in the same turn are intentionally dropped: the
+        # synthetic call signals "I'm done", and executing additional tools
+        # would mean another iteration that the model already opted out of.
+        if synthetic_tool_name and hasattr(message, "tool_calls") and message.tool_calls:
+            synthetic_args = _extract_synthetic_format_arguments(
+                message, synthetic_tool_name
+            )
+            if synthetic_args is not None:
+                if loop_logger:
+                    loop_logger.info(
+                        "Provider-managed loop: synthetic format tool '%s' "
+                        "called at iteration %d/%d — returning structured "
+                        "content",
+                        synthetic_tool_name,
+                        iteration,
+                        max_iterations,
+                    )
+                message_dict: dict[str, Any] = {
+                    "role": getattr(message, "role", "assistant"),
+                    "content": synthetic_args,
+                }
+                if hasattr(response, "usage") and response.usage:
+                    usage = response.usage
+                    message_dict["_mesh_usage"] = {
+                        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                        "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+                        "model": effective_model,
+                    }
+                return message_dict
 
         if hasattr(message, "tool_calls") and message.tool_calls:
             if loop_logger:
@@ -765,6 +965,11 @@ async def _provider_agentic_loop_stream(
     hint_fallback_timeout = _DEFAULT_HINT_FALLBACK_TIMEOUT
     hint_output_type_name = "Response"
 
+    # Synthetic-format-tool state (mirrors the buffered loop, native path).
+    synthetic_tool_name: str | None = None
+    synthetic_tool: dict[str, Any] | None = None
+    synthetic_output_type_name = "Response"
+
     total_input_tokens = 0
     total_output_tokens = 0
 
@@ -797,6 +1002,19 @@ async def _provider_agentic_loop_stream(
             ),
         )
 
+        (
+            synthetic_tool_name,
+            synthetic_tool,
+            synthetic_output_type_name,
+        ) = _pop_mesh_synthetic_format_flags(
+            completion_args,
+            defaults=(
+                synthetic_tool_name,
+                synthetic_tool,
+                synthetic_output_type_name,
+            ),
+        )
+
         existing_stream_opts = completion_args.get("stream_options") or {}
         completion_args["stream"] = True
         completion_args["stream_options"] = {
@@ -804,7 +1022,43 @@ async def _provider_agentic_loop_stream(
             "include_usage": True,
         }
 
-        stream_iter = await litellm.acompletion(**completion_args)
+        # Native dispatch (issue #834, PR 1): route through the vendor's
+        # native SDK streaming adapter by default when the SDK is installed.
+        # Set MCP_MESH_NATIVE_LLM=0 to force the LiteLLM fallback path.
+        from _mcp_mesh.engine.provider_handlers import ProviderHandlerRegistry
+
+        _native_handler = ProviderHandlerRegistry.get_handler(vendor)
+
+        # Inject synthetic format tool when handler signaled it. Same logic
+        # as the buffered loop — append the tool, set tool_choice. The
+        # adapter emits tool_use deltas the same way for synthetic and real
+        # tools; the loop disambiguates AFTER merge by tool name.
+        if synthetic_tool_name and synthetic_tool:
+            completion_args["tools"] = _inject_synthetic_format_tool(
+                completion_args.get("tools"), synthetic_tool, completion_args
+            )
+
+        if _native_handler.has_native():
+            _native_args = {
+                k: v
+                for k, v in completion_args.items()
+                if k
+                not in (
+                    "model",
+                    "api_key",
+                    "base_url",
+                    "stream",
+                    "stream_options",
+                )
+            }
+            stream_iter = await _native_handler.complete_stream(
+                _native_args,
+                model=effective_model,
+                api_key=completion_args.get("api_key"),
+                base_url=completion_args.get("base_url"),
+            )
+        else:
+            stream_iter = await litellm.acompletion(**completion_args)
 
         chunks: list[Any] = []
         saw_tool_call = False
@@ -858,6 +1112,38 @@ async def _provider_agentic_loop_stream(
                         "provider stream produced tool_call deltas but no "
                         "complete tool_call could be merged"
                     )
+
+                # Synthetic-format-tool recognition (native path, structured
+                # output). If any merged tool call targets the synthetic name,
+                # its arguments ARE the structured answer — emit ONE final
+                # content chunk and terminate the loop. Real tool calls in
+                # the same iteration are dropped (the model signaled "I'm
+                # done" by calling the synthetic; executing real tools would
+                # imply another iteration the model already opted out of).
+                if synthetic_tool_name:
+                    synthetic_args: str | None = None
+                    for tc in merged_tool_calls:
+                        if tc["function"]["name"] == synthetic_tool_name:
+                            synthetic_args = tc["function"]["arguments"] or "{}"
+                            break
+                    if synthetic_args is not None:
+                        if loop_logger:
+                            loop_logger.info(
+                                "Provider stream loop: synthetic format tool "
+                                "'%s' called at iteration %d/%d — emitting "
+                                "structured content as one chunk",
+                                synthetic_tool_name,
+                                iteration,
+                                max_iterations,
+                            )
+                        yield synthetic_args
+                        set_llm_metadata(
+                            model=effective_model,
+                            provider=vendor or "",
+                            input_tokens=total_input_tokens,
+                            output_tokens=total_output_tokens,
+                        )
+                        return
 
                 preamble_text = MeshLlmAgent._join_text_from_chunks(chunks)
                 if loop_logger:
@@ -1369,18 +1655,85 @@ def llm_provider(
                 hint_output_type_name,
             ) = _pop_mesh_hint_flags(completion_args)
 
+            (
+                synthetic_tool_name,
+                synthetic_tool,
+                synthetic_output_type_name,
+            ) = _pop_mesh_synthetic_format_flags(completion_args)
+
+            # Inject synthetic format tool when handler signaled it. Same
+            # logic as the agentic loop. Mirrors the no-tools→one-iteration
+            # case there: when there are zero real user tools, ``tool_choice``
+            # is forced to the synthetic for a deterministic single round-trip.
+            if synthetic_tool_name and synthetic_tool:
+                completion_args["tools"] = _inject_synthetic_format_tool(
+                    completion_args.get("tools"), synthetic_tool, completion_args
+                )
+
             try:
                 logger.debug(
                     f"📤 LLM provider request: {format_log_value(completion_args)}"
                 )
 
-                response = await asyncio.to_thread(
-                    litellm.completion, **completion_args
+                # Native dispatch (issue #834, PR 1): route through the
+                # vendor's native SDK adapter by default when the SDK is
+                # installed. Set MCP_MESH_NATIVE_LLM=0 to force LiteLLM.
+                from _mcp_mesh.engine.provider_handlers import (
+                    ProviderHandlerRegistry,
                 )
+
+                _native_handler = ProviderHandlerRegistry.get_handler(vendor)
+                if _native_handler.has_native():
+                    _native_args = {
+                        k: v
+                        for k, v in completion_args.items()
+                        if k not in ("model", "api_key", "base_url")
+                    }
+                    response = await _native_handler.complete(
+                        _native_args,
+                        model=effective_model,
+                        api_key=completion_args.get("api_key"),
+                        base_url=completion_args.get("base_url"),
+                    )
+                else:
+                    response = await asyncio.to_thread(
+                        litellm.completion, **completion_args
+                    )
 
                 logger.debug(f"📥 LLM provider response: {format_log_value(response)}")
 
                 message = response.choices[0].message
+
+                # Synthetic-format-tool recognition: the model's call to the
+                # synthetic tool IS the structured answer. Surface its args as
+                # ``content`` and DROP tool_calls so downstream consumers don't
+                # try to "execute" a synthetic tool that has no MCP endpoint.
+                synthetic_args: str | None = None
+                if synthetic_tool_name:
+                    synthetic_args = _extract_synthetic_format_arguments(
+                        message, synthetic_tool_name
+                    )
+
+                if synthetic_args is not None:
+                    if logger:
+                        logger.info(
+                            "LLM provider %s: synthetic format tool '%s' called "
+                            "— returning structured content (legacy single-call path)",
+                            func.__name__,
+                            synthetic_tool_name,
+                        )
+                    message_dict = {
+                        "role": getattr(message, "role", "assistant"),
+                        "content": synthetic_args,
+                    }
+                    if hasattr(response, "usage") and response.usage:
+                        usage = response.usage
+                        message_dict["_mesh_usage"] = {
+                            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+                            "model": effective_model,
+                        }
+                    return message_dict
 
                 # Handle content - it can be a string or list of content blocks
                 final_content = _extract_text_from_message_content(message.content)
@@ -1539,11 +1892,22 @@ def llm_provider(
 
             # Strip internal mesh control flags before they reach LiteLLM
             # (mirrors the buffered legacy path). Captured values are not
-            # used here — HINT validation cannot be applied to a live
-            # stream without buffering, and this no-tools branch never
-            # runs ``apply_structured_output``. Future work could buffer
-            # if HINT mode is later signaled by another route.
+            # used here for HINT mode — HINT validation cannot be applied
+            # to a live stream without buffering. The synthetic-format-tool
+            # path DOES need buffering: we recognize the synthetic call
+            # AFTER merging tool_call deltas and emit one final content
+            # chunk.
             _pop_mesh_hint_flags(completion_args)
+            (
+                synthetic_tool_name,
+                synthetic_tool,
+                _synthetic_output_type_name,
+            ) = _pop_mesh_synthetic_format_flags(completion_args)
+
+            if synthetic_tool_name and synthetic_tool:
+                completion_args["tools"] = _inject_synthetic_format_tool(
+                    completion_args.get("tools"), synthetic_tool, completion_args
+                )
 
             existing_stream_opts = completion_args.get("stream_options") or {}
             completion_args["stream"] = True
@@ -1555,12 +1919,55 @@ def llm_provider(
             from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
             from _mcp_mesh.tracing.context import set_llm_metadata
 
-            stream_iter = await litellm.acompletion(**completion_args)
+            # Native dispatch (issue #834, PR 1): route through the
+            # vendor's native SDK streaming adapter by default when the
+            # SDK is installed. Set MCP_MESH_NATIVE_LLM=0 to force the
+            # LiteLLM fallback path.
+            from _mcp_mesh.engine.provider_handlers import (
+                ProviderHandlerRegistry,
+            )
+
+            _native_handler = ProviderHandlerRegistry.get_handler(vendor)
+            if _native_handler.has_native():
+                _native_args = {
+                    k: v
+                    for k, v in completion_args.items()
+                    if k
+                    not in (
+                        "model",
+                        "api_key",
+                        "base_url",
+                        "stream",
+                        "stream_options",
+                    )
+                }
+                stream_iter = await _native_handler.complete_stream(
+                    _native_args,
+                    model=effective_model,
+                    api_key=completion_args.get("api_key"),
+                    base_url=completion_args.get("base_url"),
+                )
+            else:
+                stream_iter = await litellm.acompletion(**completion_args)
             chunks: list[Any] = []
             stream_completed = False
+            saw_tool_call = False
+            buffer_for_synthetic = bool(synthetic_tool_name)
             try:
                 async for chunk in stream_iter:
                     chunks.append(chunk)
+                    if MeshLlmAgent._chunk_has_tool_call(chunk):
+                        saw_tool_call = True
+                        continue
+                    if saw_tool_call:
+                        # Tool-call deltas continue arriving; suppress text
+                        # to avoid interleaving partial text with the JSON
+                        # we'll emit at end-of-stream.
+                        continue
+                    if buffer_for_synthetic:
+                        # Synthetic-format mode: buffer everything; emit one
+                        # JSON chunk after merge.
+                        continue
                     text = MeshLlmAgent._extract_text_from_chunk(chunk)
                     if text:
                         yield text
@@ -1575,6 +1982,32 @@ def llm_provider(
                             logger.debug(
                                 f"provider stream (no-tools): aclose() failed: {e}"
                             )
+
+            # Synthetic-format-tool emission: merge tool calls, find synthetic,
+            # emit its arguments as one chunk. Best-effort fallback: if the
+            # synthetic tool was missing or merge failed, emit any buffered
+            # text instead so the consumer always sees something.
+            if buffer_for_synthetic and synthetic_tool_name:
+                merged = MeshLlmAgent._merge_streamed_tool_calls(chunks)
+                synthetic_args: str | None = None
+                for tc in merged:
+                    if tc["function"]["name"] == synthetic_tool_name:
+                        synthetic_args = tc["function"]["arguments"] or "{}"
+                        break
+                if synthetic_args is not None:
+                    yield synthetic_args
+                else:
+                    if logger:
+                        logger.warning(
+                            "LLM provider %s_stream: synthetic format tool '%s' "
+                            "expected but not present in stream — emitting buffered "
+                            "text as best-effort fallback",
+                            func.__name__,
+                            synthetic_tool_name,
+                        )
+                    fallback_text = MeshLlmAgent._join_text_from_chunks(chunks)
+                    if fallback_text:
+                        yield fallback_text
 
             usage = MeshLlmAgent._extract_usage_from_chunks(chunks)
             iter_model = MeshLlmAgent._extract_model_from_chunks(chunks)
