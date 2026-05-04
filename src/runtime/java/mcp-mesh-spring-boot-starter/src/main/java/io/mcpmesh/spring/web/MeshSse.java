@@ -155,16 +155,7 @@ public final class MeshSse {
         public void onNext(String chunk) {
             if (terminated.get()) return;
             try {
-                // Prepend a space so the wire bytes are `data: <chunk>\n\n`
-                // (with the conventional space after the colon). Spring's
-                // SseEmitter.event().data() emits `data:<value>\n\n` with
-                // no separator, which is technically valid SSE but breaks
-                // strict client parsers that look for `data: ` (e.g. the
-                // React UI in the day-10 bonus tutorial does
-                // line.startsWith('data: ')). Adding the space here keeps
-                // the wire format byte-identical with Python's
-                // StreamingResponse and TypeScript's mesh.sseStream.
-                emitter.send(SseEmitter.event().data(" " + chunk));
+                emitter.send(buildDataEvent(chunk));
             } catch (IOException | IllegalStateException e) {
                 // Client disconnected or emitter already completed — cancel upstream
                 if (terminated.compareAndSet(false, true)) {
@@ -182,11 +173,14 @@ public final class MeshSse {
         public void onError(Throwable throwable) {
             if (!terminated.compareAndSet(false, true)) return;
             try {
-                // Leading space matches the Python/TS wire format
-                // (`data: <json>\n\n`); see onNext for rationale.
-                emitter.send(SseEmitter.event()
-                    .name("error")
-                    .data(" " + buildErrorJson(throwable)));
+                // event: error\ndata: <json>\n\n — same data-line splitting
+                // logic as buildDataEvent so wire format stays byte-identical
+                // with Python/TS.
+                SseEmitter.SseEventBuilder builder = SseEmitter.event().name("error");
+                for (String line : splitChunk(buildErrorJson(throwable))) {
+                    builder = builder.data(" " + line);
+                }
+                emitter.send(builder);
             } catch (IOException | IllegalStateException e) {
                 log.debug("Failed to write SSE error frame: {}", e.getMessage());
             } finally {
@@ -202,9 +196,7 @@ public final class MeshSse {
         public void onComplete() {
             if (!terminated.compareAndSet(false, true)) return;
             try {
-                // Leading space matches Python/TS wire format
-                // (`data: [DONE]\n\n`); see onNext for rationale.
-                emitter.send(SseEmitter.event().data(" [DONE]"));
+                emitter.send(buildDataEvent("[DONE]"));
             } catch (IOException | IllegalStateException e) {
                 log.debug("Failed to write SSE [DONE] frame: {}", e.getMessage());
             } finally {
@@ -214,6 +206,45 @@ public final class MeshSse {
                     // emitter may already be terminal
                 }
             }
+        }
+
+        /**
+         * Build an SseEventBuilder with one {@code data:} field per source
+         * line of the chunk. Spring writes the event as
+         * {@code data: <line1>\ndata: <line2>\n...\n\n}, which is byte-
+         * identical to the TypeScript {@code mesh.sseStream} and Python
+         * {@code StreamingResponse} output.
+         *
+         * <p>Why we don't just call {@code .data(chunk)} once: Spring's
+         * builder emits {@code data:<value>\n\n} (no space after the colon),
+         * and for multi-line values its internal split prepends {@code data:}
+         * to continuation lines also without the space. Both forms are valid
+         * SSE per the spec, but strict client parsers require {@code data: }
+         * (with space) — including the React UI in the day-10 bonus tutorial
+         * which does {@code line.startsWith("data: ")}. By splitting the
+         * chunk ourselves and prepending a space to each line, every {@code
+         * data:} line gets the conventional space separator and Java's wire
+         * output matches Python/TS exactly.
+         */
+        private static SseEmitter.SseEventBuilder buildDataEvent(String chunk) {
+            SseEmitter.SseEventBuilder builder = SseEmitter.event();
+            for (String line : splitChunk(chunk)) {
+                builder = builder.data(" " + line);
+            }
+            return builder;
+        }
+
+        /**
+         * Split a chunk into lines for SSE framing, mirroring TypeScript's
+         * {@code chunk.replace(/\r\n/g, '\n').split('\n')} so all three
+         * runtimes split identically. {@code -1} limit preserves trailing
+         * empty strings from a terminal newline. Empty input returns one
+         * empty line so the chunk produces exactly one {@code data:} field
+         * (matching TS behavior).
+         */
+        private static String[] splitChunk(String chunk) {
+            String normalized = (chunk == null) ? "" : chunk.replace("\r\n", "\n");
+            return normalized.isEmpty() ? new String[]{""} : normalized.split("\n", -1);
         }
     }
 }
