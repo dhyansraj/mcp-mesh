@@ -1018,9 +1018,14 @@ async def complete_stream(
                     ),
                     model=last_model,
                 )
-            except GeneratorExit:
-                # Consumer already closed the generator; nothing to publish.
-                raise
+            except (GeneratorExit, StopAsyncIteration):
+                # The consumer has already called ``aclose()`` on this async
+                # generator, so executing ``yield`` inside ``finally`` raises
+                # GeneratorExit (or in rare cases StopAsyncIteration). Python
+                # forbids re-raising during finally cleanup — and there's
+                # nowhere to deliver the fallback usage chunk anyway. Swallow
+                # silently and let normal generator teardown proceed.
+                pass
 
 
 # ---------------------------------------------------------------------------

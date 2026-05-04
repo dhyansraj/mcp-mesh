@@ -143,27 +143,51 @@ def _inject_synthetic_format_tool(
     """Append the synthetic format tool to ``tools`` and set ``tool_choice``.
 
     Returns a NEW list (never mutates the caller's). If user has zero real
-    tools, force ``tool_choice`` to the synthetic tool — saves one round-trip
-    and is fully deterministic. Otherwise use ``"auto"`` so Claude can keep
-    invoking real tools across iterations and only pick the synthetic when
-    it's done gathering data (matches TS/Java pattern).
+    tools (excluding the synthetic), force ``tool_choice`` to the synthetic
+    tool — saves one round-trip and is fully deterministic. Otherwise use
+    ``"auto"`` so Claude can keep invoking real tools across iterations and
+    only pick the synthetic when it's done gathering data (matches TS/Java
+    pattern).
 
-    If the caller (or upstream) had already set ``tool_choice``, it is
-    silently overridden — synthetic format injection requires the model to
+    Idempotent. The agentic loops call this helper once per iteration; if
+    the caller persists the augmented list across iterations, the synthetic
+    is detected and the helper skips both the re-append AND the override
+    WARN. Without this guard the WARN spams 5-10 times per request for
+    typical multi-turn structured-output runs (the value at
+    ``completion_args["tool_choice"]`` on iter 2+ is the value WE set on
+    iter 1, not a real caller override).
+
+    If the caller (or upstream) had already set ``tool_choice`` AND the
+    synthetic is not yet present (real first-iteration override), it is
+    silently taken over — synthetic format injection requires the model to
     be able to invoke our synthetic tool, so we must control this knob. A
     WARN is logged so the override is at least visible in observability.
     """
     real_tools = list(tools or [])
-    augmented = real_tools + [synthetic_tool]
+    synthetic_name = synthetic_tool.get("function", {}).get("name")
+    already_injected = any(
+        isinstance(t, dict)
+        and t.get("function", {}).get("name") == synthetic_name
+        for t in real_tools
+    )
     prior_choice = completion_args.get("tool_choice")
-    if prior_choice is not None:
+    if prior_choice is not None and not already_injected:
         logger.warning(
             "Synthetic format injection overriding caller-supplied "
             "tool_choice (was: %r). Structured output requires controlling "
             "tool_choice so the synthetic format tool can be invoked.",
             prior_choice,
         )
-    if not real_tools:
+    # User-supplied real tools = everything except the synthetic. Used for
+    # both the no-tools→forced-synthetic decision and to ensure the helper
+    # is idempotent when called with an already-augmented list.
+    user_real_tools = [
+        t for t in real_tools
+        if not (isinstance(t, dict)
+                and t.get("function", {}).get("name") == synthetic_name)
+    ]
+    augmented = user_real_tools + [synthetic_tool]
+    if not user_real_tools:
         # No real tools — force the synthetic. Single round-trip, deterministic.
         completion_args["tool_choice"] = {
             "type": "function",
@@ -663,15 +687,22 @@ async def _provider_agentic_loop(
         # (``ProviderHandlerRegistry`` is imported at module top.)
         _native_handler = ProviderHandlerRegistry.get_handler(vendor)
 
-        # Inject synthetic format tool when handler signaled it. We rebuild
-        # ``completion_args["tools"]`` per-iteration (rather than mutating
-        # the outer ``tools`` arg) so the user-provided list is preserved
-        # for the next iteration's logic. Tool_choice is set per-iteration
-        # because LiteLLM/Anthropic require it alongside the tools list.
+        # Inject synthetic format tool when handler signaled it. The helper
+        # is idempotent: on iter 2+ the synthetic is already in ``tools``
+        # (we persist the augmented list back to the outer ``tools`` below)
+        # and the helper skips both the re-append and the override WARN.
+        # Tool_choice is set per-iteration because LiteLLM/Anthropic require
+        # it alongside the tools list.
         if synthetic_tool_name and synthetic_tool:
             completion_args["tools"] = _inject_synthetic_format_tool(
                 completion_args.get("tools"), synthetic_tool, completion_args
             )
+            # Persist the augmented list across iterations so the helper's
+            # idempotency check (synthetic-already-present) trips on iter 2+.
+            # Without this, iter 2 starts from the raw user tools again and
+            # ``completion_args["tool_choice"]`` (set by the helper on iter 1)
+            # would be misread as a caller override and trigger a spurious WARN.
+            tools = completion_args["tools"]
 
         if _native_handler.has_native():
             _native_args = {
@@ -992,11 +1023,16 @@ async def _provider_agentic_loop_stream(
         # Inject synthetic format tool when handler signaled it. Same logic
         # as the buffered loop — append the tool, set tool_choice. The
         # adapter emits tool_use deltas the same way for synthetic and real
-        # tools; the loop disambiguates AFTER merge by tool name.
+        # tools; the loop disambiguates AFTER merge by tool name. Helper is
+        # idempotent — see ``_inject_synthetic_format_tool``. We persist the
+        # augmented list back to the outer ``tools`` so iter 2+ sees the
+        # synthetic-already-present state and the override WARN doesn't
+        # spam once per iteration.
         if synthetic_tool_name and synthetic_tool:
             completion_args["tools"] = _inject_synthetic_format_tool(
                 completion_args.get("tools"), synthetic_tool, completion_args
             )
+            tools = completion_args["tools"]
 
         if _native_handler.has_native():
             _native_args = {

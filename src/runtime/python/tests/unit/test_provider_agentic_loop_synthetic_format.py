@@ -195,6 +195,56 @@ class TestInjectSyntheticFormatTool:
             "Synthetic format injection overriding" in m for m in warn_msgs
         ), f"None should not trip the override warning; got: {warn_msgs}"
 
+    def test_idempotent_no_warning_when_synthetic_already_in_tools(self, caplog):
+        """Round-3 review: the helper is invoked once per iteration of the
+        agentic loop. On iter 2+ ``completion_args["tool_choice"]`` is the
+        value WE set on iter 1 (auto / forced-synthetic), not a real caller
+        override. The loops persist the augmented tools list across
+        iterations, so the helper detects the synthetic-already-present
+        state and must skip BOTH the re-append and the WARN. Without this,
+        multi-iteration runs (5-10 iters is common) spammed 5-10 identical
+        WARN lines per request.
+        """
+        from mesh.helpers import _inject_synthetic_format_tool
+
+        # Simulate iter-2 state: tools already contains the synthetic from
+        # iter 1, and tool_choice is whatever iter 1's helper call set.
+        tools_already_augmented = [
+            {"type": "function", "function": {"name": "real_tool"}},
+            _synthetic_tool(),
+        ]
+        completion_args: dict[str, Any] = {"tool_choice": "auto"}
+
+        with caplog.at_level("WARNING", logger="mesh.helpers"):
+            result = _inject_synthetic_format_tool(
+                tools=tools_already_augmented,
+                synthetic_tool=_synthetic_tool(),
+                completion_args=completion_args,
+            )
+
+        warn_msgs = [
+            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert not any(
+            "Synthetic format injection overriding" in m for m in warn_msgs
+        ), (
+            f"Iter-2 must not re-warn — synthetic already in tools list; "
+            f"got: {warn_msgs}"
+        )
+        # And the synthetic must appear EXACTLY ONCE — no duplicate-append.
+        synthetic_count = sum(
+            1
+            for t in result
+            if isinstance(t, dict)
+            and t.get("function", {}).get("name") == SYNTHETIC_TOOL_NAME
+        )
+        assert synthetic_count == 1, (
+            f"Synthetic must be present exactly once, not duplicated; "
+            f"got {synthetic_count} occurrences in {result}"
+        )
+        # tool_choice stays "auto" (real tool present alongside synthetic).
+        assert completion_args["tool_choice"] == "auto"
+
 
 # ---------------------------------------------------------------------------
 # Buffered loop: _provider_agentic_loop
