@@ -123,20 +123,23 @@ test:
     workdir: /workspace
     capture: java_start
 
-  - name: "Wait for Java agent to register (up to 90s)"
+  - name: "Wait for Java agent to register (up to 180s)"
+    # Java cold-start (Spring Boot init + SPIRE SVID fetch) regularly
+    # exceeded 90s on loaded test boxes — bumped to 180s after run
+    # 7c9009ac (test 51436 hit "agent did not register within 90s").
     handler: shell
     command: |
-      for i in $(seq 1 45); do
+      for i in $(seq 1 90); do
         if curl -sk https://localhost:8000/agents 2>/dev/null | grep -q "greeter-java"; then
           echo "REGISTERED after $((i*2)) seconds"
           exit 0
         fi
         sleep 2
       done
-      echo "TIMEOUT: agent did not register within 90s"
+      echo "TIMEOUT: agent did not register within 180s"
       exit 1
     capture: wait_output
-    timeout: 120
+    timeout: 210
 
   - name: "Check agent registered"
     handler: shell
