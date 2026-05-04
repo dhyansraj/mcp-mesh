@@ -890,7 +890,16 @@ async def complete_stream(
     last_input_tokens = 0
     last_output_tokens = 0
     last_model: str | None = None
-    saw_message_stop = False
+    # Tracks whether the authoritative final-usage chunk (from
+    # ``stream.get_final_message().usage``) has been successfully yielded to
+    # the consumer. Set to True ONLY after the yield returns — so any failure
+    # mode (get_final_message raises, consumer cancels mid-yield, network
+    # cutoff before message_stop) leaves it False and the ``finally`` block
+    # emits the best-effort fallback. Setting a "saw message_stop" flag
+    # BEFORE the yield would create a telemetry hole: the event arrived but
+    # the chunk never reached the consumer, yet the fallback would be
+    # skipped on the assumption that authoritative usage was published.
+    final_usage_emitted = False
 
     try:
         async with client.messages.stream(**create_kwargs) as stream:
@@ -965,10 +974,14 @@ async def complete_stream(
                     continue
 
                 if event_type == "message_stop":
-                    saw_message_stop = True
                     # Pull the final aggregated message + usage so we can emit
                     # one definitive usage chunk (matches litellm's "usage in
                     # final chunk when stream_options.include_usage=True").
+                    # ``final_usage_emitted`` is intentionally flipped AFTER
+                    # the yield returns — if get_final_message raises, the
+                    # yield is cancelled, or the consumer aborts mid-yield,
+                    # the flag stays False so the ``finally`` block can still
+                    # publish a best-effort fallback from last-seen counters.
                     final_msg = await stream.get_final_message()
                     final_usage = getattr(final_msg, "usage", None)
                     if final_usage is not None:
@@ -986,13 +999,16 @@ async def complete_stream(
                             model=getattr(final_msg, "model", None),
                             finish_reason=getattr(final_msg, "stop_reason", None),
                         )
+                        final_usage_emitted = True
                     continue
     finally:
-        # If the stream ended (or was torn down) WITHOUT a message_stop event,
-        # emit a final usage chunk built from the last cumulative counters we
-        # observed. Otherwise telemetry would silently record zero tokens for
-        # any interrupted stream — masking real cost on partial generations.
-        if not saw_message_stop and (last_input_tokens or last_output_tokens):
+        # If the authoritative final-usage chunk was never delivered to the
+        # consumer (no message_stop, get_final_message raised, consumer
+        # cancelled mid-yield, server cutoff, etc.), emit a best-effort
+        # usage chunk built from the last cumulative counters we observed.
+        # Otherwise telemetry would silently record zero tokens for any
+        # interrupted stream — masking real cost on partial generations.
+        if not final_usage_emitted and (last_input_tokens or last_output_tokens):
             try:
                 yield _StreamChunk(
                     delta=_Delta(),

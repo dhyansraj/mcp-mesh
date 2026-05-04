@@ -1420,6 +1420,89 @@ class TestStreamInterruptionUsage:
         assert usage_chunks[0].usage.prompt_tokens == 8
         assert usage_chunks[0].usage.completion_tokens == 2
 
+    @pytest.mark.asyncio
+    async def test_emits_best_effort_usage_when_get_final_message_raises(self):
+        """Round-2 review: ``message_stop`` arrives but
+        ``stream.get_final_message()`` raises (e.g. API serialization error
+        finalizing). The previous implementation set
+        ``saw_message_stop = True`` BEFORE awaiting get_final_message, so
+        the raise would skip the ``finally`` fallback and telemetry would
+        record 0 tokens despite a (potentially) fully-billed call. The fix
+        flips the flag (``final_usage_emitted``) only AFTER the yield
+        succeeds, so this failure mode now triggers the best-effort
+        fallback chunk built from the last-seen counters.
+        """
+
+        class _RaisingFinalStream(_FakeAsyncStream):
+            async def get_final_message(self):
+                raise RuntimeError("API error finalizing")
+
+        events = [
+            _stream_event(
+                "message_start",
+                message=SimpleNamespace(
+                    model="claude-sonnet-4-5",
+                    usage=SimpleNamespace(input_tokens=33, output_tokens=0),
+                ),
+            ),
+            _stream_event(
+                "content_block_delta",
+                index=0,
+                delta=SimpleNamespace(type="text_delta", text="partial"),
+            ),
+            _stream_event(
+                "message_delta",
+                usage=SimpleNamespace(output_tokens=7),
+            ),
+            _stream_event("message_stop"),
+        ]
+        instance = MagicMock()
+        instance.messages = MagicMock()
+        instance.messages.stream = MagicMock(
+            return_value=_RaisingFinalStream(events, final_message=None)
+        )
+        cls_mock = MagicMock(return_value=instance)
+
+        with patch("anthropic.AsyncAnthropic", cls_mock):
+            stream = anthropic_native.complete_stream(
+                {"messages": [{"role": "user", "content": "Hi."}]},
+                model="anthropic/claude-sonnet-4-5",
+                api_key="sk-test",
+            )
+
+            chunks: list = []
+            raised: Exception | None = None
+            try:
+                async for chunk in stream:
+                    chunks.append(chunk)
+            except RuntimeError as exc:
+                raised = exc
+
+        # (a) The exception from get_final_message must propagate to the
+        #     consumer — the adapter must NOT swallow it.
+        assert raised is not None and "API error finalizing" in str(raised), (
+            "get_final_message exception must propagate (was swallowed?)"
+        )
+
+        # (b) Despite the failure, the finally block MUST have yielded a
+        #     best-effort usage chunk built from the last-seen counters
+        #     before the exception surfaced. Otherwise telemetry shows 0
+        #     tokens for what may be a fully billed call.
+        usage_chunks = [c for c in chunks if c.usage is not None]
+        assert len(usage_chunks) == 1, (
+            "expected one best-effort usage chunk emitted from finally before "
+            "the exception propagated; got: "
+            f"{[ (c.usage and (c.usage.prompt_tokens, c.usage.completion_tokens)) for c in chunks ]}"
+        )
+        u = usage_chunks[0].usage
+        assert u.prompt_tokens == 33, (
+            "input_tokens should be the last-seen value from message_start"
+        )
+        assert u.completion_tokens == 7, (
+            "completion_tokens should be the last cumulative output_tokens "
+            "seen on message_delta"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Bedrock backend: WARN on ignored api_key, forward base_url (review fix W#2)

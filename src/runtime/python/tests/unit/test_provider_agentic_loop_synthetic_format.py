@@ -99,6 +99,104 @@ def _synthetic_tool() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Direct unit tests: _inject_synthetic_format_tool helper
+# ---------------------------------------------------------------------------
+
+
+class TestInjectSyntheticFormatTool:
+    """Cover the helper that splices the synthetic tool into the request and
+    sets ``tool_choice``. The helper is normally called from inside the
+    agentic loops, but the override-detection WARN is easiest to assert at
+    this level.
+    """
+
+    def test_warns_when_overriding_pre_set_tool_choice(self, caplog):
+        """Round-2 review: ``_inject_synthetic_format_tool`` unconditionally
+        writes ``tool_choice``. If the caller (or upstream) had already set
+        a value, it was silently discarded — making the override invisible
+        in observability. Now WARN once when the prior value is non-None.
+        """
+        from mesh.helpers import _inject_synthetic_format_tool
+
+        completion_args: dict[str, Any] = {
+            # Caller pre-set tool_choice (some upstream wanted to force a
+            # specific tool); synthetic format injection MUST take it over.
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "caller_chosen_tool"},
+            },
+        }
+        with caplog.at_level("WARNING", logger="mesh.helpers"):
+            _inject_synthetic_format_tool(
+                tools=[{"type": "function", "function": {"name": "real_tool"}}],
+                synthetic_tool=_synthetic_tool(),
+                completion_args=completion_args,
+            )
+
+        warn_msgs = [
+            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert any(
+            "Synthetic format injection overriding caller-supplied tool_choice"
+            in m
+            for m in warn_msgs
+        ), (
+            f"Expected override-warning; got: {warn_msgs}"
+        )
+        # The override should still happen — WARN documents it, doesn't undo it.
+        assert completion_args["tool_choice"] == "auto"
+
+    def test_no_warning_when_tool_choice_was_unset(self, caplog):
+        """Sanity check: the WARN must only fire when overriding an existing
+        non-None value. The common case (caller never touched tool_choice)
+        must stay quiet.
+        """
+        from mesh.helpers import _inject_synthetic_format_tool
+
+        completion_args: dict[str, Any] = {}
+        with caplog.at_level("WARNING", logger="mesh.helpers"):
+            _inject_synthetic_format_tool(
+                tools=None,
+                synthetic_tool=_synthetic_tool(),
+                completion_args=completion_args,
+            )
+
+        warn_msgs = [
+            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert not any(
+            "Synthetic format injection overriding" in m for m in warn_msgs
+        ), f"Did not expect override-warning; got: {warn_msgs}"
+        # No real tools → forced synthetic. Existing behavior preserved.
+        assert completion_args["tool_choice"] == {
+            "type": "function",
+            "function": {"name": SYNTHETIC_TOOL_NAME},
+        }
+
+    def test_no_warning_when_tool_choice_explicitly_none(self, caplog):
+        """``tool_choice=None`` is treated the same as unset (no override
+        signal worth surfacing). Without this, callers that defensively set
+        ``None`` would get spurious WARNs on every request.
+        """
+        from mesh.helpers import _inject_synthetic_format_tool
+
+        completion_args: dict[str, Any] = {"tool_choice": None}
+        with caplog.at_level("WARNING", logger="mesh.helpers"):
+            _inject_synthetic_format_tool(
+                tools=[{"type": "function", "function": {"name": "real_tool"}}],
+                synthetic_tool=_synthetic_tool(),
+                completion_args=completion_args,
+            )
+
+        warn_msgs = [
+            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert not any(
+            "Synthetic format injection overriding" in m for m in warn_msgs
+        ), f"None should not trip the override warning; got: {warn_msgs}"
+
+
+# ---------------------------------------------------------------------------
 # Buffered loop: _provider_agentic_loop
 # ---------------------------------------------------------------------------
 

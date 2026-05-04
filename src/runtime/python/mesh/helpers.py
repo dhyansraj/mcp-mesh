@@ -147,9 +147,22 @@ def _inject_synthetic_format_tool(
     and is fully deterministic. Otherwise use ``"auto"`` so Claude can keep
     invoking real tools across iterations and only pick the synthetic when
     it's done gathering data (matches TS/Java pattern).
+
+    If the caller (or upstream) had already set ``tool_choice``, it is
+    silently overridden — synthetic format injection requires the model to
+    be able to invoke our synthetic tool, so we must control this knob. A
+    WARN is logged so the override is at least visible in observability.
     """
     real_tools = list(tools or [])
     augmented = real_tools + [synthetic_tool]
+    prior_choice = completion_args.get("tool_choice")
+    if prior_choice is not None:
+        logger.warning(
+            "Synthetic format injection overriding caller-supplied "
+            "tool_choice (was: %r). Structured output requires controlling "
+            "tool_choice so the synthetic format tool can be invoked.",
+            prior_choice,
+        )
     if not real_tools:
         # No real tools — force the synthetic. Single round-trip, deterministic.
         completion_args["tool_choice"] = {
@@ -1472,11 +1485,25 @@ def llm_provider(
             output_schema = model_params_copy.pop("output_schema", None)
             output_type_name = model_params_copy.pop("output_type_name", None)
 
+            # Source-of-truth for messages downstream. Defaults to the
+            # request's messages; ``apply_structured_output`` may swap in a
+            # NEW list (Claude native synthetic-format path builds an
+            # augmented list to avoid mutating the caller's reference). We
+            # read it back from ``model_params_copy`` so that augmentation
+            # flows through to the agentic loop.
+            effective_messages = request.messages
             if output_schema:
                 # Include messages so handler can modify system prompt (e.g., HINT mode injection)
                 model_params_copy["messages"] = request.messages
                 handler.apply_structured_output(
                     output_schema, output_type_name, model_params_copy
+                )
+                # Pull back the (possibly-replaced) messages list before
+                # popping the key off the model_params dict — the native
+                # synthetic-format path returns a NEW list rather than
+                # mutating the original.
+                effective_messages = model_params_copy.get(
+                    "messages", request.messages
                 )
                 # Remove messages to avoid duplication in completion_args
                 model_params_copy.pop("messages", None)
@@ -1499,7 +1526,10 @@ def llm_provider(
 
             # Use vendor handler to format system prompt when tools are present
             effective_tools = clean_tools if clean_tools is not None else request.tools
-            messages = request.messages
+            # Use the messages list returned by ``apply_structured_output``
+            # (may be the request's original list OR a new augmented list
+            # built by the Claude native synthetic-format path).
+            messages = effective_messages
             if effective_tools:
 
                 # Find and format system message

@@ -539,16 +539,18 @@ class ClaudeHandler(BaseProviderHandler):
         # answer and skips the synthetic tool entirely (especially on simple
         # questions where the model thinks tool_use is unnecessary).
         #
-        # IMPORTANT: build a NEW system message dict and REPLACE messages[i]
-        # rather than mutating the existing one. Caller-side shallow-copies
-        # share the original system dict across iterations / requests; mutation
-        # would re-inject the instruction every time a request reuses that
-        # dict (see issue #834 review). Replacement is idempotent — the
-        # instruction is appended exactly once per call regardless of caller
-        # aliasing.
-        messages = model_params.get("messages", [])
+        # IMPORTANT: build a NEW messages list and a NEW system message dict
+        # rather than mutating the caller's. The caller's reference to the
+        # list is shared across iterations / requests; in-place reassignment
+        # via ``messages[idx] = new_msg`` or ``messages.insert(0, ...)``
+        # would surface to the caller and could re-inject the instruction
+        # on subsequent reuse (see issue #834 review-round-2). The new list
+        # is wired back through ``model_params["messages"]`` so the agentic
+        # loop sees the augmented version.
+        original_messages = model_params.get("messages", [])
+        new_messages: list[dict[str, Any]] = list(original_messages)
         instruction_inserted = False
-        for idx, msg in enumerate(messages):
+        for idx, msg in enumerate(new_messages):
             if msg.get("role") == "system":
                 base_content = msg.get("content", "")
                 new_msg: dict[str, Any] = {**msg}
@@ -570,7 +572,7 @@ class ClaudeHandler(BaseProviderHandler):
                 else:
                     # Unknown content shape — leave the dict as-is (best effort).
                     new_msg["content"] = base_content
-                messages[idx] = new_msg
+                new_messages[idx] = new_msg
                 instruction_inserted = True
                 break
 
@@ -578,14 +580,18 @@ class ClaudeHandler(BaseProviderHandler):
             # No system message — synthesize one. Without it the model would
             # never see the "must call this tool" rule and structured output
             # would silently degrade to plain-text answers.
-            messages.insert(
+            new_messages.insert(
                 0,
                 {
                     "role": "system",
                     "content": SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION.lstrip("\n"),
                 },
             )
-            model_params["messages"] = messages
+
+        # Wire the new list back into model_params so the agentic loop sees
+        # the augmented messages. The caller's original list reference is
+        # left untouched.
+        model_params["messages"] = new_messages
 
         # Build the synthetic tool. Stored as the OpenAI/litellm tool shape
         # so the upstream `_convert_tools` translator in anthropic_native

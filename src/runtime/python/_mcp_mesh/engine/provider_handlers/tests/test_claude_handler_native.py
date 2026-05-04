@@ -382,11 +382,11 @@ class TestApplyStructuredOutputNative:
     def test_does_not_double_inject_when_called_twice_on_same_messages(
         self, _native_on
     ):
-        """Regression for review fix W#3: caller-side shallow copies of the
-        messages list often share the same system message dict across
-        iterations. The handler must build a NEW system message dict (and
-        replace messages[i]) rather than mutating the existing one — otherwise
-        a second call would re-append the "__mesh_format_response" instruction.
+        """Regression for review fix W#3 (round 1 + round 2): caller-side
+        shallow copies of the messages list often share the same system
+        message dict across iterations. The handler must build a NEW
+        messages list AND a NEW system message dict — otherwise a second
+        call would re-append the "__mesh_format_response" instruction.
         """
         handler = ClaudeHandler()
         original_system = {"role": "system", "content": "You are helpful."}
@@ -395,32 +395,36 @@ class TestApplyStructuredOutputNative:
         msgs1 = [original_system, {"role": "user", "content": "Q1"}]
         msgs2 = [original_system, {"role": "user", "content": "Q2"}]
 
-        handler.apply_structured_output(
-            _trip_schema(), "Trip", {"messages": msgs1}
-        )
-        handler.apply_structured_output(
-            _trip_schema(), "Trip", {"messages": msgs2}
-        )
+        params1 = {"messages": msgs1}
+        params2 = {"messages": msgs2}
+        handler.apply_structured_output(_trip_schema(), "Trip", params1)
+        handler.apply_structured_output(_trip_schema(), "Trip", params2)
 
         # Original dict must NOT have been mutated.
         assert original_system["content"] == "You are helpful.", (
             "system message dict was mutated — caller-side aliasing would "
             "cause double injection on reuse"
         )
-        # Both processed lists should each have the instruction exactly once.
-        instr_count_1 = msgs1[0]["content"].count("__mesh_format_response")
-        instr_count_2 = msgs2[0]["content"].count("__mesh_format_response")
+        # The augmented messages live on params["messages"] (a NEW list,
+        # round-2 fix) — that's what flows downstream to the agentic loop.
+        instr_count_1 = params1["messages"][0]["content"].count(
+            "__mesh_format_response"
+        )
+        instr_count_2 = params2["messages"][0]["content"].count(
+            "__mesh_format_response"
+        )
         assert instr_count_1 == 1, (
-            f"expected 1 instruction in msgs1; got {instr_count_1}"
+            f"expected 1 instruction in params1[messages]; got {instr_count_1}"
         )
         assert instr_count_2 == 1, (
-            f"expected 1 instruction in msgs2; got {instr_count_2}"
+            f"expected 1 instruction in params2[messages]; got {instr_count_2}"
         )
 
     def test_does_not_double_inject_block_list(self, _native_on):
         """Same regression for the content-block list shape (post-prompt-cache).
-        The original list of blocks must not be mutated; replacing the dict
-        must produce a NEW list with the instruction block appended once.
+        The original list of blocks must not be mutated; the augmented
+        copy on ``params["messages"]`` must contain the instruction block
+        appended exactly once.
         """
         handler = ClaudeHandler()
         original_block = {
@@ -433,18 +437,17 @@ class TestApplyStructuredOutputNative:
         msgs1 = [original_system, {"role": "user", "content": "Q1"}]
         msgs2 = [original_system, {"role": "user", "content": "Q2"}]
 
-        handler.apply_structured_output(
-            _trip_schema(), "Trip", {"messages": msgs1}
-        )
-        handler.apply_structured_output(
-            _trip_schema(), "Trip", {"messages": msgs2}
-        )
+        params1 = {"messages": msgs1}
+        params2 = {"messages": msgs2}
+        handler.apply_structured_output(_trip_schema(), "Trip", params1)
+        handler.apply_structured_output(_trip_schema(), "Trip", params2)
 
         # Original system dict's content list MUST be untouched.
         assert original_system["content"] == [original_block]
-        # Each processed list got exactly one instruction block.
-        for msgs in (msgs1, msgs2):
-            blocks = msgs[0]["content"]
+        # Each augmented list (NEW lists on params["messages"], round-2 fix)
+        # got exactly one instruction block.
+        for params in (params1, params2):
+            blocks = params["messages"][0]["content"]
             instr_blocks = [
                 b for b in blocks
                 if isinstance(b, dict)
@@ -453,6 +456,79 @@ class TestApplyStructuredOutputNative:
             assert len(instr_blocks) == 1, (
                 f"expected 1 instruction block; got {len(instr_blocks)}"
             )
+
+    def test_does_not_mutate_caller_messages_list_with_existing_system(
+        self, _native_on
+    ):
+        """Round-2 review (W#3): even though the system dict itself was
+        already protected from in-place mutation in round 1, the messages
+        LIST was still mutated via ``messages[idx] = new_msg``. The caller's
+        list reference must remain untouched — the augmented version flows
+        through ``model_params["messages"]`` as a NEW list.
+        """
+        handler = ClaudeHandler()
+        original_system = {"role": "system", "content": "You are helpful."}
+        original_user = {"role": "user", "content": "Plan a trip."}
+        original_messages = [original_system, original_user]
+        original_messages_id = id(original_messages)
+        original_messages_snapshot = list(original_messages)
+
+        params: dict = {"messages": original_messages}
+        handler.apply_structured_output(_trip_schema(), "Trip", params)
+
+        # The caller's list reference must be the SAME object after the call,
+        # and its contents must be byte-for-byte unchanged (no replacement,
+        # no insertion, no removal).
+        assert id(original_messages) == original_messages_id
+        assert original_messages == original_messages_snapshot, (
+            "caller's messages list was mutated — round-2 fix requires the "
+            "handler to build a new list, not assign messages[idx] in place"
+        )
+        # Original system dict still untouched (round-1 fix, regression check).
+        assert original_system["content"] == "You are helpful."
+
+        # The augmented list lives on params["messages"] — must be a DIFFERENT
+        # object than the caller's, with the instruction baked into its
+        # system message.
+        new_messages = params["messages"]
+        assert id(new_messages) != original_messages_id, (
+            "model_params['messages'] should point to a NEW list, not the "
+            "caller's"
+        )
+        assert "__mesh_format_response" in new_messages[0]["content"]
+        # User message should pass through by reference (not duplicated).
+        assert new_messages[1] is original_user
+
+    def test_does_not_mutate_caller_messages_list_when_no_system(
+        self, _native_on
+    ):
+        """Round-2 review (W#3): the no-system-message branch previously did
+        ``messages.insert(0, synthesized)``, mutating the caller's list. With
+        the round-2 fix, the caller's list must stay untouched and the
+        synthesized system message lives only on the new ``params["messages"]``
+        list.
+        """
+        handler = ClaudeHandler()
+        original_user = {"role": "user", "content": "Hi."}
+        original_messages = [original_user]
+        original_messages_id = id(original_messages)
+        original_len = len(original_messages)
+
+        params: dict = {"messages": original_messages}
+        handler.apply_structured_output(_trip_schema(), "Trip", params)
+
+        # Caller's list reference unchanged: same object, same length, same
+        # element. No insert(0, ...) leaked through.
+        assert id(original_messages) == original_messages_id
+        assert len(original_messages) == original_len
+        assert original_messages[0] is original_user
+
+        # Augmented list on params["messages"] gained the synthesized system.
+        new_messages = params["messages"]
+        assert id(new_messages) != original_messages_id
+        assert new_messages[0]["role"] == "system"
+        assert "__mesh_format_response" in new_messages[0]["content"]
+        assert new_messages[1] is original_user
 
 
 class TestApplyStructuredOutputLiteLLMUnchanged:
