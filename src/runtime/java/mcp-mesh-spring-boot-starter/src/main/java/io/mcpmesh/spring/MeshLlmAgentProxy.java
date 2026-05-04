@@ -276,9 +276,17 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         }
 
         // Build the LLM messages list — same shape the buffered path produces.
+        // Use a LinkedHashMap rather than Map.of: Map.of throws NPE on null
+        // values, but Message.content() can legitimately be null for tool /
+        // assistant messages that only carry tool_calls. Spec says cold-
+        // publisher errors should reach the subscriber via onError, not
+        // throw synchronously from stream().
         List<Map<String, Object>> llmMessages = new ArrayList<>();
         for (Message msg : messages != null ? messages : List.<Message>of()) {
-            llmMessages.add(Map.of("role", msg.role(), "content", msg.content()));
+            Map<String, Object> entry = new LinkedHashMap<>(2);
+            entry.put("role", msg.role());
+            entry.put("content", msg.content());
+            llmMessages.add(entry);
         }
 
         // Build model_params (vendor-agnostic; provider handler maps to its API)

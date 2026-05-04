@@ -522,6 +522,13 @@ export async function* streamMcpTool(
       effectiveTimeout = meshTimeoutMs;
     }
   }
+  // Stream timeout defaults are usually generous (300s) but a partial caller
+  // options object could leave this undefined or non-positive — that would
+  // cause setTimeout to fire on next tick and abort the stream immediately.
+  // Fall back to the buffered call default in that case.
+  if (typeof effectiveTimeout !== "number" || effectiveTimeout <= 0) {
+    effectiveTimeout = DEFAULT_CALL_OPTIONS.streamTimeout!;
+  }
 
   const bodyStr = JSON.stringify(payload);
   const requestBytes = Buffer.byteLength(bodyStr, "utf8");

@@ -158,5 +158,16 @@ export async function sseStream(
     });
     safeWrite(`event: error\ndata: ${errPayload}\n\n`);
     safeEnd();
+    // Release the upstream iterator if the failure originated outside the
+    // iterator itself (e.g. safeWrite threw). Without this, an upstream
+    // proxy.stream() generator's finally block — which cancels the
+    // OkHttp/fetch reader — never runs until GC, leaking the connection.
+    if (typeof iterator.return === "function") {
+      try {
+        await iterator.return();
+      } catch {
+        /* upstream cleanup is best-effort */
+      }
+    }
   }
 }

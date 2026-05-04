@@ -141,8 +141,16 @@ test:
     command: |
       # Strip CR (curl -N emits CRLF on some hosts) before counting so the
       # `data:` prefix anchors at start-of-line regardless of line ending.
+      # Then PASS/FAIL on a numeric comparison — assertions match the verdict
+      # token rather than substring-matching numeric counts (which would
+      # confuse e.g. =2 with =20, =21, etc.).
       COUNT=$(printf '%s' "${captured.sse_output}" | tr -d '\r' | grep -c '^data:' || true)
       echo "DATA_LINE_COUNT=$COUNT"
+      if [ "$COUNT" -ge 3 ]; then
+        echo "DATA_LINE_COUNT_VERDICT=PASS"
+      else
+        echo "DATA_LINE_COUNT_VERDICT=FAIL"
+      fi
     capture: data_line_count
 
 assertions:
@@ -179,12 +187,10 @@ assertions:
   # ===== Per-chunk delivery (chunks were NOT collapsed into a single buffered frame) =====
   - expr: "${captured.data_line_count} contains 'DATA_LINE_COUNT='"
     message: "Should have captured a DATA_LINE_COUNT line"
-  - expr: "${captured.data_line_count} not contains 'DATA_LINE_COUNT=0'"
-    message: "Should have at least one data: line"
-  - expr: "${captured.data_line_count} not contains 'DATA_LINE_COUNT=1'"
-    message: "Should NOT have only one data: line (would mean chunks were buffered)"
-  - expr: "${captured.data_line_count} not contains 'DATA_LINE_COUNT=2'"
-    message: "Should have more than 2 data: lines (5 producer chunks + [DONE] expected)"
+  - expr: "${captured.data_line_count} contains 'DATA_LINE_COUNT_VERDICT=PASS'"
+    message: "Should have at least 3 data: lines (5 producer chunks + [DONE] expected)"
+  - expr: "${captured.data_line_count} not contains 'DATA_LINE_COUNT_VERDICT=FAIL'"
+    message: "Per-chunk delivery verdict must be PASS"
 
 post_run:
   - handler: shell

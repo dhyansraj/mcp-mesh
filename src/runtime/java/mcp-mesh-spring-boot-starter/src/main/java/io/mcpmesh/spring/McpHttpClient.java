@@ -905,9 +905,17 @@ public class McpHttpClient {
                 return false;
             }
 
-            // Final response for our request id: end the stream
+            // Final response for our request id: end the stream.
+            // JSON-RPC 2.0 lets servers echo the id type, but proxies/gateways
+            // sometimes stringify numeric ids for "JSON safety" — accept both
+            // forms so we don't hang waiting for an end-of-stream marker that
+            // never comes in the type we sent.
             JsonNode idNode = msg.get("id");
-            if (idNode != null && idNode.isNumber() && idNode.asLong() == requestId) {
+            boolean idMatches = idNode != null && (
+                (idNode.isNumber() && idNode.asLong() == requestId) ||
+                (idNode.isTextual() && Long.toString(requestId).equals(idNode.asText()))
+            );
+            if (idMatches) {
                 JsonNode errorNode = msg.get("error");
                 if (errorNode != null) {
                     String em = errorNode.has("message")
