@@ -325,7 +325,9 @@ def _chunk(content=None, usage=None, model=None):
 
 class TestStreamingToolYieldsChunks:
     @pytest.mark.asyncio
-    async def test_no_tools_path_streams_chunks_through_acompletion(self):
+    async def test_no_tools_path_streams_chunks_through_acompletion(
+        self, monkeypatch
+    ):
         """Direct text-streaming when ``request.tools`` is empty.
 
         We exercise the underlying async generator function (resolved via
@@ -334,7 +336,12 @@ class TestStreamingToolYieldsChunks:
         so testing it requires a FastMCP Context. The streaming behavior we
         care about is in the generator itself; the wrapper's chunk-forwarding
         is covered by ``test_stream_wrapper.py``.
+
+        Issue #834 flipped MCP_MESH_NATIVE_LLM to default-ON, so we force
+        the LiteLLM path here to keep the ``litellm.acompletion`` mock
+        reachable.
         """
+        monkeypatch.setenv("MCP_MESH_NATIVE_LLM", "0")
         import inspect
 
         from mesh.types import MeshLlmRequest

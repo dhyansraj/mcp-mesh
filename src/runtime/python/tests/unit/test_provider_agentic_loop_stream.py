@@ -26,6 +26,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _force_litellm_path(monkeypatch):
+    """Force the LiteLLM path for every test in this module.
+
+    Issue #834 flipped MCP_MESH_NATIVE_LLM from opt-in to opt-out. These
+    tests mock ``litellm.acompletion`` directly to verify the agentic-loop
+    contract, so they explicitly disable native dispatch — otherwise the
+    loop would route around litellm and the mock would never be hit.
+    """
+    monkeypatch.setenv("MCP_MESH_NATIVE_LLM", "0")
+
+
 # ---------------------------------------------------------------------------
 # Streaming chunk fakes mirroring litellm.acompletion(stream=True) shape.
 # Kept independent from test_mesh_llm_stream.py so each test file is

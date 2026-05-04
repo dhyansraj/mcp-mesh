@@ -1,0 +1,713 @@
+"""Unit tests for ClaudeHandler native SDK dispatch (issue #834).
+
+Covers:
+  * has_native() returns True by default when the SDK is importable
+    (opt-out semantics — MCP_MESH_NATIVE_LLM=0 disables)
+  * has_native() returns False when MCP_MESH_NATIVE_LLM is explicitly set
+    to a falsy value (0/false/no/off)
+  * has_native() returns False when the SDK is missing (regardless of
+    flag value)
+  * has_native() returns True when MCP_MESH_NATIVE_LLM=1 (or other truthy
+    value) and the SDK is available — same as the default
+  * has_native() emits a one-time DEBUG dispatch-status log on first call
+    so ``meshctl ... --debug`` runs can confirm whether native or LiteLLM
+    is in play
+  * complete()/complete_stream() dispatch into the native module when
+    has_native() is True; raise NotImplementedError on the base class
+  * apply_structured_output(): on the native path, stamps the synthetic
+    format tool sentinels and augments the system prompt; on the LiteLLM
+    path, preserves the existing HINT-mode behavior unchanged
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from pydantic import BaseModel
+
+from _mcp_mesh.engine.provider_handlers import claude_handler as claude_handler_module
+from _mcp_mesh.engine.provider_handlers.base_provider_handler import (
+    BaseProviderHandler,
+)
+from _mcp_mesh.engine.provider_handlers.claude_handler import (
+    SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION,
+    SYNTHETIC_FORMAT_TOOL_NAME,
+    ClaudeHandler,
+)
+
+
+# ---------------------------------------------------------------------------
+# has_native() gating
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clean_env():
+    """Make sure the feature flag does not leak between tests."""
+    original = os.environ.pop("MCP_MESH_NATIVE_LLM", None)
+    yield
+    os.environ.pop("MCP_MESH_NATIVE_LLM", None)
+    if original is not None:
+        os.environ["MCP_MESH_NATIVE_LLM"] = original
+
+
+class TestHasNative:
+    def test_returns_true_when_flag_unset_and_sdk_available(self):
+        """Default ON: with the env var unset and the SDK importable, native
+        dispatch is enabled. This is the opt-out semantics flip — previously
+        the flag had to be set explicitly to enable native dispatch.
+        """
+        handler = ClaudeHandler()
+        assert "MCP_MESH_NATIVE_LLM" not in os.environ
+
+        with patch(
+            "_mcp_mesh.engine.native_clients.anthropic_native.is_available",
+            return_value=True,
+        ):
+            assert handler.has_native() is True
+
+    @pytest.mark.parametrize("value", ["0", "false", "False", "no", "OFF"])
+    def test_returns_false_when_flag_explicitly_off(self, value):
+        """Explicit opt-out via MCP_MESH_NATIVE_LLM=0/false/no/off forces the
+        LiteLLM fallback path even when the SDK is importable."""
+        handler = ClaudeHandler()
+        os.environ["MCP_MESH_NATIVE_LLM"] = value
+
+        # Even with SDK present, explicit opt-out wins.
+        with patch(
+            "_mcp_mesh.engine.native_clients.anthropic_native.is_available",
+            return_value=True,
+        ):
+            assert handler.has_native() is False
+
+    def test_returns_false_when_flag_unset_but_sdk_missing(self):
+        """SDK gate: with the SDK missing, native dispatch is unavailable
+        even on the new default-ON path. Falls back to LiteLLM with a
+        one-time INFO log."""
+        handler = ClaudeHandler()
+        assert "MCP_MESH_NATIVE_LLM" not in os.environ
+
+        with patch(
+            "_mcp_mesh.engine.native_clients.anthropic_native.is_available",
+            return_value=False,
+        ):
+            assert handler.has_native() is False
+
+    def test_returns_false_when_flag_explicit_on_but_sdk_missing(self):
+        """Even with explicit MCP_MESH_NATIVE_LLM=1, a missing SDK falls back."""
+        handler = ClaudeHandler()
+        os.environ["MCP_MESH_NATIVE_LLM"] = "1"
+
+        with patch(
+            "_mcp_mesh.engine.native_clients.anthropic_native.is_available",
+            return_value=False,
+        ):
+            assert handler.has_native() is False
+
+    def test_returns_true_when_flag_explicit_on_and_sdk_available(self):
+        """Explicit-enable matches the default; preserved for backward compat
+        with existing deployments that set MCP_MESH_NATIVE_LLM=1."""
+        handler = ClaudeHandler()
+        os.environ["MCP_MESH_NATIVE_LLM"] = "1"
+
+        with patch(
+            "_mcp_mesh.engine.native_clients.anthropic_native.is_available",
+            return_value=True,
+        ):
+            assert handler.has_native() is True
+
+    @pytest.mark.parametrize("value", ["", "1", "true", "True", "yes", "ON"])
+    def test_default_on_accepts_unset_or_truthy_flag_values(self, value):
+        """Empty string (unset → default), and any truthy value all enable
+        native dispatch when the SDK is importable."""
+        handler = ClaudeHandler()
+        if value:
+            os.environ["MCP_MESH_NATIVE_LLM"] = value
+        with patch(
+            "_mcp_mesh.engine.native_clients.anthropic_native.is_available",
+            return_value=True,
+        ):
+            assert handler.has_native() is True
+
+    def test_logs_fallback_once_when_sdk_missing(self):
+        """When native is attempted (default ON) but the SDK is missing,
+        log_fallback_once() must be invoked so the user sees a single
+        nudge per process. The handler now also short-circuits the call
+        on subsequent misses via ``is_fallback_logged()`` — verify both:
+        the first call invokes the log function, the second one does not.
+        """
+        handler = ClaudeHandler()
+        # Default ON path: do NOT set the flag.
+        assert "MCP_MESH_NATIVE_LLM" not in os.environ
+
+        with (
+            patch(
+                "_mcp_mesh.engine.native_clients.anthropic_native.is_available",
+                return_value=False,
+            ),
+            patch(
+                "_mcp_mesh.engine.native_clients.anthropic_native.log_fallback_once"
+            ) as mock_log,
+            patch(
+                "_mcp_mesh.engine.native_clients.anthropic_native.is_fallback_logged",
+                side_effect=[False, True],
+            ),
+        ):
+            handler.has_native()
+            handler.has_native()
+            # First call invokes log_fallback_once (is_fallback_logged → False);
+            # second call short-circuits at the call site (is_fallback_logged
+            # → True) — total log_fallback_once invocations = 1.
+            assert mock_log.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# complete() dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestComplete:
+    @pytest.mark.asyncio
+    async def test_complete_dispatches_to_native_module(self):
+        handler = ClaudeHandler()
+        sentinel = MagicMock(name="response")
+        with patch(
+            "_mcp_mesh.engine.native_clients.anthropic_native.complete",
+            new=AsyncMock(return_value=sentinel),
+        ) as mock_complete:
+            result = await handler.complete(
+                {"messages": [{"role": "user", "content": "Hi"}]},
+                model="anthropic/claude-sonnet-4-5",
+                api_key="sk-test",
+                base_url="https://api.example.com",
+            )
+
+        assert result is sentinel
+        mock_complete.assert_awaited_once()
+        kwargs = mock_complete.await_args.kwargs
+        assert kwargs["model"] == "anthropic/claude-sonnet-4-5"
+        assert kwargs["api_key"] == "sk-test"
+        assert kwargs["base_url"] == "https://api.example.com"
+
+    @pytest.mark.asyncio
+    async def test_complete_stream_dispatches_to_native_module(self):
+        handler = ClaudeHandler()
+
+        async def _fake_iter():
+            yield "chunk1"
+            yield "chunk2"
+
+        with patch(
+            "_mcp_mesh.engine.native_clients.anthropic_native.complete_stream",
+            return_value=_fake_iter(),
+        ) as mock_stream:
+            stream = await handler.complete_stream(
+                {"messages": [{"role": "user", "content": "Hi"}]},
+                model="anthropic/claude-sonnet-4-5",
+                api_key="sk-test",
+            )
+            chunks = [c async for c in stream]
+
+        assert chunks == ["chunk1", "chunk2"]
+        mock_stream.assert_called_once()
+        kwargs = mock_stream.call_args.kwargs
+        assert kwargs["model"] == "anthropic/claude-sonnet-4-5"
+        assert kwargs["api_key"] == "sk-test"
+
+
+# ---------------------------------------------------------------------------
+# Base class default: NotImplementedError
+# ---------------------------------------------------------------------------
+
+
+class _BareHandler(BaseProviderHandler):
+    """Concrete subclass with the bare minimum to instantiate."""
+
+    def __init__(self):
+        super().__init__(vendor="bare")
+
+    def prepare_request(self, messages, tools, output_type, **kwargs):
+        return {"messages": messages}
+
+    def format_system_prompt(self, base_prompt, tool_schemas, output_type):
+        return base_prompt
+
+
+class TestBaseHandlerDefault:
+    def test_has_native_default_false(self):
+        assert _BareHandler().has_native() is False
+
+    @pytest.mark.asyncio
+    async def test_complete_default_raises(self):
+        with pytest.raises(NotImplementedError):
+            await _BareHandler().complete(
+                {"messages": []}, model="x/y", api_key=None
+            )
+
+    @pytest.mark.asyncio
+    async def test_complete_stream_default_raises(self):
+        with pytest.raises(NotImplementedError):
+            await _BareHandler().complete_stream(
+                {"messages": []}, model="x/y", api_key=None
+            )
+
+
+# ---------------------------------------------------------------------------
+# apply_structured_output(): native path injects synthetic-tool sentinels;
+# LiteLLM path preserves existing HINT-mode behavior unchanged.
+# ---------------------------------------------------------------------------
+
+
+class _Trip(BaseModel):
+    destination: str
+    days: int
+
+
+def _trip_schema() -> dict:
+    return _Trip.model_json_schema()
+
+
+@pytest.fixture
+def _native_on(monkeypatch):
+    """Force ``ClaudeHandler.has_native()`` → True for the duration of the test.
+
+    Patches the module-level lookup the handler uses, so we don't rely on the
+    real anthropic SDK being importable in CI.
+    """
+    monkeypatch.setattr(ClaudeHandler, "has_native", lambda self: True)
+    yield
+
+
+@pytest.fixture
+def _native_off(monkeypatch):
+    """Force ``ClaudeHandler.has_native()`` → False — LiteLLM path."""
+    monkeypatch.setattr(ClaudeHandler, "has_native", lambda self: False)
+    yield
+
+
+class TestApplyStructuredOutputNative:
+    def test_stamps_synthetic_format_sentinel(self, _native_on):
+        handler = ClaudeHandler()
+        params: dict = {
+            "messages": [
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "Plan a trip."},
+            ]
+        }
+        result = handler.apply_structured_output(_trip_schema(), "Trip", params)
+
+        assert (
+            result["_mesh_synthetic_format_tool_name"]
+            == SYNTHETIC_FORMAT_TOOL_NAME
+        )
+        synth = result["_mesh_synthetic_format_tool"]
+        assert synth["type"] == "function"
+        assert synth["function"]["name"] == SYNTHETIC_FORMAT_TOOL_NAME
+        # Schema is forwarded as the tool's parameters.
+        params_schema = synth["function"]["parameters"]
+        assert "destination" in params_schema["properties"]
+        assert result["_mesh_synthetic_format_output_type_name"] == "Trip"
+
+    def test_does_not_set_response_format_or_hint_flags(self, _native_on):
+        handler = ClaudeHandler()
+        params: dict = {
+            "messages": [{"role": "system", "content": "S"}],
+            # Pre-existing HINT flag (should be cleared on native path).
+            "_mesh_hint_mode": True,
+        }
+        result = handler.apply_structured_output(_trip_schema(), "Trip", params)
+
+        assert "response_format" not in result
+        assert "_mesh_hint_mode" not in result
+        assert "_mesh_hint_schema" not in result
+
+    def test_appends_must_call_tool_instruction_to_system_message(
+        self, _native_on
+    ):
+        handler = ClaudeHandler()
+        original = "You are a travel planner."
+        params: dict = {
+            "messages": [
+                {"role": "system", "content": original},
+                {"role": "user", "content": "Plan a trip."},
+            ]
+        }
+        handler.apply_structured_output(_trip_schema(), "Trip", params)
+
+        new_system = params["messages"][0]["content"]
+        assert new_system.startswith(original)
+        assert "__mesh_format_response" in new_system
+        # Spot-check the key directive — "must call this tool".
+        assert "MUST call" in new_system
+
+    def test_preserves_cache_control_on_system_content_blocks(self, _native_on):
+        """When the system message has already been decorated with prompt-cache
+        blocks (list-of-blocks shape), the synthetic instruction is APPENDED as
+        a new block so cache_control on the original blocks is preserved.
+        """
+        handler = ClaudeHandler()
+        original_block = {
+            "type": "text",
+            "text": "Original system text.",
+            "cache_control": {"type": "ephemeral"},
+        }
+        params: dict = {
+            "messages": [
+                {"role": "system", "content": [original_block]},
+                {"role": "user", "content": "Hi"},
+            ]
+        }
+        handler.apply_structured_output(_trip_schema(), "Trip", params)
+
+        blocks = params["messages"][0]["content"]
+        assert isinstance(blocks, list)
+        assert blocks[0] == original_block  # cache_control intact
+        assert any(
+            b.get("type") == "text" and "__mesh_format_response" in b.get("text", "")
+            for b in blocks[1:]
+        )
+
+    def test_synthesizes_system_message_when_absent(self, _native_on):
+        handler = ClaudeHandler()
+        params: dict = {"messages": [{"role": "user", "content": "Hi."}]}
+        handler.apply_structured_output(_trip_schema(), "Trip", params)
+
+        msgs = params["messages"]
+        assert msgs[0]["role"] == "system"
+        assert "__mesh_format_response" in msgs[0]["content"]
+
+    def test_does_not_double_inject_when_called_twice_on_same_messages(
+        self, _native_on
+    ):
+        """Regression for review fix W#3 (round 1 + round 2): caller-side
+        shallow copies of the messages list often share the same system
+        message dict across iterations. The handler must build a NEW
+        messages list AND a NEW system message dict — otherwise a second
+        call would re-append the "__mesh_format_response" instruction.
+        """
+        handler = ClaudeHandler()
+        original_system = {"role": "system", "content": "You are helpful."}
+        # Same dict referenced from two distinct message lists (simulates two
+        # back-to-back requests reusing the same system message object).
+        msgs1 = [original_system, {"role": "user", "content": "Q1"}]
+        msgs2 = [original_system, {"role": "user", "content": "Q2"}]
+
+        params1 = {"messages": msgs1}
+        params2 = {"messages": msgs2}
+        handler.apply_structured_output(_trip_schema(), "Trip", params1)
+        handler.apply_structured_output(_trip_schema(), "Trip", params2)
+
+        # Original dict must NOT have been mutated.
+        assert original_system["content"] == "You are helpful.", (
+            "system message dict was mutated — caller-side aliasing would "
+            "cause double injection on reuse"
+        )
+        # The augmented messages live on params["messages"] (a NEW list,
+        # round-2 fix) — that's what flows downstream to the agentic loop.
+        instr_count_1 = params1["messages"][0]["content"].count(
+            "__mesh_format_response"
+        )
+        instr_count_2 = params2["messages"][0]["content"].count(
+            "__mesh_format_response"
+        )
+        assert instr_count_1 == 1, (
+            f"expected 1 instruction in params1[messages]; got {instr_count_1}"
+        )
+        assert instr_count_2 == 1, (
+            f"expected 1 instruction in params2[messages]; got {instr_count_2}"
+        )
+
+    def test_does_not_double_inject_block_list(self, _native_on):
+        """Same regression for the content-block list shape (post-prompt-cache).
+        The original list of blocks must not be mutated; the augmented
+        copy on ``params["messages"]`` must contain the instruction block
+        appended exactly once.
+        """
+        handler = ClaudeHandler()
+        original_block = {
+            "type": "text",
+            "text": "Original system text.",
+            "cache_control": {"type": "ephemeral"},
+        }
+        # One shared system dict referenced from two messages lists.
+        original_system = {"role": "system", "content": [original_block]}
+        msgs1 = [original_system, {"role": "user", "content": "Q1"}]
+        msgs2 = [original_system, {"role": "user", "content": "Q2"}]
+
+        params1 = {"messages": msgs1}
+        params2 = {"messages": msgs2}
+        handler.apply_structured_output(_trip_schema(), "Trip", params1)
+        handler.apply_structured_output(_trip_schema(), "Trip", params2)
+
+        # Original system dict's content list MUST be untouched.
+        assert original_system["content"] == [original_block]
+        # Each augmented list (NEW lists on params["messages"], round-2 fix)
+        # got exactly one instruction block.
+        for params in (params1, params2):
+            blocks = params["messages"][0]["content"]
+            instr_blocks = [
+                b for b in blocks
+                if isinstance(b, dict)
+                and "__mesh_format_response" in b.get("text", "")
+            ]
+            assert len(instr_blocks) == 1, (
+                f"expected 1 instruction block; got {len(instr_blocks)}"
+            )
+
+    def test_does_not_mutate_caller_messages_list_with_existing_system(
+        self, _native_on
+    ):
+        """Round-2 review (W#3): even though the system dict itself was
+        already protected from in-place mutation in round 1, the messages
+        LIST was still mutated via ``messages[idx] = new_msg``. The caller's
+        list reference must remain untouched — the augmented version flows
+        through ``model_params["messages"]`` as a NEW list.
+        """
+        handler = ClaudeHandler()
+        original_system = {"role": "system", "content": "You are helpful."}
+        original_user = {"role": "user", "content": "Plan a trip."}
+        original_messages = [original_system, original_user]
+        original_messages_id = id(original_messages)
+        original_messages_snapshot = list(original_messages)
+
+        params: dict = {"messages": original_messages}
+        handler.apply_structured_output(_trip_schema(), "Trip", params)
+
+        # The caller's list reference must be the SAME object after the call,
+        # and its contents must be byte-for-byte unchanged (no replacement,
+        # no insertion, no removal).
+        assert id(original_messages) == original_messages_id
+        assert original_messages == original_messages_snapshot, (
+            "caller's messages list was mutated — round-2 fix requires the "
+            "handler to build a new list, not assign messages[idx] in place"
+        )
+        # Original system dict still untouched (round-1 fix, regression check).
+        assert original_system["content"] == "You are helpful."
+
+        # The augmented list lives on params["messages"] — must be a DIFFERENT
+        # object than the caller's, with the instruction baked into its
+        # system message.
+        new_messages = params["messages"]
+        assert id(new_messages) != original_messages_id, (
+            "model_params['messages'] should point to a NEW list, not the "
+            "caller's"
+        )
+        assert "__mesh_format_response" in new_messages[0]["content"]
+        # User message should pass through by reference (not duplicated).
+        assert new_messages[1] is original_user
+
+    def test_does_not_mutate_caller_messages_list_when_no_system(
+        self, _native_on
+    ):
+        """Round-2 review (W#3): the no-system-message branch previously did
+        ``messages.insert(0, synthesized)``, mutating the caller's list. With
+        the round-2 fix, the caller's list must stay untouched and the
+        synthesized system message lives only on the new ``params["messages"]``
+        list.
+        """
+        handler = ClaudeHandler()
+        original_user = {"role": "user", "content": "Hi."}
+        original_messages = [original_user]
+        original_messages_id = id(original_messages)
+        original_len = len(original_messages)
+
+        params: dict = {"messages": original_messages}
+        handler.apply_structured_output(_trip_schema(), "Trip", params)
+
+        # Caller's list reference unchanged: same object, same length, same
+        # element. No insert(0, ...) leaked through.
+        assert id(original_messages) == original_messages_id
+        assert len(original_messages) == original_len
+        assert original_messages[0] is original_user
+
+        # Augmented list on params["messages"] gained the synthesized system.
+        new_messages = params["messages"]
+        assert id(new_messages) != original_messages_id
+        assert new_messages[0]["role"] == "system"
+        assert "__mesh_format_response" in new_messages[0]["content"]
+        assert new_messages[1] is original_user
+
+
+class TestApplyStructuredOutputLiteLLMUnchanged:
+    """The LiteLLM path MUST keep the existing HINT-mode behavior."""
+
+    def test_sets_hint_mode_flags_not_synthetic(self, _native_off):
+        handler = ClaudeHandler()
+        params: dict = {
+            "messages": [{"role": "system", "content": "You are helpful."}]
+        }
+        result = handler.apply_structured_output(_trip_schema(), "Trip", params)
+
+        assert result["_mesh_hint_mode"] is True
+        assert result["_mesh_hint_schema"] is not None
+        assert result["_mesh_hint_output_type_name"] == "Trip"
+        # Native sentinels MUST NOT be present on the LiteLLM path.
+        assert "_mesh_synthetic_format_tool" not in result
+        assert "_mesh_synthetic_format_tool_name" not in result
+
+    def test_force_response_format_env_flag_still_works_on_litellm(
+        self, _native_off, monkeypatch
+    ):
+        """The MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT env flag is unchanged for
+        the LiteLLM path — it routes to the base impl that sets response_format.
+        """
+        handler = ClaudeHandler()
+        monkeypatch.setenv("MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT", "true")
+        params: dict = {
+            "messages": [{"role": "system", "content": "You are helpful."}]
+        }
+        result = handler.apply_structured_output(_trip_schema(), "Trip", params)
+
+        assert "response_format" in result
+        assert result["response_format"]["type"] == "json_schema"
+        # No HINT or synthetic flags on the base path.
+        assert "_mesh_hint_mode" not in result
+        assert "_mesh_synthetic_format_tool" not in result
+
+    def test_force_response_format_env_flag_no_op_on_native(
+        self, _native_on, monkeypatch
+    ):
+        """On the native path the env flag is intentionally a no-op —
+        synthetic-tool injection is the canonical native behavior.
+        """
+        handler = ClaudeHandler()
+        monkeypatch.setenv("MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT", "true")
+        params: dict = {
+            "messages": [{"role": "system", "content": "S"}]
+        }
+        result = handler.apply_structured_output(_trip_schema(), "Trip", params)
+
+        assert "response_format" not in result
+        assert (
+            result["_mesh_synthetic_format_tool_name"]
+            == SYNTHETIC_FORMAT_TOOL_NAME
+        )
+
+
+# ---------------------------------------------------------------------------
+# One-time DEBUG dispatch-status log (issue #834 follow-up)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _reset_dispatch_status_log():
+    """Reset the module-level one-time guard so each test starts clean.
+
+    The log is fire-once per process — we have to flip the sentinel back to
+    False so subsequent tests can observe the log being emitted.
+    """
+    original = claude_handler_module._DISPATCH_STATUS_LOGGED
+    claude_handler_module._DISPATCH_STATUS_LOGGED = False
+    yield
+    claude_handler_module._DISPATCH_STATUS_LOGGED = original
+
+
+class TestDispatchStatusLog:
+    """``has_native()`` should fire a DEBUG log exactly once per process so
+    operators running ``meshctl ... --debug`` can confirm whether the native
+    Anthropic SDK is in play (or whether mesh has fallen back to LiteLLM)."""
+
+    def test_logs_enabled_when_sdk_available_and_flag_unset(
+        self, caplog, _reset_dispatch_status_log
+    ):
+        handler = ClaudeHandler()
+        assert "MCP_MESH_NATIVE_LLM" not in os.environ
+
+        with (
+            caplog.at_level(
+                logging.DEBUG,
+                logger="_mcp_mesh.engine.provider_handlers.claude_handler",
+            ),
+            patch(
+                "_mcp_mesh.engine.native_clients.anthropic_native.is_available",
+                return_value=True,
+            ),
+        ):
+            handler.has_native()
+
+        status_records = [
+            r for r in caplog.records if "Claude native dispatch:" in r.message
+        ]
+        assert len(status_records) == 1
+        assert status_records[0].levelno == logging.DEBUG
+        assert "enabled" in status_records[0].message
+
+    def test_logs_disabled_when_flag_explicitly_off(
+        self, caplog, _reset_dispatch_status_log
+    ):
+        handler = ClaudeHandler()
+        os.environ["MCP_MESH_NATIVE_LLM"] = "0"
+
+        with caplog.at_level(
+            logging.DEBUG,
+            logger="_mcp_mesh.engine.provider_handlers.claude_handler",
+        ):
+            handler.has_native()
+
+        status_records = [
+            r for r in caplog.records if "Claude native dispatch:" in r.message
+        ]
+        assert len(status_records) == 1
+        assert status_records[0].levelno == logging.DEBUG
+        assert "disabled" in status_records[0].message
+        assert "MCP_MESH_NATIVE_LLM=0" in status_records[0].message
+
+    def test_logs_disabled_when_sdk_missing(
+        self, caplog, _reset_dispatch_status_log
+    ):
+        handler = ClaudeHandler()
+        assert "MCP_MESH_NATIVE_LLM" not in os.environ
+
+        with (
+            caplog.at_level(
+                logging.DEBUG,
+                logger="_mcp_mesh.engine.provider_handlers.claude_handler",
+            ),
+            patch(
+                "_mcp_mesh.engine.native_clients.anthropic_native.is_available",
+                return_value=False,
+            ),
+        ):
+            handler.has_native()
+
+        status_records = [
+            r for r in caplog.records if "Claude native dispatch:" in r.message
+        ]
+        assert len(status_records) == 1
+        assert status_records[0].levelno == logging.DEBUG
+        assert "disabled" in status_records[0].message
+        assert "anthropic SDK not installed" in status_records[0].message
+        assert "mcp-mesh[anthropic]" in status_records[0].message
+
+    def test_log_fires_only_once_across_calls(
+        self, caplog, _reset_dispatch_status_log
+    ):
+        """Second call to has_native() must NOT re-emit the dispatch-status log
+        — the one-time guard is the whole point of the helper."""
+        handler = ClaudeHandler()
+        assert "MCP_MESH_NATIVE_LLM" not in os.environ
+
+        with (
+            caplog.at_level(
+                logging.DEBUG,
+                logger="_mcp_mesh.engine.provider_handlers.claude_handler",
+            ),
+            patch(
+                "_mcp_mesh.engine.native_clients.anthropic_native.is_available",
+                return_value=True,
+            ),
+        ):
+            handler.has_native()
+            first_count = sum(
+                1 for r in caplog.records if "Claude native dispatch:" in r.message
+            )
+            handler.has_native()
+            second_count = sum(
+                1 for r in caplog.records if "Claude native dispatch:" in r.message
+            )
+
+        assert first_count == 1
+        assert second_count == 1  # no new log emitted on the second call

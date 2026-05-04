@@ -170,9 +170,9 @@ test:
   - name: "Call analyze_mixed_content"
     handler: shell
     workdir: /workspace
-    command: "meshctl call analyze_mixed_content '{\"image_number\": 1}'"
+    command: "meshctl call analyze_mixed_content '{\"image_number\": 1}' --timeout 120"
     capture: analyze_result
-    timeout: 120
+    timeout: 140  # +20s over meshctl --timeout to avoid race on output flush
 
   # Stop agents
   - name: "Stop agents"
