@@ -492,11 +492,11 @@ class TestNativeDispatchResolverVendor:
         assert resolve_mock.await_args.args[1] == "openai"
 
     @pytest.mark.asyncio
-    async def test_native_dispatch_with_unknown_vendor_falls_back_to_openai(self):
-        """vendor=None on native dispatch path is nonsensical (the loop only
-        sets has_native_dispatch=True after picking a vendor that has a
-        handler) — but we defend against it: the resolver still gets a valid
-        vendor string."""
+    async def test_native_dispatch_with_none_vendor_skips_resolver(self):
+        """When vendor is None on the native dispatch path, the upstream
+        ``vendor and _has_resource_link(...)`` short-circuit prevents resolver
+        invocation entirely. (Unknown-but-non-None vendor fallback is covered
+        separately in TestUnknownNativeVendorWarn.)"""
         message = _make_message_mock(
             [_make_tool_call_mock("call_1", "screenshot", "{}")]
         )
