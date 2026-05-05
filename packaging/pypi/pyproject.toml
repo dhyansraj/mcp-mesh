@@ -49,6 +49,13 @@ requires-python = ">=3.11"
 # silently fall back to LiteLLM. (openai is also a transitive dep of
 # litellm today; promoting to a direct base dep prevents breakage if
 # litellm ever drops it as transitive.)
+#
+# google-genai SDK is included by default for native Gemini dispatch
+# (issue #834 PR 3). Supports both AI Studio (gemini/*) and Vertex AI
+# (vertex_ai/*) backends via constructor flag. When MCP_MESH_NATIVE_LLM
+# is unset (default ON), Gemini provider agents dispatch through the
+# native google-genai SDK; without it they would silently fall back to
+# LiteLLM.
 dependencies = [
     # Rust core runtime (required - no Python fallback)
     "mcp-mesh-core>=1.4.1",
@@ -67,6 +74,7 @@ dependencies = [
     "litellm>=1.80.5,!=1.82.7,!=1.82.8",
     "anthropic>=0.42",
     "openai>=1.60",
+    "google-genai>=0.8.0",
     "prometheus-client>=0.19.0,<1.0.0",
     "pyyaml>=6.0,<7.0",
     "jinja2>=3.1.0",
@@ -121,6 +129,13 @@ openai = [
     # #834 PR 2). This entry is kept so existing ``pip install mcp-mesh[openai]``
     # commands continue to work without error.
     "openai>=1.60"
+]
+gemini = [
+    # Backward-compat alias: ``google-genai`` is now a base dependency
+    # (issue #834 PR 3). This entry is kept so existing
+    # ``pip install mcp-mesh[gemini]`` commands continue to work without
+    # error.
+    "google-genai>=0.8.0"
 ]
 
 [project.urls]

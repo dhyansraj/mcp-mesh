@@ -1247,7 +1247,16 @@ class MeshLlmAgent:
         subsequent chunks at the same index. We coalesce by index and drop
         any partial entries (defensive — providers very rarely truncate
         mid-stream, but the math still works).
+
+        Gemini-only: deltas may carry a ``_thought_signature`` (bytes) — the
+        opaque blob from Gemini 2.0+ thought-mode functionCall Parts that the
+        API requires to be echoed back on the next-turn functionCall. Forward
+        it onto the merged dict as ``_gemini_thought_signature`` (base64-
+        encoded so JSON-shaped consumers can round-trip it). Other vendors
+        don't set this attribute so the branch is a no-op for them.
         """
+        import base64 as _base64
+
         merged: dict[int, dict[str, Any]] = {}
         for chunk in buffered:
             choices = getattr(chunk, "choices", None) or []
@@ -1279,6 +1288,18 @@ class MeshLlmAgent:
                         slot["function"]["name"] = fn.name
                     if getattr(fn, "arguments", None):
                         slot["function"]["arguments"] += fn.arguments
+                # Gemini-only thought_signature passthrough (last fragment
+                # wins; Gemini emits the whole functionCall Part in a single
+                # chunk so coalescing isn't a real concern in practice).
+                # Strict ``bytes`` check — MagicMock test doubles otherwise
+                # auto-generate truthy attributes that aren't bytes-like
+                # and break b64encode (and other vendors will never set
+                # this attr to anything but bytes / None).
+                sig = getattr(tc, "_thought_signature", None)
+                if isinstance(sig, (bytes, bytearray)) and sig:
+                    slot["_gemini_thought_signature"] = _base64.b64encode(
+                        sig
+                    ).decode("ascii")
         return [tc for tc in merged.values() if tc["id"] is not None]
 
     async def _stream_mesh_delegated(

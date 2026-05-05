@@ -81,6 +81,18 @@ SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION = (
 _DISPATCH_STATUS_LOGGED = False
 
 
+def is_dispatch_status_logged() -> bool:
+    """Return True once the one-time dispatch-status log has fired.
+
+    Exposed so ``has_native()`` can skip the call frame for
+    ``_log_dispatch_status_once`` on every dispatch decision after the
+    first — the function dedupes internally, but on the hot path
+    avoiding the call entirely is cheaper. Mirrors ``is_fallback_logged``
+    on the native-client modules.
+    """
+    return _DISPATCH_STATUS_LOGGED
+
+
 def _log_dispatch_status_once() -> None:
     """Log the resolved native-dispatch status once per process at DEBUG level.
 
@@ -99,7 +111,7 @@ def _log_dispatch_status_once() -> None:
         logger.debug(
             "Claude native dispatch: disabled "
             "(MCP_MESH_NATIVE_LLM=%s explicitly set; using LiteLLM)",
-            env_value or "<unset>",
+            env_value,
         )
         return
 
@@ -669,7 +681,11 @@ class ClaudeHandler(BaseProviderHandler):
         # Emit the one-time dispatch-status DEBUG log. Lazy here (vs. at
         # module/handler init) so it fires when the first dispatch decision
         # is actually made — the most useful signal for ``--debug`` runs.
-        _log_dispatch_status_once()
+        # Skip the call entirely once the log has fired — the function
+        # dedupes internally, but avoiding the call frame on the hot path
+        # is cheaper still.
+        if not is_dispatch_status_logged():
+            _log_dispatch_status_once()
 
         flag = os.environ.get("MCP_MESH_NATIVE_LLM", "").strip().lower()
         # Explicit opt-out wins over SDK availability.
