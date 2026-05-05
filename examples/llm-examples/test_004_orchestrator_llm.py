@@ -29,7 +29,7 @@ class OrchestratorResponse(BaseModel):
         {"capability": "system_analysis", "tags": ["llm", "expert"]},
     ],
     filter_mode="all",
-    provider="claude",
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",
     max_iterations=10,
     system_prompt="""You are a senior orchestrator managing specialist AI agents.

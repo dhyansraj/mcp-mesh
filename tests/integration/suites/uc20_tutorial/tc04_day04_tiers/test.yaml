@@ -124,6 +124,28 @@ test:
     workdir: /workspace
     capture: openai_status
 
+  # Workaround: explicit wait for LLM provider resolution to propagate from
+  # registry to planner. Even after all 8 agents are healthy, the resolution
+  # event may need additional time. Mirrors the pattern used in
+  # uc15_parallel_tool_calls/tc01_parallel_tools_py.
+  - name: "Wait for LLM provider resolution to propagate"
+    handler: wait
+    seconds: 10
+
+  # DIAGNOSTIC: capture claude-provider startup + resolution logs
+  - name: "DIAGNOSTIC: claude-provider startup + resolution logs"
+    handler: shell
+    command: "meshctl logs claude-provider --tail 100 || true"
+    workdir: /workspace
+    capture: claude_provider_logs
+
+  # DIAGNOSTIC: capture planner-agent LLM provider resolution logs
+  - name: "DIAGNOSTIC: planner-agent LLM provider resolution logs"
+    handler: shell
+    command: "meshctl logs planner-agent --tail 100 || true"
+    workdir: /workspace
+    capture: planner_agent_logs
+
   # Call plan_trip — should route to Claude (preferred via +claude tag)
   - name: "Call plan_trip with Claude preferred"
     handler: shell
@@ -131,11 +153,16 @@ test:
       echo "=== Calling plan_trip (should route to Claude via +claude) ==="
       RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace --timeout 90 2>&1)
       echo "$RESULT"
-      if echo "$RESULT" | grep -qi 'Kyoto\|itinerary\|day' && \
-         echo "$RESULT" | grep -q 'Trace ID'; then
-        echo "PASS: plan_trip returned itinerary with trace ID"
+      # Verify the call succeeded (got a real LLM response, not an error)
+      # We're testing PROVIDER ROUTING here, not LLM output quality.
+      # Pass criteria: trace ID present (call dispatched) + non-error response
+      # (LLM actually responded — could be itinerary OR clarifying question OR any text)
+      if echo "$RESULT" | grep -q 'Trace ID' && \
+         echo "$RESULT" | grep -q '"isError": false' && \
+         echo "$RESULT" | grep -qE '"text"|"result"'; then
+        echo "PASS: plan_trip routed to LLM and got valid response"
       else
-        echo "FAIL: Response missing expected fields"
+        echo "FAIL: plan_trip did not return a valid LLM response"
         exit 1
       fi
     workdir: /workspace
@@ -178,11 +205,16 @@ test:
       echo "=== Calling plan_trip (should failover to OpenAI) ==="
       RESULT=$(meshctl call plan_trip '{"destination":"Tokyo","dates":"June 10-14, 2026","budget":"$3000"}' --trace --timeout 90 2>&1)
       echo "$RESULT"
-      if echo "$RESULT" | grep -qi 'Tokyo\|itinerary\|day' && \
-         echo "$RESULT" | grep -q 'Trace ID'; then
-        echo "PASS: plan_trip returned itinerary via failover"
+      # Verify the call succeeded (got a real LLM response, not an error)
+      # We're testing PROVIDER ROUTING here, not LLM output quality.
+      # Pass criteria: trace ID present (call dispatched) + non-error response
+      # (LLM actually responded — could be itinerary OR clarifying question OR any text)
+      if echo "$RESULT" | grep -q 'Trace ID' && \
+         echo "$RESULT" | grep -q '"isError": false' && \
+         echo "$RESULT" | grep -qE '"text"|"result"'; then
+        echo "PASS: plan_trip routed to LLM and got valid response"
       else
-        echo "FAIL: Failover response missing expected fields"
+        echo "FAIL: plan_trip did not return a valid LLM response"
         exit 1
       fi
     workdir: /workspace

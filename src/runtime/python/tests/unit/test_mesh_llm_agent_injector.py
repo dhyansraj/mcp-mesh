@@ -56,7 +56,7 @@ def register_test_llm_function(
         )
 
     if config is None:
-        config = {"filter": {"capability": "document"}, "provider": "claude"}
+        config = {"filter": {"capability": "document"}, "provider": {"capability": "llm", "tags": ["claude"]}}
 
     DecoratorRegistry.register_mesh_llm(
         test_func, config, output_type, "llm", function_id
@@ -126,7 +126,7 @@ class TestProcessLLMTools:
         function_id = "chat_abc123"
         DecoratorRegistry.register_mesh_llm(
             chat,
-            {"filter": {"capability": "document"}, "provider": "claude"},
+            {"filter": {"capability": "document"}, "provider": {"capability": "llm", "tags": ["claude"]}},
             ChatResponse,
             "llm",
             function_id,
@@ -174,14 +174,14 @@ class TestProcessLLMTools:
 
         DecoratorRegistry.register_mesh_llm(
             chat_func,
-            {"filter": {"capability": "document"}, "provider": "claude"},
+            {"filter": {"capability": "document"}, "provider": {"capability": "llm", "tags": ["claude"]}},
             ChatResponse,
             "llm",
             "chat_abc123",
         )
         DecoratorRegistry.register_mesh_llm(
             analyze_func,
-            {"filter": {"capability": "document"}, "provider": "claude"},
+            {"filter": {"capability": "document"}, "provider": {"capability": "llm", "tags": ["claude"]}},
             ChatResponse,
             "llm",
             "analyze_def456",
@@ -308,7 +308,7 @@ class TestCreateInjectionWrapper:
         # Create wrapper first, before processing tools
         wrapper = injector.create_injection_wrapper(test_func, function_id)
 
-        # Update DecoratorRegistry to use the wrapper (simulating what @mesh.llm() does)
+        # Update DecoratorRegistry to use the wrapper (simulating what @mesh.llm(provider={"capability": "llm"}) does)
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
 
         llm_agents = DecoratorRegistry._mesh_llm_agents
@@ -389,7 +389,7 @@ class TestMeshLlmAgentInstantiation:
         config = {
             "filter": {"capability": "document"},
             "filter_mode": "all",
-            "provider": "claude",
+            "provider": {"capability": "llm", "tags": ["claude"]},
             "model": "claude-3-5-sonnet-20241022",
             "max_iterations": 10,
         }
@@ -527,14 +527,14 @@ class TestTopologyUpdates:
 
         DecoratorRegistry.register_mesh_llm(
             chat_func,
-            {"filter": {"capability": "document"}, "provider": "claude"},
+            {"filter": {"capability": "document"}, "provider": {"capability": "llm", "tags": ["claude"]}},
             ChatResponse,
             "llm",
             "chat_abc123",
         )
         DecoratorRegistry.register_mesh_llm(
             analyze_func,
-            {"filter": {"capability": "document"}, "provider": "claude"},
+            {"filter": {"capability": "document"}, "provider": {"capability": "llm", "tags": ["claude"]}},
             ChatResponse,
             "llm",
             "analyze_def456",
@@ -682,7 +682,7 @@ class TestIntegrationWithDecoratorRegistry:
         config = {
             "filter": [{"capability": "doc", "tags": ["pdf"]}],
             "filter_mode": "best_match",
-            "provider": "openai",
+            "provider": {"capability": "llm", "tags": ["openai"]},
             "model": "gpt-4o",
             "max_iterations": 15,
             "system_prompt": "You are helpful",
@@ -695,9 +695,9 @@ class TestIntegrationWithDecoratorRegistry:
         injector = MeshLlmAgentInjector()
         injector.process_llm_tools({"test_func": []})
 
-        # Verify all config fields were captured
+        # Verify all config fields were captured (mesh delegation: provider is dict)
         llm_agent_data = injector._llm_agents[function_id]
-        assert llm_agent_data["config"]["provider"] == "openai"
+        assert llm_agent_data["config"]["provider"] == {"capability": "llm", "tags": ["openai"]}
         assert llm_agent_data["config"]["model"] == "gpt-4o"
         assert llm_agent_data["config"]["max_iterations"] == 15
         assert llm_agent_data["config"]["system_prompt"] == "You are helpful"
@@ -751,7 +751,7 @@ class TestContextExtractionWithTemplates:
 
         function_id = "chat_template_test"
         config = {
-            "provider": "claude",
+            "provider": {"capability": "llm", "tags": ["claude"]},
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
@@ -799,7 +799,7 @@ class TestContextExtractionWithTemplates:
 
         function_id = "chat_ctx_detect"
         config = {
-            "provider": "claude",
+            "provider": {"capability": "llm", "tags": ["claude"]},
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
@@ -853,7 +853,7 @@ class TestContextExtractionWithTemplates:
 
         function_id = "chat_async_ctx"
         config = {
-            "provider": "claude",
+            "provider": {"capability": "llm", "tags": ["claude"]},
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
@@ -899,7 +899,7 @@ class TestContextExtractionWithTemplates:
 
         function_id = "analyze_no_template"
         config = {
-            "provider": "claude",
+            "provider": {"capability": "llm", "tags": ["claude"]},
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": False,  # No template
@@ -943,7 +943,7 @@ class TestContextExtractionWithTemplates:
 
         function_id = "chat_kwargs"
         config = {
-            "provider": "claude",
+            "provider": {"capability": "llm", "tags": ["claude"]},
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
@@ -987,7 +987,7 @@ class TestContextExtractionWithTemplates:
 
         function_id = "chat_positional"
         config = {
-            "provider": "claude",
+            "provider": {"capability": "llm", "tags": ["claude"]},
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
@@ -1036,7 +1036,7 @@ class TestContextExtractionWithTemplates:
 
         function_id = "chat_none_ctx"
         config = {
-            "provider": "claude",
+            "provider": {"capability": "llm", "tags": ["claude"]},
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
@@ -1074,42 +1074,42 @@ class TestTemplateIntegrationInInjector:
 
     @pytest.mark.asyncio
     async def test_end_to_end_template_rendering_with_llm_call(self):
-        """Test: Complete flow from decorator to template rendering in LLM call."""
+        """Test: Complete flow from decorator to template rendering in LLM call.
+
+        Mesh-delegated only — installs an AsyncMock provider_proxy on the
+        agent_data and asserts that the rendered template reaches the
+        provider in the request dict.
+        """
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
         from _mcp_mesh.engine.mesh_llm_agent_injector import MeshLlmAgentInjector
 
-        # Register function with template
+        # Mesh-delegated provider proxy returning a parseable JSON answer.
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": '{"answer": "Response", "confidence": 0.9}',
+        }
+
         async def chat(msg: str, ctx: ChatContext, llm: MeshLlmAgent = None):
-            # Call the LLM agent with the message
-            with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-                mock_completion.return_value = MagicMock(
-                    choices=[
-                        MagicMock(
-                            message=MagicMock(
-                                content='{"answer": "Response", "confidence": 0.9}',
-                                tool_calls=None,
-                            )
-                        )
-                    ]
-                )
+            response = await llm(msg)
 
-                response = await llm(msg)
+            # Verify system prompt contains rendered template inside the
+            # request dict the provider proxy received.
+            call_kwargs = mock_provider_proxy.call_args[1]
+            request_dict = call_kwargs["request"]
+            messages = request_dict["messages"]
+            system_message = next(m for m in messages if m["role"] == "system")
 
-                # Verify system prompt contains rendered template
-                call_kwargs = mock_completion.call_args[1]
-                messages = call_kwargs["messages"]
-                system_message = next(m for m in messages if m["role"] == "system")
+            # Should have rendered template with context
+            assert "Alice" in system_message["content"]
+            assert "Python" in system_message["content"]
 
-                # Should have rendered template with context
-                assert "Alice" in system_message["content"]
-                assert "Python" in system_message["content"]
-
-                return response
+            return response
 
         function_id = "chat_e2e"
         config = {
-            "provider": "claude",
+            "provider": {"capability": "llm", "tags": ["claude"]},
             "model": "claude-3-5-sonnet-20241022",
             "filter": {"capability": "document"},
             "is_template": True,
@@ -1133,6 +1133,11 @@ class TestTemplateIntegrationInInjector:
         }
 
         injector.process_llm_tools(llm_tools)
+
+        # Inject the mock provider proxy into the agent_data so subsequent
+        # _create_llm_agent (per-call template path) wires it through.
+        injector._llm_agents[function_id]["provider_proxy"] = mock_provider_proxy
+        injector._llm_agents[function_id]["vendor"] = "anthropic"
 
         wrapper = injector.create_injection_wrapper(chat, function_id)
 

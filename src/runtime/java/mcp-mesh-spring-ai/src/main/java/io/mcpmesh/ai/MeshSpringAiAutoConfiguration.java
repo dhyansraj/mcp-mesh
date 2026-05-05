@@ -18,7 +18,8 @@ import org.springframework.ai.chat.model.ChatModel;
  * <p>Provides:
  * <ul>
  *   <li>{@link MeshLlmProviderProcessor} - Processes @MeshLlmProvider annotations</li>
- *   <li>{@link SpringAiLlmProvider} - Spring AI integration for LLM calls</li>
+ *   <li>{@link SpringAiLlmProvider} - Spring AI integration used by the
+ *       provider-side {@code @MeshLlmProvider} agent to invoke vendor LLMs</li>
  * </ul>
  */
 @AutoConfiguration

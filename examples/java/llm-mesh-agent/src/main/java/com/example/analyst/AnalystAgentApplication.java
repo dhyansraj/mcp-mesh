@@ -59,14 +59,18 @@ import java.util.Map;
  * # Start the registry
  * meshctl start --registry-only
  *
- * # Start an LLM provider (exposes capability="llm")
- * meshctl start -d examples/llm-provider/claude_provider.py
- * # Or: cd examples/java/llm-provider-agent && mvn spring-boot:run
+ * # Step 1: Generate a provider agent (one-per-vendor, holds the API key)
+ * meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+ *
+ * # Step 2: Start the provider (Python or Java; either works — the consumer
+ * #         discovers via mesh capability/tags)
+ * meshctl start -d ./claude-provider/main.py
+ * # Or for a Java-side provider: cd examples/java/llm-provider-agent && mvn spring-boot:run
  *
  * # Start some data tools (optional, for agentic loop)
  * meshctl start -d examples/data-tools/data_service.py
  *
- * # Run this agent
+ * # Run this consumer (it discovers the provider via mesh)
  * cd examples/java/llm-mesh-agent
  * mvn spring-boot:run
  *

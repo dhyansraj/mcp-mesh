@@ -33,7 +33,6 @@ import static org.junit.jupiter.api.Assertions.*;
  * <ul>
  *   <li>chunks come through from a mocked {@code process_chat_stream}</li>
  *   <li>the request body is wrapped in {@code {request: <MeshLlmRequest>}}</li>
- *   <li>direct (default-interface) providers throw {@link UnsupportedOperationException}</li>
  *   <li>missing-provider state throws {@link IllegalStateException}</li>
  * </ul>
  */
@@ -266,30 +265,6 @@ class MeshLlmAgentProxyStreamTest {
     }
 
     @Test
-    @DisplayName("default interface stream() throws UnsupportedOperationException for direct providers")
-    void defaultInterfaceThrowsUnsupportedOperationForDirect() {
-        // A direct-mode MeshLlmAgent (no override of stream()) should throw the
-        // UnsupportedOperationException with a clear "use mesh delegate" message.
-        // We use an inline anonymous class to simulate a direct-mode agent that
-        // doesn't override stream().
-        MeshLlmAgent directOnlyAgent = new MeshLlmAgent() {
-            @Override public GenerateBuilder request() { throw new UnsupportedOperationException(); }
-            @Override public List<ToolInfo> getAvailableTools() { return List.of(); }
-            @Override public boolean isAvailable() { return true; }
-            @Override public String getProvider() { return "claude"; }
-        };
-
-        UnsupportedOperationException ex = assertThrows(
-            UnsupportedOperationException.class,
-            () -> directOnlyAgent.stream(List.of(MeshLlmAgent.Message.user("hi")))
-        );
-        assertTrue(ex.getMessage().contains("mesh-delegated provider"),
-            "Error message should mention mesh-delegated provider, got: " + ex.getMessage());
-        assertTrue(ex.getMessage().contains("ai.mcpmesh.stream"),
-            "Error message should mention the ai.mcpmesh.stream tag, got: " + ex.getMessage());
-    }
-
-    @Test
     @DisplayName("ignores progress notifications with mismatched progressToken")
     void ignoresMismatchedTokens() throws Exception {
         server.setDispatcher(new okhttp3.mockwebserver.Dispatcher() {
@@ -340,7 +315,6 @@ class MeshLlmAgentProxyStreamTest {
 
         MeshLlmRegistry.LlmConfig config = new MeshLlmRegistry.LlmConfig(
             "user.chatStream",
-            null,                                 // directProvider
             providerSelector,
             1,                                    // maxIterations
             "",                                   // systemPrompt
@@ -352,7 +326,6 @@ class MeshLlmAgentProxyStreamTest {
             false                                 // parallelToolCalls
         );
 
-        assertTrue(config.isMeshDelegation(), "directProvider=null => mesh delegation");
         assertNotNull(config.providerSelector());
         String[] tags = config.providerSelector().tags();
         assertEquals(2, tags.length);

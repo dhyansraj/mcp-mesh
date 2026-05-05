@@ -60,13 +60,17 @@ meshctl start --registry-only
 
 ### 2. Start an LLM Provider
 
-The analyst agent delegates LLM calls to a provider via mesh:
+The analyst agent delegates LLM calls to a provider via mesh.
 
 ```bash
-# Using Python LLM provider
-meshctl start -d examples/llm-provider/claude_provider.py
+# Step 1: Generate a Python provider (one-per-vendor, holds the API key)
+meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
 
-# Or using Java LLM provider
+# Step 2: Start it
+meshctl start -d ./claude-provider/main.py
+
+# Or use a Java-side provider (consumer discovers via mesh capability/tags
+# regardless of provider runtime)
 cd examples/java/llm-provider-agent
 mvn spring-boot:run
 ```

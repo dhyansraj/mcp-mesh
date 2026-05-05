@@ -12,74 +12,25 @@
 
 ## Overview
 
-MCP Mesh provides first-class LLM support for Java/Spring Boot agents through the `@MeshLlm` annotation. Two modes are available:
-
-| Mode              | Annotation                          | API Key Location | Use Case                         |
-| ----------------- | ----------------------------------- | ---------------- | -------------------------------- |
-| **Direct**        | `@MeshLlm(provider = "claude")`     | Local agent      | Single agent, simpler setup      |
-| **Mesh Delegate** | `@MeshLlm(providerSelector = @...)` | Provider agent   | Shared LLM, centralized key mgmt |
-
-## Architecture
-
-### Direct Mode
+MCP Mesh provides first-class LLM support for Java/Spring Boot agents through the `@MeshLlm` annotation. LLM calls are routed through a mesh-registered **provider agent** (`@MeshLlmProvider`); consumers (`@MeshLlm`) never hold the API key.
 
 ```
-User -> Agent -> Spring AI -> Claude API (direct)
-                 (local API key)
+User -> Consumer Agent -> Mesh -> LLM Provider Agent -> Vendor API
+                                  (API key lives here only)
 ```
 
-### Mesh Delegation Mode
+> **Tip**: Bootstrap a provider with
+> `meshctl scaffold llm-provider --vendor claude --runtime java --name claude-provider`
+> and a consumer with
+> `meshctl scaffold llm --vendor claude --runtime java --name analyst-agent`.
 
-```
-User -> Agent -> Mesh -> LLM Provider Agent -> Claude API
-                         (API key here only)
-```
+## @MeshLlm Consumer
 
-## Direct LLM (@MeshLlm with provider)
-
-Use `provider = "claude"` or `provider = "openai"` for direct API calls. Requires the API key set locally.
-
-```java
-import io.mcpmesh.*;
-import io.mcpmesh.types.MeshLlmAgent;
-
-@MeshLlm(
-    provider = "claude",
-    maxIterations = 1,
-    systemPrompt = "You are a helpful, friendly assistant. Keep responses concise.",
-    maxTokens = 1024,
-    temperature = 0.7
-)
-@MeshTool(
-    capability = "chat",
-    description = "Interactive chat with Claude",
-    tags = {"chat", "llm", "java", "direct"}
-)
-public ChatResponse chat(
-    @Param(value = "message", description = "User message") String message,
-    MeshLlmAgent llm
-) {
-    if (llm != null && llm.isAvailable()) {
-        String response = llm.generate(message);
-        return new ChatResponse(message, response, "direct:claude");
-    }
-    return new ChatResponse(message, "LLM unavailable", "fallback");
-}
-```
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-# or
-export OPENAI_API_KEY=sk-...
-```
-
-## Mesh Delegation (@MeshLlm with providerSelector)
-
-Use `providerSelector` to delegate LLM calls to a provider agent in the mesh. No local API key needed.
+Use `providerSelector` to discover the LLM provider in the mesh:
 
 ```java
 @MeshLlm(
-    providerSelector = @Selector(capability = "llm"),
+    providerSelector = @Selector(capability = "llm", tags = {"+claude"}),
     maxIterations = 5,
     systemPrompt = "classpath:prompts/analyst.ftl",
     contextParam = "ctx",
@@ -105,6 +56,9 @@ public AnalysisResult analyze(
         .generate(AnalysisResult.class);
 }
 ```
+
+The provider agent (a separate Spring Boot process declared with
+`@MeshLlmProvider`) holds the vendor API key; the consumer above never does.
 
 ## Fluent Builder API
 
@@ -304,12 +258,12 @@ provider value, dependency, and auth config change.
 
 ### When to use Vertex AI vs AI Studio
 
-| Use case                                              | Pick                                                |
-| ----------------------------------------------------- | --------------------------------------------------- |
-| Quickstart / dev / lowest setup                       | AI Studio (`provider = "gemini"`, `GOOGLE_AI_GEMINI_API_KEY`) |
-| Production with IAM auth, GCP audit logs, VPC-SC      | Vertex AI (`provider = "vertex_ai"`, ADC)           |
-| Need Provisioned Throughput (no capacity 429s)        | Vertex AI                                           |
-| Multi-tenant org-controlled billing                   | Vertex AI                                           |
+| Use case                                              | Pick                                                                                  |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Quickstart / dev / lowest setup                       | AI Studio provider (`model = "gemini/gemini-2.0-flash"`, `GOOGLE_AI_GEMINI_API_KEY`)  |
+| Production with IAM auth, GCP audit logs, VPC-SC      | Vertex AI provider (`model = "vertex_ai/gemini-2.0-flash"`, ADC)                      |
+| Need Provisioned Throughput (no capacity 429s)        | Vertex AI provider                                                                    |
+| Multi-tenant org-controlled billing                   | Vertex AI provider                                                                    |
 
 ### Setup
 
@@ -349,47 +303,45 @@ provider value, dependency, and auth config change.
    export GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json
    ```
 
-4. Use `provider = "vertex_ai"` on `@MeshLlm`:
+4. Run a Java provider with `@MeshLlmProvider`:
 
    ```java
-   @MeshLlm(provider = "vertex_ai", maxTokens = 256, temperature = 0.0)
-   @MeshTool(capability = "geo")
-   public CapitalInfo capitalOf(@Param("country") String country, MeshLlmAgent llm) {
-       return llm.request().user("What is the capital of " + country + "?")
-                 .generate(CapitalInfo.class);
+   @MeshAgent(name = "gemini-provider", port = 9111)
+   @MeshLlmProvider(
+       capability = "llm",
+       tags = {"llm", "gemini", "vertex"},
+       model = "vertex_ai/gemini-2.0-flash"
+   )
+   @SpringBootApplication
+   public class GeminiProviderApplication {
+       public static void main(String[] args) {
+           SpringApplication.run(GeminiProviderApplication.class, args);
+       }
    }
    ```
 
-### Why "vertex_ai" matters
-
-`provider = "gemini"` (or `"google"`) prefers the AI Studio bean
-(`googleAiGeminiChatModel`) when both backends are configured, falling back
-to Vertex AI only if AI Studio is unavailable. This is convenient for users
-who only have one backend, but ambiguous when both are present.
-
-`provider = "vertex_ai"` (or `"vertexai"`) skips that preference and goes
-straight to `vertexAiGeminiChatModel`, throwing a clear error if it's not
-configured.
+   Consumers don't change — they keep their existing
+   `@MeshLlm(providerSelector = @Selector(capability = "llm", tags = {"+gemini"}))`
+   selector. The `vertex_ai/*` model prefix tells `SpringAiLlmProvider` to
+   bind to the IAM-backed `vertexAiGeminiChatModel` bean.
 
 ### Switching backends
 
-Migrate from AI Studio to Vertex AI:
+Migrate from AI Studio to Vertex AI by changing the provider agent's `model`
+string and swapping the Spring AI starter dependency:
 
 ```java
-// before:
-@MeshLlm(provider = "gemini", …)
-// after:
-@MeshLlm(provider = "vertex_ai", …)
+// Provider — before:
+@MeshLlmProvider(model = "gemini/gemini-2.0-flash", capability = "llm", tags = {"llm","gemini"})
+// Provider — after:
+@MeshLlmProvider(model = "vertex_ai/gemini-2.0-flash", capability = "llm", tags = {"llm","gemini","vertex"})
 ```
 
 Swap the dependency in `pom.xml`
 (`spring-ai-starter-model-google-genai` → `spring-ai-starter-model-vertex-ai-gemini`)
 and replace `GOOGLE_AI_GEMINI_API_KEY` with ADC + the
-`spring.ai.vertex.ai.gemini.*` properties shown above.
-
-### Reference example
-
-See `examples/java/vertex-ai-agent/` for a working minimal Spring Boot agent.
+`spring.ai.vertex.ai.gemini.*` properties shown above. Consumer agents are
+unchanged.
 
 ## Complete Example
 

@@ -68,7 +68,7 @@ public class {{ .NamePascal }}Application {
      * @return {{ if eq .ResponseFormat "json" }}Structured response{{ else }}Processing result as text{{ end }}
      */
     @MeshLlm(
-        providerSelector = @Selector({{ if .ProviderTags }}tags = {{ "{" }}{{ range $i, $t := .ProviderTags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ "}" }}{{ else }}capability = "llm"{{ end }}),
+        providerSelector = @Selector(capability = "llm"{{ if .ProviderTags }}, tags = {{ "{" }}{{ range $i, $t := .ProviderTags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }}{{ "}" }}{{ end }}),
         maxIterations = {{ .MaxIterations }},
         systemPrompt = "classpath:prompts/{{ .Name }}.ftl",
         contextParam = "{{ .ContextParam }}",

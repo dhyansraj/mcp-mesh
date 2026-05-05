@@ -9,26 +9,12 @@ import java.lang.annotation.Target;
  * Marks a method as an LLM-powered tool with automatic tool discovery.
  *
  * <p>Methods annotated with {@code @MeshLlm} have access to an injected
- * {@code MeshLlmAgent} that can generate responses using LLM capabilities.
+ * {@code MeshLlmAgent} that can generate responses by routing to an LLM
+ * provider agent in the mesh.
  *
- * <h2>LLM Provider Modes</h2>
- *
- * <h3>Direct Mode (Spring AI)</h3>
- * <p>Uses Spring AI clients directly. Requires appropriate API keys.
- * <pre>{@code
- * @MeshLlm(
- *     provider = "claude",  // or "openai"
- *     maxIterations = 3,
- *     systemPrompt = "You are a helpful assistant."
- * )
- * @MeshTool(capability = "chat")
- * public String chat(@Param("message") String message, MeshLlmAgent llm) {
- *     return llm.generate(message);
- * }
- * }</pre>
- *
- * <h3>Mesh Delegation Mode</h3>
- * <p>Routes to an LLM provider agent in the mesh.
+ * <h2>Mesh Delegation</h2>
+ * <p>The LLM call is always routed to a provider agent in the mesh. Use
+ * {@link #providerSelector()} to pick which provider should serve the request.
  * <pre>{@code
  * @MeshLlm(
  *     providerSelector = @Selector(
@@ -60,28 +46,11 @@ import java.lang.annotation.Target;
 public @interface MeshLlm {
 
     /**
-     * Direct LLM provider name for Spring AI.
+     * Selector for the mesh-delegated LLM provider.
      *
-     * <p>Supported values:
-     * <ul>
-     *   <li>{@code "claude"}, {@code "anthropic"} — Claude via spring-ai-anthropic</li>
-     *   <li>{@code "openai"}, {@code "gpt"} — GPT via spring-ai-openai</li>
-     *   <li>{@code "gemini"}, {@code "google"} — Gemini, prefers AI Studio (spring-ai-google-genai)
-     *       and falls back to Vertex AI if AI Studio not configured</li>
-     *   <li>{@code "vertex_ai"} (or {@code "vertexai"}) — Force Gemini via Vertex AI
-     *       (spring-ai-vertex-ai-gemini), even if AI Studio is also configured. Use
-     *       this when you need IAM auth, Provisioned Throughput, VPC-SC, or
-     *       org-controlled billing.</li>
-     * </ul>
-     *
-     * <p>Leave empty to use {@link #providerSelector()} for mesh delegation.
-     */
-    String provider() default "";
-
-    /**
-     * Selector for mesh-delegated LLM provider.
-     *
-     * <p>Used when {@link #provider()} is empty.
+     * <p>Required. Use tags such as {@code "+claude"} or {@code "+openai"} to
+     * pick a specific provider when multiple are registered for the
+     * {@code "llm"} capability.
      */
     Selector providerSelector() default @Selector;
 

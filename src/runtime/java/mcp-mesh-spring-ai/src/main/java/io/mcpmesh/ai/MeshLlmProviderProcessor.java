@@ -326,7 +326,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
         // Extract model_params (contains output_schema for mesh delegation)
         Map<String, Object> modelParams = (Map<String, Object>) requestData.get("model_params");
 
-        // Extract output_schema from model_params (mesh delegation) or directly (direct mode)
+        // Extract output_schema from model_params (preferred), falling back to top-level for legacy callers
         Map<String, Object> outputSchemaData = null;
         String outputTypeName = null;
         if (modelParams != null) {

@@ -24,8 +24,7 @@ public class MeshLlmRegistry {
      */
     public record LlmConfig(
         String functionId,
-        String directProvider,      // For direct mode (e.g., "claude")
-        Selector providerSelector,  // For mesh delegation mode
+        Selector providerSelector,  // For mesh delegation
         int maxIterations,
         String systemPrompt,
         String contextParam,
@@ -34,14 +33,7 @@ public class MeshLlmRegistry {
         int maxTokens,
         double temperature,
         boolean parallelToolCalls
-    ) {
-        /**
-         * Check if this is mesh delegation mode.
-         */
-        public boolean isMeshDelegation() {
-            return directProvider == null || directProvider.isEmpty();
-        }
-    }
+    ) {}
 
     // Registry: functionId -> LlmConfig
     private final Map<String, LlmConfig> configsByFunctionId = new ConcurrentHashMap<>();
@@ -60,10 +52,25 @@ public class MeshLlmRegistry {
         String functionId = targetClass.getName() + "." + method.getName();
         String methodKey = getMethodKey(method);
 
+        // v2: direct LLM mode is gone — every @MeshLlm consumer must point
+        // providerSelector at a registered @MeshLlmProvider. An empty selector
+        // would silently skip llmProvider enrichment in MeshAutoConfiguration
+        // and the consumer would fail at first generate() with no upstream
+        // bound. Catch the misconfig at registration time so the failure mode
+        // is loud and actionable.
+        Selector selector = annotation.providerSelector();
+        if (selector == null || selector.capability() == null || selector.capability().isEmpty()) {
+            throw new IllegalStateException(
+                "@MeshLlm on " + functionId + " requires providerSelector with a non-empty capability(). "
+                + "Direct LLM mode was removed in v2 — every consumer must specify a provider via "
+                + "@Selector(capability=\"llm\", tags={\"+claude\"}). "
+                + "See docs/java/llm/index.md for the migration."
+            );
+        }
+
         LlmConfig config = new LlmConfig(
             functionId,
-            annotation.provider().isEmpty() ? null : annotation.provider(),
-            annotation.providerSelector(),
+            selector,
             annotation.maxIterations(),
             annotation.systemPrompt(),
             annotation.contextParam(),
@@ -77,8 +84,7 @@ public class MeshLlmRegistry {
         configsByFunctionId.put(functionId, config);
         configsByMethod.put(methodKey, config);
 
-        log.info("Registered @MeshLlm: {} (mode={})",
-            functionId, config.isMeshDelegation() ? "mesh" : "direct:" + config.directProvider());
+        log.info("Registered @MeshLlm: {} (mesh-delegated)", functionId);
     }
 
     /**

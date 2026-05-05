@@ -20,7 +20,7 @@
  * server.addTool(mesh.llm({
  *   name: "assist",
  *   capability: "smart_assistant",
- *   provider: "claude",
+ *   provider: { capability: "llm", tags: ["+claude"] },
  *   systemPrompt: "file://prompts/assistant.hbs",
  *   filter: [{ capability: "calculator" }],
  *   returns: AssistResponse,
@@ -410,6 +410,9 @@ export function llm<
 
 /**
  * Build JsLlmAgentSpec for Rust core from LLM tool configs.
+ *
+ * Mesh-delegation only — provider is always serialized as the
+ * ``{ capability, tags? }`` object spec (no ``direct:`` wrapper).
  */
 export function buildLlmAgentSpecs(): Array<{
   functionId: string;
@@ -428,21 +431,8 @@ export function buildLlmAgentSpecs(): Array<{
   }> = [];
 
   for (const [, config] of registry.getAllConfigs()) {
-    // Apply MESH_LLM_* env var overrides (matches Python SDK behavior)
-    // ENV > config > defaults
-
-    // MESH_LLM_PROVIDER: Override provider for direct mode (not mesh delegation)
-    let resolvedProvider: string | object;
-    if (typeof config.provider === "string") {
-      resolvedProvider = process.env.MESH_LLM_PROVIDER || config.provider;
-    } else {
-      resolvedProvider = config.provider; // mesh delegation - no override
-    }
-
-    const providerJson =
-      typeof resolvedProvider === "string"
-        ? JSON.stringify({ direct: resolvedProvider })
-        : JSON.stringify(resolvedProvider);
+    // Mesh-delegation spec — serialize {capability, tags?} verbatim
+    const providerJson = JSON.stringify(config.provider);
 
     // Serialize filter to JSON if present
     const filterJson = config.filter ? JSON.stringify(config.filter) : undefined;
@@ -538,10 +528,7 @@ export function getLlmToolMetadata(toolName: string): {
 
   return {
     llmFilter: config.filter ? JSON.stringify(config.filter) : undefined,
-    llmProvider:
-      typeof config.provider === "string"
-        ? config.provider
-        : JSON.stringify(config.provider),
+    llmProvider: JSON.stringify(config.provider),
   };
 }
 

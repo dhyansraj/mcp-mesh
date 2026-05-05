@@ -83,10 +83,10 @@ MCP Mesh is the only framework with **Distributed Dynamic Dependency Injection**
 ### 2. Decorators That Do Everything
 
 ```python
-@mesh.agent(name="my-agent", port=8080)      # Register with mesh
-@mesh.tool(capability="process")              # Expose as callable tool
-@mesh.llm(provider="anthropic")               # Add LLM capabilities
-@mesh.route("/api/endpoint")                  # REST API endpoint
+@mesh.agent(name="my-agent", port=8080)                      # Register with mesh
+@mesh.tool(capability="process")                              # Expose as callable tool
+@mesh.llm(provider={"capability": "llm", "tags": ["+claude"]}) # Add LLM capabilities
+@mesh.route("/api/endpoint")                                  # REST API endpoint
 ```
 
 ### 3. Automatic Dependency Injection

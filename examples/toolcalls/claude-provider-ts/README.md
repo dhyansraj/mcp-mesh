@@ -32,7 +32,7 @@ Other agents can use this provider via `mesh.llm()`:
 server.addTool(
   mesh.llm({
     name: "my_tool",
-    provider: { capability: "llm", tags: ["claude"] },
+    provider: { capability: "llm", tags: ["+claude"] },
     // ... rest of config
   }),
 );

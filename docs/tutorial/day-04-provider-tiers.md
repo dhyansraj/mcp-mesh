@@ -67,7 +67,7 @@ Day 3. Same decorator, same zero-code body, different model string.
 ### Scaffold the provider
 
 ```shell
-$ meshctl scaffold --name openai-provider --agent-type llm-provider --model openai/gpt-4o-mini --port 9108
+$ meshctl scaffold llm-provider --vendor openai --runtime python --name openai-provider --port 9108
 ```
 
 Replace the generated `main.py` with:

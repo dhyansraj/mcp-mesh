@@ -237,9 +237,7 @@ Intent Agent declares LLM dependency using preference tags:
 
 ```python
 @mesh.llm(
-    capability="llm",
-    description="LLM for intent understanding",
-    tags=["+claude"],  # Prefer Claude, but accept any LLM if unavailable
+    provider={"capability": "llm", "tags": ["+claude"]},  # Prefer Claude, accept any LLM
 )
 ```
 

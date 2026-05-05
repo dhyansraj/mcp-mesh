@@ -403,26 +403,21 @@ export interface ToolMeta {
 
 /**
  * LLM provider specification.
- * Can be a direct LiteLLM provider string or mesh delegation config.
+ * Mesh delegation only — describes the capability/tag filter used to
+ * discover an ``@mesh.llm_provider`` in the mesh.
  *
  * @example
  * ```typescript
- * // Direct LiteLLM provider
- * provider: "claude"
- * provider: "openai"
- *
  * // Mesh delegation (discover LLM provider via mesh)
  * provider: { capability: "llm", tags: ["+claude"] }
  * ```
  */
-export type LlmProviderSpec =
-  | string // Direct LiteLLM provider (e.g., "claude", "openai")
-  | {
-      /** Capability name to discover in mesh */
-      capability: string;
-      /** Tags for filtering (e.g., ["+claude", "-deprecated"]) */
-      tags?: string[];
-    };
+export type LlmProviderSpec = {
+  /** Capability name to discover in mesh */
+  capability: string;
+  /** Tags for filtering (e.g., ["+claude", "-deprecated"]) */
+  tags?: string[];
+};
 
 /**
  * LLM filter specification for tool access.
@@ -454,7 +449,7 @@ export interface LlmMeta {
   toolCalls: LlmToolCall[];
   /** Model used for generation */
   model: string;
-  /** Provider used (litellm provider name or mesh agent ID) */
+  /** Provider used (e.g., ``mesh:<endpoint>`` or ``mesh:<capability>``) */
   provider: string;
 }
 
@@ -582,7 +577,7 @@ export interface MeshLlmConfig<TParams extends z.ZodType, TReturns extends z.Zod
   version?: string;
 
   // LLM Configuration
-  /** LLM provider - direct string (LiteLLM) or mesh delegation object */
+  /** LLM provider — mesh-delegation spec (capability + tag filter) */
   provider: LlmProviderSpec;
   /** Model override (e.g., "anthropic/claude-sonnet-4-5") */
   model?: string;
@@ -603,7 +598,7 @@ export interface MeshLlmConfig<TParams extends z.ZodType, TReturns extends z.Zod
   /** Filter mode: "all" (union), "best_match" (single best), "*" (all tools) */
   filterMode?: LlmFilterMode;
 
-  // LiteLLM parameters
+  // Generation parameters (forwarded to the mesh-delegated provider)
   /** Maximum tokens to generate */
   maxOutputTokens?: number;
   /** Sampling temperature */
@@ -715,10 +710,6 @@ export interface LlmAgent<T = string> {
    *   },
    * }));
    * ```
-   *
-   * **Mesh-delegate ONLY:** Direct providers (LiteLLM, Vercel) are not
-   * supported in this SDK release; ``stream()`` throws when called on an
-   * agent without a mesh provider.
    *
    * @param message - User message (string or multi-turn array)
    * @param options - Same runtime overrides as the callable form

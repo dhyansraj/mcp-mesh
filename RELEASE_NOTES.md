@@ -1,5 +1,53 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.4.1...v2.0.0)
+
+## v2.0.0 (unreleased)
+
+Single-mode LLM architecture (#859). All `@mesh.llm` / `mesh.llm()` /
+`@MeshLlm` consumers now route through a mesh-registered LLM provider agent
+(`@mesh.llm_provider` / `addLlmProvider` / `@MeshLlmProvider`). API keys live
+on the provider, never on consumers, and providers can be tagged, swapped,
+and load-balanced like any other capability.
+
+### Migration (one-shot)
+
+1. Run one provider agent per vendor:
+   ```bash
+   meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+   meshctl scaffold llm-provider --vendor openai --runtime python --name openai-provider
+   ```
+2. Update consumers to use the provider selector:
+   ```python
+   @mesh.llm(provider={"capability": "llm", "tags": ["+claude"]})
+   ```
+   ```typescript
+   mesh.llm({ provider: { capability: "llm", tags: ["+claude"] } })
+   ```
+   ```java
+   @MeshLlm(providerSelector = @Selector(capability = "llm", tags = {"+claude"}))
+   ```
+3. Move `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_*` env vars from
+   consumer agent processes onto the matching provider agent process.
+
+### Removed
+
+- `@mesh.llm(provider="claude" | "openai", model=...)` (Python) — use
+  `provider={"capability": "llm", "tags": [...]}`
+- `@MeshLlm(provider = "claude" | "openai" | "vertex_ai")` (Java) — use
+  `providerSelector = @Selector(...)`
+- `MESH_LLM_PROVIDER` and `MESH_LLM_MODEL` env vars (consumer-side overrides
+  no longer apply; route to a different provider instead)
+- `examples/java/llm-direct-agent/` and other direct-mode example folders
+
+### Changed
+
+- **`@MeshLlm` `maxIterations` default lowered from 5 to 1** (Java). After v2,
+  the agentic loop is opt-in: a single LLM round-trip is the safe default for
+  consumers that don't actually need tool calling. Consumers that rely on
+  multi-turn tool use must set `maxIterations` explicitly (e.g.
+  `@MeshLlm(providerSelector = ..., maxIterations = 5)`).
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.4.0...v1.4.1)
 
 ## v1.4.1 (2026-04-28)

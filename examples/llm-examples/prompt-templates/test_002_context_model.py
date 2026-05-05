@@ -42,7 +42,7 @@ class AnalysisResult(BaseModel):
 @mesh.llm(
     system_prompt="file://prompts/analyst.jinja2",
     filter={"tags": ["system"]},  # Filter for system tools
-    provider="claude",
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",
     context_param="analysis_ctx",  # Explicit context parameter
 )

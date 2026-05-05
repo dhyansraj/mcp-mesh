@@ -5,7 +5,7 @@ streaming wrappers.
 The decoration chain on a streaming LLM tool is:
 
     @app.tool()
-    @mesh.llm(...)       # outer
+    @mesh.llm(provider={"capability": "llm"}, ...)       # outer
     @mesh.tool(...)      # inner (runs first; the result is what @mesh.llm sees)
     async def chat(prompt: str, llm: MeshLlmAgent) -> mesh.Stream[str]: ...
 
@@ -119,7 +119,7 @@ class TestMeshLlmPreservesStreamCtx:
         and dry-run paths never hit ``stream()``.
         """
 
-        @mesh.llm(provider="claude", model="anthropic/claude-sonnet-4-5")
+        @mesh.llm(provider={"capability": "llm", "tags": ["claude"]}, model="anthropic/claude-sonnet-4-5")
         @mesh.tool(capability="chat-stream-output-type-test")
         async def chat(
             prompt: str,
@@ -137,7 +137,7 @@ class TestMeshLlmPreservesStreamCtx:
     def test_mesh_llm_only_stream_str_normalizes_output_type_to_str(self):
         """Same normalization without a ``@mesh.tool`` layer underneath."""
 
-        @mesh.llm(provider="claude", model="anthropic/claude-sonnet-4-5")
+        @mesh.llm(provider={"capability": "llm", "tags": ["claude"]}, model="anthropic/claude-sonnet-4-5")
         async def chat(
             prompt: str,
             llm: mesh.MeshLlmAgent = None,
@@ -158,7 +158,7 @@ class TestMeshLlmPreservesStreamCtx:
         class Reply(BaseModel):
             text: str
 
-        @mesh.llm(provider="claude", model="anthropic/claude-sonnet-4-5")
+        @mesh.llm(provider={"capability": "llm", "tags": ["claude"]}, model="anthropic/claude-sonnet-4-5")
         async def chat(
             prompt: str,
             llm: mesh.MeshLlmAgent = None,

@@ -413,18 +413,23 @@ tools); only the auth transport and env var names differ.
 `GOOGLE_APPLICATION_CREDENTIALS` (or `gcloud auth application-default login`)
 is the same across all three.
 
-#### Python — model prefix
+#### Python — provider model prefix
+
+Run a `@mesh.llm_provider` agent with the `vertex_ai/*` model string:
 
 ```python
-@mesh.llm(
-    provider={"capability": "llm", "tags": ["gemini"]},
+@mesh.llm_provider(
+    capability="llm",
+    tags=["llm", "gemini", "vertex"],
     model="vertex_ai/gemini-2.0-flash",
 )
-async def my_tool(...): ...
+def gemini_provider(): pass
 ```
 
-The Python runtime routes `vertex_ai/*` through the same `GeminiHandler` as
-`gemini/*`, but LiteLLM picks the Vertex AI transport based on the prefix.
+Consumers don't change — they keep their existing
+`provider={"capability": "llm", "tags": ["+gemini"]}` selector. The Python
+runtime routes `vertex_ai/*` through the same `GeminiHandler` as `gemini/*`,
+but LiteLLM picks the Vertex AI transport based on the prefix.
 
 Install the `vertex` extra (adds `google-auth`):
 
@@ -461,12 +466,21 @@ are required — the SDK throws a `LoadSettingError` on the first call if
 either is unset (no project auto-discovery from ADC, no default location).
 Common location values: `us-central1`, `global`.
 
-#### Java — `provider = "vertex_ai"`
+#### Java — `@MeshLlmProvider` with the Vertex AI starter
+
+Run a Java provider agent with `@MeshLlmProvider`. The Spring AI Vertex AI
+starter selects the IAM-backed `vertexAiGeminiChatModel` bean automatically
+when present:
 
 ```java
-@MeshLlm(provider = "vertex_ai", …)
-@MeshTool(capability = "…")
-public MyResult myTool(@Param("…") String input, MeshLlmAgent llm) { … }
+@MeshAgent(name = "gemini-provider", port = 9111)
+@MeshLlmProvider(
+    capability = "llm",
+    tags = {"llm", "gemini", "vertex"},
+    model = "vertex_ai/gemini-2.0-flash"
+)
+@SpringBootApplication
+public class GeminiProviderApplication { … }
 ```
 
 Add the Vertex AI Spring AI starter to your `pom.xml` (mesh's
@@ -490,20 +504,17 @@ binding can populate from env vars):
 | `spring.ai.vertex.ai.gemini.location`           | `SPRING_AI_VERTEX_AI_GEMINI_LOCATION`             |
 | `spring.ai.vertex.ai.gemini.chat.options.model` | `SPRING_AI_VERTEX_AI_GEMINI_CHAT_OPTIONS_MODEL`   |
 
-`provider = "vertex_ai"` is significant: with just `provider = "gemini"`,
-SpringAiLlmProvider prefers the AI Studio bean (`googleAiGeminiChatModel`)
-when both backends are configured; `"vertex_ai"` forces the IAM path.
-
 #### Same Code, Two Backends
 
-The same agent code works against AI Studio _or_ Vertex AI by changing only
-the model prefix / provider value and the auth config — no other code changes:
+The provider agent's `model` string (and its auth config) is the only thing
+that changes between AI Studio and Vertex AI. Consumer agents keep the same
+`@mesh.llm` / `mesh.llm()` / `@MeshLlm` selector regardless of backend:
 
 |                | AI Studio                                  | Vertex AI                                                          |
 | -------------- | ------------------------------------------ | ------------------------------------------------------------------ |
-| Python         | `model="gemini/gemini-2.0-flash"`          | `model="vertex_ai/gemini-2.0-flash"`                               |
-| TypeScript     | `model: "gemini/gemini-2.0-flash"`         | `model: "vertex_ai/gemini-2.0-flash"`                              |
-| Java           | `@MeshLlm(provider = "gemini")`            | `@MeshLlm(provider = "vertex_ai")`                                 |
+| Python provider | `model="gemini/gemini-2.0-flash"`          | `model="vertex_ai/gemini-2.0-flash"`                               |
+| TypeScript provider | `model: "gemini/gemini-2.0-flash"`     | `model: "vertex_ai/gemini-2.0-flash"`                              |
+| Java provider   | `model = "gemini/gemini-2.0-flash"`        | `model = "vertex_ai/gemini-2.0-flash"`                             |
 | Auth env       | `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` / `GOOGLE_AI_GEMINI_API_KEY` | `GOOGLE_APPLICATION_CREDENTIALS` (ADC)        |
 
 #### Provisioned Throughput
@@ -512,15 +523,17 @@ GCP Provisioned Throughput is a Vertex AI account-side feature and requires
 no mesh configuration — once your project has a PT reservation for the
 target model, Vertex routes your calls through it automatically.
 
-### LLM Agent Overrides
+### LLM Consumer Overrides
 
 ```bash
-# Override LLM provider at runtime
-export MESH_LLM_PROVIDER=openai          # claude, openai, anthropic
-export MESH_LLM_MODEL=gpt-4o
+# Iteration cap and tool-filter mode for @mesh.llm consumers
 export MESH_LLM_MAX_ITERATIONS=5
-export MESH_LLM_FILTER_MODE=all          # all, include, exclude
+export MESH_LLM_FILTER_MODE=all          # all, best_match, *
 ```
+
+LLM provider/model is selected by routing to a `@mesh.llm_provider` agent in the
+mesh — change the consumer's `provider={...}` selector or run a different
+provider agent. There is no consumer-side env var that bypasses mesh routing.
 
 ### LLM Timeouts
 
@@ -531,7 +544,7 @@ export MESH_PROVIDER_TIMEOUT_MS=300000
 # Individual tool timeout (TypeScript, default: 30000ms)
 export MESH_TOOL_TIMEOUT_MS=30000
 
-# LiteLLM proxy settings (Python)
+# LiteLLM proxy settings (Python provider agents)
 export LITELLM_URL=http://localhost:4000
 export LITELLM_TIMEOUT_MS=300000
 ```

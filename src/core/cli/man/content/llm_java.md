@@ -292,22 +292,22 @@ Uses LiteLLM model format in `@MeshLlmProvider`:
 The Java runtime supports Gemini via Google Cloud Vertex AI as an
 alternative to AI Studio. Same model family, same `GeminiHandler`, same
 HINT-mode prompt shaping for structured output with tools — only the
-provider value, dependency, and auth config change.
+provider's `model` string, dependency, and auth config change.
 
 ### When to use Vertex AI vs AI Studio
 
 | Use case                                              | Pick                                                |
 | ----------------------------------------------------- | --------------------------------------------------- |
-| Quickstart / dev / lowest setup                       | AI Studio (`provider = "gemini"`, `GOOGLE_AI_GEMINI_API_KEY`) |
-| Production with IAM auth, GCP audit logs, VPC-SC      | Vertex AI (`provider = "vertex_ai"`, ADC)           |
+| Quickstart / dev / lowest setup                       | AI Studio (`gemini/<model>`, `GOOGLE_AI_GEMINI_API_KEY`) |
+| Production with IAM auth, GCP audit logs, VPC-SC      | Vertex AI (`vertex_ai/<model>`, ADC)                |
 | Need Provisioned Throughput (no capacity 429s)        | Vertex AI                                           |
 | Multi-tenant org-controlled billing                   | Vertex AI                                           |
 
-### Setup
+### Setup (Vertex AI provider agent)
 
-1. Add the Vertex AI Spring AI starter to your `pom.xml` (mesh's
-   `mcp-mesh-spring-ai` does **not** pull it in by default — it's optional
-   so non-Vertex users don't drag in `google-cloud-aiplatform`):
+1. Add the Vertex AI Spring AI starter to your provider's `pom.xml`
+   (mesh's `mcp-mesh-spring-ai` does **not** pull it in by default — it's
+   optional so non-Vertex users don't drag in `google-cloud-aiplatform`):
 
    ```xml
    <dependency>
@@ -341,10 +341,26 @@ provider value, dependency, and auth config change.
    export GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json
    ```
 
-4. Use `provider = "vertex_ai"` on `@MeshLlm`:
+4. Use the `vertex_ai/<model>` prefix on `@MeshLlmProvider`:
 
    ```java
-   @MeshLlm(provider = "vertex_ai", maxTokens = 256, temperature = 0.0)
+   @MeshAgent(name = "gemini-vertex-provider", port = 9111)
+   @MeshLlmProvider(
+       model = "vertex_ai/gemini-2.0-flash",
+       capability = "llm",
+       tags = {"llm", "gemini", "vertex"}
+   )
+   @SpringBootApplication
+   public class GeminiVertexProviderApplication { … }
+   ```
+
+   Consumers select this provider through mesh delegation:
+
+   ```java
+   @MeshLlm(
+       providerSelector = @Selector(capability = "llm", tags = {"vertex"}),
+       maxTokens = 256, temperature = 0.0
+   )
    @MeshTool(capability = "geo")
    public CapitalInfo capitalOf(@Param("country") String country, MeshLlmAgent llm) {
        return llm.request().user("What is the capital of " + country + "?")
@@ -352,36 +368,22 @@ provider value, dependency, and auth config change.
    }
    ```
 
-### Why "vertex_ai" matters
-
-`provider = "gemini"` (or `"google"`) prefers the AI Studio bean
-(`googleAiGeminiChatModel`) when both backends are configured, falling back
-to Vertex AI only if AI Studio is unavailable. This is convenient for users
-who only have one backend, but ambiguous when both are present.
-
-`provider = "vertex_ai"` (or `"vertexai"`) skips that preference and goes
-straight to `vertexAiGeminiChatModel`, throwing a clear error if it's not
-configured.
-
 ### Switching backends
 
-Migrate from AI Studio to Vertex AI:
+Migrate from AI Studio to Vertex AI by updating only the provider agent:
 
 ```java
 // before:
-@MeshLlm(provider = "gemini", …)
+@MeshLlmProvider(model = "gemini/gemini-2.0-flash", …)
 // after:
-@MeshLlm(provider = "vertex_ai", …)
+@MeshLlmProvider(model = "vertex_ai/gemini-2.0-flash", …)
 ```
 
 Swap the dependency in `pom.xml`
 (`spring-ai-starter-model-google-genai` → `spring-ai-starter-model-vertex-ai-gemini`)
 and replace `GOOGLE_AI_GEMINI_API_KEY` with ADC + the
-`spring.ai.vertex.ai.gemini.*` properties shown above.
-
-### Reference example
-
-See `examples/java/vertex-ai-agent/` for a working minimal Spring Boot agent.
+`spring.ai.vertex.ai.gemini.*` properties shown above. Consumer agents
+keep the same `@MeshLlm(providerSelector = …)` selector.
 
 ## Complete Example
 

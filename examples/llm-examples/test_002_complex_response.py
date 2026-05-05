@@ -43,7 +43,7 @@ class AnalysisResult(BaseModel):
 @app.tool()
 @mesh.llm(
     filter=None,  # No tools
-    provider="claude",
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",
     max_iterations=5,
     system_prompt=(

@@ -160,11 +160,9 @@ Pre-flight checks in `chat_endpoint` fire BEFORE `StreamingResponse` is built, s
 
 Both patterns are valid — pick the one that matches the error model. If only mid-stream errors matter, the simpler `async def ... yield` form is fine; if pre-flight failures must be visible to non-SSE clients via HTTP status, use the coroutine-returns-generator pattern.
 
-## Direct vs mesh-delegate streaming
+## Provider-side streaming resolution
 
-`MeshLlmAgent.stream()` works in both modes. **Direct mode** (consumer-supplied LiteLLM call) streams chunks straight from the vendor SDK. **Mesh-delegate mode** (zero-code `@mesh.llm_provider`) streams through the provider's auto-generated `process_chat_stream` tool — the provider runs the agentic loop, the consumer just iterates chunks.
-
-The two modes share the same author surface; the resolver picks the right variant based on the consumer's return type:
+`MeshLlmAgent.stream()` always routes through a mesh-registered `@mesh.llm_provider` agent. The provider runs the agentic loop and the consumer iterates chunks via the auto-generated `process_chat_stream` tool. The resolver picks the right provider tool variant based on the consumer's return type:
 
 | Consumer return type | Resolver matches | Provider tool used |
 |----------------------|------------------|--------------------|
@@ -202,7 +200,7 @@ from fastmcp import FastMCP
 app = FastMCP("Chatbot")
 
 @app.tool()
-@mesh.llm(provider="claude", model="anthropic/claude-sonnet-4-5")
+@mesh.llm(provider={"capability": "llm", "tags": ["+claude"]})
 @mesh.tool(capability="chat")
 async def chat(prompt: str, llm: mesh.MeshLlmAgent = None) -> mesh.Stream[str]:
     async for chunk in llm.stream(prompt):

@@ -59,18 +59,20 @@ def make_tool_call_mock(id: str, name: str, arguments: str):
     return tool_call
 
 
-def make_test_config(
-    provider: str = "claude",
-    model: str = "claude-3-5-sonnet-20241022",
-    api_key: str = "test-key",
+def make_test_config(provider: Optional[dict] = None,
+    model: Optional[str] = None,
     max_iterations: int = 10,
     system_prompt: Optional[str] = None,
 ) -> LLMConfig:
-    """Create LLMConfig for testing."""
+    """Create LLMConfig for testing (mesh-delegated only).
+
+    Direct-LiteLLM mode was removed in v2 — the provider is always a dict
+    describing the upstream @mesh.llm_provider filter. Default uses a
+    capability/tag pair that matches what the integration suites use.
+    """
     return LLMConfig(
-        provider=provider,
+        provider=provider if provider is not None else {"capability": "llm", "tags": ["claude"]},
         model=model,
-        api_key=api_key,
         max_iterations=max_iterations,
         system_prompt=system_prompt,
     )
@@ -84,10 +86,7 @@ class TestMeshLlmAgentInitialization:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
+            config=make_test_config(model="claude-3-5-sonnet-20241022",
                 max_iterations=10,
                 system_prompt="You are a helpful assistant.",
             ),
@@ -95,7 +94,9 @@ class TestMeshLlmAgentInitialization:
             output_type=ChatResponse,
         )
 
-        assert agent.provider == "claude"
+        # Provider is always a dict in v2 (mesh delegation only).
+        assert isinstance(agent.provider, dict)
+        assert agent.provider.get("capability") == "llm"
         assert agent.model == "claude-3-5-sonnet-20241022"
         assert agent.max_iterations == 10
         assert agent.output_type == ChatResponse
@@ -112,10 +113,7 @@ class TestMeshLlmAgentInitialization:
         tools = [mock_tool_proxy]
 
         agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
+            config=make_test_config(model="claude-3-5-sonnet-20241022",
                 max_iterations=10,
             ),
             filtered_tools=tools,
@@ -130,10 +128,7 @@ class TestMeshLlmAgentInitialization:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
+            config=make_test_config(model="claude-3-5-sonnet-20241022",
                 max_iterations=10,
                 system_prompt="You are a helpful assistant.",
             ),
@@ -148,10 +143,7 @@ class TestMeshLlmAgentInitialization:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
+            config=make_test_config(model="claude-3-5-sonnet-20241022",
                 max_iterations=10,
                 system_prompt="Original prompt",
             ),
@@ -161,895 +153,6 @@ class TestMeshLlmAgentInitialization:
 
         agent.set_system_prompt("You are an expert analyst.")
         assert agent.system_prompt == "You are an expert analyst."
-
-
-class TestMeshLlmAgentHappyPath:
-    """Test successful agentic loop scenarios."""
-
-    @pytest.mark.asyncio
-    async def test_simple_response_without_tools(self):
-        """Test simple LLM response without tool usage."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[],
-            output_type=ChatResponse,
-        )
-
-        # Mock LiteLLM completion to return final response
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content='{"answer": "Hello!", "confidence": 0.95, "sources": []}',
-                            tool_calls=None,
-                        )
-                    )
-                ]
-            )
-
-            response = await agent("Say hello")
-
-            assert isinstance(response, ChatResponse)
-            assert response.answer == "Hello!"
-            assert response.confidence == 0.95
-            mock_completion.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_agentic_loop_with_single_tool_call(self):
-        """Test agentic loop with one tool call."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-
-        # Create mock tool proxy
-        mock_tool_proxy = AsyncMock()
-        mock_tool_proxy.name = "extract_pdf"
-        mock_tool_proxy.call_tool = AsyncMock(return_value={"text": "PDF content here"})
-        mock_tool_proxy.description = "Extract text from PDF"
-        mock_tool_proxy.input_schema = {
-            "type": "object",
-            "properties": {"file_path": {"type": "string"}},
-        }
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[mock_tool_proxy],
-            tool_proxies={"extract_pdf": mock_tool_proxy},
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            # First call: LLM wants to use tool
-            tool_call = MagicMock()
-            tool_call.id = "call_123"
-            tool_call.function.name = "extract_pdf"
-            tool_call.function.arguments = '{"file_path": "/test.pdf"}'
-
-            # Second call: LLM returns final response
-            mock_completion.side_effect = [
-                MagicMock(
-                    choices=[
-                        MagicMock(message=MagicMock(content="", tool_calls=[tool_call]))
-                    ]
-                ),
-                MagicMock(
-                    choices=[
-                        MagicMock(
-                            message=MagicMock(
-                                content='{"answer": "The PDF contains: PDF content here", "confidence": 0.9, "sources": ["/test.pdf"]}',
-                                tool_calls=None,
-                            )
-                        )
-                    ]
-                ),
-            ]
-
-            response = await agent("Analyze /test.pdf")
-
-            assert isinstance(response, ChatResponse)
-            assert "PDF content here" in response.answer
-            assert response.confidence == 0.9
-            assert "/test.pdf" in response.sources
-            assert mock_completion.call_count == 2
-            mock_tool_proxy.call_tool.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_agentic_loop_with_multiple_tool_calls(self):
-        """Test agentic loop with multiple sequential tool calls."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-
-        # Create multiple mock tools
-        pdf_tool = AsyncMock()
-        pdf_tool.name = "extract_pdf"
-        pdf_tool.call_tool = AsyncMock(return_value={"text": "PDF content"})
-        pdf_tool.description = "Extract text from PDF"
-        pdf_tool.input_schema = {"type": "object"}
-
-        search_tool = AsyncMock()
-        search_tool.name = "web_search"
-        search_tool.call_tool = AsyncMock(
-            return_value={"results": ["Result 1", "Result 2"]}
-        )
-        search_tool.description = "Search the web"
-        search_tool.input_schema = {"type": "object"}
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[pdf_tool, search_tool],
-            tool_proxies={"extract_pdf": pdf_tool, "web_search": search_tool},
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            # Simulate: tool call -> tool call -> final response
-            mock_completion.side_effect = [
-                # First: use PDF tool
-                MagicMock(
-                    choices=[
-                        MagicMock(
-                            message=MagicMock(
-                                content="",
-                                tool_calls=[
-                                    make_tool_call_mock("call_1", "extract_pdf", "{}")
-                                ],
-                            )
-                        )
-                    ]
-                ),
-                # Second: use search tool
-                MagicMock(
-                    choices=[
-                        MagicMock(
-                            message=MagicMock(
-                                content="",
-                                tool_calls=[
-                                    make_tool_call_mock(
-                                        "call_2", "web_search", '{"query": "test"}'
-                                    )
-                                ],
-                            )
-                        )
-                    ]
-                ),
-                # Third: final response
-                MagicMock(
-                    choices=[
-                        MagicMock(
-                            message=MagicMock(
-                                content='{"answer": "Combined results", "confidence": 0.85, "sources": []}',
-                                tool_calls=None,
-                            )
-                        )
-                    ]
-                ),
-            ]
-
-            response = await agent("Analyze and search")
-
-            assert isinstance(response, ChatResponse)
-            assert response.answer == "Combined results"
-            assert mock_completion.call_count == 3
-            pdf_tool.call_tool.assert_called_once()
-            search_tool.call_tool.assert_called_once()
-
-
-class TestMeshLlmAgentToolErrors:
-    """Test error handling when tools fail."""
-
-    @pytest.mark.asyncio
-    async def test_tool_execution_error(self):
-        """Test handling of tool execution errors."""
-        from _mcp_mesh.engine.mesh_llm_agent import (MeshLlmAgent,
-                                                     ToolExecutionError)
-
-        mock_tool = AsyncMock()
-        mock_tool.name = "failing_tool"
-        mock_tool.call_tool = AsyncMock(side_effect=Exception("Tool crashed!"))
-        mock_tool.description = "A tool that fails"
-        mock_tool.input_schema = {"type": "object"}
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[mock_tool],
-            tool_proxies={"failing_tool": mock_tool},
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content="",
-                            tool_calls=[
-                                make_tool_call_mock("call_1", "failing_tool", "{}")
-                            ],
-                        )
-                    )
-                ]
-            )
-
-            with pytest.raises(ToolExecutionError, match="Tool crashed!"):
-                await agent("Use the failing tool")
-
-    @pytest.mark.asyncio
-    async def test_tool_not_found_error(self):
-        """Test handling when LLM requests unknown tool."""
-        from _mcp_mesh.engine.mesh_llm_agent import (MeshLlmAgent,
-                                                     ToolExecutionError)
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[],  # No tools available
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content="",
-                            tool_calls=[
-                                make_tool_call_mock("call_1", "nonexistent_tool", "{}")
-                            ],
-                        )
-                    )
-                ]
-            )
-
-            with pytest.raises(ToolExecutionError, match="Tool.*not found"):
-                await agent("Use nonexistent tool")
-
-    @pytest.mark.asyncio
-    async def test_tool_timeout(self):
-        """Test handling of tool execution timeout."""
-        import asyncio
-
-        from _mcp_mesh.engine.mesh_llm_agent import (MeshLlmAgent,
-                                                     ToolExecutionError)
-
-        mock_tool = AsyncMock()
-        mock_tool.name = "slow_tool"
-        mock_tool.call_tool = AsyncMock(side_effect=TimeoutError("Tool timed out"))
-        mock_tool.description = "A slow tool"
-        mock_tool.input_schema = {"type": "object"}
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[mock_tool],
-            tool_proxies={"slow_tool": mock_tool},
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content="",
-                            tool_calls=[
-                                make_tool_call_mock("call_1", "slow_tool", "{}")
-                            ],
-                        )
-                    )
-                ]
-            )
-
-            with pytest.raises(ToolExecutionError, match="timed out"):
-                await agent("Use slow tool")
-
-
-class TestMeshLlmAgentResponseFormatErrors:
-    """Test error handling for invalid response formats."""
-
-    @pytest.mark.asyncio
-    async def test_invalid_json_response(self):
-        """Test handling of invalid JSON in LLM response."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-        from _mcp_mesh.engine.response_parser import ResponseParseError
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[],
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content="This is not valid JSON!", tool_calls=None
-                        )
-                    )
-                ]
-            )
-
-            with pytest.raises(ResponseParseError, match="Invalid JSON"):
-                await agent("Say hello")
-
-    @pytest.mark.asyncio
-    async def test_pydantic_validation_error(self):
-        """Test handling when response doesn't match Pydantic schema."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-        from _mcp_mesh.engine.response_parser import ResponseParseError
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[],
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            # Valid JSON but missing required fields
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content='{"answer": "Hello"}',  # Missing 'confidence' field
-                            tool_calls=None,
-                        )
-                    )
-                ]
-            )
-
-            with pytest.raises(ResponseParseError, match="validation"):
-                await agent("Say hello")
-
-    @pytest.mark.asyncio
-    async def test_wrong_response_type(self):
-        """Test handling when response has wrong type for field."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-        from _mcp_mesh.engine.response_parser import ResponseParseError
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[],
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            # confidence should be float, not string
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content='{"answer": "Hello", "confidence": "very high", "sources": []}',
-                            tool_calls=None,
-                        )
-                    )
-                ]
-            )
-
-            with pytest.raises(ResponseParseError, match="validation"):
-                await agent("Say hello")
-
-
-class TestMeshLlmAgentMaxIterations:
-    """Test max iterations limit."""
-
-    @pytest.mark.asyncio
-    async def test_max_iterations_exceeded(self):
-        """Test error when max_iterations is exceeded."""
-        from _mcp_mesh.engine.mesh_llm_agent import (MaxIterationsError,
-                                                     MeshLlmAgent)
-
-        mock_tool = AsyncMock()
-        mock_tool.name = "endless_tool"
-        mock_tool.call_tool = AsyncMock(return_value={"result": "ok"})
-        mock_tool.description = "A tool"
-        mock_tool.input_schema = {"type": "object"}
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=3,  # Very low limit
-            ),
-            filtered_tools=[mock_tool],
-            tool_proxies={"endless_tool": mock_tool},
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            # Always return tool calls, never final response
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content="",
-                            tool_calls=[
-                                make_tool_call_mock("call_1", "endless_tool", "{}")
-                            ],
-                        )
-                    )
-                ]
-            )
-
-            with pytest.raises(MaxIterationsError, match="Exceeded.*3 iterations"):
-                await agent("Keep using tools")
-
-    @pytest.mark.asyncio
-    async def test_exactly_at_max_iterations(self):
-        """Test successful completion exactly at max_iterations."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-
-        mock_tool = AsyncMock()
-        mock_tool.name = "test_tool"
-        mock_tool.call_tool = AsyncMock(return_value={"result": "ok"})
-        mock_tool.description = "A tool"
-        mock_tool.input_schema = {"type": "object"}
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[mock_tool],
-            tool_proxies={"test_tool": mock_tool},
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            # First iteration: tool call
-            # Second iteration: final response (exactly at limit)
-            mock_completion.side_effect = [
-                MagicMock(
-                    choices=[
-                        MagicMock(
-                            message=MagicMock(
-                                content="",
-                                tool_calls=[
-                                    make_tool_call_mock("call_1", "test_tool", "{}")
-                                ],
-                            )
-                        )
-                    ]
-                ),
-                MagicMock(
-                    choices=[
-                        MagicMock(
-                            message=MagicMock(
-                                content='{"answer": "Done", "confidence": 1.0, "sources": []}',
-                                tool_calls=None,
-                            )
-                        )
-                    ]
-                ),
-            ]
-
-            response = await agent("Test")
-
-            assert isinstance(response, ChatResponse)
-            assert response.answer == "Done"
-
-
-class TestMeshLlmAgentLLMAPIErrors:
-    """Test LLM API error handling."""
-
-    @pytest.mark.asyncio
-    async def test_llm_api_error(self):
-        """Test handling of LLM API errors."""
-        from _mcp_mesh.engine.mesh_llm_agent import LLMAPIError, MeshLlmAgent
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[],
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.side_effect = Exception("API Error: Rate limit exceeded")
-
-            with pytest.raises(LLMAPIError, match="Rate limit exceeded"):
-                await agent("Say hello")
-
-    @pytest.mark.asyncio
-    async def test_llm_authentication_error(self):
-        """Test handling of authentication errors."""
-        from _mcp_mesh.engine.mesh_llm_agent import LLMAPIError, MeshLlmAgent
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="invalid-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[],
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.side_effect = Exception("API Error: Invalid API key")
-
-            with pytest.raises(LLMAPIError, match="Invalid API key"):
-                await agent("Say hello")
-
-    @pytest.mark.asyncio
-    async def test_llm_timeout(self):
-        """Test handling of LLM API timeout."""
-        import asyncio
-
-        from _mcp_mesh.engine.mesh_llm_agent import LLMAPIError, MeshLlmAgent
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[],
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.side_effect = TimeoutError("LLM request timed out")
-
-            with pytest.raises(LLMAPIError, match="timed out"):
-                await agent("Say hello")
-
-
-class TestMeshLlmAgentEdgeCases:
-    """Test edge cases and unusual scenarios."""
-
-    @pytest.mark.asyncio
-    async def test_empty_message(self):
-        """Test handling of empty message."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[],
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content='{"answer": "Please provide a message", "confidence": 0.5, "sources": []}',
-                            tool_calls=None,
-                        )
-                    )
-                ]
-            )
-
-            response = await agent("")
-
-            assert isinstance(response, ChatResponse)
-            # Should still work, LLM handles empty input
-
-    @pytest.mark.asyncio
-    async def test_very_long_message(self):
-        """Test handling of very long message."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[],
-            output_type=ChatResponse,
-        )
-
-        long_message = "test " * 10000  # Very long message
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content='{"answer": "Processed", "confidence": 0.8, "sources": []}',
-                            tool_calls=None,
-                        )
-                    )
-                ]
-            )
-
-            response = await agent(long_message)
-
-            assert isinstance(response, ChatResponse)
-            # Should handle long messages (LiteLLM/provider handles token limits)
-
-    @pytest.mark.asyncio
-    async def test_no_tools_available(self):
-        """Test with no tools available."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[],  # No tools
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            # LLM should work without tools
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content='{"answer": "No tools needed", "confidence": 1.0, "sources": []}',
-                            tool_calls=None,
-                        )
-                    )
-                ]
-            )
-
-            response = await agent("Just chat")
-
-            assert isinstance(response, ChatResponse)
-            assert response.answer == "No tools needed"
-
-    @pytest.mark.asyncio
-    async def test_tool_returns_empty_result(self):
-        """Test when tool returns empty result."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-
-        mock_tool = AsyncMock()
-        mock_tool.name = "empty_tool"
-        mock_tool.call_tool = AsyncMock(return_value={})  # Empty result
-        mock_tool.description = "Returns nothing"
-        mock_tool.input_schema = {"type": "object"}
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[mock_tool],
-            tool_proxies={"empty_tool": mock_tool},
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.side_effect = [
-                # First: use tool
-                MagicMock(
-                    choices=[
-                        MagicMock(
-                            message=MagicMock(
-                                content="",
-                                tool_calls=[
-                                    make_tool_call_mock("call_1", "empty_tool", "{}")
-                                ],
-                            )
-                        )
-                    ]
-                ),
-                # Second: final response
-                MagicMock(
-                    choices=[
-                        MagicMock(
-                            message=MagicMock(
-                                content='{"answer": "Tool returned nothing", "confidence": 0.5, "sources": []}',
-                                tool_calls=None,
-                            )
-                        )
-                    ]
-                ),
-            ]
-
-            response = await agent("Use empty tool")
-
-            assert isinstance(response, ChatResponse)
-            # Should handle empty tool results gracefully
-
-
-class TestMeshLlmAgentComplexScenarios:
-    """Test complex real-world scenarios."""
-
-    @pytest.mark.asyncio
-    async def test_parallel_tool_calls_in_one_response(self):
-        """Test when LLM requests multiple tools in single response."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-
-        tool1 = AsyncMock()
-        tool1.name = "tool_a"
-        tool1.call_tool = AsyncMock(return_value={"result": "A"})
-        tool1.description = "Tool A"
-        tool1.input_schema = {"type": "object"}
-
-        tool2 = AsyncMock()
-        tool2.name = "tool_b"
-        tool2.call_tool = AsyncMock(return_value={"result": "B"})
-        tool2.description = "Tool B"
-        tool2.input_schema = {"type": "object"}
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[tool1, tool2],
-            tool_proxies={"tool_a": tool1, "tool_b": tool2},
-            output_type=ChatResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.side_effect = [
-                # First: request both tools at once
-                MagicMock(
-                    choices=[
-                        MagicMock(
-                            message=MagicMock(
-                                content="",
-                                tool_calls=[
-                                    make_tool_call_mock("call_1", "tool_a", "{}"),
-                                    make_tool_call_mock("call_2", "tool_b", "{}"),
-                                ],
-                            )
-                        )
-                    ]
-                ),
-                # Second: final response
-                MagicMock(
-                    choices=[
-                        MagicMock(
-                            message=MagicMock(
-                                content='{"answer": "Both tools executed", "confidence": 0.9, "sources": []}',
-                                tool_calls=None,
-                            )
-                        )
-                    ]
-                ),
-            ]
-
-            response = await agent("Use both tools")
-
-            assert isinstance(response, ChatResponse)
-            assert response.answer == "Both tools executed"
-            tool1.call_tool.assert_called_once()
-            tool2.call_tool.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_complex_pydantic_model_response(self):
-        """Test with complex nested Pydantic model."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[],
-            output_type=ComplexResponse,
-        )
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content='{"result": {"key": "value"}, "metadata": {"version": "1.0"}, "status": "success"}',
-                            tool_calls=None,
-                        )
-                    )
-                ]
-            )
-
-            response = await agent("Complex query")
-
-            assert isinstance(response, ComplexResponse)
-            assert response.result == {"key": "value"}
-            assert response.metadata == {"version": "1.0"}
-            assert response.status == "success"
-
-    @pytest.mark.asyncio
-    async def test_system_prompt_override(self):
-        """Test system prompt override before execution."""
-        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
-
-        agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
-                max_iterations=10,
-            ),
-            filtered_tools=[],
-            output_type=ChatResponse,
-        )
-
-        # Override before calling
-        agent.set_system_prompt("New prompt for this call")
-
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content='{"answer": "Response", "confidence": 1.0, "sources": []}',
-                            tool_calls=None,
-                        )
-                    )
-                ]
-            )
-
-            response = await agent("Test")
-
-            # Verify system prompt was used in call
-            call_kwargs = mock_completion.call_args[1]
-            assert "messages" in call_kwargs
-            # System prompt should be in messages or separate parameter
-
-            assert isinstance(response, ChatResponse)
 
 
 # ============================================================================
@@ -1319,12 +422,20 @@ class TestTemplateRendering:
         template_path = str(TEMPLATES_DIR / "simple.jinja2")
         context = ChatContext(user_name="Alice", domain="Python")
 
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": '{"answer": "Response", "confidence": 1.0, "sources": []}',
+        }
+
         agent = MeshLlmAgent(
             config=config,
             filtered_tools=[],
             output_type=ChatResponse,
             template_path=template_path,
             context_value=context,
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
         )
 
         rendered = agent._render_system_prompt()
@@ -1344,12 +455,20 @@ class TestTemplateRendering:
         template_path = str(TEMPLATES_DIR / "simple.jinja2")
         context = {"user_name": "Bob", "domain": "Go"}
 
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": '{"answer": "Response", "confidence": 1.0, "sources": []}',
+        }
+
         agent = MeshLlmAgent(
             config=config,
             filtered_tools=[],
             output_type=ChatResponse,
             template_path=template_path,
             context_value=context,
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
         )
 
         rendered = agent._render_system_prompt()
@@ -1387,12 +506,20 @@ class TestTemplateRendering:
             role="expert", domain="AI", skills=["Python", "ML", "NLP"]
         )
 
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": '{"answer": "Response", "confidence": 1.0, "sources": []}',
+        }
+
         agent = MeshLlmAgent(
             config=config,
             filtered_tools=[],
             output_type=ChatResponse,
             template_path=template_path,
             context_value=context,
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
         )
 
         rendered = agent._render_system_prompt()
@@ -1413,12 +540,20 @@ class TestTemplateRendering:
         # Empty context - missing required vars
         context = {}
 
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": '{"answer": "Response", "confidence": 1.0, "sources": []}',
+        }
+
         agent = MeshLlmAgent(
             config=config,
             filtered_tools=[],
             output_type=ChatResponse,
             template_path=template_path,
             context_value=context,
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
         )
 
         # In strict mode, should raise UndefinedError
@@ -1436,12 +571,20 @@ class TestTemplateRendering:
         template_path = str(TEMPLATES_DIR / "simple.jinja2")
         context = ChatContext(user_name="Alice", domain="Python")
 
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": '{"answer": "Response", "confidence": 1.0, "sources": []}',
+        }
+
         agent = MeshLlmAgent(
             config=config,
             filtered_tools=[],
             output_type=ChatResponse,
             template_path=template_path,
             context_value=context,
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
         )
 
         # Override at runtime
@@ -1454,12 +597,18 @@ class TestTemplateRendering:
 
     @pytest.mark.asyncio
     async def test_render_template_used_in_llm_call(self):
-        """Test: Rendered template used in actual LLM call."""
+        """Test: Rendered template used in actual LLM call (mesh-delegated)."""
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         config = make_test_config()
         template_path = str(TEMPLATES_DIR / "simple.jinja2")
         context = ChatContext(user_name="Alice", domain="Python")
+
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": '{"answer": "Response", "confidence": 1.0, "sources": []}',
+        }
 
         agent = MeshLlmAgent(
             config=config,
@@ -1467,30 +616,21 @@ class TestTemplateRendering:
             output_type=ChatResponse,
             template_path=template_path,
             context_value=context,
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
         )
 
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content='{"answer": "Response", "confidence": 1.0, "sources": []}',
-                            tool_calls=None,
-                        )
-                    )
-                ]
-            )
+        response = await agent("Test message")
 
-            response = await agent("Test message")
+        # Verify system prompt in provider request contains rendered template
+        call_kwargs = mock_provider_proxy.call_args[1]
+        request_dict = call_kwargs["request"]
+        messages = request_dict["messages"]
+        system_message = next(m for m in messages if m["role"] == "system")
 
-            # Verify system prompt in call contains rendered template content
-            call_kwargs = mock_completion.call_args[1]
-            messages = call_kwargs["messages"]
-            system_message = next(m for m in messages if m["role"] == "system")
-
-            assert "Alice" in system_message["content"]
-            assert "Python" in system_message["content"]
-            assert isinstance(response, ChatResponse)
+        assert "Alice" in system_message["content"]
+        assert "Python" in system_message["content"]
+        assert isinstance(response, ChatResponse)
 
 
 # ============================================================================
@@ -1681,41 +821,39 @@ class TestRuntimeContextInjection:
         template_path = str(TEMPLATES_DIR / "simple.jinja2")
         auto_context = {"user_name": "Alice", "domain": "Python"}
 
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": '{"answer": "Response", "confidence": 1.0, "sources": []}',
+        }
+
         agent = MeshLlmAgent(
             config=config,
             filtered_tools=[],
             output_type=ChatResponse,
             template_path=template_path,
             context_value=auto_context,
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
         )
 
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content='{"answer": "Response", "confidence": 1.0, "sources": []}',
-                            tool_calls=None,
-                        )
-                    )
-                ]
-            )
 
-            # Call with runtime context that overrides domain
-            response = await agent(
-                "Test message",
-                context={"domain": "Go"},
-            )
+        # Call with runtime context that overrides domain
+        response = await agent(
+            "Test message",
+            context={"domain": "Go"},
+        )
 
-            # Verify system prompt contains merged context
-            call_kwargs = mock_completion.call_args[1]
-            messages = call_kwargs["messages"]
-            system_message = next(m for m in messages if m["role"] == "system")
+        # Verify system prompt contains merged context
+        call_kwargs = mock_provider_proxy.call_args[1]
+        request_dict = call_kwargs["request"]
+        messages = request_dict["messages"]
+        system_message = next(m for m in messages if m["role"] == "system")
 
-            # Alice from auto, Go from runtime (append mode default)
-            assert "Alice" in system_message["content"]
-            assert "Go" in system_message["content"]
-            assert isinstance(response, ChatResponse)
+        # Alice from auto, Go from runtime (append mode default)
+        assert "Alice" in system_message["content"]
+        assert "Go" in system_message["content"]
+        assert isinstance(response, ChatResponse)
 
     @pytest.mark.asyncio
     async def test_call_with_context_mode_replace(self):
@@ -1726,43 +864,41 @@ class TestRuntimeContextInjection:
         template_path = str(TEMPLATES_DIR / "simple.jinja2")
         auto_context = {"user_name": "Alice", "domain": "Python"}
 
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": '{"answer": "Response", "confidence": 1.0, "sources": []}',
+        }
+
         agent = MeshLlmAgent(
             config=config,
             filtered_tools=[],
             output_type=ChatResponse,
             template_path=template_path,
             context_value=auto_context,
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
         )
 
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content='{"answer": "Response", "confidence": 1.0, "sources": []}',
-                            tool_calls=None,
-                        )
-                    )
-                ]
-            )
 
-            # Call with replace mode
-            response = await agent(
-                "Test message",
-                context={"user_name": "Bob", "domain": "Rust"},
-                context_mode="replace",
-            )
+        # Call with replace mode
+        response = await agent(
+            "Test message",
+            context={"user_name": "Bob", "domain": "Rust"},
+            context_mode="replace",
+        )
 
-            # Verify system prompt contains replaced context
-            call_kwargs = mock_completion.call_args[1]
-            messages = call_kwargs["messages"]
-            system_message = next(m for m in messages if m["role"] == "system")
+        # Verify system prompt contains replaced context
+        call_kwargs = mock_provider_proxy.call_args[1]
+        request_dict = call_kwargs["request"]
+        messages = request_dict["messages"]
+        system_message = next(m for m in messages if m["role"] == "system")
 
-            # Bob and Rust from runtime (replace mode)
-            assert "Bob" in system_message["content"]
-            assert "Rust" in system_message["content"]
-            assert "Alice" not in system_message["content"]
-            assert isinstance(response, ChatResponse)
+        # Bob and Rust from runtime (replace mode)
+        assert "Bob" in system_message["content"]
+        assert "Rust" in system_message["content"]
+        assert "Alice" not in system_message["content"]
+        assert isinstance(response, ChatResponse)
 
     @pytest.mark.asyncio
     async def test_call_without_context_uses_auto_populated(self):
@@ -1773,37 +909,35 @@ class TestRuntimeContextInjection:
         template_path = str(TEMPLATES_DIR / "simple.jinja2")
         auto_context = ChatContext(user_name="Alice", domain="Python")
 
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": '{"answer": "Response", "confidence": 1.0, "sources": []}',
+        }
+
         agent = MeshLlmAgent(
             config=config,
             filtered_tools=[],
             output_type=ChatResponse,
             template_path=template_path,
             context_value=auto_context,
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
         )
 
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content='{"answer": "Response", "confidence": 1.0, "sources": []}',
-                            tool_calls=None,
-                        )
-                    )
-                ]
-            )
 
-            # Call without context (backward compatible)
-            response = await agent("Test message")
+        # Call without context (backward compatible)
+        response = await agent("Test message")
 
-            # Verify system prompt contains auto-populated context
-            call_kwargs = mock_completion.call_args[1]
-            messages = call_kwargs["messages"]
-            system_message = next(m for m in messages if m["role"] == "system")
+        # Verify system prompt contains auto-populated context
+        call_kwargs = mock_provider_proxy.call_args[1]
+        request_dict = call_kwargs["request"]
+        messages = request_dict["messages"]
+        system_message = next(m for m in messages if m["role"] == "system")
 
-            assert "Alice" in system_message["content"]
-            assert "Python" in system_message["content"]
-            assert isinstance(response, ChatResponse)
+        assert "Alice" in system_message["content"]
+        assert "Python" in system_message["content"]
+        assert isinstance(response, ChatResponse)
 
     @pytest.mark.asyncio
     async def test_call_with_context_mode_prepend(self):
@@ -1814,42 +948,40 @@ class TestRuntimeContextInjection:
         template_path = str(TEMPLATES_DIR / "simple.jinja2")
         auto_context = {"user_name": "Alice", "domain": "Python"}
 
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": '{"answer": "Response", "confidence": 1.0, "sources": []}',
+        }
+
         agent = MeshLlmAgent(
             config=config,
             filtered_tools=[],
             output_type=ChatResponse,
             template_path=template_path,
             context_value=auto_context,
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
         )
 
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = MagicMock(
-                choices=[
-                    MagicMock(
-                        message=MagicMock(
-                            content='{"answer": "Response", "confidence": 1.0, "sources": []}',
-                            tool_calls=None,
-                        )
-                    )
-                ]
-            )
 
-            # Call with prepend mode - auto should win
-            response = await agent(
-                "Test message",
-                context={"user_name": "Bob", "domain": "Rust"},
-                context_mode="prepend",
-            )
+        # Call with prepend mode - auto should win
+        response = await agent(
+            "Test message",
+            context={"user_name": "Bob", "domain": "Rust"},
+            context_mode="prepend",
+        )
 
-            # Verify system prompt uses auto context (prepend means auto wins)
-            call_kwargs = mock_completion.call_args[1]
-            messages = call_kwargs["messages"]
-            system_message = next(m for m in messages if m["role"] == "system")
+        # Verify system prompt uses auto context (prepend means auto wins)
+        call_kwargs = mock_provider_proxy.call_args[1]
+        request_dict = call_kwargs["request"]
+        messages = request_dict["messages"]
+        system_message = next(m for m in messages if m["role"] == "system")
 
-            # Auto wins on conflicts
-            assert "Alice" in system_message["content"]
-            assert "Python" in system_message["content"]
-            assert isinstance(response, ChatResponse)
+        # Auto wins on conflicts
+        assert "Alice" in system_message["content"]
+        assert "Python" in system_message["content"]
+        assert isinstance(response, ChatResponse)
 
 
 # ============================================================================
@@ -1870,9 +1002,8 @@ class TestMeshDelegationModelOverride:
             provider={
                 "capability": "llm",
                 "tags": ["claude"],
-            },  # Dict = mesh delegation
+            },
             model="anthropic/claude-haiku",  # Explicit model override
-            api_key="",
             max_iterations=10,
             system_prompt="Test prompt",
         )
@@ -1892,8 +1023,8 @@ class TestMeshDelegationModelOverride:
             vendor="anthropic",
         )
 
-        # Verify agent is mesh delegated
-        assert agent._is_mesh_delegated is True
+        # Mesh delegation is the only mode in v2 (provider is always a dict).
+        assert isinstance(agent.provider, dict)
 
         # Call agent
         response = await agent("Test message")
@@ -1916,7 +1047,6 @@ class TestMeshDelegationModelOverride:
         config = LLMConfig(
             provider={"capability": "llm", "tags": ["claude"]},
             model=None,  # No model specified
-            api_key="",
             max_iterations=10,
             system_prompt="Test prompt",
         )
@@ -2055,71 +1185,64 @@ class TestLlmMetaAttachment:
 
     @pytest.mark.asyncio
     async def test_mesh_meta_attached_to_pydantic_result(self):
-        """Test: _mesh_meta is attached to Pydantic model results."""
+        """Test: _mesh_meta is attached to Pydantic model results.
+
+        Mesh-delegated only — the provider proxy returns a message dict with
+        ``_mesh_usage``, which ``_MockResponse`` lifts into the response shape.
+        """
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
         from mesh.types import LlmMeta
 
-        # Create mock response with usage data
-        mock_message = MagicMock()
-        mock_message.content = '{"answer": "42", "confidence": 0.95, "sources": []}'
-        mock_message.tool_calls = None
-        mock_message.model_dump = lambda: {
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
             "role": "assistant",
-            "content": mock_message.content,
+            "content": '{"answer": "42", "confidence": 0.95, "sources": []}',
+            "_mesh_usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "model": "anthropic/claude-3-5-sonnet",
+            },
         }
 
-        mock_usage = MagicMock()
-        mock_usage.prompt_tokens = 100
-        mock_usage.completion_tokens = 50
+        agent = MeshLlmAgent(
+            config=make_test_config(
+                model="anthropic/claude-3-5-sonnet",
+                system_prompt="You are helpful.",
+            ),
+            filtered_tools=[],
+            output_type=ChatResponse,
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
+        )
 
-        mock_choice = MagicMock()
-        mock_choice.message = mock_message
+        result = await agent("What is the answer?")
 
-        mock_response = MagicMock()
-        mock_response.choices = [mock_choice]
-        mock_response.usage = mock_usage
-        mock_response.model = "anthropic/claude-3-5-sonnet"
+        # Verify result is correct type
+        assert isinstance(result, ChatResponse)
+        assert result.answer == "42"
+        assert result.confidence == 0.95
 
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = mock_response
-
-            agent = MeshLlmAgent(
-                config=make_test_config(
-                    provider="anthropic",
-                    model="anthropic/claude-3-5-sonnet",
-                    system_prompt="You are helpful.",
-                ),
-                filtered_tools=[],
-                output_type=ChatResponse,
-            )
-
-            result = await agent("What is the answer?")
-
-            # Verify result is correct type
-            assert isinstance(result, ChatResponse)
-            assert result.answer == "42"
-            assert result.confidence == 0.95
-
-            # Verify _mesh_meta is attached
-            assert hasattr(result, "_mesh_meta")
-            assert isinstance(result._mesh_meta, LlmMeta)
-            assert result._mesh_meta.provider == "anthropic"
-            assert result._mesh_meta.model == "anthropic/claude-3-5-sonnet"
-            assert result._mesh_meta.input_tokens == 100
-            assert result._mesh_meta.output_tokens == 50
-            assert result._mesh_meta.total_tokens == 150
-            assert result._mesh_meta.latency_ms > 0
+        # Verify _mesh_meta is attached
+        assert hasattr(result, "_mesh_meta")
+        assert isinstance(result._mesh_meta, LlmMeta)
+        assert result._mesh_meta.provider == "anthropic"
+        assert result._mesh_meta.model == "anthropic/claude-3-5-sonnet"
+        assert result._mesh_meta.input_tokens == 100
+        assert result._mesh_meta.output_tokens == 50
+        assert result._mesh_meta.total_tokens == 150
+        assert result._mesh_meta.latency_ms > 0
 
     @pytest.mark.asyncio
     async def test_mesh_meta_accumulates_tokens_across_iterations(self):
-        """Test: _mesh_meta accumulates tokens across tool call iterations."""
+        """Test: _mesh_meta accumulates tokens across tool call iterations.
+
+        Mesh-delegated only — provider proxy returns a tool_call message on
+        the first call and a final answer on the second; iterations sum the
+        ``_mesh_usage`` token counts.
+        """
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
-        # First response: tool call
-        mock_message_1 = MagicMock()
-        mock_message_1.content = None
-        mock_message_1.tool_calls = [make_tool_call_mock("tc1", "get_info", "{}")]
-        mock_message_1.model_dump = lambda: {
+        first_response = {
             "role": "assistant",
             "content": None,
             "tool_calls": [
@@ -2129,113 +1252,92 @@ class TestLlmMetaAttachment:
                     "function": {"name": "get_info", "arguments": "{}"},
                 }
             ],
+            "_mesh_usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "model": "anthropic/claude-3-5-sonnet",
+            },
         }
-
-        mock_usage_1 = MagicMock()
-        mock_usage_1.prompt_tokens = 100
-        mock_usage_1.completion_tokens = 20
-
-        mock_choice_1 = MagicMock()
-        mock_choice_1.message = mock_message_1
-
-        mock_response_1 = MagicMock()
-        mock_response_1.choices = [mock_choice_1]
-        mock_response_1.usage = mock_usage_1
-        mock_response_1.model = "anthropic/claude-3-5-sonnet"
-
-        # Second response: final answer
-        mock_message_2 = MagicMock()
-        mock_message_2.content = '{"answer": "done", "confidence": 0.9, "sources": []}'
-        mock_message_2.tool_calls = None
-
-        mock_usage_2 = MagicMock()
-        mock_usage_2.prompt_tokens = 150
-        mock_usage_2.completion_tokens = 30
-
-        mock_choice_2 = MagicMock()
-        mock_choice_2.message = mock_message_2
-
-        mock_response_2 = MagicMock()
-        mock_response_2.choices = [mock_choice_2]
-        mock_response_2.usage = mock_usage_2
-        mock_response_2.model = "anthropic/claude-3-5-sonnet"
+        second_response = {
+            "role": "assistant",
+            "content": '{"answer": "done", "confidence": 0.9, "sources": []}',
+            "_mesh_usage": {
+                "prompt_tokens": 150,
+                "completion_tokens": 30,
+                "model": "anthropic/claude-3-5-sonnet",
+            },
+        }
 
         call_count = 0
 
-        def side_effect(**kwargs):
+        async def fake_provider(**kwargs):
             nonlocal call_count
             call_count += 1
-            return mock_response_1 if call_count == 1 else mock_response_2
+            return first_response if call_count == 1 else second_response
+
+        mock_provider_proxy = AsyncMock(side_effect=fake_provider)
 
         # Mock tool proxy with call_tool method returning JSON-serializable result
         mock_tool_proxy = MagicMock()
         mock_tool_proxy.call_tool = AsyncMock(return_value={"result": "tool result"})
+        mock_tool_proxy.endpoint = "http://test:9999"
 
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.side_effect = side_effect
+        agent = MeshLlmAgent(
+            config=make_test_config(
+                model="anthropic/claude-3-5-sonnet",
+                system_prompt="You are helpful.",
+            ),
+            filtered_tools=[
+                {"name": "get_info", "description": "Get info", "inputSchema": {}}
+            ],
+            output_type=ChatResponse,
+            tool_proxies={"get_info": mock_tool_proxy},
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
+        )
 
-            agent = MeshLlmAgent(
-                config=make_test_config(
-                    provider="anthropic",
-                    model="anthropic/claude-3-5-sonnet",
-                    system_prompt="You are helpful.",
-                ),
-                filtered_tools=[
-                    {"name": "get_info", "description": "Get info", "inputSchema": {}}
-                ],
-                output_type=ChatResponse,
-                tool_proxies={"get_info": mock_tool_proxy},
-            )
+        result = await agent("Do something")
 
-            result = await agent("Do something")
-
-            # Verify tokens are accumulated from both calls
-            assert result._mesh_meta.input_tokens == 250  # 100 + 150
-            assert result._mesh_meta.output_tokens == 50  # 20 + 30
-            assert result._mesh_meta.total_tokens == 300
+        # Verify tokens are accumulated from both calls
+        assert result._mesh_meta.input_tokens == 250  # 100 + 150
+        assert result._mesh_meta.output_tokens == 50  # 20 + 30
+        assert result._mesh_meta.total_tokens == 300
 
     @pytest.mark.asyncio
     async def test_mesh_meta_not_attached_to_str_result(self):
         """Test: _mesh_meta cannot be attached to str results (silently skipped)."""
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
-        mock_message = MagicMock()
-        mock_message.content = "Hello, world!"
-        mock_message.tool_calls = None
+        mock_provider_proxy = AsyncMock()
+        mock_provider_proxy.return_value = {
+            "role": "assistant",
+            "content": "Hello, world!",
+            "_mesh_usage": {
+                "prompt_tokens": 50,
+                "completion_tokens": 10,
+                "model": "anthropic/claude-3-5-sonnet",
+            },
+        }
 
-        mock_usage = MagicMock()
-        mock_usage.prompt_tokens = 50
-        mock_usage.completion_tokens = 10
+        agent = MeshLlmAgent(
+            config=make_test_config(
+                model="anthropic/claude-3-5-sonnet",
+                system_prompt="You are helpful.",
+            ),
+            filtered_tools=[],
+            output_type=str,  # str return type
+            provider_proxy=mock_provider_proxy,
+            vendor="anthropic",
+        )
 
-        mock_choice = MagicMock()
-        mock_choice.message = mock_message
+        result = await agent("Say hello")
 
-        mock_response = MagicMock()
-        mock_response.choices = [mock_choice]
-        mock_response.usage = mock_usage
-        mock_response.model = "anthropic/claude-3-5-sonnet"
+        # Result should be string
+        assert isinstance(result, str)
+        assert result == "Hello, world!"
 
-        with patch("_mcp_mesh.engine.mesh_llm_agent.completion") as mock_completion:
-            mock_completion.return_value = mock_response
-
-            agent = MeshLlmAgent(
-                config=make_test_config(
-                    provider="anthropic",
-                    model="anthropic/claude-3-5-sonnet",
-                    system_prompt="You are helpful.",
-                ),
-                filtered_tools=[],
-                output_type=str,  # str return type
-            )
-
-            result = await agent("Say hello")
-
-            # Result should be string
-            assert isinstance(result, str)
-            assert result == "Hello, world!"
-
-            # _mesh_meta cannot be attached to str (no error, just not present)
-            assert not hasattr(result, "_mesh_meta")
+        # _mesh_meta cannot be attached to str (no error, just not present)
+        assert not hasattr(result, "_mesh_meta")
 
     def test_llm_meta_dataclass_creation(self):
         """Test: LlmMeta dataclass can be created with all fields."""
@@ -2360,10 +1462,7 @@ class TestBuildRequestParamsKwargCollision:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
+            config=make_test_config(model="claude-3-5-sonnet-20241022",
                 max_iterations=10,
             ),
             filtered_tools=[],
@@ -2419,10 +1518,7 @@ class TestBuildRequestParamsKwargCollision:
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         agent = MeshLlmAgent(
-            config=make_test_config(
-                provider="claude",
-                model="claude-3-5-sonnet-20241022",
-                api_key="test-key",
+            config=make_test_config(model="claude-3-5-sonnet-20241022",
                 max_iterations=10,
             ),
             filtered_tools=[],

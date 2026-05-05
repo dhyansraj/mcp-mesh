@@ -216,7 +216,7 @@ public interface MeshLlmAgent {
     boolean isAvailable();
 
     /**
-     * Get the provider name (for direct mode) or endpoint (for mesh mode).
+     * Get the resolved mesh provider identifier (e.g., the provider endpoint).
      *
      * @return Provider identifier
      */

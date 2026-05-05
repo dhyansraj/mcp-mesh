@@ -32,7 +32,7 @@ class ChatResponse(BaseModel):
     system_prompt="file://prompts/chat.jinja2",
     # No context_param - should detect via type hint!
     filter=None,
-    provider="claude",
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",
 )
 @mesh.tool(capability="chat_type_hint", tags=["prompt-template", "test-003a"])
@@ -49,7 +49,7 @@ def chat_type_hint(
     system_prompt="file://prompts/chat.jinja2",
     # No context_param - should detect "prompt_context" by name!
     filter=None,
-    provider="claude",
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",
 )
 @mesh.tool(capability="chat_convention", tags=["prompt-template", "test-003b"])

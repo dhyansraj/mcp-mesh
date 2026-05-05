@@ -2,12 +2,13 @@
 MeshLlmAgent proxy implementation.
 
 Provides automatic agentic loop for LLM-based agents with tool integration.
+
+Mesh-delegated only: every @mesh.llm consumer routes its LLM calls through a
+mesh-resolved @mesh.llm_provider. Direct LiteLLM mode was removed in v2.
 """
 
-import asyncio
 import json
 import logging
-import os
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -36,13 +37,6 @@ except ImportError:
     Template = None
     TemplateSyntaxError = None
 
-# Import litellm at module level for mocking in tests
-try:
-    from litellm import acompletion, completion
-except ImportError:
-    completion = None
-    acompletion = None
-
 logger = logging.getLogger(__name__)
 
 # Sentinel value to distinguish "context not provided" from "explicitly None/empty"
@@ -53,8 +47,9 @@ _CONTEXT_NOT_PROVIDED = object()
 # Mock LiteLLM response types for mesh-delegated provider responses
 # ---------------------------------------------------------------------------
 # These lightweight classes mimic the litellm.completion() response shape so
-# that the agentic loop can treat direct-LiteLLM and mesh-delegated responses
-# identically.  Extracted to module level for reusability and testability.
+# the agentic loop can consume mesh-delegated responses with the same code
+# path the rest of the LiteLLM ecosystem uses (mock objects keep the consumer
+# loop's response-handling logic identical to what the test fixtures expect).
 
 
 class _MockFunction:
@@ -172,13 +167,13 @@ class MeshLlmAgent:
         Initialize MeshLlmAgent proxy.
 
         Args:
-            config: LLM configuration (provider, model, api_key, etc.)
+            config: LLM configuration (provider filter, optional model override, etc.)
             filtered_tools: List of tool metadata from registry (for schema building)
             output_type: Pydantic BaseModel for response validation, or str for plain text
             tool_proxies: Optional map of function_name -> proxy for tool execution
             template_path: Optional path to Jinja2 template file for system prompt
             context_value: Optional context for template rendering (MeshContextModel, dict, or None)
-            provider_proxy: Optional pre-resolved provider proxy for mesh delegation
+            provider_proxy: Pre-resolved provider proxy for mesh delegation (required at call time)
             vendor: Optional vendor name for handler selection (e.g., "anthropic", "openai")
             default_model_params: Optional dict of default LLM parameters from decorator
                                   (e.g., max_tokens, temperature). These are merged with
@@ -187,7 +182,6 @@ class MeshLlmAgent:
         self.config = config
         self.provider = config.provider
         self.model = config.model
-        self.api_key = config.api_key
         self.tools_metadata = filtered_tools  # Tool metadata for schema building
         self.tool_proxies = tool_proxies or {}  # Proxies for execution
         self.max_iterations = config.max_iterations
@@ -204,8 +198,6 @@ class MeshLlmAgent:
                 "🔀 parallel tool calls enabled — tools will execute concurrently via asyncio.gather()"
             )
 
-        # Detect if using mesh delegation (provider is dict)
-        self._is_mesh_delegated = isinstance(self.provider, dict)
         self._mesh_provider_proxy = provider_proxy  # Pre-resolved by heartbeat
 
         # Template rendering support (Phase 3)
@@ -721,25 +713,21 @@ class MeshLlmAgent:
         effective_context = self._resolve_context(context, context_mode)
         base_system_prompt = self._render_system_prompt(effective_context)
 
-        if self._is_mesh_delegated:
-            system_content = base_system_prompt
-            if self._tool_schemas:
-                if self._parallel_tool_calls:
-                    system_content += "\n\nYou have access to tools. You CAN and SHOULD call multiple tools simultaneously when the calls are independent."
-                else:
-                    system_content += "\n\nYou have access to tools. Use them when needed to gather information."
-        else:
-            system_content = self._provider_handler.format_system_prompt(
-                base_prompt=base_system_prompt,
-                tool_schemas=self._tool_schemas,
-                output_type=self.output_type,
-            )
-            if self._parallel_tool_calls and self._tool_schemas:
-                system_content += "\n\nYou CAN and SHOULD call multiple tools simultaneously when the calls are independent. Return all independent tool calls in a single response."
+        # Mesh-delegated: tool schemas are advertised separately on the wire
+        # (the provider's structured-output / tool-calling layer applies the
+        # vendor-specific shaping). The consumer's system prompt only needs a
+        # nudge that tools are available; vendor-specific JSON-schema
+        # injection happens provider-side.
+        system_content = base_system_prompt
+        if self._tool_schemas:
+            if self._parallel_tool_calls:
+                system_content += "\n\nYou have access to tools. You CAN and SHOULD call multiple tools simultaneously when the calls are independent."
+            else:
+                system_content += "\n\nYou have access to tools. Use them when needed to gather information."
 
-        logger.debug(
-            f"📝 System prompt (formatted by {self._provider_handler}): {system_content[:200]}..."
-        )
+        # v2: vendor-specific shaping happens provider-side; the consumer
+        # just sends the raw system_content over the wire.
+        logger.debug(f"📝 System prompt (mesh-delegated): {system_content[:200]}...")
 
         media_parts: list[dict] = []
         if media:
@@ -820,9 +808,7 @@ class MeshLlmAgent:
         # **kwargs capture in @mesh.llm). See #863.
         call_kwargs.pop("output_type", None)
         effective_tools = (
-            self._enrich_tools_with_endpoints()
-            if self._is_mesh_delegated and self._tool_schemas
-            else (self._tool_schemas if self._tool_schemas else None)
+            self._enrich_tools_with_endpoints() if self._tool_schemas else None
         )
         return self._provider_handler.prepare_request(
             messages=messages,
@@ -898,12 +884,6 @@ class MeshLlmAgent:
         total_output_tokens = 0
         effective_model = self.model  # Track actual model used
 
-        # Check if litellm is available
-        if completion is None:
-            raise ImportError(
-                "litellm is required for MeshLlmAgent. Install with: pip install litellm"
-            )
-
         messages = await self._build_messages_for_run(
             message, media, context, context_mode
         )
@@ -919,76 +899,65 @@ class MeshLlmAgent:
             )
 
             try:
-                # Call LLM (either direct LiteLLM or mesh-delegated)
+                # Mesh-delegated call to upstream @mesh.llm_provider
                 try:
                     request_params = self._build_request_params(messages, **kwargs)
                     effective_tools = (
                         self._enrich_tools_with_endpoints()
-                        if self._is_mesh_delegated and self._tool_schemas
-                        else (self._tool_schemas if self._tool_schemas else None)
+                        if self._tool_schemas
+                        else None
                     )
 
-                    if self._is_mesh_delegated:
-                        # Mesh delegation: extract model_params to send to provider
-                        # Exclude messages/tools (separate params), api_key (provider has it),
-                        # and output_mode (only used locally by prepare_request)
-                        model_params = {
-                            k: v
-                            for k, v in request_params.items()
-                            if k
-                            not in [
-                                "messages",
-                                "tools",
-                                "api_key",
-                                "output_mode",
-                                "model",  # Model handled separately below
-                            ]
-                        }
+                    # Mesh delegation: extract model_params to send to provider.
+                    # Exclude messages/tools (separate params), output_mode (only
+                    # used locally by prepare_request), and model (handled
+                    # explicitly below so we can keep the consumer-vs-provider
+                    # model-override semantics readable).
+                    model_params = {
+                        k: v
+                        for k, v in request_params.items()
+                        if k
+                        not in [
+                            "messages",
+                            "tools",
+                            "output_mode",
+                            "model",
+                        ]
+                    }
 
-                        # Issue #308: Include model override if explicitly set by consumer
-                        # This allows consumer to request a specific model from the provider
-                        # (e.g., use haiku instead of provider's default sonnet)
-                        if self.model:
-                            model_params["model"] = self.model
+                    # Issue #308: Include model override if explicitly set by consumer
+                    # This allows consumer to request a specific model from the provider
+                    # (e.g., use haiku instead of provider's default sonnet)
+                    if self.model:
+                        model_params["model"] = self.model
 
-                        # Issue #459: Include output_schema for provider to apply vendor-specific handling
-                        # (e.g., OpenAI needs response_format, not prompt-based JSON instructions)
-                        if self.output_type is not str and hasattr(
-                            self.output_type, "model_json_schema"
-                        ):
-                            model_params["output_schema"] = (
-                                self.output_type.model_json_schema()
-                            )
-                            model_params["output_type_name"] = self.output_type.__name__
-
-                        # Issue #713: Re-inject parallel_tool_calls for provider-side execution.
-                        # Provider handlers strip this from request_params (e.g., Claude handler
-                        # pops it since the Claude API doesn't accept it), but the provider's
-                        # agentic loop needs it to decide parallel vs sequential execution.
-                        if self._parallel_tool_calls:
-                            model_params["parallel_tool_calls"] = True
-
-                        logger.debug(
-                            f"📤 Delegating to mesh provider with handler-prepared params: "
-                            f"keys={list(model_params.keys())}"
+                    # Issue #459: Include output_schema for provider to apply vendor-specific handling
+                    # (e.g., OpenAI needs response_format, not prompt-based JSON instructions)
+                    if self.output_type is not str and hasattr(
+                        self.output_type, "model_json_schema"
+                    ):
+                        model_params["output_schema"] = (
+                            self.output_type.model_json_schema()
                         )
+                        model_params["output_type_name"] = self.output_type.__name__
 
-                        response = await self._call_mesh_provider(
-                            messages=messages,
-                            tools=effective_tools if effective_tools else None,
-                            **model_params,
-                        )
-                    else:
-                        # Direct LiteLLM call: add model and API key
-                        request_params["model"] = self.model
-                        request_params["api_key"] = self.api_key
+                    # Issue #713: Re-inject parallel_tool_calls for provider-side execution.
+                    # Provider handlers strip this from request_params (e.g., Claude handler
+                    # pops it since the Claude API doesn't accept it), but the provider's
+                    # agentic loop needs it to decide parallel vs sequential execution.
+                    if self._parallel_tool_calls:
+                        model_params["parallel_tool_calls"] = True
 
-                        logger.debug(
-                            f"📤 Calling LLM with handler-prepared params: "
-                            f"keys={list(request_params.keys())}"
-                        )
+                    logger.debug(
+                        f"📤 Delegating to mesh provider with handler-prepared params: "
+                        f"keys={list(model_params.keys())}"
+                    )
 
-                        response = await asyncio.to_thread(completion, **request_params)
+                    response = await self._call_mesh_provider(
+                        messages=messages,
+                        tools=effective_tools if effective_tools else None,
+                        **model_params,
+                    )
                 except Exception as e:
                     # Any exception from completion call is an LLM API error
                     logger.error(f"❌ LLM API error: {e}")
@@ -1358,10 +1327,9 @@ class MeshLlmAgent:
             else None
         )
 
-        # Mesh delegation: extract model_params to send to provider.
-        # Mirrors __call__'s mesh-delegate branch (mesh_llm_agent.py:929-963)
-        # so the streaming and buffered paths land identical request shapes
-        # on the provider side.
+        # Mesh delegation: extract model_params to send to provider. Mirrors
+        # __call__'s mesh-delegate branch so the streaming and buffered paths
+        # land identical request shapes on the provider side.
         model_params = {
             k: v
             for k, v in request_params.items()
@@ -1369,7 +1337,6 @@ class MeshLlmAgent:
             not in [
                 "messages",
                 "tools",
-                "api_key",
                 "output_mode",
                 "model",
             ]
@@ -1456,6 +1423,18 @@ class MeshLlmAgent:
             buffered_tool_name = stream_tool_name[: -len("_stream")]
         else:
             buffered_tool_name = stream_tool_name
+        # Defensive: if the provider's streaming tool isn't named with the
+        # ``_stream`` suffix our convention assumes, the derivation above
+        # leaves the buffered name equal to the streaming name and we'd
+        # re-invoke the same unknown tool (or, worse, infinite-loop if it
+        # later starts existing). Bail out with a clear error instead.
+        if buffered_tool_name == stream_tool_name:
+            raise RuntimeError(
+                f"Cannot derive buffered fallback for streaming tool '{stream_tool_name}': "
+                f"provider does not follow the '<tool>_stream' naming convention. "
+                f"Either expose the streaming variant or rename the buffered tool to "
+                f"share a base name (e.g. 'process_chat' + 'process_chat_stream')."
+            )
         result = await provider_proxy.call_tool_with_tracing(
             buffered_tool_name, {"request": request_dict}
         )
@@ -1486,42 +1465,20 @@ class MeshLlmAgent:
         context_mode: Literal["replace", "append", "prepend"] = "append",
         **kwargs,
     ) -> AsyncIterator[str]:
-        """Stream the final assistant text token-by-token via the agentic loop.
+        """Stream the final assistant text token-by-token via mesh delegation.
 
-        Each iteration opens ``litellm.acompletion(stream=True, ...)`` and
-        consumes chunks live as they arrive. Text deltas are yielded to the
-        consumer immediately; the moment a ``tool_calls`` delta appears we
-        stop yielding text from this iteration, drain the rest of the stream
-        to collect tool_call argument fragments and the trailing usage block,
-        execute the tools, append assistant + tool messages, and continue
-        the loop. An iteration that produces no tool_calls IS the final
-        answer — we return after the stream exhausts.
+        Routes to the resolved @mesh.llm_provider's auto-generated
+        ``<name>_stream`` MCP tool when present, falling back to a single-chunk
+        yield from the buffered ``<name>`` tool when the provider does not
+        advertise a streaming variant (older providers, TS / Java SDKs).
 
-        Why stop yielding text once a tool_call is seen:
-            Anthropic emits text only BEFORE a tool_call within a single
-            assistant turn (Claude does not interleave text and tool_calls
-            inside one content block). Any further "text" deltas after a
-            tool_call delta are typically empty / whitespace and would just
-            muddy the consumer's view of the preamble. If a future provider
-            DOES interleave, we can revisit. The earlier "peek-then-stream"
-            design (Option A) decided text-vs-tool BEFORE the stream began,
-            which dropped the entire tool_call branch when Claude prefaced
-            its tool calls with text like "I'll check the weather..." —
-            this Option B implementation handles that case correctly.
-
-        Token usage is captured AFTER full stream consumption per iteration
-        (LiteLLM emits ``usage`` in the final chunk when
-        ``stream_options={"include_usage": True}`` is requested) so
-        ExecutionTracer's post-call read still sees accurate counts.
+        The provider runs its own agentic loop (buffered or streaming) and
+        emits text deltas back through the MCP stream channel — the consumer
+        side is intentionally a thin pipe.
 
         Constraints:
             - String output only — typed Pydantic outputs cannot be
               meaningfully streamed and would defeat token-by-token UX.
-            - Mesh-delegated providers route through the provider's
-              auto-generated ``<name>_stream`` tool when present, falling
-              back to a single-chunk yield from the buffered ``<name>``
-              tool when the provider does not advertise a streaming
-              variant (e.g., older Python providers and TS / Java SDKs).
 
         Yields:
             ``str`` chunks from the final assistant message (and any
@@ -1534,186 +1491,13 @@ class MeshLlmAgent:
                 "Use MeshLlmAgent.__call__() for typed responses."
             )
 
-        if self._is_mesh_delegated:
-            # Forward call-time kwargs (temperature, max_tokens, etc.) so
-            # mesh-delegated streaming honors the same overrides as the
-            # buffered __call__ path.
-            async for chunk in self._stream_mesh_delegated(
-                message, media, context, context_mode, **kwargs
-            ):
-                yield chunk
-            return
-
-        if acompletion is None:
-            raise ImportError(
-                "litellm is required for MeshLlmAgent.stream(). "
-                "Install with: pip install litellm"
-            )
-
-        from _mcp_mesh.tracing.context import set_llm_metadata
-
-        self._iteration_count = 0
-        total_input_tokens = 0
-        total_output_tokens = 0
-        effective_model = self.model
-
-        messages = await self._build_messages_for_run(
-            message, media, context, context_mode
-        )
-
-        while self._iteration_count < self.max_iterations:
-            self._iteration_count += 1
-            logger.debug(
-                f"🔄 stream iteration {self._iteration_count}/{self.max_iterations}"
-            )
-
-            try:
-                request_params = self._build_request_params(messages, **kwargs)
-            except Exception as e:
-                logger.error(f"❌ stream: failed to build request params: {e}")
-                raise LLMAPIError(
-                    provider=str(self.provider),
-                    model=self.model,
-                    original_error=e,
-                ) from e
-
-            request_params["model"] = self.model
-            request_params["api_key"] = self.api_key
-            request_params["stream"] = True
-            existing_stream_opts = request_params.get("stream_options") or {}
-            request_params["stream_options"] = {
-                **existing_stream_opts,
-                "include_usage": True,
-            }
-
-            try:
-                stream_iter = await acompletion(**request_params)
-            except Exception as e:
-                logger.error(f"❌ stream: acompletion failed: {e}")
-                raise LLMAPIError(
-                    provider=str(self.provider),
-                    model=self.model,
-                    original_error=e,
-                ) from e
-
-            chunks: list[Any] = []
-            saw_tool_call = False
-            stream_completed = False
-
-            try:
-                async for chunk in stream_iter:
-                    chunks.append(chunk)
-
-                    if self._chunk_has_tool_call(chunk):
-                        # First tool_call delta of this iteration: stop
-                        # yielding text immediately. We continue draining
-                        # the stream so we collect remaining tool_call
-                        # argument fragments AND the trailing usage chunk;
-                        # we do NOT break out of the loop.
-                        saw_tool_call = True
-                        continue
-
-                    if saw_tool_call:
-                        # Already in tool-call mode; ignore any further
-                        # text deltas (per the docstring: Claude doesn't
-                        # interleave text and tool_calls).
-                        continue
-
-                    text = self._extract_text_from_chunk(chunk)
-                    if text:
-                        yield text
-                stream_completed = True
-
-                final_usage = self._extract_usage_from_chunks(chunks)
-                if final_usage:
-                    total_input_tokens += final_usage.get("prompt_tokens", 0) or 0
-                    total_output_tokens += (
-                        final_usage.get("completion_tokens", 0) or 0
-                    )
-                model_from_chunks = self._extract_model_from_chunks(chunks)
-                if model_from_chunks:
-                    effective_model = model_from_chunks
-
-                if saw_tool_call:
-                    merged_tool_calls = self._merge_streamed_tool_calls(chunks)
-                    if not merged_tool_calls:
-                        raise LLMAPIError(
-                            provider=str(self.provider),
-                            model=self.model,
-                            original_error=RuntimeError(
-                                "stream produced tool_call deltas but no complete "
-                                "tool_call could be merged"
-                            ),
-                        )
-
-                    preamble_text = self._join_text_from_chunks(chunks)
-                    mock = _MockResponse(
-                        {
-                            "role": "assistant",
-                            "content": preamble_text or None,
-                            "tool_calls": merged_tool_calls,
-                        }
-                    )
-
-                    set_llm_metadata(
-                        model=effective_model,
-                        provider=str(self.provider) if self.provider else "",
-                        input_tokens=total_input_tokens,
-                        output_tokens=total_output_tokens,
-                    )
-
-                    assistant_message = mock.choices[0].message
-                    logger.info(
-                        f"🛠️  stream: LLM requested {len(assistant_message.tool_calls)} tool calls"
-                    )
-                    messages.append(assistant_message.model_dump())
-
-                    if (
-                        self._parallel_tool_calls
-                        and len(assistant_message.tool_calls) > 1
-                    ):
-                        tool_results = await self._execute_tool_calls_parallel(
-                            assistant_message.tool_calls
-                        )
-                    else:
-                        tool_results = await self._execute_tool_calls(
-                            assistant_message.tool_calls
-                        )
-                    tool_results = await self._resolve_media_in_tool_results(
-                        tool_results
-                    )
-                    for tr in tool_results:
-                        messages.append(tr)
-                    continue
-
-                # No tool_calls observed this iteration → final answer.
-                # All text was already yielded live above; usage + model
-                # metadata is published, and we're done.
-                set_llm_metadata(
-                    model=effective_model,
-                    provider=str(self.provider) if self.provider else "",
-                    input_tokens=total_input_tokens,
-                    output_tokens=total_output_tokens,
-                )
-                return
-            finally:
-                if not stream_completed:
-                    aclose = getattr(stream_iter, "aclose", None)
-                    if aclose is not None:
-                        try:
-                            await aclose()
-                        except Exception as e:
-                            logger.debug(
-                                f"stream: aclose() failed during teardown: {e}"
-                            )
-
-        logger.error(
-            f"❌ stream: max iterations ({self.max_iterations}) exceeded without final response"
-        )
-        raise MaxIterationsError(
-            iteration_count=self._iteration_count,
-            max_allowed=self.max_iterations,
-        )
+        # Forward call-time kwargs (temperature, max_tokens, etc.) so the
+        # streaming path honors the same overrides as the buffered
+        # __call__ path.
+        async for chunk in self._stream_mesh_delegated(
+            message, media, context, context_mode, **kwargs
+        ):
+            yield chunk
 
     @staticmethod
     def _chunk_has_tool_call(chunk: Any) -> bool:

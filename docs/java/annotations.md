@@ -130,15 +130,13 @@ Specifies capability and tag selection for dependencies, LLM providers, and filt
 
 ## @MeshLlm
 
-Enables LLM-powered tools. Applied alongside `@MeshTool` on the method.
-
-### Via Mesh (providerSelector)
-
-Route LLM requests through a mesh provider agent:
+Enables LLM-powered tools. Applied alongside `@MeshTool` on the method. LLM
+calls are routed through a mesh-registered `@MeshLlmProvider` agent — the
+consumer never holds the vendor API key.
 
 ```java
 @MeshLlm(
-    providerSelector = @Selector(capability = "llm"),  // Find LLM via mesh
+    providerSelector = @Selector(capability = "llm", tags = {"+claude"}),  // Discover provider in mesh
     maxIterations = 5,                                  // Max agentic loops
     systemPrompt = "classpath:prompts/analyst.ftl",     // FreeMarker template
     contextParam = "ctx",                               // Parameter for context
@@ -161,36 +159,9 @@ public AnalysisResult analyze(
 }
 ```
 
-### Direct Provider (provider)
-
-Use a specific LLM provider by name:
-
-```java
-@MeshLlm(
-    provider = "claude",                    // Direct provider name
-    maxIterations = 1,                      // Single generation
-    systemPrompt = "You are a helpful assistant.",
-    maxTokens = 1024,
-    temperature = 0.7
-)
-@MeshTool(capability = "chat",
-          description = "Chat with Claude",
-          tags = {"chat", "llm", "java", "direct"})
-public ChatResponse chat(
-        @Param(value = "message", description = "User message") String message,
-        MeshLlmAgent llm) {
-    if (llm != null && llm.isAvailable()) {
-        String response = llm.generate(message);
-        return new ChatResponse(response);
-    }
-    return new ChatResponse("LLM unavailable");
-}
-```
-
 | Attribute          | Required | Default | Description                          |
 | ------------------ | -------- | ------- | ------------------------------------ |
-| `provider`         | No\*     |         | Direct provider name                 |
-| `providerSelector` | No\*     |         | `@Selector` for mesh LLM discovery   |
+| `providerSelector` | Yes      |         | `@Selector` for mesh LLM discovery   |
 | `maxIterations`    | No       | `1`     | Max agentic loop iterations          |
 | `systemPrompt`     | No       | `""`    | System prompt or template path       |
 | `contextParam`     | No       | `""`    | Parameter name for template context  |
@@ -198,8 +169,6 @@ public ChatResponse chat(
 | `filterMode`       | No       | `ALL`   | `FilterMode.ALL` or `BEST_MATCH`     |
 | `maxTokens`        | No       | `0`     | Max output tokens (0 = default)      |
 | `temperature`      | No       | `0.0`   | Sampling temperature (0.0 = default) |
-
-\*Specify either `provider` (direct) or `providerSelector` (mesh discovery), not both.
 
 ### MeshLlmAgent API
 
