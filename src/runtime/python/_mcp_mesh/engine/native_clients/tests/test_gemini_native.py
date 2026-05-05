@@ -1056,6 +1056,18 @@ class TestAdaptResponse:
         assert out.usage is None
         assert out.choices[0].message.content == "hi"
 
+    def test_finish_reason_malformed_function_call_maps_to_tool_calls(self):
+        """Recent google-genai versions emit MALFORMED_FUNCTION_CALL when the
+        model attempted a tool call but produced invalid JSON. Map to
+        ``tool_calls`` so helpers.py's agentic loop can surface the failure
+        path naturally instead of treating it as a normal STOP."""
+        raw = _make_gemini_response(
+            text="garbled tool call",
+            finish_reason="MALFORMED_FUNCTION_CALL",
+        )
+        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        assert out.choices[0].finish_reason == "tool_calls"
+
 
 # ---------------------------------------------------------------------------
 # complete() — request dispatch + adaptation

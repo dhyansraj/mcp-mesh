@@ -351,6 +351,24 @@ class TestDispatchStatusLog:
         assert first_count == 1
         assert second_count == 1
 
+    def test_is_dispatch_status_logged_short_circuits_after_first_call(
+        self, _reset_dispatch_status_log
+    ):
+        """``has_native()`` consults ``is_dispatch_status_logged()`` so it can
+        skip the log-once call frame on the hot path. Verify the getter
+        flips False → True after the first ``has_native()`` invocation."""
+        handler = GeminiHandler()
+        assert "MCP_MESH_NATIVE_LLM" not in os.environ
+        assert gemini_handler_module.is_dispatch_status_logged() is False
+
+        with patch(
+            "_mcp_mesh.engine.native_clients.gemini_native.is_available",
+            return_value=True,
+        ):
+            handler.has_native()
+
+        assert gemini_handler_module.is_dispatch_status_logged() is True
+
 
 # ---------------------------------------------------------------------------
 # HINT-mode preservation

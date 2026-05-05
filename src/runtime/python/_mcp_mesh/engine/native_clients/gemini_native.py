@@ -749,6 +749,11 @@ _GEMINI_SCHEMA_KEYS = frozenset({
     "anyOf",
     "allOf",
     "oneOf",
+    # Gemini-specific OpenAPI extension to control output property ordering;
+    # not currently emitted by mesh's Pydantic generator but accepted by the
+    # API and may appear in user-supplied schemas — whitelist for forward
+    # compatibility.
+    "propertyOrdering",
     # NOTABLY ABSENT (rejected by Gemini): additionalProperties, $schema,
     # title, $ref, definitions, $defs, propertyNames, patternProperties,
     # exclusiveMinimum, exclusiveMaximum, multipleOf, const, not, contains.
@@ -1075,6 +1080,10 @@ _FINISH_REASON_MAP = {
     "LANGUAGE": "stop",
     "OTHER": "stop",
     "FINISH_REASON_UNSPECIFIED": "stop",
+    # Model attempted a tool call but emitted a malformed function_call part.
+    # Map to "tool_calls" so helpers.py's agentic loop surfaces the failure
+    # path naturally (rather than treating it as a normal STOP).
+    "MALFORMED_FUNCTION_CALL": "tool_calls",
 }
 
 
