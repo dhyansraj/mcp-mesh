@@ -126,8 +126,11 @@ class TestSupportsModel:
         assert gemini_native.supports_model(model) is False
 
     def test_none_returns_false(self):
-        # Defensive: None should not crash; treat as unsupported.
-        assert gemini_native.supports_model(None or "") is False
+        # Defensive: None must not crash; treat as unsupported. The previous
+        # form ``supports_model(None or "")`` evaluated to ``""`` and never
+        # exercised the None branch — the existing ``if not model`` guard
+        # in ``supports_model`` covers it cleanly.
+        assert gemini_native.supports_model(None) is False
 
 
 class TestStripPrefix:
@@ -762,6 +765,51 @@ class TestSanitizeGeminiParametersSchema:
     def test_empty_dict_returns_empty_dict(self):
         assert gemini_native._sanitize_gemini_parameters_schema({}) == {}
 
+    def test_default_literal_payload_passes_through(self):
+        """``default`` holds an arbitrary literal JSON value, NOT a nested
+        schema. Recursing into it would strip JSON-Schema-named keys from a
+        user-supplied default whose own keys happen to match schema fields
+        (e.g. a default object ``{"additionalProperties": False, ...}``) —
+        silent corruption of user data. The literal must round-trip verbatim.
+        """
+        schema = {
+            "type": "object",
+            "default": {
+                "additionalProperties": False,
+                "value": 42,
+                "title": "preserved",
+            },
+            "properties": {"v": {"type": "integer"}},
+        }
+        out = gemini_native._sanitize_gemini_parameters_schema(schema)
+        # The full default dict must be preserved — no key stripping.
+        assert out["default"] == {
+            "additionalProperties": False,
+            "value": 42,
+            "title": "preserved",
+        }
+
+    def test_example_literal_payload_passes_through(self):
+        """Same contract as ``default``: ``example`` is a literal payload, not
+        a nested schema. Recursion would silently mangle user examples whose
+        keys happen to collide with JSON-Schema field names.
+        """
+        schema = {
+            "type": "object",
+            "example": {
+                "additionalProperties": False,
+                "title": "Sample",
+                "value": [1, 2, 3],
+            },
+            "properties": {"v": {"type": "integer"}},
+        }
+        out = gemini_native._sanitize_gemini_parameters_schema(schema)
+        assert out["example"] == {
+            "additionalProperties": False,
+            "title": "Sample",
+            "value": [1, 2, 3],
+        }
+
 
 class TestConvertToolChoice:
     def test_auto(self):
@@ -1137,6 +1185,32 @@ class TestUnsupportedKwargWarn:
             if r.levelname == "WARNING" and "dropping unsupported kwarg" in r.getMessage()
         ]
         assert len(warns) == 3
+
+    def test_candidate_count_warns_and_dropped(self, caplog):
+        """``candidate_count`` is intentionally NOT forwarded — mesh's
+        contract is single-completion (n=1) and the response/stream adapters
+        only consume ``candidates[0]``. Silently dropping N-1 candidates would
+        be surprising; instead the kwarg falls through to the WARN path so
+        callers get a loud signal that mesh doesn't support it.
+        """
+        with caplog.at_level("WARNING", logger=gemini_native.logger.name):
+            out = gemini_native._build_create_kwargs(
+                {
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "candidate_count": 3,
+                },
+                model="gemini/gemini-2.0-flash",
+            )
+        # Not forwarded into the SDK config.
+        assert "candidate_count" not in out["config"]
+        # WARN must mention candidate_count (single-completion contract surface).
+        warn_msgs = [
+            r.getMessage() for r in caplog.records if r.levelname == "WARNING"
+        ]
+        assert any(
+            "candidate_count" in m and "dropping unsupported kwarg" in m
+            for m in warn_msgs
+        ), f"Expected WARN about candidate_count; got: {warn_msgs}"
 
 
 # ---------------------------------------------------------------------------

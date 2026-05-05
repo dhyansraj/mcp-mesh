@@ -1863,16 +1863,19 @@ def llm_provider(
                 }
 
                 # Include tool_calls if present (critical for agentic loop support!)
+                #
+                # Use the shared ``_build_assistant_tool_call_dict`` helper so
+                # the Gemini-only ``_gemini_thought_signature`` sidecar is
+                # forwarded onto the conversation dict. Inline construction
+                # would silently drop the signature, breaking the next-iteration
+                # request to thinking Gemini models with HTTP 400 ("Function
+                # call is missing a thought_signature"). This single-call
+                # branch fires for callers who hit ``process_chat`` directly
+                # (no agentic-loop path) — the loop branch (~line 849) already
+                # uses the helper.
                 if hasattr(message, "tool_calls") and message.tool_calls:
                     message_dict["tool_calls"] = [
-                        {
-                            "id": tc.id,
-                            "type": tc.type,
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments,
-                            },
-                        }
+                        _build_assistant_tool_call_dict(tc)
                         for tc in message.tool_calls
                     ]
 

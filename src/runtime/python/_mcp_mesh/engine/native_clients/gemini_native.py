@@ -940,6 +940,12 @@ def _sanitize_gemini_parameters_schema(schema: Any) -> Any:
                 # ``enum`` is a list of literal values, not nested schemas.
                 out[key] = list(value)
                 continue
+            if key in ("default", "example"):
+                # Literal payload (any JSON value), NOT a nested schema. Pass
+                # through verbatim — recursing would strip JSON-Schema-named
+                # keys from user-provided literals (silent data corruption).
+                out[key] = value
+                continue
             out[key] = _sanitize_gemini_parameters_schema(value)
         return out
     if isinstance(schema, list):
@@ -1068,7 +1074,13 @@ _GEMINI_PASSTHROUGH_KWARGS = frozenset({
     "response_mime_type",
     "presence_penalty",
     "frequency_penalty",
-    "candidate_count",
+    # NOTABLY ABSENT: ``candidate_count``. Mesh's contract is single-completion
+    # (anthropic_native + openai_native both implicitly assume n=1) and the
+    # Gemini response/stream adapters here only consume ``candidates[0]``.
+    # Forwarding ``candidate_count > 1`` would silently drop additional
+    # candidates. Letting the kwarg fall through to the WARN path gives
+    # callers a loud signal that mesh doesn't support multi-candidate output
+    # instead of silently returning 1 of N.
 })
 
 # Keys explicitly handled (consumed or routed) inside this adapter — the
@@ -1182,7 +1194,9 @@ def _build_create_kwargs(
         ("seed", "seed"),
         ("presence_penalty", "presence_penalty"),
         ("frequency_penalty", "frequency_penalty"),
-        ("candidate_count", "candidate_count"),
+        # ``candidate_count`` deliberately NOT forwarded — see the comment on
+        # ``_GEMINI_PASSTHROUGH_KWARGS``. Lets the WARN path surface the
+        # unsupported-knob signal instead of silently dropping N-1 candidates.
     ):
         value = request_params.get(src)
         if value is None:
