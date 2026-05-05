@@ -26,6 +26,7 @@ Real network calls are mocked.
 
 from __future__ import annotations
 
+import asyncio
 import builtins
 import json
 import sys
@@ -1179,9 +1180,13 @@ class TestSharedHttpxClient:
         yield
         openai_native._reset_shared_httpx_client()
 
-    def test_shared_httpx_client_reused_across_calls(self):
-        """Two ``_build_client`` calls must reuse the same ``http_client``
-        instance — proves we have a single connection pool process-wide."""
+    @pytest.mark.asyncio
+    async def test_shared_httpx_client_reused_within_same_loop(self):
+        """Two ``_build_client`` calls on the same event loop must reuse
+        the same ``http_client`` instance — proves we have a single
+        connection pool per loop. Run inside an async context so
+        _get_shared_httpx_client() picks up the running loop and caches
+        against it."""
         cls_mock = MagicMock(return_value=MagicMock())
         with patch("openai.AsyncOpenAI", cls_mock):
             openai_native._build_client(
@@ -1213,7 +1218,8 @@ class TestSharedHttpxClient:
         assert second is not first
         assert second.is_closed is False
 
-    def test_api_key_rotation_works_with_shared_pool(self):
+    @pytest.mark.asyncio
+    async def test_api_key_rotation_works_with_shared_pool(self):
         """K8s secret rotation: the api_key changes per call but the shared
         http_client stays the same. Each call still creates a NEW
         ``AsyncOpenAI`` wrapper so the rotated key is honored."""
@@ -1235,7 +1241,8 @@ class TestSharedHttpxClient:
         # But the same shared httpx client.
         assert first_kwargs["http_client"] is second_kwargs["http_client"]
 
-    def test_httpx_timeout_configuration(self):
+    @pytest.mark.asyncio
+    async def test_httpx_timeout_configuration(self):
         """The shared client carries the documented per-stage timeouts.
         ``read=600`` is critical — LLM responses can take minutes on long
         generations, and a too-tight read timeout would spuriously cut off
@@ -1246,7 +1253,8 @@ class TestSharedHttpxClient:
         assert client.timeout.write == 30.0
         assert client.timeout.pool == 5.0
 
-    def test_httpx_limits_configuration(self):
+    @pytest.mark.asyncio
+    async def test_httpx_limits_configuration(self):
         """The shared pool's connection limits are applied as documented.
 
         Reads private ``_transport._pool`` attrs because httpx does not
@@ -1258,6 +1266,110 @@ class TestSharedHttpxClient:
         pool = client._transport._pool
         assert pool._max_keepalive_connections == 20
         assert pool._max_connections == 100
+
+    def test_per_loop_httpx_pool_isolates_event_loops(self):
+        """Different event loops MUST get different httpx pool instances.
+
+        This is the preventive fix mirrored from gemini_native (issue #866):
+        mesh's ``shared/tool_executor.py`` round-robins tool calls across
+        worker threads, each owning its own long-lived loop. A process-global
+        ``httpx.AsyncClient`` would bind its anyio sync primitives to the
+        first worker's loop and break the moment a call lands on a different
+        worker.
+        """
+        captured_clients: list = []
+
+        async def _capture_client():
+            captured_clients.append(openai_native._get_shared_httpx_client())
+
+        # Two distinct event loops. Each must produce its own httpx pool.
+        loop_a = asyncio.new_event_loop()
+        try:
+            loop_a.run_until_complete(_capture_client())
+        finally:
+            loop_a.close()
+
+        loop_b = asyncio.new_event_loop()
+        try:
+            loop_b.run_until_complete(_capture_client())
+        finally:
+            loop_b.close()
+
+        assert len(captured_clients) == 2
+        assert captured_clients[0] is not captured_clients[1], (
+            "Same httpx.AsyncClient was reused across event loops — would "
+            "trigger 'bound to a different event loop' RuntimeError on the "
+            "second loop's first request"
+        )
+
+    def test_cross_loop_dispatch_does_not_raise(self, monkeypatch):
+        """End-to-end: simulate the mesh worker-pool scenario — two
+        ``complete()`` calls on two distinct event loops. The fix
+        guarantees no cross-loop bug surfaces; without it the second
+        loop's first request would raise.
+        """
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+        # Build a fake API response shaped like openai.types.ChatCompletion.
+        api_resp = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="hi", role="assistant", tool_calls=None
+                    ),
+                    finish_reason="stop",
+                    index=0,
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1),
+            model="gpt-4o-mini",
+        )
+
+        def _fresh_openai_mock():
+            instance = MagicMock()
+            instance.chat = MagicMock()
+            instance.chat.completions = MagicMock()
+            instance.chat.completions.create = AsyncMock(return_value=api_resp)
+            return MagicMock(return_value=instance)
+
+        cls_mock = _fresh_openai_mock()
+        monkeypatch.setattr("openai.AsyncOpenAI", cls_mock)
+
+        async def _one_call():
+            await openai_native.complete(
+                {"messages": [{"role": "user", "content": "hi"}]},
+                model="openai/gpt-4o-mini",
+            )
+
+        loop_a = asyncio.new_event_loop()
+        try:
+            loop_a.run_until_complete(_one_call())
+        finally:
+            loop_a.close()
+
+        loop_b = asyncio.new_event_loop()
+        try:
+            # Pre-fix: this raised "bound to a different event loop" if the
+            # cached httpx pool was reused. Post-fix: each loop gets its
+            # own pool from _get_shared_httpx_client.
+            loop_b.run_until_complete(_one_call())
+        finally:
+            loop_b.close()
+
+    def test_get_shared_httpx_returns_uncached_when_no_loop(self):
+        """Sync test paths (no running loop) get an uncached client back —
+        otherwise we'd cache against a nonexistent loop id."""
+        c1 = openai_native._get_shared_httpx_client()
+        c2 = openai_native._get_shared_httpx_client()
+        try:
+            # Each sync call returns a fresh client (not cached).
+            assert c1 is not c2
+        finally:
+            # Sync-path clients aren't cached — caller must close them.
+            # Use asyncio.run(...) since aclose() is async and we have no
+            # running loop here (that's the whole point of this test).
+            asyncio.run(c1.aclose())
+            asyncio.run(c2.aclose())
 
 
 # ---------------------------------------------------------------------------

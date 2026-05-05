@@ -30,6 +30,7 @@ Out of scope (PR 2 of issue #834):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -46,64 +47,104 @@ _OPENAI_PREFIX = "openai/"
 
 
 # ---------------------------------------------------------------------------
-# Shared httpx connection pool (issue #834 perf fix)
+# Per-event-loop httpx connection pool (issue #834 perf fix + #866 cross-loop fix)
 # ---------------------------------------------------------------------------
-# A single ``httpx.AsyncClient`` is reused across all native OpenAI calls in
-# this process. ``openai.AsyncOpenAI`` accepts ``http_client=`` and uses the
-# supplied client (and its connection pool) instead of constructing a fresh
-# one per call. This eliminates ~150-300ms per-call TLS+H2 setup overhead
-# vs. LiteLLM (which does its own pool reuse).
+# An ``httpx.AsyncClient`` is reused across all native OpenAI calls in this
+# process — but the cache is keyed by the *running asyncio event loop* rather
+# than process-globally. ``openai.AsyncOpenAI`` accepts ``http_client=`` and
+# uses the supplied client (and its connection pool) instead of constructing
+# a fresh one per call. This eliminates ~150-300ms per-call TLS+H2 setup
+# overhead vs. LiteLLM (which does its own pool reuse).
 #
-# K8s secret rotation still works because the api_key is still read fresh
-# per call by callers and forwarded to the per-call ``AsyncOpenAI`` wrapper
-# — the pool itself carries no credential state, only TCP/TLS connections.
-_CACHED_HTTPX_CLIENT: httpx.AsyncClient | None = None
-# Guards lazy-init / rebuild of the shared httpx client. The pool itself is
-# safe for concurrent use; the lock only protects the check-then-create race
-# at construction. Cheap (uncontended after first call) and correct under
-# threaded harnesses (tests, sync wrapper paths) that touch the cache.
+# WHY PER-LOOP (preventive fix mirroring gemini_native — issue #866):
+# ``httpx.AsyncClient`` (via httpcore) lazily constructs anyio synchronization
+# primitives — ``Lock`` / ``Semaphore`` / ``Event`` for the connection pool
+# — on first I/O. Those primitives bind to the *event loop that issues the
+# first request* and CANNOT be reused from a different loop ("bound to a
+# different event loop" RuntimeError).
+#
+# In mesh, ``shared/tool_executor.py`` runs an N-worker thread pool, each
+# thread owning its own long-lived asyncio event loop. Tool calls are
+# round-robin dispatched across workers. A single process-wide ``httpx``
+# pool would bind to the first worker's loop and then break the moment a
+# call lands on a different worker. OpenAI's current integration tests
+# happen not to surface this on their current test mix, but the same
+# mechanism trips reliably in Gemini's uc10_toolcalls suite — applying the
+# fix uniformly so future test patterns can't trip the same regression.
+#
+# Per-loop caching keeps the connection-reuse win within a single loop
+# (tool calls scheduled to the same worker share its pool) while
+# guaranteeing each loop owns its own anyio primitives. ``id(loop)`` is the
+# cache key.
+#
+# ASSUMPTION: mesh's worker loops live for the process lifetime — loop ids
+# are stable per worker. If short-lived loops were ever introduced (e.g.,
+# ad-hoc ``asyncio.run()`` outside a worker), id() reuse could surface a
+# stale-but-not-closed cached client bound to the original (now-dead) loop.
+# The current code does NOT detect this — ``is_closed`` only flips on
+# explicit ``aclose()``, not on owning-loop closure. A weakref-keyed cache
+# would handle this; deferred per #860.
+#
+# K8s secret rotation still works because the api_key is read fresh per call
+# by callers and forwarded to the per-call ``AsyncOpenAI`` wrapper — the
+# pool itself carries no credential state, only TCP/TLS connections.
+_CACHED_HTTPX_CLIENT_BY_LOOP: dict[int, httpx.AsyncClient] = {}
+# Guards lazy-init / rebuild of the per-loop httpx client cache. The pool
+# instances themselves are safe for concurrent use within their owning loop;
+# the lock only protects the check-then-create race at construction. Cheap
+# (uncontended after first call per loop).
 _CACHED_HTTPX_CLIENT_LOCK = threading.Lock()
 
 
-def _get_shared_httpx_client() -> httpx.AsyncClient:
-    """Lazily construct (or rebuild if closed) the shared httpx client.
+def _build_httpx_client() -> httpx.AsyncClient:
+    """Construct a fresh httpx.AsyncClient with the standard mesh tuning."""
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            connect=10.0,  # connection establishment
+            read=600.0,    # body read — LLM responses can be slow
+            write=30.0,    # request body write
+            pool=5.0,      # waiting for free connection from pool
+        ),
+        limits=httpx.Limits(
+            max_keepalive_connections=20,
+            max_connections=100,
+            keepalive_expiry=30.0,
+        ),
+    )
 
-    Single connection pool shared across all native OpenAI calls in this
-    process. Per-call ``AsyncOpenAI`` wrappers reuse this pool —
-    eliminating ~150-300ms per-call TLS+H2 setup overhead. K8s secret
-    rotation still works: ``api_key`` is read fresh per call; the pool
-    carries no credential state.
+
+def _get_shared_httpx_client() -> httpx.AsyncClient:
+    """Return an httpx.AsyncClient bound to the current event loop.
+
+    Cached per-loop (NOT process-globally) — see the module-level comment
+    for the rationale. Falls back to constructing a fresh client when no
+    loop is currently running (sync test paths); that client is NOT cached
+    so it gets garbage-collected promptly.
     """
-    global _CACHED_HTTPX_CLIENT
-    # Fast path — no lock when the cached client is healthy. The check is
-    # benign-racy (worst case: two threads both observe None and both enter
-    # the lock; the second one finds the cache populated under the lock and
-    # returns early).
-    if _CACHED_HTTPX_CLIENT is not None and not _CACHED_HTTPX_CLIENT.is_closed:
-        return _CACHED_HTTPX_CLIENT
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop — caller is in sync code (most likely test setup).
+        # Return an uncached client; the caller is responsible for cleanup.
+        return _build_httpx_client()
+
+    loop_id = id(loop)
+    # Fast path — no lock when the cached client for this loop is healthy.
+    cached = _CACHED_HTTPX_CLIENT_BY_LOOP.get(loop_id)
+    if cached is not None and not cached.is_closed:
+        return cached
     with _CACHED_HTTPX_CLIENT_LOCK:
-        if _CACHED_HTTPX_CLIENT is None or _CACHED_HTTPX_CLIENT.is_closed:
-            _CACHED_HTTPX_CLIENT = httpx.AsyncClient(
-                timeout=httpx.Timeout(
-                    connect=10.0,  # connection establishment
-                    read=600.0,    # body read — LLM responses can be slow
-                    write=30.0,    # request body write
-                    pool=5.0,      # waiting for free connection from pool
-                ),
-                limits=httpx.Limits(
-                    max_keepalive_connections=20,
-                    max_connections=100,
-                    keepalive_expiry=30.0,
-                ),
-            )
-        return _CACHED_HTTPX_CLIENT
+        cached = _CACHED_HTTPX_CLIENT_BY_LOOP.get(loop_id)
+        if cached is None or cached.is_closed:
+            cached = _build_httpx_client()
+            _CACHED_HTTPX_CLIENT_BY_LOOP[loop_id] = cached
+        return cached
 
 
 def _reset_shared_httpx_client() -> None:
-    """For tests — reset the cached client. NOT for production use."""
-    global _CACHED_HTTPX_CLIENT
+    """For tests — drop all cached per-loop clients. NOT for production use."""
     with _CACHED_HTTPX_CLIENT_LOCK:
-        _CACHED_HTTPX_CLIENT = None
+        _CACHED_HTTPX_CLIENT_BY_LOOP.clear()
 
 
 # ---------------------------------------------------------------------------

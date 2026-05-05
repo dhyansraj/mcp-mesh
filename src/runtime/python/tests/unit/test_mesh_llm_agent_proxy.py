@@ -2344,3 +2344,109 @@ class TestMeshDelegationMeta:
 
         assert usage is None
         assert model is None
+
+
+class TestBuildRequestParamsKwargCollision:
+    """Regression tests for #863: output_type kwarg collision in
+    _build_request_params when output_type leaks into _default_model_params
+    (e.g., via @mesh.llm decorator **kwargs capture)."""
+
+    def test_build_request_params_no_kwarg_collision_when_output_type_in_default_params(
+        self,
+    ):
+        """#863: prepare_request was failing with 'got multiple values for
+        keyword argument output_type' when output_type leaked into
+        _default_model_params (decorator **kwargs capture path)."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        agent = MeshLlmAgent(
+            config=make_test_config(
+                provider="claude",
+                model="claude-3-5-sonnet-20241022",
+                api_key="test-key",
+                max_iterations=10,
+            ),
+            filtered_tools=[],
+            output_type=ChatResponse,
+        )
+
+        # Simulate output_type leaking into _default_model_params via the
+        # decorator path (resolved_config.update(kwargs) in @mesh.llm).
+        agent._default_model_params["output_type"] = ChatResponse
+
+        # Capture prepare_request invocation; assert no TypeError raised
+        # and output_type arrives exactly once with the agent's value.
+        captured: dict = {}
+
+        def fake_prepare_request(*, messages, tools, output_type, **kwargs):
+            captured["messages"] = messages
+            captured["tools"] = tools
+            captured["output_type"] = output_type
+            captured["kwargs"] = kwargs
+            return {
+                "messages": messages,
+                "tools": tools,
+                "output_type": output_type,
+                **kwargs,
+            }
+
+        with patch.object(
+            agent._provider_handler,
+            "prepare_request",
+            side_effect=fake_prepare_request,
+        ):
+            params = agent._build_request_params(
+                [{"role": "user", "content": "hi"}]
+            )
+
+        # Did not raise TypeError; reached the handler exactly once.
+        assert captured["output_type"] is ChatResponse
+        # output_type should NOT also appear in **kwargs (would imply
+        # collision risk if upstream signatures changed).
+        assert "output_type" not in captured["kwargs"]
+        # Returned params include output_type from the explicit kwarg path.
+        assert params["output_type"] is ChatResponse
+
+    def test_build_request_params_call_time_output_type_kwarg_pops_safely(self):
+        """Defense-in-depth: caller-supplied ``output_type`` kwarg at call
+        time is popped before the splat — preventing collision with the
+        explicit ``output_type=self.output_type`` passed to
+        ``prepare_request``. ``self.output_type`` is always authoritative
+        (set at agent construction); call-time ``output_type`` is never
+        honored, by design. The pop is what keeps a stale **kwargs forward
+        from raising ``TypeError: prepare_request() got multiple values for
+        keyword argument 'output_type'``."""
+        from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
+
+        agent = MeshLlmAgent(
+            config=make_test_config(
+                provider="claude",
+                model="claude-3-5-sonnet-20241022",
+                api_key="test-key",
+                max_iterations=10,
+            ),
+            filtered_tools=[],
+            output_type=ChatResponse,
+        )
+
+        captured: dict = {}
+
+        def fake_prepare_request(*, messages, tools, output_type, **kwargs):
+            captured["output_type"] = output_type
+            captured["kwargs"] = kwargs
+            return {"output_type": output_type, **kwargs}
+
+        with patch.object(
+            agent._provider_handler,
+            "prepare_request",
+            side_effect=fake_prepare_request,
+        ):
+            agent._build_request_params(
+                [{"role": "user", "content": "hi"}],
+                output_type=ComplexResponse,  # caller-provided collision
+            )
+
+        # ``self.output_type`` is what reaches the handler — call-time
+        # ``output_type`` is unconditionally popped, never honored.
+        assert captured["output_type"] is ChatResponse
+        assert "output_type" not in captured["kwargs"]

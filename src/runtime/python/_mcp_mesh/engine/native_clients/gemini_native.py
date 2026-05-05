@@ -97,9 +97,15 @@ _VERTEX_PREFIX = "vertex_ai/"
 # Per-loop caching keeps the connection-reuse win within a single loop
 # (tool calls scheduled to the same worker share its pool) while
 # guaranteeing each loop owns its own anyio primitives. ``id(loop)`` is the
-# cache key — sufficient because loops are long-lived (workers run for the
-# process lifetime); when a loop closes the cached client is dropped from
-# the map by the next access if found stale.
+# cache key.
+#
+# ASSUMPTION: mesh's worker loops live for the process lifetime — loop ids
+# are stable per worker. If short-lived loops were ever introduced (e.g.,
+# ad-hoc ``asyncio.run()`` outside a worker), id() reuse could surface a
+# stale-but-not-closed cached client bound to the original (now-dead) loop.
+# The current code does NOT detect this — ``is_closed`` only flips on
+# explicit ``aclose()``, not on owning-loop closure. A weakref-keyed cache
+# would handle this; deferred per #860.
 #
 # K8s secret rotation still works because the api_key is read fresh per call
 # by callers and forwarded to the per-call ``genai.Client`` wrapper — the
