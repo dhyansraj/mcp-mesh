@@ -24,6 +24,7 @@ Reference:
 
 import json
 import logging
+import os
 from typing import Any, Optional
 
 from pydantic import BaseModel
@@ -45,6 +46,55 @@ OUTPUT_MODE_STRICT = "strict"
 OUTPUT_MODE_HINT = "hint"
 
 logger = logging.getLogger(__name__)
+
+
+# One-time guard so the dispatch-status DEBUG log fires exactly once per
+# process. Mirrors ``_logged_fallback_once`` in gemini_native — we
+# deliberately keep the state at module level (not on the handler instance)
+# because mesh constructs a fresh handler per request in some paths.
+_DISPATCH_STATUS_LOGGED = False
+
+
+def _log_dispatch_status_once() -> None:
+    """Log the resolved native-dispatch status once per process at DEBUG level.
+
+    Designed so users running with ``meshctl ... --debug`` can confirm whether
+    a Gemini provider agent is using the native google-genai SDK or falling
+    back to LiteLLM. Fires on first call only; subsequent invocations are
+    no-ops.
+    """
+    global _DISPATCH_STATUS_LOGGED
+    if _DISPATCH_STATUS_LOGGED:
+        return
+    _DISPATCH_STATUS_LOGGED = True
+
+    env_value = os.getenv("MCP_MESH_NATIVE_LLM", "").strip().lower()
+
+    if env_value in ("0", "false", "no", "off"):
+        logger.debug(
+            "Gemini native dispatch: disabled "
+            "(MCP_MESH_NATIVE_LLM=%s explicitly set; using LiteLLM)",
+            env_value or "<unset>",
+        )
+        return
+
+    from _mcp_mesh.engine.native_clients import gemini_native
+
+    if gemini_native.is_available():
+        try:
+            import google.genai as genai
+            version = getattr(genai, "__version__", "<unknown>")
+        except Exception:
+            version = "<import-failed>"
+        logger.debug(
+            "Gemini native dispatch: enabled (google-genai SDK %s)",
+            version,
+        )
+    else:
+        logger.debug(
+            "Gemini native dispatch: disabled "
+            "(google-genai SDK not installed; install mcp-mesh[gemini] to enable)"
+        )
 
 
 class GeminiHandler(BaseProviderHandler):
@@ -295,3 +345,92 @@ class GeminiHandler(BaseProviderHandler):
             output_type_name or "Response",
         )
         return model_params
+
+    # ------------------------------------------------------------------
+    # Native Gemini SDK dispatch (issue #834, PR 3)
+    # ------------------------------------------------------------------
+    # Default ON when the google-genai SDK is importable. Set
+    # ``MCP_MESH_NATIVE_LLM=0`` (or false/no/off) to force the LiteLLM
+    # fallback path. In normal installs the google-genai SDK is a base dep,
+    # so the missing-SDK branch should never trigger — kept for symmetry
+    # with the Anthropic / OpenAI handlers and to guard against custom
+    # installs that strip the SDK.
+    #
+    # HINT-mode preservation: ``prepare_request`` already decides
+    # response_format vs HINT (the existing Gemini API infinite-tool-loop
+    # workaround for ``response_format + tools``). The native adapter
+    # forwards whatever the handler hands it — no behavioral change.
+
+    def has_native(self) -> bool:
+        """Native dispatch is enabled by default when the google-genai SDK is
+        importable. Set ``MCP_MESH_NATIVE_LLM=0`` (or ``false``/``no``/``off``)
+        to disable and force the LiteLLM fallback path. Setting the flag to
+        ``1``/``true``/``yes``/``on`` is accepted as an explicit-enable
+        (same behavior as the default).
+        """
+        # Emit the one-time dispatch-status DEBUG log. Lazy here (vs. at
+        # module/handler init) so it fires when the first dispatch decision
+        # is actually made — the most useful signal for ``--debug`` runs.
+        _log_dispatch_status_once()
+
+        flag = os.environ.get("MCP_MESH_NATIVE_LLM", "").strip().lower()
+        # Explicit opt-out wins over SDK availability.
+        if flag in ("0", "false", "no", "off"):
+            return False
+
+        # Lazy import inside the function so module import does not fail
+        # when the SDK is absent; this mirrors what the call sites do.
+        from _mcp_mesh.engine.native_clients import gemini_native
+
+        if not gemini_native.is_available():
+            # Skip the log call entirely once it has already fired — the
+            # function dedupes internally, but on the no-native hot path
+            # avoiding the call frame altogether is cheaper still.
+            if not gemini_native.is_fallback_logged():
+                gemini_native.log_fallback_once()
+            return False
+
+        return True
+
+    async def complete(
+        self,
+        request_params: dict[str, Any],
+        *,
+        model: str,
+        **kwargs: Any,
+    ) -> Any:
+        """Dispatch a buffered completion to the native Gemini SDK adapter."""
+        from _mcp_mesh.engine.native_clients import gemini_native
+
+        return await gemini_native.complete(
+            request_params,
+            model=model,
+            api_key=kwargs.get("api_key"),
+            base_url=kwargs.get("base_url"),
+        )
+
+    async def complete_stream(
+        self,
+        request_params: dict[str, Any],
+        *,
+        model: str,
+        **kwargs: Any,
+    ):
+        """Streaming completion via the native Gemini SDK.
+
+        Note: this method is ``async def`` but ``return``s (without
+        awaiting) the async generator from
+        ``gemini_native.complete_stream``. Callers ``await`` the handler
+        call (which resolves the coroutine to the AG), then
+        ``async for chunk in stream_iter:`` to consume. Mirrors the
+        dispatch contract used in mesh/helpers.py and matches the
+        ClaudeHandler / OpenAIHandler patterns.
+        """
+        from _mcp_mesh.engine.native_clients import gemini_native
+
+        return gemini_native.complete_stream(
+            request_params,
+            model=model,
+            api_key=kwargs.get("api_key"),
+            base_url=kwargs.get("base_url"),
+        )
