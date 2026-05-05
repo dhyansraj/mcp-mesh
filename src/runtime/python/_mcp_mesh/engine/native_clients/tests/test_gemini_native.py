@@ -22,6 +22,7 @@ Real network calls are mocked.
 
 from __future__ import annotations
 
+import asyncio
 import builtins
 import json
 import sys
@@ -205,11 +206,98 @@ class TestBuildClient:
         assert kwargs["location"] == "europe-west4"
 
     def test_vertex_raises_when_no_project(self, monkeypatch):
+        # Stub ADC auto-derive to return None — simulates a deployment
+        # where neither GOOGLE_CLOUD_PROJECT env var nor ADC carries a
+        # project. Without this stub the test would pick up the test
+        # author's gcloud-default-login project.
+        monkeypatch.setattr(
+            gemini_native, "_derive_vertex_project_from_adc", lambda: None
+        )
         with pytest.raises(ValueError) as exc_info:
             gemini_native._build_client("vertex_ai/gemini-2.0-flash", None, None)
         msg = str(exc_info.value)
         assert "GOOGLE_CLOUD_PROJECT" in msg
         assert "MCP_MESH_NATIVE_LLM=0" in msg
+
+    def test_vertex_auto_derives_project_from_adc(self, monkeypatch):
+        """When GOOGLE_CLOUD_PROJECT is unset, fall back to ADC-derived
+        project — matches LiteLLM's behavior and works seamlessly with
+        Workload Identity / gcloud-default-login (no env var required)."""
+        monkeypatch.setattr(
+            gemini_native,
+            "_derive_vertex_project_from_adc",
+            lambda: "adc-derived-project",
+        )
+        cls_mock = MagicMock(return_value=MagicMock())
+        monkeypatch.setattr("google.genai.Client", cls_mock)
+        gemini_native._build_client("vertex_ai/gemini-2.0-flash", None, None)
+        kwargs = cls_mock.call_args.kwargs
+        assert kwargs["project"] == "adc-derived-project"
+        assert kwargs["vertexai"] is True
+
+    def test_vertex_env_var_wins_over_adc_derive(self, monkeypatch):
+        """Explicit GOOGLE_CLOUD_PROJECT env var takes precedence over the
+        ADC-derived project — auto-derive is a fallback, not an override."""
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "explicit-env-project")
+        # Make the ADC stub fail loudly if it's called — env var should
+        # short-circuit the derive path.
+        monkeypatch.setattr(
+            gemini_native,
+            "_derive_vertex_project_from_adc",
+            lambda: pytest.fail(
+                "ADC derive must not be called when env var is set"
+            ),
+        )
+        cls_mock = MagicMock(return_value=MagicMock())
+        monkeypatch.setattr("google.genai.Client", cls_mock)
+        gemini_native._build_client("vertex_ai/gemini-2.0-flash", None, None)
+        assert cls_mock.call_args.kwargs["project"] == "explicit-env-project"
+
+    def test_derive_vertex_project_calls_google_auth_default(
+        self, monkeypatch
+    ):
+        """The derive helper calls google.auth.default() and returns the
+        second tuple element (the resolved default project)."""
+        import google.auth as _ga
+
+        monkeypatch.setattr(
+            _ga, "default", lambda: (MagicMock(), "auth-default-project")
+        )
+        assert (
+            gemini_native._derive_vertex_project_from_adc()
+            == "auth-default-project"
+        )
+
+    def test_derive_vertex_project_returns_none_when_auth_unavailable(
+        self, monkeypatch
+    ):
+        """If google.auth isn't importable (custom install stripping the
+        transitive dep), the helper returns None — caller surfaces the
+        explicit-env-var error message."""
+        original_import = builtins.__import__
+
+        def _fake_import(name, *args, **kwargs):
+            if name == "google.auth" or name.startswith("google.auth."):
+                raise ImportError("No module named 'google.auth'")
+            return original_import(name, *args, **kwargs)
+
+        monkeypatch.delitem(sys.modules, "google.auth", raising=False)
+        with patch("builtins.__import__", side_effect=_fake_import):
+            assert gemini_native._derive_vertex_project_from_adc() is None
+
+    def test_derive_vertex_project_returns_none_when_default_raises(
+        self, monkeypatch
+    ):
+        """ADC has many failure modes (no creds, no metadata server, etc.).
+        The helper swallows them and returns None so the caller surfaces
+        the explicit-env-var error message."""
+        import google.auth as _ga
+
+        def _raise(*_args, **_kwargs):
+            raise RuntimeError("Could not automatically determine credentials")
+
+        monkeypatch.setattr(_ga, "default", _raise)
+        assert gemini_native._derive_vertex_project_from_adc() is None
 
     def test_vertex_ignores_api_key_with_warn(self, monkeypatch, caplog):
         monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "my-gcp-project")
@@ -870,6 +958,96 @@ class TestBuildCreateKwargs:
         assert out["config"]["response_mime_type"] == "application/json"
         assert out["config"]["response_schema"] == {"type": "object"}
 
+    def test_response_schema_strips_camelcase_additional_properties(self):
+        """Pydantic-generated schemas always emit
+        ``additionalProperties: False`` (camelCase). Gemini rejects it
+        with HTTP 400 INVALID_ARGUMENT — must be stripped from
+        responseSchema (not just tool parameters)."""
+        out = gemini_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "Plan",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {"answer": {"type": "string"}},
+                            "required": ["answer"],
+                        },
+                    },
+                },
+            },
+            model="gemini/gemini-2.0-flash",
+        )
+        rs = out["config"]["response_schema"]
+        assert "additionalProperties" not in rs
+        assert rs["type"] == "object"
+        assert rs["properties"] == {"answer": {"type": "string"}}
+        assert rs["required"] == ["answer"]
+
+    def test_response_schema_strips_snake_case_additional_properties(self):
+        """Some upstream paths (Pydantic dump, LiteLLM normalization) emit
+        ``additional_properties`` (snake_case). The whitelist sanitizer
+        strips it because it's not in ``_GEMINI_SCHEMA_KEYS`` — verifies
+        the snake_case variant doesn't slip past via responseSchema."""
+        out = gemini_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "Plan",
+                        "schema": {
+                            "type": "object",
+                            "additional_properties": False,  # snake_case
+                            "exclusive_minimum": 0,
+                            "properties": {"answer": {"type": "string"}},
+                        },
+                    },
+                },
+            },
+            model="gemini/gemini-2.0-flash",
+        )
+        rs = out["config"]["response_schema"]
+        # Both casings dropped (only camelCase whitelist members survive).
+        assert "additional_properties" not in rs
+        assert "additionalProperties" not in rs
+        assert "exclusive_minimum" not in rs
+        assert rs["type"] == "object"
+
+    def test_response_schema_strips_dollar_schema_and_title(self):
+        """The whole rejected-key family (``$schema``, ``title``, ``$ref``,
+        ``definitions``) must be stripped from response_schema too —
+        same as for tool parameters."""
+        out = gemini_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "Plan",
+                        "schema": {
+                            "type": "object",
+                            "title": "PlanSchema",
+                            "$schema": "http://json-schema.org/draft-07/schema#",
+                            "$ref": "#/definitions/Plan",
+                            "definitions": {"Plan": {"type": "string"}},
+                            "properties": {"answer": {"type": "string"}},
+                        },
+                    },
+                },
+            },
+            model="gemini/gemini-2.0-flash",
+        )
+        rs = out["config"]["response_schema"]
+        assert "title" not in rs
+        assert "$schema" not in rs
+        assert "$ref" not in rs
+        assert "definitions" not in rs
+        assert rs["type"] == "object"
+
     def test_drops_internal_mesh_sentinels(self):
         """``_mesh_*`` sentinels must NOT trigger a WARN — they're handled
         upstream in helpers._pop_mesh_*_flags."""
@@ -1376,20 +1554,114 @@ class TestSharedHttpxClient:
         yield
         gemini_native._reset_shared_httpx_client()
 
-    def test_shared_httpx_client_reused_across_calls(self, monkeypatch):
-        """Two ``_build_client`` calls must reuse the same httpx pool —
-        proves we have a single connection pool process-wide."""
+    @pytest.mark.asyncio
+    async def test_shared_httpx_client_reused_within_same_loop(
+        self, monkeypatch
+    ):
+        """Two ``_build_client`` calls on the same event loop must reuse
+        the same httpx pool — connection-pool reuse within a loop is the
+        whole reason we cache."""
         monkeypatch.setenv("GOOGLE_API_KEY", "GAK-test")
         cls_mock = MagicMock(return_value=MagicMock())
         monkeypatch.setattr("google.genai.Client", cls_mock)
-        gemini_native._build_client("gemini/gemini-2.0-flash", "GAK-A", None)
-        gemini_native._build_client("gemini/gemini-2.0-flash", "GAK-B", None)
-        # Each call gets HttpOptions whose httpx_async_client is the SAME
-        # cached pool instance — two distinct HttpOptions wrappers but the
-        # same underlying httpx client.
+
+        # Run inside an async context so _get_shared_httpx_client() picks
+        # up the running loop and caches against it.
+        async def _do_two_builds():
+            gemini_native._build_client("gemini/gemini-2.0-flash", "GAK-A", None)
+            gemini_native._build_client("gemini/gemini-2.0-flash", "GAK-B", None)
+
+        await _do_two_builds()
+
         first_http = cls_mock.call_args_list[0].kwargs["http_options"].httpx_async_client
         second_http = cls_mock.call_args_list[1].kwargs["http_options"].httpx_async_client
         assert first_http is second_http
+
+    def test_per_loop_httpx_pool_isolates_event_loops(self, monkeypatch):
+        """Different event loops MUST get different httpx pool instances.
+
+        This is the regression fix for the "asyncio.locks.Event ... is bound
+        to a different event loop" bug — mesh's ``shared/tool_executor.py``
+        round-robins tool calls across worker threads, each owning its own
+        long-lived loop. A process-global ``httpx.AsyncClient`` would bind
+        its anyio sync primitives to the first worker's loop and break the
+        moment a call lands on a different worker.
+        """
+        monkeypatch.setenv("GOOGLE_API_KEY", "GAK-test")
+
+        captured_clients: list = []
+
+        async def _capture_client():
+            captured_clients.append(gemini_native._get_shared_httpx_client())
+
+        # Two distinct event loops. Each must produce its own httpx pool.
+        loop_a = asyncio.new_event_loop()
+        try:
+            loop_a.run_until_complete(_capture_client())
+        finally:
+            loop_a.close()
+
+        loop_b = asyncio.new_event_loop()
+        try:
+            loop_b.run_until_complete(_capture_client())
+        finally:
+            loop_b.close()
+
+        assert len(captured_clients) == 2
+        assert captured_clients[0] is not captured_clients[1], (
+            "Same httpx.AsyncClient was reused across event loops — would "
+            "trigger 'bound to a different event loop' RuntimeError on the "
+            "second loop's first request"
+        )
+
+    def test_cross_loop_dispatch_does_not_raise(self, monkeypatch):
+        """End-to-end: simulate the mesh worker-pool scenario — two
+        ``complete()`` calls on two distinct event loops. The fix
+        guarantees no cross-loop bug surfaces; without it the second
+        loop's first request would raise.
+        """
+        monkeypatch.setenv("GOOGLE_API_KEY", "GAK-test")
+
+        api_resp = _make_gemini_response(text="hi")
+
+        def _fresh_genai_mock():
+            instance = MagicMock()
+            instance.aio = MagicMock()
+            instance.aio.models = MagicMock()
+            instance.aio.models.generate_content = AsyncMock(return_value=api_resp)
+            return MagicMock(return_value=instance)
+
+        cls_mock = _fresh_genai_mock()
+        monkeypatch.setattr("google.genai.Client", cls_mock)
+
+        async def _one_call():
+            await gemini_native.complete(
+                {"messages": [{"role": "user", "content": "hi"}]},
+                model="gemini/gemini-2.0-flash",
+            )
+
+        loop_a = asyncio.new_event_loop()
+        try:
+            loop_a.run_until_complete(_one_call())
+        finally:
+            loop_a.close()
+
+        loop_b = asyncio.new_event_loop()
+        try:
+            # Pre-fix: this raised "bound to a different event loop" if the
+            # cached httpx pool was reused. Post-fix: each loop gets its
+            # own pool from _get_shared_httpx_client.
+            loop_b.run_until_complete(_one_call())
+        finally:
+            loop_b.close()
+
+    def test_get_shared_httpx_returns_uncached_when_no_loop(self):
+        """Sync test paths (no running loop) get an uncached client back —
+        otherwise we'd cache against a nonexistent loop id."""
+        c1 = gemini_native._get_shared_httpx_client()
+        c2 = gemini_native._get_shared_httpx_client()
+        # Each sync call returns a fresh client (not cached).
+        assert c1 is not c2
 
     @pytest.mark.asyncio
     async def test_shared_httpx_client_recreated_after_close(self):

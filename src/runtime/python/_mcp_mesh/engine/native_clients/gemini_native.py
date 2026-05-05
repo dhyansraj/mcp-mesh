@@ -45,6 +45,7 @@ paths.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -66,64 +67,99 @@ _VERTEX_PREFIX = "vertex_ai/"
 
 
 # ---------------------------------------------------------------------------
-# Shared httpx connection pool (issue #834 perf fix)
+# Per-event-loop httpx connection pool (issue #834 perf fix + asyncio binding fix)
 # ---------------------------------------------------------------------------
-# A single ``httpx.AsyncClient`` is reused across all native Gemini calls in
-# this process. ``google.genai.Client`` accepts a custom async httpx client
-# via ``HttpOptions(httpx_async_client=...)`` and uses the supplied pool
-# instead of constructing a fresh one per call. This eliminates ~150-300ms
-# per-call TLS+H2 setup overhead vs. LiteLLM (which does its own pool reuse).
+# An ``httpx.AsyncClient`` is reused across all native Gemini calls in this
+# process — but the cache is keyed by the *running asyncio event loop* rather
+# than process-globally. ``google.genai.Client`` accepts a custom async httpx
+# client via ``HttpOptions(httpx_async_client=...)`` and uses the supplied
+# pool instead of constructing a fresh one per call. This eliminates
+# ~150-300ms per-call TLS+H2 setup overhead vs. LiteLLM (which does its own
+# pool reuse).
+#
+# WHY PER-LOOP (and why this DIFFERS from anthropic_native / openai_native):
+# ``httpx.AsyncClient`` (via httpcore) lazily constructs anyio synchronization
+# primitives — ``Lock`` / ``Semaphore`` / ``Event`` for the connection pool
+# — on first I/O. Those primitives bind to the *event loop that issues the
+# first request* and CANNOT be reused from a different loop ("bound to a
+# different event loop" RuntimeError).
+#
+# In mesh, ``shared/tool_executor.py`` runs an N-worker thread pool, each
+# thread owning its own long-lived asyncio event loop. Tool calls are
+# round-robin dispatched across workers. A single process-wide ``httpx``
+# pool would bind to the first worker's loop and then break the moment a
+# call lands on a different worker. Anthropic/OpenAI integration tests
+# happen not to surface this on their current test mix; Gemini's
+# uc10_toolcalls suite exercises enough cross-worker churn to trip it
+# every run.
+#
+# Per-loop caching keeps the connection-reuse win within a single loop
+# (tool calls scheduled to the same worker share its pool) while
+# guaranteeing each loop owns its own anyio primitives. ``id(loop)`` is the
+# cache key — sufficient because loops are long-lived (workers run for the
+# process lifetime); when a loop closes the cached client is dropped from
+# the map by the next access if found stale.
 #
 # K8s secret rotation still works because the api_key is read fresh per call
 # by callers and forwarded to the per-call ``genai.Client`` wrapper — the
 # pool itself carries no credential state, only TCP/TLS connections.
-_CACHED_HTTPX_CLIENT: httpx.AsyncClient | None = None
-# Guards lazy-init / rebuild of the shared httpx client. The pool itself is
-# safe for concurrent use; the lock only protects the check-then-create race
-# at construction. Cheap (uncontended after first call) and correct under
-# threaded harnesses (tests, sync wrapper paths) that touch the cache.
+_CACHED_HTTPX_CLIENT_BY_LOOP: dict[int, httpx.AsyncClient] = {}
+# Guards lazy-init / rebuild of the per-loop httpx client cache. The pool
+# instances themselves are safe for concurrent use within their owning loop;
+# the lock only protects the check-then-create race at construction. Cheap
+# (uncontended after first call per loop).
 _CACHED_HTTPX_CLIENT_LOCK = threading.Lock()
 
 
-def _get_shared_httpx_client() -> httpx.AsyncClient:
-    """Lazily construct (or rebuild if closed) the shared httpx client.
+def _build_httpx_client() -> httpx.AsyncClient:
+    """Construct a fresh httpx.AsyncClient with the standard mesh tuning."""
+    return httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            connect=10.0,  # connection establishment
+            read=600.0,    # body read — LLM responses can be slow
+            write=30.0,    # request body write
+            pool=5.0,      # waiting for free connection from pool
+        ),
+        limits=httpx.Limits(
+            max_keepalive_connections=20,
+            max_connections=100,
+            keepalive_expiry=30.0,
+        ),
+    )
 
-    Single connection pool shared across all native Gemini calls in this
-    process. Per-call ``genai.Client`` wrappers reuse this pool —
-    eliminating ~150-300ms per-call TLS+H2 setup overhead. K8s secret
-    rotation still works: ``api_key`` is read fresh per call; the pool
-    carries no credential state.
+
+def _get_shared_httpx_client() -> httpx.AsyncClient:
+    """Return an httpx.AsyncClient bound to the current event loop.
+
+    Cached per-loop (NOT process-globally) — see the module-level comment
+    for the rationale. Falls back to constructing a fresh client when no
+    loop is currently running (sync test paths); that client is NOT cached
+    so it gets garbage-collected promptly.
     """
-    global _CACHED_HTTPX_CLIENT
-    # Fast path — no lock when the cached client is healthy. The check is
-    # benign-racy (worst case: two threads both observe None and both enter
-    # the lock; the second one finds the cache populated under the lock and
-    # returns early).
-    if _CACHED_HTTPX_CLIENT is not None and not _CACHED_HTTPX_CLIENT.is_closed:
-        return _CACHED_HTTPX_CLIENT
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop — caller is in sync code (most likely test setup).
+        # Return an uncached client; the caller is responsible for cleanup.
+        return _build_httpx_client()
+
+    loop_id = id(loop)
+    # Fast path — no lock when the cached client for this loop is healthy.
+    cached = _CACHED_HTTPX_CLIENT_BY_LOOP.get(loop_id)
+    if cached is not None and not cached.is_closed:
+        return cached
     with _CACHED_HTTPX_CLIENT_LOCK:
-        if _CACHED_HTTPX_CLIENT is None or _CACHED_HTTPX_CLIENT.is_closed:
-            _CACHED_HTTPX_CLIENT = httpx.AsyncClient(
-                timeout=httpx.Timeout(
-                    connect=10.0,  # connection establishment
-                    read=600.0,    # body read — LLM responses can be slow
-                    write=30.0,    # request body write
-                    pool=5.0,      # waiting for free connection from pool
-                ),
-                limits=httpx.Limits(
-                    max_keepalive_connections=20,
-                    max_connections=100,
-                    keepalive_expiry=30.0,
-                ),
-            )
-        return _CACHED_HTTPX_CLIENT
+        cached = _CACHED_HTTPX_CLIENT_BY_LOOP.get(loop_id)
+        if cached is None or cached.is_closed:
+            cached = _build_httpx_client()
+            _CACHED_HTTPX_CLIENT_BY_LOOP[loop_id] = cached
+        return cached
 
 
 def _reset_shared_httpx_client() -> None:
-    """For tests — reset the cached client. NOT for production use."""
-    global _CACHED_HTTPX_CLIENT
+    """For tests — drop all cached per-loop clients. NOT for production use."""
     with _CACHED_HTTPX_CLIENT_LOCK:
-        _CACHED_HTTPX_CLIENT = None
+        _CACHED_HTTPX_CLIENT_BY_LOOP.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +382,37 @@ def _strip_prefix(model: str) -> str:
     return model
 
 
+def _derive_vertex_project_from_adc() -> str | None:
+    """Best-effort: load Google ADC and return the resolved project id.
+
+    Mirrors LiteLLM's Vertex behavior — when ``GOOGLE_CLOUD_PROJECT`` is
+    unset, ADC's loaded credentials carry a quota project (from the
+    ``GOOGLE_APPLICATION_CREDENTIALS`` JSON's ``quota_project_id`` field
+    OR the gcloud-default-login flow OR Workload Identity metadata).
+
+    Returns ``None`` (not raising) when ``google-auth`` isn't installed or
+    ADC fails to load — callers fall back to the explicit-env-var error
+    message in that case. Intentionally permissive: a deployment with
+    valid ADC but no env var should "just work."
+    """
+    try:
+        import google.auth  # type: ignore[import-untyped]
+    except ImportError:
+        # google-auth ships transitively with google-genai but defend
+        # against custom installs that strip it.
+        return None
+    try:
+        _credentials, default_project = google.auth.default()
+    except Exception as exc:  # noqa: BLE001 — ADC has many failure modes
+        logger.debug(
+            "Vertex project ADC auto-derive failed: %s; "
+            "fall back to explicit-env-var error path",
+            exc,
+        )
+        return None
+    return default_project or None
+
+
 def _build_client(
     model: str,
     api_key: str | None,
@@ -377,13 +444,21 @@ def _build_client(
         project = os.environ.get("GOOGLE_CLOUD_PROJECT")
         location = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
         if not project:
+            # Auto-derive from Application Default Credentials. Matches
+            # LiteLLM's behavior — the credentials JSON's quota_project_id
+            # (or the loaded ADC's quota project) is used when the env var
+            # isn't explicitly set. Works seamlessly with Workload Identity
+            # / gcloud-default-login deployments where users typically don't
+            # set GOOGLE_CLOUD_PROJECT explicitly.
+            project = _derive_vertex_project_from_adc()
+        if not project:
             raise ValueError(
-                "Native Vertex AI dispatch requires GOOGLE_CLOUD_PROJECT env "
-                "var. Set GOOGLE_CLOUD_PROJECT (and optionally "
-                "GOOGLE_CLOUD_LOCATION; default 'us-central1'), ensure ADC is "
-                "configured (gcloud auth application-default login OR "
-                "Workload Identity in K8s), or set MCP_MESH_NATIVE_LLM=0 to "
-                "fall back to LiteLLM."
+                "Native Vertex AI dispatch requires a project. Set "
+                "GOOGLE_CLOUD_PROJECT env var, ensure ADC is configured "
+                "with a quota project (gcloud auth application-default "
+                "login OR Workload Identity in K8s), or set "
+                "MCP_MESH_NATIVE_LLM=0 to fall back to LiteLLM. Optional: "
+                "GOOGLE_CLOUD_LOCATION (default 'us-central1')."
             )
         if api_key:
             # Vertex backend uses Google Cloud IAM, NOT api_key. Surface a
@@ -1003,13 +1078,22 @@ def _build_create_kwargs(
     # response_format → response_mime_type + response_schema (handler may
     # also be using HINT mode — in that case response_format is absent and
     # the JSON instructions live in the system prompt; this branch is a no-op).
+    #
+    # responseSchema MUST go through the same sanitizer as tool parameters.
+    # Pydantic-generated schemas always emit ``additionalProperties: False``
+    # (camelCase) AND some upstream paths normalize to ``additional_properties``
+    # (snake_case) — Gemini rejects both with HTTP 400 INVALID_ARGUMENT
+    # ("Unknown name 'additional_properties'..."). The whitelist sanitizer
+    # strips both casings (snake_case keys aren't in the whitelist either).
     rf = request_params.get("response_format")
     if isinstance(rf, dict):
         if rf.get("type") == "json_schema":
             schema = (rf.get("json_schema") or {}).get("schema") or {}
             config["response_mime_type"] = "application/json"
             if schema:
-                config["response_schema"] = schema
+                config["response_schema"] = _sanitize_gemini_parameters_schema(
+                    schema
+                )
         elif rf.get("type") == "json_object":
             config["response_mime_type"] = "application/json"
     # Allow callers to set response_mime_type directly too.
