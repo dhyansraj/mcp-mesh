@@ -198,6 +198,71 @@ def _inject_synthetic_format_tool(
     return augmented
 
 
+def _build_assistant_tool_call_dict(tc: Any) -> dict[str, Any]:
+    """Serialize one ``_ToolCall``-shape object into the conversation dict.
+
+    Whitelists the four canonical fields (``id``, ``type``,
+    ``function.name``, ``function.arguments``) plus one Gemini-only sidecar:
+    ``_gemini_thought_signature`` (base64-encoded bytes) when present on the
+    source object. The signature originates from Gemini 2.0+ thinking models
+    that emit a Part-level ``thought_signature`` on each functionCall response
+    Part — the Gemini API REQUIRES this signature to be echoed back on the
+    next-turn functionCall of the same multi-turn conversation, otherwise
+    rejecting with HTTP 400 ("Function call is missing a thought_signature").
+
+    The Gemini native adapter (``gemini_native._adapt_response``) lifts the
+    signature off the response Part and stores it on the synthesized
+    ``_ToolCall._thought_signature`` attribute. We forward it onto the
+    serialized dict here so that the next-iteration's
+    ``gemini_native._convert_messages_to_gemini`` can recover it and place it
+    back on the outbound functionCall Part. Other vendor adapters
+    (anthropic_native, openai_native, litellm) never set the attribute; the
+    sidecar is simply absent for them — fully backward-compatible.
+    """
+    out: dict[str, Any] = {
+        "id": tc.id,
+        "type": tc.type,
+        "function": {
+            "name": tc.function.name,
+            "arguments": tc.function.arguments,
+        },
+    }
+    # Strict ``bytes`` check — only the Gemini native adapter sets this attr
+    # and only ever to bytes / None. MagicMock test doubles otherwise
+    # auto-generate truthy attributes that aren't bytes-like and would break
+    # the b64encode call below.
+    sig = getattr(tc, "_thought_signature", None)
+    if isinstance(sig, (bytes, bytearray)) and sig:
+        import base64
+
+        out["_gemini_thought_signature"] = base64.b64encode(sig).decode("ascii")
+    return out
+
+
+def _build_assistant_tool_call_dict_from_merged(tc: dict[str, Any]) -> dict[str, Any]:
+    """Same as :func:`_build_assistant_tool_call_dict` but for the streaming
+    merger's pre-coalesced dict shape.
+
+    ``MeshLlmAgent._merge_streamed_tool_calls`` returns a list of dicts (not
+    ``_ToolCall`` objects); the Gemini-only thought_signature is forwarded
+    onto those dicts as ``_gemini_thought_signature`` (already base64-encoded)
+    so this serializer just whitelist-passes-through. Other vendors don't set
+    the key so the field is silently absent for them.
+    """
+    out: dict[str, Any] = {
+        "id": tc["id"],
+        "type": tc["type"],
+        "function": {
+            "name": tc["function"]["name"],
+            "arguments": tc["function"]["arguments"],
+        },
+    }
+    sig_b64 = tc.get("_gemini_thought_signature")
+    if sig_b64:
+        out["_gemini_thought_signature"] = sig_b64
+    return out
+
+
 def _extract_synthetic_format_arguments(
     message: Any,
     synthetic_tool_name: str,
@@ -762,19 +827,26 @@ async def _provider_agentic_loop(
                     f"(iteration {iteration}/{max_iterations})"
                 )
 
-            # Add assistant message with tool_calls to conversation
+            # Add assistant message with tool_calls to conversation.
+            #
+            # ``_gemini_thought_signature`` (when present, base64-encoded
+            # bytes) is a Gemini-only sidecar: Gemini 2.0+ thinking models
+            # emit a Part-level ``thought_signature`` on each ``functionCall``
+            # response Part that the API REQUIRES to be echoed back on the
+            # next-turn ``functionCall`` of a multi-turn tool-calling
+            # conversation. Without it Gemini rejects the request with
+            # HTTP 400. The native Gemini adapter (gemini_native._adapt_response)
+            # lifts the signature off the response Part onto its ``_ToolCall``;
+            # we serialize it onto the conversation dict here so that the
+            # next iteration's ``_convert_messages_to_gemini`` can recover it
+            # and place it back on the outbound functionCall Part. Other
+            # vendors never set the attribute, so the field is silently
+            # absent for them.
             assistant_msg: dict[str, Any] = {
                 "role": "assistant",
                 "content": message.content or "",
                 "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": tc.type,
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
+                    _build_assistant_tool_call_dict(tc)
                     for tc in message.tool_calls
                 ],
             }
@@ -1148,18 +1220,17 @@ async def _provider_agentic_loop_stream(
                         f"(iteration {iteration}/{max_iterations})"
                     )
 
+                # See ``_build_assistant_tool_call_dict`` for the
+                # ``_gemini_thought_signature`` rationale — the merged dict
+                # may carry that Gemini-only sidecar (the streaming merger
+                # forwards it from ``_StreamToolCallDelta._thought_signature``)
+                # and we propagate it onto the conversation dict so the
+                # next iteration's Gemini Part-conversion can echo it back.
                 assistant_msg: dict[str, Any] = {
                     "role": "assistant",
                     "content": preamble_text or "",
                     "tool_calls": [
-                        {
-                            "id": tc["id"],
-                            "type": tc["type"],
-                            "function": {
-                                "name": tc["function"]["name"],
-                                "arguments": tc["function"]["arguments"],
-                            },
-                        }
+                        _build_assistant_tool_call_dict_from_merged(tc)
                         for tc in merged_tool_calls
                     ],
                 }

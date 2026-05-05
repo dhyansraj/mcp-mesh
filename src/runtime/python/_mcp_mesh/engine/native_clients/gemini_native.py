@@ -46,6 +46,7 @@ paths.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -181,12 +182,33 @@ class _Function:
 
 
 class _ToolCall:
-    __slots__ = ("id", "type", "function")
+    """A tool-call descriptor in litellm-shape, with one Gemini-only extra.
 
-    def __init__(self, id: str, name: str, arguments: str):
+    ``_thought_signature`` is the opaque blob Gemini's thought-mode (Gemini
+    2.0+ thinking models) emits on each ``functionCall`` Part. The Gemini API
+    REQUIRES this signature to be echoed back on the next-turn ``functionCall``
+    Part of the same multi-turn tool-calling conversation; without it the API
+    rejects the request with HTTP 400 "Function call is missing a
+    thought_signature in functionCall parts." The field is silently ignored by
+    every other vendor — kept on this object so the agentic loop can serialize
+    it into the conversation dict (under ``_gemini_thought_signature``,
+    base64-encoded) and ``_convert_messages_to_gemini`` can recover it on the
+    next iteration to build a valid Gemini ``functionCall`` Part.
+    """
+
+    __slots__ = ("id", "type", "function", "_thought_signature")
+
+    def __init__(
+        self,
+        id: str,
+        name: str,
+        arguments: str,
+        thought_signature: bytes | None = None,
+    ):
         self.id = id
         self.type = "function"
         self.function = _Function(name=name, arguments=arguments)
+        self._thought_signature = thought_signature
 
 
 class _Message:
@@ -302,9 +324,15 @@ class _StreamToolCallDelta:
     so we always populate id+name+arguments together — the merger handles
     "everything in one fragment" cleanly because subsequent fragment lookups
     return None and the existing fields stay intact.
+
+    ``_thought_signature`` carries Gemini's thought-mode opaque blob from the
+    response Part through the agentic loop — see ``_ToolCall`` docstring for
+    the full rationale. The merger forwards it under the
+    ``_gemini_thought_signature`` key (base64-encoded) on the merged dict so
+    the next iteration's ``_convert_messages_to_gemini`` can echo it back.
     """
 
-    __slots__ = ("index", "id", "type", "function")
+    __slots__ = ("index", "id", "type", "function", "_thought_signature")
 
     def __init__(
         self,
@@ -312,11 +340,13 @@ class _StreamToolCallDelta:
         id: str | None = None,
         name: str | None = None,
         arguments: str | None = None,
+        thought_signature: bytes | None = None,
     ):
         self.index = index
         self.id = id
         self.type = "function" if id is not None else None
         self.function = _StreamFunctionDelta(name=name, arguments=arguments)
+        self._thought_signature = thought_signature
 
 
 # ---------------------------------------------------------------------------
@@ -761,14 +791,38 @@ def _convert_messages_to_gemini(
                     parsed_args = {}
                 if not isinstance(parsed_args, dict):
                     parsed_args = {}
-                parts.append(
-                    {
-                        "function_call": {
-                            "name": fn.get("name", ""),
-                            "args": parsed_args,
-                        }
+                fc_part: dict[str, Any] = {
+                    "function_call": {
+                        "name": fn.get("name", ""),
+                        "args": parsed_args,
                     }
-                )
+                }
+                # Echo Gemini's thought-mode signature back on the next-turn
+                # functionCall Part. Required for Gemini 2.0+ thinking models
+                # — without it the API rejects the request with HTTP 400
+                # "Function call is missing a thought_signature in
+                # functionCall parts." The signature was lifted off the
+                # response Part by ``_adapt_response`` and serialized into
+                # the assistant tool_call dict (base64-encoded) by the
+                # mesh agentic-loop machinery; decode and place at the Part
+                # level (NOT nested in function_call — see
+                # google.genai.types.Part.thought_signature). Other vendors
+                # don't emit this key, so the branch is a no-op for them.
+                sig_b64 = tc.get("_gemini_thought_signature")
+                if sig_b64:
+                    try:
+                        fc_part["thought_signature"] = base64.b64decode(sig_b64)
+                    except (ValueError, TypeError) as exc:
+                        # Corrupted signature — log and proceed without it.
+                        # The request will likely fail at the API layer but
+                        # the dispatch contract is preserved.
+                        logger.warning(
+                            "Discarding malformed _gemini_thought_signature "
+                            "on tool_call id=%r: %s",
+                            tc.get("id"),
+                            exc,
+                        )
+                parts.append(fc_part)
 
             if not parts:
                 # Skip empty assistant messages — Gemini rejects empty parts.
@@ -1199,6 +1253,13 @@ def _adapt_response(raw: Any, *, model: str) -> _Response:
     ``_ToolCall`` with synthesized id ``gemini_call_<index>``). usage_metadata
     maps to ``_Usage`` with prompt_token_count / candidates_token_count
     field-name translation.
+
+    Gemini 2.0+ thinking models attach a Part-level ``thought_signature``
+    (``bytes``) on functionCall parts that the API requires to be echoed back
+    on the next-turn functionCall in multi-turn tool calling — we lift it onto
+    the synthesized ``_ToolCall`` so the agentic loop can carry it through to
+    ``_convert_messages_to_gemini`` on the next iteration. See the ``_ToolCall``
+    docstring for the full lifecycle.
     """
     candidates = getattr(raw, "candidates", None) or []
     first_candidate = candidates[0] if candidates else None
@@ -1227,8 +1288,17 @@ def _adapt_response(raw: Any, *, model: str) -> _Response:
                     args_str = "{}"
                 # Synthesize a stable id since Gemini has no tool-call ids.
                 synth_id = f"gemini_call_{len(tool_calls)}"
+                # thought_signature lives on the Part (not on FunctionCall) —
+                # see google.genai.types.Part.thought_signature. Empty-bytes
+                # signatures are treated as absent.
+                sig = getattr(part, "thought_signature", None) or None
                 tool_calls.append(
-                    _ToolCall(id=synth_id, name=fc_name, arguments=args_str)
+                    _ToolCall(
+                        id=synth_id,
+                        name=fc_name,
+                        arguments=args_str,
+                        thought_signature=sig,
+                    )
                 )
 
     finish_reason = _normalize_finish_reason(
@@ -1311,12 +1381,17 @@ def _adapt_stream_chunk(
                     args_str = "{}"
                 idx = tool_call_index_state[0]
                 tool_call_index_state[0] = idx + 1
+                # thought_signature lives on the Part, not on FunctionCall
+                # (google.genai.types.Part.thought_signature). Empty bytes
+                # are treated as absent.
+                sig = getattr(part, "thought_signature", None) or None
                 tool_call_deltas.append(
                     _StreamToolCallDelta(
                         index=idx,
                         id=f"gemini_call_{idx}",
                         name=fc_name,
                         arguments=args_str,
+                        thought_signature=sig,
                     )
                 )
         if text_buf:

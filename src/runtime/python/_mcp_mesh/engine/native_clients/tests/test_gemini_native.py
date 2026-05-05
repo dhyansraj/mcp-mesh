@@ -1698,3 +1698,329 @@ class TestIsFallbackLogged:
         assert gemini_native.is_fallback_logged() is False
         gemini_native.log_fallback_once()
         assert gemini_native.is_fallback_logged() is True
+
+
+# ---------------------------------------------------------------------------
+# thought_signature preservation (Gemini 2.0+ thinking-model multi-turn fix)
+# ---------------------------------------------------------------------------
+# Recent google-genai versions emit a Part-level ``thought_signature`` (bytes)
+# on functionCall response Parts when the model is a Gemini 2.0+ thinking
+# model. The Gemini API REQUIRES this signature to be echoed back on the
+# next-turn functionCall Part of the same multi-turn conversation, otherwise
+# rejecting with HTTP 400 "Function call is missing a thought_signature in
+# functionCall parts." LiteLLM preserves the signature internally; the native
+# adapter must too. The transport carrier is a base64-encoded ``_gemini_*``
+# sidecar field on the conversation tool_call dict — survives the helpers.py
+# round-trip naturally and is silently ignored by other vendors.
+
+
+def _make_gemini_response_with_signature(
+    *,
+    function_calls_with_sigs: list[tuple[dict, bytes | None]],
+    finish_reason: str = "STOP",
+    model_version: str | None = "gemini-2.0-flash-thinking",
+):
+    """Build a fake genai.GenerateContentResponse where each function_call
+    Part carries an explicit thought_signature (or None to model an absent
+    sig — useful for backward-compat checks)."""
+    parts = []
+    for fc, sig in function_calls_with_sigs:
+        # thought_signature lives on the Part (NOT nested inside FunctionCall)
+        # — see google.genai.types.Part.thought_signature (types.py line 1970).
+        parts.append(
+            SimpleNamespace(
+                text=None,
+                function_call=SimpleNamespace(
+                    name=fc["name"], args=fc.get("args", {})
+                ),
+                thought_signature=sig,
+            )
+        )
+    content = SimpleNamespace(parts=parts, role="model")
+    fr_obj = SimpleNamespace(name=finish_reason)
+    candidate = SimpleNamespace(content=content, finish_reason=fr_obj, index=0)
+    usage = SimpleNamespace(
+        prompt_token_count=10,
+        candidates_token_count=5,
+        total_token_count=15,
+    )
+    return SimpleNamespace(
+        candidates=[candidate],
+        usage_metadata=usage,
+        model_version=model_version,
+    )
+
+
+class TestThoughtSignatureExtraction:
+    """``_adapt_response`` must lift the Part-level ``thought_signature`` onto
+    the synthesized ``_ToolCall._thought_signature`` so the agentic loop can
+    serialize it into the conversation dict for the next iteration."""
+
+    def test_response_extracts_thought_signature_from_function_call(self):
+        sig_bytes = b"opaque-signature-blob-123"
+        raw = _make_gemini_response_with_signature(
+            function_calls_with_sigs=[
+                ({"name": "get_weather", "args": {"city": "NYC"}}, sig_bytes),
+            ],
+        )
+        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        tcs = out.choices[0].message.tool_calls
+        assert len(tcs) == 1
+        # Signature stashed on the _ToolCall as raw bytes (not yet encoded).
+        assert tcs[0]._thought_signature == sig_bytes
+
+    def test_absent_signature_is_none(self):
+        """Backward-compat: parts without a thought_signature attribute (older
+        non-thinking models, mocked test parts) result in None — must not
+        raise AttributeError."""
+        raw = _make_gemini_response(
+            function_calls=[{"name": "get_weather", "args": {"city": "NYC"}}],
+        )
+        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        tcs = out.choices[0].message.tool_calls
+        assert len(tcs) == 1
+        assert tcs[0]._thought_signature is None
+
+    def test_explicit_none_signature_is_none(self):
+        """When the SDK returns ``thought_signature=None`` (explicitly), the
+        _ToolCall carries None — sanity check that the ``getattr ... or None``
+        idiom in _adapt_response coerces falsy values to None."""
+        raw = _make_gemini_response_with_signature(
+            function_calls_with_sigs=[
+                ({"name": "get_weather", "args": {}}, None),
+            ],
+        )
+        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        assert out.choices[0].message.tool_calls[0]._thought_signature is None
+
+    def test_empty_bytes_signature_treated_as_absent(self):
+        """An empty-bytes signature (b"") is semantically absent — Gemini
+        wouldn't echo it on the next turn anyway. Coerced to None so the
+        downstream serializer doesn't emit a useless ``_gemini_*`` field."""
+        raw = _make_gemini_response_with_signature(
+            function_calls_with_sigs=[
+                ({"name": "get_weather", "args": {}}, b""),
+            ],
+        )
+        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        assert out.choices[0].message.tool_calls[0]._thought_signature is None
+
+    def test_multiple_function_calls_each_carry_own_signature(self):
+        """When a single response Part-list contains multiple function_calls
+        (each with its own Part), each ``_ToolCall`` carries its own
+        signature — sanity check that the per-Part loop doesn't bleed values
+        across calls."""
+        sig_a = b"sig-for-call-A"
+        sig_b = b"sig-for-call-B"
+        raw = _make_gemini_response_with_signature(
+            function_calls_with_sigs=[
+                ({"name": "call_A", "args": {}}, sig_a),
+                ({"name": "call_B", "args": {}}, sig_b),
+            ],
+        )
+        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        tcs = out.choices[0].message.tool_calls
+        assert len(tcs) == 2
+        assert tcs[0]._thought_signature == sig_a
+        assert tcs[1]._thought_signature == sig_b
+        # Synthesized ids are still monotonic (independent of signatures).
+        assert tcs[0].id == "gemini_call_0"
+        assert tcs[1].id == "gemini_call_1"
+
+
+class TestThoughtSignatureStreamingExtraction:
+    """``_adapt_stream_chunk`` must also lift the Part-level signature onto
+    the ``_StreamToolCallDelta`` so the streaming merger can forward it onto
+    the merged dict (under the ``_gemini_thought_signature`` key, b64-encoded)
+    for the next iteration."""
+
+    def test_streaming_extracts_thought_signature(self):
+        sig_bytes = b"streaming-sig-456"
+        # Build a single chunk with one function_call Part carrying a sig.
+        part = SimpleNamespace(
+            text=None,
+            function_call=SimpleNamespace(name="get_weather", args={"city": "NYC"}),
+            thought_signature=sig_bytes,
+        )
+        candidate = SimpleNamespace(
+            content=SimpleNamespace(parts=[part], role="model"),
+            finish_reason=None,
+            index=0,
+        )
+        chunk = SimpleNamespace(
+            candidates=[candidate],
+            usage_metadata=None,
+            model_version="gemini-2.0-flash-thinking",
+        )
+        adapted = gemini_native._adapt_stream_chunk(
+            chunk, model="gemini-2.0-flash", tool_call_index_state=[0]
+        )
+        deltas = adapted.choices[0].delta.tool_calls
+        assert deltas is not None and len(deltas) == 1
+        assert deltas[0]._thought_signature == sig_bytes
+        assert deltas[0].id == "gemini_call_0"
+
+    def test_streaming_absent_signature_is_none(self):
+        """Backward-compat for streaming chunks: parts without
+        thought_signature attr produce None — older non-thinking models."""
+        # Use the existing _make_stream_chunk helper which doesn't set
+        # thought_signature on its parts.
+        chunk = _make_stream_chunk(
+            function_call={"name": "get_weather", "args": {}},
+        )
+        adapted = gemini_native._adapt_stream_chunk(
+            chunk, model="gemini-2.0-flash", tool_call_index_state=[0]
+        )
+        deltas = adapted.choices[0].delta.tool_calls
+        assert deltas is not None and len(deltas) == 1
+        assert deltas[0]._thought_signature is None
+
+
+class TestThoughtSignatureRoundTrip:
+    """``_convert_messages_to_gemini`` must decode the ``_gemini_*`` sidecar
+    on the assistant tool_call dict and place the bytes at the Part level of
+    the outbound functionCall (NOT nested inside ``function_call``) — see
+    google.genai.types.Part.thought_signature."""
+
+    def test_convert_messages_round_trips_thought_signature(self):
+        import base64
+
+        sig_bytes = b"round-trip-signature-789"
+        sig_b64 = base64.b64encode(sig_bytes).decode("ascii")
+        msgs = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "gemini_call_0",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "NYC"}',
+                        },
+                        "_gemini_thought_signature": sig_b64,
+                    }
+                ],
+            }
+        ]
+        out = gemini_native._convert_messages_to_gemini(msgs, {})
+        assert len(out) == 1
+        assert out[0]["role"] == "model"
+        # Find the functionCall part — signature must be at the Part level.
+        fc_parts = [p for p in out[0]["parts"] if "function_call" in p]
+        assert len(fc_parts) == 1
+        # Part-level field (NOT nested inside function_call).
+        assert fc_parts[0].get("thought_signature") == sig_bytes
+        # function_call sub-dict still carries name/args, NOT the signature.
+        assert fc_parts[0]["function_call"]["name"] == "get_weather"
+        assert "thought_signature" not in fc_parts[0]["function_call"]
+
+    def test_convert_messages_no_signature_works(self):
+        """Backward-compat: tool_call dict WITHOUT ``_gemini_thought_signature``
+        produces a clean Gemini Part — no signature field, no error. This is
+        the steady-state path for non-thinking Gemini models AND for any
+        cross-vendor tool_call dict that lands in a Gemini conversation."""
+        msgs = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "gemini_call_0",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "NYC"}',
+                        },
+                    }
+                ],
+            }
+        ]
+        out = gemini_native._convert_messages_to_gemini(msgs, {})
+        fc_parts = [p for p in out[0]["parts"] if "function_call" in p]
+        assert len(fc_parts) == 1
+        # No thought_signature field anywhere on the Part.
+        assert "thought_signature" not in fc_parts[0]
+        assert "thought_signature" not in fc_parts[0]["function_call"]
+
+    def test_convert_messages_malformed_signature_warns_and_skips(self, caplog):
+        """A corrupted base64 signature must NOT crash the request — log a
+        WARN and proceed without the signature (the API will likely reject
+        the resulting request, but the dispatch contract is preserved)."""
+        msgs = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "gemini_call_0",
+                        "type": "function",
+                        "function": {"name": "f", "arguments": "{}"},
+                        "_gemini_thought_signature": "!!!not-valid-base64!!!",
+                    }
+                ],
+            }
+        ]
+        with caplog.at_level("WARNING", logger=gemini_native.logger.name):
+            out = gemini_native._convert_messages_to_gemini(msgs, {})
+        fc_parts = [p for p in out[0]["parts"] if "function_call" in p]
+        assert len(fc_parts) == 1
+        # No signature on the resulting Part (skipped due to decode error).
+        assert "thought_signature" not in fc_parts[0]
+        # WARN must mention the malformed signature + the call id.
+        assert any(
+            "_gemini_thought_signature" in r.getMessage()
+            and "gemini_call_0" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_full_round_trip_response_to_next_turn_request(self):
+        """End-to-end: response Part → ``_ToolCall._thought_signature`` →
+        simulate the helpers.py serializer (b64-encode onto dict) →
+        ``_convert_messages_to_gemini`` → outbound Gemini Part with the
+        original bytes restored at the Part level. Mirrors the actual
+        agentic-loop data flow.
+        """
+        import base64
+
+        # 1. Response side: Gemini returns a functionCall Part with a sig.
+        original_sig = b"\x00\x01\x02\xff\xfe\xfd-binary-signature-blob"
+        raw = _make_gemini_response_with_signature(
+            function_calls_with_sigs=[
+                ({"name": "get_weather", "args": {"city": "NYC"}}, original_sig),
+            ],
+        )
+        adapted = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        tc = adapted.choices[0].message.tool_calls[0]
+
+        # 2. Simulate helpers.py serializer (mesh.helpers
+        # ._build_assistant_tool_call_dict) — same logic, kept inline so this
+        # test doesn't depend on the helper's import path.
+        assistant_msg = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": tc.type,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                    "_gemini_thought_signature": base64.b64encode(
+                        tc._thought_signature
+                    ).decode("ascii"),
+                }
+            ],
+        }
+
+        # 3. Next-turn request: run the message dict back through Gemini's
+        # message converter and verify the original bytes land at the Part
+        # level of the outbound functionCall.
+        out = gemini_native._convert_messages_to_gemini([assistant_msg], {})
+        fc_part = next(p for p in out[0]["parts"] if "function_call" in p)
+        assert fc_part["thought_signature"] == original_sig
+        # And confirm the args round-trip too (sanity).
+        assert fc_part["function_call"]["name"] == "get_weather"
+        assert fc_part["function_call"]["args"] == {"city": "NYC"}
