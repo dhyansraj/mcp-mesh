@@ -3,12 +3,16 @@
 # the "vertex_ai/<model>" prefix (IAM auth, NOT AI Studio API key).
 #
 # REQUIRED secrets in tsuite DB (configured via the secrets handler):
-#   - GCP_SA_JSON_B64     : base64-encoded service-account JSON (single-line — multi-line
-#                           values mangle the .env file when sourced via `set -a && . .env`).
-#                           Generate via: `base64 -i ~/.config/gcloud/application_default_credentials.json | tr -d '\n'`
-#   - VERTEXAI_PROJECT    : GCP project id (e.g., eng-cache-151909)
-#   - VERTEXAI_LOCATION   : GCP region    (e.g., us-central1)
+#   - GCP_SA_JSON_B64       : base64-encoded service-account JSON (single-line — multi-line
+#                             values mangle the .env file when sourced via `set -a && . .env`).
+#                             Generate via: `base64 -i ~/.config/gcloud/application_default_credentials.json | tr -d '\n'`
+#   - GOOGLE_CLOUD_PROJECT  : GCP project id (e.g., eng-cache-151909)
+#   - GOOGLE_CLOUD_LOCATION : GCP region    (e.g., us-central1)
 # Without these, the materialize step fails with a clear "secret not configured" error.
+#
+# Note: secret names are the env var names that mcp-mesh reads. PR3 native Gemini
+# dispatch (#834) uses Google-standard env vars GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_LOCATION
+# (NOT the LiteLLM convention VERTEXAI_PROJECT/VERTEXAI_LOCATION).
 #
 # Related: https://github.com/dhyansraj/mcp-mesh/issues/816
 
