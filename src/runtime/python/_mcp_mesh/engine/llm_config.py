@@ -18,9 +18,9 @@ class LLMConfig:
     @mesh.llm_provider to bind against.
     """
 
-    provider: dict[str, Any] = None
+    provider: Optional[dict[str, Any]] = None
     """LLM provider filter (mesh delegation).
-       Format: {"capability": "llm", "tags": ["claude"], "version": ">=1.0.0"}"""
+       Format: {"capability": "llm", "tags": ["+claude"], "version": ">=1.0.0"}"""
 
     model: Optional[str] = None
     """Optional model override sent to the provider (e.g., "anthropic/claude-haiku-4").

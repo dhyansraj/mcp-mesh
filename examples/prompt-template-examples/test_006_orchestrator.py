@@ -32,7 +32,7 @@ class SelfDepTestResult(BaseModel):
     system_prompt="file://prompts/orchestrator_chain.jinja2",
     filter=[{"capability": "document_analysis"}],  # Will see analyze_document tool
     filter_mode="all",
-    provider={"capability": "llm", "tags": ["claude"]},
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",  # LiteLLM requires vendor prefix
 )
 @mesh.tool(capability="orchestration")

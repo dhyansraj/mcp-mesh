@@ -141,7 +141,7 @@ docker compose -f docker-compose.llm-delegation.yml --profile test-pt-009 down
 
 - Check provider is running: `docker compose -f docker-compose.llm-delegation.yml ps`
 - Verify registration: `curl http://localhost:8002/agents | jq`
-- Check tags match: Consumer `tags: ["claude"]` should match provider
+- Check tags match: Consumer `tags: ["+claude"]` should match a provider tagged `claude`
 
 ### LiteLLM API Error
 

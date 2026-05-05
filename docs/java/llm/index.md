@@ -20,9 +20,9 @@ User -> Consumer Agent -> Mesh -> LLM Provider Agent -> Vendor API
 ```
 
 > **Tip**: Bootstrap a provider with
-> `meshctl scaffold --lang java --agent-type llm-provider --name claude-provider --model anthropic/claude-sonnet-4-5`
+> `meshctl scaffold llm-provider --vendor claude --runtime java --name claude-provider`
 > and a consumer with
-> `meshctl scaffold --lang java --agent-type llm-agent --name analyst-agent --llm-selector claude`.
+> `meshctl scaffold llm --vendor claude --runtime java --name analyst-agent`.
 
 ## @MeshLlm Consumer
 

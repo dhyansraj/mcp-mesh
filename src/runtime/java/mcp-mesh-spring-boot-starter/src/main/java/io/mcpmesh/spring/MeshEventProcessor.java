@@ -157,6 +157,8 @@ public class MeshEventProcessor implements SmartLifecycle {
     }
 
     private void handleAgentRegistered(MeshEvent event) {
+        // no-op since v2; kept for log signal in DEBUG builds. Direct-LLM
+        // init was removed in #859.
         log.info("Agent registered with mesh: {}", event.getAgentId());
     }
 

@@ -44,7 +44,7 @@ class Answer(BaseModel):
 
 @app.tool()
 @mesh.llm(
-    provider={"capability": "llm", "tags": ["claude"]},  # Mesh delegation!
+    provider={"capability": "llm", "tags": ["+claude"]},  # Mesh delegation!
     max_iterations=5,
 )
 @mesh.tool(capability="qa", version="1.0.0")
@@ -62,7 +62,7 @@ async def ask_question(question: str, llm: mesh.MeshLlmAgent = None) -> Answer:
     Returns:
         Answer with response field
     """
-    # LLM will be resolved from mesh (capability="llm", tags=["claude"])
+    # LLM will be resolved from mesh (capability="llm", tags=["+claude"])
     result = await llm(question)
     return result
 

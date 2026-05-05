@@ -35,7 +35,7 @@ class OrchestratorResult(BaseModel):
 @mesh.llm(
     system_prompt="file://prompts/orchestrator.jinja2",
     filter=None,  # Simplified for testing
-    provider={"capability": "llm", "tags": ["claude"]},
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",  # LiteLLM requires vendor prefix
 )
 @mesh.tool(capability="orchestration")

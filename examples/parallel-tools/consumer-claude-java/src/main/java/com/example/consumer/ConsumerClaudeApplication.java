@@ -54,14 +54,20 @@ import java.util.List;
  * # Start the registry
  * meshctl start --registry-only
  *
- * # Start a Claude LLM provider (e.g., examples/llm-provider/claude_provider.py)
- * meshctl start -d examples/llm-provider/claude_provider.py
+ * # Step 1: Generate a Claude provider agent (one-per-vendor, holds the API key)
+ * meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+ *
+ * # Step 2: Start the provider
+ * meshctl start -d ./claude-provider/main.py
+ * # (or use any existing Claude provider from the integration suites, e.g.
+ * #  tests/integration/suites/uc15_parallel_tool_calls/artifacts/claude-provider-py)
  *
  * # Start the slow tool agent
  * meshctl start -d examples/parallel-tools/slow-tool-java
  *
- * # Run this agent
- * meshctl start examples/parallel-tools/consumer-claude-java -d
+ * # Run this consumer (it discovers the provider via mesh)
+ * cd examples/parallel-tools/consumer-claude-java
+ * mvn spring-boot:run
  *
  * # Test parallel execution
  * meshctl call parallelAnalyze '{"ctx": {"query": "Analyze AAPL stock", "ticker": "AAPL"}}'

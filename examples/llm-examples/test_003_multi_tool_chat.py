@@ -30,7 +30,7 @@ class ChatResponse(BaseModel):
         {"capability": "uptime_info"},  # Uptime information
     ],
     filter_mode="all",  # Get ALL matching tools
-    provider={"capability": "llm", "tags": ["claude"]},
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",  # Same as test_002
     max_iterations=15,
     system_prompt="""You are a system administration assistant.
@@ -67,7 +67,7 @@ def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
         {"capability": "uptime_info"},  # Uptime information
     ],
     filter_mode="best_match",  # Best match per capability
-    provider={"capability": "llm", "tags": ["claude"]},
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",
     max_iterations=15,
     system_prompt="""You are a system administration assistant.
@@ -97,7 +97,7 @@ def chat_best_match(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse
 @mesh.llm(
     filter=None,  # No specific filter
     filter_mode="*",  # Wildcard - all available tools
-    provider={"capability": "llm", "tags": ["claude"]},
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",
     max_iterations=15,
     system_prompt="""You are a system administration assistant with access to ALL available system tools.

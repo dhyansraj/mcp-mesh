@@ -15,7 +15,7 @@ app = FastMCP("Py LLM Consumer Service")
 
 @app.tool()
 @mesh.llm(
-    provider={"capability": "llm", "tags": ["claude"]},
+    provider={"capability": "llm", "tags": ["+claude"]},
     filter=[{"capability": "add"}],
     max_iterations=5,
     system_prompt="You are a helpful math assistant. When asked math questions, ALWAYS use the available add tool to compute the answer. Return the numeric result clearly.",

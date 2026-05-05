@@ -34,7 +34,7 @@ class AnalysisResult(BaseModel):
 @mesh.llm(
     system_prompt="file://prompts/analyzer.jinja2",
     filter=None,
-    provider={"capability": "llm", "tags": ["claude"]},
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",
     context_param="ctx",
 )

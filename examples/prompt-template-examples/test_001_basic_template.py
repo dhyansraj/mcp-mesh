@@ -23,7 +23,7 @@ class ChatResponse(BaseModel):
 @mesh.llm(
     system_prompt="file://prompts/basic_chat.jinja2",
     filter=None,
-    provider={"capability": "llm", "tags": ["claude"]},
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",  # LiteLLM requires vendor prefix
     context_param="ctx",  # Explicit context parameter name
 )

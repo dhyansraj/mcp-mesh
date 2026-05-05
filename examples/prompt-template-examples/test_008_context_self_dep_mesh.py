@@ -10,7 +10,7 @@ This test requires an LLM provider agent to be running:
     meshctl start examples/llm-mesh-delegation/test_009_provider.py
 
 Difference from test_007:
-- test_007: Uses direct LiteLLM (provider={"capability": "llm", "tags": ["claude"]})
+- test_007: Uses direct LiteLLM (provider={"capability": "llm", "tags": ["+claude"]})
 - test_008: Uses mesh delegation (provider={"capability": "llm"})
 """
 

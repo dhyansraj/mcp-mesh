@@ -33,7 +33,7 @@ class EnrichedResult(BaseModel):
 @mesh.llm(
     system_prompt="file://prompts/dual_injection.jinja2",
     filter={"tags": ["system"]},  # Will get system agent tools for LLM
-    provider={"capability": "llm", "tags": ["claude"]},
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",
 )
 @mesh.tool(

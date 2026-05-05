@@ -441,9 +441,16 @@ public class MeshAutoConfiguration {
                 continue;
             }
 
-            // Set llmProvider for mesh delegation
+            // Set llmProvider for mesh delegation. After v2, MeshLlmRegistry
+            // rejects @MeshLlm with an empty providerSelector at register-time,
+            // so this branch should always succeed; the null/empty guard stays
+            // as defense-in-depth in case of future code paths that bypass
+            // registration validation.
             Selector selector = llmConfig.providerSelector();
-            if (selector != null && !selector.capability().isEmpty()) {
+            if (selector == null || selector.capability() == null || selector.capability().isEmpty()) {
+                log.warn("@MeshLlm on tool '{}' has empty providerSelector — skipping llmProvider enrichment "
+                    + "(this should be unreachable after v2; report as a bug)", toolSpec.getCapability());
+            } else {
                 try {
                     // Build llmProvider JSON: {"capability": "llm", "tags": ["+claude", "+anthropic"]}
                     java.util.Map<String, Object> providerMap = new java.util.LinkedHashMap<>();

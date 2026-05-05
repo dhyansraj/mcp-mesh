@@ -32,7 +32,7 @@ class SystemAnalysisResult(BaseModel):
         {"capability": "uptime_info"},
     ],
     filter_mode="all",
-    provider={"capability": "llm", "tags": ["claude"]},
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",
     max_iterations=10,
     system_prompt="""You are a system analysis expert.

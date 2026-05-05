@@ -40,6 +40,14 @@ and load-balanced like any other capability.
   no longer apply; route to a different provider instead)
 - `examples/java/llm-direct-agent/` and other direct-mode example folders
 
+### Changed
+
+- **`@MeshLlm` `maxIterations` default lowered from 5 to 1** (Java). After v2,
+  the agentic loop is opt-in: a single LLM round-trip is the safe default for
+  consumers that don't actually need tool calling. Consumers that rely on
+  multi-turn tool use must set `maxIterations` explicitly (e.g.
+  `@MeshLlm(providerSelector = ..., maxIterations = 5)`).
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.4.0...v1.4.1)
 
 ## v1.4.1 (2026-04-28)

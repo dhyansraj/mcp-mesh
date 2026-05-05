@@ -711,6 +711,12 @@ class MeshLlmAgentInjector(BaseInjector):
                 logger.info(
                     f"🔍 Extracted vendor '{vendor}' from consumer model override '{model}' for handler selection"
                 )
+            else:
+                logger.debug(
+                    "Could not extract vendor from model override %r; handler selection "
+                    "will use registry-resolved vendor",
+                    model,
+                )
 
         # Create MeshLlmAgent with both metadata and proxies
         # Use .get() with defaults for tools_metadata/proxies to handle race condition

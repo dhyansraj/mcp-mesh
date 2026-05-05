@@ -54,14 +54,20 @@ import java.util.List;
  * # Start the registry
  * meshctl start --registry-only
  *
- * # Start a Gemini LLM provider (e.g., examples/llm-provider/gemini_provider.py)
- * meshctl start -d examples/llm-provider/gemini_provider.py
+ * # Step 1: Generate a Gemini provider agent (one-per-vendor, holds the API key)
+ * meshctl scaffold llm-provider --vendor gemini --runtime python --name gemini-provider
+ *
+ * # Step 2: Start the provider
+ * meshctl start -d ./gemini-provider/main.py
+ * # (or use any existing Gemini provider from the integration suites, e.g.
+ * #  tests/integration/suites/uc15_parallel_tool_calls/artifacts/gemini-provider-py)
  *
  * # Start the slow tool agent
  * meshctl start -d examples/parallel-tools/slow-tool-java
  *
- * # Run this agent
- * meshctl start examples/parallel-tools/consumer-gemini-java -d
+ * # Run this consumer (it discovers the provider via mesh)
+ * cd examples/parallel-tools/consumer-gemini-java
+ * mvn spring-boot:run
  *
  * # Test parallel execution
  * meshctl call parallelAnalyze '{"ctx": {"query": "Analyze AAPL stock", "ticker": "AAPL"}}'

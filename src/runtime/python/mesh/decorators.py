@@ -1741,11 +1741,19 @@ def llm(
     # Up-front validation: provider must be a dict (mesh delegation only).
     # Catch the legacy direct-mode signature (provider="claude") before we
     # walk the function body so the failure mode is clear and immediate.
+    # Distinguish explicit None from the legacy string form so the error
+    # message points at the right migration step.
+    if provider is None:
+        raise TypeError(
+            "@mesh.llm: 'provider' is required (mesh-delegated only since v2). "
+            "Pass provider={'capability': 'llm', 'tags': ['+claude']}. "
+            "See docs/01-getting-started/06-llm-integration.md."
+        )
     if not isinstance(provider, dict):
         raise TypeError(
             f"@mesh.llm: 'provider' must be a dict for mesh delegation "
             f"(got {type(provider).__name__}). Direct LLM mode was removed in v2.\n"
-            f"  Use: @mesh.llm(provider={{'capability': 'llm', 'tags': ['claude']}}, ...)\n"
+            f"  Use: @mesh.llm(provider={{'capability': 'llm', 'tags': ['+claude']}}, ...)\n"
             f"  Migrate from: @mesh.llm(provider='claude', model='...', api_key='...')"
         )
 

@@ -41,11 +41,14 @@ meshctl scaffold llm-provider --vendor openai --runtime python --name openai-pro
 meshctl scaffold llm-provider --vendor gemini --runtime python --name gemini-provider
 ```
 
-Supported `--vendor` values: `claude`, `openai`, `gemini`. Supported
-`--runtime` values: `python`, `typescript`, `java`. For Vertex AI, use
-`--vendor gemini` and rely on the Vertex environment variables
-(`GOOGLE_CLOUD_PROJECT`, `GOOGLE_APPLICATION_CREDENTIALS`) on the provider
-process.
+Supported `--vendor` values: `claude`, `openai`, `gemini`,
+`litellm-fallback`. The `litellm-fallback` vendor scaffolds a generic LiteLLM
+provider you can point at any OpenAI-compatible endpoint (Ollama, vLLM,
+LM Studio, etc.) — handy when you don't have an API key for a major vendor or
+want to test against a local model. Supported `--runtime` values: `python`,
+`typescript`, `java`. For Vertex AI, use `--vendor gemini` and rely on the
+Vertex environment variables (`GOOGLE_CLOUD_PROJECT`,
+`GOOGLE_APPLICATION_CREDENTIALS`) on the provider process.
 
 The legacy `--agent-type llm-agent` / `--agent-type llm-provider` flag mode
 documented below still works for backward compatibility.

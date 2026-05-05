@@ -725,9 +725,9 @@ class MeshLlmAgent:
             else:
                 system_content += "\n\nYou have access to tools. Use them when needed to gather information."
 
-        logger.debug(
-            f"📝 System prompt (formatted by {self._provider_handler}): {system_content[:200]}..."
-        )
+        # v2: vendor-specific shaping happens provider-side; the consumer
+        # just sends the raw system_content over the wire.
+        logger.debug(f"📝 System prompt (mesh-delegated): {system_content[:200]}...")
 
         media_parts: list[dict] = []
         if media:
@@ -1423,6 +1423,18 @@ class MeshLlmAgent:
             buffered_tool_name = stream_tool_name[: -len("_stream")]
         else:
             buffered_tool_name = stream_tool_name
+        # Defensive: if the provider's streaming tool isn't named with the
+        # ``_stream`` suffix our convention assumes, the derivation above
+        # leaves the buffered name equal to the streaming name and we'd
+        # re-invoke the same unknown tool (or, worse, infinite-loop if it
+        # later starts existing). Bail out with a clear error instead.
+        if buffered_tool_name == stream_tool_name:
+            raise RuntimeError(
+                f"Cannot derive buffered fallback for streaming tool '{stream_tool_name}': "
+                f"provider does not follow the '<tool>_stream' naming convention. "
+                f"Either expose the streaming variant or rename the buffered tool to "
+                f"share a base name (e.g. 'process_chat' + 'process_chat_stream')."
+            )
         result = await provider_proxy.call_tool_with_tracing(
             buffered_tool_name, {"request": request_dict}
         )

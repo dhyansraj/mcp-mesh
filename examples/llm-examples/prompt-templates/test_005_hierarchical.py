@@ -39,7 +39,7 @@ class TaskResult(BaseModel):
 @mesh.llm(
     system_prompt="file://prompts/hierarchical.jinja2",
     filter={"tags": ["system"]},
-    provider={"capability": "llm", "tags": ["claude"]},
+    provider={"capability": "llm", "tags": ["+claude"]},
     model="anthropic/claude-sonnet-4-5",
     context_param="task",  # Explicit context parameter
 )

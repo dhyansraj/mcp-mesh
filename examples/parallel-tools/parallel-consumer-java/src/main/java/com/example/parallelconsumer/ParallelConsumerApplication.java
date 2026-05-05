@@ -53,14 +53,18 @@ import java.util.List;
  * # Start the registry
  * meshctl start --registry-only
  *
- * # Start an LLM provider
- * meshctl start -d examples/llm-provider/claude_provider.py
+ * # Step 1: Generate a provider agent (one-per-vendor, holds the API key)
+ * meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+ *
+ * # Step 2: Start the provider
+ * meshctl start -d ./claude-provider/main.py
  *
  * # Start the slow tool agent
  * meshctl start -d examples/parallel-tools/slow-tool-java
  *
- * # Run this agent
- * meshctl start examples/parallel-tools/parallel-consumer-java -d
+ * # Run this consumer (it discovers the provider via mesh)
+ * cd examples/parallel-tools/parallel-consumer-java
+ * mvn spring-boot:run
  *
  * # Test parallel execution
  * meshctl call parallel_analyze '{"ctx": {"query": "Analyze AAPL stock", "ticker": "AAPL"}}'
