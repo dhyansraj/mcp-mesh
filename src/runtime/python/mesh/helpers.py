@@ -442,6 +442,7 @@ async def _execute_tool_calls_for_iteration(
     parallel: bool,
     vendor: str | None,
     loop_logger: logging.Logger | None,
+    has_native_dispatch: bool = False,
 ) -> tuple[list[dict], list[dict]]:
     """Execute one iteration's tool calls (parallel or sequential).
 
@@ -455,16 +456,18 @@ async def _execute_tool_calls_for_iteration(
       * Look up the MCP endpoint from ``tool_endpoints`` (returns an error
         tool message if missing).
       * Dispatch via :class:`UnifiedMCPProxy.call_tool`.
-      * Resolve resource_link items in the tool result to multimodal content
-        using the OpenAI-compatible image_url format (LiteLLM converts to the
-        provider-native format).
+      * Resolve resource_link items in the tool result to multimodal content.
+        The resolver formats per the destination vendor when known —
+        vendor-native shape (issue #860) for the native dispatch path,
+        OpenAI-shape (image_url + data URI, the historical default) for the
+        LiteLLM fallback path so LiteLLM's vendor adapters handle conversion.
       * For vendors that do not support images in role:tool messages
         (OpenAI / Gemini / Google), strip image parts out of the tool message
         and accumulate them so the caller can synthesize a follow-up user
         message after all tool results.
       * For vendors that do support images in role:tool messages
-        (Anthropic / Claude via LiteLLM), inline the resolved multimodal
-        content directly in the tool message.
+        (Anthropic / Claude), inline the resolved multimodal content directly
+        in the tool message.
 
     Args:
         message: The ``response.choices[0].message`` from LiteLLM whose
@@ -482,6 +485,16 @@ async def _execute_tool_calls_for_iteration(
             resolution is skipped and tool results pass through as JSON.
         loop_logger: Logger used for debug/info/warning output. May be
             ``None`` to suppress logging.
+        has_native_dispatch: When True, the surrounding agentic loop is
+            dispatching through the vendor's native SDK adapter (e.g.
+            ``anthropic_native``) and resource_link resolution should emit
+            vendor-native content blocks (issue #860). When False (LiteLLM
+            fallback path or unknown vendor), resolution stays on the
+            historical OpenAI-shape contract — LiteLLM handles vendor
+            translation internally and changing the upstream shape would
+            break the LiteLLM adapter chain. Defaults to False so callers
+            that don't yet plumb dispatch awareness fall back to the
+            pre-#860 behaviour.
 
     Returns:
         A tuple ``(tool_messages, accumulated_images)`` where:
@@ -489,13 +502,27 @@ async def _execute_tool_calls_for_iteration(
             ``{role: "tool", tool_call_id: ..., content: ...}`` dicts to be
             appended to the conversation immediately after the assistant
             message that requested the tools.
-          * ``accumulated_images`` is the list of image dicts (in
-            OpenAI-compatible format) to be sent in a follow-up user message
-            after all tool results, for vendors that do not support images
-            in role:tool messages. Empty for other vendors.
+          * ``accumulated_images`` is the list of image dicts (vendor-native
+            shape on native dispatch path, OpenAI-shape on LiteLLM path) to
+            be sent in a follow-up user message after all tool results, for
+            vendors that do not support images in role:tool messages. Empty
+            for other vendors.
     """
     from _mcp_mesh.engine.unified_mcp_proxy import UnifiedMCPProxy
     from _mcp_mesh.media.resolver import _has_resource_link, resolve_resource_links
+
+    # Issue #860: pick the resolver vendor argument so that:
+    #   * native dispatch (e.g. anthropic_native, gemini_native) receives the
+    #     vendor-native content shape directly — no per-adapter translation
+    #     needed downstream;
+    #   * LiteLLM fallback path keeps the historical OpenAI-shape contract,
+    #     because LiteLLM's vendor adapters expect image_url + data URI and
+    #     translate to the wire format themselves.
+    # Note: ``_format_for_gemini`` is currently aliased to ``_format_for_openai``
+    # in the resolver, so for vendor="gemini"/"google"/"vertex_ai" the shape
+    # is identical regardless of dispatch path. Only vendor="anthropic" sees
+    # an actual shape difference today (image_url → Claude image block).
+    resolver_vendor = vendor if has_native_dispatch and vendor else "openai"
 
     async def _execute_single_tool(tc) -> tuple[dict, list[dict]]:
         """Execute a single tool call and return (tool_message, image_parts)."""
@@ -530,14 +557,13 @@ async def _execute_tool_calls_for_iteration(
             result = await proxy.call_tool(tool_name, args)
 
             # Resolve resource_link items to multimodal content.
-            # Always use OpenAI-compatible format (image_url with
-            # data URIs) — LiteLLM converts to provider-native.
+            # ``resolver_vendor`` is "openai" on the LiteLLM fallback path
+            # (preserves historical contract) and the actual vendor on the
+            # native dispatch path (issue #860 — vendor-native shape upstream).
             if vendor and _has_resource_link(result):
                 try:
-                    # Always use OpenAI format — LiteLLM converts to
-                    # provider-native format internally.
                     resolved_parts = await resolve_resource_links(
-                        result, "openai"
+                        result, resolver_vendor
                     )
                 except Exception as resolve_err:
                     if loop_logger:
@@ -853,7 +879,12 @@ async def _provider_agentic_loop(
             current_messages.append(assistant_msg)
 
             tool_messages, accumulated_images = await _execute_tool_calls_for_iteration(
-                message, tool_endpoints, parallel, vendor, loop_logger
+                message,
+                tool_endpoints,
+                parallel,
+                vendor,
+                loop_logger,
+                has_native_dispatch=_native_handler.has_native(),
             )
             current_messages.extend(tool_messages)
 
@@ -1255,6 +1286,7 @@ async def _provider_agentic_loop_stream(
                         parallel,
                         vendor,
                         loop_logger,
+                        has_native_dispatch=_native_handler.has_native(),
                     )
                 )
                 current_messages.extend(tool_messages)

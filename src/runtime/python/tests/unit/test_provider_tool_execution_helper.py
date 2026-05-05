@@ -309,6 +309,226 @@ class TestErrorPaths:
 
 
 # ---------------------------------------------------------------------------
+# Issue #860 — vendor-native upstream emission on the native dispatch path
+# (and OpenAI-shape fallback on the LiteLLM path)
+# ---------------------------------------------------------------------------
+
+
+class TestNativeDispatchResolverVendor:
+    """Verify the ``has_native_dispatch`` flag drives the vendor argument
+    passed to ``resolve_resource_links``. This is the upstream half of the
+    #860 architectural cleanup: native dispatch path receives vendor-native
+    content blocks straight from the resolver; LiteLLM fallback path keeps
+    the historical OpenAI-shape contract so LiteLLM's own vendor adapters
+    handle the conversion."""
+
+    def _patch_resolver(self, parts: list):
+        """Patch the resolver so we can capture the vendor argument."""
+        resolve_mock = AsyncMock(return_value=parts)
+        return (
+            patch(
+                "_mcp_mesh.media.resolver._has_resource_link",
+                return_value=True,
+            ),
+            patch(
+                "_mcp_mesh.media.resolver.resolve_resource_links",
+                new=resolve_mock,
+            ),
+            resolve_mock,
+        )
+
+    @pytest.mark.asyncio
+    async def test_litellm_path_uses_openai_shape_for_anthropic_vendor(self):
+        """LiteLLM fallback path (``has_native_dispatch=False``): even though
+        vendor is "anthropic", the resolver is asked for OpenAI shape so the
+        existing LiteLLM adapter chain keeps working unchanged."""
+        message = _make_message_mock(
+            [_make_tool_call_mock("call_1", "screenshot", "{}")]
+        )
+        tool_endpoints = {"screenshot": "http://localhost:9000"}
+
+        proxy_instance = MagicMock()
+        proxy_instance.call_tool = AsyncMock(
+            return_value={"resource_link": True}
+        )
+
+        link_patch, resolve_patch, resolve_mock = self._patch_resolver(
+            parts=[{"type": "text", "text": "ok"}]
+        )
+
+        with patch(
+            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+            return_value=proxy_instance,
+        ), link_patch, resolve_patch:
+            await _execute_tool_calls_for_iteration(
+                message=message,
+                tool_endpoints=tool_endpoints,
+                parallel=False,
+                vendor="anthropic",
+                loop_logger=None,
+                has_native_dispatch=False,
+            )
+
+        assert resolve_mock.await_count == 1
+        # Second positional arg is the vendor passed to the resolver.
+        called_vendor = resolve_mock.await_args.args[1]
+        assert called_vendor == "openai", (
+            "LiteLLM fallback path must keep emitting OpenAI-shape blocks; "
+            f"got vendor={called_vendor!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_native_dispatch_uses_vendor_native_shape_for_anthropic(self):
+        """Native dispatch path (``has_native_dispatch=True``): vendor flows
+        through to the resolver so the resolver emits Claude-native image
+        blocks directly. The native Anthropic adapter's content-block
+        translator becomes a no-op for these blocks."""
+        message = _make_message_mock(
+            [_make_tool_call_mock("call_1", "screenshot", "{}")]
+        )
+        tool_endpoints = {"screenshot": "http://localhost:9000"}
+
+        proxy_instance = MagicMock()
+        proxy_instance.call_tool = AsyncMock(
+            return_value={"resource_link": True}
+        )
+
+        link_patch, resolve_patch, resolve_mock = self._patch_resolver(
+            parts=[{"type": "text", "text": "ok"}]
+        )
+
+        with patch(
+            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+            return_value=proxy_instance,
+        ), link_patch, resolve_patch:
+            await _execute_tool_calls_for_iteration(
+                message=message,
+                tool_endpoints=tool_endpoints,
+                parallel=False,
+                vendor="anthropic",
+                loop_logger=None,
+                has_native_dispatch=True,
+            )
+
+        assert resolve_mock.await_count == 1
+        called_vendor = resolve_mock.await_args.args[1]
+        assert called_vendor == "anthropic", (
+            "Native dispatch path must emit vendor-native blocks; "
+            f"got vendor={called_vendor!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_native_dispatch_uses_vendor_native_shape_for_gemini(self):
+        """Native dispatch + vendor=gemini: resolver is called with "gemini".
+        The resolver's ``_format_for_gemini`` is currently aliased to
+        ``_format_for_openai``, so the wire shape is identical to the
+        LiteLLM path — but the call CONTRACT is "ask for gemini" so future
+        gemini-native shape changes flow through automatically."""
+        message = _make_message_mock(
+            [_make_tool_call_mock("call_1", "screenshot", "{}")]
+        )
+        tool_endpoints = {"screenshot": "http://localhost:9000"}
+
+        proxy_instance = MagicMock()
+        proxy_instance.call_tool = AsyncMock(
+            return_value={"resource_link": True}
+        )
+
+        link_patch, resolve_patch, resolve_mock = self._patch_resolver(
+            parts=[{"type": "text", "text": "ok"}]
+        )
+
+        with patch(
+            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+            return_value=proxy_instance,
+        ), link_patch, resolve_patch:
+            await _execute_tool_calls_for_iteration(
+                message=message,
+                tool_endpoints=tool_endpoints,
+                parallel=False,
+                vendor="gemini",
+                loop_logger=None,
+                has_native_dispatch=True,
+            )
+
+        assert resolve_mock.await_count == 1
+        called_vendor = resolve_mock.await_args.args[1]
+        assert called_vendor == "gemini"
+
+    @pytest.mark.asyncio
+    async def test_default_has_native_dispatch_preserves_legacy_behavior(self):
+        """Callers that don't yet plumb ``has_native_dispatch`` (third-party
+        or mid-rebase) MUST get the pre-#860 behavior: resolver called with
+        OpenAI shape, LiteLLM downstream handles conversion."""
+        message = _make_message_mock(
+            [_make_tool_call_mock("call_1", "screenshot", "{}")]
+        )
+        tool_endpoints = {"screenshot": "http://localhost:9000"}
+
+        proxy_instance = MagicMock()
+        proxy_instance.call_tool = AsyncMock(
+            return_value={"resource_link": True}
+        )
+
+        link_patch, resolve_patch, resolve_mock = self._patch_resolver(
+            parts=[{"type": "text", "text": "ok"}]
+        )
+
+        with patch(
+            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+            return_value=proxy_instance,
+        ), link_patch, resolve_patch:
+            # Note: no has_native_dispatch kwarg -> default False.
+            await _execute_tool_calls_for_iteration(
+                message=message,
+                tool_endpoints=tool_endpoints,
+                parallel=False,
+                vendor="anthropic",
+                loop_logger=None,
+            )
+
+        assert resolve_mock.await_args.args[1] == "openai"
+
+    @pytest.mark.asyncio
+    async def test_native_dispatch_with_unknown_vendor_falls_back_to_openai(self):
+        """vendor=None on native dispatch path is nonsensical (the loop only
+        sets has_native_dispatch=True after picking a vendor that has a
+        handler) — but we defend against it: the resolver still gets a valid
+        vendor string."""
+        message = _make_message_mock(
+            [_make_tool_call_mock("call_1", "screenshot", "{}")]
+        )
+        tool_endpoints = {"screenshot": "http://localhost:9000"}
+
+        proxy_instance = MagicMock()
+        proxy_instance.call_tool = AsyncMock(
+            return_value={"resource_link": True}
+        )
+
+        link_patch, resolve_patch, resolve_mock = self._patch_resolver(
+            parts=[{"type": "text", "text": "ok"}]
+        )
+
+        with patch(
+            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+            return_value=proxy_instance,
+        ), link_patch, resolve_patch:
+            await _execute_tool_calls_for_iteration(
+                message=message,
+                tool_endpoints=tool_endpoints,
+                parallel=False,
+                vendor=None,
+                loop_logger=None,
+                has_native_dispatch=True,
+            )
+
+        # When vendor is None, the resolver guard inside the helper means the
+        # resolver shouldn't even be invoked (it's gated on
+        # ``vendor and _has_resource_link(result)``). Pin that fact.
+        assert resolve_mock.await_count == 0
+
+
+# ---------------------------------------------------------------------------
 # Module-level invariants
 # ---------------------------------------------------------------------------
 
