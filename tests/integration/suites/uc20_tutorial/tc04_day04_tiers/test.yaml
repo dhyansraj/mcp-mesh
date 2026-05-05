@@ -124,6 +124,28 @@ test:
     workdir: /workspace
     capture: openai_status
 
+  # Workaround: explicit wait for LLM provider resolution to propagate from
+  # registry to planner. Even after all 8 agents are healthy, the resolution
+  # event may need additional time. Mirrors the pattern used in
+  # uc15_parallel_tool_calls/tc01_parallel_tools_py.
+  - name: "Wait for LLM provider resolution to propagate"
+    handler: wait
+    seconds: 10
+
+  # DIAGNOSTIC: capture claude-provider startup + resolution logs
+  - name: "DIAGNOSTIC: claude-provider startup + resolution logs"
+    handler: shell
+    command: "meshctl logs claude-provider --tail 100 || true"
+    workdir: /workspace
+    capture: claude_provider_logs
+
+  # DIAGNOSTIC: capture planner-agent LLM provider resolution logs
+  - name: "DIAGNOSTIC: planner-agent LLM provider resolution logs"
+    handler: shell
+    command: "meshctl logs planner-agent --tail 100 || true"
+    workdir: /workspace
+    capture: planner_agent_logs
+
   # Call plan_trip — should route to Claude (preferred via +claude tag)
   - name: "Call plan_trip with Claude preferred"
     handler: shell
