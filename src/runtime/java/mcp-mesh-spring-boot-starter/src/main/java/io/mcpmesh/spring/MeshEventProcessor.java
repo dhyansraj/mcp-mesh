@@ -1,17 +1,13 @@
 package io.mcpmesh.spring;
 
-import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.core.MeshEvent;
 import io.mcpmesh.spring.media.MediaStore;
-import io.mcpmesh.types.MeshLlmAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.SmartLifecycle;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -48,8 +44,7 @@ public class MeshEventProcessor implements SmartLifecycle {
     private final McpHttpClient mcpClient;
     private final McpMeshToolProxyFactory proxyFactory;
     private final ToolInvoker toolInvoker;
-    private final ObjectMapper objectMapper;
-    private final ApplicationContext applicationContext; // For optional Spring AI bean lookup
+    private final ApplicationContext applicationContext; // For MediaStore bean lookup
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ExecutorService executor;
 
@@ -68,9 +63,6 @@ public class MeshEventProcessor implements SmartLifecycle {
     // Key: short function name (e.g., "analyze"), Value: tools list
     private final Map<String, List<MeshEvent.LlmToolInfo>> pendingTools = new ConcurrentHashMap<>();
 
-    // Track if direct LLM agents have been initialized
-    private final AtomicBoolean directLlmInitialized = new AtomicBoolean(false);
-
     public MeshEventProcessor(
             MeshRuntime runtime,
             MeshDependencyInjector injector,
@@ -79,7 +71,6 @@ public class MeshEventProcessor implements SmartLifecycle {
             McpHttpClient mcpClient,
             McpMeshToolProxyFactory proxyFactory,
             ToolInvoker toolInvoker,
-            ObjectMapper objectMapper,
             ApplicationContext applicationContext) {
         this.runtime = runtime;
         this.injector = injector;
@@ -88,7 +79,6 @@ public class MeshEventProcessor implements SmartLifecycle {
         this.mcpClient = mcpClient;
         this.proxyFactory = proxyFactory;
         this.toolInvoker = toolInvoker;
-        this.objectMapper = objectMapper;
         this.applicationContext = applicationContext;
         this.executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "mesh-event-processor");
@@ -168,138 +158,6 @@ public class MeshEventProcessor implements SmartLifecycle {
 
     private void handleAgentRegistered(MeshEvent event) {
         log.info("Agent registered with mesh: {}", event.getAgentId());
-
-        // Initialize direct LLM agents (only once)
-        initializeDirectLlmAgents();
-    }
-
-    /**
-     * Initialize direct LLM agents (provider="claude" mode).
-     *
-     * <p>This is called when the agent registers with the mesh.
-     * For direct mode, all configuration is available at startup,
-     * so we can create and inject the MeshLlmAgentImpl immediately.
-     *
-     * <p>This is equivalent to Python's initialize_direct_llm_agents().
-     *
-     * <p>Uses reflection to avoid compile-time dependency on mcp-mesh-spring-ai.
-     */
-    private void initializeDirectLlmAgents() {
-        if (!directLlmInitialized.compareAndSet(false, true)) {
-            return; // Already initialized
-        }
-
-        Map<String, MeshLlmRegistry.LlmConfig> allConfigs = llmRegistry.getAllConfigs();
-        if (allConfigs.isEmpty()) {
-            log.debug("No @MeshLlm configurations found");
-            return;
-        }
-
-        // Try to get SpringAiLlmProvider bean (optional dependency)
-        Object springAiProvider = null;
-        try {
-            springAiProvider = applicationContext.getBean("springAiLlmProvider");
-        } catch (Exception e) {
-            log.debug("SpringAiLlmProvider not available (mcp-mesh-spring-ai not on classpath)");
-        }
-
-        for (Map.Entry<String, MeshLlmRegistry.LlmConfig> entry : allConfigs.entrySet()) {
-            String funcId = entry.getKey();
-            MeshLlmRegistry.LlmConfig config = entry.getValue();
-
-            // Only process direct mode (not mesh delegation)
-            if (config.isMeshDelegation()) {
-                log.debug("Skipping mesh delegation LLM config: {}", funcId);
-                continue;
-            }
-
-            String provider = config.directProvider();
-            log.info("Initializing direct LLM agent for {} (provider={})", funcId, provider);
-
-            // Check if SpringAiLlmProvider is available
-            if (springAiProvider == null) {
-                log.warn("SpringAiLlmProvider not available for direct LLM mode. " +
-                    "Add mcp-mesh-spring-ai dependency for @MeshLlm(provider=\"{}\") to work.", provider);
-                continue;
-            }
-
-            // Check if the provider is available (API key configured) using reflection
-            try {
-                Method isAvailableMethod = springAiProvider.getClass().getMethod("isProviderAvailable", String.class);
-                Boolean isAvailable = (Boolean) isAvailableMethod.invoke(springAiProvider, provider);
-                if (!isAvailable) {
-                    log.warn("LLM provider '{}' not available for {}. " +
-                        "Check that the API key is configured (e.g., ANTHROPIC_API_KEY).",
-                        provider, funcId);
-                    continue;
-                }
-            } catch (Exception e) {
-                log.error("Failed to check provider availability: {}", e.getMessage());
-                continue;
-            }
-
-            // Find the wrapper for this function
-            MeshToolWrapper wrapper = wrapperRegistry.getWrapper(funcId);
-            if (wrapper == null) {
-                log.debug("No wrapper found for funcId: {} (may not have MeshLlmAgent parameter)", funcId);
-                continue;
-            }
-
-            if (wrapper.getLlmAgentCount() == 0) {
-                log.debug("Wrapper {} has no MeshLlmAgent parameters", funcId);
-                continue;
-            }
-
-            // Create MeshLlmAgentImpl for direct mode using reflection
-            try {
-                Class<?> agentImplClass = Class.forName("io.mcpmesh.ai.MeshLlmAgentImpl");
-                Constructor<?> constructor = agentImplClass.getConstructor(
-                    String.class,           // functionId
-                    springAiProvider.getClass(), // llmProvider (SpringAiLlmProvider)
-                    String.class,           // provider
-                    String.class,           // systemPrompt
-                    int.class,              // maxIterations
-                    int.class,              // maxTokens
-                    double.class,           // temperature
-                    ObjectMapper.class      // objectMapper
-                );
-
-                MeshLlmAgent agent = (MeshLlmAgent) constructor.newInstance(
-                    funcId,
-                    springAiProvider,
-                    provider,
-                    config.systemPrompt(),
-                    config.maxIterations(),
-                    config.maxTokens(),
-                    config.temperature(),
-                    objectMapper
-                );
-
-                // Wire MediaStore for multimodal support (via reflection)
-                try {
-                    MediaStore store = applicationContext.getBean(MediaStore.class);
-                    Method setMediaStore = agentImplClass.getMethod("setMediaStore", MediaStore.class);
-                    setMediaStore.invoke(agent, store);
-                } catch (BeansException e) {
-                    log.debug("MediaStore not available — multimodal media support disabled for direct LLM agent");
-                } catch (NoSuchMethodException e) {
-                    log.debug("setMediaStore not found on agent class — media support not available");
-                }
-
-                // Inject into each LLM agent parameter position in the wrapper
-                for (int llmIndex = 0; llmIndex < wrapper.getLlmAgentCount(); llmIndex++) {
-                    String compositeKey = MeshToolWrapperRegistry.buildLlmKey(funcId, llmIndex);
-                    wrapperRegistry.updateLlmAgent(compositeKey, agent);
-
-                    log.info("Initialized direct LLM agent for {} (provider={}, index={}, available={})",
-                        funcId, provider, llmIndex, agent.isAvailable());
-                }
-            } catch (ClassNotFoundException e) {
-                log.warn("MeshLlmAgentImpl not found. Add mcp-mesh-spring-ai dependency for direct LLM mode.");
-            } catch (Exception e) {
-                log.error("Failed to create direct LLM agent for {}: {}", funcId, e.getMessage(), e);
-            }
-        }
     }
 
     private void handleDependencyAvailable(MeshEvent event) {

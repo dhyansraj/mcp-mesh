@@ -95,7 +95,7 @@ parsing, and response formatting.
 ### Scaffold the provider
 
 ```shell
-$ meshctl scaffold --name claude-provider --agent-type llm-provider --model anthropic/claude-sonnet-4-5 --port 9106
+$ meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider --port 9106
 ```
 
 Replace the generated `main.py` with:

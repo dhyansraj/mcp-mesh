@@ -1,14 +1,15 @@
 # vertex-ai-agent (Java)
 
-Minimal Spring Boot example of calling Google Gemini through **Vertex AI**
-(IAM auth) from a mesh agent. Same Gemini model family as the AI Studio
-path — only the `provider` value and auth config change.
+Minimal Spring Boot example of running a Gemini provider agent backed by
+**Vertex AI** (IAM auth). Same Gemini model family as the AI Studio path —
+only the provider's `model` string and auth config change.
 
 ## What it shows
 
-- `@MeshLlm(provider = "vertex_ai")` to force Vertex AI even if AI Studio is
-  also configured (otherwise `provider = "gemini"` prefers AI Studio)
-- A Java record (`CapitalInfo`) as the structured output type
+- `@MeshLlmProvider(model = "vertex_ai/gemini-2.0-flash")` to bind the
+  IAM-backed `vertexAiGeminiChatModel` Spring AI bean
+- A Java record (`CapitalInfo`) as the structured output type on the
+  consumer side
 - Mesh's `GeminiHandler` routing automatically applies HINT-mode prompt
   shaping when structured output is combined with tools
 
@@ -60,7 +61,7 @@ You should see a structured response like:
 
 ## Switching to AI Studio
 
-To run the same agent against Google AI Studio instead:
+To run the same provider against Google AI Studio instead:
 
 1. Replace the dependency in `pom.xml`:
    ```xml
@@ -70,14 +71,18 @@ To run the same agent against Google AI Studio instead:
      <version>${spring-ai.version}</version>
    </dependency>
    ```
-2. Change the annotation:
+2. Change the provider's `model` string:
    ```java
-   @MeshLlm(provider = "gemini", …)   // was: provider = "vertex_ai"
+   @MeshLlmProvider(model = "gemini/gemini-2.0-flash", …)   // was: vertex_ai/gemini-2.0-flash
    ```
 3. Configure the API key:
    ```bash
    export GOOGLE_AI_GEMINI_API_KEY=AIza…
    ```
+
+Consumer agents are unchanged — they keep their existing
+`@MeshLlm(providerSelector = @Selector(capability = "llm", tags = {"+gemini"}))`
+selector.
 
 ## Env var conventions across runtimes
 

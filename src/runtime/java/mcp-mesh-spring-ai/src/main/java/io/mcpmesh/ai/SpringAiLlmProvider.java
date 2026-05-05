@@ -13,10 +13,13 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Spring AI LLM provider for direct LLM calls.
+ * Spring AI LLM provider used by the provider-side {@code @MeshLlmProvider}
+ * agent to invoke vendor LLMs.
  *
  * <p>Manages ChatClient instances for different LLM providers (Claude, OpenAI, etc.).
- * Used when {@code @MeshLlm(provider = "claude")} is specified (direct mode).
+ * The {@link MeshLlmProviderProcessor} resolves a {@link org.springframework.ai.chat.model.ChatModel}
+ * via {@link #getModelForProvider(String)} when handling an incoming
+ * {@code llm_generate} mesh request.
  *
  * <h2>Supported Providers</h2>
  * <ul>

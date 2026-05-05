@@ -35,7 +35,7 @@ class TestMeshLlmDecoratorBasics:
     def test_decorator_registers_function(self):
         """Test that @mesh.llm decorator registers function in registry."""
 
-        @mesh.llm(filter={"capability": "document"})
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -48,7 +48,7 @@ class TestMeshLlmDecoratorBasics:
     def test_decorator_accepts_simple_filter(self):
         """Test decorator with simple string filter."""
 
-        @mesh.llm(filter="document_processor")
+        @mesh.llm(provider={"capability": "llm"}, filter="document_processor")
         def analyze(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -59,7 +59,7 @@ class TestMeshLlmDecoratorBasics:
     def test_decorator_accepts_dict_filter(self):
         """Test decorator with dict filter (capability + tags)."""
 
-        @mesh.llm(filter={"capability": "document", "tags": ["pdf", "advanced"]})
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document", "tags": ["pdf", "advanced"]})
         def analyze(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -72,6 +72,7 @@ class TestMeshLlmDecoratorBasics:
         """Test decorator with list of mixed filters."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter=[
                 {"capability": "document", "tags": ["pdf"]},
                 "web_search",
@@ -103,9 +104,9 @@ class TestMeshLlmDecoratorConfiguration:
                     del os.environ[key]
 
     def test_decorator_default_configuration(self):
-        """Test decorator with default configuration values."""
+        """Test decorator default configuration (mesh-delegated only)."""
 
-        @mesh.llm(filter={"capability": "document"})
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -113,26 +114,33 @@ class TestMeshLlmDecoratorConfiguration:
         agent_data = next(iter(llm_agents.values()))
         config = agent_data.config
 
-        # Check defaults
-        assert config["provider"] == "claude"
+        # Check defaults — provider stays a dict (mesh delegation only); the
+        # auto-stamped "-ai.mcpmesh.stream" tag may have been appended by the
+        # stream-discrimination layer.
+        assert isinstance(config["provider"], dict)
+        assert config["provider"].get("capability") == "llm"
         assert config["filter_mode"] == "all"
         assert config["max_iterations"] == 10
 
-    def test_decorator_custom_provider(self):
-        """Test decorator with custom provider."""
+    def test_decorator_custom_provider_filter(self):
+        """Test decorator with custom provider filter (mesh delegation)."""
 
-        @mesh.llm(filter={"capability": "document"}, provider="openai")
+        @mesh.llm(
+            filter={"capability": "document"},
+            provider={"capability": "llm", "tags": ["openai"]},
+        )
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
         llm_agents = DecoratorRegistry.get_mesh_llm_agents()
         agent_data = next(iter(llm_agents.values()))
-        assert agent_data.config["provider"] == "openai"
+        assert agent_data.config["provider"]["capability"] == "llm"
+        assert "openai" in agent_data.config["provider"]["tags"]
 
     def test_decorator_custom_model(self):
         """Test decorator with custom model."""
 
-        @mesh.llm(filter={"capability": "document"}, model="claude-3-5-sonnet-20241022")
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"}, model="claude-3-5-sonnet-20241022")
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -143,7 +151,7 @@ class TestMeshLlmDecoratorConfiguration:
     def test_decorator_custom_max_iterations(self):
         """Test decorator with custom max_iterations."""
 
-        @mesh.llm(filter={"capability": "document"}, max_iterations=20)
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"}, max_iterations=20)
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -155,6 +163,7 @@ class TestMeshLlmDecoratorConfiguration:
         """Test decorator with system prompt."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "document"},
             system_prompt="You are a helpful assistant.",
         )
@@ -169,6 +178,7 @@ class TestMeshLlmDecoratorConfiguration:
         """Test decorator with system prompt file path."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "document"},
             system_prompt_file="prompts/chat.jinja2",
         )
@@ -190,7 +200,7 @@ class TestMeshLlmDecoratorOutputTypeExtraction:
     def test_extracts_pydantic_output_type(self):
         """Test that decorator extracts Pydantic BaseModel from return annotation."""
 
-        @mesh.llm(filter={"capability": "document"})
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -205,7 +215,7 @@ class TestMeshLlmDecoratorOutputTypeExtraction:
             result: str
             metadata: dict
 
-        @mesh.llm(filter={"capability": "document"})
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
         def analyze(message: str, llm: mesh.MeshLlmAgent = None) -> CustomResponse:
             return llm(message)
 
@@ -218,7 +228,7 @@ class TestMeshLlmDecoratorOutputTypeExtraction:
 
         with pytest.warns(UserWarning, match="should return a Pydantic BaseModel"):
 
-            @mesh.llm(filter={"capability": "document"})
+            @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
             def chat(message: str, llm: mesh.MeshLlmAgent = None) -> dict:
                 return llm(message)
 
@@ -233,7 +243,7 @@ class TestMeshLlmDecoratorParameterValidation:
     def test_detects_single_mesh_llm_agent_parameter(self):
         """Test detection of single MeshLlmAgent parameter."""
 
-        @mesh.llm(filter={"capability": "document"})
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -244,7 +254,7 @@ class TestMeshLlmDecoratorParameterValidation:
     def test_detects_custom_parameter_name(self):
         """Test detection of custom parameter name."""
 
-        @mesh.llm(filter={"capability": "document"})
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
         def chat(message: str, document_llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return document_llm(message)
 
@@ -259,7 +269,7 @@ class TestMeshLlmDecoratorParameterValidation:
             UserWarning, match="multiple MeshLlmAgent parameters.*Only.*first"
         ):
 
-            @mesh.llm(filter={"capability": "document"})
+            @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
             def chat(
                 message: str,
                 llm1: mesh.MeshLlmAgent = None,
@@ -277,7 +287,7 @@ class TestMeshLlmDecoratorParameterValidation:
 
         with pytest.raises(ValueError, match="must have at least one parameter"):
 
-            @mesh.llm(filter={"capability": "document"})
+            @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
             def chat(message: str) -> ChatResponse:
                 return ChatResponse(answer="test", confidence=0.9)
 
@@ -292,7 +302,7 @@ class TestMeshLlmDecoratorFilterMode:
     def test_filter_mode_all(self):
         """Test filter_mode='all'."""
 
-        @mesh.llm(filter={"capability": "document"}, filter_mode="all")
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"}, filter_mode="all")
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -303,7 +313,7 @@ class TestMeshLlmDecoratorFilterMode:
     def test_filter_mode_best_match(self):
         """Test filter_mode='best_match'."""
 
-        @mesh.llm(filter={"capability": "document"}, filter_mode="best_match")
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"}, filter_mode="best_match")
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -314,7 +324,7 @@ class TestMeshLlmDecoratorFilterMode:
     def test_filter_mode_wildcard(self):
         """Test filter_mode='*' (wildcard)."""
 
-        @mesh.llm(filter={"capability": "document"}, filter_mode="*")
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"}, filter_mode="*")
         def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -333,11 +343,11 @@ class TestMeshLlmDecoratorFunctionIdGeneration:
     def test_generates_unique_function_id(self):
         """Test that each decorated function gets unique ID."""
 
-        @mesh.llm(filter={"capability": "document"})
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
         def chat1(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
-        @mesh.llm(filter={"capability": "document"})
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
         def chat2(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
             return llm(message)
 
@@ -349,7 +359,7 @@ class TestMeshLlmDecoratorFunctionIdGeneration:
     def test_function_id_includes_function_name(self):
         """Test that function ID contains function name."""
 
-        @mesh.llm(filter={"capability": "document"})
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
         def my_chat_function(
             message: str, llm: mesh.MeshLlmAgent = None
         ) -> ChatResponse:
@@ -377,6 +387,7 @@ class TestTemplateFileSupport:
         """Test: Literal system_prompt (no prefix) works as before."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "chat"},
             system_prompt="You are a helpful assistant.",
         )
@@ -399,6 +410,7 @@ class TestTemplateFileSupport:
         """Test: file:// prefix detected and stripped."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "chat"},
             system_prompt="file://prompts/chat.jinja2",
         )
@@ -419,6 +431,7 @@ class TestTemplateFileSupport:
         """Test: Absolute path (file:///...) detected correctly."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "chat"},
             system_prompt="file:///tmp/prompts/chat.jinja2",
         )
@@ -436,6 +449,7 @@ class TestTemplateFileSupport:
         """Test: Relative path stored correctly."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "chat"},
             system_prompt="file://./prompts/chat.jinja2",
         )
@@ -452,6 +466,7 @@ class TestTemplateFileSupport:
         """Test: .jinja2 extension auto-detected as template without file://."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "chat"},
             system_prompt="prompts/chat.jinja2",  # No file:// prefix
         )
@@ -469,6 +484,7 @@ class TestTemplateFileSupport:
         """Test: .j2 extension auto-detected as template without file://."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "chat"},
             system_prompt="prompts/chat.j2",
         )
@@ -493,6 +509,7 @@ class TestContextParamSupport:
         """Test: context_param stored correctly."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "chat"},
             system_prompt="file://prompts/chat.jinja2",
             context_param="ctx",
@@ -515,6 +532,7 @@ class TestContextParamSupport:
         with patch("mesh.decorators.logger") as mock_logger:
 
             @mesh.llm(
+                provider={"capability": "llm"},
                 filter={"capability": "chat"},
                 system_prompt="You are helpful.",  # No file://
                 context_param="ctx",  # Context param without template
@@ -536,6 +554,7 @@ class TestContextParamSupport:
         with patch("mesh.decorators.logger") as mock_logger:
 
             @mesh.llm(
+                provider={"capability": "llm"},
                 filter={"capability": "chat"},
                 system_prompt="file://prompts/chat.jinja2",
                 context_param="ctx",
@@ -551,6 +570,7 @@ class TestContextParamSupport:
         """Test: context_param=None is valid (no error)."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "chat"},
             system_prompt="file://prompts/chat.jinja2",
             context_param=None,
@@ -575,6 +595,7 @@ class TestDecoratorRegistryTemplateMetadata:
         """Test: is_template flag set for templates."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "chat"},
             system_prompt="file://prompts/chat.jinja2",
         )
@@ -582,6 +603,7 @@ class TestDecoratorRegistryTemplateMetadata:
             return llm(message)
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "help"},
             system_prompt="You are helpful.",
         )
@@ -611,6 +633,7 @@ class TestDecoratorRegistryTemplateMetadata:
         """Test: template_path stored for templates."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "chat"},
             system_prompt="file://prompts/analyst.jinja2",
         )
@@ -626,6 +649,7 @@ class TestDecoratorRegistryTemplateMetadata:
         """Test: context_param_name stored in registry."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "chat"},
             system_prompt="file://prompts/chat.jinja2",
             context_param="analysis_ctx",
@@ -644,6 +668,7 @@ class TestDecoratorRegistryTemplateMetadata:
         """Test: Literal prompts don't have template metadata."""
 
         @mesh.llm(
+            provider={"capability": "llm"},
             filter={"capability": "chat"},
             system_prompt="You are helpful.",
         )

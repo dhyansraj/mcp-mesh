@@ -917,18 +917,22 @@ async def process_pipeline(
 
 > Inject LLM agents as dependencies with automatic tool discovery and type-safe prompt templates
 
-The `@mesh.llm` decorator enables LLM integration as first-class mesh capabilities, treating LLMs as injectable dependencies like any other agent.
+The `@mesh.llm` decorator enables LLM integration as first-class mesh capabilities. LLM calls are routed through a mesh-registered LLM provider agent (`@mesh.llm_provider`) — the consumer never holds the API key, and providers can be swapped, tagged, and load-balanced like any other capability.
+
+> **Tip**: Use `meshctl scaffold llm --vendor claude --runtime python` to bootstrap a consumer and `meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider` to bootstrap a one-per-vendor provider.
 
 ### Parameters
 
-| Parameter        | Type   | Default    | Description                                        |
-| ---------------- | ------ | ---------- | -------------------------------------------------- |
-| `system_prompt`  | `str`  | `None`     | Literal prompt or `file://path/to/template.jinja2` |
-| `filter`         | `dict` | `None`     | Tool discovery filter (capability, tags, version)  |
-| `provider`       | `str`  | `"claude"` | LLM provider (claude, openai, etc.)                |
-| `model`          | `str`  | Required   | Model identifier                                   |
-| `context_param`  | `str`  | `None`     | Parameter name containing template context         |
-| `max_iterations` | `int`  | `5`        | Max agentic loop iterations                        |
+| Parameter        | Type   | Default | Description                                                  |
+| ---------------- | ------ | ------- | ------------------------------------------------------------ |
+| `provider`       | `dict` | `None`  | Provider selector — `{"capability": "llm", "tags": [...]}`   |
+| `system_prompt`  | `str`  | `None`  | Literal prompt or `file://path/to/template.jinja2`           |
+| `filter`         | `list` | `None`  | Tool discovery filter (capability, tags, version)            |
+| `filter_mode`    | `str`  | `"all"` | `"all"`, `"best_match"`, or `"*"` (wildcard)                 |
+| `context_param`  | `str`  | `None`  | Parameter name containing template context                   |
+| `max_iterations` | `int`  | `1`     | Max agentic loop iterations                                  |
+| `model`          | `str`  | `None`  | Optional override for the provider's default model           |
+| `<llm_params>`   | any    | -       | LiteLLM params (`max_tokens`, `temperature`, `top_p`, etc.)  |
 
 ### Decorator Order with LLM
 
@@ -938,8 +942,7 @@ The `@mesh.llm` decorator enables LLM integration as first-class mesh capabiliti
 # ✅ CORRECT ORDER
 @app.tool()           # ← FastMCP decorator FIRST
 @mesh.llm(            # ← LLM decorator SECOND
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    provider={"capability": "llm", "tags": ["+claude"]}
 )
 @mesh.tool(           # ← Mesh tool decorator THIRD
     capability="chat"
@@ -948,9 +951,9 @@ async def chat_function(message: str, llm: mesh.MeshLlmAgent = None):
     return await llm(message)
 
 # ❌ WRONG ORDER
-@mesh.llm(provider="claude", model="anthropic/claude-sonnet-4-5")  # Wrong
-@app.tool()                                                        # Wrong
-@mesh.tool(capability="chat")                                      # Wrong
+@mesh.llm(provider={"capability": "llm"})  # Wrong
+@app.tool()                                # Wrong
+@mesh.tool(capability="chat")              # Wrong
 async def broken_function(message: str, llm=None):
     pass
 ```
@@ -965,9 +968,8 @@ app = FastMCP("Chat Service")
 
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="You are a helpful assistant.",
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
 )
 @mesh.tool(capability="chat")
 async def chat(message: str, llm: mesh.MeshLlmAgent = None) -> str:
@@ -977,15 +979,16 @@ async def chat(message: str, llm: mesh.MeshLlmAgent = None) -> str:
     return await llm(message)
 ```
 
+The provider agent (a separate process registered with `@mesh.llm_provider`) holds the API key and runs the LiteLLM call. See [Creating LLM Providers](#creating-llm-providers) below.
+
 ### LLM with Tool Discovery Filter
 
 ```python
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="You are a system administrator with monitoring tools.",
-    filter={"tags": ["system", "monitoring"]},  # Auto-discover tools
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    filter=[{"tags": ["system", "monitoring"]}],  # Auto-discover tools
 )
 @mesh.tool(capability="system_admin")
 async def admin_assistant(task: str, llm: mesh.MeshLlmAgent = None):
@@ -1018,10 +1021,9 @@ class AnalysisContext(MeshContextModel):
 
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="file://prompts/analyst.jinja2",  # Load from file
-    context_param="ctx",  # Which parameter contains context
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    context_param="ctx",                              # Which parameter contains context
 )
 @mesh.tool(capability="analysis")
 async def analyze_system(
@@ -1033,6 +1035,33 @@ async def analyze_system(
     if llm is None:
         return {"error": "LLM unavailable"}
     return await llm(query)
+```
+
+### Creating LLM Providers
+
+A consumer's `provider={...}` selector matches a `@mesh.llm_provider` agent in the mesh. Provider agents are zero-code and centralize the API key:
+
+```python
+import mesh
+
+@mesh.llm_provider(
+    model="anthropic/claude-sonnet-4-5",
+    capability="llm",
+    tags=["llm", "claude", "provider"],
+    version="1.0.0",
+)
+def claude_provider():
+    pass  # No body needed — decorator wires up LiteLLM
+
+@mesh.agent(name="claude-provider", http_port=9110)
+class ClaudeProviderAgent:
+    pass
+```
+
+Run one provider per vendor (`claude-provider`, `openai-provider`, etc.) and tag them so consumers can express preferences (`"+claude"`, `"-experimental"`, …). Bootstrap with:
+
+```bash
+meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
 ```
 
 **Template file** (`prompts/analyst.jinja2`):
@@ -1065,10 +1094,9 @@ class EnrichedResult(BaseModel):
 
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="file://prompts/dual_injection.jinja2",
-    filter={"tags": ["system"]},  # LLM gets system tools via filter
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    filter=[{"tags": ["system"]}],  # LLM gets system tools via filter
 )
 @mesh.tool(
     capability="enriched_analysis",
@@ -1127,10 +1155,9 @@ class ChatContext(MeshContextModel):
 
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="file://prompts/chat.jinja2",
     context_param="ctx",
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
 )
 @mesh.tool(capability="personalized_chat")
 async def chat(
@@ -1170,10 +1197,9 @@ class SpecialistContext(MeshContextModel):
 
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="file://prompts/specialist.jinja2",
     context_param="ctx",
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
 )
 @mesh.tool(capability="specialist_analysis", tags=["llm", "specialist"])
 async def specialist_analyze(
@@ -1186,10 +1212,9 @@ async def specialist_analyze(
 # Orchestrator LLM discovers specialist with enhanced schema
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="You coordinate analysis tasks across specialists.",
-    filter={"capability": "specialist_analysis"},  # Discovers specialist
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    filter=[{"capability": "specialist_analysis"}],  # Discovers specialist
 )
 @mesh.tool(capability="orchestrator")
 async def orchestrate_analysis(task: str, llm: mesh.MeshLlmAgent = None):
@@ -1231,30 +1256,30 @@ The orchestrator receives:
 
 ### LLM Filter Patterns
 
-Common filter patterns for tool discovery:
+Common filter patterns for tool discovery (all examples assume `provider={"capability": "llm", "tags": ["+claude"]}` is also set):
 
 ```python
 # 1. Filter by tags (most common)
-@mesh.llm(filter={"tags": ["system", "monitoring"]})
+@mesh.llm(provider={"capability": "llm"}, filter=[{"tags": ["system", "monitoring"]}])
 
 # 2. Filter by capability
-@mesh.llm(filter={"capability": "weather_service"})
+@mesh.llm(provider={"capability": "llm"}, filter=[{"capability": "weather_service"}])
 
 # 3. Combine capability + tags
-@mesh.llm(filter={
+@mesh.llm(provider={"capability": "llm"}, filter=[{
     "capability": "database",
     "tags": ["production", "primary"]
-})
+}])
 
 # 4. Filter with version constraints
-@mesh.llm(filter={
+@mesh.llm(provider={"capability": "llm"}, filter=[{
     "capability": "api_service",
     "version": ">=2.0.0",
     "tags": ["rest", "v2"]
-})
+}])
 
 # 5. No filter - LLM has no tools
-@mesh.llm()  # Pure chat, no tool access
+@mesh.llm(provider={"capability": "llm"})  # Pure chat, no tool access
 ```
 
 ### Template Context Detection
@@ -1328,7 +1353,7 @@ if llm is None:
     return default_response
 
 # Use filters for dynamic tool discovery
-@mesh.llm(filter={"tags": ["system"]})
+@mesh.llm(provider={"capability": "llm"}, filter=[{"tags": ["system"]}])
 
 # Version templates separately
 system_prompt="file://prompts/analyst_v2.jinja2"
@@ -1355,21 +1380,19 @@ ctx: dict  # Use MeshContextModel instead
 
 ### Environment Variables
 
-LLM configuration via environment variables:
+LLM provider agents read API keys from the environment:
 
 ```bash
-# Provider API keys
+# Set on the @mesh.llm_provider agent process (not the consumer)
 export ANTHROPIC_API_KEY="your-claude-key"
 export OPENAI_API_KEY="your-openai-key"
 
-# Override provider/model at runtime
-export MCP_MESH_LLM_PROVIDER="openai"
-export MCP_MESH_LLM_MODEL="gpt-4"
-
-# Template settings
+# Template settings (consumer-side)
 export MCP_MESH_TEMPLATE_DIR="/custom/prompts"
 export MCP_MESH_TEMPLATE_CACHE_ENABLED="true"
 ```
+
+To swap which provider a consumer talks to, change the `provider={...}` selector or run a different `@mesh.llm_provider` agent — there are no `MESH_LLM_*` overrides on the consumer side.
 
 ### Complete LLM Example
 
@@ -1389,11 +1412,10 @@ class DocumentContext(MeshContextModel):
 # 2. Specialist LLM
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="file://prompts/doc_analyzer.jinja2",
     context_param="ctx",
-    filter={"tags": ["document"]},
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    filter=[{"tags": ["document"]}],
 )
 @mesh.tool(capability="doc_analysis", tags=["llm", "specialist"])
 async def analyze_doc(doc: str, ctx: DocumentContext, llm: mesh.MeshLlmAgent = None):
@@ -1404,10 +1426,9 @@ async def analyze_doc(doc: str, ctx: DocumentContext, llm: mesh.MeshLlmAgent = N
 # 3. Orchestrator LLM
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="You orchestrate document workflows.",
-    filter={"capability": "doc_analysis"},
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    filter=[{"capability": "doc_analysis"}],
 )
 @mesh.tool(capability="doc_orchestrator")
 async def orchestrate(task: str, llm: mesh.MeshLlmAgent = None):
@@ -1418,10 +1439,9 @@ async def orchestrate(task: str, llm: mesh.MeshLlmAgent = None):
 # 4. Dual injection (LLM + MCP)
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="file://prompts/enriched.jinja2",
-    filter={"tags": ["system"]},
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    filter=[{"tags": ["system"]}],
 )
 @mesh.tool(
     capability="enriched_analysis",

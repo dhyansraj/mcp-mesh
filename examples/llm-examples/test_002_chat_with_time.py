@@ -24,7 +24,7 @@ class ChatResponse(BaseModel):
 @app.tool()
 @mesh.llm(
     filter={"capability": "date_service"},  # Request date_service tools
-    provider="claude",
+    provider={"capability": "llm", "tags": ["claude"]},
     model="anthropic/claude-sonnet-4-5",
     max_iterations=10,
     system_prompt="""You are a helpful assistant with access to system time tools.

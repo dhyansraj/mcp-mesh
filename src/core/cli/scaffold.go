@@ -128,6 +128,11 @@ Infrastructure:
 		provider.RegisterFlags(cmd)
 	}
 
+	// Attach `llm-provider` and `llm` subcommands (#859).
+	// These wrap the static template machinery with vendor + runtime shortcuts
+	// and print follow-up messages cross-linking provider/consumer scaffolds.
+	scaffold.AttachLLMSubcommands(cmd)
+
 	return cmd
 }
 

@@ -24,7 +24,7 @@ class ChatResponse(BaseModel):
 @app.tool()
 @mesh.llm(
     filter=None,  # No tools - empty filter
-    provider="claude",
+    provider={"capability": "llm", "tags": ["claude"]},
     model="anthropic/claude-sonnet-4-5",
     max_iterations=5,
     system_prompt="You are a helpful assistant. Answer questions concisely.",

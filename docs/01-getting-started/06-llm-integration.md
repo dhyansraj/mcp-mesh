@@ -4,15 +4,24 @@
 
 ## What is @mesh.llm?
 
-MCP Mesh treats LLMs as first-class agents in the mesh. With `@mesh.llm()`, you can:
+MCP Mesh treats LLMs as first-class agents in the mesh. LLM calls are routed through a mesh-registered **provider agent** (`@mesh.llm_provider`), and consumers (`@mesh.llm`) declare which provider they want using the same selector syntax used for any other dependency.
 
+- 🔌 **Provider + consumer architecture** — API keys live on the provider; consumers stay key-free
 - 🤖 **Inject LLM agents** like any other dependency
 - 🔍 **Auto-discover tools** based on capability filters
 - 📝 **Type-safe prompt templates** using Jinja2 and Pydantic
-- 🔗 **Dual injection** - combine LLM agents with MCP agents in one function
-- 🎯 **Enhanced schemas** - Field descriptions help LLMs construct contexts correctly
+- 🔗 **Dual injection** — combine LLM agents with MCP agents in one function
+- 🎯 **Enhanced schemas** — Field descriptions help LLMs construct contexts correctly
 
-This transforms LLMs from external services into orchestratable mesh capabilities.
+## Bootstrap with meshctl
+
+```bash
+# Provider — one per vendor (sets API key, exposes capability="llm")
+meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+
+# Consumer — declares provider={...} and uses MeshLlmAgent
+meshctl scaffold llm --vendor claude --runtime python --name analysis-agent
+```
 
 ## Quick Example
 
@@ -25,25 +34,26 @@ app = FastMCP("Analysis Service")
 
 # 1. Simple LLM injection
 @app.tool()
-@mesh.llm(provider="claude", model="anthropic/claude-sonnet-4-5")
+@mesh.llm(provider={"capability": "llm", "tags": ["+claude"]})
 @mesh.tool(capability="simple_chat")
 async def chat(message: str, llm: mesh.MeshLlmAgent = None) -> str:
-    """LLM agent auto-injected, no configuration needed."""
+    """LLM agent auto-injected from a mesh provider."""
     return await llm(message)
 
 # 2. LLM with tool discovery filter
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="You are a helpful system analyst.",
-    filter={"tags": ["system"]},  # Auto-discover system tools
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    filter=[{"tags": ["system"]}],  # Auto-discover system tools
 )
 @mesh.tool(capability="system_analysis")
 async def analyze(query: str, llm: mesh.MeshLlmAgent = None) -> dict:
     """LLM automatically has access to all system-tagged tools."""
     return await llm(query)
 ```
+
+The provider runs as a separate agent and only needs `ANTHROPIC_API_KEY` (or whichever vendor's key); the analysis service above never holds it.
 
 ## Core Concepts
 
@@ -53,7 +63,7 @@ LLMs are injected as `MeshLlmAgent` parameters, just like MCP agents:
 
 ```python
 @app.tool()
-@mesh.llm(provider="claude", model="anthropic/claude-sonnet-4-5")
+@mesh.llm(provider={"capability": "llm", "tags": ["+claude"]})
 @mesh.tool(capability="assistant")
 async def help_user(
     question: str,
@@ -73,12 +83,11 @@ Use `filter` to automatically discover and inject tools into the LLM's context:
 ```python
 @app.tool()
 @mesh.llm(
-    filter={
+    provider={"capability": "llm", "tags": ["+claude"]},
+    filter=[{
         "capability": "weather_service",  # Specific capability
-        "tags": ["weather", "forecast"]    # Or by tags
-    },
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+        "tags": ["weather", "forecast"]   # Or by tags
+    }],
 )
 @mesh.tool(capability="weather_chat")
 async def weather_assistant(query: str, llm: mesh.MeshLlmAgent = None):
@@ -104,10 +113,9 @@ class AnalysisContext(MeshContextModel):
 
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="file://prompts/analyst.jinja2",  # Load from file
-    context_param="ctx",  # Which parameter contains context
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    context_param="ctx",                              # Which parameter contains context
 )
 @mesh.tool(capability="analysis")
 async def analyze_system(
@@ -136,22 +144,24 @@ Provide detailed analysis appropriate for {{ user_level }}-level users.
 
 ### Parameters
 
-| Parameter        | Type   | Default    | Description                                        |
-| ---------------- | ------ | ---------- | -------------------------------------------------- |
-| `system_prompt`  | `str`  | `None`     | Literal prompt or `file://path/to/template.jinja2` |
-| `filter`         | `dict` | `None`     | Tool discovery filter (capability, tags, version)  |
-| `provider`       | `str`  | `"claude"` | LLM provider (claude, openai, etc.)                |
-| `model`          | `str`  | Required   | Model identifier                                   |
-| `context_param`  | `str`  | `None`     | Parameter name containing template context         |
-| `max_iterations` | `int`  | `5`        | Max agentic loop iterations                        |
+| Parameter        | Type   | Default | Description                                                  |
+| ---------------- | ------ | ------- | ------------------------------------------------------------ |
+| `provider`       | `dict` | `None`  | Provider selector — `{"capability": "llm", "tags": [...]}`   |
+| `system_prompt`  | `str`  | `None`  | Literal prompt or `file://path/to/template.jinja2`           |
+| `filter`         | `list` | `None`  | Tool discovery filter (capability, tags, version)            |
+| `filter_mode`    | `str`  | `"all"` | `"all"`, `"best_match"`, or `"*"` (wildcard)                 |
+| `context_param`  | `str`  | `None`  | Parameter name containing template context                   |
+| `max_iterations` | `int`  | `1`     | Max agentic loop iterations                                  |
+| `model`          | `str`  | `None`  | Optional override for the provider's default model           |
+| `<llm_params>`   | any    | -       | LiteLLM params (`max_tokens`, `temperature`, `top_p`, etc.)  |
 
 > **Vertex AI (Gemini via IAM)**: For production deployments using Google
-> Cloud IAM instead of API keys, change the model prefix to
-> `vertex_ai/gemini-2.0-flash` and install the `[vertex]` extra. The
-> TypeScript and Java runtimes have equivalent support — see the
-> [Python](../python/llm/index.md), [TypeScript](../typescript/llm/index.md),
-> and [Java](../java/llm/index.md) LLM Integration pages for runtime-specific
-> auth env vars (each follows its own ecosystem's naming convention).
+> Cloud IAM instead of API keys, run a Gemini provider with
+> `model="vertex_ai/gemini-2.0-flash"` and install the `[vertex]` extra.
+> Consumers don't change. The TypeScript and Java runtimes have equivalent
+> support — see the [Python](../python/llm/index.md),
+> [TypeScript](../typescript/llm/index.md), and [Java](../java/llm/index.md)
+> LLM Integration pages for runtime-specific auth env vars.
 
 ### Basic Usage Patterns
 
@@ -160,9 +170,8 @@ Provide detailed analysis appropriate for {{ user_level }}-level users.
 ```python
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="You are a helpful assistant.",
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
 )
 @mesh.tool(capability="chat")
 async def chat(message: str, llm: mesh.MeshLlmAgent = None) -> str:
@@ -174,10 +183,9 @@ async def chat(message: str, llm: mesh.MeshLlmAgent = None) -> str:
 ```python
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="You are a system administrator with access to monitoring tools.",
-    filter={"tags": ["system", "monitoring"]},  # Auto-discover tools
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    filter=[{"tags": ["system", "monitoring"]}],  # Auto-discover tools
 )
 @mesh.tool(capability="system_admin")
 async def admin_assistant(task: str, llm: mesh.MeshLlmAgent = None):
@@ -189,10 +197,9 @@ async def admin_assistant(task: str, llm: mesh.MeshLlmAgent = None):
 ```python
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="file://prompts/chat.jinja2",
     context_param="ctx",
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
 )
 @mesh.tool(capability="personalized_chat")
 async def chat(
@@ -219,10 +226,9 @@ class EnrichedResult(BaseModel):
 
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="file://prompts/dual_injection.jinja2",
-    filter={"tags": ["system"]},  # LLM gets system tools
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    filter=[{"tags": ["system"]}],  # LLM gets system tools
 )
 @mesh.tool(
     capability="enriched_analysis",
@@ -278,10 +284,9 @@ class ChatContext(MeshContextModel):
 
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="file://prompts/chat.jinja2",
     context_param="ctx",
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
 )
 @mesh.tool(capability="smart_chat")
 async def chat(
@@ -328,10 +333,9 @@ class AnalysisContext(MeshContextModel):
 
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="file://prompts/analyst.jinja2",
     context_param="ctx",
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
 )
 @mesh.tool(capability="specialist_analysis")
 async def analyze(request: str, ctx: AnalysisContext, llm: mesh.MeshLlmAgent = None):
@@ -340,9 +344,8 @@ async def analyze(request: str, ctx: AnalysisContext, llm: mesh.MeshLlmAgent = N
 # Orchestrator LLM that calls specialist
 @app.tool()
 @mesh.llm(
-    filter={"capability": "specialist_analysis"},  # Discovers specialist
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    provider={"capability": "llm", "tags": ["+claude"]},
+    filter=[{"capability": "specialist_analysis"}],  # Discovers specialist
 )
 @mesh.tool(capability="orchestrator")
 async def orchestrate(task: str, llm: mesh.MeshLlmAgent = None):
@@ -496,11 +499,10 @@ class DocumentContext(MeshContextModel):
 # 2. Specialist LLM - Document Analyzer
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="file://prompts/document_analyzer.jinja2",
     context_param="ctx",
-    filter={"tags": ["document", "ocr"]},  # Gets document tools
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    filter=[{"tags": ["document", "ocr"]}],  # Gets document tools
 )
 @mesh.tool(capability="document_analysis", tags=["llm", "analysis"])
 async def analyze_document(
@@ -513,10 +515,9 @@ async def analyze_document(
 # 3. Orchestrator LLM - Coordinates specialists
 @app.tool()
 @mesh.llm(
+    provider={"capability": "llm", "tags": ["+claude"]},
     system_prompt="You are an orchestrator coordinating document workflows.",
-    filter={"capability": "document_analysis"},  # Discovers analyzer
-    provider="claude",
-    model="anthropic/claude-sonnet-4-5"
+    filter=[{"capability": "document_analysis"}],  # Discovers analyzer
 )
 @mesh.tool(capability="document_orchestrator")
 async def process_document_workflow(
@@ -600,14 +601,20 @@ class AnalysisContext(MeshContextModel):
 ✅ **Good:**
 
 ```python
-@mesh.llm(filter={"tags": ["system", "monitoring"]})  # Discovers tools dynamically
+@mesh.llm(
+    provider={"capability": "llm"},
+    filter=[{"tags": ["system", "monitoring"]}],  # Discovers tools dynamically
+)
 ```
 
 ❌ **Avoid:**
 
 ```python
 # Manually listing tools in system prompt
-@mesh.llm(system_prompt="You have access to get_cpu, get_memory, get_disk...")
+@mesh.llm(
+    provider={"capability": "llm"},
+    system_prompt="You have access to get_cpu, get_memory, get_disk...",
+)
 ```
 
 ### 5. Always Check for None
@@ -632,15 +639,23 @@ async def chat(msg: str, llm: mesh.MeshLlmAgent = None):
 
 ### LLM Not Injected (llm is None)
 
-**Cause**: Missing provider configuration or API key
+**Cause**: No `@mesh.llm_provider` agent matches the consumer's `provider={...}` selector, or the provider can't reach the vendor API.
 
-**Solution**:
+**Solutions**:
 
-```bash
-export ANTHROPIC_API_KEY=your-api-key
-# or
-export OPENAI_API_KEY=your-api-key
-```
+1. Verify a provider is running and tagged correctly:
+   ```bash
+   meshctl list --wide  # Look for capability="llm" with the tags you require
+   ```
+2. Make sure the API key is set on the **provider** process (not the consumer):
+   ```bash
+   # On the @mesh.llm_provider agent:
+   export ANTHROPIC_API_KEY=your-api-key   # or OPENAI_API_KEY, GOOGLE_API_KEY, ...
+   ```
+3. Bootstrap a provider if you don't have one:
+   ```bash
+   meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+   ```
 
 ### Template File Not Found
 
@@ -706,7 +721,7 @@ chat(
 meshctl list --wide  # See all capabilities and tags
 
 # Broaden filter
-@mesh.llm(filter={"tags": ["system"]})  # Instead of specific tags
+@mesh.llm(provider={"capability": "llm"}, filter=[{"tags": ["system"]}])
 ```
 
 ## What's Next?

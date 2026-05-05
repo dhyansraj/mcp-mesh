@@ -53,7 +53,7 @@ class SelfDepContextResult(BaseModel):
     system_prompt="file://prompts/extraction.jinja2",  # Uses {{ user_name }}
     context_param="ctx",  # Explicit context parameter
     filter=None,  # No tools needed for this test
-    provider="claude",  # Direct LiteLLM (no mesh delegation)
+    provider={"capability": "llm", "tags": ["claude"]},  # Direct LiteLLM (no mesh delegation)
     model="anthropic/claude-sonnet-4-5",
 )
 @mesh.tool(capability="memory_extraction")

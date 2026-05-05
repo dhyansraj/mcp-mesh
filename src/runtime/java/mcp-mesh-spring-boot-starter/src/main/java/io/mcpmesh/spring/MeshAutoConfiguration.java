@@ -191,11 +191,10 @@ public class MeshAutoConfiguration {
             McpHttpClient mcpHttpClient,
             McpMeshToolProxyFactory proxyFactory,
             ToolInvoker toolInvoker,
-            ObjectMapper objectMapper,
             ApplicationContext applicationContext) {
 
         return new MeshEventProcessor(runtime, injector, wrapperRegistry,
-            llmRegistry, mcpHttpClient, proxyFactory, toolInvoker, objectMapper, applicationContext);
+            llmRegistry, mcpHttpClient, proxyFactory, toolInvoker, applicationContext);
     }
 
     @Bean
@@ -442,71 +441,69 @@ public class MeshAutoConfiguration {
                 continue;
             }
 
-            // Only set llmProvider for mesh delegation mode (not direct provider mode)
-            if (llmConfig.isMeshDelegation()) {
-                Selector selector = llmConfig.providerSelector();
-                if (selector != null && !selector.capability().isEmpty()) {
-                    try {
-                        // Build llmProvider JSON: {"capability": "llm", "tags": ["+claude", "+anthropic"]}
-                        java.util.Map<String, Object> providerMap = new java.util.LinkedHashMap<>();
-                        providerMap.put("capability", selector.capability());
-                        providerMap.put("tags", java.util.Arrays.asList(selector.tags()));
-                        if (!selector.version().isEmpty()) {
-                            providerMap.put("version", selector.version());
-                        }
-
-                        String llmProviderJson = objectMapper.writeValueAsString(providerMap);
-                        toolSpec.setLlmProvider(llmProviderJson);
-
-                        log.debug("Set llmProvider on tool '{}': {}", toolSpec.getCapability(), llmProviderJson);
-                    } catch (Exception e) {
-                        log.warn("Failed to serialize llmProvider for tool '{}': {}",
-                            toolSpec.getCapability(), e.getMessage());
+            // Set llmProvider for mesh delegation
+            Selector selector = llmConfig.providerSelector();
+            if (selector != null && !selector.capability().isEmpty()) {
+                try {
+                    // Build llmProvider JSON: {"capability": "llm", "tags": ["+claude", "+anthropic"]}
+                    java.util.Map<String, Object> providerMap = new java.util.LinkedHashMap<>();
+                    providerMap.put("capability", selector.capability());
+                    providerMap.put("tags", java.util.Arrays.asList(selector.tags()));
+                    if (!selector.version().isEmpty()) {
+                        providerMap.put("version", selector.version());
                     }
+
+                    String llmProviderJson = objectMapper.writeValueAsString(providerMap);
+                    toolSpec.setLlmProvider(llmProviderJson);
+
+                    log.debug("Set llmProvider on tool '{}': {}", toolSpec.getCapability(), llmProviderJson);
+                } catch (Exception e) {
+                    log.warn("Failed to serialize llmProvider for tool '{}': {}",
+                        toolSpec.getCapability(), e.getMessage());
                 }
+            }
 
-                // Set llmFilter if configured
-                // Registry expects: {"filter": [...], "filter_mode": "all"|"best_match"|"wildcard"}
-                Selector[] filters = llmConfig.filters();
-                if (filters != null && filters.length > 0) {
-                    try {
-                        // Build filter array (supports multiple selectors)
-                        java.util.List<java.util.Map<String, Object>> filterArray = new java.util.ArrayList<>();
-                        for (Selector filter : filters) {
-                            java.util.Map<String, Object> selectorMap = new java.util.LinkedHashMap<>();
-                            if (!filter.capability().isEmpty()) {
-                                selectorMap.put("capability", filter.capability());
-                            }
-                            if (filter.tags().length > 0) {
-                                selectorMap.put("tags", java.util.Arrays.asList(filter.tags()));
-                            }
-                            if (!filter.version().isEmpty()) {
-                                selectorMap.put("version", filter.version());
-                            }
-                            filterArray.add(selectorMap);
+            // Set llmFilter if configured
+            // Registry expects: {"filter": [...], "filter_mode": "all"|"best_match"|"wildcard"}
+            Selector[] filters = llmConfig.filters();
+            if (filters != null && filters.length > 0) {
+                try {
+                    // Build filter array (supports multiple selectors)
+                    java.util.List<java.util.Map<String, Object>> filterArray = new java.util.ArrayList<>();
+                    for (Selector filter : filters) {
+                        java.util.Map<String, Object> selectorMap = new java.util.LinkedHashMap<>();
+                        if (!filter.capability().isEmpty()) {
+                            selectorMap.put("capability", filter.capability());
                         }
-
-                        // Build llmFilter with filter array and filter_mode
-                        java.util.Map<String, Object> llmFilterMap = new java.util.LinkedHashMap<>();
-                        llmFilterMap.put("filter", filterArray);
-
-                        // Convert filterMode ordinal to string
-                        String filterModeStr = switch (llmConfig.filterMode()) {
-                            case 0 -> "all";
-                            case 1 -> "best_match";
-                            case 2 -> "wildcard";
-                            default -> "all";
-                        };
-                        llmFilterMap.put("filter_mode", filterModeStr);
-
-                        String llmFilterJson = objectMapper.writeValueAsString(llmFilterMap);
-                        toolSpec.setLlmFilter(llmFilterJson);
-
-                        log.debug("Set llmFilter on tool '{}': {}", toolSpec.getCapability(), llmFilterJson);
-                    } catch (Exception e) {
-                        log.warn("Failed to serialize llmFilter for tool '{}': {}",
-                            toolSpec.getCapability(), e.getMessage());
+                        if (filter.tags().length > 0) {
+                            selectorMap.put("tags", java.util.Arrays.asList(filter.tags()));
+                        }
+                        if (!filter.version().isEmpty()) {
+                            selectorMap.put("version", filter.version());
+                        }
+                        filterArray.add(selectorMap);
                     }
+
+                    // Build llmFilter with filter array and filter_mode
+                    java.util.Map<String, Object> llmFilterMap = new java.util.LinkedHashMap<>();
+                    llmFilterMap.put("filter", filterArray);
+
+                    // Convert filterMode ordinal to string
+                    String filterModeStr = switch (llmConfig.filterMode()) {
+                        case 0 -> "all";
+                        case 1 -> "best_match";
+                        case 2 -> "wildcard";
+                        default -> "all";
+                    };
+                    llmFilterMap.put("filter_mode", filterModeStr);
+
+                    String llmFilterJson = objectMapper.writeValueAsString(llmFilterMap);
+                    toolSpec.setLlmFilter(llmFilterJson);
+
+                    log.debug("Set llmFilter on tool '{}': {}", toolSpec.getCapability(), llmFilterJson);
+                } catch (Exception e) {
+                    log.warn("Failed to serialize llmFilter for tool '{}': {}",
+                        toolSpec.getCapability(), e.getMessage());
                 }
             }
         }

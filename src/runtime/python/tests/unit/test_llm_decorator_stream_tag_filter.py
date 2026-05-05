@@ -127,17 +127,6 @@ class TestStreamTagAugmentation:
 
         assert provider["tags"] == ["-ai.mcpmesh.stream"]
 
-    def test_no_provider_dict_no_tag_change(self):
-        """Direct mode (string provider) — no augmentation, provider stays a string."""
-
-        @mesh.llm(provider="claude")
-        async def chat(message: str, llm: mesh.MeshLlmAgent = None) -> str:
-            return await llm(message)
-
-        agents = DecoratorRegistry.get_mesh_llm_agents()
-        agent_data = next(iter(agents.values()))
-        assert agent_data.config["provider"] == "claude"
-
     def test_provider_dict_without_user_tags(self):
         """Provider dict with no ``tags`` key gets a fresh single-tag list."""
 

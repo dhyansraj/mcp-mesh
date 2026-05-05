@@ -4,7 +4,7 @@
  * Covers:
  * - Mesh-delegate path: chunks come through from a mocked process_chat_stream
  * - The {request: <MeshLlmRequest>} body shape is preserved
- * - Direct providers throw a clear error pointing the user at mesh-delegate
+ * - Calling stream() without a meshProvider throws a clear error
  * - The createCallable's .stream() exposes the same iterable
  * - Tag-based discrimination: provider tags (including ai.mcpmesh.stream) are
  *   forwarded verbatim to buildLlmAgentSpecs() so the registry resolver can
@@ -259,10 +259,10 @@ describe("MeshLlmAgent.stream()", () => {
     expect(chunks).toEqual(["alpha ", "beta"]);
   });
 
-  it("throws when called on an agent without a meshProvider (direct mode)", async () => {
+  it("throws when called without a meshProvider (provider not yet resolved)", async () => {
     const agent = new MeshLlmAgent({
-      functionId: "test.direct",
-      provider: "claude",
+      functionId: "test.unresolved",
+      provider: { capability: "llm", tags: ["+claude", "ai.mcpmesh.stream"] },
       maxIterations: 1,
     });
 
@@ -381,32 +381,9 @@ describe("Tag-based discrimination flows through to buildLlmAgentSpecs", () => {
     const specs = buildLlmAgentSpecs();
     expect(specs).toHaveLength(1);
     const parsed = JSON.parse(specs[0].provider);
-    // Mesh-delegate object spec is serialized as-is (no `direct` wrapper)
+    // Mesh-delegate object spec is serialized as-is
     expect(parsed.capability).toBe("llm");
     expect(parsed.tags).toEqual(["+claude", "ai.mcpmesh.stream"]);
-  });
-
-  it("string provider goes through the direct: wrapper (no tag flow path)", () => {
-    const registry = LlmToolRegistry.getInstance();
-    registry.register("user.chat", {
-      functionId: "user.chat",
-      name: "chat",
-      capability: "chat",
-      description: "buffered test",
-      version: "1.0.0",
-      tags: [],
-      provider: "claude",
-      maxIterations: 1,
-      filterMode: "all",
-      inputSchema: JSON.stringify({ type: "object" }),
-      outputMode: "hint",
-      parallelToolCalls: false,
-      execute: async () => "ok",
-    });
-
-    const specs = buildLlmAgentSpecs();
-    const parsed = JSON.parse(specs[0].provider);
-    expect(parsed).toEqual({ direct: "claude" });
   });
 });
 

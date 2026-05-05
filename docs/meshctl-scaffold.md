@@ -15,12 +15,40 @@ meshctl scaffold
 # Generate a basic tool agent
 meshctl scaffold --name my-tool --agent-type tool
 
-# Generate an LLM-powered agent
-meshctl scaffold --name my-agent --agent-type llm-agent
+# Generate an LLM-powered consumer (vendor-aware subcommand)
+meshctl scaffold llm --vendor claude --runtime python --name my-agent
 
-# Generate an LLM provider
-meshctl scaffold --name claude-provider --agent-type llm-provider --model anthropic/claude-sonnet-4-5
+# Generate an LLM provider (vendor-aware subcommand)
+meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
 ```
+
+## Recommended: vendor-aware subcommands
+
+The preferred way to scaffold LLM consumers and providers is through the
+vendor-aware subcommands. They wire the right model, environment variables,
+and dependencies for each vendor without needing to remember LiteLLM model
+strings.
+
+```bash
+# LLM consumer (declares provider={...} via @mesh.llm)
+meshctl scaffold llm --vendor claude --runtime python --name my-consumer
+meshctl scaffold llm --vendor openai --runtime python --name my-consumer
+meshctl scaffold llm --vendor gemini --runtime python --name my-consumer
+
+# LLM provider (one per vendor — holds the API key)
+meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+meshctl scaffold llm-provider --vendor openai --runtime python --name openai-provider
+meshctl scaffold llm-provider --vendor gemini --runtime python --name gemini-provider
+```
+
+Supported `--vendor` values: `claude`, `openai`, `gemini`. Supported
+`--runtime` values: `python`, `typescript`, `java`. For Vertex AI, use
+`--vendor gemini` and rely on the Vertex environment variables
+(`GOOGLE_CLOUD_PROJECT`, `GOOGLE_APPLICATION_CREDENTIALS`) on the provider
+process.
+
+The legacy `--agent-type llm-agent` / `--agent-type llm-provider` flag mode
+documented below still works for backward compatibility.
 
 ## Agent Types
 

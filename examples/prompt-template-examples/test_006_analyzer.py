@@ -32,7 +32,7 @@ class AnalysisResult(BaseModel):
 @mesh.llm(
     system_prompt="file://prompts/analyzer.jinja2",
     filter=None,
-    provider="claude",
+    provider={"capability": "llm", "tags": ["claude"]},
     model="anthropic/claude-sonnet-4-5",  # LiteLLM requires vendor prefix
 )
 @mesh.tool(capability="document_analysis", tags=["llm", "analysis"])

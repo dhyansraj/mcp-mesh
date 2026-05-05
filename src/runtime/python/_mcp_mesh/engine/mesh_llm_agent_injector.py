@@ -65,80 +65,6 @@ class MeshLlmAgentInjector(BaseInjector):
         super().__init__()
         self._llm_agents: dict[str, dict[str, Any]] = {}
 
-    def initialize_direct_llm_agents(self) -> None:
-        """
-        Initialize LLM agents that use direct LiteLLM (no mesh delegation).
-
-        This handles the case where:
-        - provider is a string (e.g., "claude") - direct LiteLLM call
-        - filter is None or empty - no mesh tools needed
-
-        These agents don't need to wait for registry response since all
-        information is available at decorator time.
-        """
-        llm_agents = DecoratorRegistry.get_mesh_llm_agents()
-
-        for function_id, llm_metadata in llm_agents.items():
-            config = llm_metadata.config
-            provider = config.get("provider")
-            filter_config = config.get("filter")
-
-            # Check if this is a direct LiteLLM agent (provider is string, not dict)
-            is_direct_llm = isinstance(provider, str)
-
-            # Check if no tools needed (filter is None or empty)
-            has_no_filter = filter_config is None or (
-                isinstance(filter_config, list) and len(filter_config) == 0
-            )
-
-            if is_direct_llm and has_no_filter:
-                # Skip if already initialized
-                if function_id in self._llm_agents:
-                    continue
-
-                logger.info(
-                    f"🔧 Initializing direct LiteLLM agent for '{function_id}' "
-                    f"(provider={provider}, no filter)"
-                )
-
-                # Initialize empty tools data for direct LiteLLM
-                self._llm_agents[function_id] = {
-                    "config": config,
-                    "output_type": llm_metadata.output_type,
-                    "param_name": llm_metadata.param_name,
-                    "tools_metadata": [],  # No tools for direct LiteLLM
-                    "tools_proxies": {},  # No tool proxies needed
-                    "function": llm_metadata.function,
-                    "provider_proxy": None,  # No mesh delegation
-                }
-
-                # Get the wrapper and update it with LLM agent
-                wrapper = llm_metadata.function
-                if wrapper and hasattr(wrapper, "_mesh_update_llm_agent"):
-                    llm_agent = self._create_llm_agent(function_id)
-                    if llm_agent is None:
-                        continue
-                    wrapper._mesh_update_llm_agent(llm_agent)
-                    logger.info(
-                        f"🔄 Updated wrapper with MeshLlmAgent for '{function_id}' (direct LiteLLM mode)"
-                    )
-
-                    # Set factory for per-call context agent creation (template support)
-                    if config.get("is_template", False):
-
-                        def create_context_agent(
-                            context_value: Any, _func_id: str = function_id
-                        ) -> MeshLlmAgent:
-                            """Factory to create MeshLlmAgent with context for template rendering."""
-                            return self._create_llm_agent(
-                                _func_id, context_value=context_value
-                            )
-
-                        wrapper._mesh_create_context_agent = create_context_agent
-                        logger.info(
-                            f"🎯 Set context agent factory for template-based function '{function_id}' (direct LiteLLM mode)"
-                        )
-
     def _build_function_name_to_id_mapping(self) -> dict[str, str]:
         """
         Build mapping from function_name to function_id.
@@ -731,11 +657,10 @@ class MeshLlmAgentInjector(BaseInjector):
             return None
         config_dict = llm_agent_data["config"]
 
-        # Create LLMConfig from dict
+        # Create LLMConfig from dict (mesh-delegated only — provider must be a dict)
         llm_config = LLMConfig(
-            provider=config_dict.get("provider", "claude"),
-            model=config_dict.get("model", "claude-3-5-sonnet-20241022"),
-            api_key=config_dict.get("api_key", ""),  # Will use ENV if empty
+            provider=config_dict.get("provider"),
+            model=config_dict.get("model"),  # Optional consumer-side override
             max_iterations=config_dict.get("max_iterations", 10),
             system_prompt=config_dict.get("system_prompt"),
             output_mode=config_dict.get(
@@ -747,14 +672,14 @@ class MeshLlmAgentInjector(BaseInjector):
         is_template = config_dict.get("is_template", False)
         template_path = config_dict.get("template_path")
 
-        # Extract model params (everything except internal config keys)
-        # These are passed through to LiteLLM (e.g., max_tokens, temperature)
+        # Extract model params (everything except internal config keys).
+        # These are forwarded to the provider as default model_params (e.g.,
+        # max_tokens, temperature) and merged with call-time kwargs.
         INTERNAL_CONFIG_KEYS = {
             "filter",
             "filter_mode",
             "provider",
             "model",
-            "api_key",
             "max_iterations",
             "system_prompt",
             "system_prompt_file",
@@ -773,17 +698,18 @@ class MeshLlmAgentInjector(BaseInjector):
                 f"🔧 Extracted default model params for {function_id}: {list(default_model_params.keys())}"
             )
 
-        # Determine vendor for provider handler selection
-        # Priority: 1) From registry (mesh delegation), 2) From model name, 3) None
+        # Vendor for provider handler selection comes from the registry's
+        # ResolvedLLMProvider (process_llm_providers stores it on the agent
+        # data). Falls back to extracting from the optional consumer-side
+        # model override (e.g. "anthropic/claude-haiku-4" -> "anthropic"),
+        # which the consumer set when it wants to pin a specific model.
         vendor = llm_agent_data.get("vendor")
         if not vendor:
-            # For direct LiteLLM calls, extract vendor from model name
-            # e.g., "anthropic/claude-sonnet-4-5" -> "anthropic"
-            model = config_dict.get("model", "")
+            model = config_dict.get("model") or ""
             vendor = extract_vendor_from_model(model)
             if vendor:
                 logger.info(
-                    f"🔍 Extracted vendor '{vendor}' from model '{model}' for handler selection"
+                    f"🔍 Extracted vendor '{vendor}' from consumer model override '{model}' for handler selection"
                 )
 
         # Create MeshLlmAgent with both metadata and proxies
@@ -813,8 +739,6 @@ class MeshLlmAgentInjector(BaseInjector):
             + (f", template={template_path}" if is_template else "")
             + (
                 f", provider_proxy={llm_agent_data.get('provider_proxy').function_name if llm_agent_data.get('provider_proxy') else 'None'}"
-                if isinstance(config_dict.get("provider"), dict)
-                else ""
             )
             + (
                 f", model_params={list(default_model_params.keys())}"

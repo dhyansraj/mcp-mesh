@@ -1667,9 +1667,8 @@ def llm(
     filter: dict[str, Any] | list[dict[str, Any] | str] | str | None = None,
     *,
     filter_mode: str = "all",
-    provider: str | dict[str, Any] = "claude",
+    provider: dict[str, Any],
     model: str | None = None,
-    api_key: str | None = None,
     max_iterations: int = 10,
     system_prompt: str | None = None,
     system_prompt_file: str | None = None,
@@ -1680,18 +1679,18 @@ def llm(
     """
     LLM agent decorator with automatic agentic loop.
 
-    This decorator enables LLM agents to automatically access mesh tools via
-    dependency injection. The MeshLlmAgent proxy handles the complete agentic loop:
+    Mesh-delegated only: every @mesh.llm consumer must point ``provider`` at a
+    @mesh.llm_provider registered in the mesh. Direct LiteLLM mode was removed
+    in v2 — there is one path, and it goes through a provider agent.
+
+    The MeshLlmAgent proxy handles the complete agentic loop:
     - Tool filtering based on filter parameter
-    - LLM API calls (Claude, OpenAI, etc. via LiteLLM)
+    - Provider resolution via mesh DI (capability + tags + version)
     - Tool execution via MCP proxies
     - Response parsing to Pydantic models
 
     Configuration Hierarchy (ENV > Decorator):
-        - MESH_LLM_PROVIDER: Override provider
-        - MESH_LLM_MODEL: Override model
-        - ANTHROPIC_API_KEY: Claude API key
-        - OPENAI_API_KEY: OpenAI API key
+        - MESH_LLM_MODEL: Override the optional consumer-side model override
         - MESH_LLM_MAX_ITERATIONS: Override max iterations
 
     Usage:
@@ -1704,8 +1703,7 @@ def llm(
 
         @mesh.llm(
             filter={"capability": "document", "tags": ["pdf"]},
-            provider="claude",
-            model="claude-3-5-sonnet-20241022"
+            provider={"capability": "llm", "tags": ["claude"]},
         )
         @mesh.tool(capability="chat")
         async def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
@@ -1715,25 +1713,41 @@ def llm(
     Args:
         filter: Tool filter (string, dict, or list of mixed)
         filter_mode: Filter mode ("all", "best_match", "*")
-        provider: LLM provider (string like "claude" for direct LiteLLM, or dict for mesh delegation)
-                  Mesh delegation format: {"capability": "llm", "tags": ["claude"], "version": ">=1.0.0"}
-                  When dict: Uses mesh DI to resolve provider agent instead of calling LiteLLM directly
-        model: Model name (can be overridden by MESH_LLM_MODEL) - only used with string provider
-        api_key: API key (can be overridden by provider-specific env vars) - only used with string provider
+        provider: REQUIRED. Provider filter dict for mesh delegation.
+                  Format: {"capability": "llm", "tags": ["claude"], "version": ">=1.0.0"}
+        model: Optional model override forwarded to the provider — lets a single
+               consumer pin to a specific model (e.g., haiku) when the provider
+               otherwise defaults to a different one (e.g., sonnet). May be
+               overridden by MESH_LLM_MODEL.
         max_iterations: Max agentic loop iterations (can be overridden by MESH_LLM_MAX_ITERATIONS)
-        system_prompt: Default system prompt
-        system_prompt_file: Path to Jinja2 template file
-        **kwargs: Additional configuration
+        system_prompt: Default system prompt (literal string or ``file://`` template)
+        system_prompt_file: Path to Jinja2 template file (deprecated — use system_prompt="file://...")
+        context_param: Function parameter name to auto-extract template context from
+        parallel_tool_calls: Encourage the LLM to emit independent tool_calls in parallel
+        **kwargs: Additional model parameters forwarded to the provider as defaults
+                  (e.g., temperature=0.7, max_tokens=2048)
 
     Returns:
         Decorated function with MeshLlmAgent injection
 
     Raises:
+        TypeError: If ``provider`` is not a dict
         ValueError: If no MeshLlmAgent parameter found
         UserWarning: If multiple MeshLlmAgent parameters or non-Pydantic return type
     """
     import inspect
     import warnings
+
+    # Up-front validation: provider must be a dict (mesh delegation only).
+    # Catch the legacy direct-mode signature (provider="claude") before we
+    # walk the function body so the failure mode is clear and immediate.
+    if not isinstance(provider, dict):
+        raise TypeError(
+            f"@mesh.llm: 'provider' must be a dict for mesh delegation "
+            f"(got {type(provider).__name__}). Direct LLM mode was removed in v2.\n"
+            f"  Use: @mesh.llm(provider={{'capability': 'llm', 'tags': ['claude']}}, ...)\n"
+            f"  Migrate from: @mesh.llm(provider='claude', model='...', api_key='...')"
+        )
 
     def decorator(func: T) -> T:
         # Step 1: Resolve configuration with hierarchy (ENV > decorator params)
@@ -1769,19 +1783,10 @@ def llm(
                 f"Context parameter will be ignored."
             )
 
-        # Handle provider config: dict (mesh delegation) or string (direct LiteLLM)
-        # If provider is dict, don't allow env var override (explicit mesh delegation)
-        if isinstance(provider, dict):
-            resolved_provider = provider
-        else:
-            resolved_provider = get_config_value(
-                "MESH_LLM_PROVIDER",
-                override=provider,
-                default="claude",
-                rule=ValidationRule.STRING_RULE,
-            )
+        # Mesh delegation: provider is the filter dict; never overridden by env.
+        resolved_provider = provider
 
-        # Resolve model with env var override
+        # Resolve optional consumer-side model override with env var override
         resolved_model = get_config_value(
             "MESH_LLM_MODEL",
             override=model,
@@ -1795,13 +1800,6 @@ def llm(
                 f"⚠️ @mesh.llm: No 'system_prompt' specified for function '{func.__name__}'. "
                 f"Using default: 'You are a helpful assistant.' "
                 f"Consider adding a custom system_prompt for better results."
-            )
-
-        if isinstance(provider, str) and provider == "claude" and not resolved_model:
-            logger.warning(
-                f"⚠️ @mesh.llm: No 'model' specified for function '{func.__name__}'. "
-                f"The LLM provider will use its default model. "
-                f"Consider specifying a model explicitly (e.g., model='anthropic/claude-sonnet-4-5')."
             )
 
         # Use default system prompt if not provided
@@ -1818,11 +1816,7 @@ def llm(
                 rule=ValidationRule.STRING_RULE,
             ),
             "provider": resolved_provider,
-            "model": resolved_model if resolved_model else (
-                resolved_provider if isinstance(resolved_provider, str) and "/" in resolved_provider
-                else None
-            ),
-            "api_key": api_key,  # Will be resolved from provider-specific env vars later
+            "model": resolved_model,
             "max_iterations": get_config_value(
                 "MESH_LLM_MAX_ITERATIONS",
                 override=max_iterations,
@@ -1894,19 +1888,18 @@ def llm(
         # it, so the registry resolver picks the right variant deterministically
         # via the existing +/- tag-operator semantics. If the user explicitly
         # set a discrimination tag (any operator form), don't override.
-        if isinstance(resolved_provider, dict):
-            provider_tags = list(resolved_provider.get("tags") or [])
-            has_stream_tag = any(
-                t in ("ai.mcpmesh.stream", "+ai.mcpmesh.stream", "-ai.mcpmesh.stream")
-                for t in provider_tags
-            )
-            if not has_stream_tag:
-                if llm_stream_type == "text":
-                    provider_tags.append("ai.mcpmesh.stream")
-                else:
-                    provider_tags.append("-ai.mcpmesh.stream")
-                resolved_provider = {**resolved_provider, "tags": provider_tags}
-                resolved_config["provider"] = resolved_provider
+        provider_tags = list(resolved_provider.get("tags") or [])
+        has_stream_tag = any(
+            t in ("ai.mcpmesh.stream", "+ai.mcpmesh.stream", "-ai.mcpmesh.stream")
+            for t in provider_tags
+        )
+        if not has_stream_tag:
+            if llm_stream_type == "text":
+                provider_tags.append("ai.mcpmesh.stream")
+            else:
+                provider_tags.append("-ai.mcpmesh.stream")
+            resolved_provider = {**resolved_provider, "tags": provider_tags}
+            resolved_config["provider"] = resolved_provider
 
         # Step 3: Find MeshLlmAgent parameter
         from mesh.types import MeshLlmAgent

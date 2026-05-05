@@ -11,7 +11,7 @@ app = FastMCP("ChatbotAgent Service")
 @mesh.llm(
     filter=[{"capability": "get_weather"}],
     filter_mode="all",
-    provider="claude",
+    provider={"capability": "llm", "tags": ["claude"]},
     model="anthropic/claude-sonnet-4-5",
     max_iterations=5,
     system_prompt="file://prompts/chatbot-agent.jinja2",

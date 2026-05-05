@@ -24,8 +24,7 @@ public class MeshLlmRegistry {
      */
     public record LlmConfig(
         String functionId,
-        String directProvider,      // For direct mode (e.g., "claude")
-        Selector providerSelector,  // For mesh delegation mode
+        Selector providerSelector,  // For mesh delegation
         int maxIterations,
         String systemPrompt,
         String contextParam,
@@ -34,14 +33,7 @@ public class MeshLlmRegistry {
         int maxTokens,
         double temperature,
         boolean parallelToolCalls
-    ) {
-        /**
-         * Check if this is mesh delegation mode.
-         */
-        public boolean isMeshDelegation() {
-            return directProvider == null || directProvider.isEmpty();
-        }
-    }
+    ) {}
 
     // Registry: functionId -> LlmConfig
     private final Map<String, LlmConfig> configsByFunctionId = new ConcurrentHashMap<>();
@@ -62,7 +54,6 @@ public class MeshLlmRegistry {
 
         LlmConfig config = new LlmConfig(
             functionId,
-            annotation.provider().isEmpty() ? null : annotation.provider(),
             annotation.providerSelector(),
             annotation.maxIterations(),
             annotation.systemPrompt(),
@@ -77,8 +68,7 @@ public class MeshLlmRegistry {
         configsByFunctionId.put(functionId, config);
         configsByMethod.put(methodKey, config);
 
-        log.info("Registered @MeshLlm: {} (mode={})",
-            functionId, config.isMeshDelegation() ? "mesh" : "direct:" + config.directProvider());
+        log.info("Registered @MeshLlm: {} (mesh-delegated)", functionId);
     }
 
     /**
