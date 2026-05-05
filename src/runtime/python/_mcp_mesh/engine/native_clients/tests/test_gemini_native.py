@@ -317,6 +317,23 @@ class TestBuildClient:
             "vertex_ai backend" in r.getMessage() for r in caplog.records
         )
 
+    def test_base_url_forwarded_to_http_options(self, monkeypatch):
+        """A non-None base_url must be forwarded into HttpOptions so callers
+        can route Gemini requests through a custom proxy or test endpoint.
+        Regression: previously _build_client accepted base_url and silently
+        dropped it, leaving HttpOptions on the SDK default."""
+        cls_mock = MagicMock(return_value=MagicMock())
+        monkeypatch.setattr("google.genai.Client", cls_mock)
+
+        gemini_native._build_client(
+            "gemini/gemini-2.0-flash",
+            "GAK-test",
+            "https://custom-proxy.example.com",
+        )
+
+        http_options = cls_mock.call_args.kwargs["http_options"]
+        assert http_options.base_url == "https://custom-proxy.example.com"
+
 
 # ---------------------------------------------------------------------------
 # Translators: system message extraction
@@ -1540,6 +1557,48 @@ class TestCompleteStream:
         # returned.
         usage_chunks = [c for c in chunks if c.usage is not None]
         assert len(usage_chunks) == 1
+
+    @pytest.mark.asyncio
+    async def test_stream_final_chunk_with_only_finish_reason_maps_to_tool_calls_when_prior_chunk_had_tool_call(
+        self, monkeypatch
+    ):
+        """Gemini may emit a function_call part in one chunk and then deliver
+        finish_reason=STOP in a LATER chunk that has no parts. The adapter
+        must consult the cumulative tool-call counter so the final chunk's
+        finish_reason maps to "tool_calls" — otherwise helpers.py's agentic
+        loop sees "stop" and terminates without executing the tool that
+        arrived in an earlier chunk."""
+        chunks_in = [
+            _make_stream_chunk(
+                function_call={
+                    "name": "get_weather",
+                    "args": {"city": "NYC"},
+                },
+                model_version="gemini-2.0-flash",
+            ),
+            _make_stream_chunk(
+                finish_reason="STOP",
+                usage={"prompt_tokens": 5, "completion_tokens": 2},
+            ),
+        ]
+        _patched_streaming_genai(chunks_in, monkeypatch=monkeypatch)
+
+        stream = gemini_native.complete_stream(
+            {"messages": [{"role": "user", "content": "weather?"}]},
+            model="gemini/gemini-2.0-flash",
+        )
+        chunks = []
+        async for c in stream:
+            chunks.append(c)
+
+        # The final-finish chunk has no parts but must still be tagged
+        # tool_calls because a prior chunk emitted a function_call.
+        finish_chunks = [
+            c for c in chunks
+            if c.choices and c.choices[0].finish_reason is not None
+        ]
+        assert len(finish_chunks) == 1
+        assert finish_chunks[0].choices[0].finish_reason == "tool_calls"
 
 
 # ---------------------------------------------------------------------------

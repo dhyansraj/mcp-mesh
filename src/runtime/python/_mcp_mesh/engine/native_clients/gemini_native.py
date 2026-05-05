@@ -468,7 +468,14 @@ def _build_client(
     import google.genai as genai
     from google.genai.types import HttpOptions
 
-    http_options = HttpOptions(httpx_async_client=_get_shared_httpx_client())
+    http_options_kwargs: dict[str, Any] = {
+        "httpx_async_client": _get_shared_httpx_client()
+    }
+    if base_url:
+        # Forward custom Gemini-compatible endpoints (proxies, test endpoints)
+        # — HttpOptions.base_url is a documented field on the google-genai SDK.
+        http_options_kwargs["base_url"] = base_url
+    http_options = HttpOptions(**http_options_kwargs)
 
     if model.startswith(_VERTEX_PREFIX):
         project = os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -1399,9 +1406,17 @@ def _adapt_stream_chunk(
 
     finish_reason: str | None = None
     if raw_finish_reason is not None:
+        # Gemini may emit function_call parts in one chunk and finish_reason=STOP
+        # in a LATER chunk that has no parts. Without consulting the cumulative
+        # tool-call counter we'd map that final STOP to "stop" and helpers.py's
+        # agentic loop would terminate without executing the prior chunk's
+        # tool calls. Treat the stream as having tool calls if either THIS
+        # chunk emitted one OR any prior chunk did (counter > 0).
         finish_reason = _normalize_finish_reason(
             raw_finish_reason,
-            has_tool_calls=bool(tool_call_deltas),
+            has_tool_calls=(
+                bool(tool_call_deltas) or tool_call_index_state[0] > 0
+            ),
         )
 
     usage_obj = getattr(raw_chunk, "usage_metadata", None)
