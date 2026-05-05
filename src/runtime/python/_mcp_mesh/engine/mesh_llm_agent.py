@@ -813,6 +813,12 @@ class MeshLlmAgent:
             if self.output_mode
             else effective_kwargs
         )
+        # Avoid kwarg collision: prepare_request takes output_type as an
+        # explicit kwarg below; pop it from call_kwargs to prevent
+        # "got multiple values for keyword argument 'output_type'" TypeError
+        # if it leaked into _default_model_params (e.g., via decorator
+        # **kwargs capture in @mesh.llm). See #863.
+        call_kwargs.pop("output_type", None)
         effective_tools = (
             self._enrich_tools_with_endpoints()
             if self._is_mesh_delegated and self._tool_schemas
