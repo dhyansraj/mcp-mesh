@@ -1361,8 +1361,15 @@ class TestSharedHttpxClient:
         otherwise we'd cache against a nonexistent loop id."""
         c1 = openai_native._get_shared_httpx_client()
         c2 = openai_native._get_shared_httpx_client()
-        # Each sync call returns a fresh client (not cached).
-        assert c1 is not c2
+        try:
+            # Each sync call returns a fresh client (not cached).
+            assert c1 is not c2
+        finally:
+            # Sync-path clients aren't cached — caller must close them.
+            # Use asyncio.run(...) since aclose() is async and we have no
+            # running loop here (that's the whole point of this test).
+            asyncio.run(c1.aclose())
+            asyncio.run(c2.aclose())
 
 
 # ---------------------------------------------------------------------------

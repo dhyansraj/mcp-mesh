@@ -21,7 +21,9 @@ import pytest
 from mesh.helpers import (
     _TOOL_IMAGE_UNSUPPORTED_VENDORS,
     _execute_tool_calls_for_iteration,
+    _warn_native_dispatch_unknown_vendor_once,
 )
+import mesh.helpers as _mesh_helpers
 
 
 # ---------------------------------------------------------------------------
@@ -538,3 +540,111 @@ class TestModuleConstants:
         """The vendor set drives image-handling policy; if it changes,
         provider-side image behavior changes silently. Pin it explicitly."""
         assert _TOOL_IMAGE_UNSUPPORTED_VENDORS == {"openai", "gemini", "google"}
+
+
+# ---------------------------------------------------------------------------
+# Issue #860 cleanup — WARN when native dispatch claims an unknown vendor
+# ---------------------------------------------------------------------------
+
+
+class TestUnknownNativeVendorWarn:
+    """The native dispatch path validates ``vendor`` against
+    ``_VENDOR_FORMATTERS``; an unknown vendor falls back to OpenAI shape but
+    emits a one-time WARN so the operator notices the misconfiguration
+    instead of silently shipping wrong content blocks."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_dedupe(self):
+        """Per-vendor dedupe set persists for the process; reset between
+        tests so each one observes the WARN-once behavior cleanly."""
+        _mesh_helpers._logged_unknown_native_vendors.clear()
+        yield
+        _mesh_helpers._logged_unknown_native_vendors.clear()
+
+    def test_warn_emits_once_per_vendor(self, caplog):
+        with caplog.at_level("WARNING", logger=_mesh_helpers.logger.name):
+            _warn_native_dispatch_unknown_vendor_once("brand_new_vendor")
+            _warn_native_dispatch_unknown_vendor_once("brand_new_vendor")
+            _warn_native_dispatch_unknown_vendor_once("brand_new_vendor")
+
+        warn_msgs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING" and "brand_new_vendor" in r.getMessage()
+        ]
+        assert len(warn_msgs) == 1, (
+            f"expected exactly one WARN per unique vendor; got "
+            f"{len(warn_msgs)}: {warn_msgs}"
+        )
+
+    def test_warn_emits_once_per_unique_vendor(self, caplog):
+        """Distinct unknown vendors each get their own one-shot WARN."""
+        with caplog.at_level("WARNING", logger=_mesh_helpers.logger.name):
+            _warn_native_dispatch_unknown_vendor_once("vendor_a")
+            _warn_native_dispatch_unknown_vendor_once("vendor_b")
+            _warn_native_dispatch_unknown_vendor_once("vendor_a")
+            _warn_native_dispatch_unknown_vendor_once("vendor_c")
+
+        warn_msgs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING"
+            and "_VENDOR_FORMATTERS" in r.getMessage()
+        ]
+        # Three distinct vendors → three WARNs total.
+        assert len(warn_msgs) == 3
+        assert sum("vendor_a" in m for m in warn_msgs) == 1
+        assert sum("vendor_b" in m for m in warn_msgs) == 1
+        assert sum("vendor_c" in m for m in warn_msgs) == 1
+
+    @pytest.mark.asyncio
+    async def test_native_dispatch_with_unknown_vendor_warns_and_falls_back(
+        self, caplog
+    ):
+        """End-to-end: ``_execute_tool_calls_for_iteration`` with
+        has_native_dispatch=True and a vendor not in _VENDOR_FORMATTERS must
+        (a) call the resolver with vendor="openai" (safe fallback) and
+        (b) emit the WARN."""
+        message = _make_message_mock(
+            [_make_tool_call_mock("call_1", "screenshot", "{}")]
+        )
+        tool_endpoints = {"screenshot": "http://localhost:9000"}
+
+        proxy_instance = MagicMock()
+        proxy_instance.call_tool = AsyncMock(
+            return_value={"resource_link": True}
+        )
+
+        resolve_mock = AsyncMock(return_value=[{"type": "text", "text": "ok"}])
+
+        with patch(
+            "_mcp_mesh.engine.unified_mcp_proxy.UnifiedMCPProxy",
+            return_value=proxy_instance,
+        ), patch(
+            "_mcp_mesh.media.resolver._has_resource_link", return_value=True
+        ), patch(
+            "_mcp_mesh.media.resolver.resolve_resource_links", new=resolve_mock
+        ), caplog.at_level("WARNING", logger=_mesh_helpers.logger.name):
+            await _execute_tool_calls_for_iteration(
+                message=message,
+                tool_endpoints=tool_endpoints,
+                parallel=False,
+                vendor="cohere",  # not in _VENDOR_FORMATTERS today
+                loop_logger=None,
+                has_native_dispatch=True,
+            )
+
+        # Resolver was called with the safe fallback vendor.
+        assert resolve_mock.await_count == 1
+        assert resolve_mock.await_args.args[1] == "openai"
+
+        # WARN fired once for the unknown vendor.
+        warn_msgs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING" and "cohere" in r.getMessage()
+        ]
+        assert len(warn_msgs) == 1, (
+            f"expected one WARN about unknown native vendor 'cohere'; "
+            f"got: {warn_msgs}"
+        )

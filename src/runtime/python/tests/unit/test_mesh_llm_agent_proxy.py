@@ -2407,10 +2407,15 @@ class TestBuildRequestParamsKwargCollision:
         # Returned params include output_type from the explicit kwarg path.
         assert params["output_type"] is ChatResponse
 
-    def test_build_request_params_call_time_output_type_kwarg_also_dropped(self):
-        """Defense-in-depth: even if a caller passes output_type=... at
-        call time (e.g., stale **kwargs forwarding), the explicit
-        ``self.output_type`` wins and no TypeError occurs."""
+    def test_build_request_params_call_time_output_type_kwarg_pops_safely(self):
+        """Defense-in-depth: caller-supplied ``output_type`` kwarg at call
+        time is popped before the splat — preventing collision with the
+        explicit ``output_type=self.output_type`` passed to
+        ``prepare_request``. ``self.output_type`` is always authoritative
+        (set at agent construction); call-time ``output_type`` is never
+        honored, by design. The pop is what keeps a stale **kwargs forward
+        from raising ``TypeError: prepare_request() got multiple values for
+        keyword argument 'output_type'``."""
         from _mcp_mesh.engine.mesh_llm_agent import MeshLlmAgent
 
         agent = MeshLlmAgent(
@@ -2441,6 +2446,7 @@ class TestBuildRequestParamsKwargCollision:
                 output_type=ComplexResponse,  # caller-provided collision
             )
 
-        # Self.output_type wins (no collision raised, value is from agent).
+        # ``self.output_type`` is what reaches the handler — call-time
+        # ``output_type`` is unconditionally popped, never honored.
         assert captured["output_type"] is ChatResponse
         assert "output_type" not in captured["kwargs"]

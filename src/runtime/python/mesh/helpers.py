@@ -73,6 +73,35 @@ _MESH_HINT_KEYS = (
 _DEFAULT_HINT_FALLBACK_TIMEOUT = 90
 
 
+# Per-vendor dedupe set for the "native dispatch claims unknown vendor" WARN.
+# Keyed by vendor name so each unique vendor produces exactly one log line per
+# process, even though the dispatch path is hit once per agentic-loop iteration.
+_logged_unknown_native_vendors: set[str] = set()
+
+
+def _warn_native_dispatch_unknown_vendor_once(vendor: str) -> None:
+    """Emit a one-time WARN when native dispatch reports a vendor that has no
+    formatter in ``mesh.media.resolver._VENDOR_FORMATTERS``.
+
+    Symptom this catches: a new native handler is wired up (advertises
+    ``has_native=True`` for some vendor X) but the matching emitter formatter
+    in the resolver is never added. The resource_link resolver would then
+    silently fall back to OpenAI shape on a path that explicitly asked for
+    vendor-native shape — i.e., the very misconfiguration #860 introduced
+    upstream emission to surface.
+    """
+    if vendor in _logged_unknown_native_vendors:
+        return
+    _logged_unknown_native_vendors.add(vendor)
+    logger.warning(
+        "Native dispatch reports vendor=%r but %r has no entry in "
+        "_VENDOR_FORMATTERS; falling back to OpenAI-shape blocks. "
+        "Add a formatter to mesh.media.resolver._VENDOR_FORMATTERS to "
+        "emit vendor-native shape on the native path.",
+        vendor, vendor,
+    )
+
+
 def _pop_mesh_hint_flags(
     completion_args: dict[str, Any],
     defaults: tuple[bool, dict | None, int, str] = (
@@ -522,7 +551,19 @@ async def _execute_tool_calls_for_iteration(
     # in the resolver, so for vendor="gemini"/"google"/"vertex_ai" the shape
     # is identical regardless of dispatch path. Only vendor="anthropic" sees
     # an actual shape difference today (image_url → Claude image block).
-    resolver_vendor = vendor if has_native_dispatch and vendor else "openai"
+    if has_native_dispatch and vendor:
+        # Validate the vendor has a formatter; if not, fall back to OpenAI
+        # shape (safe default — won't crash) but log loudly so the operator
+        # learns the native handler was added without a matching emitter.
+        from _mcp_mesh.media.resolver import _VENDOR_FORMATTERS
+
+        if vendor in _VENDOR_FORMATTERS:
+            resolver_vendor = vendor
+        else:
+            _warn_native_dispatch_unknown_vendor_once(vendor)
+            resolver_vendor = "openai"
+    else:
+        resolver_vendor = "openai"
 
     async def _execute_single_tool(tc) -> tuple[dict, list[dict]]:
         """Execute a single tool call and return (tool_message, image_parts)."""
