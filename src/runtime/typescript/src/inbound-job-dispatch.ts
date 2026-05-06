@@ -67,15 +67,32 @@ export function readJobHeaders(
  *
  * Mirrors the Python helper: primitives, plain arrays of safe values,
  * and plain objects keyed by strings with safe values pass through.
- * Anything else gets wrapped as `{ value: String(result) }` so the
- * Rust JSON layer doesn't error inside auto-complete.
+ * Anything else (Map, Set, class instances, Symbol, BigInt, undefined,
+ * functions) gets wrapped as `{ value: String(result) }` so the Rust
+ * JSON layer doesn't error inside auto-complete.
+ *
+ * The plain-object check uses `Object.getPrototypeOf` rather than
+ * `Object.entries`, because Maps/Sets/class instances have empty
+ * `Object.entries(...)` results — which would otherwise (mis-)pass the
+ * "every entry is safe" guard.
  */
 function isJsonSafe(value: unknown): boolean {
   if (value === null) return true;
   const t = typeof value;
-  if (t === "boolean" || t === "number" || t === "string") return true;
+  if (t === "boolean" || t === "number" || t === "string") {
+    // Reject NaN / +Infinity — they JSON-stringify to `null` and would
+    // round-trip lossy through the registry's payload column.
+    if (t === "number" && !Number.isFinite(value as number)) return false;
+    return true;
+  }
   if (Array.isArray(value)) return value.every(isJsonSafe);
   if (t === "object") {
+    // Plain-object check: prototype must be Object.prototype or null.
+    // This rejects Maps, Sets, Dates, class instances, etc. — all of
+    // which serialise to `{}` (lossy) under default JSON.stringify and
+    // would not survive the FFI serde-json round-trip cleanly.
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return false;
     return Object.entries(value as Record<string, unknown>).every(
       ([k, v]) => typeof k === "string" && isJsonSafe(v),
     );
@@ -124,10 +141,21 @@ export async function runWithJobContext<T>(
   // close the row themselves. Matches Python's `_run_and_autocomplete`.
   // On exception we let the throw propagate; we attempt a best-effort
   // `controller.fail(...)` only if the controller is not yet terminal.
-  const runAndAutoComplete = async (): Promise<T> => {
-    let result: T;
+  //
+  // We capture the user's actual return value in a closure (`captured`)
+  // and feed only a JSON-safe sentinel (`null`) through the napi
+  // boundary in `withJobAsync`. The user value goes back to the JS
+  // caller via the returned closure variable — keeping non-JSON-safe
+  // returns (Map, Symbol, class instance, BigInt, undefined) from
+  // hitting the Rust serde-json round-trip and producing a cryptic
+  // FFI error. The auto-complete path still applies `isJsonSafe` and
+  // wraps non-safe values for `controller.complete(...)`.
+  let captured: T;
+  let didCapture = false;
+  const runAndAutoComplete = async (): Promise<null> => {
     try {
-      result = await invoke();
+      captured = await invoke();
+      didCapture = true;
     } catch (err) {
       // Best-effort terminal report so the registry doesn't have to
       // wait on the lease expiry to mark the row failed.
@@ -147,28 +175,45 @@ export async function runWithJobContext<T>(
     // Only auto-complete if the user didn't already call complete/fail.
     try {
       const alreadyTerminal = await controller.isTerminal();
-      if (alreadyTerminal) return result;
+      if (alreadyTerminal) return null;
     } catch {
       // If we can't probe, skip auto-complete to avoid double-flush.
-      return result;
+      return null;
     }
     try {
-      const safe = isJsonSafe(result) ? result : { value: String(result) };
+      const safe = isJsonSafe(captured)
+        ? captured
+        : { value: String(captured) };
       await controller.complete(safe);
     } catch {
       // Auto-complete failed — registry sweep will eventually mark
       // the row terminal. Don't shadow the user's return value.
     }
-    return result;
+    return null;
   };
 
   // Bind the JS-side ALS first; then bind the Rust-side task-local
   // around the same Promise so cancel registry + outbound headers see
   // the active job. Both must be set in parallel because the Rust
   // task-local does NOT cross the FFI boundary into the Node loop.
+  //
+  // The Promise handed to `withJobAsync` resolves to `null` (the
+  // sentinel) — Rust serde never sees the user's value, so non-JSON
+  // returns can't trip the FFI boundary. The user's actual return is
+  // pulled from `captured` after the await resolves.
   return CURRENT_JOB.run(snap, async () => {
     const body = runAndAutoComplete();
-    return (await withJobAsync(jobId, deadlineSecs, body)) as T;
+    await withJobAsync(jobId, deadlineSecs, body);
+    if (!didCapture) {
+      // Defensive: the body resolved without setting `captured` —
+      // should be unreachable since runAndAutoComplete only returns
+      // after invoke() succeeds (which sets captured), but guard
+      // against future refactors.
+      throw new Error(
+        "runWithJobContext: invoke completed but no value was captured",
+      );
+    }
+    return captured;
   });
 }
 

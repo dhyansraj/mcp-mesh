@@ -32,11 +32,13 @@
  * job after the lease expired. PR #883 fixed this same divergence in
  * the Python dispatcher; we mirror the fix here from the start.
  */
+import { Agent } from "undici";
 import { JobController } from "@mcpmesh/core";
 import {
   runWithJobContext,
   makeJobController,
 } from "./inbound-job-dispatch.js";
+import { runWithPropagatedHeaders } from "./proxy.js";
 
 const _POLL_BASE_MS = 500;
 const _POLL_MAX_MS = 5000;
@@ -83,6 +85,21 @@ export class ClaimDispatcher {
   private _permitWaiters: Array<() => void> = [];
   /** Wake-up callbacks for the backoff sleep (so stop() exits promptly). */
   private _sleepWaiters: Array<() => void> = [];
+  /**
+   * Per-dispatcher keep-alive HTTP agent for `/jobs/claim` polls.
+   *
+   * Mirrors Python's `httpx.AsyncClient(timeout=10)` lifetime — one
+   * client per dispatcher (not per poll) so the TLS handshake + TCP
+   * connection are reused across the polling loop. Pool size matches
+   * the dispatch semaphore (`_MAX_CONCURRENT_DISPATCHES`) since claim
+   * polls are serialised by the loop and never need more than that.
+   * Closed in `stop()` so socket pools don't leak across agent restarts.
+   */
+  private readonly _httpAgent: Agent = new Agent({
+    keepAliveTimeout: 30_000,
+    keepAliveMaxTimeout: 60_000,
+    connections: _MAX_CONCURRENT_DISPATCHES,
+  });
 
   constructor(
     capability: string,
@@ -119,6 +136,14 @@ export class ClaimDispatcher {
       } catch {
         /* swallow */
       }
+    }
+    // Close the keep-alive pool so sockets don't leak across agent
+    // restarts in long-lived test harnesses (mirrors the Python
+    // dispatcher's `httpx.AsyncClient.aclose()` in `stop()`).
+    try {
+      await this._httpAgent.close();
+    } catch {
+      /* best-effort cleanup */
     }
   }
 
@@ -165,7 +190,13 @@ export class ClaimDispatcher {
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
           signal: controller.signal,
-        });
+          // Keep-alive pool — reuses TCP/TLS across polls. See
+          // `_httpAgent` field for sizing rationale. Cast required
+          // because Node's `fetch` types don't expose the undici
+          // dispatcher slot; runtime accepts it.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          dispatcher: this._httpAgent as any,
+        } as RequestInit);
       } finally {
         clearTimeout(timeout);
       }
@@ -249,9 +280,29 @@ export class ClaimDispatcher {
       return;
     }
 
+    // Seed the propagated-headers ALS so outbound calls made by the
+    // handler continue the submitter's trace tree and carry the job
+    // context onward. Mirrors Python's
+    // `TraceContext.set_propagated_headers` block in
+    // `_mcp_mesh.engine.claim_dispatcher.PythonClaimDispatcher._dispatch`.
+    //
+    // Trace headers (`x-trace-id`, `x-parent-span`) are not echoed by
+    // the registry's claim response in the current wire (see
+    // `src/core/registry/ent_handlers_jobs.go::ClaimJobs`), so we only
+    // seed `x-mesh-job-id` + `x-mesh-timeout` here. If a future schema
+    // adds `trace_id` to ClaimedJob, fold it in alongside.
+    const headers: Record<string, string> = {
+      "x-mesh-job-id": jobId,
+    };
+    if (deadlineSecs !== null && deadlineSecs > 0) {
+      headers["x-mesh-timeout"] = String(deadlineSecs);
+    }
+
     try {
-      await runWithJobContext(jobId, deadlineSecs, controller, () =>
-        this.handler(payload, controller),
+      await runWithPropagatedHeaders(headers, () =>
+        runWithJobContext(jobId, deadlineSecs, controller, () =>
+          this.handler(payload, controller),
+        ),
       );
     } catch (err) {
       console.warn(

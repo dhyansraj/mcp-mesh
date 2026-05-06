@@ -19,6 +19,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ClaimDispatcher } from "../claim-dispatcher.js";
+import { getCurrentPropagatedHeaders } from "../proxy.js";
 
 // Mock @mcpmesh/core so the real JobController/withJobAsync don't
 // actually try to reach the registry. The dispatcher uses `fetch`
@@ -173,6 +174,118 @@ describe("ClaimDispatcher", () => {
     await d.stop();
     expect(handler).toHaveBeenCalledOnce();
     expect(handler.mock.calls[0][1].jobId).toBe("real-job");
+  });
+
+  it("seeds the propagated-headers ALS with x-mesh-job-id (and x-mesh-timeout when present)", async () => {
+    // Verifies follow-up #2: claim-path dispatches must seed the
+    // propagated-headers AsyncLocalStorage so outbound calls made by
+    // the handler continue the submitter's trace tree (Python parity
+    // — see `_mcp_mesh.engine.claim_dispatcher.PythonClaimDispatcher
+    // ._dispatch`'s `TraceContext.set_propagated_headers` block).
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    let calls = 0;
+    fetchMock.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          status: 200,
+          json: async () => ({
+            claimed: [
+              {
+                id: "job-trace-1",
+                submitted_payload: { foo: "bar" },
+                max_duration: 45,
+              },
+            ],
+          }),
+        } as unknown as Response;
+      }
+      return { status: 204, json: async () => ({}) } as unknown as Response;
+    });
+
+    let observed: Record<string, string> | null = null;
+    const handler = vi.fn(async () => {
+      // Snapshot the ALS view from inside the user handler — exactly
+      // where outbound proxy calls would read it.
+      observed = { ...getCurrentPropagatedHeaders() };
+      return { ok: true };
+    });
+    const d = new ClaimDispatcher("cap-trace", "agent-1", "http://reg", handler);
+    d.start();
+    await new Promise((r) => setTimeout(r, 100));
+    await d.stop();
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(observed).not.toBeNull();
+    expect(observed!["x-mesh-job-id"]).toBe("job-trace-1");
+    expect(observed!["x-mesh-timeout"]).toBe("45");
+  });
+
+  it("omits x-mesh-timeout when claim has no max_duration", async () => {
+    // Defensive: a claim without max_duration must not seed an empty
+    // / zero-valued timeout header (downstream parsers would reject it).
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    let calls = 0;
+    fetchMock.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          status: 200,
+          json: async () => ({
+            claimed: [{ id: "job-no-timeout", submitted_payload: {} }],
+          }),
+        } as unknown as Response;
+      }
+      return { status: 204, json: async () => ({}) } as unknown as Response;
+    });
+
+    let observed: Record<string, string> | null = null;
+    const handler = vi.fn(async () => {
+      observed = { ...getCurrentPropagatedHeaders() };
+      return null;
+    });
+    const d = new ClaimDispatcher("cap-no-timeout", "i", "http://r", handler);
+    d.start();
+    await new Promise((r) => setTimeout(r, 100));
+    await d.stop();
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(observed).not.toBeNull();
+    expect(observed!["x-mesh-job-id"]).toBe("job-no-timeout");
+    expect(observed!["x-mesh-timeout"]).toBeUndefined();
+  });
+
+  it("stop() closes the keep-alive http agent (no leaked sockets)", async () => {
+    // Verifies follow-up #3: each ClaimDispatcher owns an undici Agent
+    // for connection reuse on /jobs/claim polls; stop() must close
+    // it so long-lived test harnesses don't leak sockets across
+    // agent restarts.
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    fetchMock.mockResolvedValue({
+      status: 204,
+      json: async () => ({}),
+    } as unknown as Response);
+
+    const d = new ClaimDispatcher("cap-stop", "i", "http://r", vi.fn());
+    // The Agent is private; reach in to verify close-state transitions.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const agent = (d as any)._httpAgent as {
+      close: () => Promise<void>;
+      destroyed: boolean;
+      closed: boolean;
+    };
+    const closeSpy = vi.spyOn(agent, "close");
+
+    d.start();
+    await new Promise((r) => setTimeout(r, 30));
+    await d.stop();
+
+    // We invoke close() once from stop(); undici's DispatcherBase
+    // re-enters close(callback) internally, which the spy records as
+    // a second call. We only care that it was invoked (and that the
+    // agent is now in the closed state).
+    expect(closeSpy).toHaveBeenCalled();
+    expect(agent.closed || agent.destroyed).toBe(true);
   });
 
   it("stop() exits even when the handler is long-running", async () => {

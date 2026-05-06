@@ -118,11 +118,61 @@ describe("runWithJobContext", () => {
       stub as any,
       async () => userValue,
     );
-    // withJobAsync round-trips through napi-rs serde so the resolved
-    // value is a structurally-equal copy, not the same reference.
-    expect(result).toStrictEqual(userValue);
+    // The user's value is captured in a closure and returned directly
+    // (no napi serde round-trip), so the same reference is preserved.
+    expect(result).toBe(userValue);
     expect(stub.complete).toHaveBeenCalledOnce();
     expect(stub.complete).toHaveBeenCalledWith(userValue);
+  });
+
+  it("returns non-JSON-safe values to the caller and wraps for auto-complete", async () => {
+    // Map / Set / class instance / Symbol — any of these would have
+    // tripped the napi serde-json round-trip with a cryptic Rust error
+    // before the fix. Now they pass through to the caller untouched
+    // (Rust never sees them) and the auto-complete wraps them as
+    // `{ value: String(...) }` for the registry.
+    const cases: Array<{ name: string; build: () => unknown }> = [
+      { name: "Map", build: () => new Map([["k", 1]]) },
+      { name: "Set", build: () => new Set([1, 2, 3]) },
+      {
+        name: "class instance",
+        build: () => {
+          class Foo {
+            x = 1;
+            describe() {
+              return "foo";
+            }
+          }
+          return new Foo();
+        },
+      },
+      { name: "BigInt", build: () => BigInt(123) },
+      { name: "undefined", build: () => undefined },
+    ];
+    for (const c of cases) {
+      const stub = {
+        isTerminal: vi.fn().mockResolvedValue(false),
+        complete: vi.fn().mockResolvedValue(undefined),
+        fail: vi.fn().mockResolvedValue(undefined),
+      };
+      const value = c.build();
+      const result = await runWithJobContext(
+        `job-${c.name}`,
+        null,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        stub as any,
+        async () => value as unknown,
+      );
+      // The user value is preserved verbatim — it never crosses napi.
+      expect(result, `case=${c.name} return value`).toBe(value);
+      // And the registry sees a JSON-safe wrap.
+      expect(stub.complete, `case=${c.name} complete called`).toHaveBeenCalledOnce();
+      const completedWith = stub.complete.mock.calls[0][0];
+      expect(
+        completedWith,
+        `case=${c.name} complete payload is wrapped`,
+      ).toMatchObject({ value: expect.any(String) });
+    }
   });
 
   it("auto-completes nested JSON-safe arrays/objects verbatim", async () => {
