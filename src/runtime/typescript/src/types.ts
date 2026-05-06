@@ -57,6 +57,80 @@ export type {
 } from "@mcpmesh/core";
 
 /**
+ * Type marker for DDDI injection of a long-running-task handle (Phase 1
+ * — MeshJob substrate).
+ *
+ * Used as a parameter-position type annotation on a tool registered with
+ * `agent.addTool({ task: true, ... })` (producer) or `mesh.route(...)`
+ * with a `task=true` dependency (consumer). The mesh runtime injects:
+ *
+ * - On the **producer side** (a tool decorated `{ task: true }` invoked
+ *   via the inbound job-dispatch path or claim worker): a
+ *   `JobController` exposing
+ *   `await job.updateProgress(...)` /
+ *   `await job.complete(result)` / `await job.fail(error)`.
+ *
+ * - On the **consumer side** (a function depending on a remote
+ *   `task=true` capability): a submitter that returns a `JobProxy`
+ *   exposing `await proxy.wait(timeoutSecs?)` / `await proxy.status()`
+ *   / `await proxy.cancel(reason?)`.
+ *
+ * A MeshJob parameter is **orthogonal** to positional MeshTool slots
+ * per `MESHJOB_DDDI_CONTRACT.md` — it does not consume a positional
+ * dependency-injection index.
+ *
+ * If a function declaring a MeshJob param is invoked as a regular
+ * synchronous tool call (no `X-Mesh-Job-Id` header, no claim path),
+ * the runtime injects `null` for the slot. Producer code SHOULD treat
+ * `null` as a fast path with no progress reporting.
+ *
+ * The type itself is structurally minimal because TypeScript erases
+ * structural types at runtime; the DDDI resolver records signature
+ * positions explicitly when the SDK builds the tool definition (see
+ * `__tests__/resolver-meshjob.spec.ts`).
+ *
+ * @example Producer
+ * ```typescript
+ * agent.addTool({
+ *   name: "plan_trip",
+ *   capability: "plan_trip",
+ *   task: true,
+ *   parameters: z.object({ userId: z.string() }),
+ *   dependencies: [{ capability: "weather" }],
+ *   meshJobParamIndex: 2,  // signature position of `job` below
+ *   execute: async (
+ *     { userId },
+ *     weather: McpMeshTool | null = null,
+ *     job: MeshJob | null = null,
+ *   ) => {
+ *     await job?.updateProgress(0.1, "checking weather");
+ *     const w = await weather?.({ city: "PDX" });
+ *     await job?.updateProgress(0.9, "done");
+ *     return { itinerary: w };
+ *   },
+ * });
+ * ```
+ */
+export interface MeshJob {
+  // Producer-side surface (when injected as JobController):
+  jobId?: string;
+  updateProgress?(progress: number, message?: string): Promise<void>;
+  complete?(result: unknown): Promise<void>;
+  fail?(error: string): Promise<void>;
+
+  // Consumer-side surface (when injected as JobProxy / submitter):
+  submit?(payload?: Record<string, unknown>, options?: {
+    maxDuration?: number;
+    maxRetries?: number;
+    totalDeadline?: number;
+    ownerInstanceId?: string;
+  }): Promise<MeshJob>;
+  wait?(timeoutSecs?: number): Promise<unknown>;
+  status?(): Promise<Record<string, unknown>>;
+  cancel?(reason?: string): Promise<void>;
+}
+
+/**
  * Dependency specification for mesh tool DI.
  *
  * Can be specified as a simple string (capability name) or
@@ -239,6 +313,26 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
    */
   outputSchemaStrict?: boolean;
   /**
+   * Phase 1 MeshJob substrate: mark this tool as long-running.
+   *
+   * When `true`, producers advertise `task=true` in their tool
+   * metadata so consumers know to invoke this capability via job
+   * semantics (`mesh.MeshJob.submit(...) → wait/poll`) rather than as
+   * a regular synchronous `tools/call`. The actual job-context binding
+   * happens at inbound call time via the dispatch wrapper (Phase B).
+   *
+   * Constraints (validated at `addTool` time):
+   *
+   *   - `execute` MUST be an `async` function (long-running tools need
+   *     a Promise-based control flow to drive `MeshJob.updateProgress()`,
+   *     cancellation, and outbound polling). Sync `execute` raises a
+   *     clear error at registration.
+   *
+   * Default: `false` (regular synchronous tool). See
+   * `MESHJOB_DESIGN.org` "Producer-side flow".
+   */
+  task?: boolean;
+  /**
    * Dependencies required by this tool.
    * Injected positionally as McpMeshTool params after args.
    *
@@ -395,6 +489,10 @@ export interface ToolMeta {
   dependencies: NormalizedDependency[];
   /** Per-dependency configuration indexed by position (matches dependencies array) */
   dependencyKwargs?: DependencyKwargs[];
+  /** Phase 1 MeshJob substrate: producer flag advertising this tool as
+   * long-running so consumers invoke via job semantics. See
+   * MeshToolDef.task for full semantics. */
+  task?: boolean;
 }
 
 // ============================================================================

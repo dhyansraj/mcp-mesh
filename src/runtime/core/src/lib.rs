@@ -42,6 +42,8 @@ pub mod job_context;
 pub mod jobs;
 #[cfg(feature = "python")]
 pub mod jobs_py;
+#[cfg(feature = "typescript")]
+pub mod jobs_napi;
 pub mod registry;
 pub mod response_parser;
 pub mod runtime;

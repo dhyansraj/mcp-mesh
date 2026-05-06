@@ -266,6 +266,26 @@ export {
   formatZodError,
 } from "./response-parser.js";
 
+// MeshJob substrate (Phase 1) — see MESHJOB_DDDI_CONTRACT.md.
+// Re-export the MeshJob type marker, AsyncLocalStorage mirror, and the
+// DDDI resolver so consumers can use either the SDK entry points or
+// drop down to the underlying primitives in tests / advanced wiring.
+export type { MeshJob } from "./types.js";
+export {
+  CURRENT_JOB,
+  currentJob,
+  remainingSeconds,
+  withJobAsync,
+  type JobContextSnapshot,
+} from "./job-context.js";
+export {
+  resolveMeshJobSignature,
+  ResolverError,
+  type ResolvedSignature,
+  type ResolvedMeshToolDep,
+  type ResolverInput,
+} from "./resolver-meshjob.js";
+
 // Types
 export type {
   AgentConfig,

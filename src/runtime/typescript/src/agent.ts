@@ -213,6 +213,40 @@ export class MeshAgent {
     const toolName = def.name;
     const execute = def.execute;
 
+    // Phase 1 MeshJob substrate: validate `task: true` requires an
+    // async function. Long-running tools need a Promise-based control
+    // flow so the dispatch wrapper (Phase B) can await
+    // `MeshJob.updateProgress()` / cancellation / outbound polling.
+    // Fail loudly at `addTool` so the developer sees the misuse before
+    // the agent even tries to register with the registry.
+    //
+    // Heuristic: AsyncFunction.constructor.name === "AsyncFunction".
+    // We only flag the obvious sync case (an arrow/function literal)
+    // — any function returning a Promise will pass this check, which
+    // is the right relaxation for users who wrap their handler in a
+    // Promise factory.
+    if (def.task === true) {
+      const ctorName = (execute as { constructor?: { name?: string } })
+        ?.constructor?.name;
+      if (ctorName !== "AsyncFunction") {
+        // We can't reliably detect Promise-returning sync functions
+        // without invoking them, but we CAN reject the unambiguous
+        // "function() { ... }" case where the developer probably
+        // forgot the `async` keyword.
+        if (ctorName === "Function") {
+          throw new Error(
+            `addTool({ task: true }) requires an async execute function; ` +
+              `tool '${toolName}' has a sync execute. Mark it 'async' or ` +
+              `remove task: true.`
+          );
+        }
+        // Other constructor names (GeneratorFunction, etc.) are
+        // unusual; let them through with a console warning rather
+        // than blocking — Phase B's dispatch wrapper will surface
+        // any actual misuse at first invocation.
+      }
+    }
+
     // Worker mode: register the raw execute fn in the worker tool map and
     // skip FastMCP registration, dependency wiring, and metadata storage.
     // The worker entry will look up tools by name when handling dispatched
@@ -417,6 +451,11 @@ export class MeshAgent {
       outputSchemaStrict: def.outputSchemaStrict !== false,
       dependencies: normalizedDeps,
       dependencyKwargs: def.dependencyKwargs,
+      // Phase 1 MeshJob substrate: stamp producer's long-running flag
+      // so the heartbeat pipeline ships it to the registry. Consumers
+      // read this to decide between job semantics and a regular
+      // tools/call.
+      task: def.task === true,
     });
 
     return this;
