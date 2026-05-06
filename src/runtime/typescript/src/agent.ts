@@ -35,6 +35,16 @@ import { resolveConfig, generateAgentIdSuffix, findAvailablePort } from "./confi
 import { enrichSchemaWithMediaTypes } from "./media-param.js";
 import { createProxy, normalizeDependency, runWithTraceContext, runWithPropagatedHeaders, PROXY_DISPATCH_META } from "./proxy.js";
 import {
+  readJobHeaders,
+  runWithJobContext,
+  makeJobController,
+  spliceJobController,
+} from "./inbound-job-dispatch.js";
+import { MeshJobSubmitter } from "./mesh-job-submitter.js";
+import { ClaimDispatcher, type ClaimHandler } from "./claim-dispatcher.js";
+import { registerJobHelperTools, type HelperToolMeta } from "./jobs-helper-tools.js";
+import { registerCancelRoute } from "./jobs-cancel-route.js";
+import {
   clusterStrictEnabled,
   normalizeSchemaWithPolicy,
 } from "./schema-normalize.js";
@@ -165,6 +175,21 @@ export class MeshAgent {
   // registry / Rust core wiring (no Express port conflict, no double-register).
   private _workerMode = false;
 
+  /**
+   * Phase 1 MeshJob substrate: per-tool ClaimHandler for `task: true`
+   * tools. Indexed by capability so the ClaimDispatcher can look up
+   * the local handler without re-traversing the tools map. Populated
+   * by addTool() at registration time; consumed by _autoStart() to
+   * spawn one dispatcher per task tool.
+   */
+  private _taskHandlers: Map<string, ClaimHandler> = new Map();
+  /**
+   * Active claim dispatchers (one per task=true capability). Started
+   * during _autoStart(); stopped during shutdown(). Empty for agents
+   * that own no task=true tools.
+   */
+  private _claimDispatchers: ClaimDispatcher[] = [];
+
   constructor(server: FastMCP, config: AgentConfig) {
     if (_isWorkerMode) {
       // Worker thread: skip ALL init. Only addTool() runs (in worker-mode
@@ -213,6 +238,91 @@ export class MeshAgent {
     const toolName = def.name;
     const execute = def.execute;
 
+    // Phase 1 MeshJob substrate: validate `task: true` requires an
+    // async function. Long-running tools need a Promise-based control
+    // flow so the dispatch wrapper (Phase B) can await
+    // `MeshJob.updateProgress()` / cancellation / outbound polling.
+    // Fail loudly at `addTool` so the developer sees the misuse before
+    // the agent even tries to register with the registry.
+    //
+    // Heuristic: AsyncFunction.constructor.name === "AsyncFunction".
+    // We only flag the obvious sync case (an arrow/function literal)
+    // — any function returning a Promise will pass this check, which
+    // is the right relaxation for users who wrap their handler in a
+    // Promise factory.
+    if (def.task === true) {
+      const ctorName = (execute as { constructor?: { name?: string } })
+        ?.constructor?.name;
+      if (ctorName !== "AsyncFunction") {
+        // We can't reliably detect Promise-returning sync functions
+        // without invoking them, but we CAN reject the unambiguous
+        // "function() { ... }" case where the developer probably
+        // forgot the `async` keyword.
+        if (ctorName === "Function") {
+          throw new Error(
+            `addTool({ task: true }) requires an async execute function; ` +
+              `tool '${toolName}' has a sync execute. Mark it 'async' or ` +
+              `remove task: true.`
+          );
+        }
+        // Other constructor names (GeneratorFunction, etc.) are
+        // unusual; let them through with a console warning rather
+        // than blocking — the dispatch wrapper will surface any actual
+        // misuse at first invocation.
+      }
+    }
+
+    // Phase 1 MeshJob substrate (consumer-side validation): if the
+    // tool declares meshJobDepIndex, that index MUST be a non-negative
+    // integer pointing to a valid dependency. Catch misuse at
+    // registration so the developer doesn't see a confusing TypeError
+    // at runtime when the wrapper tries to swap the dep proxy for a
+    // submitter. Mirrors the meshJobParamIndex validation below —
+    // NaN / fractional / negative values must fail-fast here too.
+    if (def.meshJobDepIndex !== undefined) {
+      const depCount = (def.dependencies ?? []).length;
+      const v = def.meshJobDepIndex;
+      const isInt = Number.isInteger(v) && v >= 0;
+      if (!isInt) {
+        throw new Error(
+          `addTool({ meshJobDepIndex: ${v} }) for tool '${toolName}': ` +
+            `meshJobDepIndex must be a non-negative integer (index into ` +
+            `dependencies[]), got: ${v}`,
+        );
+      }
+      if (v >= depCount) {
+        throw new Error(
+          `addTool({ meshJobDepIndex: ${v} }) for tool ` +
+            `'${toolName}' is out of range — the tool declares ${depCount} ` +
+            `dependencies. meshJobDepIndex must be a valid index into ` +
+            `dependencies[].`,
+        );
+      }
+    }
+
+    // Phase 1 MeshJob substrate (producer-side validation): if the
+    // tool declares meshJobParamIndex, that position MUST be a sane
+    // integer >= 1. Position 0 is reserved for the args payload, so
+    // the controller can only land at sig pos 1+. Without this
+    // guard, values 0 / negative / NaN / non-integer silently skip
+    // controller injection — the user's handler then sees `null`
+    // where it expected a JobController and throws a confusing
+    // `TypeError: Cannot read properties of null` at first await.
+    //
+    // Upper bound is a sanity check: > 10 almost certainly means a
+    // typo (no real producer signature has that many params).
+    if (def.meshJobParamIndex !== undefined) {
+      const v = def.meshJobParamIndex;
+      const ok = Number.isInteger(v) && v >= 1 && v <= 10;
+      if (!ok) {
+        throw new Error(
+          `addTool({ meshJobParamIndex: ${v} }) for tool '${toolName}': ` +
+            `meshJobParamIndex must be an integer >= 1 (position of MeshJob ` +
+            `param after the args payload), got: ${v}`,
+        );
+      }
+    }
+
     // Worker mode: register the raw execute fn in the worker tool map and
     // skip FastMCP registration, dependency wiring, and metadata storage.
     // The worker entry will look up tools by name when handling dispatched
@@ -231,11 +341,56 @@ export class MeshAgent {
     );
     const depEndpoints = normalizedDeps.map((d) => d.capability);
 
+    // Capture for closures — these reads must be live at invocation
+    // time (e.g. registryUrl/agentId aren't set yet at addTool time).
+    const isTaskTool = def.task === true;
+    const meshJobDepIndex = def.meshJobDepIndex;
+    const meshJobParamIndex = def.meshJobParamIndex;
+
+    // Phase 1 MeshJob substrate: when a job-bound tool exists AND the
+    // user explicitly opted into worker isolation via env, log a single
+    // warning at registration time. The wrapper force-disables
+    // isolation for job-bound tools because controllers + the
+    // AsyncLocalStorage / Rust task-local job context don't cross the
+    // worker_threads boundary cleanly. Without this log the
+    // force-disable was silent — users who set MCP_MESH_TOOL_ISOLATION
+    // expected it to apply to every tool.
+    const isJobBoundForLog = isTaskTool || meshJobDepIndex !== undefined;
+    const isolationEnvSet =
+      typeof process.env.MCP_MESH_TOOL_ISOLATION === "string" &&
+      process.env.MCP_MESH_TOOL_ISOLATION.toLowerCase() !== "false";
+    if (isJobBoundForLog && isolationEnvSet) {
+      console.warn(
+        `[mesh-tool] '${toolName}' has ` +
+          (isTaskTool ? "task: true" : `meshJobDepIndex: ${meshJobDepIndex}`) +
+          `; worker isolation is disabled for job-bound tools ` +
+          `(controllers/AsyncLocalStorage don't cross worker boundaries). ` +
+          `Set 'task: true' explicitly if you intend a producer.`,
+      );
+    }
+
     // Create wrapper that injects dependencies positionally and handles tracing
     const wrappedExecute = async (args: z.infer<T>): Promise<string> => {
       // Build positional deps array using composite keys (toolName:dep_index)
-      const depsArray: (McpMeshTool | null)[] = normalizedDeps.map(
-        (_, depIndex) => this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null
+      // Phase 1 MeshJob substrate (consumer-side): if meshJobDepIndex is
+      // set, swap the McpMeshTool proxy at that slot for a
+      // MeshJobSubmitter targeting that dep's capability. We bind the
+      // submitter to the live registryUrl/agentId so it can submit
+      // jobs without needing access to the agent instance.
+      const depsArray: (McpMeshTool | MeshJobSubmitter | null)[] = normalizedDeps.map(
+        (dep, depIndex) => {
+          if (depIndex === meshJobDepIndex) {
+            // Build the submitter lazily per call so we always pick
+            // up the current registryUrl (test harnesses sometimes
+            // mutate it between calls).
+            return new MeshJobSubmitter(
+              dep.capability,
+              this.agentId,
+              this.config.registryUrl,
+            );
+          }
+          return this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
+        },
       );
       const injectedCount = depsArray.filter((d) => d !== null).length;
 
@@ -289,7 +444,19 @@ export class MeshAgent {
       // Python implementation in _mcp_mesh/shared/tool_executor.py.
       // Default ON; set MCP_MESH_TOOL_ISOLATION=false to revert to inline
       // execution on the main loop (legacy behavior).
+      //
+      // Phase 1 MeshJob substrate: force-disable isolation for tools
+      // that bind to a JobController or MeshJobSubmitter. The
+      // controller/submitter wrap napi-rs handles plus
+      // AsyncLocalStorage state that cannot be cleanly serialised
+      // across the worker_threads boundary. Running inline on the
+      // main loop is the right trade — task=true tools are
+      // long-running by definition and benefit less from isolation
+      // (their wall-clock time is dominated by the user's `await`s,
+      // not CPU bursts that block the event loop).
+      const isJobBound = isTaskTool || meshJobDepIndex !== undefined;
       const isolationEnabled =
+        !isJobBound &&
         (process.env.MCP_MESH_TOOL_ISOLATION ?? "true").toLowerCase() !== "false";
 
       try {
@@ -331,10 +498,62 @@ export class MeshAgent {
           });
         } else {
           // Legacy inline execution on the main thread. Preserved as a clean
-          // fallback for users who explicitly opt out of isolation.
+          // fallback for users who explicitly opt out of isolation, AND used
+          // unconditionally for job-bound tools (see isJobBound above).
+          //
+          // Phase 1 MeshJob substrate: when this tool is task=true and the
+          // inbound headers carry X-Mesh-Job-Id, build a JobController,
+          // splice it into the call args at meshJobParamIndex, and run the
+          // user function inside both the JS-side ALS (CURRENT_JOB) and the
+          // Rust-side task-local (withJobAsync) so cancel-registry binding
+          // + outbound header injection work transparently.
           result = await runWithTraceContext(traceContext, async () => {
             return await runWithPropagatedHeaders(propagatedHeaders, async () => {
-              return await execute(cleanArgs, ...depsArray);
+              if (isTaskTool) {
+                const [jobId, deadlineSecs] = readJobHeaders(propagatedHeaders);
+                let controller = null;
+                if (jobId && this.config.registryUrl && this.agentId) {
+                  try {
+                    controller = makeJobController(
+                      jobId,
+                      this.agentId,
+                      this.config.registryUrl,
+                    );
+                  } catch (err) {
+                    // Don't silently fall back to a regular tool call —
+                    // a `task: true` tool that needs a controller will
+                    // misbehave (return a dict instead of completing the
+                    // row, leaving the registry's job stuck in `working`
+                    // until lease expiry). Surface the failure so the
+                    // outer FastMCP handler reports it AND the inbound
+                    // wrapper's catch (or its caller) can fail-fast.
+                    console.error(
+                      `[mesh-jobs] makeJobController failed for tool ` +
+                        `'${toolName}' job=${jobId} agent=${this.agentId} ` +
+                        `registry=${this.config.registryUrl}:`,
+                      err,
+                    );
+                    throw err;
+                  }
+                }
+                // Build the call args, splicing the controller (or null) at
+                // meshJobParamIndex if specified. Position 0 is `args`; deps
+                // begin at position 1. The MeshJob slot is orthogonal —
+                // when meshJobParamIndex skips a position, deps shift past
+                // it (caller's signature must reflect that).
+                const callArgs = spliceJobController(
+                  cleanArgs,
+                  depsArray,
+                  controller,
+                  meshJobParamIndex,
+                );
+                return await runWithJobContext(jobId, deadlineSecs, controller, () =>
+                  Promise.resolve(
+                    (execute as (...a: unknown[]) => unknown)(...callArgs),
+                  ),
+                );
+              }
+              return await execute(cleanArgs, ...(depsArray as (McpMeshTool | null)[]));
             });
           });
         }
@@ -397,6 +616,38 @@ export class MeshAgent {
       execute: wrappedExecute,
     });
 
+    // Phase 1 MeshJob substrate: register a ClaimHandler for this
+    // tool so the per-capability ClaimDispatcher (spawned in
+    // _autoStart) can dispatch claimed jobs to the same execute fn
+    // — without going through FastMCP's HTTP transport. The handler
+    // builds the same callArgs shape the inbound wrapper does, but
+    // gets the controller passed in directly (no header parsing
+    // needed) and bypasses FastMCP's tool-call serialisation.
+    if (isTaskTool) {
+      const capability = def.capability ?? toolName;
+      this._taskHandlers.set(capability, async (payload, controller) => {
+        const liveDeps: (McpMeshTool | MeshJobSubmitter | null)[] = normalizedDeps.map(
+          (dep, depIndex) => {
+            if (depIndex === meshJobDepIndex) {
+              return new MeshJobSubmitter(
+                dep.capability,
+                this.agentId,
+                this.config.registryUrl,
+              );
+            }
+            return this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
+          },
+        );
+        const callArgs = spliceJobController(
+          payload,
+          liveDeps,
+          controller,
+          meshJobParamIndex,
+        );
+        return await (execute as (...a: unknown[]) => unknown)(...callArgs);
+      });
+    }
+
     // Store mesh metadata with JSON Schema for LLM tool resolution
     const inputSchema = this.convertZodToJsonSchema(def.parameters);
     enrichSchemaWithMediaTypes(inputSchema as Record<string, unknown>);
@@ -417,6 +668,13 @@ export class MeshAgent {
       outputSchemaStrict: def.outputSchemaStrict !== false,
       dependencies: normalizedDeps,
       dependencyKwargs: def.dependencyKwargs,
+      // Phase 1 MeshJob substrate: stamp producer's long-running flag
+      // so the heartbeat pipeline ships it to the registry. Consumers
+      // read this to decide between job semantics and a regular
+      // tools/call.
+      task: def.task === true,
+      meshJobParamIndex: def.meshJobParamIndex,
+      meshJobDepIndex: def.meshJobDepIndex,
     });
 
     return this;
@@ -608,11 +866,98 @@ export class MeshAgent {
     // 2. Register LLM tools from LlmToolRegistry
     this.registerLlmTools();
 
+    // 2.5 Phase 1 MeshJob substrate: register the three framework
+    // helper tools (`__mesh_job_status`/`_result`/`_cancel`) on
+    // every TS agent regardless of whether it owns task=true tools.
+    // Mirrors Python's JobsHelperToolsStep. Skipped when there's no
+    // registry URL — the helpers can't function without it.
+    this.registerJobsHelperTools();
+
+    // 2.6 Phase 1 MeshJob substrate: mount POST /jobs/:job_id/cancel
+    // on FastMCP's underlying Hono app so the registry's cancel
+    // forwarder can fire the in-process cancel token. Best-effort —
+    // failures here are logged, not fatal. When this agent owns
+    // task: true tools and the route fails to register, escalate to
+    // a second console.error so the operator can't miss the
+    // cancel-mid-flight regression in logs.
+    if (this.config.registryUrl) {
+      const cancelRouteOk = registerCancelRoute(this.server);
+      if (!cancelRouteOk && this._taskHandlers.size > 0) {
+        console.error(
+          `[mesh-jobs] agent ${this.agentId} owns ${this._taskHandlers.size} ` +
+            `task: true tool(s) but the cancel route failed to register. ` +
+            `Cancel requests for in-flight jobs will fall through to ` +
+            `lease expiry — see the prior [mesh-jobs] error for the cause.`,
+        );
+      }
+    }
+
     // 3. Start heartbeat to registry via Rust core
     await this.startHeartbeat();
 
+    // 3.5 Phase 1 MeshJob substrate: spawn one ClaimDispatcher per
+    // task=true tool so the agent can poll the registry's
+    // /jobs/claim and dispatch claimed work locally. Started after
+    // heartbeat so the registry already knows this replica when the
+    // first claim arrives (eliminates the "claim before
+    // registration" race).
+    this.startClaimDispatchers();
+
     // 4. Install signal handlers for graceful shutdown
     this.installSignalHandlers();
+  }
+
+  /**
+   * Phase 1 MeshJob substrate: register the three framework helper
+   * tools on the FastMCP server AND in the agent's tool catalog so
+   * the heartbeat ships them to the registry as visible capabilities.
+   */
+  private registerJobsHelperTools(): void {
+    if (!this.config.registryUrl) {
+      return;
+    }
+    let helpers: Map<string, HelperToolMeta>;
+    try {
+      helpers = registerJobHelperTools(this.server, this.config.registryUrl);
+    } catch (err) {
+      console.warn("[mesh-jobs] failed to register job helper tools:", err);
+      return;
+    }
+    for (const [name, meta] of helpers.entries()) {
+      // Don't overwrite a user-defined tool with the same name.
+      if (this.tools.has(name)) continue;
+      this.tools.set(name, {
+        capability: meta.capability,
+        version: meta.version,
+        tags: meta.tags,
+        description: meta.description,
+        inputSchema: meta.inputSchema,
+        outputSchemaStrict: true,
+        dependencies: [],
+        dependencyKwargs: undefined,
+        task: meta.task,
+      });
+    }
+  }
+
+  /**
+   * Phase 1 MeshJob substrate: spawn ClaimDispatchers for every
+   * task=true tool registered. Skipped if no registry URL or no task
+   * handlers are present.
+   */
+  private startClaimDispatchers(): void {
+    if (!this.config.registryUrl) return;
+    if (this._taskHandlers.size === 0) return;
+    for (const [capability, handler] of this._taskHandlers.entries()) {
+      const dispatcher = new ClaimDispatcher(
+        capability,
+        this.agentId,
+        this.config.registryUrl,
+        handler,
+      );
+      dispatcher.start();
+      this._claimDispatchers.push(dispatcher);
+    }
   }
 
   /**
@@ -1114,6 +1459,16 @@ export class MeshAgent {
    * Shutdown the agent gracefully.
    */
   async shutdown(): Promise<void> {
+    // Phase 1 MeshJob substrate: stop claim dispatchers first so
+    // they don't pull a fresh job mid-shutdown.
+    for (const d of this._claimDispatchers) {
+      try {
+        await d.stop();
+      } catch (err) {
+        console.warn(`[mesh-jobs] error stopping claim dispatcher:`, err);
+      }
+    }
+    this._claimDispatchers = [];
     try {
       await closeHttpPool();
     } catch (err) {
