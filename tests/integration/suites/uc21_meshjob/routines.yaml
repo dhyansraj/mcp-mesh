@@ -61,8 +61,11 @@ routines:
               # Verify the sweep override actually stamped its log line.
               # If MCP_MESH_SWEEP_INTERVAL didn't take effect the suite
               # must fail loudly here, not via slow per-test timeouts.
-              grep -qE '\[sweep\] using MCP_MESH_SWEEP_INTERVAL' \
-                ~/.mcp-mesh/logs/registry.log \
+              # Tail the log so a stale match from an earlier run in the
+              # same shell session can't make a misconfigured current
+              # run look healthy.
+              tail -n 200 ~/.mcp-mesh/logs/registry.log \
+                | grep -qE '\[sweep\] using MCP_MESH_SWEEP_INTERVAL' \
                 || { echo "FAIL: MCP_MESH_SWEEP_INTERVAL override did not take effect"; exit 1; }
               echo "[setup] confirmed sweep override active"
               exit 0

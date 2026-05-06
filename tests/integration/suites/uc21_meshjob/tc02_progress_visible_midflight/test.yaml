@@ -1,6 +1,6 @@
 # tc02_progress_visible_midflight — validates the batching tick.
 #
-# Submits a long-enough generate_report job (5 sections * 2s = 10s) and
+# Submits a long-enough generate_report job (7 sections * 2s = 14s) and
 # polls __mesh_job_status mid-flight. The producer's JobController
 # emits update_progress() after each section; those deltas flow to the
 # registry via /jobs/batch on the batching tick. By the time at least
@@ -11,7 +11,7 @@
 #   - first / mid polls show status="working" with progress strictly
 #     between 0 and 1.0 at least once
 #   - final poll shows status="completed" with progress=1.0
-#   - the report has 5 sections in the result
+#   - the report has 7 sections in the result
 
 name: "MeshJob: mid-flight progress visible via __mesh_job_status"
 description: "Submit long job, poll status mid-flight, observe progress advance through working->completed"

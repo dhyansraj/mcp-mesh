@@ -2,8 +2,11 @@
 #
 # Four agents: producer, consumer (submits the job), and two
 # bystanders X and Y that have no involvement with the job. The
-# bystanders are deployed with overridden MCP_MESH_AGENT_NAME so the
-# same fixture serves both — distinct agent IDs in the registry.
+# bystanders are two distinct fixtures (``bystander-x/main.py`` and
+# ``bystander-y/main.py``) deployed on separate ports — each has its
+# own ``@mesh.agent`` declaration with a unique name so the registry
+# sees two genuinely independent agents (no shared MCP_MESH_AGENT_NAME
+# override trickery).
 #
 # Submit a job via the consumer; capture job_id. Then call
 # __mesh_job_status on each bystander targeting that job_id.

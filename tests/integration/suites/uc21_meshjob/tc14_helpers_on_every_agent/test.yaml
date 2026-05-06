@@ -123,9 +123,16 @@ test:
     handler: shell
     workdir: /workspace
     command: |
-      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="orchestrator-agent") | .id')
-      # Check the orchestrator's tools list contains the helpers via meshctl list --tools
-      meshctl list --tools 2>&1 | grep -E "orchestrator|__mesh_job_" | head -10
+      # Scope strictly to the orchestrator agent's own capabilities via
+      # the registry API. ``meshctl list --tools`` (no positional) returns
+      # tools from ALL agents and the table layout has no agent-scoped
+      # filter flag, so an unfiltered grep + ``head -10`` could pick up a
+      # match from the producer or consumer (both also auto-register the
+      # __mesh_job_* helpers) and silently mask a missing registration on
+      # the orchestrator. Filtering on the agent record's capabilities
+      # array is deterministic.
+      curl -s http://localhost:8000/agents \
+        | jq -r '.agents[] | select(.name=="orchestrator-agent") | .capabilities[].function_name'
     capture: orchestrator_tools
 
 assertions:

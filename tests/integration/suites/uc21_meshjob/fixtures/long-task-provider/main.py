@@ -220,7 +220,15 @@ async def report_with_downstream_call(
     if job is not None:
         await job.update_progress(0.1, "calling downstream")
     if slow_downstream is None:
-        return {"error": "slow_downstream dependency not injected"}
+        # Returning a dict here would trip the runtime's auto-complete
+        # path (W8 fix from PR #878) and mark the job COMPLETED with the
+        # error dict as its result. The intent is the opposite — surface
+        # the missing-dep state as a terminal failure. job.fail() sets
+        # the terminal state explicitly; auto-complete is a no-op once a
+        # terminal state has been recorded.
+        if job is not None:
+            await job.fail({"error": "slow_downstream dependency not injected"})
+        return None
     # The downstream tool sleeps 30s. With cancel propagation working,
     # the cancel token aborts the in-flight HTTP request well before
     # the 30s timer elapses.

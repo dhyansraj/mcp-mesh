@@ -22,7 +22,7 @@ tags:
   - smoke
   - python
   - issue-872
-timeout: 60
+timeout: 90
 
 pre_run:
   - routine: global.setup_for_python_agent

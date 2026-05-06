@@ -46,4 +46,24 @@ func TestReadSweepIntervalFromEnv(t *testing.T) {
 			t.Fatalf("expected default 5m on invalid input, got %s", got)
 		}
 	})
+
+	// time.ParseDuration accepts "0s" / "0" and negative durations, but
+	// time.NewTicker panics on a non-positive value. The env reader must
+	// fall back to the default instead of letting a misconfigured
+	// override crash the registry at sweep start.
+	t.Run("zero_falls_back_to_default", func(t *testing.T) {
+		t.Setenv("MCP_MESH_SWEEP_INTERVAL", "0s")
+		got := readSweepIntervalFromEnv()
+		if got != 5*time.Minute {
+			t.Fatalf("expected default 5m for zero override, got %s", got)
+		}
+	})
+
+	t.Run("negative_falls_back_to_default", func(t *testing.T) {
+		t.Setenv("MCP_MESH_SWEEP_INTERVAL", "-5m")
+		got := readSweepIntervalFromEnv()
+		if got != 5*time.Minute {
+			t.Fatalf("expected default 5m for negative override, got %s", got)
+		}
+	})
 }

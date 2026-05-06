@@ -63,6 +63,14 @@ func readSweepIntervalFromEnv() time.Duration {
 		log.Printf("[sweep] invalid MCP_MESH_SWEEP_INTERVAL=%q, using default %s", raw, defaultSweepInterval)
 		return defaultSweepInterval
 	}
+	// time.ParseDuration accepts zero ("0s") and negative values ("-5m"),
+	// but time.NewTicker panics on a non-positive duration. Reject both
+	// here so a misconfigured env var falls back to the default rather
+	// than crashing the registry on Start.
+	if d <= 0 {
+		log.Printf("[sweep] non-positive MCP_MESH_SWEEP_INTERVAL=%q (parsed=%s), using default %s", raw, d, defaultSweepInterval)
+		return defaultSweepInterval
+	}
 	log.Printf("[sweep] using MCP_MESH_SWEEP_INTERVAL=%s (overrides default %s)", d, defaultSweepInterval)
 	return d
 }
