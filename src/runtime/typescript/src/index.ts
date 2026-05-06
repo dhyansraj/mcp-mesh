@@ -285,6 +285,25 @@ export {
   type ResolvedMeshToolDep,
   type ResolverInput,
 } from "./resolver-meshjob.js";
+export {
+  MeshJobSubmitter,
+  type SubmitOptions,
+} from "./mesh-job-submitter.js";
+export {
+  readJobHeaders,
+  runWithJobContext,
+  makeJobController,
+} from "./inbound-job-dispatch.js";
+export {
+  ClaimDispatcher,
+  type ClaimHandler,
+} from "./claim-dispatcher.js";
+export { registerJobHelperTools } from "./jobs-helper-tools.js";
+export { registerCancelRoute } from "./jobs-cancel-route.js";
+// Re-export napi-rs job primitives for users who want to drop down
+// to the underlying handles directly (e.g. constructing a JobProxy
+// from a known job_id).
+export { JobController, JobProxy } from "@mcpmesh/core";
 
 // Types
 export type {

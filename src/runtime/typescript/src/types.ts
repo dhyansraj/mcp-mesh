@@ -319,7 +319,7 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
    * metadata so consumers know to invoke this capability via job
    * semantics (`mesh.MeshJob.submit(...) → wait/poll`) rather than as
    * a regular synchronous `tools/call`. The actual job-context binding
-   * happens at inbound call time via the dispatch wrapper (Phase B).
+   * happens at inbound call time via the dispatch wrapper.
    *
    * Constraints (validated at `addTool` time):
    *
@@ -332,6 +332,66 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
    * `MESHJOB_DESIGN.org` "Producer-side flow".
    */
   task?: boolean;
+  /**
+   * Phase 1 MeshJob substrate (producer-side): signature position of
+   * the `MeshJob` parameter on the user's `execute` function.
+   *
+   * When set on a `task: true` tool, the runtime injects a
+   * `JobController` at this position when the tool is invoked under
+   * a job context (claim path or inbound call carrying
+   * `X-Mesh-Job-Id`). When the tool is invoked synchronously without
+   * a job context, the runtime injects `null` per
+   * `MESHJOB_DDDI_CONTRACT.md`.
+   *
+   * Position 0 is reserved for `args`; deps start at 1. The
+   * `MeshJob` slot is orthogonal to MeshTool positional indexing —
+   * MeshTool deps skip the `meshJobParamIndex` position and shift
+   * accordingly. See `resolver-meshjob.ts` for the contract test
+   * seam.
+   *
+   * Producer example with one MeshTool dep and a MeshJob slot:
+   * ```ts
+   * agent.addTool({
+   *   task: true,
+   *   dependencies: ["weather"],
+   *   meshJobParamIndex: 2,  // job at sig pos 2
+   *   execute: async (
+   *     { city },
+   *     weather: McpMeshTool | null = null,  // dep at sig pos 1
+   *     job: MeshJob | null = null,           // controller at sig pos 2
+   *   ) => { ... },
+   * });
+   * ```
+   */
+  meshJobParamIndex?: number;
+  /**
+   * Phase 1 MeshJob substrate (consumer-side): index into
+   * `dependencies` whose proxy should be injected as a
+   * `MeshJobSubmitter` (returns a `JobProxy`) instead of a regular
+   * `McpMeshTool` proxy.
+   *
+   * Use this when the consumer wants to call a remote `task: true`
+   * capability via job semantics (submit + poll/wait) rather than as
+   * a regular synchronous `tools/call`. The user function receives a
+   * `MeshJob`-typed handle at the dep's positional slot.
+   *
+   * Consumer example:
+   * ```ts
+   * agent.addTool({
+   *   name: "commission_report",
+   *   dependencies: ["generate_report"],
+   *   meshJobDepIndex: 0,  // generate_report is task=true
+   *   execute: async ({ userId }, generateReport: MeshJob | null = null) => {
+   *     const proxy = await generateReport!.submit(
+   *       { user_id: userId, sections: ["intro"] },
+   *       { maxDuration: 60 },
+   *     );
+   *     return await proxy.wait(60);
+   *   },
+   * });
+   * ```
+   */
+  meshJobDepIndex?: number;
   /**
    * Dependencies required by this tool.
    * Injected positionally as McpMeshTool params after args.
@@ -493,6 +553,14 @@ export interface ToolMeta {
    * long-running so consumers invoke via job semantics. See
    * MeshToolDef.task for full semantics. */
   task?: boolean;
+  /** Phase 1 MeshJob substrate: producer-side signature position of
+   * the MeshJob param. Used by the inbound dispatch wrapper to inject
+   * a JobController when running as a job. */
+  meshJobParamIndex?: number;
+  /** Phase 1 MeshJob substrate: consumer-side index into dependencies
+   * whose slot should hold a MeshJobSubmitter (instead of a regular
+   * McpMeshTool proxy). */
+  meshJobDepIndex?: number;
 }
 
 // ============================================================================
