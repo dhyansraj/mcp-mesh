@@ -84,7 +84,7 @@ repos:
             then echo "make generate failed — install oapi-codegen and retry";
             exit 1;
             fi;
-            if ! git diff --exit-code HEAD -- src/core/registry/generated/ > /dev/null 2>&1;
+            if ! git diff --exit-code -- src/core/registry/generated/ > /dev/null 2>&1;
             then echo "Generated code is out of date or hand-edited!";
             echo "Run: make generate";
             exit 1;
