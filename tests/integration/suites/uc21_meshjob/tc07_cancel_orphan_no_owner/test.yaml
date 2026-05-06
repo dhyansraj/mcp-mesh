@@ -1,0 +1,85 @@
+# tc07_cancel_orphan_no_owner — direct registry cancel for unowned job.
+#
+# Strategy: POST /jobs directly to the registry for a capability that
+# NO running provider hosts (e.g. ``ghost_capability``). With no
+# producer in the mesh that advertises that capability, the
+# registry's claim path will never assign an owner_instance_id —
+# the row stays in ``status=working, owner=NULL`` (the unowned
+# orphan / pre-claim shape).
+#
+# Cancel that job and assert:
+#   - cancel returns 200 with ``forwarded_to_instance_id == null``
+#   - final status=cancelled
+#
+# We deliberately do NOT start any producer for this test — the
+# scenario is about the unowned-pre-claim cancel path, not about
+# racing the claim worker.
+
+name: "MeshJob: cancel for unowned/orphan job (no claim has happened)"
+description: "POST /jobs for a capability nobody hosts; cancel before claim; verify forwarded_to_instance_id is null"
+tags:
+  - meshjob
+  - python
+  - issue-872
+  - cancel
+timeout: 60
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Submit job for a capability nobody hosts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:8000/jobs \
+        -H 'Content-Type: application/json' \
+        -d '{"capability":"ghost_capability","submitted_payload":{"x":1},"submitted_by":"tc07","max_duration":30,"max_retries":0}'
+    capture: submit_resp
+    timeout: 10
+
+  - name: "Confirm the row is owner=NULL"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.id')
+      echo "JOB_ID=${JOB_ID}"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}"
+    capture: pre_cancel_status
+
+  - name: "Cancel via direct registry POST"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.id')
+      curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/cancel" \
+        -H 'Content-Type: application/json' \
+        -d '{"reason":"tc07 unowned cancel"}' \
+        -w "\nHTTP_CODE=%{http_code}"
+    capture: cancel_response
+
+  - name: "Read final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}"
+    capture: final_status
+
+assertions:
+  - expr: "${captured.pre_cancel_status} contains '\"owner_instance_id\":null'"
+    message: "row should have owner_instance_id=null (no provider for ghost_capability to claim it)"
+  - expr: "${captured.cancel_response} contains 'HTTP_CODE=200'"
+    message: "cancel HTTP should return 200"
+  - expr: "${captured.cancel_response} contains '\"forwarded_to_instance_id\":null'"
+    message: "no owner to forward to — forwarded_to_instance_id must be null"
+  - expr: "${captured.cancel_response} contains '\"status\":\"cancelled\"'"
+    message: "cancel response should report status:cancelled"
+  - expr: "${captured.final_status} contains '\"status\":\"cancelled\"'"
+    message: "final status row should be cancelled"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

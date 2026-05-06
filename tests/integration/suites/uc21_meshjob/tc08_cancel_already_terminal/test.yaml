@@ -1,0 +1,134 @@
+# tc08_cancel_already_terminal — 409 conflict on cancel of terminal job.
+#
+# Submit a fast generate_report job and wait for it to complete.
+# Then attempt to cancel the now-completed job. The registry's
+# CancelJob handler returns HTTP 409 with reason "job is already in
+# a terminal state". The helper-tool wrapper currently raises a
+# RuntimeError with that message; meshctl call surfaces it as an
+# MCP isError envelope.
+#
+# Asserts:
+#   - direct registry POST returns HTTP 409 with the canonical
+#     "already in a terminal state" message
+#   - the helper tool ``__mesh_job_cancel`` surfaces it through MCP
+#     as an isError response containing the same canonical phrase
+
+name: "MeshJob: cancel of already-terminal job returns 409 / structured error"
+description: "Complete a job, then cancel it; both registry HTTP and helper tool must reject as conflict"
+tags:
+  - meshjob
+  - python
+  - issue-872
+  - cancel
+timeout: 90
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/long-task-consumer /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install consumer deps"
+    handler: pip-install
+    path: /workspace/long-task-consumer
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Wait for consumer + DI resolution"
+    handler: wait
+    seconds: 18
+
+  # Run a quick 1-section job to completion (~2s) via commission_report.
+  - name: "Run a fast job to completion"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report '{"user_id":"alice","sections":["only"]}' --raw
+    capture: commission_resp
+    timeout: 30
+
+  # The commission_report consumer waits internally and returns the
+  # final result — by the time we get here, the job IS terminal.
+  # Look up the recently-completed job_id by scanning recent agents.
+  # We can't easily extract the job_id from the result envelope
+  # because commission_report's wait() returns just the structured
+  # complete() payload (no job_id). Submit a *separate* job via
+  # submit-only so we have an explicit handle.
+  - name: "Submit a second job (submit-only) to capture job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only '{"user_id":"alice","sections":["only"],"max_retries":1,"max_duration":30}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Wait for second job to complete (~3s)"
+    handler: wait
+    seconds: 6
+
+  - name: "Confirm it is terminal"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      echo "JOB_ID=${JOB_ID}"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status'
+    capture: terminal_check
+
+  - name: "Direct registry cancel — expect HTTP 409"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/cancel" \
+        -H 'Content-Type: application/json' -d '{}' \
+        -w "\nHTTP_CODE=%{http_code}"
+    capture: registry_cancel
+
+  - name: "Helper-tool cancel — expect MCP isError"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      meshctl call __mesh_job_cancel "{\"job_id\":\"${JOB_ID}\"}" 2>&1 || true
+    capture: helper_cancel
+
+assertions:
+  - expr: "${captured.terminal_check} contains 'completed'"
+    message: "second job should have completed before cancel attempt"
+  - expr: "${captured.registry_cancel} contains 'HTTP_CODE=409'"
+    message: "direct registry cancel of completed job must return 409"
+  - expr: "${captured.registry_cancel} contains 'terminal'"
+    message: "registry 409 message should mention terminal state"
+  # The helper tool surfaces conflicts through MCP. Either it
+  # returns isError:true with the conflict reason, or meshctl call
+  # exits non-zero with the error in stderr — accept either.
+  - expr: "${captured.helper_cancel} icontains 'conflict'"
+    message: "helper-tool cancel should surface 409 conflict"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

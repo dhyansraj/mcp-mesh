@@ -1,0 +1,104 @@
+# tc01_submit_wait_happy — headline regression test for MeshJob Phase 1.
+#
+# Scenario:
+#   - Registry up with MCP_MESH_SWEEP_INTERVAL=10s (uniform across suite)
+#   - long-task-provider hosts generate_report (task=True)
+#   - long-task-consumer hosts commission_report (deps=["generate_report"])
+#   - Client invokes commission_report with sections=[intro, analysis, summary]
+#   - Consumer's submit() + wait() pattern returns the structured payload
+#     after ~6s (3 sections * 2s each).
+#
+# Asserts:
+#   - meshctl call response is NOT an MCP error envelope (no "isError": true)
+#   - structuredContent.report has 3 entries with the expected section names
+#     and the canonical "Generated content for ..." marker text
+#
+# Tags: smoke (this is the most important regression for issue #872)
+
+name: "MeshJob: submit-and-wait happy path returns structured result"
+description: "Producer + consumer: commission_report -> generate_report (3 sections) -> wait -> structured result"
+tags:
+  - meshjob
+  - smoke
+  - python
+  - issue-872
+timeout: 90
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/long-task-consumer /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install consumer deps"
+    handler: pip-install
+    path: /workspace/long-task-consumer
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for provider registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start consumer (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Wait for consumer registration + DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Call commission_report — submit + wait the full job"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report '{"user_id": "alice", "sections": ["intro", "analysis", "summary"]}'
+    capture: commission_response
+    timeout: 60
+
+assertions:
+  - expr: "${captured.agent_list} contains 'long-task-provider'"
+    message: "provider should be registered"
+  - expr: "${captured.agent_list} contains 'long-task-consumer'"
+    message: "consumer should be registered"
+  # MCP envelope assertions: must not be an isError response.
+  - expr: "${captured.commission_response} not contains '\"isError\": true'"
+    message: "commission_report should NOT return an MCP error envelope"
+  # Consumer returns generate_report's complete() payload verbatim. With
+  # FastMCP this surfaces as both structuredContent and the textual
+  # content[0].text. Assert against the structured shape.
+  - expr: "${captured.commission_response} contains '\"user_id\": \"alice\"'"
+    message: "result should echo the submitted user_id"
+  - expr: "${captured.commission_response} contains '\"section\": \"intro\"'"
+    message: "result should include the intro section"
+  - expr: "${captured.commission_response} contains '\"section\": \"analysis\"'"
+    message: "result should include the analysis section"
+  - expr: "${captured.commission_response} contains '\"section\": \"summary\"'"
+    message: "result should include the summary section"
+  - expr: "${captured.commission_response} contains 'Generated content for intro'"
+    message: "result should include the canonical marker for intro"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

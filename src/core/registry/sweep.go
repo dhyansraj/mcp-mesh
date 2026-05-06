@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -24,11 +25,55 @@ import (
 // Internal sweep tunables. Operators get a single env-var knob
 // (MCP_MESH_RETENTION); these are deliberately not configurable so the
 // surface area stays small.
+//
+// Exception: sweepInterval is overridable via MCP_MESH_SWEEP_INTERVAL so
+// integration tests that exercise crash-recovery and total_deadline expiry
+// don't have to wait the full 5-minute default for a tick. Production
+// deployments should leave this unset.
 const (
-	sweepInterval    = 5 * time.Minute
-	defaultRetention = 1 * time.Hour
-	eventMaxRows     = 100_000
+	defaultSweepInterval = 5 * time.Minute
+	defaultRetention     = 1 * time.Hour
+	eventMaxRows         = 100_000
 )
+
+// sweepInterval is read once at package init from MCP_MESH_SWEEP_INTERVAL.
+// var (not const) because the env read happens at runtime.
+var sweepInterval = readSweepIntervalFromEnv()
+
+// readSweepIntervalFromEnv parses MCP_MESH_SWEEP_INTERVAL as a Go duration
+// string (e.g. "5m", "30s", "1m30s"). Falls back to defaultSweepInterval
+// when the env var is unset or malformed. Logs at INFO when a valid override
+// is applied; stays silent when unset (default behaviour, no noise).
+//
+// NOTE: this function deliberately uses the stdlib `log` package rather
+// than the project's `*logger.Logger` because it is invoked at package
+// init time (via the `var sweepInterval = readSweepIntervalFromEnv()`
+// initialiser above) — long before the structured logger is constructed
+// in cmd/registry. Switching to the project logger here would require
+// either lazily initialising it or moving the env read into Start(),
+// both of which lose the ability to surface a malformed override
+// before the registry binary even starts up.
+func readSweepIntervalFromEnv() time.Duration {
+	raw := os.Getenv("MCP_MESH_SWEEP_INTERVAL")
+	if raw == "" {
+		return defaultSweepInterval
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		log.Printf("[sweep] invalid MCP_MESH_SWEEP_INTERVAL=%q, using default %s", raw, defaultSweepInterval)
+		return defaultSweepInterval
+	}
+	// time.ParseDuration accepts zero ("0s") and negative values ("-5m"),
+	// but time.NewTicker panics on a non-positive duration. Reject both
+	// here so a misconfigured env var falls back to the default rather
+	// than crashing the registry on Start.
+	if d <= 0 {
+		log.Printf("[sweep] non-positive MCP_MESH_SWEEP_INTERVAL=%q (parsed=%s), using default %s", raw, d, defaultSweepInterval)
+		return defaultSweepInterval
+	}
+	log.Printf("[sweep] using MCP_MESH_SWEEP_INTERVAL=%s (overrides default %s)", d, defaultSweepInterval)
+	return d
+}
 
 // SweepConfig holds the configuration for the registry sweep job.
 //

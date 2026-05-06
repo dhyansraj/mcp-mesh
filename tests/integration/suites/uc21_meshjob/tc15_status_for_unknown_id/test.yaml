@@ -1,0 +1,98 @@
+# tc15_status_for_unknown_id — bogus ID returns structured "not found".
+#
+# Calls __mesh_job_status with a UUID that's not in the registry.
+# The registry's GetJob handler returns HTTP 404 with
+# "job not found: <id>". The Rust JobProxy.status() turns that
+# into a JobError::NotFound which the helper-tool wrapper raises as
+# RuntimeError → meshctl call surfaces as MCP isError envelope.
+#
+# Asserts (per task spec — structural, NOT auth-flavoured):
+#   - response is an MCP error (isError:true) OR meshctl call exit
+#     code != 0 with "not found" in stderr
+#   - the message contains "not found" (case-insensitive)
+#   - the message MUST NOT contain "unauthorized" / "permission denied"
+#     — the auth model is presigned-URL semantics, not gating
+
+name: "MeshJob: __mesh_job_status with unknown job_id returns structured not-found"
+description: "Bogus UUID returns NotFound-shaped error (not a 500, not an auth error)"
+tags:
+  - meshjob
+  - python
+  - issue-872
+  - helpers
+  - errors
+timeout: 60
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/orchestrator-agent /workspace/
+
+  - name: "Install agent deps"
+    handler: pip-install
+    path: /workspace/orchestrator-agent
+
+  - routine: start_registry_with_fast_sweep
+
+  # Just one bystander agent — enough to expose the helper tools.
+  - name: "Start orchestrator agent"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=9103 -d
+
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 14
+
+  - name: "Direct registry GET — confirm 404 shape"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -w "\nHTTP_CODE=%{http_code}" \
+        "http://localhost:8000/jobs/00000000-0000-0000-0000-000000000000"
+    capture: registry_404
+
+  - name: "Helper tool with bogus job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call __mesh_job_status \
+        '{"job_id":"00000000-0000-0000-0000-000000000000"}' 2>&1 || true
+    capture: helper_response
+
+assertions:
+  - expr: "${captured.registry_404} contains 'HTTP_CODE=404'"
+    message: "registry GET /jobs/<bogus-id> should return HTTP 404"
+  - expr: "${captured.registry_404} icontains 'job not found'"
+    message: "registry 404 body should say 'job not found'"
+  # Helper tool surfaces NotFound through MCP. meshctl call may
+  # exit non-zero with stderr (when the wrapper raises) or
+  # return an isError envelope. Either way, "not found" must
+  # appear in the visible output.
+  - expr: "${captured.helper_response} icontains 'not found'"
+    message: "helper-tool error should mention 'not found'"
+  # Auth-model assertions: presigned-URL semantics → NOT gated.
+  - expr: "${captured.helper_response} not contains 'unauthorized'"
+    message: "must NOT mention 'unauthorized' — auth model is job_id-as-capability"
+  - expr: "${captured.helper_response} not contains 'permission denied'"
+    message: "must NOT mention 'permission denied' — auth model is job_id-as-capability"
+  # The error must be the structured NotFound shape (404 round-trip
+  # surfaces as `RuntimeError("backend error: job not found: <id>")`).
+  # If the registry hit a real 500 instead, the message would carry the
+  # `BackendError::Server` rendering "server error (HTTP 500)" — that
+  # exact phrase is the canonical 500-shaped error and MUST be absent.
+  - expr: "${captured.helper_response} contains 'backend error'"
+    message: "must surface as the structured BackendError envelope (proves the 404 round-trip, not a transport-level failure)"
+  - expr: "${captured.helper_response} not contains 'server error (HTTP 5'"
+    message: "must NOT surface as a 5xx server error — registry returns a clean 404 NotFound"
+  - expr: "${captured.helper_response} not contains '500 Internal Server Error'"
+    message: "must NOT carry a literal HTTP 500 status line — the registry path is 404, not 500"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

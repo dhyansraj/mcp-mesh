@@ -1,0 +1,143 @@
+# tc13_total_deadline_expires — total_deadline overrides retry budget.
+#
+# Submits a job with ``total_deadline=now+5s`` and a generous
+# max_retries=10. The producer is killed mid-flight to make the
+# row eligible for the orphan path. By the time the sweep tick
+# (10s with our override) fires, total_deadline has already passed
+# — so ExpireDeadlinedJobs marks the row failed with reason
+# "deadline_exceeded" BEFORE the orphan-reset path can put it back
+# in the claim pool.
+#
+# Asserts:
+#   - status=failed
+#   - error == "deadline_exceeded" (the canonical reason)
+#   - attempt_count == 1 (NOT incremented further regardless of
+#     max_retries=10)
+
+name: "MeshJob: total_deadline expiry overrides retry budget"
+description: "deadline=now+5s with max_retries=10; deadline-sweep marks failed before any retry"
+tags:
+  - meshjob
+  - python
+  - issue-872
+  - retry
+  - deadline
+  - slow
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/long-task-consumer /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install consumer deps"
+    handler: pip-install
+    path: /workspace/long-task-consumer
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Wait for consumer DI"
+    handler: wait
+    seconds: 18
+
+  # commission_with_options propagates total_deadline_secs (relative)
+  # → datetime in UTC for the submitter.
+  - name: "Submit with total_deadline=now+5s, max_retries=10"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_with_options \
+        '{"user_id":"alice","sections":["a","b","c","d","e","f","g"],"max_retries":10,"total_deadline_secs":5,"wait_timeout_secs":2}'
+    capture: submit_resp
+    timeout: 30
+
+  # Get the job_id from the structured envelope. commission_with_options
+  # returns {job_id, status, ...} on either success OR wait_raised.
+  - name: "Capture job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1 | xargs -I{} echo "JOB_ID={}"
+    capture: job_id_extract
+
+  - name: "Kill provider — make the row a candidate for orphan/deadline sweep"
+    handler: shell
+    workdir: /workspace
+    command: |
+      MY_PID=$$
+      MY_PPID=$PPID
+      PID=""
+      for p in /proc/[0-9]*; do
+        pid="${p##*/}"
+        [ "$pid" = "1" ] && continue
+        [ "$pid" = "$MY_PID" ] && continue
+        [ "$pid" = "$MY_PPID" ] && continue
+        [ -f "$p/cmdline" ] || continue
+        cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$cmd" in
+          *python*long-task-provider/main.py*) PID="$pid"; break ;;
+        esac
+      done
+      [ -n "$PID" ] && kill -9 "$PID" && echo "killed PID=$PID" || echo "no provider PID found"
+      echo "kill done"
+
+  # Deadline path doesn't depend on health-monitor + retention — the
+  # ExpireDeadlinedJobs pass runs on every sweep tick (~10s). With
+  # total_deadline=now+5s and the first sweep tick after submit, the
+  # row is marked failed within ~10-15s. The longer wait here is
+  # belt-and-braces.
+  - name: "Wait for deadline sweep"
+    handler: wait
+    seconds: 25
+
+  - name: "Final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      echo "JOB_ID=${JOB_ID}"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,attempt_count,error,total_deadline,owner_instance_id}'
+    capture: final_status
+
+assertions:
+  - expr: "${captured.final_status} contains '\"status\": \"failed\"'"
+    message: "deadline-expired job must be marked failed"
+  - expr: "${captured.final_status} contains 'deadline_exceeded'"
+    message: "error must be the canonical 'deadline_exceeded' reason — NOT 'orphaned'"
+  - expr: "${captured.final_status} not contains 'orphaned'"
+    message: "deadline path must take precedence over orphan-reset; error must NOT mention 'orphaned'"
+  # The deadline can fire before the producer claims (attempt_count=0)
+  # or during the in-flight first attempt (attempt_count=1). What
+  # MUST NOT happen is the substrate iterating to attempt_count=10
+  # despite max_retries=10 — total_deadline has to short-circuit
+  # the retry path. We assert attempt_count <= 1 below.
+  - expr: "${captured.final_status} matches '\"attempt_count\":\\s*[01]\\b'"
+    message: "attempt_count must be 0 or 1 — deadline overrides max_retries=10"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

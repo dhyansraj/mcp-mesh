@@ -442,15 +442,23 @@ func TestCancelJob_OwnedForwardsToOwner(t *testing.T) {
 	defer cleanup()
 
 	// Stand up a fake owner agent that records the cancel callback.
+	// ``hits`` stays atomic so the polling loop below can read it without
+	// holding the mutex; ``gotURL``/``gotBody`` are written in the handler
+	// goroutine and read by the main test goroutine after the poll, so
+	// they need explicit synchronization to keep ``go test -race`` happy.
 	var (
+		mu      sync.Mutex
 		gotURL  string
 		gotBody []byte
 		hits    int32
 	)
 	owner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&hits, 1)
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
 		gotURL = r.URL.Path
-		gotBody, _ = io.ReadAll(r.Body)
+		gotBody = body
+		mu.Unlock()
+		atomic.AddInt32(&hits, 1)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer owner.Close()
@@ -493,8 +501,12 @@ func TestCancelJob_OwnedForwardsToOwner(t *testing.T) {
 
 	// Owner saw the forward.
 	assert.Equal(t, int32(1), atomic.LoadInt32(&hits), "owner should receive exactly one cancel forward")
-	assert.Equal(t, "/jobs/"+j.ID+"/cancel", gotURL)
-	assert.Contains(t, string(gotBody), "client cancel")
+	mu.Lock()
+	gotURLCopy := gotURL
+	gotBodyCopy := append([]byte(nil), gotBody...)
+	mu.Unlock()
+	assert.Equal(t, "/jobs/"+j.ID+"/cancel", gotURLCopy)
+	assert.Contains(t, string(gotBodyCopy), "client cancel")
 }
 
 func TestCancelJob_NotFound(t *testing.T) {
