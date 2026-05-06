@@ -883,6 +883,69 @@ async def _handle_llm_provider_update(
     logger.debug(f"Registered LLM provider for {function_id}")
 
 
+def _start_claim_dispatchers_on_heartbeat_loop(context: dict[str, Any]) -> list:
+    """Start any MeshJob claim dispatchers staged by ``JobsClaimWorkersStep``.
+
+    Phase 1 MeshJob substrate (#bug 2 — local-validation fix)
+    ---------------------------------------------------------
+    The startup pipeline runs inside a transient ``asyncio.run`` loop on
+    the main thread, while the FastAPI/uvicorn server runs on yet
+    another thread (immediate-uvicorn flow). Neither of those loops is
+    a stable home for the dispatcher tasks:
+
+    * Pipeline loop closes when ``process_once()`` returns — any task
+      created there dies immediately.
+    * The immediate-uvicorn FastAPI app uses its own (FastMCP-supplied)
+      lifespan that does NOT know about ``app.state.mesh_claim_dispatchers``,
+      and even where the lifespan-factory lifespan IS in use, its startup
+      section runs BEFORE the pipeline stages dispatchers — so the
+      lifespan never sees them.
+
+    The heartbeat thread, on the other hand, owns a long-lived
+    ``loop.run_until_complete(heartbeat_task_fn(...))`` that lives for
+    the whole agent lifetime. Starting the dispatchers from inside the
+    heartbeat task binds them to that persistent loop — exactly what we
+    want.
+
+    Returns the list of dispatchers we started so the heartbeat task can
+    stop them on shutdown.
+    """
+    dispatchers = list(context.get("claim_dispatchers", []) or [])
+    if not dispatchers:
+        return []
+
+    started: list = []
+    for d in dispatchers:
+        try:
+            d.start()  # idempotent: no-op if already running on this loop
+            started.append(d)
+        except Exception as e:
+            logger.warning(
+                "heartbeat: failed to start claim dispatcher for capability=%s: %s",
+                getattr(d, "capability", "?"),
+                e,
+            )
+    if started:
+        logger.info(
+            "📨 heartbeat: started %d MeshJob claim dispatcher(s) on heartbeat loop",
+            len(started),
+        )
+    return started
+
+
+async def _stop_claim_dispatchers(dispatchers: list) -> None:
+    """Best-effort shutdown of claim dispatchers started by the heartbeat loop."""
+    for d in dispatchers:
+        try:
+            await d.stop()
+        except Exception as e:
+            logger.warning(
+                "heartbeat: error stopping claim dispatcher for capability=%s: %s",
+                getattr(d, "capability", "?"),
+                e,
+            )
+
+
 async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
     """
     Rust-backed heartbeat task that runs in FastAPI lifespan.
@@ -919,6 +982,7 @@ async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
     logger.info(f"Starting Rust-backed heartbeat for agent '{agent_id}'")
 
     handle = None
+    claim_dispatchers: list = []
     try:
         # Build AgentSpec from context
         spec = _build_agent_spec(context)
@@ -926,6 +990,12 @@ async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
         # Start Rust core runtime
         handle = core.start_agent(spec)
         logger.info(f"Rust core started for agent '{agent_id}'")
+
+        # Phase 1 MeshJob substrate: start claim dispatchers on this
+        # heartbeat loop (long-lived), not the transient pipeline loop
+        # or the racy uvicorn-lifespan loop. See helper docstring for
+        # the architectural rationale.
+        claim_dispatchers = _start_claim_dispatchers_on_heartbeat_loop(context)
 
         # Event loop - process events from Rust core
         while True:
@@ -969,6 +1039,14 @@ async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
         logger.error(f"Rust heartbeat failed for agent '{agent_id}': {e}")
         raise
     finally:
+        # Stop claim dispatchers BEFORE Rust core shutdown so they get a
+        # clean cancellation signal while the loop is still spinning.
+        if claim_dispatchers:
+            try:
+                await _stop_claim_dispatchers(claim_dispatchers)
+            except Exception as e:
+                logger.warning(f"Error stopping claim dispatchers: {e}")
+
         # Always ensure graceful shutdown of Rust core to prevent daemon thread issues
         # This is critical: without shutdown(), Rust background threads may try to
         # write to stdout via tracing after Python's stdout is finalized

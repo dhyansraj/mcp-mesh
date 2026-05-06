@@ -175,6 +175,54 @@ var (
 			},
 		},
 	}
+	// JobsColumns holds the columns for the "jobs" table.
+	JobsColumns = []*schema.Column{
+		{Name: "job_id", Type: field.TypeString},
+		{Name: "capability", Type: field.TypeString},
+		{Name: "owner_instance_id", Type: field.TypeString, Nullable: true},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"working", "input_required", "completed", "failed", "cancelled"}, Default: "working"},
+		{Name: "progress", Type: field.TypeFloat64, Nullable: true},
+		{Name: "progress_message", Type: field.TypeString, Nullable: true},
+		{Name: "result", Type: field.TypeJSON, Nullable: true},
+		{Name: "error", Type: field.TypeString, Nullable: true},
+		{Name: "submitted_payload", Type: field.TypeJSON, Nullable: true},
+		{Name: "attempt_count", Type: field.TypeInt, Default: 0},
+		{Name: "max_retries", Type: field.TypeInt, Default: 1},
+		{Name: "max_duration", Type: field.TypeInt, Nullable: true},
+		{Name: "total_deadline", Type: field.TypeTime, Nullable: true},
+		{Name: "lease_expires_at", Type: field.TypeTime, Nullable: true},
+		{Name: "last_heartbeat_at", Type: field.TypeTime, Nullable: true},
+		{Name: "submitted_at", Type: field.TypeTime},
+		{Name: "submitted_by", Type: field.TypeString, Nullable: true},
+	}
+	// JobsTable holds the schema information for the "jobs" table.
+	JobsTable = &schema.Table{
+		Name:       "jobs",
+		Columns:    JobsColumns,
+		PrimaryKey: []*schema.Column{JobsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "job_capability_status",
+				Unique:  false,
+				Columns: []*schema.Column{JobsColumns[1], JobsColumns[3]},
+			},
+			{
+				Name:    "job_lease_expires_at",
+				Unique:  false,
+				Columns: []*schema.Column{JobsColumns[13]},
+			},
+			{
+				Name:    "job_owner_instance_id",
+				Unique:  false,
+				Columns: []*schema.Column{JobsColumns[2]},
+			},
+			{
+				Name:    "job_status",
+				Unique:  false,
+				Columns: []*schema.Column{JobsColumns[3]},
+			},
+		},
+	}
 	// LlmProviderResolutionsColumns holds the columns for the "llm_provider_resolutions" table.
 	LlmProviderResolutionsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -364,6 +412,7 @@ var (
 		AgentsTable,
 		CapabilitiesTable,
 		DependencyResolutionsTable,
+		JobsTable,
 		LlmProviderResolutionsTable,
 		LlmToolResolutionsTable,
 		RegistryEventsTable,

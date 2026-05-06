@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -19,6 +20,15 @@ import (
 	"mcp-mesh/src/core/registry/tracing"
 	"mcp-mesh/src/core/registry/trust"
 )
+
+// shutdownDrainTimeout caps how long ``Server.Stop`` waits for handler-
+// spawned background goroutines (e.g. the cancel-forward in
+// ``forwardCancelToOwner``) to finish after their parent context is
+// cancelled. Set slightly above ``cancelForwardTimeout`` so a forward
+// that's already mid-flight has time to return cleanly when its
+// transport observes the cancellation, but capped tight enough that
+// shutdown can't hang indefinitely on a wedged owner agent.
+const shutdownDrainTimeout = 10 * time.Second
 
 // Server represents the registry HTTP server
 type Server struct {
@@ -32,6 +42,20 @@ type Server struct {
 	tracingManager *tracing.TracingManager
 	trustChain     *trust.TrustChain
 	logger         *logger.Logger
+
+	// shutdownCtx + shutdownCancel + shutdownWG together gate handler-
+	// spawned background goroutines (currently the cancel-forward in
+	// ``ent_handlers_jobs.go::forwardCancelToOwner``) so a registry
+	// ``Stop`` cleanly aborts in-flight forwards instead of letting
+	// them run on after the process is supposedly stopped. Pattern
+	// borrowed from ``SweepJob`` (sweep.go ~line 96) but adapted to a
+	// fan-out-per-request goroutine model: instead of a single long-
+	// running goroutine, every cancel forward registers itself on the
+	// WaitGroup and uses ``shutdownCtx`` as the parent for its HTTP
+	// request context.
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
+	shutdownWG     *sync.WaitGroup
 }
 
 // NewServer creates a new registry server using Ent database
@@ -39,8 +63,17 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	// Create Ent-based service
 	entService := NewEntService(entDB, config, logger)
 
+	// Shutdown coordination for handler-spawned goroutines
+	// (cancel-forward, etc). The context is cancelled by ``Server.Stop``
+	// and the WaitGroup is drained alongside; both are passed into the
+	// handler constructor so background goroutines can wire themselves
+	// into the lifecycle without each handler re-implementing the
+	// pattern.
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+	shutdownWG := &sync.WaitGroup{}
+
 	// Create Ent-based business logic handlers
-	handlers := NewEntBusinessLogicHandlers(entService)
+	handlers := NewEntBusinessLogicHandlersWithShutdown(entService, shutdownCtx, shutdownWG)
 
 	// Create health monitor using configuration values
 	heartbeatTimeout := time.Duration(config.DefaultTimeoutThreshold) * time.Second
@@ -101,6 +134,9 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 		tracingManager: tracingManager,
 		trustChain:     trustChain,
 		logger:         logger,
+		shutdownCtx:    shutdownCtx,
+		shutdownCancel: shutdownCancel,
+		shutdownWG:     shutdownWG,
 	}
 
 	// Add operational endpoints first (includes wildcard proxy routes that must be registered before generated routes)
@@ -167,6 +203,35 @@ func (s *Server) Stop() error {
 	// Stop sweep job
 	if s.sweepJob != nil {
 		s.sweepJob.Stop()
+	}
+
+	// Cancel handler-spawned background goroutines (cancel-forward,
+	// etc.) and wait for them to drain. The cancel propagates into each
+	// goroutine's HTTP request context so ``http.Client.Do`` returns
+	// promptly with a context-cancelled error, and the goroutine exits
+	// after logging via the "abandoned: registry shutting down" branch.
+	// We bound the wait so a wedged owner-side TCP stack can't hang
+	// shutdown — anything still running past the cap is logged as
+	// abandoned so an operator sees evidence in the registry log.
+	if s.shutdownCancel != nil {
+		s.shutdownCancel()
+	}
+	if s.shutdownWG != nil {
+		drainDone := make(chan struct{})
+		go func() {
+			s.shutdownWG.Wait()
+			close(drainDone)
+		}()
+		select {
+		case <-drainDone:
+			// All registered goroutines exited cleanly.
+		case <-time.After(shutdownDrainTimeout):
+			if s.logger != nil {
+				s.logger.Warning("Registry shutdown: handler-spawned goroutines did not drain within %s; abandoning", shutdownDrainTimeout)
+			} else {
+				log.Printf("[registry] shutdown: handler-spawned goroutines did not drain within %s; abandoning", shutdownDrainTimeout)
+			}
+		}
 	}
 
 	// Stop distributed tracing if enabled

@@ -98,15 +98,15 @@ func TestSweepStaleAgentsOnly(t *testing.T) {
 	// Recently unhealthy: should NOT be purged (updated_at within retention).
 	seedAgent(t, client, "fresh-unhealthy", agent.StatusUnhealthy, now.Add(-30*time.Minute))
 
-	purgedAgents, purgedEvents, _, err := job.runOnce(context.Background())
+	res, err := job.runOnce(context.Background())
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
-	if purgedAgents != 2 {
-		t.Errorf("expected 2 agents purged, got %d", purgedAgents)
+	if res.agentsPurged != 2 {
+		t.Errorf("expected 2 agents purged, got %d", res.agentsPurged)
 	}
-	if purgedEvents != 0 {
-		t.Errorf("expected 0 events purged, got %d", purgedEvents)
+	if res.eventsPurged != 0 {
+		t.Errorf("expected 0 events purged, got %d", res.eventsPurged)
 	}
 
 	// Verify exactly the expected agents remain.
@@ -144,15 +144,15 @@ func TestSweepBoth(t *testing.T) {
 	seedEvent(t, client, "host", now.Add(-2*24*time.Hour))
 	seedEvent(t, client, "host", now.Add(-1*time.Minute))
 
-	purgedAgents, purgedEvents, _, err := job.runOnce(context.Background())
+	res, err := job.runOnce(context.Background())
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
-	if purgedAgents != 1 {
-		t.Errorf("expected 1 agent purged, got %d", purgedAgents)
+	if res.agentsPurged != 1 {
+		t.Errorf("expected 1 agent purged, got %d", res.agentsPurged)
 	}
-	if purgedEvents != 0 {
-		t.Errorf("expected 0 events purged (under cap), got %d", purgedEvents)
+	if res.eventsPurged != 0 {
+		t.Errorf("expected 0 events purged (under cap), got %d", res.eventsPurged)
 	}
 }
 
@@ -171,15 +171,15 @@ func TestSweepEventMaxRowsUnderCap(t *testing.T) {
 		seedEvent(t, client, "host", now.Add(-time.Duration(5-i)*time.Minute))
 	}
 
-	purgedAgents, purgedEvents, _, err := job.runOnce(context.Background())
+	res, err := job.runOnce(context.Background())
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
-	if purgedAgents != 0 {
-		t.Errorf("expected 0 agents purged, got %d", purgedAgents)
+	if res.agentsPurged != 0 {
+		t.Errorf("expected 0 agents purged, got %d", res.agentsPurged)
 	}
-	if purgedEvents != 0 {
-		t.Errorf("expected 0 events purged (under cap), got %d", purgedEvents)
+	if res.eventsPurged != 0 {
+		t.Errorf("expected 0 events purged (under cap), got %d", res.eventsPurged)
 	}
 
 	count, err := client.RegistryEvent.Query().Count(context.Background())
@@ -214,15 +214,15 @@ func TestSweepEventMaxRowsOverCap(t *testing.T) {
 		seedEvent(t, client, "host", timestamps[i])
 	}
 
-	purgedAgents, purgedEvents, _, err := job.runOnce(context.Background())
+	res, err := job.runOnce(context.Background())
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
-	if purgedAgents != 0 {
-		t.Errorf("expected 0 agents purged, got %d", purgedAgents)
+	if res.agentsPurged != 0 {
+		t.Errorf("expected 0 agents purged, got %d", res.agentsPurged)
 	}
-	if purgedEvents != 2 {
-		t.Errorf("expected 2 events purged (5 - cap of 3), got %d", purgedEvents)
+	if res.eventsPurged != 2 {
+		t.Errorf("expected 2 events purged (5 - cap of 3), got %d", res.eventsPurged)
 	}
 
 	// Verify exactly 3 events remain, and they are the 3 newest.
@@ -260,12 +260,12 @@ func TestSweepDisabledRetention(t *testing.T) {
 	seedAgent(t, client, "stale", agent.StatusUnhealthy, now.Add(-100*24*time.Hour))
 	seedEvent(t, client, "stale", now.Add(-100*24*time.Hour))
 
-	purgedAgents, _, _, err := job.runOnce(context.Background())
+	res, err := job.runOnce(context.Background())
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
-	if purgedAgents != 0 {
-		t.Errorf("expected 0 agents purged with retention=0, got %d", purgedAgents)
+	if res.agentsPurged != 0 {
+		t.Errorf("expected 0 agents purged with retention=0, got %d", res.agentsPurged)
 	}
 
 	// The stale agent row should still exist.
@@ -358,7 +358,7 @@ func TestSweepFixesOrphanProviderResolutions(t *testing.T) {
 		t.Fatalf("seed llm provider resolution: %v", err)
 	}
 
-	if _, _, _, err := job.runOnce(ctx); err != nil {
+	if _, err := job.runOnce(ctx); err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
 
@@ -578,12 +578,12 @@ func TestSweep_PurgeOrphanSchemaEntries_DeletesOrphan(t *testing.T) {
 	// Orphan schema entry, well past retention.
 	seedSchemaEntryAt(t, client, "sha256:orphan", now.Add(-2*time.Hour))
 
-	_, _, schemasPurged, err := job.runOnce(ctx)
+	res, err := job.runOnce(ctx)
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
-	if schemasPurged != 1 {
-		t.Errorf("expected 1 schema purged, got %d", schemasPurged)
+	if res.schemasPurged != 1 {
+		t.Errorf("expected 1 schema purged, got %d", res.schemasPurged)
 	}
 
 	count, err := client.SchemaEntry.Query().Count(ctx)
@@ -627,12 +627,12 @@ func TestSweep_PurgeOrphanSchemaEntries_KeepsReferenced(t *testing.T) {
 		t.Fatalf("seed capability: %v", err)
 	}
 
-	_, _, schemasPurged, err := job.runOnce(ctx)
+	res, err := job.runOnce(ctx)
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
-	if schemasPurged != 0 {
-		t.Errorf("expected 0 schemas purged (both referenced), got %d", schemasPurged)
+	if res.schemasPurged != 0 {
+		t.Errorf("expected 0 schemas purged (both referenced), got %d", res.schemasPurged)
 	}
 
 	count, err := client.SchemaEntry.Query().Count(ctx)
@@ -657,12 +657,12 @@ func TestSweep_PurgeOrphanSchemaEntries_KeepsRecent(t *testing.T) {
 	// Orphan, but only 30 minutes old (within 1h retention).
 	seedSchemaEntryAt(t, client, "sha256:fresh-orphan", now.Add(-30*time.Minute))
 
-	_, _, schemasPurged, err := job.runOnce(ctx)
+	res, err := job.runOnce(ctx)
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
-	if schemasPurged != 0 {
-		t.Errorf("expected 0 schemas purged (within retention), got %d", schemasPurged)
+	if res.schemasPurged != 0 {
+		t.Errorf("expected 0 schemas purged (within retention), got %d", res.schemasPurged)
 	}
 
 	count, err := client.SchemaEntry.Query().Count(ctx)
@@ -802,14 +802,14 @@ func TestSweep_PurgeOrphanSchemaEntries_SkipsReferencedAcrossLargeBatch(t *testi
 		}
 	}
 
-	_, _, schemasPurged, err := job.runOnce(ctx)
+	res, err := job.runOnce(ctx)
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
 
 	wantPurged := total - referenced
-	if schemasPurged != wantPurged {
-		t.Errorf("expected %d schemas purged (total=%d, referenced=%d), got %d", wantPurged, total, referenced, schemasPurged)
+	if res.schemasPurged != wantPurged {
+		t.Errorf("expected %d schemas purged (total=%d, referenced=%d), got %d", wantPurged, total, referenced, res.schemasPurged)
 	}
 
 	// Verify the surviving rows are exactly the referenced ones.

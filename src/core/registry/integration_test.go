@@ -256,12 +256,12 @@ func TestSweepJobIntegration(t *testing.T) {
 	cfg := SweepConfig{Retention: 1 * time.Hour}
 	job := NewSweepJob(cfg, entDB, service, testLogger)
 
-	purgedAgents, _, _, err := job.runOnce(ctx)
+	res, err := job.runOnce(ctx)
 	if err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
-	if purgedAgents != 1 {
-		t.Errorf("expected 1 agent purged, got %d", purgedAgents)
+	if res.agentsPurged != 1 {
+		t.Errorf("expected 1 agent purged, got %d", res.agentsPurged)
 	}
 
 	// Sanity-check via the public ListAgents API: the agent must be gone

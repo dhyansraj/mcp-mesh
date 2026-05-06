@@ -32,10 +32,16 @@
 //! - `ffi`: Enable C FFI bindings for multi-language SDK support
 
 pub mod agentic_loop;
+pub mod cancel_registry;
+pub mod claim_worker;
 pub mod config;
 pub mod events;
 pub mod handle;
 pub mod heartbeat;
+pub mod job_context;
+pub mod jobs;
+#[cfg(feature = "python")]
+pub mod jobs_py;
 pub mod registry;
 pub mod response_parser;
 pub mod runtime;
@@ -43,6 +49,7 @@ pub mod provider;
 pub mod schema;
 pub mod schema_normalize;
 pub mod spec;
+pub mod task_backend;
 pub mod tls;
 pub mod json_fast;
 pub mod mcp_client;
@@ -51,6 +58,30 @@ pub mod tracing_publish;
 pub mod vault;
 #[cfg(feature = "spire")]
 pub mod spire;
+
+// Re-exports for the MeshJob substrate (Phase 1). Keeps the public
+// surface clean for FFI / language SDK consumers.
+pub use job_context::{
+    current as current_job, inject_job_headers, remaining_seconds as job_remaining_seconds,
+    try_current as try_current_job, with_job, JobContext,
+};
+pub use jobs::{
+    new_coalescing_queue, run_as_job, run_cancellable, spawn_batching_tick, submit_job,
+    BatchingConfig, BatchingHandle, CoalescingQueue, JobCancelled, JobController, JobError,
+    JobProxy, SubmitJobArgs, WaitConfig,
+};
+pub use task_backend::{
+    BackendError, CancelJobRequest, CancelJobResponse, ClaimJobsRequest, ClaimJobsResponse,
+    ClaimedJob, CreateJobRequest, CreateJobResponse, Job, JobBatchRequest, JobBatchResponse,
+    JobDelta, JobStatus, RegistryHttpBackend, RejectedDelta, TaskBackend,
+};
+pub use cancel_registry::{
+    active_job_count, cancel_active_job, register_active_job, unregister_active_job,
+};
+pub use claim_worker::{
+    spawn_claim_worker, ClaimDispatcher, ClaimWorkerConfig, ClaimWorkerHandle, DispatchOutcome,
+};
+pub use registry::{FastHeartbeatResponse, FastHeartbeatStatus, PENDING_JOBS_HEADER};
 
 // C FFI bindings module
 pub mod ffi;
@@ -550,6 +581,14 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(process_llm_response_py, m)?)?;
     m.add_function(wrap_pyfunction!(add_tool_results_py, m)?)?;
     m.add_function(wrap_pyfunction!(get_loop_state_py, m)?)?;
+
+    // MeshJob substrate (Phase 1)
+    m.add_class::<jobs_py::PyJobController>()?;
+    m.add_class::<jobs_py::PyJobProxy>()?;
+    m.add_function(wrap_pyfunction!(jobs_py::submit_job_py, m)?)?;
+    m.add_function(wrap_pyfunction!(jobs_py::current_job_py, m)?)?;
+    m.add_function(wrap_pyfunction!(jobs_py::cancel_active_job_py, m)?)?;
+    m.add_function(wrap_pyfunction!(jobs_py::with_job_async_py, m)?)?;
 
     Ok(())
 }

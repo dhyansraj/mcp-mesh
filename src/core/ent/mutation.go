@@ -9,6 +9,7 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
+	"mcp-mesh/src/core/ent/job"
 	"mcp-mesh/src/core/ent/llmproviderresolution"
 	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/predicate"
@@ -33,6 +34,7 @@ const (
 	TypeAgent                 = "Agent"
 	TypeCapability            = "Capability"
 	TypeDependencyResolution  = "DependencyResolution"
+	TypeJob                   = "Job"
 	TypeLLMProviderResolution = "LLMProviderResolution"
 	TypeLLMToolResolution     = "LLMToolResolution"
 	TypeRegistryEvent         = "RegistryEvent"
@@ -4368,6 +4370,1497 @@ func (m *DependencyResolutionMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown DependencyResolution edge %s", name)
+}
+
+// JobMutation represents an operation that mutates the Job nodes in the graph.
+type JobMutation struct {
+	config
+	op                Op
+	typ               string
+	id                *string
+	capability        *string
+	owner_instance_id *string
+	status            *job.Status
+	progress          *float64
+	addprogress       *float64
+	progress_message  *string
+	result            *map[string]interface{}
+	error             *string
+	submitted_payload *map[string]interface{}
+	attempt_count     *int
+	addattempt_count  *int
+	max_retries       *int
+	addmax_retries    *int
+	max_duration      *int
+	addmax_duration   *int
+	total_deadline    *time.Time
+	lease_expires_at  *time.Time
+	last_heartbeat_at *time.Time
+	submitted_at      *time.Time
+	submitted_by      *string
+	clearedFields     map[string]struct{}
+	done              bool
+	oldValue          func(context.Context) (*Job, error)
+	predicates        []predicate.Job
+}
+
+var _ ent.Mutation = (*JobMutation)(nil)
+
+// jobOption allows management of the mutation configuration using functional options.
+type jobOption func(*JobMutation)
+
+// newJobMutation creates new mutation for the Job entity.
+func newJobMutation(c config, op Op, opts ...jobOption) *JobMutation {
+	m := &JobMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeJob,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withJobID sets the ID field of the mutation.
+func withJobID(id string) jobOption {
+	return func(m *JobMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *Job
+		)
+		m.oldValue = func(ctx context.Context) (*Job, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().Job.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withJob sets the old Job of the mutation.
+func withJob(node *Job) jobOption {
+	return func(m *JobMutation) {
+		m.oldValue = func(context.Context) (*Job, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m JobMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m JobMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of Job entities.
+func (m *JobMutation) SetID(id string) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *JobMutation) ID() (id string, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *JobMutation) IDs(ctx context.Context) ([]string, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []string{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().Job.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetCapability sets the "capability" field.
+func (m *JobMutation) SetCapability(s string) {
+	m.capability = &s
+}
+
+// Capability returns the value of the "capability" field in the mutation.
+func (m *JobMutation) Capability() (r string, exists bool) {
+	v := m.capability
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCapability returns the old "capability" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldCapability(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCapability is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCapability requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCapability: %w", err)
+	}
+	return oldValue.Capability, nil
+}
+
+// ResetCapability resets all changes to the "capability" field.
+func (m *JobMutation) ResetCapability() {
+	m.capability = nil
+}
+
+// SetOwnerInstanceID sets the "owner_instance_id" field.
+func (m *JobMutation) SetOwnerInstanceID(s string) {
+	m.owner_instance_id = &s
+}
+
+// OwnerInstanceID returns the value of the "owner_instance_id" field in the mutation.
+func (m *JobMutation) OwnerInstanceID() (r string, exists bool) {
+	v := m.owner_instance_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOwnerInstanceID returns the old "owner_instance_id" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldOwnerInstanceID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOwnerInstanceID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOwnerInstanceID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOwnerInstanceID: %w", err)
+	}
+	return oldValue.OwnerInstanceID, nil
+}
+
+// ClearOwnerInstanceID clears the value of the "owner_instance_id" field.
+func (m *JobMutation) ClearOwnerInstanceID() {
+	m.owner_instance_id = nil
+	m.clearedFields[job.FieldOwnerInstanceID] = struct{}{}
+}
+
+// OwnerInstanceIDCleared returns if the "owner_instance_id" field was cleared in this mutation.
+func (m *JobMutation) OwnerInstanceIDCleared() bool {
+	_, ok := m.clearedFields[job.FieldOwnerInstanceID]
+	return ok
+}
+
+// ResetOwnerInstanceID resets all changes to the "owner_instance_id" field.
+func (m *JobMutation) ResetOwnerInstanceID() {
+	m.owner_instance_id = nil
+	delete(m.clearedFields, job.FieldOwnerInstanceID)
+}
+
+// SetStatus sets the "status" field.
+func (m *JobMutation) SetStatus(j job.Status) {
+	m.status = &j
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *JobMutation) Status() (r job.Status, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldStatus(ctx context.Context) (v job.Status, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *JobMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetProgress sets the "progress" field.
+func (m *JobMutation) SetProgress(f float64) {
+	m.progress = &f
+	m.addprogress = nil
+}
+
+// Progress returns the value of the "progress" field in the mutation.
+func (m *JobMutation) Progress() (r float64, exists bool) {
+	v := m.progress
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProgress returns the old "progress" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldProgress(ctx context.Context) (v *float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProgress is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProgress requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProgress: %w", err)
+	}
+	return oldValue.Progress, nil
+}
+
+// AddProgress adds f to the "progress" field.
+func (m *JobMutation) AddProgress(f float64) {
+	if m.addprogress != nil {
+		*m.addprogress += f
+	} else {
+		m.addprogress = &f
+	}
+}
+
+// AddedProgress returns the value that was added to the "progress" field in this mutation.
+func (m *JobMutation) AddedProgress() (r float64, exists bool) {
+	v := m.addprogress
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearProgress clears the value of the "progress" field.
+func (m *JobMutation) ClearProgress() {
+	m.progress = nil
+	m.addprogress = nil
+	m.clearedFields[job.FieldProgress] = struct{}{}
+}
+
+// ProgressCleared returns if the "progress" field was cleared in this mutation.
+func (m *JobMutation) ProgressCleared() bool {
+	_, ok := m.clearedFields[job.FieldProgress]
+	return ok
+}
+
+// ResetProgress resets all changes to the "progress" field.
+func (m *JobMutation) ResetProgress() {
+	m.progress = nil
+	m.addprogress = nil
+	delete(m.clearedFields, job.FieldProgress)
+}
+
+// SetProgressMessage sets the "progress_message" field.
+func (m *JobMutation) SetProgressMessage(s string) {
+	m.progress_message = &s
+}
+
+// ProgressMessage returns the value of the "progress_message" field in the mutation.
+func (m *JobMutation) ProgressMessage() (r string, exists bool) {
+	v := m.progress_message
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProgressMessage returns the old "progress_message" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldProgressMessage(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProgressMessage is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProgressMessage requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProgressMessage: %w", err)
+	}
+	return oldValue.ProgressMessage, nil
+}
+
+// ClearProgressMessage clears the value of the "progress_message" field.
+func (m *JobMutation) ClearProgressMessage() {
+	m.progress_message = nil
+	m.clearedFields[job.FieldProgressMessage] = struct{}{}
+}
+
+// ProgressMessageCleared returns if the "progress_message" field was cleared in this mutation.
+func (m *JobMutation) ProgressMessageCleared() bool {
+	_, ok := m.clearedFields[job.FieldProgressMessage]
+	return ok
+}
+
+// ResetProgressMessage resets all changes to the "progress_message" field.
+func (m *JobMutation) ResetProgressMessage() {
+	m.progress_message = nil
+	delete(m.clearedFields, job.FieldProgressMessage)
+}
+
+// SetResult sets the "result" field.
+func (m *JobMutation) SetResult(value map[string]interface{}) {
+	m.result = &value
+}
+
+// Result returns the value of the "result" field in the mutation.
+func (m *JobMutation) Result() (r map[string]interface{}, exists bool) {
+	v := m.result
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResult returns the old "result" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldResult(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResult is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResult requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResult: %w", err)
+	}
+	return oldValue.Result, nil
+}
+
+// ClearResult clears the value of the "result" field.
+func (m *JobMutation) ClearResult() {
+	m.result = nil
+	m.clearedFields[job.FieldResult] = struct{}{}
+}
+
+// ResultCleared returns if the "result" field was cleared in this mutation.
+func (m *JobMutation) ResultCleared() bool {
+	_, ok := m.clearedFields[job.FieldResult]
+	return ok
+}
+
+// ResetResult resets all changes to the "result" field.
+func (m *JobMutation) ResetResult() {
+	m.result = nil
+	delete(m.clearedFields, job.FieldResult)
+}
+
+// SetError sets the "error" field.
+func (m *JobMutation) SetError(s string) {
+	m.error = &s
+}
+
+// Error returns the value of the "error" field in the mutation.
+func (m *JobMutation) Error() (r string, exists bool) {
+	v := m.error
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldError returns the old "error" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldError(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldError is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldError requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldError: %w", err)
+	}
+	return oldValue.Error, nil
+}
+
+// ClearError clears the value of the "error" field.
+func (m *JobMutation) ClearError() {
+	m.error = nil
+	m.clearedFields[job.FieldError] = struct{}{}
+}
+
+// ErrorCleared returns if the "error" field was cleared in this mutation.
+func (m *JobMutation) ErrorCleared() bool {
+	_, ok := m.clearedFields[job.FieldError]
+	return ok
+}
+
+// ResetError resets all changes to the "error" field.
+func (m *JobMutation) ResetError() {
+	m.error = nil
+	delete(m.clearedFields, job.FieldError)
+}
+
+// SetSubmittedPayload sets the "submitted_payload" field.
+func (m *JobMutation) SetSubmittedPayload(value map[string]interface{}) {
+	m.submitted_payload = &value
+}
+
+// SubmittedPayload returns the value of the "submitted_payload" field in the mutation.
+func (m *JobMutation) SubmittedPayload() (r map[string]interface{}, exists bool) {
+	v := m.submitted_payload
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSubmittedPayload returns the old "submitted_payload" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldSubmittedPayload(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSubmittedPayload is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSubmittedPayload requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSubmittedPayload: %w", err)
+	}
+	return oldValue.SubmittedPayload, nil
+}
+
+// ClearSubmittedPayload clears the value of the "submitted_payload" field.
+func (m *JobMutation) ClearSubmittedPayload() {
+	m.submitted_payload = nil
+	m.clearedFields[job.FieldSubmittedPayload] = struct{}{}
+}
+
+// SubmittedPayloadCleared returns if the "submitted_payload" field was cleared in this mutation.
+func (m *JobMutation) SubmittedPayloadCleared() bool {
+	_, ok := m.clearedFields[job.FieldSubmittedPayload]
+	return ok
+}
+
+// ResetSubmittedPayload resets all changes to the "submitted_payload" field.
+func (m *JobMutation) ResetSubmittedPayload() {
+	m.submitted_payload = nil
+	delete(m.clearedFields, job.FieldSubmittedPayload)
+}
+
+// SetAttemptCount sets the "attempt_count" field.
+func (m *JobMutation) SetAttemptCount(i int) {
+	m.attempt_count = &i
+	m.addattempt_count = nil
+}
+
+// AttemptCount returns the value of the "attempt_count" field in the mutation.
+func (m *JobMutation) AttemptCount() (r int, exists bool) {
+	v := m.attempt_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAttemptCount returns the old "attempt_count" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldAttemptCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAttemptCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAttemptCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAttemptCount: %w", err)
+	}
+	return oldValue.AttemptCount, nil
+}
+
+// AddAttemptCount adds i to the "attempt_count" field.
+func (m *JobMutation) AddAttemptCount(i int) {
+	if m.addattempt_count != nil {
+		*m.addattempt_count += i
+	} else {
+		m.addattempt_count = &i
+	}
+}
+
+// AddedAttemptCount returns the value that was added to the "attempt_count" field in this mutation.
+func (m *JobMutation) AddedAttemptCount() (r int, exists bool) {
+	v := m.addattempt_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetAttemptCount resets all changes to the "attempt_count" field.
+func (m *JobMutation) ResetAttemptCount() {
+	m.attempt_count = nil
+	m.addattempt_count = nil
+}
+
+// SetMaxRetries sets the "max_retries" field.
+func (m *JobMutation) SetMaxRetries(i int) {
+	m.max_retries = &i
+	m.addmax_retries = nil
+}
+
+// MaxRetries returns the value of the "max_retries" field in the mutation.
+func (m *JobMutation) MaxRetries() (r int, exists bool) {
+	v := m.max_retries
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMaxRetries returns the old "max_retries" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldMaxRetries(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMaxRetries is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMaxRetries requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMaxRetries: %w", err)
+	}
+	return oldValue.MaxRetries, nil
+}
+
+// AddMaxRetries adds i to the "max_retries" field.
+func (m *JobMutation) AddMaxRetries(i int) {
+	if m.addmax_retries != nil {
+		*m.addmax_retries += i
+	} else {
+		m.addmax_retries = &i
+	}
+}
+
+// AddedMaxRetries returns the value that was added to the "max_retries" field in this mutation.
+func (m *JobMutation) AddedMaxRetries() (r int, exists bool) {
+	v := m.addmax_retries
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetMaxRetries resets all changes to the "max_retries" field.
+func (m *JobMutation) ResetMaxRetries() {
+	m.max_retries = nil
+	m.addmax_retries = nil
+}
+
+// SetMaxDuration sets the "max_duration" field.
+func (m *JobMutation) SetMaxDuration(i int) {
+	m.max_duration = &i
+	m.addmax_duration = nil
+}
+
+// MaxDuration returns the value of the "max_duration" field in the mutation.
+func (m *JobMutation) MaxDuration() (r int, exists bool) {
+	v := m.max_duration
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMaxDuration returns the old "max_duration" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldMaxDuration(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMaxDuration is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMaxDuration requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMaxDuration: %w", err)
+	}
+	return oldValue.MaxDuration, nil
+}
+
+// AddMaxDuration adds i to the "max_duration" field.
+func (m *JobMutation) AddMaxDuration(i int) {
+	if m.addmax_duration != nil {
+		*m.addmax_duration += i
+	} else {
+		m.addmax_duration = &i
+	}
+}
+
+// AddedMaxDuration returns the value that was added to the "max_duration" field in this mutation.
+func (m *JobMutation) AddedMaxDuration() (r int, exists bool) {
+	v := m.addmax_duration
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearMaxDuration clears the value of the "max_duration" field.
+func (m *JobMutation) ClearMaxDuration() {
+	m.max_duration = nil
+	m.addmax_duration = nil
+	m.clearedFields[job.FieldMaxDuration] = struct{}{}
+}
+
+// MaxDurationCleared returns if the "max_duration" field was cleared in this mutation.
+func (m *JobMutation) MaxDurationCleared() bool {
+	_, ok := m.clearedFields[job.FieldMaxDuration]
+	return ok
+}
+
+// ResetMaxDuration resets all changes to the "max_duration" field.
+func (m *JobMutation) ResetMaxDuration() {
+	m.max_duration = nil
+	m.addmax_duration = nil
+	delete(m.clearedFields, job.FieldMaxDuration)
+}
+
+// SetTotalDeadline sets the "total_deadline" field.
+func (m *JobMutation) SetTotalDeadline(t time.Time) {
+	m.total_deadline = &t
+}
+
+// TotalDeadline returns the value of the "total_deadline" field in the mutation.
+func (m *JobMutation) TotalDeadline() (r time.Time, exists bool) {
+	v := m.total_deadline
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTotalDeadline returns the old "total_deadline" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldTotalDeadline(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTotalDeadline is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTotalDeadline requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTotalDeadline: %w", err)
+	}
+	return oldValue.TotalDeadline, nil
+}
+
+// ClearTotalDeadline clears the value of the "total_deadline" field.
+func (m *JobMutation) ClearTotalDeadline() {
+	m.total_deadline = nil
+	m.clearedFields[job.FieldTotalDeadline] = struct{}{}
+}
+
+// TotalDeadlineCleared returns if the "total_deadline" field was cleared in this mutation.
+func (m *JobMutation) TotalDeadlineCleared() bool {
+	_, ok := m.clearedFields[job.FieldTotalDeadline]
+	return ok
+}
+
+// ResetTotalDeadline resets all changes to the "total_deadline" field.
+func (m *JobMutation) ResetTotalDeadline() {
+	m.total_deadline = nil
+	delete(m.clearedFields, job.FieldTotalDeadline)
+}
+
+// SetLeaseExpiresAt sets the "lease_expires_at" field.
+func (m *JobMutation) SetLeaseExpiresAt(t time.Time) {
+	m.lease_expires_at = &t
+}
+
+// LeaseExpiresAt returns the value of the "lease_expires_at" field in the mutation.
+func (m *JobMutation) LeaseExpiresAt() (r time.Time, exists bool) {
+	v := m.lease_expires_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLeaseExpiresAt returns the old "lease_expires_at" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldLeaseExpiresAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLeaseExpiresAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLeaseExpiresAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLeaseExpiresAt: %w", err)
+	}
+	return oldValue.LeaseExpiresAt, nil
+}
+
+// ClearLeaseExpiresAt clears the value of the "lease_expires_at" field.
+func (m *JobMutation) ClearLeaseExpiresAt() {
+	m.lease_expires_at = nil
+	m.clearedFields[job.FieldLeaseExpiresAt] = struct{}{}
+}
+
+// LeaseExpiresAtCleared returns if the "lease_expires_at" field was cleared in this mutation.
+func (m *JobMutation) LeaseExpiresAtCleared() bool {
+	_, ok := m.clearedFields[job.FieldLeaseExpiresAt]
+	return ok
+}
+
+// ResetLeaseExpiresAt resets all changes to the "lease_expires_at" field.
+func (m *JobMutation) ResetLeaseExpiresAt() {
+	m.lease_expires_at = nil
+	delete(m.clearedFields, job.FieldLeaseExpiresAt)
+}
+
+// SetLastHeartbeatAt sets the "last_heartbeat_at" field.
+func (m *JobMutation) SetLastHeartbeatAt(t time.Time) {
+	m.last_heartbeat_at = &t
+}
+
+// LastHeartbeatAt returns the value of the "last_heartbeat_at" field in the mutation.
+func (m *JobMutation) LastHeartbeatAt() (r time.Time, exists bool) {
+	v := m.last_heartbeat_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastHeartbeatAt returns the old "last_heartbeat_at" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldLastHeartbeatAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastHeartbeatAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastHeartbeatAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastHeartbeatAt: %w", err)
+	}
+	return oldValue.LastHeartbeatAt, nil
+}
+
+// ClearLastHeartbeatAt clears the value of the "last_heartbeat_at" field.
+func (m *JobMutation) ClearLastHeartbeatAt() {
+	m.last_heartbeat_at = nil
+	m.clearedFields[job.FieldLastHeartbeatAt] = struct{}{}
+}
+
+// LastHeartbeatAtCleared returns if the "last_heartbeat_at" field was cleared in this mutation.
+func (m *JobMutation) LastHeartbeatAtCleared() bool {
+	_, ok := m.clearedFields[job.FieldLastHeartbeatAt]
+	return ok
+}
+
+// ResetLastHeartbeatAt resets all changes to the "last_heartbeat_at" field.
+func (m *JobMutation) ResetLastHeartbeatAt() {
+	m.last_heartbeat_at = nil
+	delete(m.clearedFields, job.FieldLastHeartbeatAt)
+}
+
+// SetSubmittedAt sets the "submitted_at" field.
+func (m *JobMutation) SetSubmittedAt(t time.Time) {
+	m.submitted_at = &t
+}
+
+// SubmittedAt returns the value of the "submitted_at" field in the mutation.
+func (m *JobMutation) SubmittedAt() (r time.Time, exists bool) {
+	v := m.submitted_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSubmittedAt returns the old "submitted_at" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldSubmittedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSubmittedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSubmittedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSubmittedAt: %w", err)
+	}
+	return oldValue.SubmittedAt, nil
+}
+
+// ResetSubmittedAt resets all changes to the "submitted_at" field.
+func (m *JobMutation) ResetSubmittedAt() {
+	m.submitted_at = nil
+}
+
+// SetSubmittedBy sets the "submitted_by" field.
+func (m *JobMutation) SetSubmittedBy(s string) {
+	m.submitted_by = &s
+}
+
+// SubmittedBy returns the value of the "submitted_by" field in the mutation.
+func (m *JobMutation) SubmittedBy() (r string, exists bool) {
+	v := m.submitted_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSubmittedBy returns the old "submitted_by" field's value of the Job entity.
+// If the Job object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *JobMutation) OldSubmittedBy(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSubmittedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSubmittedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSubmittedBy: %w", err)
+	}
+	return oldValue.SubmittedBy, nil
+}
+
+// ClearSubmittedBy clears the value of the "submitted_by" field.
+func (m *JobMutation) ClearSubmittedBy() {
+	m.submitted_by = nil
+	m.clearedFields[job.FieldSubmittedBy] = struct{}{}
+}
+
+// SubmittedByCleared returns if the "submitted_by" field was cleared in this mutation.
+func (m *JobMutation) SubmittedByCleared() bool {
+	_, ok := m.clearedFields[job.FieldSubmittedBy]
+	return ok
+}
+
+// ResetSubmittedBy resets all changes to the "submitted_by" field.
+func (m *JobMutation) ResetSubmittedBy() {
+	m.submitted_by = nil
+	delete(m.clearedFields, job.FieldSubmittedBy)
+}
+
+// Where appends a list predicates to the JobMutation builder.
+func (m *JobMutation) Where(ps ...predicate.Job) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the JobMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *JobMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.Job, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *JobMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *JobMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (Job).
+func (m *JobMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *JobMutation) Fields() []string {
+	fields := make([]string, 0, 16)
+	if m.capability != nil {
+		fields = append(fields, job.FieldCapability)
+	}
+	if m.owner_instance_id != nil {
+		fields = append(fields, job.FieldOwnerInstanceID)
+	}
+	if m.status != nil {
+		fields = append(fields, job.FieldStatus)
+	}
+	if m.progress != nil {
+		fields = append(fields, job.FieldProgress)
+	}
+	if m.progress_message != nil {
+		fields = append(fields, job.FieldProgressMessage)
+	}
+	if m.result != nil {
+		fields = append(fields, job.FieldResult)
+	}
+	if m.error != nil {
+		fields = append(fields, job.FieldError)
+	}
+	if m.submitted_payload != nil {
+		fields = append(fields, job.FieldSubmittedPayload)
+	}
+	if m.attempt_count != nil {
+		fields = append(fields, job.FieldAttemptCount)
+	}
+	if m.max_retries != nil {
+		fields = append(fields, job.FieldMaxRetries)
+	}
+	if m.max_duration != nil {
+		fields = append(fields, job.FieldMaxDuration)
+	}
+	if m.total_deadline != nil {
+		fields = append(fields, job.FieldTotalDeadline)
+	}
+	if m.lease_expires_at != nil {
+		fields = append(fields, job.FieldLeaseExpiresAt)
+	}
+	if m.last_heartbeat_at != nil {
+		fields = append(fields, job.FieldLastHeartbeatAt)
+	}
+	if m.submitted_at != nil {
+		fields = append(fields, job.FieldSubmittedAt)
+	}
+	if m.submitted_by != nil {
+		fields = append(fields, job.FieldSubmittedBy)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *JobMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case job.FieldCapability:
+		return m.Capability()
+	case job.FieldOwnerInstanceID:
+		return m.OwnerInstanceID()
+	case job.FieldStatus:
+		return m.Status()
+	case job.FieldProgress:
+		return m.Progress()
+	case job.FieldProgressMessage:
+		return m.ProgressMessage()
+	case job.FieldResult:
+		return m.Result()
+	case job.FieldError:
+		return m.Error()
+	case job.FieldSubmittedPayload:
+		return m.SubmittedPayload()
+	case job.FieldAttemptCount:
+		return m.AttemptCount()
+	case job.FieldMaxRetries:
+		return m.MaxRetries()
+	case job.FieldMaxDuration:
+		return m.MaxDuration()
+	case job.FieldTotalDeadline:
+		return m.TotalDeadline()
+	case job.FieldLeaseExpiresAt:
+		return m.LeaseExpiresAt()
+	case job.FieldLastHeartbeatAt:
+		return m.LastHeartbeatAt()
+	case job.FieldSubmittedAt:
+		return m.SubmittedAt()
+	case job.FieldSubmittedBy:
+		return m.SubmittedBy()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *JobMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case job.FieldCapability:
+		return m.OldCapability(ctx)
+	case job.FieldOwnerInstanceID:
+		return m.OldOwnerInstanceID(ctx)
+	case job.FieldStatus:
+		return m.OldStatus(ctx)
+	case job.FieldProgress:
+		return m.OldProgress(ctx)
+	case job.FieldProgressMessage:
+		return m.OldProgressMessage(ctx)
+	case job.FieldResult:
+		return m.OldResult(ctx)
+	case job.FieldError:
+		return m.OldError(ctx)
+	case job.FieldSubmittedPayload:
+		return m.OldSubmittedPayload(ctx)
+	case job.FieldAttemptCount:
+		return m.OldAttemptCount(ctx)
+	case job.FieldMaxRetries:
+		return m.OldMaxRetries(ctx)
+	case job.FieldMaxDuration:
+		return m.OldMaxDuration(ctx)
+	case job.FieldTotalDeadline:
+		return m.OldTotalDeadline(ctx)
+	case job.FieldLeaseExpiresAt:
+		return m.OldLeaseExpiresAt(ctx)
+	case job.FieldLastHeartbeatAt:
+		return m.OldLastHeartbeatAt(ctx)
+	case job.FieldSubmittedAt:
+		return m.OldSubmittedAt(ctx)
+	case job.FieldSubmittedBy:
+		return m.OldSubmittedBy(ctx)
+	}
+	return nil, fmt.Errorf("unknown Job field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *JobMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case job.FieldCapability:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCapability(v)
+		return nil
+	case job.FieldOwnerInstanceID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOwnerInstanceID(v)
+		return nil
+	case job.FieldStatus:
+		v, ok := value.(job.Status)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case job.FieldProgress:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProgress(v)
+		return nil
+	case job.FieldProgressMessage:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProgressMessage(v)
+		return nil
+	case job.FieldResult:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResult(v)
+		return nil
+	case job.FieldError:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetError(v)
+		return nil
+	case job.FieldSubmittedPayload:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSubmittedPayload(v)
+		return nil
+	case job.FieldAttemptCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAttemptCount(v)
+		return nil
+	case job.FieldMaxRetries:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMaxRetries(v)
+		return nil
+	case job.FieldMaxDuration:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMaxDuration(v)
+		return nil
+	case job.FieldTotalDeadline:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTotalDeadline(v)
+		return nil
+	case job.FieldLeaseExpiresAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLeaseExpiresAt(v)
+		return nil
+	case job.FieldLastHeartbeatAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastHeartbeatAt(v)
+		return nil
+	case job.FieldSubmittedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSubmittedAt(v)
+		return nil
+	case job.FieldSubmittedBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSubmittedBy(v)
+		return nil
+	}
+	return fmt.Errorf("unknown Job field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *JobMutation) AddedFields() []string {
+	var fields []string
+	if m.addprogress != nil {
+		fields = append(fields, job.FieldProgress)
+	}
+	if m.addattempt_count != nil {
+		fields = append(fields, job.FieldAttemptCount)
+	}
+	if m.addmax_retries != nil {
+		fields = append(fields, job.FieldMaxRetries)
+	}
+	if m.addmax_duration != nil {
+		fields = append(fields, job.FieldMaxDuration)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *JobMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case job.FieldProgress:
+		return m.AddedProgress()
+	case job.FieldAttemptCount:
+		return m.AddedAttemptCount()
+	case job.FieldMaxRetries:
+		return m.AddedMaxRetries()
+	case job.FieldMaxDuration:
+		return m.AddedMaxDuration()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *JobMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case job.FieldProgress:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddProgress(v)
+		return nil
+	case job.FieldAttemptCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddAttemptCount(v)
+		return nil
+	case job.FieldMaxRetries:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMaxRetries(v)
+		return nil
+	case job.FieldMaxDuration:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddMaxDuration(v)
+		return nil
+	}
+	return fmt.Errorf("unknown Job numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *JobMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(job.FieldOwnerInstanceID) {
+		fields = append(fields, job.FieldOwnerInstanceID)
+	}
+	if m.FieldCleared(job.FieldProgress) {
+		fields = append(fields, job.FieldProgress)
+	}
+	if m.FieldCleared(job.FieldProgressMessage) {
+		fields = append(fields, job.FieldProgressMessage)
+	}
+	if m.FieldCleared(job.FieldResult) {
+		fields = append(fields, job.FieldResult)
+	}
+	if m.FieldCleared(job.FieldError) {
+		fields = append(fields, job.FieldError)
+	}
+	if m.FieldCleared(job.FieldSubmittedPayload) {
+		fields = append(fields, job.FieldSubmittedPayload)
+	}
+	if m.FieldCleared(job.FieldMaxDuration) {
+		fields = append(fields, job.FieldMaxDuration)
+	}
+	if m.FieldCleared(job.FieldTotalDeadline) {
+		fields = append(fields, job.FieldTotalDeadline)
+	}
+	if m.FieldCleared(job.FieldLeaseExpiresAt) {
+		fields = append(fields, job.FieldLeaseExpiresAt)
+	}
+	if m.FieldCleared(job.FieldLastHeartbeatAt) {
+		fields = append(fields, job.FieldLastHeartbeatAt)
+	}
+	if m.FieldCleared(job.FieldSubmittedBy) {
+		fields = append(fields, job.FieldSubmittedBy)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *JobMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *JobMutation) ClearField(name string) error {
+	switch name {
+	case job.FieldOwnerInstanceID:
+		m.ClearOwnerInstanceID()
+		return nil
+	case job.FieldProgress:
+		m.ClearProgress()
+		return nil
+	case job.FieldProgressMessage:
+		m.ClearProgressMessage()
+		return nil
+	case job.FieldResult:
+		m.ClearResult()
+		return nil
+	case job.FieldError:
+		m.ClearError()
+		return nil
+	case job.FieldSubmittedPayload:
+		m.ClearSubmittedPayload()
+		return nil
+	case job.FieldMaxDuration:
+		m.ClearMaxDuration()
+		return nil
+	case job.FieldTotalDeadline:
+		m.ClearTotalDeadline()
+		return nil
+	case job.FieldLeaseExpiresAt:
+		m.ClearLeaseExpiresAt()
+		return nil
+	case job.FieldLastHeartbeatAt:
+		m.ClearLastHeartbeatAt()
+		return nil
+	case job.FieldSubmittedBy:
+		m.ClearSubmittedBy()
+		return nil
+	}
+	return fmt.Errorf("unknown Job nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *JobMutation) ResetField(name string) error {
+	switch name {
+	case job.FieldCapability:
+		m.ResetCapability()
+		return nil
+	case job.FieldOwnerInstanceID:
+		m.ResetOwnerInstanceID()
+		return nil
+	case job.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case job.FieldProgress:
+		m.ResetProgress()
+		return nil
+	case job.FieldProgressMessage:
+		m.ResetProgressMessage()
+		return nil
+	case job.FieldResult:
+		m.ResetResult()
+		return nil
+	case job.FieldError:
+		m.ResetError()
+		return nil
+	case job.FieldSubmittedPayload:
+		m.ResetSubmittedPayload()
+		return nil
+	case job.FieldAttemptCount:
+		m.ResetAttemptCount()
+		return nil
+	case job.FieldMaxRetries:
+		m.ResetMaxRetries()
+		return nil
+	case job.FieldMaxDuration:
+		m.ResetMaxDuration()
+		return nil
+	case job.FieldTotalDeadline:
+		m.ResetTotalDeadline()
+		return nil
+	case job.FieldLeaseExpiresAt:
+		m.ResetLeaseExpiresAt()
+		return nil
+	case job.FieldLastHeartbeatAt:
+		m.ResetLastHeartbeatAt()
+		return nil
+	case job.FieldSubmittedAt:
+		m.ResetSubmittedAt()
+		return nil
+	case job.FieldSubmittedBy:
+		m.ResetSubmittedBy()
+		return nil
+	}
+	return fmt.Errorf("unknown Job field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *JobMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *JobMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *JobMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *JobMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *JobMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *JobMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *JobMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown Job unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *JobMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown Job edge %s", name)
 }
 
 // LLMProviderResolutionMutation represents an operation that mutates the LLMProviderResolution nodes in the graph.

@@ -614,9 +614,15 @@ def _get_or_create_agent_id(agent_name: str | None = None) -> str:
     """
     Get or create a shared agent ID for all functions in this process.
 
-    Format: {prefix}-{8chars} where:
-    - prefix precedence: MCP_MESH_AGENT_NAME env var > agent_name parameter > "agent"
-    - 8chars is first 8 characters of a UUID
+    Resolution order (first match wins):
+    1. MCP_MESH_AGENT_ID env var — explicit full-id override (production K8s
+       sets this to the pod name so the same id survives restarts and lines
+       up with the pod's logs / metrics). This is the value used everywhere
+       (heartbeat registration, claim worker, JobController instance_id),
+       so a single env var pins identity across all subsystems.
+    2. Synthetic ``{prefix}-{8chars}`` where prefix precedence is
+       MCP_MESH_AGENT_NAME env var > agent_name parameter > "agent" and
+       8chars is the first 8 characters of a fresh UUID.
 
     Args:
         agent_name: Optional name from @mesh.agent decorator
@@ -627,6 +633,17 @@ def _get_or_create_agent_id(agent_name: str | None = None) -> str:
     global _SHARED_AGENT_ID
 
     if _SHARED_AGENT_ID is None:
+        # Step 1: explicit full-id override.
+        explicit = get_config_value(
+            "MCP_MESH_AGENT_ID",
+            default=None,
+            rule=ValidationRule.STRING_RULE,
+        )
+        if explicit:
+            _SHARED_AGENT_ID = explicit
+            return _SHARED_AGENT_ID
+
+        # Step 2: synthetic prefix-uuid form.
         # Precedence: env var > agent_name > default "agent"
         prefix = get_config_value(
             "MCP_MESH_AGENT_NAME",
@@ -756,6 +773,7 @@ def tool(
     dependencies: list[dict[str, Any]] | list[str] | None = None,
     description: str | None = None,
     output_schema_strict: bool = True,
+    task: bool = False,
     **kwargs: Any,
 ) -> Callable[[T], T]:
     """
@@ -795,6 +813,16 @@ def tool(
             schema cannot be canonicalized but the tool should still register.
             Wins even when the cluster-wide MCP_MESH_SCHEMA_STRICT=true env var
             promotes WARN→BLOCK. Issue #547 Phase 4.
+        task: When True, mark this tool as long-running (Phase 1 MeshJob
+            substrate). Producers advertise ``task=True`` in their tool
+            metadata so consumers know to invoke the tool via job semantics
+            (submit + wait/poll) rather than as a regular synchronous
+            ``tools/call``. The actual job-context binding happens at
+            inbound call time via the tool wrapper (next dispatch). A
+            ``task=True`` tool MUST be ``async def`` — long-running tools
+            need an event loop to drive ``MeshJob.update_progress()``,
+            cancellation, and outbound polling. See ``MESHJOB_DESIGN.org``
+            "Producer-side flow".
         **kwargs: Additional metadata
 
     Returns:
@@ -809,6 +837,20 @@ def tool(
 
         if not isinstance(output_schema_strict, bool):
             raise ValueError("output_schema_strict must be a boolean")
+
+        if not isinstance(task, bool):
+            raise ValueError("task must be a boolean")
+
+        # task=True is async-only: long-running tools need an event loop
+        # to drive MeshJob.update_progress / cancellation / outbound polling.
+        # Fail loudly at decoration time so the developer sees the problem
+        # immediately rather than at first invocation.
+        if task and not asyncio.iscoroutinefunction(target):
+            raise ValueError(
+                f"@mesh.tool(task=True) requires an async def function; "
+                f"'{getattr(target, '__name__', '?')}' is sync. "
+                "Mark the function async or remove task=True."
+            )
 
         # Validate optional parameters
         if tags is not None:
@@ -935,6 +977,12 @@ def tool(
             "description": description or getattr(target, "__doc__", None),
             # Issue #547 Phase 4: per-tool override for the schema verdict policy.
             "output_schema_strict": output_schema_strict,
+            # Phase 1 MeshJob substrate: producers advertise task=True so
+            # consumers know to invoke via job semantics (submit + wait)
+            # rather than a synchronous tools/call. The inbound tool
+            # wrapper (next dispatch) reads this flag to decide whether
+            # to bind a JobController via run_as_job before invocation.
+            "task": task,
             **kwargs,
         }
 
@@ -1027,6 +1075,16 @@ def tool(
             _trigger_debounced_processing()
             return wrapped
 
+        except ValueError:
+            # ValueError is reserved for contract violations the user MUST
+            # see at decoration time — currently the multi-``MeshJob``
+            # rejection from ``analyze_mesh_job_signature`` (per
+            # MESHJOB_DDDI_CONTRACT.md) and any future signature-shape
+            # rejection. Graceful-degradation would silently advertise a
+            # broken tool and surface a confusing AttributeError on first
+            # invocation; that is exactly the failure mode this branch is
+            # supposed to prevent.
+            raise
         except Exception as e:
             # Log but don't fail - graceful degradation
             logger.error(

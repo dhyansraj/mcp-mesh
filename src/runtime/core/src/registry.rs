@@ -59,6 +59,65 @@ pub enum FastHeartbeatStatus {
     NetworkError,
 }
 
+/// Combined result of a fast heartbeat HEAD: status + optional pending-jobs
+/// hint parsed from the `X-Mesh-Pending-Jobs` response header.
+///
+/// `pending_jobs` is the count of unclaimed jobs across this agent's
+/// declared capabilities (registry-side computation, capped per the
+/// design doc — see "Pending-jobs scoping: per-agent capability set"). The
+/// header is opportunistic: it can ride either the 200 or 202 response,
+/// and is omitted entirely when there is no work to claim.
+///
+/// Treated as `None` when:
+/// - The header is absent (registry version pre-jobs, or no pending work).
+/// - The header is present but parses as `0` (treat 0 as absent — same
+///   "no work to claim" signal so claim worker stays asleep).
+/// - The header value cannot be parsed as `u32`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FastHeartbeatResponse {
+    pub status: FastHeartbeatStatus,
+    pub pending_jobs: Option<u32>,
+}
+
+/// Header name for the pending-jobs hint. Defined here so registry-side
+/// integration tests / fixtures can reference the same constant.
+pub const PENDING_JOBS_HEADER: &str = "X-Mesh-Pending-Jobs";
+
+/// Parse the `X-Mesh-Pending-Jobs` header value into an optional count.
+///
+/// Per [`FastHeartbeatResponse`] docs: missing, `0`, and unparseable
+/// values all collapse to `None`. Anything > 0 returns `Some(n)`.
+///
+/// A malformed header (non-numeric / >u32::MAX) is logged at warn
+/// level so version-skew between the agent runtime and the registry
+/// surfaces in operator logs — silently dropping the value would mask
+/// the protocol mismatch and leave job claims stuck.
+fn parse_pending_jobs_header(headers: &reqwest::header::HeaderMap) -> Option<u32> {
+    let header_val = headers.get(PENDING_JOBS_HEADER)?;
+    let raw = match header_val.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(
+                "ignoring non-ASCII {} header value: {} (likely registry/runtime version skew)",
+                PENDING_JOBS_HEADER, e
+            );
+            return None;
+        }
+    };
+    let trimmed = raw.trim();
+    match trimmed.parse::<u32>() {
+        Ok(0) => None,
+        Ok(n) => Some(n),
+        Err(e) => {
+            warn!(
+                "ignoring malformed {} header value {:?}: {} (likely registry/runtime version skew)",
+                PENDING_JOBS_HEADER, trimmed, e
+            );
+            None
+        }
+    }
+}
+
 impl FastHeartbeatStatus {
     /// Create status from HTTP status code.
     pub fn from_status_code(code: u16) -> Self {
@@ -398,26 +457,34 @@ impl RegistryClient {
 
     /// Perform a fast heartbeat check (HEAD request).
     ///
-    /// Returns the status indicating whether full heartbeat is needed.
-    pub async fn fast_heartbeat_check(&self, agent_id: &str) -> FastHeartbeatStatus {
+    /// Returns the status indicating whether full heartbeat is needed,
+    /// plus an optional `pending_jobs` count parsed from the
+    /// `X-Mesh-Pending-Jobs` response header (see [`FastHeartbeatResponse`]).
+    pub async fn fast_heartbeat_check(&self, agent_id: &str) -> FastHeartbeatResponse {
         let url = format!("{}/heartbeat/{}", self.base_url, agent_id);
 
         trace!("Sending fast heartbeat HEAD request to {}", url);
 
         match self.client.head(&url).send().await {
             Ok(response) => {
-                let status = FastHeartbeatStatus::from_status_code(response.status().as_u16());
+                let status_code = response.status().as_u16();
+                let status = FastHeartbeatStatus::from_status_code(status_code);
+                let pending_jobs = parse_pending_jobs_header(response.headers());
                 debug!(
-                    "Fast heartbeat for agent '{}': HTTP {} -> {:?}",
-                    agent_id,
-                    response.status().as_u16(),
-                    status
+                    "Fast heartbeat for agent '{}': HTTP {} -> {:?} pending_jobs={:?}",
+                    agent_id, status_code, status, pending_jobs
                 );
-                status
+                FastHeartbeatResponse {
+                    status,
+                    pending_jobs,
+                }
             }
             Err(e) => {
                 warn!("Fast heartbeat failed for agent '{}': {}", agent_id, e);
-                FastHeartbeatStatus::NetworkError
+                FastHeartbeatResponse {
+                    status: FastHeartbeatStatus::NetworkError,
+                    pending_jobs: None,
+                }
             }
         }
     }
@@ -540,6 +607,19 @@ impl RegistryClient {
 mod tests {
     use super::*;
     use crate::spec::ToolSpec;
+    use crate::tls::TlsMode;
+
+    /// Build a TLS-off config for tests that need a `RegistryClient`.
+    fn test_tls_off() -> TlsConfig {
+        TlsConfig {
+            mode: TlsMode::Off,
+            cert_path: None,
+            key_path: None,
+            ca_path: None,
+            provider: "file".to_string(),
+            credentials: None,
+        }
+    }
 
     #[test]
     fn test_fast_heartbeat_status_from_code() {
@@ -619,6 +699,102 @@ mod tests {
         assert_eq!(request.tools.len(), 1);
         assert_eq!(request.tools[0].function_name, "greet");
         assert_eq!(request.tools[0].capability, "greeting");
+    }
+
+    #[test]
+    fn parse_pending_jobs_header_present_nonzero() {
+        let mut h = reqwest::header::HeaderMap::new();
+        h.insert(PENDING_JOBS_HEADER, "5".parse().unwrap());
+        assert_eq!(parse_pending_jobs_header(&h), Some(5));
+    }
+
+    #[test]
+    fn parse_pending_jobs_header_absent() {
+        let h = reqwest::header::HeaderMap::new();
+        assert_eq!(parse_pending_jobs_header(&h), None);
+    }
+
+    #[test]
+    fn parse_pending_jobs_header_zero_treated_as_absent() {
+        let mut h = reqwest::header::HeaderMap::new();
+        h.insert(PENDING_JOBS_HEADER, "0".parse().unwrap());
+        assert_eq!(parse_pending_jobs_header(&h), None);
+    }
+
+    #[test]
+    fn parse_pending_jobs_header_unparseable_is_none() {
+        let mut h = reqwest::header::HeaderMap::new();
+        h.insert(PENDING_JOBS_HEADER, "abc".parse().unwrap());
+        assert_eq!(parse_pending_jobs_header(&h), None);
+    }
+
+    /// Build a tiny HEAD-only HTTP mock server that returns the given
+    /// status code and optional pending-jobs header. Returns the bound
+    /// port. The server handles exactly one request and then exits.
+    async fn spawn_head_mock(status_code: u16, pending: Option<&'static str>) -> u16 {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 4096];
+            let _ = sock.read(&mut buf).await.unwrap();
+            let status_line = match status_code {
+                200 => "HTTP/1.1 200 OK\r\n",
+                202 => "HTTP/1.1 202 Accepted\r\n",
+                410 => "HTTP/1.1 410 Gone\r\n",
+                _ => "HTTP/1.1 500 Internal Server Error\r\n",
+            };
+            let mut resp = String::from(status_line);
+            resp.push_str("Content-Length: 0\r\n");
+            if let Some(p) = pending {
+                resp.push_str(&format!("{}: {}\r\n", PENDING_JOBS_HEADER, p));
+            }
+            resp.push_str("\r\n");
+            sock.write_all(resp.as_bytes()).await.unwrap();
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn fast_heartbeat_check_parses_pending_jobs_on_200() {
+        let port = spawn_head_mock(200, Some("3")).await;
+        let url = format!("http://127.0.0.1:{}", port);
+        let client = RegistryClient::new(&url, &test_tls_off()).unwrap();
+        let r = client.fast_heartbeat_check("agent-x").await;
+        assert_eq!(r.status, FastHeartbeatStatus::NoChanges);
+        assert_eq!(r.pending_jobs, Some(3));
+    }
+
+    #[tokio::test]
+    async fn fast_heartbeat_check_no_header_yields_none() {
+        let port = spawn_head_mock(200, None).await;
+        let url = format!("http://127.0.0.1:{}", port);
+        let client = RegistryClient::new(&url, &test_tls_off()).unwrap();
+        let r = client.fast_heartbeat_check("agent-x").await;
+        assert_eq!(r.status, FastHeartbeatStatus::NoChanges);
+        assert_eq!(r.pending_jobs, None);
+    }
+
+    #[tokio::test]
+    async fn fast_heartbeat_check_zero_treated_as_none() {
+        let port = spawn_head_mock(200, Some("0")).await;
+        let url = format!("http://127.0.0.1:{}", port);
+        let client = RegistryClient::new(&url, &test_tls_off()).unwrap();
+        let r = client.fast_heartbeat_check("agent-x").await;
+        assert_eq!(r.pending_jobs, None);
+    }
+
+    #[tokio::test]
+    async fn fast_heartbeat_check_pending_jobs_rides_202() {
+        let port = spawn_head_mock(202, Some("4")).await;
+        let url = format!("http://127.0.0.1:{}", port);
+        let client = RegistryClient::new(&url, &test_tls_off()).unwrap();
+        let r = client.fast_heartbeat_check("agent-x").await;
+        assert_eq!(r.status, FastHeartbeatStatus::TopologyChanged);
+        assert_eq!(r.pending_jobs, Some(4));
     }
 
     #[test]

@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -47,6 +48,12 @@ func init() {
 	// Parse MCP_MESH_PROPAGATE_HEADERS. Each comma-separated entry is either an
 	// exact header name (e.g., "authorization") or a prefix with trailing "*"
 	// (e.g., "x-trace-*"). Matching is performed in proxyRequest below.
+	//
+	// Baked-in defaults (always forwarded, regardless of this env var):
+	//   X-Trace-ID, X-Parent-Span, X-Mesh-Timeout, X-Mesh-Job-Id
+	// MCP_MESH_PROPAGATE_HEADERS is purely *additive* on top of the defaults.
+	// TODO(test): extract this parser into a pure helper so it can be unit-tested
+	// without env-var mutation. Coverage today is via integration tests.
 	if raw := os.Getenv("MCP_MESH_PROPAGATE_HEADERS"); raw != "" {
 		entries := strings.Split(raw, ",")
 		for _, e := range entries {
@@ -75,16 +82,87 @@ func init() {
 }
 
 // EntBusinessLogicHandlers implements the generated server interface using EntService
+//
+// Lifecycle/shutdown coordination
+// -------------------------------
+// Some handlers spawn best-effort background goroutines (notably
+// ``forwardCancelToOwner`` in ``ent_handlers_jobs.go``) that outlive the
+// inbound request. Those goroutines pull their context from
+// ``shutdownCtx`` and register their lifetime on ``shutdownWG`` so the
+// registry's graceful-shutdown path (``Server.Stop``) can:
+//
+//  1. Cancel ``shutdownCtx`` — in-flight HTTP forwards observe the
+//     cancellation on their ``http.Request`` context and return promptly
+//     instead of running to their per-call timeout.
+//  2. Wait on ``shutdownWG`` — the shutdown sequence either drains the
+//     forwards or surfaces the wait-timeout in the log (so an operator
+//     sees that some forwards were abandoned), rather than letting them
+//     run on a background goroutine after the process is supposedly
+//     stopped.
+//
+// When the handlers are constructed via ``NewEntBusinessLogicHandlers``
+// (no shutdown context provided — used by tests and older callers), the
+// background goroutines fall back to ``context.Background()`` and a
+// no-op WaitGroup so the existing best-effort behaviour is preserved.
 type EntBusinessLogicHandlers struct {
 	entService *EntService
 	startTime  time.Time
+
+	// shutdownCtx, when non-nil, gates background goroutines spawned
+	// from request handlers (cancel-forward, etc). It is cancelled by
+	// ``Server.Stop`` and the goroutines pass it as the request context
+	// for outbound HTTP calls so a registry shutdown cleanly aborts
+	// in-flight forwards.
+	shutdownCtx context.Context
+	// shutdownWG tracks those goroutines so ``Server.Stop`` can wait for
+	// them to drain (or log the ones that didn't). Always non-nil so
+	// handlers can call ``Add``/``Done`` unconditionally; when no
+	// shutdown coordination is wired in (tests), it's a fresh local
+	// WaitGroup and ``Wait`` is never called.
+	shutdownWG *sync.WaitGroup
 }
 
 // NewEntBusinessLogicHandlers creates a new handler instance using EntService
+//
+// Background goroutines spawned by handlers fall back to a detached
+// ``context.Background()`` and a private WaitGroup — i.e. NO shutdown
+// coordination. Production code paths should prefer
+// :func:`NewEntBusinessLogicHandlersWithShutdown` which wires the
+// registry's graceful-shutdown context in. This constructor is kept for
+// the test suite (where the registry never calls ``Stop``) and to
+// preserve the legacy zero-arg surface.
 func NewEntBusinessLogicHandlers(entService *EntService) *EntBusinessLogicHandlers {
 	return &EntBusinessLogicHandlers{
 		entService: entService,
 		startTime:  time.Now().UTC(),
+		shutdownWG: &sync.WaitGroup{},
+	}
+}
+
+// NewEntBusinessLogicHandlersWithShutdown is the production constructor
+// that wires the registry's graceful-shutdown context and WaitGroup
+// into the handlers. Background goroutines (``forwardCancelToOwner``)
+// derive their HTTP-request context from ``shutdownCtx`` so a server
+// shutdown cancels in-flight forwards cleanly, and they register on
+// ``shutdownWG`` so the shutdown sequence can wait for them to drain.
+//
+// ``shutdownCtx`` MUST be the context produced by the caller's shutdown
+// machinery (typically ``context.WithCancel`` whose ``cancel`` is
+// invoked from ``Server.Stop``). ``shutdownWG`` MUST be the same
+// WaitGroup the shutdown sequence calls ``Wait`` on.
+func NewEntBusinessLogicHandlersWithShutdown(
+	entService *EntService,
+	shutdownCtx context.Context,
+	shutdownWG *sync.WaitGroup,
+) *EntBusinessLogicHandlers {
+	if shutdownWG == nil {
+		shutdownWG = &sync.WaitGroup{}
+	}
+	return &EntBusinessLogicHandlers{
+		entService:  entService,
+		startTime:   time.Now().UTC(),
+		shutdownCtx: shutdownCtx,
+		shutdownWG:  shutdownWG,
 	}
 }
 
@@ -463,6 +541,15 @@ func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId st
 		return
 	}
 
+	// Capability-scoped pending-jobs hint (MESHJOB_DESIGN.org > Wire
+	// Protocol > HEAD heartbeat extension). Best-effort: a query failure
+	// here must not break the heartbeat — the producer will discover the
+	// pending work on the next tick. Header is set BEFORE c.Status(...)
+	// because Gin commits headers when the status line is written.
+	if pending, perr := h.entService.CountPendingJobsForAgent(c.Request.Context(), agentId); perr == nil && pending > 0 {
+		c.Header("X-Mesh-Pending-Jobs", strconv.Itoa(pending))
+	}
+
 	if hasChanges {
 		// Topology changed - please send full POST heartbeat
 		c.Status(http.StatusAccepted) // 202
@@ -655,13 +742,25 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		proxyReq.Header.Set("X-Mesh-Timeout", meshTimeout)
 	}
 
-	// Names already set explicitly above — don't duplicate via propagation
+	// Forward X-Mesh-Job-Id so the producer's tool wrapper can bind the
+	// MeshJob controller to the correct job row. Treated as a baked-in
+	// default header (like trace + timeout) so installations work out of the
+	// box without setting MCP_MESH_PROPAGATE_HEADERS. See MESHJOB_DESIGN.org
+	// "Wire Protocol / Headers".
+	if meshJobID := c.Request.Header.Get("X-Mesh-Job-Id"); meshJobID != "" {
+		proxyReq.Header.Set("X-Mesh-Job-Id", meshJobID)
+	}
+
+	// Names already set explicitly above — don't duplicate via propagation.
+	// MCP_MESH_PROPAGATE_HEADERS is additive on top of these baked-in defaults;
+	// the env var does not need to (and should not) re-list them.
 	explicitlySet := map[string]bool{
 		"content-type":   true,
 		"accept":         true,
 		"x-trace-id":     true,
 		"x-parent-span":  true,
 		"x-mesh-timeout": true,
+		"x-mesh-job-id":  true,
 	}
 
 	// Forward headers matching MCP_MESH_PROPAGATE_HEADERS allowlist (#769, #790).

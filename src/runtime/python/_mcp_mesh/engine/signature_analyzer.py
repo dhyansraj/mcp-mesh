@@ -4,9 +4,10 @@ Function signature analysis for MCP Mesh dependency injection.
 
 import inspect
 import logging
-from typing import Any, get_type_hints
+from dataclasses import dataclass, field
+from typing import Any, Optional, get_type_hints
 
-from mesh.types import McpMeshTool, MeshLlmAgent
+from mesh.types import McpMeshTool, MeshJob, MeshLlmAgent
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,145 @@ def _is_mesh_llm_type(param_type: Any) -> bool:
     return False
 
 
+def _is_mesh_job_type(param_type: Any) -> bool:
+    """Check if a type is :class:`mesh.MeshJob` (Phase 1 — MeshJob substrate).
+
+    Mirrors :func:`_is_mesh_tool_type` / :func:`_is_mesh_llm_type` for the
+    new injectable. Handles direct ``MeshJob`` annotations as well as
+    ``Optional[MeshJob]`` / ``MeshJob | None`` unions per the resolver
+    contract (``MESHJOB_DDDI_CONTRACT.md`` → "Optional / Union types").
+    """
+    # Direct MeshJob type
+    if param_type == MeshJob or (
+        hasattr(param_type, "__name__") and param_type.__name__ == "MeshJob"
+    ):
+        return True
+
+    # Union type (e.g., MeshJob | None, Optional[MeshJob])
+    if hasattr(param_type, "__args__"):
+        for arg in param_type.__args__:
+            if arg == MeshJob or (
+                hasattr(arg, "__name__") and arg.__name__ == "MeshJob"
+            ):
+                return True
+
+    return False
+
+
+@dataclass(frozen=True)
+class MeshJobResolution:
+    """Resolver output for ``MeshJob`` parameter classification.
+
+    Per ``MESHJOB_DDDI_CONTRACT.md``: ``MeshJob`` is **orthogonal** to
+    ``MeshTool`` positional indexing — its signature position is recorded
+    separately so adding/removing a ``MeshJob`` parameter does not shift
+    the slot numbers used to inject mesh-tool dependencies.
+
+    Attributes:
+        mesh_tool_positions: Signature positions (0-indexed) of
+            ``McpMeshTool`` parameters in declaration order. Each entry
+            is the slot the corresponding dependency proxy fills.
+            Identical to the legacy ``get_mesh_agent_positions`` output;
+            duplicated here so callers get a single resolver output.
+        mesh_job_param_index: Signature position (0-indexed) of the
+            single ``MeshJob`` parameter, or ``None`` if the function
+            does not declare one. Phase 1 enforces "at most one
+            ``MeshJob`` per tool" — multiple is a registration-time
+            error.
+        mesh_job_param_name: Name of the ``MeshJob`` parameter (for
+            kwargs-style injection by the runtime), or ``None`` when no
+            ``MeshJob`` is declared. Mirrors ``mesh_job_param_index``.
+    """
+
+    mesh_tool_positions: list[int] = field(default_factory=list)
+    mesh_job_param_index: Optional[int] = None
+    mesh_job_param_name: Optional[str] = None
+
+
+def analyze_mesh_job_signature(func: Any) -> MeshJobResolution:
+    """Classify a function's parameters per the MeshJob DDDI contract.
+
+    Iterates parameters in declaration order. For each:
+      - ``McpMeshTool``-typed: append signature position to
+        ``mesh_tool_positions`` (i.e. the slot the dependency proxy
+        will fill at runtime). The list's index acts as the
+        ``mesh_tool_position_counter`` from the contract.
+      - ``MeshJob``-typed: record signature position in
+        ``mesh_job_param_index`` (and the name in
+        ``mesh_job_param_name``). Does NOT touch ``mesh_tool_positions``
+        — orthogonal injection per contract.
+      - Anything else: untouched (user argument).
+
+    Phase 1 invariant: at most one ``MeshJob`` parameter. A second
+    occurrence raises ``ValueError`` so the developer sees the problem
+    at decoration / registration time rather than at first invocation.
+
+    Args:
+        func: Function to analyze. Wrapper chains (``__wrapped__`` /
+            ``_mesh_original_func``) are followed to the underlying
+            user function so the analysis matches the source-level
+            declaration.
+
+    Returns:
+        :class:`MeshJobResolution` capturing both the mesh-tool slots
+        and the single optional ``MeshJob`` slot.
+
+    Raises:
+        ValueError: If the function declares more than one ``MeshJob``
+            parameter (Phase 1 disallows; future revisions may relax).
+    """
+    func = _get_original_func(func)
+    try:
+        type_hints = get_type_hints(func)
+    except Exception as e:
+        # If we can't resolve type hints (forward refs, missing imports),
+        # fall back to empty resolution — same defensive posture as the
+        # legacy positional analysers above. The caller can still invoke
+        # the function as a plain tool; jobs just won't bind.
+        logger.warning(f"analyze_mesh_job_signature: get_type_hints failed for {func}: {e}")
+        return MeshJobResolution()
+
+    sig = inspect.signature(func)
+    mesh_tool_positions: list[int] = []
+    mesh_job_param_index: Optional[int] = None
+    mesh_job_param_name: Optional[str] = None
+
+    for i, (param_name, _param) in enumerate(sig.parameters.items()):
+        if param_name not in type_hints:
+            continue
+        param_type = type_hints[param_name]
+
+        # MeshTool: assigns next positional slot, increments the counter
+        # (the counter being len(mesh_tool_positions)).
+        if _is_mesh_tool_type(param_type):
+            mesh_tool_positions.append(i)
+            continue
+
+        # MeshJob: orthogonal — does NOT touch the mesh-tool counter.
+        if _is_mesh_job_type(param_type):
+            if mesh_job_param_index is not None:
+                # Phase 1 contract: at most one. Fail loudly with a
+                # clear message including both offending parameter names
+                # so the developer can fix it without reading the source.
+                raise ValueError(
+                    f"a tool function may declare at most one MeshJob parameter; "
+                    f"function '{func.__name__}' declares both "
+                    f"'{mesh_job_param_name}' and '{param_name}'"
+                )
+            mesh_job_param_index = i
+            mesh_job_param_name = param_name
+            continue
+
+        # Anything else (user arg, MeshLlmAgent, MeshContextModel, etc.)
+        # is untouched here — those classifiers live in their own helpers.
+
+    return MeshJobResolution(
+        mesh_tool_positions=mesh_tool_positions,
+        mesh_job_param_index=mesh_job_param_index,
+        mesh_job_param_name=mesh_job_param_name,
+    )
+
+
 def get_mesh_agent_positions(func: Any) -> list[int]:
     """
     Get positions of McpMeshTool parameters in function signature.
@@ -164,7 +304,23 @@ def get_mesh_agent_parameter_names(func: Any) -> list[str]:
 
 def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[bool, str]:
     """
-    Validate that the number of dependencies matches McpMeshTool parameters.
+    Validate that the number of dependencies matches the function's
+    injectable slots.
+
+    A function may declare two kinds of typed dependency slot:
+
+    * ``McpMeshTool`` — positional, dispatch via remote tools/call. Counted
+      via :func:`get_mesh_agent_positions`.
+    * ``MeshJob`` — name-matched (by parameter name == dependency
+      capability), dispatch via job submit. Counted by inspecting whether
+      the function declares any ``MeshJob`` param whose name appears in the
+      declared dependency capabilities (see MeshJob DDDI contract).
+
+    Validation passes when ``len(dependencies) == mcp_slots + job_slots``
+    so consumer functions that only depend on a remote ``task=True`` tool
+    (one MeshJob param, one dependency, zero McpMeshTool params) are NOT
+    skipped from the heartbeat — they still need to be advertised to the
+    registry so the resolver can match them against providers.
 
     Args:
         func: Function to validate
@@ -176,11 +332,46 @@ def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[boo
     func = _get_original_func(func)
     mesh_positions = get_mesh_agent_positions(func)
 
-    if len(dependencies) != len(mesh_positions):
+    # Count MeshJob slots that match a declared dependency capability.
+    # MeshJob params are name-matched (not positional) so an unmatched
+    # MeshJob param does NOT consume a dependency slot — only the matched
+    # ones do.
+    #
+    # Errors: ``analyze_mesh_job_signature`` raises ``ValueError`` when a
+    # function declares multiple MeshJob parameters (Phase 1 contract).
+    # We deliberately let that propagate so registration-time validation
+    # surfaces the misuse instead of silently advertising the tool with
+    # the wrong dependency-slot count. Other inspection failures
+    # (TypeError / AttributeError on weird callables) still fall through
+    # to the legacy positional-only check — those are non-contractual
+    # signatures the legacy validator already tolerated.
+    job_slots = 0
+    try:
+        resolution = analyze_mesh_job_signature(func)
+    except (TypeError, AttributeError) as e:
+        # Defensive: weird callables that can't be introspected. Skip
+        # the MeshJob accounting and fall through to the legacy check.
+        logger.debug(
+            "validate_mesh_dependencies: MeshJob analysis skipped for %s: %s",
+            getattr(func, "__name__", "?"),
+            e,
+        )
+        resolution = None
+
+    if resolution is not None and resolution.mesh_job_param_name:
+        dep_caps = {
+            d.get("capability") for d in dependencies if isinstance(d, dict)
+        }
+        if resolution.mesh_job_param_name in dep_caps:
+            job_slots = 1
+
+    expected = len(mesh_positions) + job_slots
+    if len(dependencies) != expected:
         return False, (
-            f"Function {func.__name__} has {len(mesh_positions)} McpMeshTool parameters "
+            f"Function {func.__name__} has {len(mesh_positions)} McpMeshTool "
+            f"parameter(s) and {job_slots} matched MeshJob slot(s) "
             f"but {len(dependencies)} dependencies declared. "
-            f"Each McpMeshTool parameter needs a corresponding dependency."
+            f"Each typed slot needs a corresponding dependency."
         )
 
     return True, ""

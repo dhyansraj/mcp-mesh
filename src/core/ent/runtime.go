@@ -6,6 +6,7 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
+	"mcp-mesh/src/core/ent/job"
 	"mcp-mesh/src/core/ent/llmproviderresolution"
 	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
@@ -86,6 +87,36 @@ func init() {
 	dependencyresolution.DefaultUpdatedAt = dependencyresolutionDescUpdatedAt.Default.(func() time.Time)
 	// dependencyresolution.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
 	dependencyresolution.UpdateDefaultUpdatedAt = dependencyresolutionDescUpdatedAt.UpdateDefault.(func() time.Time)
+	jobFields := schema.Job{}.Fields()
+	_ = jobFields
+	// jobDescCapability is the schema descriptor for capability field.
+	jobDescCapability := jobFields[1].Descriptor()
+	// job.CapabilityValidator is a validator for the "capability" field. It is called by the builders before save.
+	job.CapabilityValidator = jobDescCapability.Validators[0].(func(string) error)
+	// jobDescAttemptCount is the schema descriptor for attempt_count field.
+	jobDescAttemptCount := jobFields[9].Descriptor()
+	// job.DefaultAttemptCount holds the default value on creation for the attempt_count field.
+	job.DefaultAttemptCount = jobDescAttemptCount.Default.(int)
+	// job.AttemptCountValidator is a validator for the "attempt_count" field. It is called by the builders before save.
+	job.AttemptCountValidator = jobDescAttemptCount.Validators[0].(func(int) error)
+	// jobDescMaxRetries is the schema descriptor for max_retries field.
+	jobDescMaxRetries := jobFields[10].Descriptor()
+	// job.DefaultMaxRetries holds the default value on creation for the max_retries field.
+	job.DefaultMaxRetries = jobDescMaxRetries.Default.(int)
+	// job.MaxRetriesValidator is a validator for the "max_retries" field. It is called by the builders before save.
+	job.MaxRetriesValidator = jobDescMaxRetries.Validators[0].(func(int) error)
+	// jobDescMaxDuration is the schema descriptor for max_duration field.
+	jobDescMaxDuration := jobFields[11].Descriptor()
+	// job.MaxDurationValidator is a validator for the "max_duration" field. It is called by the builders before save.
+	job.MaxDurationValidator = jobDescMaxDuration.Validators[0].(func(int) error)
+	// jobDescSubmittedAt is the schema descriptor for submitted_at field.
+	jobDescSubmittedAt := jobFields[15].Descriptor()
+	// job.DefaultSubmittedAt holds the default value on creation for the submitted_at field.
+	job.DefaultSubmittedAt = jobDescSubmittedAt.Default.(func() time.Time)
+	// jobDescID is the schema descriptor for id field.
+	jobDescID := jobFields[0].Descriptor()
+	// job.IDValidator is a validator for the "id" field. It is called by the builders before save.
+	job.IDValidator = jobDescID.Validators[0].(func(string) error)
 	llmproviderresolutionFields := schema.LLMProviderResolution{}.Fields()
 	_ = llmproviderresolutionFields
 	// llmproviderresolutionDescRequiredNamespace is the schema descriptor for required_namespace field.

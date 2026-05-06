@@ -224,6 +224,98 @@ class McpMeshTool(Protocol):
             }
 
 
+class MeshJob(Protocol):
+    """
+    MCP Mesh job injectable for long-running task support (Phase 1, MeshJob substrate).
+
+    Used as a type annotation on a ``@mesh.tool`` parameter to receive either
+    a producer-side ``JobController`` (when the tool is decorated with
+    ``@mesh.tool(task=True)`` and invoked as a job — i.e. via the inbound
+    job-dispatch path or a claim worker) or a consumer-side ``JobProxy``
+    (when the tool depends on a remote ``task=True`` capability and submits
+    work via ``mesh.MeshJob.submit(...)``).
+
+    On the producer side the injected object exposes:
+        - ``await job.update_progress(progress, message=None)`` — coalesced delta.
+        - ``await job.complete(result)`` — terminal success.
+        - ``await job.fail(error)`` — terminal failure.
+
+    On the consumer side the injected object exposes:
+        - ``await job.wait(timeout_secs=None)`` — poll until terminal.
+        - ``await job.status()`` — single registry read.
+        - ``await job.cancel(reason=None)`` — request cancellation.
+
+    A ``MeshJob`` parameter is **orthogonal** to the positional indexing
+    used by ``McpMeshTool``: the DDDI resolver records its signature
+    position separately so the function can declare the job param wherever
+    it reads naturally without disturbing tool-dependency slot numbering.
+    See ``MESHJOB_DDDI_CONTRACT.md`` for the full classification rules.
+
+    A function with a ``MeshJob`` parameter MAY still be invoked as a
+    regular synchronous tool call — in that case the runtime passes
+    ``None`` for the slot. User functions should treat ``None`` as the
+    "fast path" (no progress reporting, no cancellation checks).
+
+    Usage Examples:
+        Producer (long-running task):
+
+            @mesh.tool(capability="plan_trip", task=True)
+            async def plan_trip(
+                user_id: str,
+                weather: McpMeshTool = None,
+                job: MeshJob = None,
+            ) -> dict:
+                if job is not None:
+                    await job.update_progress(0.1, "checking weather")
+                w = await weather({"city": "PDX"})
+                if job is not None:
+                    await job.update_progress(0.9, "done")
+                return {"itinerary": w}
+
+        Consumer (await a remote job):
+
+            @mesh.tool(capability="orchestrate", dependencies=["plan_trip"])
+            async def orchestrate(
+                user_id: str,
+                plan_trip: MeshJob = None,
+            ) -> dict:
+                proxy = await plan_trip.submit(user_id=user_id, max_duration=600)
+                return await proxy.wait(timeout_secs=600)
+    """
+
+    if PYDANTIC_AVAILABLE:
+
+        @classmethod
+        def __get_pydantic_core_schema__(
+            cls,
+            source_type: Any,
+            handler: Any,
+        ) -> core_schema.CoreSchema:
+            """
+            Custom Pydantic core schema for MeshJob.
+
+            Mirrors :class:`McpMeshTool` / :class:`MeshLlmAgent`: the parameter
+            appears as optional/nullable in the MCP tool input schema so MCP
+            callers don't have to (and can't) supply it. The runtime fills
+            it in — JobController on the producer side when invoked as a job,
+            JobProxy on the consumer side, or ``None`` on a regular call.
+            """
+            return core_schema.with_default_schema(
+                core_schema.nullable_schema(core_schema.any_schema()),
+                default=None,
+            )
+
+    else:
+
+        @classmethod
+        def __get_pydantic_core_schema__(cls, source_type: Any, handler: Any) -> dict:
+            return {
+                "type": "default",
+                "schema": {"type": "nullable", "schema": {"type": "any"}},
+                "default": None,
+            }
+
+
 def _create_deprecated_mcpmeshagent():
     """Create McpMeshAgent as a deprecated alias for McpMeshTool."""
 
