@@ -230,3 +230,60 @@ export function makeJobController(
 ): JobController {
   return new JobController(jobId, instanceId, registryUrl);
 }
+
+/**
+ * Build the positional call args array for a `task: true` tool, splicing
+ * the `controller` into the user signature at `meshJobParamIndex`.
+ *
+ * Position 0 is always the parsed `args` payload; deps begin at 1. The
+ * MeshJob slot is orthogonal to MeshTool positional indexing — when
+ * `meshJobParamIndex` lands inside the dep range the deps shift past
+ * it; when it lands after all deps the helper pads any gap with `null`
+ * and places the controller at the trailing position.
+ *
+ * Centralised here so both the inbound HTTP wrapper (agent.ts) and the
+ * claim-path dispatcher (claim handler in agent.ts) share one
+ * implementation — historically these splice loops had drifted apart.
+ *
+ * @param payload - The parsed `args` payload (signature position 0).
+ * @param deps - Resolved dep proxies (or `MeshJobSubmitter` for the
+ *   meshJobDepIndex slot, or `null` for unresolved deps) in declaration
+ *   order. Positionally injected starting at sig pos 1.
+ * @param controller - The `JobController` to inject at
+ *   `meshJobParamIndex`, or `null` when the call is not running under
+ *   a job context.
+ * @param meshJobParamIndex - Signature position where the controller
+ *   should land, or `undefined` when the user didn't declare a MeshJob
+ *   slot (controller is then dropped — the user just doesn't get one).
+ */
+export function spliceJobController<D>(
+  payload: unknown,
+  deps: ReadonlyArray<D>,
+  controller: JobController | null,
+  meshJobParamIndex: number | undefined,
+): unknown[] {
+  const callArgs: unknown[] = [payload];
+  let depCursor = 0;
+  let pos = 1;
+  while (depCursor < deps.length || pos === meshJobParamIndex) {
+    if (pos === meshJobParamIndex) {
+      callArgs.push(controller);
+      pos += 1;
+      continue;
+    }
+    callArgs.push(deps[depCursor]);
+    depCursor += 1;
+    pos += 1;
+  }
+  // Trailing meshJobParamIndex case (after all deps).
+  if (
+    meshJobParamIndex !== undefined &&
+    callArgs.length <= meshJobParamIndex
+  ) {
+    while (callArgs.length < meshJobParamIndex) {
+      callArgs.push(null);
+    }
+    callArgs[meshJobParamIndex] = controller;
+  }
+  return callArgs;
+}

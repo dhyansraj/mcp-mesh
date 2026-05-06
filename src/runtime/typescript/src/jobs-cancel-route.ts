@@ -35,19 +35,29 @@ import { cancelActiveJob } from "@mcpmesh/core";
  * falls back to lease-expiry.
  */
 export function registerCancelRoute(server: FastMCP): boolean {
+  // Visibility: cancel-mid-flight is a primary control-plane signal for
+  // long-running jobs. When registration fails the agent silently
+  // degrades to lease-expiry — operators who only watch ERROR-level
+  // logs would never see the regression. Emit at console.error and
+  // include the underlying reason so the failure mode is debuggable
+  // from logs alone.
   let app: ReturnType<FastMCP["getApp"]> | null = null;
   try {
     app = server.getApp();
   } catch (err) {
-    console.warn(
-      "[mesh-jobs] FastMCP.getApp() unavailable — cancel route not registered:",
-      err,
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[mesh-jobs] cancel route NOT registered — FastMCP.getApp() ` +
+        `unavailable: ${reason}. Cancel-mid-flight will silently degrade ` +
+        `to lease expiry for any task: true tools on this agent.`,
     );
     return false;
   }
   if (!app) {
-    console.warn(
-      "[mesh-jobs] FastMCP.getApp() returned null — cancel route not registered",
+    console.error(
+      `[mesh-jobs] cancel route NOT registered — FastMCP.getApp() ` +
+        `returned null. Cancel-mid-flight will silently degrade to lease ` +
+        `expiry for any task: true tools on this agent.`,
     );
     return false;
   }
@@ -74,7 +84,12 @@ export function registerCancelRoute(server: FastMCP): boolean {
     });
     return true;
   } catch (err) {
-    console.warn("[mesh-jobs] failed to register cancel route:", err);
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[mesh-jobs] cancel route NOT registered — app.post() raised: ` +
+        `${reason}. Cancel-mid-flight will silently degrade to lease ` +
+        `expiry for any task: true tools on this agent.`,
+    );
     return false;
   }
 }

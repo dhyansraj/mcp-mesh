@@ -240,6 +240,62 @@ export class ClaimDispatcher {
     ) as Array<Record<string, unknown>>;
   }
 
+  /**
+   * Fail a job by posting a single `failed` delta to `/jobs/batch`,
+   * bypassing the (failed) controller construction path. Used as a
+   * fallback when `makeJobController` throws — without this the row
+   * stays in `working` until the lease sweep, which can be minutes.
+   *
+   * Best-effort: any error here is logged at warn level (we already
+   * lost the controller for the original error, can't lose visibility
+   * of the fallback too) but does not throw — the registry sweep is
+   * still the ultimate backstop.
+   */
+  private async _failJobByIdDirectly(
+    jobId: string,
+    reason: string,
+  ): Promise<void> {
+    const url = `${this.registryUrl.replace(/\/$/, "")}/jobs/batch`;
+    const body = {
+      instance_id: this.instanceId,
+      deltas: [
+        {
+          id: jobId,
+          status: "failed",
+          error: reason,
+        },
+      ],
+    };
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10_000);
+      try {
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          dispatcher: this._httpAgent as any,
+        } as RequestInit);
+        if (resp.status !== 200) {
+          console.warn(
+            `[mesh-claim] /jobs/batch returned ${resp.status} when failing ` +
+              `job=${jobId} after controller construction failure; relying ` +
+              `on registry sweep`,
+          );
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (err) {
+      console.warn(
+        `[mesh-claim] /jobs/batch fail-fast for job=${jobId} raised:`,
+        err,
+      );
+    }
+  }
+
   private _logClaimFailure(detail: string): void {
     const msg =
       `[mesh-claim] capability=${this.capability} instance=${this.instanceId}: ` +
@@ -276,6 +332,19 @@ export class ClaimDispatcher {
       console.warn(
         `[mesh-claim] failed to construct JobController for job=${jobId}:`,
         err,
+      );
+      // Fail the job immediately so the registry doesn't wait on lease
+      // expiry to mark the row terminal — without this the row sits in
+      // `working` indefinitely (visible to users as a stuck job) until
+      // the lease sweeper notices. We can't use controller.fail()
+      // because controller construction is what failed; instead we
+      // POST a single `failed` delta to /jobs/batch directly using the
+      // dispatcher's keep-alive agent.
+      await this._failJobByIdDirectly(
+        jobId,
+        `controller construction failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
       );
       return;
     }
@@ -333,6 +402,24 @@ export class ClaimDispatcher {
       let permitTransferred = false;
       try {
         const claimed = await this._claimOnce();
+        if (claimed.length > 1) {
+          // Defensive warn (W3): the Phase 1 wire is single-claim by
+          // design — `POST /jobs/claim` returns at most one job per
+          // round-trip (see `crate::claim_worker::ClaimWorkerConfig`
+          // and the registry's ClaimJobs handler). Receiving > 1 here
+          // means a future wire change (multi-claim) shipped without
+          // re-validating the dispatcher's permit accounting. We
+          // already handle the multi-claim case via the
+          // re-acquire-per-extra loop below — the warn just surfaces
+          // the unexpected shape so a future wire change is caught
+          // explicitly rather than silently relying on the loop.
+          console.warn(
+            `[mesh-claim] capability=${this.capability} instance=${this.instanceId}: ` +
+              `unexpected multi-claim response (got ${claimed.length} jobs) — ` +
+              `Phase 1 wire is single-claim by design; defensive multi-claim ` +
+              `path engaged`,
+          );
+        }
         if (claimed.length > 0) {
           // First claim: hand the permit ownership to the dispatch
           // task. Future-safe extras: re-acquire permits one-by-one.

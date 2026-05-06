@@ -38,6 +38,7 @@ import {
   readJobHeaders,
   runWithJobContext,
   makeJobController,
+  spliceJobController,
 } from "./inbound-job-dispatch.js";
 import { MeshJobSubmitter } from "./mesh-job-submitter.js";
 import { ClaimDispatcher, type ClaimHandler } from "./claim-dispatcher.js";
@@ -288,6 +289,29 @@ export class MeshAgent {
       }
     }
 
+    // Phase 1 MeshJob substrate (producer-side validation): if the
+    // tool declares meshJobParamIndex, that position MUST be a sane
+    // integer >= 1. Position 0 is reserved for the args payload, so
+    // the controller can only land at sig pos 1+. Without this
+    // guard, values 0 / negative / NaN / non-integer silently skip
+    // controller injection — the user's handler then sees `null`
+    // where it expected a JobController and throws a confusing
+    // `TypeError: Cannot read properties of null` at first await.
+    //
+    // Upper bound is a sanity check: > 10 almost certainly means a
+    // typo (no real producer signature has that many params).
+    if (def.meshJobParamIndex !== undefined) {
+      const v = def.meshJobParamIndex;
+      const ok = Number.isInteger(v) && v >= 1 && v <= 10;
+      if (!ok) {
+        throw new Error(
+          `addTool({ meshJobParamIndex: ${v} }) for tool '${toolName}': ` +
+            `meshJobParamIndex must be an integer >= 1 (position of MeshJob ` +
+            `param after the args payload), got: ${v}`,
+        );
+      }
+    }
+
     // Worker mode: register the raw execute fn in the worker tool map and
     // skip FastMCP registration, dependency wiring, and metadata storage.
     // The worker entry will look up tools by name when handling dispatched
@@ -311,6 +335,28 @@ export class MeshAgent {
     const isTaskTool = def.task === true;
     const meshJobDepIndex = def.meshJobDepIndex;
     const meshJobParamIndex = def.meshJobParamIndex;
+
+    // Phase 1 MeshJob substrate: when a job-bound tool exists AND the
+    // user explicitly opted into worker isolation via env, log a single
+    // warning at registration time. The wrapper force-disables
+    // isolation for job-bound tools because controllers + the
+    // AsyncLocalStorage / Rust task-local job context don't cross the
+    // worker_threads boundary cleanly. Without this log the
+    // force-disable was silent — users who set MCP_MESH_TOOL_ISOLATION
+    // expected it to apply to every tool.
+    const isJobBoundForLog = isTaskTool || meshJobDepIndex !== undefined;
+    const isolationEnvSet =
+      typeof process.env.MCP_MESH_TOOL_ISOLATION === "string" &&
+      process.env.MCP_MESH_TOOL_ISOLATION.toLowerCase() !== "false";
+    if (isJobBoundForLog && isolationEnvSet) {
+      console.warn(
+        `[mesh-tool] '${toolName}' has ` +
+          (isTaskTool ? "task: true" : `meshJobDepIndex: ${meshJobDepIndex}`) +
+          `; worker isolation is disabled for job-bound tools ` +
+          `(controllers/AsyncLocalStorage don't cross worker boundaries). ` +
+          `Set 'task: true' explicitly if you intend a producer.`,
+      );
+    }
 
     // Create wrapper that injects dependencies positionally and handles tracing
     const wrappedExecute = async (args: z.infer<T>): Promise<string> => {
@@ -475,29 +521,12 @@ export class MeshAgent {
                 // begin at position 1. The MeshJob slot is orthogonal —
                 // when meshJobParamIndex skips a position, deps shift past
                 // it (caller's signature must reflect that).
-                const callArgs: unknown[] = [cleanArgs];
-                let depCursor = 0;
-                let pos = 1;
-                while (depCursor < depsArray.length || pos === meshJobParamIndex) {
-                  if (pos === meshJobParamIndex) {
-                    callArgs.push(controller);
-                    pos += 1;
-                    continue;
-                  }
-                  callArgs.push(depsArray[depCursor]);
-                  depCursor += 1;
-                  pos += 1;
-                }
-                // Trailing meshJobParamIndex case (after all deps).
-                if (
-                  meshJobParamIndex !== undefined &&
-                  callArgs.length <= meshJobParamIndex
-                ) {
-                  while (callArgs.length < meshJobParamIndex) {
-                    callArgs.push(null);
-                  }
-                  callArgs[meshJobParamIndex] = controller;
-                }
+                const callArgs = spliceJobController(
+                  cleanArgs,
+                  depsArray,
+                  controller,
+                  meshJobParamIndex,
+                );
                 return await runWithJobContext(jobId, deadlineSecs, controller, () =>
                   Promise.resolve(
                     (execute as (...a: unknown[]) => unknown)(...callArgs),
@@ -577,9 +606,6 @@ export class MeshAgent {
     if (isTaskTool) {
       const capability = def.capability ?? toolName;
       this._taskHandlers.set(capability, async (payload, controller) => {
-        const callArgs: unknown[] = [payload];
-        let depCursor = 0;
-        let pos = 1;
         const liveDeps: (McpMeshTool | MeshJobSubmitter | null)[] = normalizedDeps.map(
           (dep, depIndex) => {
             if (depIndex === meshJobDepIndex) {
@@ -592,25 +618,12 @@ export class MeshAgent {
             return this.resolvedDeps.get(`${toolName}:dep_${depIndex}`) ?? null;
           },
         );
-        while (depCursor < liveDeps.length || pos === meshJobParamIndex) {
-          if (pos === meshJobParamIndex) {
-            callArgs.push(controller);
-            pos += 1;
-            continue;
-          }
-          callArgs.push(liveDeps[depCursor]);
-          depCursor += 1;
-          pos += 1;
-        }
-        if (
-          meshJobParamIndex !== undefined &&
-          callArgs.length <= meshJobParamIndex
-        ) {
-          while (callArgs.length < meshJobParamIndex) {
-            callArgs.push(null);
-          }
-          callArgs[meshJobParamIndex] = controller;
-        }
+        const callArgs = spliceJobController(
+          payload,
+          liveDeps,
+          controller,
+          meshJobParamIndex,
+        );
         return await (execute as (...a: unknown[]) => unknown)(...callArgs);
       });
     }
@@ -843,9 +856,20 @@ export class MeshAgent {
     // 2.6 Phase 1 MeshJob substrate: mount POST /jobs/:job_id/cancel
     // on FastMCP's underlying Hono app so the registry's cancel
     // forwarder can fire the in-process cancel token. Best-effort —
-    // failures here are logged, not fatal.
+    // failures here are logged, not fatal. When this agent owns
+    // task: true tools and the route fails to register, escalate to
+    // a second console.error so the operator can't miss the
+    // cancel-mid-flight regression in logs.
     if (this.config.registryUrl) {
-      registerCancelRoute(this.server);
+      const cancelRouteOk = registerCancelRoute(this.server);
+      if (!cancelRouteOk && this._taskHandlers.size > 0) {
+        console.error(
+          `[mesh-jobs] agent ${this.agentId} owns ${this._taskHandlers.size} ` +
+            `task: true tool(s) but the cancel route failed to register. ` +
+            `Cancel requests for in-flight jobs will fall through to ` +
+            `lease expiry — see the prior [mesh-jobs] error for the cause.`,
+        );
+      }
     }
 
     // 3. Start heartbeat to registry via Rust core

@@ -20,6 +20,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ClaimDispatcher } from "../claim-dispatcher.js";
 import { getCurrentPropagatedHeaders } from "../proxy.js";
+import * as inboundDispatch from "../inbound-job-dispatch.js";
 
 // Mock @mcpmesh/core so the real JobController/withJobAsync don't
 // actually try to reach the registry. The dispatcher uses `fetch`
@@ -321,5 +322,73 @@ describe("ClaimDispatcher", () => {
     setTimeout(() => resolveHandler(), 20);
     await stopPromise;
     expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it("posts a `failed` /jobs/batch delta when JobController construction throws (W2)", async () => {
+    // Review finding W2: previously a `console.warn` + early return left
+    // the registry believing this replica owned the job until lease
+    // expiry, leaving the row stuck in `working`. The fix is to fire a
+    // POST /jobs/batch failed delta directly (bypassing the controller
+    // we couldn't construct) so the row flips terminal immediately and
+    // unblocks retry.
+    const ctorSpy = vi
+      .spyOn(inboundDispatch, "makeJobController")
+      .mockImplementation(() => {
+        throw new Error("boom: napi binding refused");
+      });
+
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    let calls = 0;
+    const claimUrl = "http://reg/jobs/claim";
+    const batchUrl = "http://reg/jobs/batch";
+    fetchMock.mockImplementation(async (url: string) => {
+      calls += 1;
+      if (url === claimUrl && calls === 1) {
+        return {
+          status: 200,
+          json: async () => ({
+            claimed: [
+              {
+                id: "job-broken-ctor",
+                submitted_payload: { x: 1 },
+              },
+            ],
+          }),
+        } as unknown as Response;
+      }
+      if (url === batchUrl) {
+        return { status: 200, json: async () => ({}) } as unknown as Response;
+      }
+      return { status: 204, json: async () => ({}) } as unknown as Response;
+    });
+
+    const handler = vi.fn();
+    const d = new ClaimDispatcher("cap-broken", "agent-x", "http://reg", handler);
+    d.start();
+    await new Promise((r) => setTimeout(r, 100));
+    await d.stop();
+
+    // Handler must NOT have been invoked — the dispatcher bailed before
+    // calling it because we couldn't build a controller.
+    expect(handler).not.toHaveBeenCalled();
+
+    // The fail-fast path must have POSTed a `failed` delta to /jobs/batch.
+    const batchCall = fetchMock.mock.calls.find(
+      (call) => call[0] === batchUrl,
+    );
+    expect(batchCall, "expected a POST /jobs/batch fail-fast call").toBeDefined();
+    const init = batchCall![1] as RequestInit;
+    expect(init.method).toBe("POST");
+    const body = JSON.parse(init.body as string);
+    expect(body.instance_id).toBe("agent-x");
+    expect(body.deltas).toHaveLength(1);
+    const delta = body.deltas[0];
+    expect(delta.id).toBe("job-broken-ctor");
+    expect(delta.status).toBe("failed");
+    expect(typeof delta.error).toBe("string");
+    expect(delta.error).toContain("controller construction failed");
+    expect(delta.error).toContain("boom: napi binding refused");
+
+    ctorSpy.mockRestore();
   });
 });
