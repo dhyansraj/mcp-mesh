@@ -141,3 +141,20 @@ docker compose -f docker-compose.observability.yml up -d
 ```
 
 Then set `MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true` when starting agents.
+
+## Optional: You.com Search for POI Agent
+
+The `poi-agent` supports a pluggable live search provider:
+
+- `POI_SEARCH_PROVIDER=brave` (default, requires `BRAVE_SEARCH_API_KEY`)
+- `POI_SEARCH_PROVIDER=you` (uses You.com Search API)
+
+Example setup:
+
+```bash
+export POI_SEARCH_PROVIDER=you
+# Optional for You.com Search API free tier (100 searches/day):
+# export YDC_API_KEY=your_key_here
+```
+
+If the configured provider fails or returns no results, the agent falls back to built-in simulated POIs.

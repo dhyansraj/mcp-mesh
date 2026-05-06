@@ -109,6 +109,46 @@ async def _brave_search_pois(location: str, api_key: str) -> list[dict]:
     return pois
 
 
+async def _you_search_pois(location: str, api_key: str | None) -> list[dict]:
+    query = f"top attractions and things to do in {location}"
+    headers = {"X-API-Key": api_key} if api_key else {}
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            "https://api.you.com/v1/agents/search",
+            params={"query": query, "count": 10},
+            headers=headers,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    results = data.get("results", {}).get("web", [])
+    pois = []
+    seen_names = set()
+
+    for r in results:
+        title = r.get("title", "")
+        description = r.get("description", "")
+        combined = f"{title} {description}"
+
+        name = re.sub(r"\s*[-|:].*$", "", title).strip()
+        if not name or name.lower() in seen_names:
+            continue
+        seen_names.add(name.lower())
+
+        pois.append({
+            "name": name,
+            "type": _classify_type(combined),
+            "category": _extract_category(combined),
+            "location": location,
+            "source_url": r.get("url", ""),
+        })
+
+        if len(pois) >= 6:
+            break
+
+    return pois
+
+
 # --8<-- [start:tool_function]
 # --8<-- [start:di_function]
 @app.tool()
@@ -129,29 +169,35 @@ async def search_pois(
     rain_chance = forecast.get("rain_chance_pct", 0)
     prefer_indoor = rain_chance > 50
 
-    api_key = os.getenv("BRAVE_SEARCH_API_KEY")
+    search_provider = os.getenv("POI_SEARCH_PROVIDER", "brave").strip().lower()
+    brave_api_key = os.getenv("BRAVE_SEARCH_API_KEY")
+    ydc_api_key = os.getenv("YDC_API_KEY")
     note = None
 
-    if api_key:
-        try:
-            pois = await _brave_search_pois(location, api_key)
-            if not pois:
-                pois = _stub_pois(location, prefer_indoor)
-                note = "Search returned no results; showing simulated data."
-        except Exception as exc:
-            logger.exception("Brave Search API failed for POIs in %s", location)
-            pois = _stub_pois(location, prefer_indoor)
-            note = f"Live search unavailable ({exc}); showing simulated data."
-    else:
-        pois = _stub_pois(location, prefer_indoor)
-        note = "BRAVE_SEARCH_API_KEY not set; showing simulated data."
+    try:
+        if search_provider == "you":
+            pois = await _you_search_pois(location, ydc_api_key)
+            if not ydc_api_key:
+                note = "Using You.com free tier (100 searches/day, no key set)."
+        else:
+            if not brave_api_key:
+                raise ValueError("BRAVE_SEARCH_API_KEY not set")
+            pois = await _brave_search_pois(location, brave_api_key)
 
-    if prefer_indoor and api_key and not note:
+        if not pois:
+            pois = _stub_pois(location, prefer_indoor)
+            note = "Search returned no results; showing simulated data."
+    except Exception as exc:
+        logger.exception("Live POI search failed for provider=%s in %s", search_provider, location)
+        pois = _stub_pois(location, prefer_indoor)
+        note = f"Live search unavailable ({exc}); showing simulated data."
+
+    if prefer_indoor and not note:
         indoor = [p for p in pois if p["type"] == "indoor"]
         outdoor = [p for p in pois if p["type"] == "outdoor"]
         pois = indoor + outdoor
         recommendation = "Rain likely — indoor activities listed first."
-    elif not prefer_indoor and api_key and not note:
+    elif not prefer_indoor and not note:
         outdoor = [p for p in pois if p["type"] == "outdoor"]
         indoor = [p for p in pois if p["type"] == "indoor"]
         pois = outdoor + indoor
