@@ -123,8 +123,11 @@ fn job_status_to_str(s: JobStatus) -> &'static str {
 pub struct JsJobController {
     inner: JobController,
     /// Background batching tick handle; held so it lives as long as this
-    /// controller. Optional: if no Tokio runtime is available at construction
-    /// time the batching tick is skipped (terminal flushes still work).
+    /// controller. Spawned inside napi-rs's Tokio runtime in the
+    /// constructor (see `within_runtime_if_available` below) and dropped
+    /// (= cancelled with final flush) when JS GC collects the controller.
+    /// `Option<...>` is preserved for forward-compat with a possible
+    /// noop-feature build where `within_runtime_if_available` may degrade.
     _batching: Option<BatchingHandle>,
 }
 
@@ -145,25 +148,26 @@ impl JsJobController {
             backend.clone(),
             queue.clone(),
         );
-        // Try to enter the napi-rs Tokio runtime so `tokio::spawn` inside
-        // `spawn_batching_tick` finds a runtime. If the construction site
-        // has no runtime context (rare, but possible from some sync paths),
-        // fall through without the tick — terminal flushes still work.
-        let batching = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                let _guard = handle.enter();
-                Some(spawn_batching_tick(
-                    queue,
-                    backend,
-                    instance_id,
-                    BatchingConfig::default(),
-                ))
-            }
-            Err(_) => None,
-        };
+        // Spawn the batching tick inside napi-rs's shared Tokio runtime so
+        // mid-flight progress deltas actually reach the registry. The
+        // `#[napi(constructor)]` is invoked synchronously from JS context
+        // with NO ambient Tokio runtime — `Handle::try_current()` would
+        // return `Err` and the tick would be silently skipped (mirrors
+        // Python's `pyo3_async_runtimes::tokio::get_runtime().enter()`).
+        // `within_runtime_if_available` enters napi-rs's `RT` for the
+        // duration of the closure so `tokio::spawn` inside
+        // `spawn_batching_tick` resolves a valid runtime handle.
+        let batching = napi::bindgen_prelude::within_runtime_if_available(|| {
+            spawn_batching_tick(
+                queue,
+                backend,
+                instance_id,
+                BatchingConfig::default(),
+            )
+        });
         Ok(Self {
             inner,
-            _batching: batching,
+            _batching: Some(batching),
         })
     }
 
