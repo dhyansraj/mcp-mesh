@@ -157,6 +157,80 @@ describe("addTool — meshJobParamIndex validation", () => {
   });
 });
 
+describe("addTool — meshJobDepIndex validation", () => {
+  function newAgent(): MeshAgent {
+    return new MeshAgent(makeFastMCPStub(), {
+      name: "test-agent-depidx",
+      httpPort: 0,
+    });
+  }
+
+  it("rejects negative values", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "bad-neg",
+        parameters: z.object({}),
+        dependencies: ["a"],
+        meshJobDepIndex: -1,
+        execute: async () => "x",
+      }),
+    ).toThrow(/meshJobDepIndex must be a non-negative integer.*got: -1/);
+  });
+
+  it("rejects NaN", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "bad-nan",
+        parameters: z.object({}),
+        dependencies: ["a"],
+        meshJobDepIndex: Number.NaN,
+        execute: async () => "x",
+      }),
+    ).toThrow(/meshJobDepIndex must be a non-negative integer.*got: NaN/);
+  });
+
+  it("rejects fractional values", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "bad-frac",
+        parameters: z.object({}),
+        dependencies: ["a", "b"],
+        meshJobDepIndex: 0.5,
+        execute: async () => "x",
+      }),
+    ).toThrow(/meshJobDepIndex must be a non-negative integer.*got: 0\.5/);
+  });
+
+  it("rejects out-of-range values (>= depCount) with the original range error", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "bad-oor",
+        parameters: z.object({}),
+        dependencies: ["a"], // length 1
+        meshJobDepIndex: 5,
+        execute: async () => "x",
+      }),
+    ).toThrow(/out of range — the tool declares 1 dependencies/);
+  });
+
+  it("accepts 0 (first dep is the MeshJob slot)", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "ok-zero",
+        parameters: z.object({}),
+        dependencies: ["a", "b"],
+        meshJobDepIndex: 0,
+        execute: async () => "x",
+      }),
+    ).not.toThrow();
+  });
+});
+
 // =============================================================================
 // W1 — splice helper (de-duplicated splice loop)
 // =============================================================================

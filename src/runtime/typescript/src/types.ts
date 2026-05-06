@@ -448,7 +448,7 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
    */
   execute: (
     args: z.infer<T>,
-    ...deps: (McpMeshTool | null)[]
+    ...deps: (McpMeshTool | MeshJob | null)[]
   ) => Promise<unknown> | unknown;
 }
 

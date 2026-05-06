@@ -4,8 +4,8 @@
  * We don't bind to a real registry here — the napi `submitJob` is
  * mocked via vitest. The tests exercise:
  *
- *   - The retry policy (3 attempts on transient errors with 200ms /
- *     1s / 5s backoff — same as Python).
+ *   - The retry policy (3 attempts on transient errors with 200ms then
+ *     1s of backoff between attempts — 2 gaps for 3 attempts).
  *   - Fail-fast on non-transient errors (404 / 4xx / serialization).
  *   - Date → unix-epoch-seconds conversion for `totalDeadline`.
  *   - Number → unix-epoch-seconds normalisation (heuristic for

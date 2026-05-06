@@ -81,7 +81,10 @@ describe("JobController batching tick", () => {
 
       // Default batching interval is 2s. Wait long enough for at least one
       // tick to fire. If the tick wasn't spawned, recorded stays empty.
-      await new Promise((r) => setTimeout(r, 2500));
+      // Use 5s of slack so this isn't flaky on slow CI runners — 500ms
+      // of headroom over a 2s tick was too tight, the cost of ~2.5s
+      // extra wall time is acceptable for a single test.
+      await new Promise((r) => setTimeout(r, 5000));
 
       expect(
         recorded.length,
@@ -99,5 +102,5 @@ describe("JobController batching tick", () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
-  }, 10_000);
+  }, 15_000);
 });

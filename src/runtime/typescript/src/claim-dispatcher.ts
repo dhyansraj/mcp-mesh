@@ -86,6 +86,15 @@ export class ClaimDispatcher {
   /** Wake-up callbacks for the backoff sleep (so stop() exits promptly). */
   private _sleepWaiters: Array<() => void> = [];
   /**
+   * In-flight handler dispatch promises. Tracked so `stop()` can drain
+   * them before closing `_httpAgent` — without this, the keep-alive
+   * pool gets torn down while handler `controller.complete(...)` /
+   * `controller.fail(...)` calls are still mid-fetch, which surfaces
+   * as cryptic socket-close errors and (worse) leaves rows in `working`
+   * because the terminal delta never reached the registry.
+   */
+  private _inflightHandlers: Set<Promise<void>> = new Set();
+  /**
    * Per-dispatcher keep-alive HTTP agent for `/jobs/claim` polls.
    *
    * Mirrors Python's `httpx.AsyncClient(timeout=10)` lifetime — one
@@ -124,8 +133,25 @@ export class ClaimDispatcher {
     });
   }
 
-  /** Signal stop and await the loop. Best-effort; never throws. */
-  async stop(): Promise<void> {
+  /**
+   * Signal stop and await the loop. Best-effort; never throws.
+   *
+   * Drain order:
+   *   1. flip `_stopped` so the loop exits at its next yield;
+   *   2. wake any blocked waiters so the loop observes the signal;
+   *   3. await the loop promise (no more new dispatches after this);
+   *   4. await any in-flight handler dispatches (bounded by `timeoutMs`)
+   *      so handlers finish their final `controller.complete/fail` HTTP
+   *      calls before `_httpAgent` is torn down;
+   *   5. close the keep-alive pool.
+   *
+   * @param timeoutMs - Bounded wait for in-flight handlers. Defaults to
+   *   30s — long enough that a typical job's terminal flush completes,
+   *   short enough that a runaway handler doesn't block shutdown
+   *   forever. Caller is free to override (e.g. tests pass `0` for an
+   *   immediate close).
+   */
+  async stop(timeoutMs: number = 30_000): Promise<void> {
     this._stopped = true;
     // Wake any waiters so the loop can observe the stop signal.
     while (this._permitWaiters.length) this._permitWaiters.shift()!();
@@ -135,6 +161,32 @@ export class ClaimDispatcher {
         await this._loopPromise;
       } catch {
         /* swallow */
+      }
+    }
+    // Drain in-flight handler dispatches before closing the keep-alive
+    // pool. `_inflightHandlers` is a Set<Promise<void>> populated in
+    // _dispatchWithPermit; entries self-remove via .finally().
+    if (this._inflightHandlers.size > 0) {
+      const drain = Promise.allSettled([...this._inflightHandlers]);
+      if (timeoutMs <= 0) {
+        // Caller asked for an immediate close — skip the drain entirely.
+      } else {
+        let drainTimer: ReturnType<typeof setTimeout> | null = null;
+        const drainTimeout = new Promise<void>((resolve) => {
+          drainTimer = setTimeout(() => {
+            console.warn(
+              `[mesh-claim] capability=${this.capability} instance=${this.instanceId}: ` +
+                `stop() drain timed out after ${timeoutMs}ms with ${this._inflightHandlers.size} ` +
+                `handler(s) still in-flight; closing keep-alive pool anyway`,
+            );
+            resolve();
+          }, timeoutMs);
+        });
+        try {
+          await Promise.race([drain, drainTimeout]);
+        } finally {
+          if (drainTimer) clearTimeout(drainTimer);
+        }
       }
     }
     // Close the keep-alive pool so sockets don't leak across agent
@@ -456,7 +508,13 @@ export class ClaimDispatcher {
   private _dispatchWithPermit(claimed: Record<string, unknown>): void {
     // Spawn but do NOT await — _runLoop continues to the next claim
     // attempt. The permit is released when this dispatch finishes.
-    void this._dispatch(claimed).finally(() => this._release());
+    // Track the promise in `_inflightHandlers` so `stop()` can drain
+    // any in-flight handlers before closing the keep-alive Agent.
+    const p: Promise<void> = this._dispatch(claimed).finally(() => {
+      this._inflightHandlers.delete(p);
+      this._release();
+    });
+    this._inflightHandlers.add(p);
   }
 
   private _sleep(ms: number): Promise<void> {

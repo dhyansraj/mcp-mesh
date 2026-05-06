@@ -450,15 +450,68 @@ pub fn cancel_active_job_napi(job_id: String) -> bool {
 /// underlying JS Promise settles. The `run_as_job` scope keeps the
 /// cancel registry entry alive for that whole window, then drops it
 /// (panic-safe via the internal drop guard).
+/// Validate `deadline_secs` for [`with_job_async_napi`]. Returns the
+/// [`napi::Error`] message that would be propagated to JS, or `None`
+/// when the input is acceptable. Extracted from `with_job_async_napi`
+/// so it can be unit-tested without the napi `Promise<T>` boundary.
+fn validate_deadline_secs(deadline_secs: Option<f64>, job_id: &str) -> Option<String> {
+    match deadline_secs {
+        Some(secs) if !secs.is_finite() || secs < 0.0 => Some(format!(
+            "withJobAsync: invalid deadline_secs ({}) for job {} — must be a non-negative finite number or null",
+            secs, job_id,
+        )),
+        _ => None,
+    }
+}
+
 #[napi(js_name = "withJobAsync")]
 pub async fn with_job_async_napi(
     job_id: String,
     deadline_secs: Option<f64>,
     body: Promise<serde_json::Value>,
 ) -> Result<serde_json::Value> {
+    // Reject negative / NaN / Inf deadlines explicitly: silently aliasing
+    // them to "no deadline" (the previous behaviour) papers over upstream
+    // bugs where a caller arithmetic'd a negative remaining-time or
+    // produced NaN through a buggy clock computation.
+    if let Some(msg) = validate_deadline_secs(deadline_secs, &job_id) {
+        return Err(Error::from_reason(msg));
+    }
     let ctx = match deadline_secs {
         Some(secs) if secs > 0.0 => JobContext::with_timeout(job_id, Duration::from_secs_f64(secs)),
         _ => JobContext::new(job_id),
     };
     run_as_job(ctx, async move { body.await }).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_deadline_secs;
+
+    #[test]
+    fn validate_deadline_secs_accepts_none_and_zero_and_positive() {
+        assert!(validate_deadline_secs(None, "j-1").is_none());
+        assert!(validate_deadline_secs(Some(0.0), "j-1").is_none());
+        assert!(validate_deadline_secs(Some(1.5), "j-1").is_none());
+        assert!(validate_deadline_secs(Some(60.0), "j-1").is_none());
+    }
+
+    #[test]
+    fn validate_deadline_secs_rejects_negative() {
+        let msg = validate_deadline_secs(Some(-0.001), "j-neg").expect("should reject");
+        assert!(msg.contains("invalid deadline_secs"));
+        assert!(msg.contains("j-neg"));
+        assert!(msg.contains("-0.001"));
+
+        let msg = validate_deadline_secs(Some(-30.0), "abc").expect("should reject");
+        assert!(msg.contains("-30"));
+        assert!(msg.contains("abc"));
+    }
+
+    #[test]
+    fn validate_deadline_secs_rejects_nan_and_inf() {
+        assert!(validate_deadline_secs(Some(f64::NAN), "j-nan").is_some());
+        assert!(validate_deadline_secs(Some(f64::INFINITY), "j-inf").is_some());
+        assert!(validate_deadline_secs(Some(f64::NEG_INFINITY), "j-ninf").is_some());
+    }
 }

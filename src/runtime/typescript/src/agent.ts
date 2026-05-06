@@ -273,15 +273,26 @@ export class MeshAgent {
     }
 
     // Phase 1 MeshJob substrate (consumer-side validation): if the
-    // tool declares meshJobDepIndex, that index MUST point to a
-    // valid dependency. Catch the misuse at registration so the
-    // developer doesn't see a confusing TypeError at runtime when
-    // the wrapper tries to swap the dep proxy for a submitter.
+    // tool declares meshJobDepIndex, that index MUST be a non-negative
+    // integer pointing to a valid dependency. Catch misuse at
+    // registration so the developer doesn't see a confusing TypeError
+    // at runtime when the wrapper tries to swap the dep proxy for a
+    // submitter. Mirrors the meshJobParamIndex validation below —
+    // NaN / fractional / negative values must fail-fast here too.
     if (def.meshJobDepIndex !== undefined) {
       const depCount = (def.dependencies ?? []).length;
-      if (def.meshJobDepIndex < 0 || def.meshJobDepIndex >= depCount) {
+      const v = def.meshJobDepIndex;
+      const isInt = Number.isInteger(v) && v >= 0;
+      if (!isInt) {
         throw new Error(
-          `addTool({ meshJobDepIndex: ${def.meshJobDepIndex} }) for tool ` +
+          `addTool({ meshJobDepIndex: ${v} }) for tool '${toolName}': ` +
+            `meshJobDepIndex must be a non-negative integer (index into ` +
+            `dependencies[]), got: ${v}`,
+        );
+      }
+      if (v >= depCount) {
+        throw new Error(
+          `addTool({ meshJobDepIndex: ${v} }) for tool ` +
             `'${toolName}' is out of range — the tool declares ${depCount} ` +
             `dependencies. meshJobDepIndex must be a valid index into ` +
             `dependencies[].`,
@@ -509,11 +520,20 @@ export class MeshAgent {
                       this.config.registryUrl,
                     );
                   } catch (err) {
-                    console.warn(
-                      `[mesh-jobs] could not construct JobController for tool ` +
-                        `'${toolName}' job=${jobId}; running as a regular call:`,
+                    // Don't silently fall back to a regular tool call —
+                    // a `task: true` tool that needs a controller will
+                    // misbehave (return a dict instead of completing the
+                    // row, leaving the registry's job stuck in `working`
+                    // until lease expiry). Surface the failure so the
+                    // outer FastMCP handler reports it AND the inbound
+                    // wrapper's catch (or its caller) can fail-fast.
+                    console.error(
+                      `[mesh-jobs] makeJobController failed for tool ` +
+                        `'${toolName}' job=${jobId} agent=${this.agentId} ` +
+                        `registry=${this.config.registryUrl}:`,
                       err,
                     );
+                    throw err;
                   }
                 }
                 // Build the call args, splicing the controller (or null) at

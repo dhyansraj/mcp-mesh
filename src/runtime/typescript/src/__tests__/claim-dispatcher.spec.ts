@@ -289,7 +289,13 @@ describe("ClaimDispatcher", () => {
     expect(agent.closed || agent.destroyed).toBe(true);
   });
 
-  it("stop() exits even when the handler is long-running", async () => {
+  it("stop() drains in-flight handlers before closing the keep-alive pool", async () => {
+    // Verifies the F7 follow-up: stop() must await any handler
+    // dispatches that are still mid-fetch before it tears down the
+    // shared `_httpAgent`. Without the drain, controller.complete /
+    // controller.fail HTTP calls would race with Agent.close() and
+    // surface as cryptic socket-closed errors — worse, the terminal
+    // delta might never reach the registry, leaving the row stuck.
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     let calls = 0;
     fetchMock.mockImplementation(async () => {
@@ -299,6 +305,73 @@ describe("ClaimDispatcher", () => {
           status: 200,
           json: async () => ({
             claimed: [{ id: "long", submitted_payload: {} }],
+          }),
+        } as unknown as Response;
+      }
+      return { status: 204, json: async () => ({}) } as unknown as Response;
+    });
+
+    let resolveHandler!: () => void;
+    let handlerObservedFinish = false;
+    const handler = vi.fn(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolveHandler = () => {
+            handlerObservedFinish = true;
+            resolve("done");
+          };
+        }),
+    );
+    const d = new ClaimDispatcher("cap", "i", "http://r", handler);
+    // The Agent is private; verify close ordering relative to handler
+    // resolution. eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const httpAgent = (d as any)._httpAgent as { close: () => Promise<void> };
+    let closedAt = 0;
+    const closeSpy = vi.spyOn(httpAgent, "close").mockImplementation(async () => {
+      closedAt = Date.now();
+    });
+
+    d.start();
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Kick off stop(); resolve the handler ~20ms later.
+    const stopStart = Date.now();
+    const stopPromise = d.stop();
+    let resolvedAt = 0;
+    setTimeout(() => {
+      resolvedAt = Date.now();
+      resolveHandler();
+    }, 20);
+    await stopPromise;
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handlerObservedFinish).toBe(true);
+    // The keep-alive pool must close STRICTLY AFTER the handler
+    // resolved — that's the whole point of the drain.
+    expect(closeSpy).toHaveBeenCalled();
+    expect(resolvedAt).toBeGreaterThan(0);
+    expect(closedAt).toBeGreaterThanOrEqual(resolvedAt);
+    // Sanity: stop() should still be quick — the bounded timeout is
+    // 30s default, but we resolved at 20ms, so total wall < 1s.
+    expect(Date.now() - stopStart).toBeLessThan(1000);
+
+    closeSpy.mockRestore();
+  });
+
+  it("stop(timeoutMs=0) skips the drain when the caller asks for an immediate close", async () => {
+    // Defensive: the bounded-drain default is 30s, but the caller can
+    // pass `0` to force-close (e.g. tests that stub a long-running
+    // handler and don't want to wait for it). Verify the path doesn't
+    // hang on the in-flight handler.
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    let calls = 0;
+    fetchMock.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          status: 200,
+          json: async () => ({
+            claimed: [{ id: "never-finishes", submitted_payload: {} }],
           }),
         } as unknown as Response;
       }
@@ -316,12 +389,13 @@ describe("ClaimDispatcher", () => {
     d.start();
     await new Promise((r) => setTimeout(r, 50));
 
-    // Stop should resolve promptly even though the handler hasn't.
-    const stopPromise = d.stop();
-    // Resolve handler after stop call to avoid leaking the promise.
-    setTimeout(() => resolveHandler(), 20);
-    await stopPromise;
-    expect(handler).toHaveBeenCalledOnce();
+    const t0 = Date.now();
+    await d.stop(0);
+    expect(Date.now() - t0).toBeLessThan(500);
+
+    // Cleanup: resolve the dangling handler so it doesn't keep the
+    // event loop alive past the test.
+    resolveHandler();
   });
 
   it("posts a `failed` /jobs/batch delta when JobController construction throws (W2)", async () => {

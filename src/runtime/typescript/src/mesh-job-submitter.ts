@@ -17,15 +17,18 @@
  * verbatim to the caller.
  *
  * Resilience: `submit` retries on transient registry errors (network
- * drops / 5xx / 503) up to 3 attempts with 200ms→1s→5s backoff.
- * 4xx / NotFound / Conflict / serialization errors propagate
- * immediately — those won't self-heal.
+ * drops / 5xx / 503) up to 3 attempts with 200ms then 1s backoff
+ * between them. 4xx / NotFound / Conflict / serialization errors
+ * propagate immediately — those won't self-heal.
  */
 import { submitJob, type JobProxy } from "@mcpmesh/core";
 
 const _SUBMIT_MAX_ATTEMPTS = 3;
-// Backoff per attempt (seconds): 200ms, 1s, 5s — matches Python.
-const _SUBMIT_BACKOFF_MS = [200, 1000, 5000];
+// Backoff applied BETWEEN attempts. With 3 attempts there are 2 gaps,
+// so this array has exactly 2 entries — a third entry would never be
+// reached (the previous `[200, 1000, 5000]` had the 5s tier silently
+// dead). Tests assert 3 total attempts; mirror that here precisely.
+const _SUBMIT_BACKOFF_MS = [200, 1000];
 
 /**
  * Heuristic: does this error string represent a transient registry
@@ -113,8 +116,8 @@ export class MeshJobSubmitter {
    * ```
    *
    * Error semantics:
-   *   - Transient registry errors (network/5xx/503) → retried 3 times
-   *     with 200ms/1s/5s backoff before propagating.
+   *   - Transient registry errors (network/5xx/503) → up to 3 attempts
+   *     with 200ms then 1s backoff between them before propagating.
    *   - 4xx / NotFound / Conflict / serialization → fail-fast.
    */
   async submit(
