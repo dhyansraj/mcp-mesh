@@ -86,29 +86,10 @@ repos:
             echo "Run: make generate"; exit 1;
             fi; echo "Generated code is up to date"
         language: system
-        files: ^api/.*\.yaml$
+        files: '^(api/.*\.(yaml|yml)|src/core/registry/generated/.*)$'
         description: "🤖 Ensures generated code matches OpenAPI specification"
 
-  # 4. Prevent direct modification of generated code
-  - repo: local
-    hooks:
-      - id: prevent-generated-code-modification
-        name: Prevent Generated Code Modification
-        entry: bash
-        args:
-          - -c
-          - >-
-            echo "Direct modification of generated code is not allowed!";
-            echo "To make changes:";
-            echo "1. Update api/mcp-mesh-registry.openapi.yaml";
-            echo "2. Run: make generate";
-            echo "3. Implement business logic in ent_handlers.go";
-            exit 1
-        language: system
-        files: ^src/core/registry/generated/.*$
-        description: "🤖 Prevents direct modification of generated code"
-
-  # 5. Contract validation for Go code
+  # 4. Contract validation for Go code
   - repo: local
     hooks:
       - id: validate-go-contract
