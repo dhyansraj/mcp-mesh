@@ -246,35 +246,55 @@ def _build_clean_signature(func: Any) -> inspect.Signature | None:
     is excluded by the @mesh.llm decorator's own __signature__ override.
 
     Returns None if no parameters need removal.
-    """
-    try:
-        from .signature_analyzer import (
-            _get_original_func,
-            analyze_mesh_job_signature,
-            get_mesh_agent_parameter_names,
-        )
 
+    Errors:
+        :class:`ValueError` from :func:`analyze_mesh_job_signature` is
+        intentionally allowed to propagate. Per
+        ``MESHJOB_DDDI_CONTRACT.md`` ("Multiple MeshJob params"), the
+        resolver MUST reject a function with more than one ``MeshJob``
+        parameter at registration / decoration time with a clear
+        message. Swallowing it here would mean a misuse silently
+        decorates and the user only sees a cryptic ``AttributeError``
+        on first invocation. Other inspection failures (forward refs,
+        broken signatures) still fall through to ``return None`` so the
+        decorator path is unaffected.
+    """
+    from .signature_analyzer import (
+        _get_original_func,
+        analyze_mesh_job_signature,
+        get_mesh_agent_parameter_names,
+    )
+
+    try:
         original = _get_original_func(func)
         injectable_names = set(get_mesh_agent_parameter_names(original))
-        # Phase 1 MeshJob substrate: also strip the MeshJob slot so it
-        # doesn't surface in FastMCP's tools/list schema as a user arg.
-        try:
-            mj = analyze_mesh_job_signature(original)
-            if mj.mesh_job_param_name:
-                injectable_names.add(mj.mesh_job_param_name)
-        except Exception:
-            pass
-        if not injectable_names:
-            return None
-        sig = inspect.signature(original)
-        clean_params = [
-            param
-            for name, param in sig.parameters.items()
-            if name not in injectable_names
-        ]
-        return sig.replace(parameters=clean_params)
-    except Exception:
+    except (TypeError, AttributeError):
+        # Inspection failure on the user's function (e.g. a built-in or a
+        # callable without a signature). Not a contract violation; fall
+        # back to "no clean signature" so the wrapper uses the original.
         return None
+
+    # Phase 1 MeshJob substrate: also strip the MeshJob slot so it
+    # doesn't surface in FastMCP's tools/list schema as a user arg.
+    # ``analyze_mesh_job_signature`` may raise ``ValueError`` when the
+    # user declares multiple MeshJob parameters — we let that propagate
+    # so @mesh.tool fails loudly at decoration time per the contract.
+    mj = analyze_mesh_job_signature(original)
+    if mj.mesh_job_param_name:
+        injectable_names.add(mj.mesh_job_param_name)
+
+    if not injectable_names:
+        return None
+    try:
+        sig = inspect.signature(original)
+    except (TypeError, ValueError):
+        return None
+    clean_params = [
+        param
+        for name, param in sig.parameters.items()
+        if name not in injectable_names
+    ]
+    return sig.replace(parameters=clean_params)
 
 
 def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[int]:

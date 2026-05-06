@@ -524,6 +524,152 @@ func TestCancelJob_AlreadyTerminalReturns409(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, resp.StatusCode)
 }
 
+// TestCancelForward_ShutdownAbortsInFlight verifies the W3 re-review fix:
+// the cancel-forward goroutine spawned by ``forwardCancelToOwner`` MUST
+// be wired into the registry's graceful-shutdown context + WaitGroup so
+// cancelling the shutdown context aborts the in-flight HTTP forward and
+// the WaitGroup reflects that the goroutine has exited.
+//
+// Without the fix the goroutine used a detached ``context.Background()``
+// and was effectively orphaned on shutdown — operators saw no log trace,
+// the cancel didn't reach the owner, and the goroutine ran on past
+// process stop until its 5s per-call timeout.
+//
+// The test pins the realistic mid-flight case: the owner agent is
+// properly registered (so ``GetAgent`` succeeds), the goroutine reaches
+// the ``client.Do`` call, and the owner's HTTP handler hangs until the
+// REGISTRY-side request context is cancelled. Cancelling the shutdown
+// context propagates through ``fwdCtx`` to the transport, which aborts
+// the in-flight call; the goroutine then exits via the
+// "abandoned: registry shutting down" path and ``shutdownWG`` drains
+// well under ``cancelForwardTimeout`` (5s) — proving the cancellation
+// actually short-circuited the wait rather than tripping the per-call
+// timeout cap.
+func TestCancelForward_ShutdownAbortsInFlight(t *testing.T) {
+	_, service, cleanup := newAuditTestEnv(t)
+	defer cleanup()
+
+	// Owner side: hang on the inbound request context. ``httptest.Server``
+	// wires the HTTP request's Context to the underlying TCP read so when
+	// the registry-side transport cancels the request, this handler's
+	// ``r.Context()`` gets Done() and we can return cleanly. Without that
+	// linkage the goroutine would leak past the test, so we add a hard
+	// stop channel to guarantee cleanup even if the shutdown wiring is
+	// broken (which is what we're testing).
+	hardStop := make(chan struct{})
+	owner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-hardStop:
+		}
+	}))
+	// IMPORTANT defer order: ``close(hardStop)`` MUST run BEFORE
+	// ``owner.Close()`` (defers fire LIFO, so we register them in
+	// owner-then-hardStop order). Without this, ``owner.Close()`` would
+	// block waiting for the in-flight handler — and the handler would
+	// never exit because we'd never close ``hardStop`` — and the test
+	// would deadlock instead of cleanly tearing down on failure.
+	defer owner.Close()
+	defer close(hardStop)
+
+	hostPort := strings.TrimPrefix(owner.URL, "http://")
+	host, port := splitHostPort(t, hostPort)
+	ownerID := "owner-shutdown-1"
+	registerOwnerAgent(t, service, ownerID, host, port)
+
+	ownerInstance := ownerID
+	j := seedJob(t, service, "job-shutdown-1", "render", &ownerInstance)
+
+	// Build handlers wired into a shutdown ctx + WG so the cancel
+	// forward registers itself on the graceful-shutdown machinery.
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+	defer shutdownCancel()
+	shutdownWG := &sync.WaitGroup{}
+	handlers := NewEntBusinessLogicHandlersWithShutdown(service, shutdownCtx, shutdownWG)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	generated.RegisterHandlers(router, handlers)
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	body, _ := json.Marshal(generated.CancelJobRequest{Reason: ptrString("shutdown")})
+	resp, err := http.Post(srv.URL+"/jobs/"+j.ID+"/cancel", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, http.StatusOK, resp.StatusCode, "cancel response should return immediately regardless of forward")
+
+	// Give the forward goroutine a moment to start the HTTP call and
+	// park in the transport. 200ms is plenty for an in-process loopback
+	// to reach the owner's ``r.Context().Done()`` parking spot.
+	time.Sleep(200 * time.Millisecond)
+
+	// Cancel the shutdown context; the forward's transport should
+	// observe the cancellation and the goroutine should exit well
+	// before cancelForwardTimeout=5s.
+	startWait := time.Now()
+	shutdownCancel()
+
+	drained := make(chan struct{})
+	go func() {
+		shutdownWG.Wait()
+		close(drained)
+	}()
+
+	select {
+	case <-drained:
+		elapsed := time.Since(startWait)
+		// The cancellation MUST short-circuit the wait — not silently
+		// time out at the per-call cap. 3s leaves margin for slow CI
+		// while still being way under the 5s cancelForwardTimeout that
+		// would indicate the cancellation didn't propagate.
+		assert.Less(t, elapsed, 3*time.Second, "WG drain took longer than expected; shutdown context did not short-circuit the forward")
+	case <-time.After(4 * time.Second):
+		t.Fatalf("shutdown WG did not drain within 4s; cancel-forward goroutine ignored shutdown context")
+	}
+}
+
+// TestCancelForward_LegacyConstructorStillWorks pins the back-compat
+// behaviour: callers using the zero-arg ``NewEntBusinessLogicHandlers``
+// (tests, older callers without shutdown wiring) MUST still get a
+// best-effort cancel forward. The internal WaitGroup is private and
+// never waited on.
+func TestCancelForward_LegacyConstructorStillWorks(t *testing.T) {
+	srv, service, cleanup := newJobsEndpointTestEnvWithService(t)
+	defer cleanup()
+
+	// Owner that records hits and returns 200.
+	var hits int32
+	owner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer owner.Close()
+
+	hostPort := strings.TrimPrefix(owner.URL, "http://")
+	host, port := splitHostPort(t, hostPort)
+	ownerID := "owner-legacy-1"
+	registerOwnerAgent(t, service, ownerID, host, port)
+
+	ownerInstance := ownerID
+	j := seedJob(t, service, "job-legacy-1", "render", &ownerInstance)
+
+	resp, err := http.Post(srv.URL+"/jobs/"+j.ID+"/cancel", "application/json", strings.NewReader(""))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Forward should still land best-effort.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&hits) >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	assert.Equal(t, int32(1), atomic.LoadInt32(&hits), "legacy constructor should still forward best-effort")
+}
+
 // ---------- helpers ----------
 
 func ptrString(s string) *string { return &s }

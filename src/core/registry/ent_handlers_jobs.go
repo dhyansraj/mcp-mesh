@@ -373,17 +373,45 @@ func (h *EntBusinessLogicHandlers) CancelJob(c *gin.Context, jobId string) {
 // a best-effort signal to abort an in-flight handler. Spawning the
 // forward into a goroutine keeps the public response p99 close to the
 // DB write latency rather than the owner-agent round-trip + 5s timeout.
+//
+// Shutdown coordination: when the handlers were constructed with the
+// production ``NewEntBusinessLogicHandlersWithShutdown`` constructor,
+// the goroutine derives its HTTP-request context from
+// ``h.shutdownCtx`` and registers on ``h.shutdownWG``. ``Server.Stop``
+// cancels ``shutdownCtx`` (cleanly aborting in-flight forwards via the
+// transport's context-cancellation hook) and then waits on
+// ``shutdownWG`` for the goroutines to drain — surfacing any abandoned
+// forwards in the log instead of letting them run on after the
+// registry is supposedly stopped. When constructed with the legacy
+// zero-arg ``NewEntBusinessLogicHandlers`` (tests), the parent context
+// falls back to ``context.Background()`` and the WaitGroup is a
+// private no-op so the existing best-effort behaviour is preserved.
 func (h *EntBusinessLogicHandlers) forwardCancelToOwner(c *gin.Context, ownerInstanceID, jobID, reason string) {
 	// Capture the request-scoped values BEFORE detaching: the request
 	// context dies when the response is sent, so we copy headers we
-	// need and use a fresh context.Background() with a bounded timeout
-	// for the forward goroutine.
+	// need and derive the forward context from the server's
+	// shutdown-aware context (see struct doc) so a registry stop cleanly
+	// aborts in-flight forwards instead of letting them run to their
+	// 5s per-call timeout on a goroutine the process can't observe.
 	traceID := c.Request.Header.Get("X-Trace-ID")
 	parentSpan := c.Request.Header.Get("X-Parent-Span")
 	meshTimeout := c.Request.Header.Get("X-Mesh-Timeout")
 
+	parentCtx := h.shutdownCtx
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+
+	// Reserve a slot on the shutdown WaitGroup BEFORE go-statement so a
+	// shutdown that races with this handler still observes the goroutine
+	// in its Wait. The matching Done() lives at the top of the goroutine
+	// via ``defer`` so a panic inside the forward can't leak the slot.
+	h.shutdownWG.Add(1)
+
 	go func() {
-		fwdCtx, cancel := context.WithTimeout(context.Background(), cancelForwardTimeout)
+		defer h.shutdownWG.Done()
+
+		fwdCtx, cancel := context.WithTimeout(parentCtx, cancelForwardTimeout)
 		defer cancel()
 
 		agentRow, err := h.entService.GetAgent(fwdCtx, ownerInstanceID)
@@ -438,7 +466,18 @@ func (h *EntBusinessLogicHandlers) forwardCancelToOwner(c *gin.Context, ownerIns
 
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Printf("[meshjob] cancel forward to %s failed (job=%s): %v", url, jobID, err)
+			// Distinguish a registry-shutdown cancellation from a "real"
+			// network error so operators see that the forward was
+			// abandoned by us, not lost to an owner-side fault.
+			// ``parentCtx.Err()`` is sticky once the parent is cancelled,
+			// so checking it here reliably attributes the failure to
+			// shutdown even when ``fwdCtx`` reports the wrapped
+			// cancellation.
+			if parentCtx.Err() != nil {
+				log.Printf("[meshjob] cancel forward to %s abandoned: registry shutting down (job=%s, err=%v)", url, jobID, err)
+			} else {
+				log.Printf("[meshjob] cancel forward to %s failed (job=%s): %v", url, jobID, err)
+			}
 			return
 		}
 		defer resp.Body.Close()

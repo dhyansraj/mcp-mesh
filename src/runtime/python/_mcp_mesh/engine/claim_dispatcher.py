@@ -29,13 +29,16 @@ task-local, Python contextvar) is identical.
 Trade-off vs the Rust-driven path:
 
 * No HEAD-hint coalescing (the worker polls on a fixed cadence).
-* No per-process semaphore enforcing ``max_concurrent`` — Python's
-  asyncio model already serializes per-task; concurrency is bounded
-  by ``asyncio.create_task`` calls (at most one per claim cycle).
 
-These limitations are documented; they're acceptable for Phase 1
-because the MOST common use case (a single agent owning one task=True
-capability with infrequent submissions) sees identical behaviour.
+Concurrency is bounded by an :class:`asyncio.Semaphore` (default 4 —
+matches ``ClaimWorkerConfig::new`` in the Rust core). The permit is
+acquired in :meth:`PythonClaimDispatcher._run_loop` BEFORE
+``POST /jobs/claim`` is issued, mirroring the Rust loop's
+acquire-then-claim ordering. Without this, ``_claim_once`` could
+outpace ``_dispatch`` under sustained load and the registry would see
+"this agent claimed N jobs" while N-max_concurrent of them sat in
+asyncio's task queue with their leases ticking down — leading to a
+re-claim storm once the leases expired.
 """
 
 from __future__ import annotations
@@ -189,64 +192,83 @@ class PythonClaimDispatcher:
         the X-Mesh-Job-Id from headers via the contextvar; for the
         claim path we set the contextvar manually before invoking it.
 
-        Concurrency is bounded by ``self._dispatch_sem`` (Phase-1 cap
-        matching the Rust ``ClaimWorker`` semaphore) so a slow-handler
-        agent can't accumulate unbounded asyncio tasks.
+        Concurrency gating is performed by ``_run_loop`` BEFORE the claim
+        is issued (matching ``crate::claim_worker::run_loop`` in the Rust
+        core). The permit is held for the lifetime of this dispatch and
+        released by the caller via ``_run_loop``'s ``finally`` block, so
+        the dispatcher can never claim more jobs than it can immediately
+        execute.
         """
-        async with self._dispatch_sem:
-            job_id = claimed.get("id")
-            if not job_id:
-                return
+        job_id = claimed.get("id")
+        if not job_id:
+            return
 
-            payload = claimed.get("submitted_payload") or {}
-            if not isinstance(payload, dict):
-                payload = {}
+        payload = claimed.get("submitted_payload") or {}
+        if not isinstance(payload, dict):
+            payload = {}
 
-            # Set propagated headers for this task so maybe_dispatch_as_job
-            # picks up the job_id (mirrors how the inbound HTTP path delivers
-            # it via the FastMCP middleware).
+        # Set propagated headers for this task so maybe_dispatch_as_job
+        # picks up the job_id (mirrors how the inbound HTTP path delivers
+        # it via the FastMCP middleware).
+        try:
+            from ..tracing.context import TraceContext
+
+            existing = TraceContext.get_propagated_headers() or {}
+            merged = dict(existing)
+            merged["x-mesh-job-id"] = job_id
+            max_dur = claimed.get("max_duration")
+            if max_dur:
+                merged["x-mesh-timeout"] = str(int(max_dur))
+            TraceContext.set_propagated_headers(merged)
+        except Exception as e:
+            logger.debug(
+                "claim_dispatcher: could not seed propagated headers (%s); "
+                "dispatching without job context",
+                e,
+            )
+
+        try:
+            await self.handler(**payload)
+        except Exception as e:
+            logger.warning(
+                "claim_dispatcher: handler for job=%s capability=%s raised: %s",
+                job_id,
+                self.capability,
+                e,
+            )
+            # Best-effort: report failure to registry so the job doesn't
+            # stay "working" until lease expiry. Failures here are
+            # logged and swallowed — the registry's stale-agent sweep is
+            # the ultimate backstop.
             try:
-                from ..tracing.context import TraceContext
+                from mcp_mesh_core import JobController as _JobController
 
-                existing = TraceContext.get_propagated_headers() or {}
-                merged = dict(existing)
-                merged["x-mesh-job-id"] = job_id
-                max_dur = claimed.get("max_duration")
-                if max_dur:
-                    merged["x-mesh-timeout"] = str(int(max_dur))
-                TraceContext.set_propagated_headers(merged)
-            except Exception as e:
+                ctrl = _JobController(job_id, self.instance_id, self.registry_url)
+                await ctrl.fail(str(e))
+            except Exception as inner:
                 logger.debug(
-                    "claim_dispatcher: could not seed propagated headers (%s); "
-                    "dispatching without job context",
-                    e,
+                    "claim_dispatcher: terminal-fail report failed: %s", inner
                 )
-
-            try:
-                await self.handler(**payload)
-            except Exception as e:
-                logger.warning(
-                    "claim_dispatcher: handler for job=%s capability=%s raised: %s",
-                    job_id,
-                    self.capability,
-                    e,
-                )
-                # Best-effort: report failure to registry so the job doesn't
-                # stay "working" until lease expiry. Failures here are
-                # logged and swallowed — the registry's stale-agent sweep is
-                # the ultimate backstop.
-                try:
-                    from mcp_mesh_core import JobController as _JobController
-
-                    ctrl = _JobController(job_id, self.instance_id, self.registry_url)
-                    await ctrl.fail(str(e))
-                except Exception as inner:
-                    logger.debug(
-                        "claim_dispatcher: terminal-fail report failed: %s", inner
-                    )
 
     async def _run_loop(self) -> None:
-        """Main loop: poll, claim, dispatch, backoff."""
+        """Main loop: gate, poll, claim, dispatch, backoff.
+
+        Concurrency model: a permit from ``self._dispatch_sem`` is acquired
+        BEFORE issuing ``_claim_once``. This mirrors
+        ``crate::claim_worker::run_loop`` in the Rust core (see
+        ``src/runtime/core/src/claim_worker.rs`` ~line 224) and prevents the
+        "owned but waiting" pile-up where ``_claim_once`` outpaces
+        ``_dispatch`` under sustained load: jobs would be stamped owner=this
+        agent in the registry, then sit in an asyncio queue while their
+        leases tick down, eventually getting orphaned and re-claimed.
+        Acquiring first means a 5th claim attempt blocks at the semaphore
+        until one of the 4 in-flight dispatches completes — the registry
+        only sees claims this agent can immediately start executing.
+
+        The permit is released in the spawned dispatch task's ``finally``
+        block so a handler that raises (or is cancelled at agent shutdown)
+        still frees the slot for the next claim.
+        """
         backoff = _POLL_BASE_SECS
         logger.info(
             "📨 claim_dispatcher started: capability=%s instance=%s",
@@ -254,35 +276,109 @@ class PythonClaimDispatcher:
             self.instance_id,
         )
         while not self._stop.is_set():
-            claimed = await self._claim_once()
-            if claimed:
-                # Dispatch concurrently so a long-running handler doesn't
-                # block the next poll. Asyncio tasks are cheap; we don't
-                # cap concurrency in Phase 1 (see module docstring).
-                # Iterate the list — Phase 1 wire returns 0 or 1 entries
-                # (single-claim semantics) but the loop is future-safe.
-                for job in claimed:
-                    logger.debug(
-                        "claim_dispatcher: claim attempt for capability=%s "
-                        "→ job_id=%s",
-                        self.capability,
-                        job.get("id"),
-                    )
-                    asyncio.create_task(self._dispatch(job))
-                backoff = _POLL_BASE_SECS  # reset on success
-                continue
-
-            # No work — sleep with the cancellation-friendly Event wait.
+            # Acquire a permit BEFORE claiming so we never pull a job from
+            # the registry that we can't immediately dispatch. Wrap the
+            # acquire in a stop-aware wait so a shutdown signal can break
+            # us out even when all permits are held by long-running
+            # handlers.
+            acquire_task = asyncio.ensure_future(self._dispatch_sem.acquire())
+            stop_task = asyncio.ensure_future(self._stop.wait())
             try:
-                await asyncio.wait_for(self._stop.wait(), timeout=backoff)
-            except asyncio.TimeoutError:
+                done, _pending = await asyncio.wait(
+                    {acquire_task, stop_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            except asyncio.CancelledError:
+                acquire_task.cancel()
+                stop_task.cancel()
+                raise
+
+            if stop_task in done and acquire_task not in done:
+                # Shutdown requested before we got a permit — abandon the
+                # acquire and exit cleanly.
+                acquire_task.cancel()
+                try:
+                    await acquire_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                break
+
+            # Permit acquired (possibly together with the stop signal — in
+            # which case we still release the permit and exit).
+            stop_task.cancel()
+            try:
+                await stop_task
+            except (asyncio.CancelledError, Exception):
                 pass
-            backoff = min(backoff * 2, _POLL_MAX_SECS)
+            permit_held = True
+
+            try:
+                if self._stop.is_set():
+                    break
+
+                claimed = await self._claim_once()
+                if claimed:
+                    # Phase 1 wire returns 0 or 1 entries (single-claim
+                    # semantics) — we hand the permit to the dispatch task
+                    # for the first claim and acquire fresh permits for
+                    # any extras (future-safe; current wire never trips
+                    # this branch).
+                    first = True
+                    for job in claimed:
+                        logger.debug(
+                            "claim_dispatcher: claim attempt for capability=%s "
+                            "→ job_id=%s",
+                            self.capability,
+                            job.get("id"),
+                        )
+                        if first:
+                            asyncio.create_task(self._dispatch_with_permit(job))
+                            permit_held = False  # ownership transferred
+                            first = False
+                        else:
+                            # Future-safe: extra claims need their own
+                            # permits. Acquire synchronously here so we
+                            # don't dispatch more concurrently than
+                            # ``_MAX_CONCURRENT_DISPATCHES`` allows.
+                            await self._dispatch_sem.acquire()
+                            asyncio.create_task(self._dispatch_with_permit(job))
+                    backoff = _POLL_BASE_SECS  # reset on success
+                    continue
+
+                # No work — release the permit (we won't need it) and
+                # sleep with a cancellation-friendly Event wait.
+                self._dispatch_sem.release()
+                permit_held = False
+                try:
+                    await asyncio.wait_for(self._stop.wait(), timeout=backoff)
+                except asyncio.TimeoutError:
+                    pass
+                backoff = min(backoff * 2, _POLL_MAX_SECS)
+            finally:
+                # Defensive: if anything inside the try block raised after
+                # we acquired the permit but before we either transferred
+                # it or released it, give it back so the loop can make
+                # progress on the next iteration.
+                if permit_held:
+                    self._dispatch_sem.release()
         logger.info(
             "📨 claim_dispatcher stopped: capability=%s instance=%s",
             self.capability,
             self.instance_id,
         )
+
+    async def _dispatch_with_permit(self, claimed: dict) -> None:
+        """Run ``_dispatch`` and guarantee the semaphore permit is released.
+
+        ``_run_loop`` acquires the permit BEFORE the claim and transfers
+        ownership to the spawned dispatch task; this wrapper ensures the
+        permit is released exactly once on every code path (success,
+        handler exception, cancellation).
+        """
+        try:
+            await self._dispatch(claimed)
+        finally:
+            self._dispatch_sem.release()
 
     def start(self) -> None:
         """Spawn the background loop on the current event loop."""

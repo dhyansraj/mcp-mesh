@@ -325,3 +325,62 @@ class TestTaskTrueDecorator:
                 pass
 
         assert "task" in str(exc_info.value).lower()
+
+
+# ===========================================================================
+# Decoration-time error surface — multi-MeshJob (W2 fix re-review)
+#
+# Per MESHJOB_DDDI_CONTRACT.md ("Multiple MeshJob params"), declaring more
+# than one ``MeshJob`` parameter on a tool function is a registration-time
+# error. The resolver raises ``ValueError``, and the framework callers
+# (``_build_clean_signature`` / ``validate_mesh_dependencies``) MUST let
+# that propagate to ``@mesh.tool`` so the user sees the misuse the moment
+# the module imports — not as a confusing ``AttributeError`` at first
+# invocation.
+# ===========================================================================
+
+
+class TestDecorationTimeMultiMeshJobError:
+    """``@mesh.tool`` rejects multi-MeshJob signatures synchronously."""
+
+    def test_two_mesh_job_params_raise_at_decoration(self):
+        """A function with two ``MeshJob``-typed parameters MUST raise
+        ValueError when the @mesh.tool decorator is applied — not at
+        first call."""
+        import mesh
+
+        with pytest.raises(ValueError) as exc_info:
+            @mesh.tool(
+                capability="bad_consumer",
+                dependencies=["other_job"],
+            )
+            async def bad_consumer(
+                user_id: str,
+                first_job: MeshJob = None,
+                second_job: MeshJob = None,
+            ):
+                return user_id
+
+        msg = str(exc_info.value).lower()
+        # Same wording as the resolver's direct ValueError so users see a
+        # single consistent error message regardless of where in the
+        # framework it surfaces.
+        assert "at most one" in msg
+        assert "meshjob" in msg
+        # Both offending names must appear so the developer can fix it
+        # without grepping the codebase.
+        assert "first_job" in msg
+        assert "second_job" in msg
+
+    def test_single_mesh_job_param_decorates_cleanly(self):
+        """Sanity: a single MeshJob param is the supported pattern and
+        MUST decorate without raising."""
+        import mesh
+
+        @mesh.tool(capability="good_consumer", dependencies=["the_job"])
+        async def good_consumer(user_id: str, the_job: MeshJob = None):
+            return user_id
+
+        meta = getattr(good_consumer, "_mesh_tool_metadata", None)
+        assert meta is not None
+        assert meta.get("capability") == "good_consumer"

@@ -336,24 +336,34 @@ def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[boo
     # MeshJob params are name-matched (not positional) so an unmatched
     # MeshJob param does NOT consume a dependency slot — only the matched
     # ones do.
+    #
+    # Errors: ``analyze_mesh_job_signature`` raises ``ValueError`` when a
+    # function declares multiple MeshJob parameters (Phase 1 contract).
+    # We deliberately let that propagate so registration-time validation
+    # surfaces the misuse instead of silently advertising the tool with
+    # the wrong dependency-slot count. Other inspection failures
+    # (TypeError / AttributeError on weird callables) still fall through
+    # to the legacy positional-only check — those are non-contractual
+    # signatures the legacy validator already tolerated.
     job_slots = 0
     try:
         resolution = analyze_mesh_job_signature(func)
-        if resolution.mesh_job_param_name:
-            dep_caps = {
-                d.get("capability") for d in dependencies if isinstance(d, dict)
-            }
-            if resolution.mesh_job_param_name in dep_caps:
-                job_slots = 1
-    except Exception as e:
-        # Defensive: if MeshJob analysis fails, fall through to the
-        # legacy positional-only check (no behavior change for non-job
-        # tools).
+    except (TypeError, AttributeError) as e:
+        # Defensive: weird callables that can't be introspected. Skip
+        # the MeshJob accounting and fall through to the legacy check.
         logger.debug(
             "validate_mesh_dependencies: MeshJob analysis skipped for %s: %s",
             getattr(func, "__name__", "?"),
             e,
         )
+        resolution = None
+
+    if resolution is not None and resolution.mesh_job_param_name:
+        dep_caps = {
+            d.get("capability") for d in dependencies if isinstance(d, dict)
+        }
+        if resolution.mesh_job_param_name in dep_caps:
+            job_slots = 1
 
     expected = len(mesh_positions) + job_slots
     if len(dependencies) != expected:

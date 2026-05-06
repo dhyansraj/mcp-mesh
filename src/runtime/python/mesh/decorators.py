@@ -1075,6 +1075,16 @@ def tool(
             _trigger_debounced_processing()
             return wrapped
 
+        except ValueError:
+            # ValueError is reserved for contract violations the user MUST
+            # see at decoration time — currently the multi-``MeshJob``
+            # rejection from ``analyze_mesh_job_signature`` (per
+            # MESHJOB_DDDI_CONTRACT.md) and any future signature-shape
+            # rejection. Graceful-degradation would silently advertise a
+            # broken tool and surface a confusing AttributeError on first
+            # invocation; that is exactly the failure mode this branch is
+            # supposed to prevent.
+            raise
         except Exception as e:
             # Log but don't fail - graceful degradation
             logger.error(

@@ -935,6 +935,140 @@ class TestPythonClaimDispatcher:
 
 
 # ===========================================================================
+# Claim-gating semaphore semantics (W1 fix — re-review)
+#
+# The semaphore in ``PythonClaimDispatcher`` MUST gate the claim itself,
+# not just the handler invocation. Otherwise ``_run_loop`` keeps pulling
+# jobs from the registry that get stamped owner=this-agent and then sit
+# in asyncio's task queue with their leases ticking down — leading to a
+# re-claim storm once the leases expire.
+#
+# These tests pin the contract: when all permits are held by in-flight
+# dispatches, the loop MUST stop calling ``_claim_once`` and only resume
+# once a permit is released. Mirrors the Rust ``run_loop`` test
+# ``respects_max_concurrent_cap`` in ``src/runtime/core/src/claim_worker.rs``.
+# ===========================================================================
+
+
+class TestClaimSemaphoreGating:
+    """Semaphore acquired BEFORE _claim_once, not just inside _dispatch."""
+
+    @pytest.mark.asyncio
+    async def test_loop_stops_claiming_when_all_permits_held(self):
+        """When 4 dispatches are in flight (all permits held), the 5th
+        loop iteration MUST NOT call ``_claim_once`` until a permit
+        frees. Pre-fix the loop kept claiming and queuing tasks past the
+        cap.
+        """
+        from _mcp_mesh.engine.claim_dispatcher import PythonClaimDispatcher
+
+        # Hold a gate inside the handler so dispatches park indefinitely
+        # until the test releases them.
+        gate = asyncio.Event()
+        in_flight: list[str] = []
+
+        async def handler(**kw):
+            in_flight.append(kw.get("job_id", "?"))
+            await gate.wait()
+
+        d = PythonClaimDispatcher("cap", "inst", "http://r", handler)
+
+        # Each ``_claim_once`` call returns one fresh job — exactly the
+        # Phase 1 wire shape (single-claim semantics). After 10 calls we
+        # return [] forever.
+        call_count = {"n": 0}
+        max_jobs = 10
+
+        async def fake_claim_once():
+            n = call_count["n"]
+            call_count["n"] += 1
+            if n >= max_jobs:
+                return []
+            return [{"id": f"j{n}", "submitted_payload": {"job_id": f"j{n}"}}]
+
+        d._claim_once = fake_claim_once  # type: ignore[assignment]
+
+        d.start()
+        # Give the loop time to hit the semaphore wall. With max=4 it
+        # should claim exactly 4 jobs and then block on the next acquire.
+        await asyncio.sleep(0.2)
+
+        # Exactly 4 in-flight dispatches (the cap). The 5th iteration
+        # MUST be parked at the semaphore acquire, NOT at _claim_once.
+        assert len(in_flight) == 4, (
+            f"expected 4 in-flight dispatches at the cap, got {len(in_flight)}"
+        )
+        # And ``_claim_once`` MUST NOT have been called for the 5th job:
+        # the loop has to gate at the semaphore BEFORE issuing the claim
+        # (otherwise the registry would have stamped the 5th job as
+        # owned-by-this-agent while it sat queued).
+        assert call_count["n"] == 4, (
+            f"expected 4 _claim_once calls (gated by semaphore), got {call_count['n']}"
+        )
+
+        # Release one permit by completing one handler. The loop should
+        # now claim and dispatch a 5th job.
+        gate.set()
+        # Give the loop time to observe the freed permit and claim/dispatch
+        # the remaining work.
+        await asyncio.sleep(0.3)
+
+        # All ten jobs should have been claimed and run by now.
+        assert call_count["n"] >= 5, (
+            f"loop should have resumed claiming after permit freed; "
+            f"got call_count={call_count['n']}"
+        )
+
+        await d.stop()
+
+    @pytest.mark.asyncio
+    async def test_permit_released_when_handler_raises(self):
+        """Even when the handler raises, the permit MUST be released so
+        the loop can keep making progress. Otherwise a single failing
+        handler would wedge the dispatcher.
+        """
+        from _mcp_mesh.engine.claim_dispatcher import PythonClaimDispatcher
+
+        invoked = {"n": 0}
+
+        async def handler(**kw):
+            invoked["n"] += 1
+            raise RuntimeError("handler boom")
+
+        d = PythonClaimDispatcher("cap", "inst", "http://r", handler)
+
+        # Stub out the terminal-fail report so we don't need a registry.
+        # The fail() path imports ``mcp_mesh_core.JobController`` which
+        # may not be present on the test machine; the dispatcher already
+        # swallows exceptions there, so this just keeps the test quiet.
+        async def noop_fail(*a, **kw):
+            pass
+
+        # Hand out 6 jobs, one at a time.
+        call_count = {"n": 0}
+
+        async def fake_claim_once():
+            n = call_count["n"]
+            call_count["n"] += 1
+            if n >= 6:
+                return []
+            return [{"id": f"j{n}", "submitted_payload": {}}]
+
+        d._claim_once = fake_claim_once  # type: ignore[assignment]
+
+        d.start()
+        await asyncio.sleep(0.2)
+        await d.stop()
+
+        # All six handlers should have been invoked despite each raising:
+        # the permit-release in ``_dispatch_with_permit``'s ``finally``
+        # block lets the loop progress past every failure.
+        assert invoked["n"] == 6, (
+            f"expected all 6 handlers to be invoked despite raising; got {invoked['n']}"
+        )
+
+
+# ===========================================================================
 # Discover task handlers
 # ===========================================================================
 
