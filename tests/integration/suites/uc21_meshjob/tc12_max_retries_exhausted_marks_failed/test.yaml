@@ -1,0 +1,184 @@
+# tc12_max_retries_exhausted_marks_failed — exhaust retry budget.
+#
+# Note on the spec wording vs substrate behaviour: the design says
+# "agent crashes" trigger retry (via stale-agent sweep + orphan
+# reroute). Handler-raised exceptions, however, are caught by the
+# claim dispatcher and reported as ``ctrl.fail(str(e))`` — the
+# explicit-fail path that does NOT retry (see tc05). So a "producer
+# that always crashes (raises)" wouldn't actually consume the retry
+# budget; the registry would mark the job failed on the first
+# attempt regardless of max_retries.
+#
+# To exhaust the budget, we must orphan the row by killing the
+# AGENT PROCESS (mimicking a crash that loses the
+# claim_dispatcher's chance to post ctrl.fail). Two SIGKILL cycles
+# with max_retries=1 leaves attempt_count=2, max_retries=1 → the
+# orphan-reset path's check ``attempt_count > max_retries`` (2 > 1)
+# trips and the row is marked failed with the "orphaned: max
+# retries exceeded" reason.
+
+name: "MeshJob: retry budget exhausted via repeated crashes — marked failed"
+description: "Two crash + sweep cycles with max_retries=1; final attempt_count=2 > max_retries → exhausted"
+tags:
+  - meshjob
+  - python
+  - issue-872
+  - retry
+  - crash-recovery
+  - slow
+timeout: 240
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/long-task-consumer /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install consumer deps"
+    handler: pip-install
+    path: /workspace/long-task-consumer
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (round 1)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Wait for consumer DI"
+    handler: wait
+    seconds: 18
+
+  - name: "Submit job with max_retries=1"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["a","b","c","d","e","f","g","h","i"],"max_retries":1,"max_duration":60}' --raw
+    capture: submit_resp
+    timeout: 15
+
+  - name: "Wait 4s for claim"
+    handler: wait
+    seconds: 4
+
+  - name: "Kill provider — round 1 (attempt 1 crashes)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      MY_PID=$$
+      MY_PPID=$PPID
+      PID=""
+      for p in /proc/[0-9]*; do
+        pid="${p##*/}"
+        [ "$pid" = "1" ] && continue
+        [ "$pid" = "$MY_PID" ] && continue
+        [ "$pid" = "$MY_PPID" ] && continue
+        [ -f "$p/cmdline" ] || continue
+        cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$cmd" in
+          *python*long-task-provider/main.py*) PID="$pid"; break ;;
+        esac
+      done
+      [ -n "$PID" ] && kill -9 "$PID" && echo "killed PID=$PID" || echo "no provider PID found"
+      echo "round 1 kill done"
+    capture: kill1
+
+  - name: "Wait for sweep to reset orphan (~35s end-to-end)"
+    handler: wait
+    seconds: 45
+
+  - name: "Status after round 1 (should be working, owner=null)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,owner_instance_id,attempt_count}'
+    capture: after_round_1
+
+  - name: "Stale PID cleanup before round 2 (SIGKILL leaves stale tracking)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop long-task-provider 2>&1 || true
+      rm -f ~/.mcp-mesh/agents/long-task-provider/* 2>/dev/null || true
+      echo "stale entry cleared"
+
+  - name: "Start provider (round 2)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for round 2 claim"
+    handler: wait
+    seconds: 14
+
+  - name: "Kill provider — round 2 (attempt 2 crashes)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      MY_PID=$$
+      MY_PPID=$PPID
+      PID=""
+      for p in /proc/[0-9]*; do
+        pid="${p##*/}"
+        [ "$pid" = "1" ] && continue
+        [ "$pid" = "$MY_PID" ] && continue
+        [ "$pid" = "$MY_PPID" ] && continue
+        [ -f "$p/cmdline" ] || continue
+        cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$cmd" in
+          *python*long-task-provider/main.py*) PID="$pid"; break ;;
+        esac
+      done
+      [ -n "$PID" ] && kill -9 "$PID" && echo "killed PID=$PID" || echo "no provider PID found"
+      echo "round 2 kill done"
+    capture: kill2
+
+  - name: "Wait for sweep to mark exhausted (~35s end-to-end)"
+    handler: wait
+    seconds: 45
+
+  - name: "Final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,owner_instance_id,attempt_count,error}'
+    capture: final_status
+
+assertions:
+  # After round 1: orphan reset to claimable
+  - expr: "${captured.after_round_1} contains '\"status\": \"working\"'"
+    message: "after round 1 sweep, status should still be working (orphan reset)"
+  - expr: "${captured.after_round_1} contains '\"owner_instance_id\": null'"
+    message: "after round 1 sweep, owner should be cleared"
+  # After round 2: budget exhausted
+  - expr: "${captured.final_status} contains '\"status\": \"failed\"'"
+    message: "after round 2 sweep with attempt_count > max_retries, must be failed"
+  - expr: "${captured.final_status} contains 'max retries exceeded'"
+    message: "error should mention max retries exceeded"
+  - expr: "${captured.final_status} contains '\"attempt_count\": 2'"
+    message: "attempt_count should be 2 (1 initial + 1 retry attempt) — budget exceeded"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

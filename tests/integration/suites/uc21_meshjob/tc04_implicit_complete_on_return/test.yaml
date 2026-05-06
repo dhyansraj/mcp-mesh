@@ -1,0 +1,99 @@
+# tc04_implicit_complete_on_return — auto-complete on return path.
+#
+# Producer fixture ``report_with_implicit_complete`` updates progress
+# but NEVER calls ``job.complete()``. The job-dispatch wrapper's
+# auto-complete-on-return path should observe the non-terminal
+# is_terminal() probe and flush the user's return value as the
+# terminal payload.
+#
+# Asserts:
+#   - status=completed (auto-complete fired)
+#   - result.implicit == true (user's return value was used as payload)
+
+name: "MeshJob: handler returns without complete() — auto-complete fires"
+description: "Producer doesn't call job.complete; runtime auto-completes with the return value"
+tags:
+  - meshjob
+  - python
+  - issue-872
+  - auto-complete
+timeout: 60
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/long-task-consumer /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install consumer deps"
+    handler: pip-install
+    path: /workspace/long-task-consumer
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Wait for consumer"
+    handler: wait
+    seconds: 18
+
+  - name: "POST /jobs for report_with_implicit_complete"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:8000/jobs \
+        -H 'Content-Type: application/json' \
+        -d '{"capability":"report_with_implicit_complete","submitted_payload":{"user_id":"alice"},"submitted_by":"tc04","max_duration":30,"max_retries":1}'
+    capture: submit_resp
+    timeout: 15
+
+  - name: "Extract job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.id')
+      echo "JOB_ID=${JOB_ID}"
+    capture: job_id_extract
+
+  - name: "Wait for completion"
+    handler: wait
+    seconds: 12
+
+  - name: "Read final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: final_status
+
+assertions:
+  - expr: "${captured.final_status} contains '\"completed\"'"
+    message: "status should be completed via auto-complete path"
+  - expr: "${captured.final_status} contains '\"implicit\": true'"
+    message: "result should be the user's return value (implicit:true)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

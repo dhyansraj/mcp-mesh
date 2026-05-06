@@ -1,0 +1,155 @@
+# tc16_third_party_can_read_status — job_id-as-capability auth model.
+#
+# Four agents: producer, consumer (submits the job), and two
+# bystanders X and Y that have no involvement with the job. The
+# bystanders are deployed with overridden MCP_MESH_AGENT_NAME so the
+# same fixture serves both — distinct agent IDs in the registry.
+#
+# Submit a job via the consumer; capture job_id. Then call
+# __mesh_job_status on each bystander targeting that job_id.
+# The substrate's "presigned-URL semantics" mandates: possession of
+# the UUID = read access. Both bystanders MUST return the actual
+# job state, NOT an authorization error.
+
+name: "MeshJob: third-party agents can read status by job_id (presigned-URL auth)"
+description: "Two unrelated bystanders read job status — no auth gating, only ID-as-capability"
+tags:
+  - meshjob
+  - python
+  - issue-872
+  - helpers
+  - auth
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/long-task-consumer /workspace/
+      cp -rL /uc-artifacts/bystander-x /workspace/
+      cp -rL /uc-artifacts/bystander-y /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install consumer deps"
+    handler: pip-install
+    path: /workspace/long-task-consumer
+
+  - name: "Install bystander-x deps"
+    handler: pip-install
+    path: /workspace/bystander-x
+
+  - name: "Install bystander-y deps"
+    handler: pip-install
+    path: /workspace/bystander-y
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Start bystander X"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start bystander-x/main.py --env MCP_MESH_HTTP_PORT=9104 -d
+
+  - name: "Start bystander Y"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start bystander-y/main.py --env MCP_MESH_HTTP_PORT=9105 -d
+
+  - name: "Wait for all 4 to register + DI to settle"
+    handler: wait
+    seconds: 25
+
+  - name: "Confirm all 4 agents in registry"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s http://localhost:8000/agents | jq -r '.agents[].name' | sort
+    capture: agent_names
+
+  - name: "Submit job via consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["one","two"],"max_retries":1,"max_duration":30}' --raw
+    capture: submit_resp
+    timeout: 15
+
+  - name: "Wait for completion"
+    handler: wait
+    seconds: 8
+
+  - name: "Bystander X reads status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="bystander-x") | .id')
+      echo "AGENT=${AGENT} JOB=${JOB_ID}"
+      meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}"
+    capture: bystander_x_status
+
+  - name: "Bystander Y reads status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="bystander-y") | .id')
+      meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}"
+    capture: bystander_y_status
+
+assertions:
+  - expr: "${captured.agent_names} contains 'long-task-provider'"
+    message: "provider should be registered"
+  - expr: "${captured.agent_names} contains 'long-task-consumer'"
+    message: "consumer should be registered"
+  - expr: "${captured.agent_names} contains 'bystander-x'"
+    message: "bystander-x should be registered"
+  - expr: "${captured.agent_names} contains 'bystander-y'"
+    message: "bystander-y should be registered"
+
+  # Both bystanders return the real status — NOT an auth error.
+  - expr: "${captured.bystander_x_status} contains '\"completed\"'"
+    message: "bystander-x should read the actual completed status (no auth gating)"
+  - expr: "${captured.bystander_y_status} contains '\"completed\"'"
+    message: "bystander-y should read the actual completed status (no auth gating)"
+
+  # Both responses must reference the producer's owner_instance_id —
+  # confirms the data flow: bystander → its helper-tool wrapper →
+  # registry GET /jobs/{id} → identical row data regardless of
+  # which agent fields the read.
+  - expr: "${captured.bystander_x_status} contains 'long-task-provider'"
+    message: "bystander-x's read should include the producer owner_instance_id"
+  - expr: "${captured.bystander_y_status} contains 'long-task-provider'"
+    message: "bystander-y's read should include the producer owner_instance_id"
+
+  # Make sure neither bystander returned an auth-flavoured error.
+  - expr: "${captured.bystander_x_status} not contains 'unauthorized'"
+    message: "bystander-x must NOT see 'unauthorized'"
+  - expr: "${captured.bystander_y_status} not contains 'permission denied'"
+    message: "bystander-y must NOT see 'permission denied'"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

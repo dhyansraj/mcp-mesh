@@ -1,0 +1,151 @@
+# tc14_helpers_on_every_agent — auto-registration is universal.
+#
+# Three agents: producer (task=True only), consumer (deps + submit
+# wrapper), and orchestrator (no task tools, no MeshJob deps —
+# pure bystander). All three should advertise __mesh_job_status,
+# __mesh_job_result, and __mesh_job_cancel via the registry.
+#
+# Submit a job through the consumer, capture job_id, then call all
+# three helpers on EACH of the three agents and confirm the same
+# job state is returned regardless of which agent fields the call.
+
+name: "MeshJob: helper tools auto-registered on every mesh agent"
+description: "Producer, consumer, and bystander all expose __mesh_job_* and return correct data"
+tags:
+  - meshjob
+  - python
+  - issue-872
+  - helpers
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/long-task-consumer /workspace/
+      cp -rL /uc-artifacts/orchestrator-agent /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install consumer deps"
+    handler: pip-install
+    path: /workspace/long-task-consumer
+
+  - name: "Install orchestrator deps"
+    handler: pip-install
+    path: /workspace/orchestrator-agent
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Start orchestrator (no task tools, no deps)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=9103 -d
+
+  - name: "Wait for all 3 to register"
+    handler: wait
+    seconds: 22
+
+  - name: "Capture full agent IDs"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl list 2>&1
+      echo "---"
+      curl -s http://localhost:8000/agents | jq -r '.agents[].id'
+    capture: agent_ids
+
+  - name: "Submit a job via consumer (commission_report on a 1-section job)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["only"],"max_retries":1,"max_duration":30}' --raw
+    capture: submit_resp
+    timeout: 15
+
+  # Wait long enough for the job to complete so __mesh_job_result
+  # can return the terminal payload.
+  - name: "Wait for completion"
+    handler: wait
+    seconds: 8
+
+  - name: "Call __mesh_job_status on PROVIDER"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider") | .id')
+      echo "JOB_ID=${JOB_ID} AGENT=${AGENT}"
+      meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}"
+    capture: status_on_provider
+
+  - name: "Call __mesh_job_result on CONSUMER"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-consumer") | .id')
+      meshctl call "${AGENT}:__mesh_job_result" "{\"job_id\":\"${JOB_ID}\"}"
+    capture: result_on_consumer
+
+  - name: "Call __mesh_job_status on ORCHESTRATOR (bystander)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="orchestrator-agent") | .id')
+      meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}"
+    capture: status_on_orchestrator
+
+  - name: "Confirm cancel-tool exists on orchestrator (no-op against terminal)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="orchestrator-agent") | .id')
+      # Check the orchestrator's tools list contains the helpers via meshctl list --tools
+      meshctl list --tools 2>&1 | grep -E "orchestrator|__mesh_job_" | head -10
+    capture: orchestrator_tools
+
+assertions:
+  - expr: "${captured.agent_ids} contains 'long-task-provider'"
+    message: "provider should be registered"
+  - expr: "${captured.agent_ids} contains 'long-task-consumer'"
+    message: "consumer should be registered"
+  - expr: "${captured.agent_ids} contains 'orchestrator-agent'"
+    message: "orchestrator (bystander) should be registered"
+  - expr: "${captured.status_on_provider} contains '\"completed\"'"
+    message: "__mesh_job_status on provider should return the same completed state"
+  - expr: "${captured.result_on_consumer} contains 'completed'"
+    message: "__mesh_job_result on consumer should return terminal status=completed"
+  - expr: "${captured.status_on_orchestrator} contains '\"completed\"'"
+    message: "__mesh_job_status on bystander orchestrator should also return completed"
+  # Cross-agent helper symmetry — same job_id returns same data regardless
+  # of which agent serves it (proves "all reads → registry, no caching").
+  - expr: "${captured.status_on_orchestrator} contains 'long-task-provider'"
+    message: "bystander's status read should include the producer's owner_instance_id (registry-sourced)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

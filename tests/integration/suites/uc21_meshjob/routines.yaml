@@ -1,0 +1,81 @@
+# UC-level routines for uc21_meshjob.
+#
+# The MeshJob substrate's recovery / deadline expiry paths are driven
+# by the registry's stale-agent + total_deadline sweep. Default sweep
+# tick is 5 minutes — far too slow for a tests suite that runs in
+# seconds. ``MCP_MESH_SWEEP_INTERVAL`` (Go duration format) overrides
+# the default; we set ``10s`` for every suite invocation so retry /
+# orphan / deadline tests can resolve in ~15s instead of ~5min.
+#
+# The env var must be exported in the shell BEFORE starting the
+# registry: the registry binary inherits ``os.Environ()`` from the
+# meshctl process, and meshctl in turn inherits from the shell.
+# Both auto-spawn (from ``meshctl start agent.py -d``) and explicit
+# ``meshctl start --registry-only -d`` paths follow this chain, so
+# either invocation works as long as the variable is exported in the
+# shell step that starts (or auto-spawns) the registry.
+
+routines:
+  # Start the registry explicitly with all the knobs cranked down so
+  # crash-recovery + deadline tests resolve in seconds instead of
+  # minutes.
+  #
+  # Three knobs matter — the chain is:
+  #   1. ``DEFAULT_TIMEOUT_THRESHOLD=15``    — heartbeat-missed window
+  #      after which AgentHealthMonitor flips status to unhealthy
+  #      (default: 60s).
+  #   2. ``MCP_MESH_HEALTH_CHECK_INTERVAL=5`` — how often the health
+  #      monitor loop runs (default: 30s).
+  #   3. ``MCP_MESH_SWEEP_INTERVAL=10s``     — how often the sweep loop
+  #      runs (default: 5min). The sweep purges agents whose status is
+  #      already ``unhealthy`` AND whose ``updated_at`` is older than
+  #      ``MCP_MESH_RETENTION``.
+  #   4. ``MCP_MESH_RETENTION=10s``          — how stale an unhealthy
+  #      agent must be before sweep purges it (default: 1h).
+  # After purgeStaleAgents removes the agent row, ResetOrphanedJobs
+  # spots the working+owner-but-no-agent state and either resets to
+  # claimable (within retry budget) or marks failed (exhausted).
+  #
+  # End-to-end after a SIGKILL: ~15s flip-to-unhealthy + ~10s
+  # retention + ~10s next sweep tick = ~35s worst case for the
+  # orphan reset to land. The crash-recovery tests wait 30-40s
+  # accordingly.
+  #
+  # The env-var prefix carries into meshctl, which exec's the registry
+  # binary inheriting os.Environ() — so all overrides reach the
+  # registry's config + sweep + health-monitor inits.
+  start_registry_with_fast_sweep:
+    description: "Start the mesh registry with all timing knobs cranked for fast recovery tests"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          MCP_MESH_SWEEP_INTERVAL=10s \
+          MCP_MESH_RETENTION=10s \
+          MCP_MESH_HEALTH_CHECK_INTERVAL=5 \
+          DEFAULT_TIMEOUT_THRESHOLD=15 \
+            meshctl start --registry-only -d
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "registry ready after ${i}s"
+              # Verify the sweep override stamped its log line.
+              grep -E '\[sweep\] using MCP_MESH_SWEEP_INTERVAL' \
+                ~/.mcp-mesh/logs/registry.log 2>/dev/null | tail -3 || true
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: registry did not become ready in 20s"
+          tail -50 ~/.mcp-mesh/logs/registry.log 2>/dev/null || true
+          exit 1
+        capture: registry_start
+        timeout: 30
+
+  # Stop everything started by this test (agents + registry).
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: meshctl stop 2>/dev/null || true
+        ignore_errors: true

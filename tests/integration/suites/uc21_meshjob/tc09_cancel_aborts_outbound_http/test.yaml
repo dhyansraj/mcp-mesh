@@ -1,0 +1,139 @@
+# tc09_cancel_aborts_outbound_http — cancel propagates through downstream calls.
+#
+# Three-agent chain:
+#   consumer (commission_downstream)
+#     -> producer.report_with_downstream_call (task=True)
+#         -> downstream-sleeper.slow_downstream (sleeps 30s)
+#
+# After submit, wait briefly then cancel. The producer's
+# JobController is bound to the cancel registry; firing the cancel
+# token aborts the in-flight HTTP request to slow_downstream — the
+# sleeper's stderr should show the canonical "sleep CANCELLED"
+# marker, and the job should reach status=cancelled in well under
+# 30s (much less than the natural sleep duration).
+
+name: "MeshJob: cancel aborts in-flight downstream HTTP call"
+description: "Producer calls slow_downstream(30s); cancel must abort the HTTP and finish in <15s"
+tags:
+  - meshjob
+  - python
+  - issue-872
+  - cancel
+  - propagation
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/long-task-consumer /workspace/
+      cp -rL /uc-artifacts/downstream-sleeper /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install consumer deps"
+    handler: pip-install
+    path: /workspace/long-task-consumer
+
+  - name: "Install sleeper deps"
+    handler: pip-install
+    path: /workspace/downstream-sleeper
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start downstream-sleeper (port 9102) FIRST"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start downstream-sleeper/main.py --env MCP_MESH_HTTP_PORT=9102 -d
+
+  - name: "Wait for sleeper"
+    handler: wait
+    seconds: 12
+
+  - name: "Start provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for provider DI to resolve slow_downstream"
+    handler: wait
+    seconds: 18
+
+  - name: "Start consumer (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Wait for consumer DI"
+    handler: wait
+    seconds: 18
+
+  - name: "Submit job that calls downstream"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_downstream '{"user_id":"alice"}' --raw
+    capture: submit_resp
+    timeout: 15
+
+  - name: "Wait 4s — let producer pick up + start downstream call"
+    handler: wait
+    seconds: 4
+
+  - name: "Cancel the job"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      echo "JOB_ID=${JOB_ID}"
+      START=$(date +%s)
+      meshctl call __mesh_job_cancel "{\"job_id\":\"${JOB_ID}\"}"
+      echo "CANCEL_AT=${START}"
+    capture: cancel_response
+    timeout: 15
+
+  # Should propagate within a few seconds — definitely well below
+  # the 30s sleep that's still running on the sleeper.
+  - name: "Wait for cancel to propagate"
+    handler: wait
+    seconds: 8
+
+  - name: "Read final status + sleeper log"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      echo "=== final status ==="
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+      echo
+      echo "=== downstream-sleeper log tail ==="
+      meshctl logs downstream-sleeper 2>&1 | tail -30
+    capture: final_check
+
+assertions:
+  - expr: "${captured.cancel_response} contains '\"ok\": true'"
+    message: "cancel should ack ok:true"
+  - expr: "${captured.final_check} contains '\"cancelled\"'"
+    message: "job status should be cancelled"
+  # The progress at cancel time should still reflect the producer
+  # being mid-downstream-call (progress=0.1, message="calling
+  # downstream"). If the cancel had not propagated through the
+  # downstream call, the producer would have continued past
+  # update_progress(0.1, "calling downstream") and either reached
+  # job.complete() or hung — neither of which leaves the row
+  # cancelled with that exact mid-call progress.
+  - expr: "${captured.final_check} contains 'calling downstream'"
+    message: "cancel should land while producer is still in the downstream call (progress message frozen at 'calling downstream')"
+  - expr: "${captured.final_check} not contains '\"completed\"'"
+    message: "the producer should NOT have reached job.complete() — the downstream HTTP must have been aborted, not awaited to natural finish"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
