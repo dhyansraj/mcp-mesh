@@ -18,6 +18,24 @@ from unittest import mock
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _reset_decorator_registry_state():
+    """Clear cached DecoratorRegistry / shared agent_id state between tests.
+
+    The job-dispatch wrapper resolves ``instance_id`` via
+    ``DecoratorRegistry.get_resolved_agent_config()["agent_id"]`` (the canonical
+    source of truth shared with heartbeat + claim worker). That value is
+    memoised in ``_cached_agent_config`` and ``_SHARED_AGENT_ID``, so without
+    a reset between tests, a test that sets ``MCP_MESH_AGENT_ID`` to a
+    different value would still see the previous test's id.
+    """
+    from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+
+    DecoratorRegistry.clear_all()
+    yield
+    DecoratorRegistry.clear_all()
+
+
 # ===========================================================================
 # job_dispatch — the inbound wrapper
 # ===========================================================================
@@ -260,6 +278,117 @@ class TestMaybeDispatchAsJob:
 
             # After exit, contextvar reset.
             assert current_job() is None
+        finally:
+            TraceContext.set_propagated_headers({})
+
+    @pytest.mark.asyncio
+    async def test_auto_complete_fires_when_handler_returns_without_explicit_complete(
+        self, monkeypatch
+    ):
+        """A ``task=True`` tool whose body returns without calling
+        ``await job.complete(...)`` must auto-complete with the return
+        value. Otherwise the row sits in ``working`` until the lease
+        expires — caller observes a hung job."""
+        from _mcp_mesh.engine.job_dispatch import maybe_dispatch_as_job
+        from _mcp_mesh.tracing.context import TraceContext
+
+        fn = _fixture_with_job
+        fn._mesh_tool_metadata = {"task": True}
+
+        TraceContext.set_propagated_headers(
+            {"x-mesh-job-id": "job-auto-1", "x-mesh-timeout": "30"}
+        )
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
+        monkeypatch.setenv("MCP_MESH_AGENT_ID", "auto-agent")
+
+        try:
+            completions: list = []
+
+            class _FakeController:
+                def __init__(self, *a, **kw):
+                    self._terminal = False
+
+                async def is_terminal(self):
+                    return self._terminal
+
+                async def complete(self, value):
+                    completions.append(value)
+                    self._terminal = True
+
+                async def fail(self, _err):
+                    self._terminal = True
+
+            async def invoke(_kw):
+                return {"answer": 42}
+
+            async def _pass(_jid, _dl, awaitable):
+                return await awaitable
+
+            with mock.patch(
+                "mcp_mesh_core.JobController", _FakeController, create=True
+            ):
+                with mock.patch(
+                    "mcp_mesh_core.with_job_async", _pass, create=True
+                ):
+                    out = await maybe_dispatch_as_job(fn, invoke, {"user": "x"})
+            assert out == {"answer": 42}
+            assert completions == [{"answer": 42}], (
+                "auto-complete must fire exactly once with the handler return"
+            )
+        finally:
+            TraceContext.set_propagated_headers({})
+
+    @pytest.mark.asyncio
+    async def test_auto_complete_skipped_when_handler_called_complete_itself(
+        self, monkeypatch
+    ):
+        """When the user explicitly calls ``await job.complete(...)``,
+        the auto-complete path MUST NOT double-flush."""
+        from _mcp_mesh.engine.job_dispatch import maybe_dispatch_as_job
+        from _mcp_mesh.tracing.context import TraceContext
+
+        fn = _fixture_with_job
+        fn._mesh_tool_metadata = {"task": True}
+
+        TraceContext.set_propagated_headers(
+            {"x-mesh-job-id": "job-noauto", "x-mesh-timeout": "30"}
+        )
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
+        monkeypatch.setenv("MCP_MESH_AGENT_ID", "noauto-agent")
+
+        try:
+            completions: list = []
+
+            class _FakeController:
+                def __init__(self, *a, **kw):
+                    self._terminal = False
+
+                async def is_terminal(self):
+                    return self._terminal
+
+                async def complete(self, value):
+                    completions.append(value)
+                    self._terminal = True
+
+            async def invoke(kw):
+                # Simulate the user explicitly closing the row.
+                ctrl = kw.get("job")
+                await ctrl.complete({"explicit": True})
+                return {"return": "value"}
+
+            async def _pass(_jid, _dl, awaitable):
+                return await awaitable
+
+            with mock.patch(
+                "mcp_mesh_core.JobController", _FakeController, create=True
+            ):
+                with mock.patch(
+                    "mcp_mesh_core.with_job_async", _pass, create=True
+                ):
+                    await maybe_dispatch_as_job(fn, invoke, {"user": "x"})
+            assert completions == [{"explicit": True}], (
+                "no double-flush — only the explicit complete call should land"
+            )
         finally:
             TraceContext.set_propagated_headers({})
 

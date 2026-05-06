@@ -1144,8 +1144,30 @@ class UnifiedMCPProxy:
                                 cur_timeout = int(headers.get("X-Mesh-Timeout", "0"))
                             except (TypeError, ValueError):
                                 cur_timeout = 0
-                            remaining = max(int(snap.deadline_secs_remaining), 0)
-                            if cur_timeout == 0 or remaining < cur_timeout:
+                            remaining = int(snap.deadline_secs_remaining)
+                            if remaining <= 0:
+                                # Already past the parent deadline. The
+                                # OpenAPI schema requires X-Mesh-Timeout
+                                # >= 1, so we MUST NOT emit the header
+                                # with "0" — downstream behaviour at the
+                                # registry proxy is undefined. Drop any
+                                # propagated header value and let the
+                                # downstream apply its server-side
+                                # default; the parent-scope cancel token
+                                # (already wired through job_context) is
+                                # the authoritative signal that this
+                                # call shouldn't have been made.
+                                self.logger.warning(
+                                    "outbound %s under job=%s has expired deadline "
+                                    "(remaining=%ds); omitting X-Mesh-Timeout instead "
+                                    "of emitting an invalid '0' value",
+                                    name,
+                                    snap.job_id,
+                                    remaining,
+                                )
+                                headers.pop("X-Mesh-Timeout", None)
+                                headers.pop("x-mesh-timeout", None)
+                            elif cur_timeout == 0 or remaining < cur_timeout:
                                 headers["X-Mesh-Timeout"] = str(remaining)
                 except Exception as e:
                     self.logger.debug(

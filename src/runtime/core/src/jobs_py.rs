@@ -269,6 +269,18 @@ impl PyJobController {
         })
     }
 
+    /// Whether ``complete`` / ``fail`` has already been called on this
+    /// controller. The Python dispatch wrapper uses this to decide
+    /// whether a returning user function needs an auto-``complete`` —
+    /// users who explicitly called ``await job.complete(...)`` already
+    /// closed out the row, so the wrapper must NOT double-flush.
+    fn is_terminal<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            Ok(inner.is_terminal().await)
+        })
+    }
+
     fn __repr__(&self) -> String {
         format!("JobController(job_id={:?})", self.inner.job_id())
     }

@@ -87,13 +87,34 @@ pub const PENDING_JOBS_HEADER: &str = "X-Mesh-Pending-Jobs";
 ///
 /// Per [`FastHeartbeatResponse`] docs: missing, `0`, and unparseable
 /// values all collapse to `None`. Anything > 0 returns `Some(n)`.
+///
+/// A malformed header (non-numeric / >u32::MAX) is logged at warn
+/// level so version-skew between the agent runtime and the registry
+/// surfaces in operator logs — silently dropping the value would mask
+/// the protocol mismatch and leave job claims stuck.
 fn parse_pending_jobs_header(headers: &reqwest::header::HeaderMap) -> Option<u32> {
-    let raw = headers.get(PENDING_JOBS_HEADER)?.to_str().ok()?;
-    let n: u32 = raw.trim().parse().ok()?;
-    if n == 0 {
-        None
-    } else {
-        Some(n)
+    let header_val = headers.get(PENDING_JOBS_HEADER)?;
+    let raw = match header_val.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            warn!(
+                "ignoring non-ASCII {} header value: {} (likely registry/runtime version skew)",
+                PENDING_JOBS_HEADER, e
+            );
+            return None;
+        }
+    };
+    let trimmed = raw.trim();
+    match trimmed.parse::<u32>() {
+        Ok(0) => None,
+        Ok(n) => Some(n),
+        Err(e) => {
+            warn!(
+                "ignoring malformed {} header value {:?}: {} (likely registry/runtime version skew)",
+                PENDING_JOBS_HEADER, trimmed, e
+            );
+            None
+        }
     }
 }
 

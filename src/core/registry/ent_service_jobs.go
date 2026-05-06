@@ -455,6 +455,16 @@ func (s *EntService) CountPendingJobsForAgent(ctx context.Context, agentID strin
 	//
 	// Semantic: max_retries counts retries on top of the initial attempt;
 	// a job is still claimable while attempt_count <= max_retries.
+	//
+	// TODO(perf): this runs on every HEAD heartbeat (~5s per replica).
+	// The current implementation pulls up to (pendingJobsHeaderCap+1)
+	// rows and filters AttemptCount <= MaxRetries in Go because Ent
+	// doesn't expose field-vs-field comparisons. With many pending jobs
+	// per capability the SELECT + Go-side filter becomes measurable.
+	// Follow-up: drop into a raw SQL predicate (`attempt_count <=
+	// max_retries`) via Ent's `sql.OrderBy`/raw predicate so the DB
+	// does the comparison directly. Acceptable as-is for v1 (cap of
+	// 100 rows + small audience). Tracking issue: TBD.
 	type minimal struct {
 		AttemptCount int `json:"attempt_count"`
 		MaxRetries   int `json:"max_retries"`

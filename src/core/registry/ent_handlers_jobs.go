@@ -6,11 +6,14 @@ package registry
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -354,68 +357,154 @@ func (h *EntBusinessLogicHandlers) CancelJob(c *gin.Context, jobId string) {
 // and swallowed: the registry row already shows status=cancelled, and the
 // owner's lease will expire if the message is missed.
 //
-// Header propagation matches proxyRequest in ent_handlers.go (#310 trace
-// headers + X-Mesh-Timeout). We deliberately do not pull in the heavier
-// mTLS path here — Phase 1 ships HTTP forwarding only; HTTPS support
-// piggybacks on the proxy refactor later.
+// Scheme handling: when the agent registered an entity_id (i.e. presented
+// a TLS client cert at registration time) we dial https with the registry's
+// own mTLS bundle. Otherwise we dial http. Mirrors the scheme-selection
+// in proxyRequest's isRegisteredAgentEndpoint path.
+//
+// Trace-header propagation matches the proxy path (#310) — we set the
+// well-known headers explicitly rather than going through the
+// MCP_MESH_PROPAGATE_HEADERS allowlist because the cancel forward is a
+// fixed, registry-internal destination and no operator opt-in is needed.
+//
+// Goroutine-driven dispatch: the cancel response to the original HTTP
+// caller does NOT wait for the forward to land. The registry row is
+// already marked cancelled before this is called; the forward is purely
+// a best-effort signal to abort an in-flight handler. Spawning the
+// forward into a goroutine keeps the public response p99 close to the
+// DB write latency rather than the owner-agent round-trip + 5s timeout.
 func (h *EntBusinessLogicHandlers) forwardCancelToOwner(c *gin.Context, ownerInstanceID, jobID, reason string) {
-	ctx := c.Request.Context()
+	// Capture the request-scoped values BEFORE detaching: the request
+	// context dies when the response is sent, so we copy headers we
+	// need and use a fresh context.Background() with a bounded timeout
+	// for the forward goroutine.
+	traceID := c.Request.Header.Get("X-Trace-ID")
+	parentSpan := c.Request.Header.Get("X-Parent-Span")
+	meshTimeout := c.Request.Header.Get("X-Mesh-Timeout")
 
-	agentRow, err := h.entService.GetAgent(ctx, ownerInstanceID)
-	if err != nil || agentRow == nil {
-		log.Printf("[meshjob] cancel forward skipped: owner %q not found in registry (job=%s, err=%v)", ownerInstanceID, jobID, err)
-		return
-	}
-	if agentRow.HTTPHost == "" || agentRow.HTTPPort == 0 {
-		log.Printf("[meshjob] cancel forward skipped: owner %q has no HTTP endpoint registered (job=%s)", ownerInstanceID, jobID)
-		return
-	}
+	go func() {
+		fwdCtx, cancel := context.WithTimeout(context.Background(), cancelForwardTimeout)
+		defer cancel()
 
-	url := fmt.Sprintf("http://%s:%d/jobs/%s/cancel", agentRow.HTTPHost, agentRow.HTTPPort, jobID)
+		agentRow, err := h.entService.GetAgent(fwdCtx, ownerInstanceID)
+		if err != nil || agentRow == nil {
+			log.Printf("[meshjob] cancel forward skipped: owner %q not found in registry (job=%s, err=%v)", ownerInstanceID, jobID, err)
+			return
+		}
+		if agentRow.HTTPHost == "" || agentRow.HTTPPort == 0 {
+			log.Printf("[meshjob] cancel forward skipped: owner %q has no HTTP endpoint registered (job=%s)", ownerInstanceID, jobID)
+			return
+		}
 
-	body := strings.NewReader("")
-	if reason != "" {
-		// Mirror the on-wire CancelJobRequest shape so the agent runtime
-		// can decode the same struct it would on a direct client call.
-		body = strings.NewReader(fmt.Sprintf(`{"reason":%q}`, reason))
-	}
+		// Scheme: https only when the agent has registered an entity_id
+		// (mTLS bundle present). Matches the scheme decision baked into
+		// the agents-list endpoint and proxyRequest's
+		// isRegisteredAgentEndpoint path.
+		scheme := "http"
+		if agentRow.EntityID != nil && *agentRow.EntityID != "" {
+			scheme = "https"
+		}
+		url := fmt.Sprintf("%s://%s:%d/jobs/%s/cancel", scheme, agentRow.HTTPHost, agentRow.HTTPPort, jobID)
 
-	fwdCtx, cancel := context.WithTimeout(ctx, cancelForwardTimeout)
-	defer cancel()
+		body := strings.NewReader("")
+		if reason != "" {
+			// Mirror the on-wire CancelJobRequest shape so the agent runtime
+			// can decode the same struct it would on a direct client call.
+			body = strings.NewReader(fmt.Sprintf(`{"reason":%q}`, reason))
+		}
 
-	req, err := http.NewRequestWithContext(fwdCtx, http.MethodPost, url, body)
-	if err != nil {
-		log.Printf("[meshjob] cancel forward build failed (owner=%s, job=%s): %v", ownerInstanceID, jobID, err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
+		req, err := http.NewRequestWithContext(fwdCtx, http.MethodPost, url, body)
+		if err != nil {
+			log.Printf("[meshjob] cancel forward build failed (owner=%s, job=%s): %v", ownerInstanceID, jobID, err)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
 
-	// Trace-header propagation matches the proxy path (#310). We set these
-	// directly rather than going through the MCP_MESH_PROPAGATE_HEADERS
-	// allowlist because the cancel forward is a fixed, registry-internal
-	// destination — no operator opt-in needed for these well-known headers.
-	if traceID := c.Request.Header.Get("X-Trace-ID"); traceID != "" {
-		req.Header.Set("X-Trace-ID", traceID)
-	}
-	if parentSpan := c.Request.Header.Get("X-Parent-Span"); parentSpan != "" {
-		req.Header.Set("X-Parent-Span", parentSpan)
-	}
-	if meshTimeout := c.Request.Header.Get("X-Mesh-Timeout"); meshTimeout != "" {
-		req.Header.Set("X-Mesh-Timeout", meshTimeout)
-	}
+		if traceID != "" {
+			req.Header.Set("X-Trace-ID", traceID)
+		}
+		if parentSpan != "" {
+			req.Header.Set("X-Parent-Span", parentSpan)
+		}
+		if meshTimeout != "" {
+			req.Header.Set("X-Mesh-Timeout", meshTimeout)
+		}
 
+		client, err := h.cancelForwardClient(scheme)
+		if err != nil {
+			log.Printf("[meshjob] cancel forward TLS init failed (owner=%s, job=%s): %v", ownerInstanceID, jobID, err)
+			return
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[meshjob] cancel forward to %s failed (job=%s): %v", url, jobID, err)
+			return
+		}
+		defer resp.Body.Close()
+		// Drain to allow connection reuse; ignore body content.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		if resp.StatusCode >= 300 {
+			log.Printf("[meshjob] cancel forward to %s returned status %d (job=%s)", url, resp.StatusCode, jobID)
+		}
+	}()
+}
+
+// cancelForwardClient builds a one-shot http.Client for forwarding a
+// cancel to an owner agent. For ``https`` targets we attach the same
+// mTLS configuration (CA + client cert/key, peer chain verification with
+// hostname verification disabled) that proxyRequest uses — the same env
+// vars (MCP_MESH_TLS_CA / _CERT / _KEY) gate both code paths so misconfig
+// surfaces consistently.
+func (h *EntBusinessLogicHandlers) cancelForwardClient(scheme string) (*http.Client, error) {
 	client := &http.Client{Timeout: cancelForwardTimeout}
-	resp, err := client.Do(req)
+	if scheme != "https" {
+		return client, nil
+	}
+
+	caPath := os.Getenv("MCP_MESH_TLS_CA")
+	certPath := os.Getenv("MCP_MESH_TLS_CERT")
+	keyPath := os.Getenv("MCP_MESH_TLS_KEY")
+	if caPath == "" || certPath == "" || keyPath == "" {
+		return nil, fmt.Errorf("https cancel forward requires MCP_MESH_TLS_CA / MCP_MESH_TLS_CERT / MCP_MESH_TLS_KEY (got ca=%q cert=%q key=%q)", caPath, certPath, keyPath)
+	}
+
+	caBytes, err := os.ReadFile(caPath)
 	if err != nil {
-		log.Printf("[meshjob] cancel forward to %s failed (job=%s): %v", url, jobID, err)
-		return
+		return nil, fmt.Errorf("read CA cert %s: %w", caPath, err)
 	}
-	defer resp.Body.Close()
-	// Drain to allow connection reuse; ignore body content.
-	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode >= 300 {
-		log.Printf("[meshjob] cancel forward to %s returned status %d (job=%s)", url, resp.StatusCode, jobID)
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caBytes) {
+		return nil, fmt.Errorf("parse CA cert from %s (empty or malformed PEM)", caPath)
 	}
+
+	clientCert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("load client cert/key (%s, %s): %w", certPath, keyPath, err)
+	}
+
+	tlsConfig := &tls.Config{
+		// Skip hostname check (--tls-auto certs are 127.0.0.1/::1 SANs only)
+		// but still verify the peer chain against the mesh CA.
+		InsecureSkipVerify: true,
+		Certificates:       []tls.Certificate{clientCert},
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("no peer certificates presented")
+			}
+			opts := x509.VerifyOptions{
+				Roots:         caPool,
+				Intermediates: x509.NewCertPool(),
+			}
+			for _, cert := range cs.PeerCertificates[1:] {
+				opts.Intermediates.AddCert(cert)
+			}
+			_, err := cs.PeerCertificates[0].Verify(opts)
+			return err
+		},
+	}
+	client.Transport = &http.Transport{TLSClientConfig: tlsConfig}
+	return client, nil
 }
 
 // jobToAPI converts an Ent Job entity into the OpenAPI Job representation.

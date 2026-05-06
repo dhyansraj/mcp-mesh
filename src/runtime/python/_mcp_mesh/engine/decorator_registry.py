@@ -367,6 +367,10 @@ class DecoratorRegistry:
         cls._mesh_workflows.clear()
         cls._mesh_llm_agents.clear()
         cls._custom_decorators.clear()
+        # Clear the cached resolved agent config so a subsequent test
+        # with a different MCP_MESH_AGENT_ID / MCP_MESH_AGENT_NAME env
+        # actually sees the new value (the cache short-circuits resolution).
+        cls._cached_agent_config = None
 
         # Also clear the shared agent ID from mesh.decorators
         try:

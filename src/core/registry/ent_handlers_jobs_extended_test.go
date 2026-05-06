@@ -479,6 +479,18 @@ func TestCancelJob_OwnedForwardsToOwner(t *testing.T) {
 	require.NotNil(t, cr.ForwardedToInstanceId)
 	assert.Equal(t, ownerID, *cr.ForwardedToInstanceId)
 
+	// The forward to the owner runs in a goroutine so the cancel
+	// response can return immediately. Poll briefly for the hit;
+	// 2s is well under the 5s cancelForwardTimeout, so a flake here
+	// would mean a real regression rather than test timing noise.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&hits) >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	// Owner saw the forward.
 	assert.Equal(t, int32(1), atomic.LoadInt32(&hits), "owner should receive exactly one cancel forward")
 	assert.Equal(t, "/jobs/"+j.ID+"/cancel", gotURL)

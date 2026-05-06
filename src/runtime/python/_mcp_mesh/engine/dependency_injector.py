@@ -479,13 +479,27 @@ def _prepare_injection_kwargs(
             from .mesh_job_submitter import MeshJobSubmitter
             import os as _os
 
-            from ..shared.agent_identity import resolve_agent_id
+            from .decorator_registry import DecoratorRegistry
 
             registry_url = _os.environ.get("MCP_MESH_REGISTRY_URL")
-            # Centralised resolver — same source the JobController uses
-            # so submitted_by lines up with the eventual claim's
+            # Single source of truth: the same DecoratorRegistry-resolved
+            # agent_id that the heartbeat registers, the claim worker
+            # sends on POST /jobs/claim, and the JobController stamps on
+            # batch deltas. Reading from it here means submitted_by
+            # lines up exactly with the eventual claim's
             # owner_instance_id when this agent submits to itself.
-            instance_id = resolve_agent_id() or "unknown"
+            instance_id = "unknown"
+            try:
+                cfg = DecoratorRegistry.get_resolved_agent_config()
+                if isinstance(cfg, dict):
+                    candidate = cfg.get("agent_id")
+                    if candidate:
+                        instance_id = candidate
+            except Exception as exc:
+                log.debug(
+                    f"{tp}MeshJob param {mesh_job_param!r}: DecoratorRegistry "
+                    f"agent_id lookup failed ({exc}); using 'unknown'"
+                )
             if registry_url:
                 submitter = MeshJobSubmitter(
                     capability=mesh_job_param,

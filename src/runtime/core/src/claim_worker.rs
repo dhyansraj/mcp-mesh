@@ -221,14 +221,24 @@ async fn run_loop(
             // Acquire a permit before claiming so we never claim a job we
             // can't immediately dispatch. `acquire_owned` so we can move
             // it into the spawned task and release on completion.
-            let permit = match Arc::clone(&semaphore).acquire_owned().await {
-                Ok(p) => p,
-                Err(_) => {
-                    // Semaphore closed — should never happen since we hold
-                    // the only reference besides the spawned tasks.
-                    warn!("Claim worker semaphore closed unexpectedly");
-                    break;
-                }
+            //
+            // Wrap the await in a tokio::select so a worker that's
+            // blocked at the semaphore (all permits held by long-running
+            // dispatches) can still observe a `cancel.cancelled()`
+            // signal and exit cleanly during agent shutdown — without
+            // this, the runtime hangs on Drop until every in-flight
+            // handler returns.
+            let permit = tokio::select! {
+                p = Arc::clone(&semaphore).acquire_owned() => match p {
+                    Ok(p) => p,
+                    Err(_) => {
+                        // Semaphore closed — should never happen since we hold
+                        // the only reference besides the spawned tasks.
+                        warn!("Claim worker semaphore closed unexpectedly");
+                        break;
+                    }
+                },
+                _ = cancel.cancelled() => break,
             };
 
             match backend

@@ -56,6 +56,17 @@ logger = logging.getLogger(__name__)
 _POLL_BASE_SECS = 0.5
 _POLL_MAX_SECS = 5.0
 
+# Phase 1 dispatch concurrency cap. Mirrors the Rust ``ClaimWorker``
+# semaphore (``max_concurrent`` in ``crate::claim_worker::ClaimWorkerConfig``)
+# so a single Python claim dispatcher cannot drown its agent process by
+# spinning unbounded handler tasks. Four matches the Rust default of 4.
+_MAX_CONCURRENT_DISPATCHES = 4
+
+# How many consecutive ``_claim_once`` failures we tolerate at WARNING
+# level before escalating to ERROR. Helps surface a wedged dispatcher in
+# operator dashboards without spamming on a single transient blip.
+_CONSECUTIVE_FAILURES_ERROR_THRESHOLD = 5
+
 
 class PythonClaimDispatcher:
     """Background task that claims pending jobs for a single capability
@@ -83,6 +94,17 @@ class PythonClaimDispatcher:
         self.handler = handler
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
+        # One httpx.AsyncClient per dispatcher instead of per poll —
+        # avoids burning a TCP/TLS handshake on every claim cycle once
+        # connection reuse is in play. Constructed lazily on first
+        # ``_claim_once`` so we bind to the running event loop, not the
+        # pipeline's one-shot loop (see jobs_claim_workers.py for the
+        # lifetime story).
+        self._http_client: Optional[Any] = None
+        # Bounded concurrency for handler dispatch (W6).
+        self._dispatch_sem = asyncio.Semaphore(_MAX_CONCURRENT_DISPATCHES)
+        # Consecutive failure tracker for log-level escalation (W1).
+        self._consecutive_failures = 0
 
     async def _claim_once(self) -> list[dict]:
         """Single ``POST /jobs/claim`` call. Returns the list of claimed
@@ -99,96 +121,129 @@ class PythonClaimDispatcher:
         """
         import httpx
 
+        if self._http_client is None:
+            self._http_client = httpx.AsyncClient(timeout=10.0)
+
         url = f"{self.registry_url.rstrip('/')}/jobs/claim"
         payload = {
             "capability": self.capability,
             "instance_id": self.instance_id,
         }
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(url, json=payload)
-                if resp.status_code == 204:
-                    return []  # no work — registry returns 204 No Content
-                if resp.status_code != 200:
-                    logger.debug(
-                        "claim_dispatcher: unexpected status %s from %s",
-                        resp.status_code,
-                        url,
-                    )
-                    return []
-                body = resp.json() or {}
-                # OpenAPI ClaimJobsResponse: {"claimed": [...]} (required).
-                claimed = body.get("claimed") or []
-                if not isinstance(claimed, list):
-                    logger.debug(
-                        "claim_dispatcher: malformed response — 'claimed' "
-                        "is not a list: %r",
-                        claimed,
-                    )
-                    return []
-                # Filter out entries without an id — defensive against
-                # any future schema drift.
-                return [c for c in claimed if isinstance(c, dict) and c.get("id")]
+            resp = await self._http_client.post(url, json=payload)
+            if resp.status_code == 204:
+                self._consecutive_failures = 0
+                return []  # no work — registry returns 204 No Content
+            if resp.status_code != 200:
+                # Non-204/200 statuses are operational issues operators
+                # should see. Bump the failure counter so a wedged
+                # registry surfaces at ERROR after the threshold.
+                self._consecutive_failures += 1
+                self._log_claim_failure(
+                    "unexpected status %s from %s" % (resp.status_code, url)
+                )
+                return []
+            body = resp.json() or {}
+            # OpenAPI ClaimJobsResponse: {"claimed": [...]} (required).
+            claimed = body.get("claimed") or []
+            if not isinstance(claimed, list):
+                self._consecutive_failures += 1
+                self._log_claim_failure(
+                    "malformed response — 'claimed' is not a list: %r" % (claimed,)
+                )
+                return []
+            # Successful poll — reset failure window so a one-off blip
+            # doesn't accumulate against later failures.
+            self._consecutive_failures = 0
+            # Filter out entries without an id — defensive against
+            # any future schema drift.
+            return [c for c in claimed if isinstance(c, dict) and c.get("id")]
         except Exception as e:
-            logger.debug("claim_dispatcher: claim_once error %s", e)
+            self._consecutive_failures += 1
+            self._log_claim_failure(
+                "claim_once error: %s: %s" % (type(e).__name__, e)
+            )
             return []
+
+    def _log_claim_failure(self, detail: str) -> None:
+        """Surface a claim-poll failure at the appropriate log level.
+
+        First few consecutive failures land at WARNING so default-INFO
+        agent logs still flag the problem; once we're past
+        ``_CONSECUTIVE_FAILURES_ERROR_THRESHOLD`` we escalate to ERROR
+        so operator dashboards / log scrapers pick it up as actionable
+        (a wedged dispatcher means jobs in this capability never run).
+        """
+        msg = (
+            "claim_dispatcher capability=%s instance=%s: %s "
+            "(consecutive_failures=%d)"
+        ) % (self.capability, self.instance_id, detail, self._consecutive_failures)
+        if self._consecutive_failures >= _CONSECUTIVE_FAILURES_ERROR_THRESHOLD:
+            logger.error(msg)
+        else:
+            logger.warning(msg)
 
     async def _dispatch(self, claimed: dict) -> None:
         """Run the local handler for a claimed job. Calls
         ``handler(**submitted_payload)`` — the wrapped DI handler reads
         the X-Mesh-Job-Id from headers via the contextvar; for the
         claim path we set the contextvar manually before invoking it.
+
+        Concurrency is bounded by ``self._dispatch_sem`` (Phase-1 cap
+        matching the Rust ``ClaimWorker`` semaphore) so a slow-handler
+        agent can't accumulate unbounded asyncio tasks.
         """
-        job_id = claimed.get("id")
-        if not job_id:
-            return
+        async with self._dispatch_sem:
+            job_id = claimed.get("id")
+            if not job_id:
+                return
 
-        payload = claimed.get("submitted_payload") or {}
-        if not isinstance(payload, dict):
-            payload = {}
+            payload = claimed.get("submitted_payload") or {}
+            if not isinstance(payload, dict):
+                payload = {}
 
-        # Set propagated headers for this task so maybe_dispatch_as_job
-        # picks up the job_id (mirrors how the inbound HTTP path delivers
-        # it via the FastMCP middleware).
-        try:
-            from ..tracing.context import TraceContext
-
-            existing = TraceContext.get_propagated_headers() or {}
-            merged = dict(existing)
-            merged["x-mesh-job-id"] = job_id
-            max_dur = claimed.get("max_duration")
-            if max_dur:
-                merged["x-mesh-timeout"] = str(int(max_dur))
-            TraceContext.set_propagated_headers(merged)
-        except Exception as e:
-            logger.debug(
-                "claim_dispatcher: could not seed propagated headers (%s); "
-                "dispatching without job context",
-                e,
-            )
-
-        try:
-            await self.handler(**payload)
-        except Exception as e:
-            logger.warning(
-                "claim_dispatcher: handler for job=%s capability=%s raised: %s",
-                job_id,
-                self.capability,
-                e,
-            )
-            # Best-effort: report failure to registry so the job doesn't
-            # stay "working" until lease expiry. Failures here are
-            # logged and swallowed — the registry's stale-agent sweep is
-            # the ultimate backstop.
+            # Set propagated headers for this task so maybe_dispatch_as_job
+            # picks up the job_id (mirrors how the inbound HTTP path delivers
+            # it via the FastMCP middleware).
             try:
-                from mcp_mesh_core import JobController as _JobController
+                from ..tracing.context import TraceContext
 
-                ctrl = _JobController(job_id, self.instance_id, self.registry_url)
-                await ctrl.fail(str(e))
-            except Exception as inner:
+                existing = TraceContext.get_propagated_headers() or {}
+                merged = dict(existing)
+                merged["x-mesh-job-id"] = job_id
+                max_dur = claimed.get("max_duration")
+                if max_dur:
+                    merged["x-mesh-timeout"] = str(int(max_dur))
+                TraceContext.set_propagated_headers(merged)
+            except Exception as e:
                 logger.debug(
-                    "claim_dispatcher: terminal-fail report failed: %s", inner
+                    "claim_dispatcher: could not seed propagated headers (%s); "
+                    "dispatching without job context",
+                    e,
                 )
+
+            try:
+                await self.handler(**payload)
+            except Exception as e:
+                logger.warning(
+                    "claim_dispatcher: handler for job=%s capability=%s raised: %s",
+                    job_id,
+                    self.capability,
+                    e,
+                )
+                # Best-effort: report failure to registry so the job doesn't
+                # stay "working" until lease expiry. Failures here are
+                # logged and swallowed — the registry's stale-agent sweep is
+                # the ultimate backstop.
+                try:
+                    from mcp_mesh_core import JobController as _JobController
+
+                    ctrl = _JobController(job_id, self.instance_id, self.registry_url)
+                    await ctrl.fail(str(e))
+                except Exception as inner:
+                    logger.debug(
+                        "claim_dispatcher: terminal-fail report failed: %s", inner
+                    )
 
     async def _run_loop(self) -> None:
         """Main loop: poll, claim, dispatch, backoff."""
@@ -250,6 +305,18 @@ class PythonClaimDispatcher:
                     self.capability,
                 )
                 self._task.cancel()
+        # Close the dispatcher-owned HTTP client so connection pools
+        # don't leak across agent restarts in long-lived test harnesses.
+        client = self._http_client
+        if client is not None:
+            self._http_client = None
+            try:
+                await client.aclose()
+            except Exception as e:  # noqa: BLE001 - best-effort cleanup
+                logger.debug(
+                    "claim_dispatcher: http client close raised (%s); ignoring",
+                    e,
+                )
 
 
 def discover_task_handlers(

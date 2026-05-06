@@ -8,7 +8,7 @@
 //! v1"). TODO(phase 2/3): SQLite backing for crash-survival across replica
 //! restarts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,18 +69,48 @@ pub struct JobCancelled;
 /// collapse to the latest; terminal deltas are kept as-is and replace any
 /// pending progress for that job.
 ///
+/// `terminal` tracks job ids that have already been flushed via
+/// `flush_terminal` so any racing `update_progress` for the same job is
+/// dropped on the floor. This preserves the "no progress after terminal"
+/// invariant even when the mutex is briefly released between the queue
+/// drain and the backend submit (see `JobController::flush_terminal`):
+/// without this guard a concurrent `update_progress` could re-enqueue a
+/// progress delta AFTER the terminal had already left the queue, and the
+/// next batching-tick flush would push that progress to the registry —
+/// where it would either silently overwrite the terminal status or get
+/// rejected as a not_owner / illegal-transition delta.
+///
 /// Public so the FFI layer (and language SDKs that wrap the producer-side
-/// pipeline directly) can construct one. Field is private so callers can't
-/// poke at the map; use `enqueue` / `drain` through a `JobController` or
-/// the batching tick.
+/// pipeline directly) can construct one. Fields are private so callers can't
+/// poke at internal state; use `enqueue` / `drain` through a `JobController`
+/// or the batching tick.
 #[derive(Default)]
 pub struct CoalescingQueue {
     pending: HashMap<String, JobDelta>,
+    /// Job ids that have already had a terminal delta dispatched. Any
+    /// further `enqueue` for these ids is silently dropped. The set is
+    /// process-lived (deliberate): once a job is terminal, it should
+    /// stay terminal for the rest of this controller's lifetime — the
+    /// JobController is single-use anyway (constructed per inbound
+    /// dispatch in `job_dispatch.maybe_dispatch_as_job`).
+    terminal: HashSet<String>,
 }
 
 impl CoalescingQueue {
     fn enqueue(&mut self, delta: JobDelta) {
         let id = delta.id.clone();
+        if self.terminal.contains(&id) {
+            // Late progress after a terminal flush — drop it. Logged at
+            // debug because this is the *expected* path when an
+            // application thread fires one last update_progress while
+            // the controller is already shutting down; only operators
+            // tracing missing progress events care.
+            debug!(
+                "CoalescingQueue: dropping post-terminal delta for job {}",
+                id
+            );
+            return;
+        }
         // Terminal deltas always replace anything pending for that id;
         // progress-only deltas also replace prior pending progress for the
         // same id (coalesce). Same insert behavior either way.
@@ -89,6 +119,16 @@ impl CoalescingQueue {
 
     fn drain(&mut self) -> Vec<JobDelta> {
         std::mem::take(&mut self.pending).into_values().collect()
+    }
+
+    /// Mark `job_id` as having been terminally flushed. Subsequent
+    /// `enqueue` calls for the same id are silently dropped. Idempotent.
+    fn mark_terminal(&mut self, job_id: &str) {
+        self.terminal.insert(job_id.to_string());
+        // Defensive: also evict any pending non-terminal entry for this
+        // id. Callers (`JobController::flush_terminal`) already remove
+        // explicitly, but doing it here keeps the invariant local.
+        self.pending.remove(job_id);
     }
 
     fn len(&self) -> usize {
@@ -270,17 +310,32 @@ impl JobController {
     }
 
     async fn flush_terminal(&self, delta: JobDelta) -> Result<(), JobError> {
-        // Pull any pending non-terminal delta for this job out of the queue
-        // and discard it (the terminal delta supersedes it). Then send the
-        // terminal delta directly — don't wait for the next tick.
+        // Mark the job terminal in the queue BEFORE dropping the lock —
+        // this both removes any pending non-terminal delta (the terminal
+        // supersedes it) and slams the door on any racing
+        // `update_progress` that lands while the backend submit is in
+        // flight. Without the sentinel, a concurrent progress update
+        // after we'd released the lock would land in the queue and the
+        // next batching-tick flush would push stale progress AFTER a
+        // terminal status was already on the wire (see CoalescingQueue
+        // docs for the invariant).
         {
             let mut q = self.queue.lock().await;
-            q.pending.remove(&self.job_id);
+            q.mark_terminal(&self.job_id);
         }
         self.backend
             .submit_batch(&self.instance_id, vec![delta])
             .await?;
         Ok(())
+    }
+
+    /// Whether `complete` / `fail` has already been called on this
+    /// controller. Exposed so per-language SDKs can tell whether a
+    /// returning user function still needs an auto-`complete` (the
+    /// "if the user forgot, finish the job for them" path).
+    pub async fn is_terminal(&self) -> bool {
+        let q = self.queue.lock().await;
+        q.terminal.contains(&self.job_id)
     }
 }
 
@@ -959,6 +1014,51 @@ mod tests {
         let job = backend.get_job(&resp.id).await.unwrap();
         assert_eq!(job.status, JobStatus::Completed);
         assert_eq!(job.result, Some(serde_json::json!({"ans": 42})));
+    }
+
+    #[tokio::test]
+    async fn post_terminal_progress_is_dropped() {
+        // After flush_terminal marks a job, any racing update_progress
+        // must NOT land in the queue (would push stale progress to the
+        // registry on the next batching tick — see CoalescingQueue
+        // docs for the invariant).
+        let backend = MockBackend::new();
+        let queue = new_coalescing_queue();
+        let resp = backend
+            .create_job(CreateJobRequest {
+                capability: "cap".into(),
+                submitted_payload: serde_json::json!({}),
+                submitted_by: "inst-1".into(),
+                max_retries: None,
+                max_duration: None,
+                total_deadline: None,
+                owner_instance_id: None,
+            })
+            .await
+            .unwrap();
+        let ctrl = JobController::new(
+            resp.id.clone(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            queue.clone(),
+        );
+
+        ctrl.complete(serde_json::json!({"done": true})).await.unwrap();
+        // is_terminal() reflects the post-flush state.
+        assert!(ctrl.is_terminal().await);
+
+        // Late progress: must be silently dropped.
+        ctrl.update_progress(0.99, Some("late".into())).await;
+
+        let q = queue.lock().await;
+        assert_eq!(q.len(), 0, "queue must stay empty after terminal");
+        drop(q);
+
+        // Backend saw only the terminal batch — no stale progress.
+        assert_eq!(backend.batch_count(), 1);
+        let (_, deltas) = backend.last_batch().unwrap();
+        assert_eq!(deltas.len(), 1);
+        assert!(deltas[0].is_terminal());
     }
 
     #[tokio::test]

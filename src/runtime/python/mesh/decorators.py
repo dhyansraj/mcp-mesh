@@ -614,9 +614,15 @@ def _get_or_create_agent_id(agent_name: str | None = None) -> str:
     """
     Get or create a shared agent ID for all functions in this process.
 
-    Format: {prefix}-{8chars} where:
-    - prefix precedence: MCP_MESH_AGENT_NAME env var > agent_name parameter > "agent"
-    - 8chars is first 8 characters of a UUID
+    Resolution order (first match wins):
+    1. MCP_MESH_AGENT_ID env var — explicit full-id override (production K8s
+       sets this to the pod name so the same id survives restarts and lines
+       up with the pod's logs / metrics). This is the value used everywhere
+       (heartbeat registration, claim worker, JobController instance_id),
+       so a single env var pins identity across all subsystems.
+    2. Synthetic ``{prefix}-{8chars}`` where prefix precedence is
+       MCP_MESH_AGENT_NAME env var > agent_name parameter > "agent" and
+       8chars is the first 8 characters of a fresh UUID.
 
     Args:
         agent_name: Optional name from @mesh.agent decorator
@@ -627,6 +633,17 @@ def _get_or_create_agent_id(agent_name: str | None = None) -> str:
     global _SHARED_AGENT_ID
 
     if _SHARED_AGENT_ID is None:
+        # Step 1: explicit full-id override.
+        explicit = get_config_value(
+            "MCP_MESH_AGENT_ID",
+            default=None,
+            rule=ValidationRule.STRING_RULE,
+        )
+        if explicit:
+            _SHARED_AGENT_ID = explicit
+            return _SHARED_AGENT_ID
+
+        # Step 2: synthetic prefix-uuid form.
         # Precedence: env var > agent_name > default "agent"
         prefix = get_config_value(
             "MCP_MESH_AGENT_NAME",

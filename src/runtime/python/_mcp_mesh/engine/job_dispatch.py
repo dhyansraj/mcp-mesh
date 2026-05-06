@@ -98,21 +98,40 @@ def _resolve_runtime_identity() -> tuple[Optional[str], Optional[str]]:
       so the registry can correlate this replica with claimed work.
 
     The ``instance_id`` MUST match the value the claim worker sent on
-    ``POST /jobs/claim`` (which uses the pipeline ``agent_id`` from the
-    decorator registry); otherwise the registry rejects deltas as
-    ``not_owner``. This is centralised in
-    :func:`_mcp_mesh.shared.agent_identity.resolve_agent_id` so both
-    code paths read from the same source.
+    ``POST /jobs/claim`` AND the value heartbeat registers with the
+    registry — otherwise the registry rejects deltas as ``not_owner``
+    and progress / terminal updates silently drop.
+
+    The single source of truth is
+    :meth:`_mcp_mesh.engine.decorator_registry.DecoratorRegistry.get_resolved_agent_config`
+    (specifically the ``agent_id`` key). That same value is what the
+    configuration step writes into the pipeline context, what the
+    heartbeat sends on registration, and what the claim worker reads —
+    so reading from it here closes the instance_id mismatch loop with
+    ZERO parallel resolution chains.
 
     Returns ``(None, None)`` when either piece is missing — the wrapper
     treats that as "job dispatch not available; fall through to a regular
     call". The user function still runs; only the MeshJob slot stays
     ``None``.
     """
-    from ..shared.agent_identity import resolve_agent_id
-
     registry_url = os.environ.get("MCP_MESH_REGISTRY_URL")
-    instance_id = resolve_agent_id()
+    instance_id: Optional[str] = None
+    try:
+        from .decorator_registry import DecoratorRegistry
+
+        cfg = DecoratorRegistry.get_resolved_agent_config()
+        if isinstance(cfg, dict):
+            candidate = cfg.get("agent_id")
+            if candidate and candidate != "unknown":
+                instance_id = candidate
+    except Exception as e:
+        logger.debug(
+            "job_dispatch: DecoratorRegistry.get_resolved_agent_config "
+            "unavailable (%s); cannot resolve instance_id",
+            e,
+        )
+
     if not registry_url or not instance_id:
         return None, None
     return registry_url, instance_id
@@ -214,8 +233,8 @@ async def maybe_dispatch_as_job(
         logger.warning(
             "job_dispatch: %s received X-Mesh-Job-Id=%s but registry_url / "
             "instance_id is not resolvable (need MCP_MESH_REGISTRY_URL plus a "
-            "stable agent identity from MCP_MESH_AGENT_ID / decorator registry / "
-            "socket.gethostname()); falling back to a regular call",
+            "DecoratorRegistry-resolved agent_id — set MCP_MESH_AGENT_ID for "
+            "an explicit override); falling back to a regular call",
             getattr(func, "__name__", "?"),
             job_id,
         )
@@ -250,6 +269,63 @@ async def maybe_dispatch_as_job(
     if mesh_job_param:
         final_kwargs[mesh_job_param] = controller
 
+    async def _run_and_autocomplete() -> Any:
+        """Invoke the user function and, if it returned without calling
+        ``job.complete(...)`` / ``job.fail(...)`` itself, auto-complete
+        with the return value.
+
+        Why this exists: a tool decorated ``task=True`` whose body never
+        explicitly closes the row would otherwise stay in ``working``
+        until the lease expires (~lease_ttl seconds, typically minutes)
+        and the registry sweep marked it failed/orphaned. From the
+        caller's point of view the job hung. Auto-completion mirrors the
+        "synchronous tool returns -> tools/call response" contract for
+        the regular path: when a task-tool returns cleanly, it's done.
+
+        The ``is_terminal()`` query is the source of truth — users who
+        DID call ``await job.complete(...)`` themselves already marked
+        the queue terminal, and we MUST NOT double-flush (the second
+        complete would race with a possibly-arrived progress update on
+        another replica and confuse the registry's `not_owner` checks).
+        On any handler exception we don't auto-fail here — the
+        exception propagation up the wrapper chain handles it (and the
+        registry sweep is the ultimate backstop for a totally crashed
+        replica).
+        """
+        result = await invoke(final_kwargs)
+        try:
+            already_terminal = await controller.is_terminal()
+        except Exception as e:
+            logger.debug(
+                "job_dispatch: is_terminal probe failed for job=%s (%s); "
+                "skipping auto-complete to avoid double-flush",
+                job_id,
+                e,
+            )
+            return result
+        if already_terminal:
+            return result
+        try:
+            # Wrap non-JSON-serialisable returns in {"value": str(...)}
+            # so Rust's ``serde_json::Value`` serialisation doesn't blow
+            # up on application returns that are e.g. dataclasses or
+            # bytes. The framework owns this auto-call so it can be
+            # opinionated; users wanting a structured terminal payload
+            # call ``await job.complete(...)`` explicitly.
+            await controller.complete(result if _is_json_safe(result) else {"value": str(result)})
+            logger.debug(
+                "job_dispatch: auto-completed job=%s with handler return value",
+                job_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "job_dispatch: auto-complete for job=%s failed (%s); "
+                "registry sweep will eventually mark the row terminal",
+                job_id,
+                e,
+            )
+        return result
+
     # Bind the Python contextvar so user code (and the outbound proxy
     # inside this Python process) can observe the active job.
     snap = JobContextSnapshot(
@@ -267,7 +343,7 @@ async def maybe_dispatch_as_job(
 
         if with_job_async is not None:
             return await with_job_async(
-                job_id, deadline_secs, invoke(final_kwargs)
+                job_id, deadline_secs, _run_and_autocomplete()
             )
         else:
             # Defensive fallback: if the FFI helper isn't available
@@ -281,6 +357,24 @@ async def maybe_dispatch_as_job(
                 "job_dispatch: with_job_async not available; running with "
                 "Python contextvar only (Rust task-local will not be set)"
             )
-            return await invoke(final_kwargs)
+            return await _run_and_autocomplete()
     finally:
         CURRENT_JOB.reset(token)
+
+
+def _is_json_safe(value: Any) -> bool:
+    """Cheap check: is ``value`` losslessly representable in JSON?
+
+    Used to decide whether to pass a handler's return verbatim into
+    ``controller.complete(...)`` or wrap it in a string envelope. We
+    don't try to be exhaustive — primitives, lists, dicts of the same
+    are safe; anything else falls through to the str() envelope so the
+    Rust JSON layer doesn't error inside the auto-complete path.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return True
+    if isinstance(value, list):
+        return all(_is_json_safe(v) for v in value)
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _is_json_safe(v) for k, v in value.items())
+    return False

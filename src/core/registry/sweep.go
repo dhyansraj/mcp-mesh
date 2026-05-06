@@ -251,22 +251,29 @@ func (s *SweepJob) runOnce(ctx context.Context) (sweepResult, error) {
 	// Orphan-job reroute always runs (independent of Retention) — jobs are
 	// not subject to the agent retention knob; an orphan is an orphan as
 	// soon as its owner is gone.
+	//
+	// Counter-capture order: each sub-step writes its partial counts onto
+	// `res` BEFORE the error check so a mid-batch failure (e.g. txn aborted
+	// after deleting half the rows) still surfaces what work actually
+	// landed in the DB. Without this, the tick logger would print zeros
+	// even though rows were updated, masking the partial progress from
+	// operators.
 	if s.service != nil {
 		reset, exhausted, err := s.service.ResetOrphanedJobs(ctx)
+		res.jobsReset = reset
+		res.jobsExhausted = exhausted
 		if err != nil {
 			return res, fmt.Errorf("reset orphaned jobs: %w", err)
 		}
-		res.jobsReset = reset
-		res.jobsExhausted = exhausted
 
 		// total_deadline expiry is opt-in (column is NULL by default per
 		// Resolved Decisions), so most ticks scan zero rows. Cheap to run
 		// every cycle.
 		expired, err := s.service.ExpireDeadlinedJobs(ctx)
+		res.jobsDeadlined = expired
 		if err != nil {
 			return res, fmt.Errorf("expire deadlined jobs: %w", err)
 		}
-		res.jobsDeadlined = expired
 	}
 
 	n, err := s.enforceEventCap(ctx)

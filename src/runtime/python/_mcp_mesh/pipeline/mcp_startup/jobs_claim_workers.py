@@ -69,11 +69,28 @@ class JobsClaimWorkersStep(PipelineStep):
         result = PipelineResult(message="Claim workers")
 
         registry_url = context.get("registry_url")
-        agent_id = context.get("agent_id") or "unknown"
+        # Read agent_id from the pipeline context — populated by
+        # ConfigurationStep from DecoratorRegistry.get_resolved_agent_config().
+        # That is the SAME canonical source used by the heartbeat
+        # registration and by job_dispatch._resolve_runtime_identity, so
+        # the claim worker's owner_instance_id will always match the
+        # JobController's instance_id stamped on batch deltas.
+        agent_id = context.get("agent_id")
         if not registry_url:
             result.status = PipelineStatus.SKIPPED
             result.message = (
                 "Claim workers skipped: no registry_url configured"
+            )
+            self.logger.info("⚠️ %s", result.message)
+            return result
+        if not agent_id or agent_id == "unknown":
+            # Without a stable agent_id every claim would be rejected
+            # by the registry as not_owner — better to skip cleanly than
+            # spin a dispatcher that can never make progress.
+            result.status = PipelineStatus.SKIPPED
+            result.message = (
+                "Claim workers skipped: no resolvable agent_id in pipeline "
+                "context (DecoratorRegistry did not produce one)"
             )
             self.logger.info("⚠️ %s", result.message)
             return result
