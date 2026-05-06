@@ -25,9 +25,32 @@ import (
 // newAuditTestEnv mirrors newSweepTestEnv from sweep_test.go: a fresh in-memory
 // Ent client + EntService with status hooks disabled so the only events in the
 // table are the audit events we explicitly emit.
+//
+// The DSN and connection pool config mirror database.InitializeEnt:
+//   - _busy_timeout=5000 makes SQLite wait on the write lock instead of
+//     returning SQLITE_BUSY immediately.
+//   - MaxOpenConns=1 forces single-writer serialization at the connection
+//     pool level, matching production (see database.InitializeEnt). This
+//     prevents SQLITE_LOCKED errors that shared-cache mode emits when two
+//     pool connections collide on the same table — _busy_timeout alone
+//     does not retry SQLITE_LOCKED, only SQLITE_BUSY.
+//
+// Without these, TestClaimJobs_ConcurrentRace_ExactlyOneWinner is flaky
+// under `go test -race`: concurrent /jobs/claim handlers each get their own
+// pool connection, race on the jobs table, and 1–2 of them error out with
+// "database table is locked".
 func newAuditTestEnv(t *testing.T) (*ent.Client, *EntService, func()) {
 	t.Helper()
-	client := enttest.Open(t, "sqlite3", "file:audit_"+t.Name()+"?mode=memory&cache=shared&_fk=1")
+
+	dsn := "file:audit_" + t.Name() + "?mode=memory&cache=shared&_fk=1&_busy_timeout=5000"
+	drv, err := sql.Open("sqlite3", dsn)
+	require.NoError(t, err, "open test sqlite driver")
+	db := drv.DB()
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+
+	client := enttest.NewClient(t, enttest.WithOptions(ent.Driver(drv)))
 	testLogger := logger.New(&config.Config{LogLevel: "ERROR"})
 	entDB := &database.EntDatabase{Client: client}
 	service := NewEntService(entDB, nil, testLogger)
