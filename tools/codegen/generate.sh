@@ -26,7 +26,9 @@
 #
 # IF THIS SCRIPT FAILS:
 # - Check OpenAPI spec syntax and schema
-# - Ensure oapi-codegen is installed (go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest)
+# - Ensure oapi-codegen is installed (go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.5.1)
+#   NOTE: Pin to v2.5.1 — must match oapi-codegen/runtime version in go.mod (v1.1.1).
+#   Newer CLI (v2.7.0+) emits API calls absent from runtime v1.1.x and breaks the build.
 # - Verify output directories exist and are writable
 # - Check that generated code matches expected interfaces
 # ============================================================================
@@ -63,9 +65,11 @@ check_prerequisites() {
     log_info "Checking prerequisites..."
 
     # Check if oapi-codegen is installed
+    # Pin to v2.5.1 — must match oapi-codegen/runtime version in go.mod (v1.1.1).
+    # Newer CLI (v2.7.0+) emits API calls absent from runtime v1.1.x and breaks the build.
     if ! command -v oapi-codegen &> /dev/null; then
         log_error "oapi-codegen not found. Install with:"
-        log_error "go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest"
+        log_error "go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.5.1"
         exit 1
     fi
 

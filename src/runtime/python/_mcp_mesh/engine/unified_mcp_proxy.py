@@ -1114,6 +1114,44 @@ class UnifiedMCPProxy:
                 )
                 headers["X-Mesh-Timeout"] = call_timeout
 
+            # Phase 1 MeshJob substrate: when a tool is executing under
+            # an active job context (set by the inbound dispatch wrapper
+            # in job_dispatch.maybe_dispatch_as_job), attach
+            # X-Mesh-Job-Id to every outbound mesh→mesh call so the
+            # downstream producer can bind its execution to the same job
+            # row. Mirrors the Rust core's `inject_job_headers` helper —
+            # this Python-side variant covers calls that originate in
+            # Python user code (vs Rust-originated outbound, e.g. from
+            # the agentic-loop LLM provider).
+            if (
+                "X-Mesh-Job-Id" not in headers
+                and "x-mesh-job-id" not in headers
+            ):
+                try:
+                    from .job_context import current_job
+
+                    snap = current_job()
+                    if snap is not None and snap.job_id:
+                        headers["X-Mesh-Job-Id"] = snap.job_id
+                        # Also override X-Mesh-Timeout with the
+                        # remaining-on-deadline value if the active
+                        # context has a tighter budget than what's
+                        # already in headers (parent-scope deadline cap
+                        # — see "Nested jobs: strict deadline cap" in
+                        # MESHJOB_DESIGN.org).
+                        if snap.deadline_secs_remaining is not None:
+                            try:
+                                cur_timeout = int(headers.get("X-Mesh-Timeout", "0"))
+                            except (TypeError, ValueError):
+                                cur_timeout = 0
+                            remaining = max(int(snap.deadline_secs_remaining), 0)
+                            if cur_timeout == 0 or remaining < cur_timeout:
+                                headers["X-Mesh-Timeout"] = str(remaining)
+                except Exception as e:
+                    self.logger.debug(
+                        f"job_context lookup failed for outbound headers: {e}"
+                    )
+
             # Use X-Mesh-Timeout to set client-side timeout (authoritative override)
             mesh_timeout_val = headers.get("X-Mesh-Timeout") or headers.get("x-mesh-timeout")
             if mesh_timeout_val:

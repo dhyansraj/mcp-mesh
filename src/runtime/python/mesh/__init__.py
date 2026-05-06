@@ -24,6 +24,7 @@ from .types import (
     McpMeshAgent,
     McpMeshTool,
     MeshContextModel,
+    MeshJob,
     MeshLlmAgent,
     MeshLlmRequest,
     Stream,
@@ -114,6 +115,8 @@ def __getattr__(name):
         return McpMeshAgent
     elif name == "MeshContextModel":
         return MeshContextModel
+    elif name == "MeshJob":
+        return MeshJob
     elif name == "MeshLlmAgent":
         return MeshLlmAgent
     elif name == "MeshLlmRequest":

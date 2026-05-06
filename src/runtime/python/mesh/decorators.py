@@ -756,6 +756,7 @@ def tool(
     dependencies: list[dict[str, Any]] | list[str] | None = None,
     description: str | None = None,
     output_schema_strict: bool = True,
+    task: bool = False,
     **kwargs: Any,
 ) -> Callable[[T], T]:
     """
@@ -795,6 +796,16 @@ def tool(
             schema cannot be canonicalized but the tool should still register.
             Wins even when the cluster-wide MCP_MESH_SCHEMA_STRICT=true env var
             promotes WARN→BLOCK. Issue #547 Phase 4.
+        task: When True, mark this tool as long-running (Phase 1 MeshJob
+            substrate). Producers advertise ``task=True`` in their tool
+            metadata so consumers know to invoke the tool via job semantics
+            (submit + wait/poll) rather than as a regular synchronous
+            ``tools/call``. The actual job-context binding happens at
+            inbound call time via the tool wrapper (next dispatch). A
+            ``task=True`` tool MUST be ``async def`` — long-running tools
+            need an event loop to drive ``MeshJob.update_progress()``,
+            cancellation, and outbound polling. See ``MESHJOB_DESIGN.org``
+            "Producer-side flow".
         **kwargs: Additional metadata
 
     Returns:
@@ -809,6 +820,20 @@ def tool(
 
         if not isinstance(output_schema_strict, bool):
             raise ValueError("output_schema_strict must be a boolean")
+
+        if not isinstance(task, bool):
+            raise ValueError("task must be a boolean")
+
+        # task=True is async-only: long-running tools need an event loop
+        # to drive MeshJob.update_progress / cancellation / outbound polling.
+        # Fail loudly at decoration time so the developer sees the problem
+        # immediately rather than at first invocation.
+        if task and not asyncio.iscoroutinefunction(target):
+            raise ValueError(
+                f"@mesh.tool(task=True) requires an async def function; "
+                f"'{getattr(target, '__name__', '?')}' is sync. "
+                "Mark the function async or remove task=True."
+            )
 
         # Validate optional parameters
         if tags is not None:
@@ -935,6 +960,12 @@ def tool(
             "description": description or getattr(target, "__doc__", None),
             # Issue #547 Phase 4: per-tool override for the schema verdict policy.
             "output_schema_strict": output_schema_strict,
+            # Phase 1 MeshJob substrate: producers advertise task=True so
+            # consumers know to invoke via job semantics (submit + wait)
+            # rather than a synchronous tools/call. The inbound tool
+            # wrapper (next dispatch) reads this flag to decide whether
+            # to bind a JobController via run_as_job before invocation.
+            "task": task,
             **kwargs,
         }
 

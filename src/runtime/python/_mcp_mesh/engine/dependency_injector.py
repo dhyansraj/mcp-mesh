@@ -235,25 +235,35 @@ def _make_stream_wrapper(
 
 
 def _build_clean_signature(func: Any) -> inspect.Signature | None:
-    """Build a signature excluding McpMeshTool parameters (detected by type).
+    """Build a signature excluding McpMeshTool and MeshJob parameters.
 
     Uses type-based detection (not position-based) to avoid false positives
     from the injector heuristic that treats single/non-typed params as targets.
 
-    Only excludes McpMeshTool here. MeshLlmAgent is excluded by the @mesh.llm
-    decorator's __signature__ override, which runs AFTER @mesh.tool in the
-    decoration chain (@mesh.tool → @mesh.llm → @app.tool).
+    Excludes both McpMeshTool and MeshJob (Phase 1 substrate) so neither
+    framework-injected slot appears in the FastMCP-visible signature —
+    otherwise FastMCP advertises them as user-callable args. MeshLlmAgent
+    is excluded by the @mesh.llm decorator's own __signature__ override.
 
     Returns None if no parameters need removal.
     """
     try:
         from .signature_analyzer import (
             _get_original_func,
+            analyze_mesh_job_signature,
             get_mesh_agent_parameter_names,
         )
 
         original = _get_original_func(func)
         injectable_names = set(get_mesh_agent_parameter_names(original))
+        # Phase 1 MeshJob substrate: also strip the MeshJob slot so it
+        # doesn't surface in FastMCP's tools/list schema as a user arg.
+        try:
+            mj = analyze_mesh_job_signature(original)
+            if mj.mesh_job_param_name:
+                injectable_names.add(mj.mesh_job_param_name)
+        except Exception:
+            pass
         if not injectable_names:
             return None
         sig = inspect.signature(original)
@@ -312,11 +322,33 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
     # Multiple parameters rule: only inject into McpMeshTool typed parameters
     if param_count > 1:
         if not mesh_positions:
-            logger.warning(
-                f"⚠️ Function '{func_name}' has {param_count} parameters but none are "
-                f"typed as McpMeshTool. Skipping injection of {len(dependencies)} dependencies. "
-                f"Consider typing dependency parameters as McpMeshTool."
-            )
+            # Phase 1 MeshJob substrate: a function may declare a MeshJob
+            # param without any McpMeshTool params — that's the consumer
+            # pattern (commission a remote job). Don't shout WARNING in
+            # that case; the MeshJob slot is wired by ``_prepare_injection_kwargs``
+            # via a different code path.
+            has_mesh_job_param = False
+            try:
+                from .signature_analyzer import analyze_mesh_job_signature
+
+                _mj = analyze_mesh_job_signature(func)
+                has_mesh_job_param = _mj.mesh_job_param_name is not None
+            except Exception:
+                pass
+
+            if has_mesh_job_param:
+                logger.debug(
+                    f"Function '{func_name}' declares a MeshJob param but no "
+                    f"McpMeshTool params; injection of {len(dependencies)} "
+                    f"declared dependency(ies) will be handled via the "
+                    f"MeshJob auto-injection path."
+                )
+            else:
+                logger.warning(
+                    f"⚠️ Function '{func_name}' has {param_count} parameters but none are "
+                    f"typed as McpMeshTool. Skipping injection of {len(dependencies)} dependencies. "
+                    f"Consider typing dependency parameters as McpMeshTool."
+                )
             return []
 
         # Check for dependency/parameter count mismatches
@@ -416,6 +448,60 @@ def _prepare_injection_kwargs(
             llm_agent = getattr(func, "_mesh_llm_agent", None)
             final_kwargs[llm_param] = llm_agent
             log.debug(f"{tp}🤖 LLM_INJECTION: Injected {llm_param}={llm_agent}")
+
+    # Phase 1 MeshJob substrate: consumer-side injection.
+    # If the function declares a MeshJob-typed parameter whose name matches
+    # one of its declared dependency capabilities, inject a
+    # MeshJobSubmitter for that capability so the consumer can call
+    # ``await submitter.submit(...)``. Per the resolver contract
+    # (MESHJOB_DDDI_CONTRACT.md), MeshJob params are orthogonal to
+    # McpMeshTool position-indexing — they're identified by name, not slot.
+    try:
+        from .signature_analyzer import analyze_mesh_job_signature
+
+        # Use _mesh_original_func if present (set by injection wrapper) so
+        # we read the user's source-level annotations, not the wrapper's.
+        sig_target = getattr(func, "_mesh_original_func", func)
+        resolution = analyze_mesh_job_signature(sig_target)
+        mesh_job_param = resolution.mesh_job_param_name
+    except Exception as e:
+        log.debug(f"{tp}MeshJob analysis skipped for {func.__name__}: {e}")
+        mesh_job_param = None
+
+    if mesh_job_param and mesh_job_param in dependencies:
+        # Only inject when the slot is currently empty / None — preserves
+        # the test-friendly contract that callers can pass an explicit
+        # MeshJob (e.g. a fake) and bypass the framework's auto-wiring.
+        if (
+            mesh_job_param not in final_kwargs
+            or final_kwargs.get(mesh_job_param) is None
+        ):
+            from .mesh_job_submitter import MeshJobSubmitter
+            import os as _os
+
+            from ..shared.agent_identity import resolve_agent_id
+
+            registry_url = _os.environ.get("MCP_MESH_REGISTRY_URL")
+            # Centralised resolver — same source the JobController uses
+            # so submitted_by lines up with the eventual claim's
+            # owner_instance_id when this agent submits to itself.
+            instance_id = resolve_agent_id() or "unknown"
+            if registry_url:
+                submitter = MeshJobSubmitter(
+                    capability=mesh_job_param,
+                    submitted_by=instance_id,
+                    registry_url=registry_url,
+                )
+                final_kwargs[mesh_job_param] = submitter
+                log.debug(
+                    f"{tp}📨 MESH_JOB_INJECTION: Injected MeshJobSubmitter "
+                    f"for capability={mesh_job_param!r}"
+                )
+            else:
+                log.warning(
+                    f"{tp}MeshJob param {mesh_job_param!r} on {func.__name__} "
+                    f"could not be wired: MCP_MESH_REGISTRY_URL not set"
+                )
 
     return final_kwargs, injected_count
 
@@ -717,8 +803,24 @@ class DependencyInjector:
 
         is_stream = _is_stream_tool(func)
 
-        # If no mesh positions to inject, create minimal wrapper for tracking
-        if not mesh_positions:
+        # Phase 1 MeshJob substrate: detect if the function declares a
+        # MeshJob param. If so, we must run the FULL DI path even when
+        # ``mesh_positions`` is empty — otherwise ``_prepare_injection_kwargs``
+        # never runs, the MeshJob auto-injection block never fires, and
+        # consumer-side jobs silently lose their submitter (#bug 1).
+        has_mesh_job_param = False
+        try:
+            from .signature_analyzer import analyze_mesh_job_signature
+
+            _mj = analyze_mesh_job_signature(func)
+            has_mesh_job_param = _mj.mesh_job_param_name is not None
+        except Exception:
+            pass
+
+        # If no mesh positions to inject AND no MeshJob slot, fall back to
+        # the minimal tracking wrapper. With a MeshJob slot we route to the
+        # full path so the auto-injection block at line ~439 can fire.
+        if not mesh_positions and not has_mesh_job_param:
             logger.debug(
                 f"🔧 No injection positions for {func.__name__}, creating minimal wrapper for tracking"
             )
@@ -737,15 +839,23 @@ class DependencyInjector:
                 async def minimal_wrapper(*args, **kwargs):
                     # Use ExecutionTracer for functions without dependencies (v0.4.0 style)
                     from ..tracing.execution_tracer import ExecutionTracer
+                    from .job_dispatch import maybe_dispatch_as_job
 
                     wrapper_logger.debug(
                         f"🔧 DI: Executing async function {func.__name__} (no dependencies)"
                     )
 
-                    # For async functions without dependencies, use the async tracer
-                    return await ExecutionTracer.trace_function_execution_async(
-                        func, args, kwargs, [], [], 0, wrapper_logger
-                    )
+                    # Phase 1 MeshJob substrate: wrap the user-function call in
+                    # maybe_dispatch_as_job. For non-task tools this is a thin
+                    # passthrough (zero overhead). For task=True tools invoked
+                    # with X-Mesh-Job-Id, it binds the JobController + contexts
+                    # for the duration of the call.
+                    async def _invoke(kw: dict) -> Any:
+                        return await ExecutionTracer.trace_function_execution_async(
+                            func, args, kw, [], [], 0, wrapper_logger
+                        )
+
+                    return await maybe_dispatch_as_job(func, _invoke, kwargs)
 
             else:
 
@@ -817,16 +927,25 @@ class DependencyInjector:
                 )
 
                 from ..tracing.execution_tracer import ExecutionTracer
+                from .job_dispatch import maybe_dispatch_as_job
 
-                result = await ExecutionTracer.trace_function_execution_async(
-                    func._mesh_original_func,
-                    args,
-                    final_kwargs,
-                    dependencies,
-                    mesh_positions,
-                    injected_count,
-                    wrapper_logger,
-                )
+                # Phase 1 MeshJob substrate: wrap the user-function call in
+                # maybe_dispatch_as_job. For non-task tools this is a thin
+                # passthrough (zero overhead). For task=True tools invoked
+                # with X-Mesh-Job-Id, it binds the JobController + contexts
+                # for the duration of the call.
+                async def _invoke(kw: dict) -> Any:
+                    return await ExecutionTracer.trace_function_execution_async(
+                        func._mesh_original_func,
+                        args,
+                        kw,
+                        dependencies,
+                        mesh_positions,
+                        injected_count,
+                        wrapper_logger,
+                    )
+
+                result = await maybe_dispatch_as_job(func, _invoke, final_kwargs)
 
                 _log_wrapper_result(func, result, wrapper_logger)
                 return result

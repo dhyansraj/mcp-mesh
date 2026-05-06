@@ -11,6 +11,9 @@ from .fastapiserver_setup import FastAPIServerSetupStep
 from .fastmcpserver_discovery import FastMCPServerDiscoveryStep
 from .heartbeat_loop import HeartbeatLoopStep
 from .heartbeat_preparation import HeartbeatPreparationStep
+from .jobs_cancel_route import JobsCancelRouteStep
+from .jobs_claim_workers import JobsClaimWorkersStep
+from .jobs_helper_tools import JobsHelperToolsStep
 from .startup_orchestrator import (MeshOrchestrator,
                                    clear_debounce_coordinator,
                                    get_debounce_coordinator,
@@ -24,6 +27,9 @@ __all__ = [
     "FastMCPServerDiscoveryStep",
     "HeartbeatLoopStep",
     "HeartbeatPreparationStep",
+    "JobsCancelRouteStep",
+    "JobsClaimWorkersStep",
+    "JobsHelperToolsStep",
     "MeshOrchestrator",
     "StartupPipeline",
     "clear_debounce_coordinator",

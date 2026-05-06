@@ -11,7 +11,9 @@ import logging
 from ..shared.mesh_pipeline import MeshPipeline
 from . import (ConfigurationStep, DecoratorCollectionStep,
                FastAPIServerSetupStep, FastMCPServerDiscoveryStep,
-               HeartbeatLoopStep, HeartbeatPreparationStep)
+               HeartbeatLoopStep, HeartbeatPreparationStep,
+               JobsCancelRouteStep, JobsClaimWorkersStep,
+               JobsHelperToolsStep)
 from .server_discovery import ServerDiscoveryStep
 
 logger = logging.getLogger(__name__)
@@ -45,10 +47,19 @@ class StartupPipeline(MeshPipeline):
             DecoratorCollectionStep(),
             ConfigurationStep(),
             FastMCPServerDiscoveryStep(),  # Discover user's FastMCP instances (MOVED UP for Phase 2)
+            # Phase 1 MeshJob: register helper tools on the FastMCP server
+            # BEFORE FastAPIServerSetup mounts it (so they appear in /tools/list).
+            JobsHelperToolsStep(),
             HeartbeatPreparationStep(),  # Prepare heartbeat payload structure (can now access FastMCP schemas)
             ServerDiscoveryStep(),  # Discover existing uvicorn servers from immediate startup
             HeartbeatLoopStep(),  # Setup background heartbeat config (handles no registry gracefully)
             FastAPIServerSetupStep(),  # Setup FastAPI app with background heartbeat
+            # Phase 1 MeshJob: cancel route needs the FastAPI app prepared
+            # by FastAPIServerSetup, so it runs AFTER it.
+            JobsCancelRouteStep(),
+            # Phase 1 MeshJob: spawn one Python claim worker per
+            # @mesh.tool(task=True) handler (skipped when no task tools).
+            JobsClaimWorkersStep(),
             # Note: Registry connection is handled in heartbeat pipeline for retry behavior
             # Note: FastAPI server will be started with uvicorn.run() after pipeline (or reused if discovered)
         ]

@@ -47,6 +47,12 @@ func init() {
 	// Parse MCP_MESH_PROPAGATE_HEADERS. Each comma-separated entry is either an
 	// exact header name (e.g., "authorization") or a prefix with trailing "*"
 	// (e.g., "x-trace-*"). Matching is performed in proxyRequest below.
+	//
+	// Baked-in defaults (always forwarded, regardless of this env var):
+	//   X-Trace-ID, X-Parent-Span, X-Mesh-Timeout, X-Mesh-Job-Id
+	// MCP_MESH_PROPAGATE_HEADERS is purely *additive* on top of the defaults.
+	// TODO(test): extract this parser into a pure helper so it can be unit-tested
+	// without env-var mutation. Coverage today is via integration tests.
 	if raw := os.Getenv("MCP_MESH_PROPAGATE_HEADERS"); raw != "" {
 		entries := strings.Split(raw, ",")
 		for _, e := range entries {
@@ -463,6 +469,15 @@ func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId st
 		return
 	}
 
+	// Capability-scoped pending-jobs hint (MESHJOB_DESIGN.org > Wire
+	// Protocol > HEAD heartbeat extension). Best-effort: a query failure
+	// here must not break the heartbeat — the producer will discover the
+	// pending work on the next tick. Header is set BEFORE c.Status(...)
+	// because Gin commits headers when the status line is written.
+	if pending, perr := h.entService.CountPendingJobsForAgent(c.Request.Context(), agentId); perr == nil && pending > 0 {
+		c.Header("X-Mesh-Pending-Jobs", strconv.Itoa(pending))
+	}
+
 	if hasChanges {
 		// Topology changed - please send full POST heartbeat
 		c.Status(http.StatusAccepted) // 202
@@ -655,13 +670,25 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 		proxyReq.Header.Set("X-Mesh-Timeout", meshTimeout)
 	}
 
-	// Names already set explicitly above — don't duplicate via propagation
+	// Forward X-Mesh-Job-Id so the producer's tool wrapper can bind the
+	// MeshJob controller to the correct job row. Treated as a baked-in
+	// default header (like trace + timeout) so installations work out of the
+	// box without setting MCP_MESH_PROPAGATE_HEADERS. See MESHJOB_DESIGN.org
+	// "Wire Protocol / Headers".
+	if meshJobID := c.Request.Header.Get("X-Mesh-Job-Id"); meshJobID != "" {
+		proxyReq.Header.Set("X-Mesh-Job-Id", meshJobID)
+	}
+
+	// Names already set explicitly above — don't duplicate via propagation.
+	// MCP_MESH_PROPAGATE_HEADERS is additive on top of these baked-in defaults;
+	// the env var does not need to (and should not) re-list them.
 	explicitlySet := map[string]bool{
 		"content-type":   true,
 		"accept":         true,
 		"x-trace-id":     true,
 		"x-parent-span":  true,
 		"x-mesh-timeout": true,
+		"x-mesh-job-id":  true,
 	}
 
 	// Forward headers matching MCP_MESH_PROPAGATE_HEADERS allowlist (#769, #790).

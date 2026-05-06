@@ -9,6 +9,7 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
+	"mcp-mesh/src/core/ent/job"
 	"mcp-mesh/src/core/ent/llmproviderresolution"
 	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
@@ -82,6 +83,7 @@ func checkColumn(table, column string) error {
 			agent.Table:                 agent.ValidColumn,
 			capability.Table:            capability.ValidColumn,
 			dependencyresolution.Table:  dependencyresolution.ValidColumn,
+			job.Table:                   job.ValidColumn,
 			llmproviderresolution.Table: llmproviderresolution.ValidColumn,
 			llmtoolresolution.Table:     llmtoolresolution.ValidColumn,
 			registryevent.Table:         registryevent.ValidColumn,

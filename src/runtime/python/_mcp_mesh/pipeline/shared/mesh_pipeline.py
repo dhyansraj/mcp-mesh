@@ -78,10 +78,17 @@ class MeshPipeline:
                     step_result = await step.execute(self.context)
                     executed_steps += 1
 
-                    # Log step result
+                    # Log step result. SKIPPED is a benign outcome (e.g.
+                    # "no task=True handlers" on a consumer-only agent —
+                    # see #bug 6); only true FAILED / PARTIAL deserve
+                    # ERROR-level visibility.
                     if step_result.is_success():
                         self.logger.info(
                             f"✅ Step {step_num} completed: {step_result.message}"
+                        )
+                    elif step_result.status == PipelineStatus.SKIPPED:
+                        self.logger.info(
+                            f"⏭️  Step {step_num} skipped: {step_result.message}"
                         )
                     else:
                         self.logger.error(
@@ -94,8 +101,13 @@ class MeshPipeline:
                     # Merge step errors into overall result
                     overall_result.errors.extend(step_result.errors)
 
-                    # Handle step failure
-                    if not step_result.is_success():
+                    # Handle step failure. SKIPPED is intentional and
+                    # MUST NOT trip the required-step abort path or
+                    # downgrade overall status to PARTIAL (#bug 6).
+                    if (
+                        not step_result.is_success()
+                        and step_result.status != PipelineStatus.SKIPPED
+                    ):
                         if step.required:
                             overall_result.status = PipelineStatus.FAILED
                             overall_result.message = f"Required step '{step.name}' failed: {step_result.message}"

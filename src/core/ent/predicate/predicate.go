@@ -15,6 +15,9 @@ type Capability func(*sql.Selector)
 // DependencyResolution is the predicate function for dependencyresolution builders.
 type DependencyResolution func(*sql.Selector)
 
+// Job is the predicate function for job builders.
+type Job func(*sql.Selector)
+
 // LLMProviderResolution is the predicate function for llmproviderresolution builders.
 type LLMProviderResolution func(*sql.Selector)
 

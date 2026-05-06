@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, watch, RwLock};
 use tokio::time::sleep;
 use tracing::{info, trace, warn};
 
@@ -118,6 +118,11 @@ pub struct AgentRuntime {
     command_rx: mpsc::Receiver<RuntimeCommand>,
     /// Flag to force a full heartbeat on next iteration
     force_full_heartbeat: bool,
+    /// Producer side of the pending-jobs hint published on every fast
+    /// heartbeat response. The claim worker (per-language SDK) holds the
+    /// `watch::Receiver` and wakes when this transitions to `Some(n>0)`.
+    /// Initialized to `None` (no pending work known).
+    pending_jobs_tx: watch::Sender<Option<u32>>,
 }
 
 impl AgentRuntime {
@@ -143,6 +148,7 @@ impl AgentRuntime {
             ..config.heartbeat.clone()
         };
         let state_machine = HeartbeatStateMachine::new(heartbeat_config);
+        let (pending_jobs_tx, _) = watch::channel::<Option<u32>>(None);
 
         Ok(Self {
             spec,
@@ -155,7 +161,19 @@ impl AgentRuntime {
             shutdown_rx,
             command_rx,
             force_full_heartbeat: false,
+            pending_jobs_tx,
         })
+    }
+
+    /// Subscribe to the pending-jobs hint. The returned receiver yields
+    /// the latest `X-Mesh-Pending-Jobs` count from each fast heartbeat
+    /// (or `None` when the header is absent / zero / pre-populated).
+    ///
+    /// Consumed by the claim worker (per-language SDK plumbs this in
+    /// during agent startup). Multiple subscribers are safe — `watch`
+    /// channels broadcast.
+    pub fn subscribe_pending_jobs(&self) -> watch::Receiver<Option<u32>> {
+        self.pending_jobs_tx.subscribe()
     }
 
     /// Run the agent runtime loop.
@@ -337,9 +355,15 @@ impl AgentRuntime {
     /// Send a fast heartbeat check (HEAD request).
     async fn send_fast_heartbeat(&mut self) {
         let agent_id = self.spec.agent_id();
-        let status = self.registry_client.fast_heartbeat_check(&agent_id).await;
+        let response = self.registry_client.fast_heartbeat_check(&agent_id).await;
 
-        let action = self.state_machine.on_fast_heartbeat_result(status);
+        // Publish the pending-jobs hint so the claim worker (per-SDK) can
+        // wake. `send_replace` (vs `send`) so we keep emitting even when
+        // the value didn't change — claim workers may want every tick as
+        // a liveness signal.
+        let _ = self.pending_jobs_tx.send_replace(response.pending_jobs);
+
+        let action = self.state_machine.on_fast_heartbeat_result(response);
 
         // If we need a full heartbeat, do it now
         if action == HeartbeatAction::SendFull {

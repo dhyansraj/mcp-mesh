@@ -41,6 +41,8 @@ tags:
     description: Registry event history (lifecycle and dependency-resolution audit)
   - name: schemas
     description: Canonical schema registry (issue #547)
+  - name: jobs
+    description: Long-running job coordination (MeshJob — see MESHJOB_DESIGN.org)
 paths:
   /health:
     get:
@@ -159,12 +161,247 @@ paths:
       responses:
         "200":
           description: No topology changes detected
+          headers:
+            X-Mesh-Pending-Jobs:
+              required: false
+              description: |
+                Capability-scoped count of unclaimed jobs awaiting this agent's group.
+                Zero / absent = no pending work. Capped at 100.
+              schema:
+                type: integer
+                minimum: 0
+                maximum: 100
         "202":
           description: Topology changed, send full POST heartbeat
+          headers:
+            X-Mesh-Pending-Jobs:
+              required: false
+              description: |
+                Capability-scoped count of unclaimed jobs awaiting this agent's group.
+                Zero / absent = no pending work. Capped at 100.
+              schema:
+                type: integer
+                minimum: 0
+                maximum: 100
         "410":
           description: Unknown agent, please register
         "503":
           description: Registry error, back off
+
+  /jobs:
+    post:
+      tags: [jobs]
+      summary: Register a new job
+      description: |
+        Producer registers a new long-running job and reserves
+        `owner_instance_id` (the calling replica). The registry persists the
+        job row in `working` state and returns the assigned id.
+
+        🤖 AI NOTE: Called by the producer's mesh runtime when a `task=True`
+        tool is invoked — NOT by external MCP clients directly. External
+        clients see jobs only via `tools/call` + helper tools.
+      operationId: createJob
+      requestBody:
+        required: true
+        description: Job creation request
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateJobRequest"
+      responses:
+        "201":
+          description: Job created and owner reserved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateJobResponse"
+        "400":
+          description: Invalid request payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /jobs/batch:
+    post:
+      tags: [jobs]
+      summary: Submit a batch of job deltas
+      description: |
+        Producer pushes coalesced progress and/or status deltas for one or more
+        jobs it owns. Used as both progress update and lease extension —
+        successful batch resets `last_heartbeat_at` and `lease_expires_at`
+        for each touched job.
+
+        🤖 AI NOTE: Only the owning replica may submit deltas. Deltas for
+        jobs not owned by `instance_id` are reported in `rejected`.
+      operationId: submitJobBatch
+      requestBody:
+        required: true
+        description: Coalesced job deltas from a single producer instance
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobBatchRequest"
+      responses:
+        "200":
+          description: Batch processed (some deltas may have been rejected)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobBatchResponse"
+        "400":
+          description: Invalid batch payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /jobs/claim:
+    post:
+      tags: [jobs]
+      summary: Atomically claim an unclaimed job
+      description: |
+        Producer attempts to atomically claim one unclaimed job for the given
+        capability. Single-claim per round-trip — replica-side concurrency
+        shapes throughput. Empty `claimed` array means no work was available
+        (this is success, not error).
+
+        🤖 AI CRITICAL CONTRACT:
+        - Atomic UPDATE ... RETURNING semantics — first writer wins
+        - Sets `owner_instance_id`, increments `attempt_count`, refreshes lease
+        - Caller is responsible for setting job context from response and
+          executing the tool body
+      operationId: claimJobs
+      requestBody:
+        required: true
+        description: Capability + claiming instance
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClaimJobsRequest"
+      responses:
+        "200":
+          description: Claim attempt completed (claimed array may be empty)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaimJobsResponse"
+        "400":
+          description: Invalid claim payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /jobs/{job_id}:
+    get:
+      tags: [jobs]
+      summary: Read latest job state
+      description: |
+        Returns the latest persisted job state. All status reads terminate
+        here — no replica-side caching, no owner-bound routing.
+
+        🤖 AI NOTE: Auth model — possession of `job_id` (~122-bit UUID) is
+        the capability. No per-caller verification.
+      operationId: getJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Server-assigned job identifier (UUID)
+      responses:
+        "200":
+          description: Current job state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /jobs/{job_id}/cancel:
+    post:
+      tags: [jobs]
+      summary: Cancel an in-flight job
+      description: |
+        Marks the job `cancelled` and, if the owner replica is still alive,
+        forwards the cancellation signal to it so in-flight work can abort.
+        Cancel is the only operation that still needs to reach the specific
+        owner replica — reads stay stateless registry queries.
+
+        🤖 AI NOTE: Returns `forwarded_to_instance_id=null` when the owner
+        is already dead (job was orphaned by sweep) — the cancel is still
+        applied to the registry row.
+      operationId: cancelJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Server-assigned job identifier (UUID)
+      requestBody:
+        required: false
+        description: Optional cancellation reason
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelJobRequest"
+      responses:
+        "200":
+          description: Job cancelled (and optionally forwarded to owner)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelJobResponse"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Job already in a terminal state, cannot cancel
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /agents:
     get:
@@ -372,6 +609,46 @@ paths:
   # path parameters don't support. See server.go setupOperationalEndpoints().
 
 components:
+  # ---------------------------------------------------------------------------
+  # Common header parameters
+  #
+  # The headers below are NOT directly served by any registry endpoint, so
+  # nothing in this spec currently $refs them. They are documented here as the
+  # canonical wire contract for headers that flow on internal mesh -> agent
+  # calls and which the registry-side proxy (/proxy/{target}, see
+  # src/core/registry/ent_handlers.go) propagates as part of its baked-in
+  # default allowlist. Documenting them in components/parameters keeps the
+  # wire contract discoverable for SDK authors and operators reviewing
+  # MCP_MESH_PROPAGATE_HEADERS overrides, without falsely implying these
+  # headers are part of any registry HTTP request body.
+  # ---------------------------------------------------------------------------
+  parameters:
+    XMeshJobIdHeader:
+      name: X-Mesh-Job-Id
+      in: header
+      required: false
+      description: |
+        Binds an inbound producer-side execution to a specific job row.
+        Set by the submitter's mesh proxy on outbound calls; read by the
+        producer's tool wrapper to bind the MeshJob controller to the
+        correct job. Server-generated, opaque to clients (UUID-like, but
+        not strictly validated).
+      schema:
+        type: string
+        example: "0193b8e1-7c2a-7c5f-9b3a-3a4f9b8c1d2e"
+    XMeshTimeoutHeader:
+      name: X-Mesh-Timeout
+      in: header
+      required: false
+      description: |
+        Per-call deadline in seconds (existing #656). Propagated via
+        async-local context from the active job; provider runtime fails
+        fast if exceeded. Capped at 600s by the proxy.
+      schema:
+        type: integer
+        minimum: 1
+        example: 30
+
   schemas:
     # New flattened mesh agent schemas
     MeshAgentRegistration:
@@ -1993,3 +2270,345 @@ components:
           type: integer
           minimum: 0
           description: Number of schemas in this response (≤ limit)
+
+    # ------------------------------------------------------------------
+    # Jobs (MeshJob — see MESHJOB_DESIGN.org)
+    # ------------------------------------------------------------------
+    JobStatus:
+      type: string
+      enum: [working, input_required, completed, failed, cancelled]
+      description: |
+        Job lifecycle state. Terminal states are `completed`, `failed`, and
+        `cancelled`. `input_required` is a non-terminal pause state.
+
+    Job:
+      type: object
+      required:
+        [
+          id,
+          capability,
+          status,
+          submitted_payload,
+          attempt_count,
+          max_retries,
+          submitted_at,
+          submitted_by,
+        ]
+      description: Full job record as persisted in the registry's `jobs` table.
+      properties:
+        id:
+          type: string
+          example: "8f2b4e6a-1c3d-4e5f-9a0b-1c2d3e4f5a6b"
+          description: Server-assigned job identifier (UUID).
+        capability:
+          type: string
+          minLength: 1
+          example: "plan_trip"
+          description: Capability the job will execute against.
+        owner_instance_id:
+          type: string
+          nullable: true
+          example: "claude-provider-replica-2"
+          description: Instance currently leasing this job (null if unclaimed/orphaned).
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        progress:
+          type: number
+          format: float
+          nullable: true
+          minimum: 0
+          maximum: 1
+          example: 0.4
+          description: Fractional progress, 0.0–1.0.
+        progress_message:
+          type: string
+          nullable: true
+          example: "searching flights"
+          description: Free-form human-readable progress note.
+        result:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Terminal payload on `completed`. Free-form JSON object (MCP tool result).
+        error:
+          type: string
+          nullable: true
+          example: "deadline_exceeded"
+          description: Failure reason on `failed`.
+        submitted_payload:
+          type: object
+          additionalProperties: true
+          description: Full args + headers captured at submit-time for replay.
+        attempt_count:
+          type: integer
+          minimum: 0
+          example: 0
+          description: Number of times this job has been claimed/attempted.
+        max_retries:
+          type: integer
+          minimum: 0
+          default: 1
+          example: 1
+          description: |
+            Number of retries on top of the initial attempt
+            (Sidekiq/Celery/Resque convention). Default 1 ⇒ at most 2
+            total claims (1 initial + 1 retry on crash/timeout). A job
+            is claimable while `attempt_count <= max_retries`; the
+            orphan-reroute sweep marks it failed once
+            `attempt_count > max_retries`.
+        max_duration:
+          type: integer
+          nullable: true
+          minimum: 1
+          example: 300
+          description: Per-attempt soft timeout in seconds (registry stores as-is; agent applies default).
+        total_deadline:
+          type: integer
+          nullable: true
+          example: 1730000000
+          description: Absolute Unix epoch deadline across all retries (opt-in).
+        lease_expires_at:
+          type: integer
+          nullable: true
+          example: 1729999700
+          description: Unix epoch when the current owner's lease expires.
+        last_heartbeat_at:
+          type: integer
+          nullable: true
+          example: 1729999400
+          description: Unix epoch of the last batch update from the owner.
+        submitted_at:
+          type: integer
+          example: 1729999000
+          description: Unix epoch when the job was created.
+        submitted_by:
+          type: string
+          example: "orchestrate-replica-1"
+          description: Instance ID of the submitting agent.
+
+    CreateJobRequest:
+      type: object
+      required: [capability, submitted_payload, submitted_by]
+      description: Producer-side request to register a new job.
+      properties:
+        capability:
+          type: string
+          minLength: 1
+          example: "plan_trip"
+          description: Capability the job will execute against.
+        submitted_payload:
+          type: object
+          additionalProperties: true
+          description: Full args + headers to persist for retry/replay.
+        max_retries:
+          type: integer
+          minimum: 0
+          default: 1
+          example: 1
+          description: |
+            Number of retries on top of the initial attempt
+            (Sidekiq/Celery/Resque convention). Default 1 ⇒ at most 2
+            total claims (1 initial + 1 retry on crash/timeout). Set to
+            0 to disable retry entirely (initial attempt only).
+        max_duration:
+          type: integer
+          nullable: true
+          minimum: 1
+          example: 300
+          description: Per-attempt soft timeout in seconds (no registry-side default — agent applies 300s soft default).
+        total_deadline:
+          type: integer
+          nullable: true
+          example: 1730000000
+          description: Opt-in absolute Unix epoch deadline across all retries.
+        submitted_by:
+          type: string
+          minLength: 1
+          example: "orchestrate-replica-1"
+          description: Instance ID of the submitting agent.
+        owner_instance_id:
+          type: string
+          nullable: true
+          description: |
+            Optional. If set, registry pins the job to this specific replica from
+            creation (push mode — submitter pre-resolved the target). If omitted,
+            owner_instance_id starts NULL and a replica must claim via /jobs/claim
+            (pull mode — used for orphan reroute and load-balanced submission).
+          example: "claude-provider-replica-2"
+
+    CreateJobResponse:
+      type: object
+      required: [id, status]
+      description: Response after a successful job registration.
+      properties:
+        id:
+          type: string
+          example: "8f2b4e6a-1c3d-4e5f-9a0b-1c2d3e4f5a6b"
+          description: Server-assigned job identifier (UUID).
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        owner_instance_id:
+          type: string
+          nullable: true
+          example: "claude-provider-replica-2"
+          description: |
+            Instance reserved as owner for the first attempt. NULL when the
+            request omitted `owner_instance_id` (pull mode — a replica must
+            claim via /jobs/claim before execution).
+
+    JobDelta:
+      type: object
+      required: [id]
+      description: |
+        A single delta to apply to one job. Only fields present are updated.
+        `result` is meaningful only when `status=completed`; `error` only when
+        `status=failed`.
+      properties:
+        id:
+          type: string
+          example: "8f2b4e6a-1c3d-4e5f-9a0b-1c2d3e4f5a6b"
+          description: Job identifier this delta targets.
+        status:
+          allOf:
+            - $ref: "#/components/schemas/JobStatus"
+          nullable: true
+          description: New status, if transitioning.
+        progress:
+          type: number
+          format: float
+          nullable: true
+          minimum: 0
+          maximum: 1
+          example: 0.6
+          description: Updated fractional progress.
+        progress_message:
+          type: string
+          nullable: true
+          example: "booking flights"
+          description: Updated human-readable progress note.
+        result:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Terminal result payload (only on `status=completed`).
+        error:
+          type: string
+          nullable: true
+          example: "upstream_unavailable"
+          description: Failure reason (only on `status=failed`).
+
+    JobBatchRequest:
+      type: object
+      required: [instance_id, deltas]
+      description: Coalesced job updates from a single producer instance.
+      properties:
+        instance_id:
+          type: string
+          minLength: 1
+          example: "claude-provider-replica-2"
+          description: Owning instance submitting these deltas.
+        deltas:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/JobDelta"
+          description: Per-job deltas to apply.
+
+    JobBatchResponse:
+      type: object
+      required: [accepted, rejected]
+      description: Per-batch outcome.
+      properties:
+        accepted:
+          type: integer
+          minimum: 0
+          example: 3
+          description: Number of deltas successfully applied.
+        rejected:
+          type: array
+          items:
+            type: object
+            required: [id, reason]
+            properties:
+              id:
+                type: string
+                description: Job identifier of the rejected delta.
+              reason:
+                type: string
+                description: Reason the delta was rejected (e.g. `not_owner`, `terminal`, `not_found`).
+          description: Per-job rejection records.
+
+    ClaimJobsRequest:
+      type: object
+      required: [capability, instance_id]
+      description: Atomic single-claim request for unclaimed jobs in a capability.
+      properties:
+        capability:
+          type: string
+          minLength: 1
+          example: "plan_trip"
+          description: Capability to claim work for.
+        instance_id:
+          type: string
+          minLength: 1
+          example: "claude-provider-replica-3"
+          description: Replica attempting to claim.
+
+    ClaimedJob:
+      type: object
+      required: [id, submitted_payload, attempt_count]
+      description: A single job successfully claimed in this round-trip.
+      properties:
+        id:
+          type: string
+          description: Job identifier the caller now owns.
+        submitted_payload:
+          type: object
+          additionalProperties: true
+          description: Full args + headers captured at submit-time for replay.
+        attempt_count:
+          type: integer
+          minimum: 1
+          description: Updated attempt count after this claim.
+        lease_expires_at:
+          type: integer
+          nullable: true
+          description: Unix epoch when the new lease expires.
+        max_duration:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: Per-attempt soft timeout in seconds (as recorded on the job).
+
+    ClaimJobsResponse:
+      type: object
+      required: [claimed]
+      description: Outcome of the claim attempt — empty array means no work was available.
+      properties:
+        claimed:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClaimedJob"
+          description: Jobs newly claimed by the calling instance (length 0 or 1 in Phase 1).
+
+    CancelJobRequest:
+      type: object
+      description: Optional cancellation reason. Body may be empty or absent.
+      properties:
+        reason:
+          type: string
+          example: "user_requested"
+          description: Free-form reason persisted alongside the cancellation.
+
+    CancelJobResponse:
+      type: object
+      required: [status]
+      description: Result of a cancellation request.
+      properties:
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        forwarded_to_instance_id:
+          type: string
+          nullable: true
+          example: "claude-provider-replica-2"
+          description: Owner instance the cancel was forwarded to (null if owner was already dead/orphaned).

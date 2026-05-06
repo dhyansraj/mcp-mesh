@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, info, trace, warn};
 
 use crate::events::HealthStatus;
-use crate::registry::FastHeartbeatStatus;
+use crate::registry::{FastHeartbeatResponse, FastHeartbeatStatus};
 
 /// State of the heartbeat state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,8 +154,20 @@ impl HeartbeatStateMachine {
     }
 
     /// Process the result of a fast heartbeat check.
-    pub fn on_fast_heartbeat_result(&mut self, status: FastHeartbeatStatus) -> HeartbeatAction {
-        trace!("Fast heartbeat result: {:?}", status);
+    ///
+    /// Accepts a [`FastHeartbeatResponse`] so callers can plumb the
+    /// `pending_jobs` hint up to the runtime alongside the status. The
+    /// state machine itself only consumes the status; the pending-jobs
+    /// signal is the runtime's responsibility (see `AgentRuntime`).
+    pub fn on_fast_heartbeat_result(
+        &mut self,
+        response: FastHeartbeatResponse,
+    ) -> HeartbeatAction {
+        let status = response.status;
+        trace!(
+            "Fast heartbeat result: {:?} pending_jobs={:?}",
+            status, response.pending_jobs
+        );
 
         match status {
             FastHeartbeatStatus::NoChanges => {
@@ -298,12 +310,20 @@ mod tests {
         assert_eq!(sm.state(), HeartbeatState::Healthy);
     }
 
+    /// Helper for tests: build a `FastHeartbeatResponse` with no pending-jobs.
+    fn fhb(status: FastHeartbeatStatus) -> FastHeartbeatResponse {
+        FastHeartbeatResponse {
+            status,
+            pending_jobs: None,
+        }
+    }
+
     #[test]
     fn test_fast_heartbeat_no_changes() {
         let mut sm = HeartbeatStateMachine::new(HeartbeatConfig::default());
         sm.on_full_heartbeat_success();
 
-        let action = sm.on_fast_heartbeat_result(FastHeartbeatStatus::NoChanges);
+        let action = sm.on_fast_heartbeat_result(fhb(FastHeartbeatStatus::NoChanges));
         assert!(matches!(action, HeartbeatAction::Wait(_)));
     }
 
@@ -312,7 +332,7 @@ mod tests {
         let mut sm = HeartbeatStateMachine::new(HeartbeatConfig::default());
         sm.on_full_heartbeat_success();
 
-        let action = sm.on_fast_heartbeat_result(FastHeartbeatStatus::TopologyChanged);
+        let action = sm.on_fast_heartbeat_result(fhb(FastHeartbeatStatus::TopologyChanged));
         assert_eq!(action, HeartbeatAction::SendFull);
     }
 
@@ -322,7 +342,7 @@ mod tests {
         sm.on_full_heartbeat_success();
         assert!(sm.is_registered());
 
-        let action = sm.on_fast_heartbeat_result(FastHeartbeatStatus::AgentUnknown);
+        let action = sm.on_fast_heartbeat_result(fhb(FastHeartbeatStatus::AgentUnknown));
         assert_eq!(action, HeartbeatAction::SendFull);
         assert!(!sm.is_registered());
         assert_eq!(sm.state(), HeartbeatState::Unregistered);
@@ -338,14 +358,32 @@ mod tests {
         sm.on_full_heartbeat_success();
 
         // Three failures should trigger reconnecting state
-        sm.on_fast_heartbeat_result(FastHeartbeatStatus::NetworkError);
+        sm.on_fast_heartbeat_result(fhb(FastHeartbeatStatus::NetworkError));
         assert_eq!(sm.state(), HeartbeatState::Healthy);
 
-        sm.on_fast_heartbeat_result(FastHeartbeatStatus::NetworkError);
+        sm.on_fast_heartbeat_result(fhb(FastHeartbeatStatus::NetworkError));
         assert_eq!(sm.state(), HeartbeatState::Healthy);
 
-        sm.on_fast_heartbeat_result(FastHeartbeatStatus::NetworkError);
+        sm.on_fast_heartbeat_result(fhb(FastHeartbeatStatus::NetworkError));
         assert_eq!(sm.state(), HeartbeatState::Reconnecting);
+    }
+
+    #[test]
+    fn test_pending_jobs_carries_through_response_struct() {
+        // The state machine ignores pending_jobs (runtime owns it), but the
+        // response struct should preserve the value so the runtime can read it
+        // alongside the action.
+        let resp = FastHeartbeatResponse {
+            status: FastHeartbeatStatus::NoChanges,
+            pending_jobs: Some(7),
+        };
+        assert_eq!(resp.pending_jobs, Some(7));
+
+        let mut sm = HeartbeatStateMachine::new(HeartbeatConfig::default());
+        sm.on_full_heartbeat_success();
+        let _ = sm.on_fast_heartbeat_result(resp);
+        // No assertion on the action — just verify the call shape compiles
+        // and doesn't disturb the existing semantics.
     }
 
     #[test]

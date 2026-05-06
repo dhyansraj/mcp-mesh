@@ -20,6 +20,8 @@ from .mcp_mesh_core import (
     AgentSpec,
     DependencySpec,
     EventType,
+    JobController,
+    JobProxy,
     LlmAgentSpec,
     LlmToolInfo,
     MeshEvent,
@@ -29,7 +31,9 @@ from .mcp_mesh_core import (
     build_jsonrpc_request_py,
     build_response_format_py,
     call_tool_py,
+    cancel_active_job,
     create_agentic_loop_py,
+    current_job,
     detect_media_params_py,
     determine_output_mode_py,
     extract_content_py,
@@ -63,6 +67,8 @@ from .mcp_mesh_core import (
     resolve_config_int_py,
     resolve_config_py,
     sanitize_schema_py,
+    submit_job,
+    with_job_async,
 )
 from .mcp_mesh_core import start_agent_py as start_agent
 from .mcp_mesh_core import strip_code_fences_py
@@ -72,6 +78,8 @@ __all__ = [
     "AgentSpec",
     "DependencySpec",
     "EventType",
+    "JobController",
+    "JobProxy",
     "LlmAgentSpec",
     "LlmToolInfo",
     "MeshEvent",
@@ -82,7 +90,9 @@ __all__ = [
     "build_jsonrpc_request_py",
     "build_response_format_py",
     "call_tool_py",
+    "cancel_active_job",
     "create_agentic_loop_py",
+    "current_job",
     "detect_media_params_py",
     "determine_output_mode_py",
     "extract_content_py",
@@ -117,4 +127,6 @@ __all__ = [
     "resolve_config_py",
     "sanitize_schema_py",
     "strip_code_fences_py",
+    "submit_job",
+    "with_job_async",
 ]

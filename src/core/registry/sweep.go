@@ -186,11 +186,23 @@ func (s *SweepJob) Stop() {
 	s.wg.Wait()
 }
 
+// sweepResult bundles the per-phase counters surfaced by a single tick.
+// Returned by runOnce so tests can assert each phase independently and the
+// tick logger can render a single human-friendly line.
+type sweepResult struct {
+	agentsPurged   int
+	eventsPurged   int
+	schemasPurged  int
+	jobsReset      int // orphan jobs returned to the pool for re-claim
+	jobsExhausted  int // orphan jobs that ran out of retries (status=failed)
+	jobsDeadlined  int // total_deadline-exceeded jobs (status=failed)
+}
+
 // tick runs a single sweep iteration with logging. Errors are logged but
 // not surfaced; the next tick will retry.
 func (s *SweepJob) tick(ctx context.Context) {
 	start := s.clock()
-	agentsPurged, eventsPurged, schemasPurged, err := s.runOnce(ctx)
+	res, err := s.runOnce(ctx)
 	took := time.Since(start)
 
 	if err != nil {
@@ -201,44 +213,77 @@ func (s *SweepJob) tick(ctx context.Context) {
 	}
 
 	if s.logger != nil {
-		if agentsPurged > 0 || eventsPurged > 0 || schemasPurged > 0 {
-			s.logger.Info("sweep: purged %d agents, %d events, %d orphan schemas (took %s)", agentsPurged, eventsPurged, schemasPurged, took)
+		anyWork := res.agentsPurged > 0 || res.eventsPurged > 0 || res.schemasPurged > 0 ||
+			res.jobsReset > 0 || res.jobsExhausted > 0 || res.jobsDeadlined > 0
+		if anyWork {
+			s.logger.Info("sweep: purged %d agents, %d events, %d orphan schemas; jobs: %d reset, %d exhausted, %d deadlined (took %s)",
+				res.agentsPurged, res.eventsPurged, res.schemasPurged,
+				res.jobsReset, res.jobsExhausted, res.jobsDeadlined, took)
 		} else {
 			s.logger.Debug("sweep: nothing to purge (took %s)", took)
 		}
 	}
 }
 
-// runOnce performs a single sweep iteration and returns the number of
-// agents, events, and orphan schema_entries purged. Exported (lower-cased
-// but callable from tests in the same package) for unit tests; production
-// callers should use Start.
-func (s *SweepJob) runOnce(ctx context.Context) (agentsPurged, eventsPurged, schemasPurged int, err error) {
+// runOnce performs a single sweep iteration and returns the per-phase
+// counters. Exported (lower-cased but callable from tests in the same
+// package) for unit tests; production callers should use Start.
+//
+// Phase order:
+//  1. Stale-agent purge (existing #837 behaviour).
+//  2. Orphan-job reroute — runs after agent purge so jobs whose owner was
+//     just deleted in step 1 are picked up in the same tick.
+//  3. Total-deadline expiry — independent of agent liveness.
+//  4. Event cap enforcement.
+//  5. Orphan schema_entry purge.
+func (s *SweepJob) runOnce(ctx context.Context) (sweepResult, error) {
+	var res sweepResult
 	now := s.clock()
 
 	if s.cfg.Retention > 0 {
 		n, err := s.purgeStaleAgents(ctx, now)
 		if err != nil {
-			return 0, 0, 0, fmt.Errorf("purge stale agents: %w", err)
+			return res, fmt.Errorf("purge stale agents: %w", err)
 		}
-		agentsPurged = n
+		res.agentsPurged = n
+	}
+
+	// Orphan-job reroute always runs (independent of Retention) — jobs are
+	// not subject to the agent retention knob; an orphan is an orphan as
+	// soon as its owner is gone.
+	if s.service != nil {
+		reset, exhausted, err := s.service.ResetOrphanedJobs(ctx)
+		if err != nil {
+			return res, fmt.Errorf("reset orphaned jobs: %w", err)
+		}
+		res.jobsReset = reset
+		res.jobsExhausted = exhausted
+
+		// total_deadline expiry is opt-in (column is NULL by default per
+		// Resolved Decisions), so most ticks scan zero rows. Cheap to run
+		// every cycle.
+		expired, err := s.service.ExpireDeadlinedJobs(ctx)
+		if err != nil {
+			return res, fmt.Errorf("expire deadlined jobs: %w", err)
+		}
+		res.jobsDeadlined = expired
 	}
 
 	n, err := s.enforceEventCap(ctx)
 	if err != nil {
-		return agentsPurged, 0, 0, fmt.Errorf("enforce event cap: %w", err)
+		return res, fmt.Errorf("enforce event cap: %w", err)
 	}
-	eventsPurged = n
+	res.eventsPurged = n
 
 	if s.cfg.Retention > 0 {
 		n, err := s.purgeOrphanSchemaEntries(ctx, now)
 		if err != nil {
-			return agentsPurged, eventsPurged, 0, fmt.Errorf("purge orphan schemas: %w", err)
+			return res, fmt.Errorf("purge orphan schemas: %w", err)
 		}
-		schemasPurged = n
+		res.schemasPurged = n
 	}
 
-	return agentsPurged, eventsPurged, schemasPurged, nil
+	return res, nil
 }
 
 // purgeStaleAgents deletes agents in unhealthy/unknown status that have

@@ -305,6 +305,29 @@ func (h *TestHandlers) GetSchema(c *gin.Context, hash string) {
 	c.JSON(404, gin.H{"error": "not found", "timestamp": time.Now().UTC()})
 }
 
+// MeshJob endpoint stubs (issue #861). The TestHandlers harness predates the
+// /jobs surface and doesn't exercise it; real coverage lives in the
+// EntBusinessLogicHandlers tests.
+func (h *TestHandlers) CreateJob(c *gin.Context) {
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
+}
+
+func (h *TestHandlers) SubmitJobBatch(c *gin.Context) {
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
+}
+
+func (h *TestHandlers) ClaimJobs(c *gin.Context) {
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
+}
+
+func (h *TestHandlers) GetJob(c *gin.Context, jobId string) {
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
+}
+
+func (h *TestHandlers) CancelJob(c *gin.Context, jobId string) {
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
+}
+
 // TestHealthMonitor tests the background health monitoring functionality
 func TestHealthMonitor(t *testing.T) {
 	tests := []struct {

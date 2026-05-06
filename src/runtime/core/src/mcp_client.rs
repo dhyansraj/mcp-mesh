@@ -221,7 +221,27 @@ pub async fn call_tool(
             request = request.header(key.as_str(), value.as_str());
         }
 
-        match request.body(payload.to_string()).send().await {
+        // Auto-inject X-Mesh-Job-Id / X-Mesh-Timeout from the active
+        // JobContext (if this outbound call is happening inside a
+        // `with_job(...)` scope). Conceptually parallel to X-Trace-Id
+        // propagation — see job_context::inject_job_headers docs.
+        request = crate::job_context::inject_job_headers(request);
+
+        // Wrap the send future so that an active JobContext's cancel token
+        // can abort an in-flight outbound request. No-op when no context.
+        let send_fut = request.body(payload.to_string()).send();
+        let send_result = if let Some(ctx) = crate::job_context::current() {
+            tokio::select! {
+                r = send_fut => r,
+                _ = ctx.cancel_token.cancelled() => {
+                    return Err("MCP call cancelled by job context".to_string());
+                }
+            }
+        } else {
+            send_fut.await
+        };
+
+        match send_result {
             Ok(response) => {
                 let status = response.status();
                 if !status.is_success() {
