@@ -146,6 +146,17 @@ assertions:
   - expr: "${captured.status_on_orchestrator} contains 'long-task-provider'"
     message: "bystander's status read should include the producer's owner_instance_id (registry-sourced)"
 
+  # Auto-registration check: even the bystander orchestrator (no task
+  # tools, no MeshJob deps) advertises all three __mesh_job_* helpers.
+  # This is the test's headline claim ("helpers on EVERY agent") — the
+  # capture above (`orchestrator_tools`) was previously dead.
+  - expr: "${captured.orchestrator_tools} contains '__mesh_job_status'"
+    message: "orchestrator (bystander) must auto-register __mesh_job_status"
+  - expr: "${captured.orchestrator_tools} contains '__mesh_job_result'"
+    message: "orchestrator (bystander) must auto-register __mesh_job_result"
+  - expr: "${captured.orchestrator_tools} contains '__mesh_job_cancel'"
+    message: "orchestrator (bystander) must auto-register __mesh_job_cancel"
+
 post_run:
   - routine: stop_all
   - routine: global.cleanup_workspace

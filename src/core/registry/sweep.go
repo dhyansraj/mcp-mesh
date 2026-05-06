@@ -44,6 +44,15 @@ var sweepInterval = readSweepIntervalFromEnv()
 // string (e.g. "5m", "30s", "1m30s"). Falls back to defaultSweepInterval
 // when the env var is unset or malformed. Logs at INFO when a valid override
 // is applied; stays silent when unset (default behaviour, no noise).
+//
+// NOTE: this function deliberately uses the stdlib `log` package rather
+// than the project's `*logger.Logger` because it is invoked at package
+// init time (via the `var sweepInterval = readSweepIntervalFromEnv()`
+// initialiser above) — long before the structured logger is constructed
+// in cmd/registry. Switching to the project logger here would require
+// either lazily initialising it or moving the env read into Start(),
+// both of which lose the ability to surface a malformed override
+// before the registry binary even starts up.
 func readSweepIntervalFromEnv() time.Duration {
 	raw := os.Getenv("MCP_MESH_SWEEP_INTERVAL")
 	if raw == "" {

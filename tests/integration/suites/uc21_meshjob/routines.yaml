@@ -58,9 +58,13 @@ routines:
           for i in $(seq 1 20); do
             if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
               echo "registry ready after ${i}s"
-              # Verify the sweep override stamped its log line.
-              grep -E '\[sweep\] using MCP_MESH_SWEEP_INTERVAL' \
-                ~/.mcp-mesh/logs/registry.log 2>/dev/null | tail -3 || true
+              # Verify the sweep override actually stamped its log line.
+              # If MCP_MESH_SWEEP_INTERVAL didn't take effect the suite
+              # must fail loudly here, not via slow per-test timeouts.
+              grep -qE '\[sweep\] using MCP_MESH_SWEEP_INTERVAL' \
+                ~/.mcp-mesh/logs/registry.log \
+                || { echo "FAIL: MCP_MESH_SWEEP_INTERVAL override did not take effect"; exit 1; }
+              echo "[setup] confirmed sweep override active"
               exit 0
             fi
             sleep 1

@@ -133,6 +133,16 @@ assertions:
     message: "cancel should land while producer is still in the downstream call (progress message frozen at 'calling downstream')"
   - expr: "${captured.final_check} not contains '\"completed\"'"
     message: "the producer should NOT have reached job.complete() — the downstream HTTP must have been aborted, not awaited to natural finish"
+  # NOTE on the downstream `sleep CANCELLED` marker: the fixture
+  # writes that line from its asyncio.CancelledError handler, but
+  # FastMCP does not currently propagate client disconnects as task
+  # cancellations to the tool handler — so the sleeper keeps running
+  # past the producer-side cancel and the marker never lands. The
+  # producer-side correctness is still proven by:
+  #   - status == cancelled (above)
+  #   - progress message frozen at "calling downstream" (above)
+  #   - status != completed (above)
+  # Tracking the downstream-side propagation gap as a separate issue.
 
 post_run:
   - routine: stop_all

@@ -81,8 +81,17 @@ assertions:
     message: "must NOT mention 'unauthorized' — auth model is job_id-as-capability"
   - expr: "${captured.helper_response} not contains 'permission denied'"
     message: "must NOT mention 'permission denied' — auth model is job_id-as-capability"
-  - expr: "${captured.helper_response} not contains 'HTTP 500'"
-    message: "must NOT surface as a 500 — registry returns 404 cleanly"
+  # The error must be the structured NotFound shape (404 round-trip
+  # surfaces as `RuntimeError("backend error: job not found: <id>")`).
+  # If the registry hit a real 500 instead, the message would carry the
+  # `BackendError::Server` rendering "server error (HTTP 500)" — that
+  # exact phrase is the canonical 500-shaped error and MUST be absent.
+  - expr: "${captured.helper_response} contains 'backend error'"
+    message: "must surface as the structured BackendError envelope (proves the 404 round-trip, not a transport-level failure)"
+  - expr: "${captured.helper_response} not contains 'server error (HTTP 5'"
+    message: "must NOT surface as a 5xx server error — registry returns a clean 404 NotFound"
+  - expr: "${captured.helper_response} not contains '500 Internal Server Error'"
+    message: "must NOT carry a literal HTTP 500 status line — the registry path is 404, not 500"
 
 post_run:
   - routine: stop_all

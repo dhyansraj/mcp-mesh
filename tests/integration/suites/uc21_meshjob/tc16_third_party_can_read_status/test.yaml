@@ -144,9 +144,16 @@ assertions:
   - expr: "${captured.bystander_y_status} contains 'long-task-provider'"
     message: "bystander-y's read should include the producer owner_instance_id"
 
-  # Make sure neither bystander returned an auth-flavoured error.
+  # Make sure neither bystander returned an auth-flavoured error —
+  # check both phrases for both bystanders (was previously asymmetric:
+  # bystander-x only checked 'unauthorized', bystander-y only checked
+  # 'permission denied', so each missed half the auth-error surface).
   - expr: "${captured.bystander_x_status} not contains 'unauthorized'"
     message: "bystander-x must NOT see 'unauthorized'"
+  - expr: "${captured.bystander_x_status} not contains 'permission denied'"
+    message: "bystander-x must NOT see 'permission denied'"
+  - expr: "${captured.bystander_y_status} not contains 'unauthorized'"
+    message: "bystander-y must NOT see 'unauthorized'"
   - expr: "${captured.bystander_y_status} not contains 'permission denied'"
     message: "bystander-y must NOT see 'permission denied'"
 

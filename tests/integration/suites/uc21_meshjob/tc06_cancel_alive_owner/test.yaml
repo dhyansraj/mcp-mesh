@@ -104,8 +104,13 @@ assertions:
     message: "__mesh_job_cancel should return ok:true"
   - expr: "${captured.final_status} contains '\"cancelled\"'"
     message: "final status should be cancelled (not completed) — task aborted mid-flight"
-  - expr: "${captured.final_status} not contains '\"completed\"'"
-    message: "status must NOT be completed — cancel happened before natural finish"
+  # Belt-and-suspenders: ensure the *status field* didn't reach
+  # "completed". Bare `'"completed"'` would collide with the
+  # `completed_at` timestamp field in the response payload (still
+  # serialised even when the job is cancelled), so we anchor on the
+  # exact status-field shape "\"status\": \"completed\"" instead.
+  - expr: "${captured.final_status} not contains '\"status\": \"completed\"'"
+    message: "status field must NOT be completed — cancel happened before natural finish"
 
 post_run:
   - routine: stop_all
