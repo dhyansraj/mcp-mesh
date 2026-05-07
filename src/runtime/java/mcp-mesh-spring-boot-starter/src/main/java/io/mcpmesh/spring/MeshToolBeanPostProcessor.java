@@ -93,7 +93,9 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor {
         // Extract dependency names from @MeshTool(dependencies=...)
         List<String> dependencyNames = extractDependencyNames(annotation);
 
-        // Create wrapper
+        // Create wrapper. Phase B MeshJob substrate: the `task` flag controls
+        // whether inbound calls bearing X-Mesh-Job-Id dispatch through the
+        // job pipeline (JobController injection + auto-complete).
         MeshToolWrapper wrapper = new MeshToolWrapper(
             funcId,
             annotation.capability(),
@@ -101,7 +103,8 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor {
             bean,
             method,
             dependencyNames,
-            objectMapper
+            objectMapper,
+            annotation.task()
         );
 
         // Register with wrapper registry
