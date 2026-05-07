@@ -1,0 +1,179 @@
+# tc12_max_retries_exhausted_marks_failed_ts — TS port of uc21/tc12.
+#
+# Two SIGKILL cycles with max_retries=1 leaves attempt_count=2,
+# max_retries=1 → orphan-reset path's check `attempt_count > max_retries`
+# (2 > 1) trips and marks failed with "orphaned: max retries exceeded".
+
+name: "MeshJob TS: retry budget exhausted via repeated crashes — marked failed"
+description: "TS — two crash + sweep cycles with max_retries=1; final attempt_count=2 > max_retries → exhausted"
+tags:
+  - meshjob
+  - typescript
+  - issue-884
+  - retry
+  - crash-recovery
+  - slow
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-ts /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-ts /workspace/
+
+  - name: "Install provider deps"
+    handler: npm-install
+    path: /workspace/long-task-provider-ts
+
+  - name: "Install consumer deps"
+    handler: npm-install
+    path: /workspace/long-task-consumer-ts
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (round 1)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 15
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+
+  - name: "Wait for consumer + DI"
+    handler: wait
+    seconds: 22
+
+  - name: "Submit job with max_retries=1"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["a","b","c","d","e","f","g","h","i"],"max_retries":1,"max_duration":60}' --raw
+    capture: submit_resp
+    timeout: 15
+
+  - name: "Wait 4s for claim"
+    handler: wait
+    seconds: 4
+
+  - name: "Kill provider — round 1 (attempt 1 crashes)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Kill ALL node/tsx processes whose cmdline mentions the agent
+      # script — see tc11 for rationale (parent/child both need killing).
+      MY_PID=$$
+      MY_PPID=$PPID
+      KILLED=""
+      for p in /proc/[0-9]*; do
+        pid="${p##*/}"
+        [ "$pid" = "1" ] && continue
+        [ "$pid" = "$MY_PID" ] && continue
+        [ "$pid" = "$MY_PPID" ] && continue
+        [ -f "$p/cmdline" ] || continue
+        cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$cmd" in
+          *long-task-provider-ts/src/index.ts*)
+            kill -9 "$pid" 2>/dev/null && KILLED="$KILLED $pid"
+            ;;
+        esac
+      done
+      echo "killed PIDs:$KILLED"
+      rm -f ~/.mcp-mesh/agents/long-task-provider-ts/* 2>/dev/null || true
+      echo "round 1 kill done"
+    capture: kill1
+
+  - name: "Wait for sweep to reset orphan (~35s end-to-end)"
+    handler: wait
+    seconds: 45
+
+  - name: "Status after round 1 (should be working, owner=null)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,owner_instance_id,attempt_count}'
+    capture: after_round_1
+
+  - name: "Stale PID cleanup before round 2 (SIGKILL leaves stale tracking)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop long-task-provider-ts 2>&1 || true
+      rm -f ~/.mcp-mesh/agents/long-task-provider-ts/* 2>/dev/null || true
+      echo "stale entry cleared"
+
+  - name: "Start provider (round 2)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
+
+  - name: "Wait for round 2 claim"
+    handler: wait
+    seconds: 18
+
+  - name: "Kill provider — round 2 (attempt 2 crashes)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Kill ALL node/tsx processes whose cmdline mentions the agent
+      # script — see tc11 for rationale (parent/child both need killing).
+      MY_PID=$$
+      MY_PPID=$PPID
+      KILLED=""
+      for p in /proc/[0-9]*; do
+        pid="${p##*/}"
+        [ "$pid" = "1" ] && continue
+        [ "$pid" = "$MY_PID" ] && continue
+        [ "$pid" = "$MY_PPID" ] && continue
+        [ -f "$p/cmdline" ] || continue
+        cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$cmd" in
+          *long-task-provider-ts/src/index.ts*)
+            kill -9 "$pid" 2>/dev/null && KILLED="$KILLED $pid"
+            ;;
+        esac
+      done
+      echo "killed PIDs:$KILLED"
+      rm -f ~/.mcp-mesh/agents/long-task-provider-ts/* 2>/dev/null || true
+      echo "round 2 kill done"
+    capture: kill2
+
+  - name: "Wait for sweep to mark exhausted (~35s end-to-end)"
+    handler: wait
+    seconds: 45
+
+  - name: "Final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,owner_instance_id,attempt_count,error}'
+    capture: final_status
+
+assertions:
+  - expr: "${captured.after_round_1} contains '\"status\": \"working\"'"
+    message: "after round 1 sweep, status should still be working (orphan reset)"
+  - expr: "${captured.after_round_1} contains '\"owner_instance_id\": null'"
+    message: "after round 1 sweep, owner should be cleared"
+  - expr: "${captured.final_status} contains '\"status\": \"failed\"'"
+    message: "after round 2 sweep with attempt_count > max_retries, must be failed"
+  - expr: "${captured.final_status} contains 'max retries exceeded'"
+    message: "error should mention max retries exceeded"
+  - expr: "${captured.final_status} contains '\"attempt_count\": 2'"
+    message: "attempt_count should be 2 (1 initial + 1 retry attempt) — budget exceeded"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

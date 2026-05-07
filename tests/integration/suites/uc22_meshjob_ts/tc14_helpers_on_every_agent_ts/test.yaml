@@ -1,0 +1,151 @@
+# tc14_helpers_on_every_agent_ts — TS port of uc21/tc14.
+#
+# Three TS agents: producer (task=true only), consumer (deps + submit
+# wrapper), and orchestrator (no task tools, no deps — pure bystander).
+# All three should advertise __mesh_job_status, __mesh_job_result, and
+# __mesh_job_cancel via the registry.
+
+name: "MeshJob TS: helper tools auto-registered on every mesh agent"
+description: "TS — producer, consumer, and bystander all expose __mesh_job_* and return correct data"
+tags:
+  - meshjob
+  - typescript
+  - issue-884
+  - helpers
+timeout: 150
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-ts /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-ts /workspace/
+      cp -rL /uc-artifacts/orchestrator-agent-ts /workspace/
+
+  - name: "Install provider deps"
+    handler: npm-install
+    path: /workspace/long-task-provider-ts
+
+  - name: "Install consumer deps"
+    handler: npm-install
+    path: /workspace/long-task-consumer-ts
+
+  - name: "Install orchestrator deps"
+    handler: npm-install
+    path: /workspace/orchestrator-agent-ts
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 15
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+
+  - name: "Start orchestrator (no task tools, no deps)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start orchestrator-agent-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9113 -d
+
+  - name: "Wait for all 3 to register"
+    handler: wait
+    seconds: 28
+
+  - name: "Capture full agent IDs"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl list 2>&1
+      echo "---"
+      curl -s http://localhost:8000/agents | jq -r '.agents[].id'
+    capture: agent_ids
+
+  - name: "Submit a job via consumer (1 section)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["only"],"max_retries":1,"max_duration":30}' --raw
+    capture: submit_resp
+    timeout: 15
+
+  - name: "Wait for completion"
+    handler: wait
+    seconds: 8
+
+  - name: "Call __mesh_job_status on PROVIDER"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-ts") | .id')
+      echo "JOB_ID=${JOB_ID} AGENT=${AGENT}"
+      meshctl call "${AGENT}:__mesh_job_status" "{\"jobId\":\"${JOB_ID}\"}"
+    capture: status_on_provider
+
+  - name: "Call __mesh_job_result on CONSUMER"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-consumer-ts") | .id')
+      meshctl call "${AGENT}:__mesh_job_result" "{\"jobId\":\"${JOB_ID}\"}"
+    capture: result_on_consumer
+
+  - name: "Call __mesh_job_status on ORCHESTRATOR (bystander)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="orchestrator-agent-ts") | .id')
+      meshctl call "${AGENT}:__mesh_job_status" "{\"jobId\":\"${JOB_ID}\"}"
+    capture: status_on_orchestrator
+
+  - name: "Confirm helper tools auto-register on the orchestrator (bystander)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s http://localhost:8000/agents \
+        | jq -r '.agents[] | select(.name=="orchestrator-agent-ts") | .capabilities[].function_name'
+    capture: orchestrator_tools
+
+assertions:
+  - expr: "${captured.agent_ids} contains 'long-task-provider-ts'"
+    message: "TS provider should be registered"
+  - expr: "${captured.agent_ids} contains 'long-task-consumer-ts'"
+    message: "TS consumer should be registered"
+  - expr: "${captured.agent_ids} contains 'orchestrator-agent-ts'"
+    message: "TS orchestrator (bystander) should be registered"
+  - expr: "${captured.status_on_provider} contains 'completed'"
+    message: "__mesh_job_status on provider should return the same completed state"
+  - expr: "${captured.result_on_consumer} contains 'completed'"
+    message: "__mesh_job_result on consumer should return terminal status=completed"
+  - expr: "${captured.status_on_orchestrator} contains 'completed'"
+    message: "__mesh_job_status on bystander orchestrator should also return completed"
+  - expr: "${captured.status_on_orchestrator} contains 'long-task-provider-ts'"
+    message: "bystander's status read should include the producer's owner_instance_id"
+
+  # Auto-registration check: even the bystander orchestrator (no task
+  # tools, no MeshJob deps) advertises all three __mesh_job_* helpers.
+  - expr: "${captured.orchestrator_tools} contains '__mesh_job_status'"
+    message: "orchestrator (bystander) must auto-register __mesh_job_status"
+  - expr: "${captured.orchestrator_tools} contains '__mesh_job_result'"
+    message: "orchestrator (bystander) must auto-register __mesh_job_result"
+  - expr: "${captured.orchestrator_tools} contains '__mesh_job_cancel'"
+    message: "orchestrator (bystander) must auto-register __mesh_job_cancel"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
