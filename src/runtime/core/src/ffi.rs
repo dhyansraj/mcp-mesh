@@ -32,12 +32,12 @@ thread_local! {
 }
 
 /// Set the last error message for the current thread.
-fn set_last_error(err: impl Into<String>) {
+pub(crate) fn set_last_error(err: impl Into<String>) {
     LAST_ERROR.with(|e| *e.borrow_mut() = Some(err.into()));
 }
 
 /// Take and clear the last error message for the current thread.
-fn take_last_error() -> Option<String> {
+pub(crate) fn take_last_error() -> Option<String> {
     LAST_ERROR.with(|e| e.borrow_mut().take())
 }
 

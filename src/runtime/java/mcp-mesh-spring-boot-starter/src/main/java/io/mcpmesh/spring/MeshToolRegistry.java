@@ -53,12 +53,50 @@ public class MeshToolRegistry {
             outputType,
             // Issue #547 Phase 4: per-tool override (default true = current behavior).
             annotation.outputSchemaStrict(),
+            // Phase B MeshJob substrate: surfaced via kwargs JSON so the
+            // registry / consumer SDK knows this is a task=true producer.
+            annotation.task(),
             bean,
             method
         );
 
         tools.put(capability, metadata);
-        log.info("Registered mesh tool: {} ({})", capability, method);
+        log.info("Registered mesh tool: {} ({}, task={})", capability, method, annotation.task());
+    }
+
+    // Phase B MeshJob substrate: synthetic tool specs registered outside
+    // the @MeshTool scan path (e.g. helper tools). Appended to the
+    // heartbeat catalog after user tools so they advertise in the registry.
+    private final List<AgentSpec.ToolSpec> syntheticTools = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    /**
+     * Add a synthetic tool spec to be merged into the heartbeat catalog.
+     * Used by {@link JobsHelperToolsRegistrar} to advertise the three
+     * MeshJob helper tools as registry-visible capabilities.
+     *
+     * <p>Idempotent by capability: if a synthetic tool with the same
+     * capability is already registered the call is a no-op. Without
+     * this guard a repeated {@code buildAgentSpec()} (e.g. test refresh
+     * or context restart in the same JVM) would accumulate duplicate
+     * helper specs in the heartbeat (PR review #874).
+     */
+    public void addSyntheticTool(AgentSpec.ToolSpec spec) {
+        if (spec == null || spec.getCapability() == null) {
+            return;
+        }
+        // Synchronize the check-then-add: CopyOnWriteArrayList serializes
+        // mutations individually, but the iterate-then-add window is open
+        // to concurrent registrations from two threads observing
+        // "no existing capability" simultaneously and both appending.
+        // (PR #891 review.)
+        synchronized (syntheticTools) {
+            for (AgentSpec.ToolSpec existing : syntheticTools) {
+                if (spec.getCapability().equals(existing.getCapability())) {
+                    return;
+                }
+            }
+            syntheticTools.add(spec);
+        }
     }
 
     /**
@@ -125,6 +163,21 @@ public class MeshToolRegistry {
                 spec.setSchemaWarnings(warnings);
             }
 
+            // Phase B MeshJob substrate: surface task=true through kwargs
+            // so the registry / consumer SDK can detect this is a task tool
+            // (matches Python's "kwargs spread of @mesh.tool decorator
+            // metadata" wire — see rust_heartbeat.py kwargs_data block).
+            if (meta.task()) {
+                try {
+                    Map<String, Object> kwargs = new LinkedHashMap<>();
+                    kwargs.put("task", true);
+                    spec.setKwargs(jsonMapper.writeValueAsString(kwargs));
+                } catch (Exception e) {
+                    log.warn("Failed to serialize kwargs for task tool '{}': {}",
+                        meta.capability(), e.getMessage());
+                }
+            }
+
             // Add dependencies to the tool spec
             for (DependencyInfo dep : meta.dependencies()) {
                 AgentSpec.DependencySpec depSpec = new AgentSpec.DependencySpec();
@@ -141,6 +194,9 @@ public class MeshToolRegistry {
 
             specs.add(spec);
         }
+
+        // Phase B MeshJob substrate: append synthetic tools (helper tools).
+        specs.addAll(syntheticTools);
 
         return specs;
     }
@@ -340,9 +396,27 @@ public class MeshToolRegistry {
         Map<String, Object> inputSchema,
         Class<?> outputType,
         boolean outputSchemaStrict,
+        boolean task,
         Object bean,
         Method method
-    ) {}
+    ) {
+        // Backward-compatible 10-arg constructor for callers that haven't
+        // adopted the Phase B `task` flag yet (defaults to false).
+        public ToolMetadata(
+                String capability,
+                String description,
+                String version,
+                List<String> tags,
+                List<DependencyInfo> dependencies,
+                Map<String, Object> inputSchema,
+                Class<?> outputType,
+                boolean outputSchemaStrict,
+                Object bean,
+                Method method) {
+            this(capability, description, version, tags, dependencies, inputSchema,
+                outputType, outputSchemaStrict, false, bean, method);
+        }
+    }
 
     /**
      * Information about a tool dependency.

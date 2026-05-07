@@ -45,6 +45,17 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+// Opaque handle wrapping a [`JobController`] plus its background batching
+// tick. The tick is held alongside the controller so it lives until the
+// caller invokes [`mesh_job_controller_free`] (mirrors PyJobController /
+// JsJobController which both keep a `BatchingHandle` field).
+//
+// Not `#[repr(C)]` — internals stay opaque to C consumers.
+typedef struct JobControllerHandle JobControllerHandle;
+
+// Opaque handle wrapping a [`JobProxy`].
+typedef struct JobProxyHandle JobProxyHandle;
+
 // Opaque handle to a running MCP Mesh agent.
 //
 // This struct holds all resources needed to interact with the agent runtime.
@@ -670,6 +681,187 @@ char *mesh_add_tool_results(const char *state_json, const char *tool_results_jso
 // # Safety
 // * `state_json` must be a valid null-terminated C string
 char *mesh_get_loop_state(const char *state_json);
+
+// Construct a [`JobController`] bound to `(job_id, instance_id)` against the
+// given `registry_url`. Spawns a per-controller background batching tick so
+// mid-flight `update_progress` calls reach the registry on the configured
+// cadence (default 2s — see [`BatchingConfig::default`]); the tick is torn
+// down with a final flush when the handle is freed.
+//
+// # Returns
+// 0 on success (handle written to `*out_handle`), non-zero on error
+// (check `mesh_last_error`).
+//
+// # Safety
+// All input strings must be valid null-terminated UTF-8. `out_handle`
+// must point to writable memory for one `*mut JobControllerHandle`.
+int32_t mesh_job_controller_new(const char *job_id,
+                                const char *instance_id,
+                                const char *registry_url,
+                                struct JobControllerHandle **out_handle);
+
+// Enqueue a progress update. Coalesces with any prior pending progress
+// for this job — only the latest survives the next batch flush.
+//
+// `message` may be NULL (no message).
+//
+// # Safety
+// `handle` must come from [`mesh_job_controller_new`] and must not yet
+// have been freed.
+int32_t mesh_job_controller_update_progress(struct JobControllerHandle *handle,
+                                            double progress,
+                                            const char *message);
+
+// Mark the job complete with the given result (JSON-encoded). Flushes
+// immediately.
+//
+// # Safety
+// `result_json` must be a valid JSON string (UTF-8). Invalid JSON
+// returns -1 with last-error set.
+int32_t mesh_job_controller_complete(struct JobControllerHandle *handle, const char *result_json);
+
+// Mark the job failed with the given error reason. Flushes immediately.
+int32_t mesh_job_controller_fail(struct JobControllerHandle *handle, const char *error);
+
+// Whether `complete` / `fail` has already been called on this controller.
+//
+// # Returns
+// `1` if terminal, `0` if not, `-1` on error.
+int32_t mesh_job_controller_is_terminal(const struct JobControllerHandle *handle);
+
+// Read the job ID this controller is bound to. Caller frees the returned
+// string via `mesh_free_string`.
+int32_t mesh_job_controller_job_id(const struct JobControllerHandle *handle, char **out_job_id);
+
+// Free a [`JobControllerHandle`] returned by [`mesh_job_controller_new`].
+//
+// Drops the inner controller AND the background batching tick (which
+// triggers a final flush of any pending deltas before the tick stops).
+//
+// # Safety
+// `handle` must come from [`mesh_job_controller_new`] or be NULL. After
+// this call, `handle` is invalid and must not be used.
+void mesh_job_controller_free(struct JobControllerHandle *handle);
+
+// Submit a new job via the registry and return a [`JobProxyHandle`].
+//
+// `args_json` must encode a JSON object with these fields (mirroring
+// [`SubmitJobArgs`] field-for-field):
+//
+// ```json
+// {
+//   "registry_url": "http://...",
+//   "capability": "...",
+//   "payload": { ... },
+//   "submitted_by": "...",
+//   "owner_instance_id": "..." | null,
+//   "max_duration": 120 | null,
+//   "max_retries": 1 | null,
+//   "total_deadline": 1700000000 | null
+// }
+// ```
+//
+// JSON-shaped (rather than positional) args mirror the napi-rs
+// `JsSubmitJobArgs` object — keeps the C ABI signature stable as fields
+// are added.
+int32_t mesh_submit_job(const char *args_json, struct JobProxyHandle **out_handle);
+
+// Construct a [`JobProxyHandle`] bound to a known job id + registry URL.
+// Normally callers obtain a proxy via [`mesh_submit_job`] / DDDI injection
+// rather than constructing one directly.
+int32_t mesh_job_proxy_new(const char *job_id,
+                           const char *registry_url,
+                           struct JobProxyHandle **out_handle);
+
+// Read the job id this proxy is bound to. Caller frees via `mesh_free_string`.
+int32_t mesh_job_proxy_job_id(const struct JobProxyHandle *handle, char **out_job_id);
+
+// Read the latest job state from the registry (single GET). The full Job
+// row is serialized as JSON and written to `*out_job_json`; caller frees
+// via `mesh_free_string`.
+int32_t mesh_job_proxy_status(struct JobProxyHandle *handle, char **out_job_json);
+
+// Poll until the job reaches a terminal state. On success writes the job
+// `result` (JSON-encoded) to `*out_result_json`; caller frees via
+// `mesh_free_string`.
+//
+// `timeout_secs`: wall-clock timeout. Use a negative value (e.g. `-1`)
+// for "no timeout" (matches the Python / napi-rs `Optional<f64>` shape).
+int32_t mesh_job_proxy_wait(struct JobProxyHandle *handle,
+                            double timeout_secs,
+                            char **out_result_json);
+
+// Request cancellation. The registry forwards the signal to the owner
+// replica when alive. `reason` may be NULL.
+int32_t mesh_job_proxy_cancel(struct JobProxyHandle *handle, const char *reason);
+
+// Free a [`JobProxyHandle`] returned by [`mesh_submit_job`] /
+// [`mesh_job_proxy_new`].
+void mesh_job_proxy_free(struct JobProxyHandle *handle);
+
+// Snapshot of the active job context on the current Rust task, or NULL
+// if no job is in scope.
+//
+// Writes a JSON object of shape `{"job_id": str, "deadline_secs_remaining":
+// int|null}` to `*out_snapshot_json`. If no context is active, writes NULL
+// (same convention as Python's `current_job` returning `None`).
+//
+// Caller frees the JSON string via `mesh_free_string` if it is non-NULL.
+int32_t mesh_current_job(char **out_snapshot_json);
+
+// Compute the `X-Mesh-Job-Id` / `X-Mesh-Timeout` header values for the
+// active job context, if any.
+//
+// Writes a JSON object `{"X-Mesh-Job-Id": "...", "X-Mesh-Timeout":
+// "<secs>"}` (with `X-Mesh-Timeout` omitted when no deadline is set) to
+// `*out_headers_json`. If no context is active, writes NULL.
+//
+// Caller frees the JSON string via `mesh_free_string` if it is non-NULL.
+int32_t mesh_inject_job_headers(char **out_headers_json);
+
+// Fire the cancel token registered for `job_id` in the process-wide
+// cancel registry, if any.
+//
+// # Returns
+// `1` if a token was found and fired, `0` if no active job for that id,
+// `-1` on error (null/invalid `job_id`).
+int32_t mesh_cancel_active_job(const char *job_id);
+
+// Run a Java-provided callback inside a fresh [`crate::jobs::run_as_job`]
+// scope so the cancel-registry entry under the snapshot's `job_id` is
+// bound for the duration of the callback (allowing
+// `POST /jobs/{id}/cancel` to fire the in-flight cancel token).
+//
+// `snapshot_json` must encode a JSON object of shape
+// `{"job_id": "...", "deadline_secs": <number>|null}` mirroring the
+// payload Java SDK constructs from inbound `X-Mesh-Job-Id` / `X-Mesh-Timeout`
+// headers. `deadline_secs` is the per-attempt deadline (relative); null /
+// missing / non-positive ≡ no deadline.
+//
+// `callback` is invoked synchronously from the runtime's `block_on`. It
+// receives the opaque `user_data` pointer the caller passed in. The
+// callback's `i32` return value is propagated as this function's return
+// value (0 = success, non-zero = caller-defined error).
+//
+// # Safety
+// `callback` must be a valid C function pointer for the entire duration
+// of this call. `user_data` is passed through opaquely — Rust does not
+// dereference it. If the callback panics across the FFI boundary the
+// behaviour is undefined; Java callers must catch all checked / unchecked
+// exceptions in their bridge function.
+//
+// # Caveat
+// The Rust `tokio::task_local!` bound by `with_job` is only visible to
+// Rust futures polled within the scope. Java code in the callback will
+// NOT see the task-local — it must read its own `ThreadLocal` mirror.
+// The Rust side handles two things here:
+//   1. cancel-registry binding so a `POST /jobs/{id}/cancel` arriving
+//      mid-flight fires the in-flight token (the Java SDK reads this via
+//      `mesh_cancel_active_job` from its cancel HTTP route);
+//   2. header injection on Rust-originated outbound work (the cancel
+//      token + `X-Mesh-*` headers are visible to `mesh_call_tool` and
+//      friends polled inside the scope).
+int32_t mesh_run_as_job(const char *snapshot_json, int32_t (*callback)(void*), void *user_data);
 
 #ifdef __cplusplus
 }  // extern "C"

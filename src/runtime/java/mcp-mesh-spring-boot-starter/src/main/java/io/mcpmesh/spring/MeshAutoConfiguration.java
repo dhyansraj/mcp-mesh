@@ -204,6 +204,33 @@ public class MeshAutoConfiguration {
         return new MeshHealthController(runtime);
     }
 
+    /**
+     * Phase B MeshJob substrate: cancel route handler. Mounted on every
+     * mesh agent so the registry can forward cancel signals to owner
+     * replicas. Safe to register unconditionally — Spring MVC only
+     * invokes the handler on POST /jobs/{jobId}/cancel matches.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public JobCancelController jobCancelController() {
+        return new JobCancelController();
+    }
+
+    /**
+     * Phase B MeshJob substrate: orchestrator that wires producers,
+     * consumers, and helper tools together once the mesh runtime is up.
+     * SmartLifecycle phase ensures it starts AFTER MeshRuntime and stops
+     * BEFORE it (so dispatchers drain in-flight handlers cleanly).
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public JobsRuntimeManager jobsRuntimeManager(
+            MeshRuntime runtime,
+            MeshToolRegistry toolRegistry,
+            MeshToolWrapperRegistry wrapperRegistry) {
+        return new JobsRuntimeManager(runtime, toolRegistry, wrapperRegistry);
+    }
+
     private AgentSpec buildAgentSpec(
             MeshProperties properties,
             MeshToolRegistry toolRegistry,
@@ -282,6 +309,21 @@ public class MeshAutoConfiguration {
         // Registry URL
         String propertiesRegistryUrl = properties.getRegistry().getUrl();
         spec.setRegistryUrl(configResolver.resolve("registry_url", propertiesRegistryUrl));
+
+        // Phase B MeshJob substrate: register the three helper tools as
+        // synthetic specs BEFORE getToolSpecs() is read into the
+        // heartbeat catalog. Without this the registry never learns the
+        // helpers exist (they were registered too late in JobsRuntimeManager).
+        // Also registers the wrapper-side handlers so MCP tools/call
+        // requests for the helper names dispatch correctly. Skips
+        // gracefully when no registry URL is configured.
+        String resolvedRegistryUrl = configResolver.resolve("registry_url",
+            properties.getRegistry().getUrl());
+        try {
+            JobsHelperToolsRegistrar.register(toolRegistry, wrapperRegistry, resolvedRegistryUrl);
+        } catch (Exception e) {
+            log.warn("Failed to register MeshJob helper tools at startup", e);
+        }
 
         // Add tools from registry (dependencies are embedded in tool specs)
         List<AgentSpec.ToolSpec> allTools = new ArrayList<>(toolRegistry.getToolSpecs());

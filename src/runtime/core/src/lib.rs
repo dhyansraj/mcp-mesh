@@ -87,6 +87,8 @@ pub use registry::{FastHeartbeatResponse, FastHeartbeatStatus, PENDING_JOBS_HEAD
 
 // C FFI bindings module
 pub mod ffi;
+#[cfg(feature = "ffi")]
+pub mod jobs_ffi;
 
 // Node.js/TypeScript bindings module (napi-rs)
 #[cfg(feature = "typescript")]

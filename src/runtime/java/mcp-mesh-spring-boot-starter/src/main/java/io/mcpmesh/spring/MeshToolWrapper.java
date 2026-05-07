@@ -3,6 +3,10 @@ package io.mcpmesh.spring;
 import tools.jackson.databind.JsonNode;
 import com.github.victools.jsonschema.generator.SchemaGenerator;
 import tools.jackson.databind.ObjectMapper;
+import io.mcpmesh.JobContext;
+import io.mcpmesh.JobController;
+import io.mcpmesh.MeshJob;
+import io.mcpmesh.MeshJobSubmitter;
 import io.mcpmesh.Param;
 import io.mcpmesh.spring.tracing.ExecutionTracer;
 import io.mcpmesh.spring.tracing.SpanScope;
@@ -55,12 +59,14 @@ public class MeshToolWrapper implements McpToolHandler {
     private final String description;
     private final Object bean;
     private final Method method;
+    private final boolean task;
 
     // Parameter metadata
     private final List<ParamInfo> mcpParams;           // MCP-exposed parameters (with @Param)
     private final List<Integer> meshToolPositions;     // Positions of McpMeshTool params
     private final List<Type> meshToolReturnTypes;      // Generic return types for McpMeshTool params
     private final List<Integer> llmAgentPositions;     // Positions of MeshLlmAgent params
+    private final Integer meshJobParamIndex;           // Position of MeshJob param, or null
     private final Map<String, Object> inputSchema;     // JSON Schema for MCP
 
     // Mutable dependency arrays (updated by heartbeat)
@@ -70,6 +76,20 @@ public class MeshToolWrapper implements McpToolHandler {
 
     // Dependency names for error messages
     private final List<String> dependencyNames;
+
+    // Consumer-side: MeshJobSubmitter to inject when MeshJob slot is present
+    // and this method depends on a task=true capability. Set by the runtime
+    // wiring (MeshAutoConfiguration / MeshEventProcessor) once the registry
+    // tells us the dep is task=true. Null when this slot is producer-side
+    // only (i.e. method is task=true) or when no submitter applies.
+    private final AtomicReference<MeshJobSubmitter> jobSubmitter = new AtomicReference<>();
+
+    // Producer-side: agent's own per-replica instance ID + registry URL.
+    // Used to construct JobController on inbound dispatch when the request
+    // bears X-Mesh-Job-Id. Set lazily via setJobBindingContext (so the
+    // wrapper doesn't need a hard dep on MeshRuntime at construction time).
+    private final AtomicReference<String> instanceId = new AtomicReference<>();
+    private final AtomicReference<String> registryUrl = new AtomicReference<>();
 
     private final ObjectMapper objectMapper;
 
@@ -95,19 +115,40 @@ public class MeshToolWrapper implements McpToolHandler {
             Method method,
             List<String> dependencyNames,
             ObjectMapper objectMapper) {
+        this(funcId, capability, description, bean, method, dependencyNames, objectMapper, false);
+    }
+
+    /**
+     * Create a wrapper for a @MeshTool annotated method, with explicit
+     * task flag for MeshJob substrate (Phase B).
+     */
+    public MeshToolWrapper(
+            String funcId,
+            String capability,
+            String description,
+            Object bean,
+            Method method,
+            List<String> dependencyNames,
+            ObjectMapper objectMapper,
+            boolean task) {
 
         this.funcId = funcId;
         this.capability = capability;
         this.description = description;
         this.bean = bean;
         this.method = method;
+        this.task = task;
         this.dependencyNames = dependencyNames != null ? dependencyNames : List.of();
         this.objectMapper = objectMapper;
 
         // Make method accessible (for private methods)
         method.setAccessible(true);
 
-        // Analyze parameters
+        // Analyze parameters via the resolver so MeshJob index is captured.
+        MeshJobResolver.Resolved resolved = MeshJobResolver.resolve(method);
+        this.meshJobParamIndex = resolved.meshJobParamIndex().orElse(null);
+
+        // Analyze remaining parameters (mcp params + mesh deps + llm agents)
         this.mcpParams = new ArrayList<>();
         this.meshToolPositions = new ArrayList<>();
         this.meshToolReturnTypes = new ArrayList<>();
@@ -122,8 +163,9 @@ public class MeshToolWrapper implements McpToolHandler {
         // Generate input schema (excluding injected params)
         this.inputSchema = generateInputSchema();
 
-        log.debug("Created wrapper for {} with {} MCP params, {} mesh deps, {} LLM agents",
-            funcId, mcpParams.size(), meshToolPositions.size(), llmAgentPositions.size());
+        log.debug("Created wrapper for {} with {} MCP params, {} mesh deps, {} LLM agents, task={}, meshJobParamIndex={}",
+            funcId, mcpParams.size(), meshToolPositions.size(), llmAgentPositions.size(),
+            task, meshJobParamIndex);
     }
 
     /**
@@ -140,7 +182,13 @@ public class MeshToolWrapper implements McpToolHandler {
             Parameter param = params[i];
             Class<?> type = param.getType();
 
-            if (McpMeshTool.class.isAssignableFrom(type)) {
+            if (MeshJob.class.isAssignableFrom(type)) {
+                // Phase B MeshJob substrate: this slot is filled separately
+                // by the dispatch wrapper (JobController on inbound job
+                // dispatch, MeshJobSubmitter on consumer side). No @Param
+                // required; the param is exempt from the MCP input schema.
+                continue;
+            } else if (McpMeshTool.class.isAssignableFrom(type)) {
                 // Mesh tool dependency - will be injected
                 meshToolPositions.add(i);
                 // Extract generic type argument (e.g., Integer from McpMeshTool<Integer>)
@@ -164,7 +212,7 @@ public class MeshToolWrapper implements McpToolHandler {
                     // No @Param annotation on non-injectable parameter
                     throw new IllegalStateException(
                         "Parameter at position " + i + " in method " + method.getName() +
-                        " must have @Param annotation. Injectable types (McpMeshTool, MeshLlmAgent) are exempt."
+                        " must have @Param annotation. Injectable types (McpMeshTool, MeshLlmAgent, MeshJob) are exempt."
                     );
                 }
             }
@@ -267,6 +315,46 @@ public class MeshToolWrapper implements McpToolHandler {
      */
     public void setTracer(ExecutionTracer tracer) {
         tracerRef.set(tracer);
+    }
+
+    /**
+     * Bind the producer-side context needed to construct a {@link JobController}
+     * on inbound job dispatch. Called once at startup by the runtime wiring
+     * (MeshAutoConfiguration / MeshEventProcessor) once the agent's
+     * per-replica instance id and registry URL are known.
+     *
+     * <p>No-op when this tool is not {@code task=true} — the wrapper would
+     * never construct a controller in that case anyway.
+     *
+     * @param instanceId  Per-replica agent ID (matches what the registry
+     *                    sees as {@code owner_instance_id} on claim)
+     * @param registryUrl Mesh registry base URL
+     */
+    public void setJobBindingContext(String instanceId, String registryUrl) {
+        if (instanceId != null) this.instanceId.set(instanceId);
+        if (registryUrl != null) this.registryUrl.set(registryUrl);
+    }
+
+    /**
+     * Set or clear the consumer-side {@link MeshJobSubmitter} to inject at
+     * the {@code MeshJob} slot for a regular (non-job) tool call. Set by
+     * the runtime once the registry tells us a declared dependency is a
+     * {@code task=true} capability.
+     *
+     * @param submitter The submitter to inject, or null to clear
+     */
+    public void setJobSubmitter(MeshJobSubmitter submitter) {
+        this.jobSubmitter.set(submitter);
+    }
+
+    /** Whether this tool is registered with {@code task=true}. */
+    public boolean isTask() {
+        return task;
+    }
+
+    /** The position of the MeshJob param in the method signature, or null. */
+    public Integer getMeshJobParamIndex() {
+        return meshJobParamIndex;
     }
 
     // =========================================================================
@@ -387,6 +475,50 @@ public class MeshToolWrapper implements McpToolHandler {
      * Internal invoke method that handles the actual method invocation.
      */
     private Object invokeInternal(Map<String, Object> cleanArgs) throws Exception {
+        // Phase B MeshJob substrate: detect inbound job dispatch.
+        // X-Mesh-Job-Id is captured by TracingFilter (we register it as a
+        // propagation header in MeshAutoConfiguration), so it lands in
+        // TraceContext.getPropagatedHeaders() with a lowercased key.
+        Map<String, String> propagated = TraceContext.getPropagatedHeaders();
+        String jobIdHeader = propagated != null ? propagated.get("x-mesh-job-id") : null;
+        Long deadlineSecs = null;
+        if (jobIdHeader != null && !jobIdHeader.isEmpty()) {
+            String timeoutHeader = propagated.get("x-mesh-timeout");
+            if (timeoutHeader != null && !timeoutHeader.isEmpty()) {
+                try {
+                    double secs = Double.parseDouble(timeoutHeader.trim());
+                    if (Double.isFinite(secs) && secs > 0) {
+                        // Round, don't truncate. `(long) 0.7 == 0` would
+                        // collapse a sub-second budget into "immediate"
+                        // and bypass the `secs > 0` filter below; rounding
+                        // preserves at-least-the-budget semantics for
+                        // sub-second timeouts (PR review #874).
+                        deadlineSecs = Math.max(1L, Math.round(secs));
+                    }
+                } catch (NumberFormatException nfe) {
+                    log.debug("Invalid X-Mesh-Timeout header value '{}': {}", timeoutHeader, nfe.getMessage());
+                }
+            }
+        }
+
+        // If task=true tool is being called as a job, dispatch through the
+        // job pipeline: build a JobController bound to this job_id, set
+        // both Java + native contexts, inject the controller at
+        // meshJobParamIndex, auto-complete on successful return.
+        //
+        // Gate is intentionally narrow — only `task=true` + a present
+        // `X-Mesh-Job-Id` header. Whether a JobController gets injected
+        // (requires meshJobParamIndex + instanceId + registryUrl) is
+        // decided INSIDE dispatchAsJob; if any of those is missing, we
+        // still bind the JobContext snapshot so outbound calls
+        // propagate the right job-id headers, but invoke the user
+        // method without the controller. The previous all-or-nothing
+        // gate silently skipped the wrap when the wiring was partial,
+        // leaving downstream calls headerless. (PR #891 review.)
+        if (task && jobIdHeader != null && !jobIdHeader.isEmpty()) {
+            return dispatchAsJob(cleanArgs, jobIdHeader, deadlineSecs);
+        }
+
         // Build full argument array
         Object[] fullArgs = new Object[method.getParameterCount()];
 
@@ -400,6 +532,14 @@ public class MeshToolWrapper implements McpToolHandler {
 
             // Convert value to target type
             fullArgs[param.position()] = convertValue(value, param.type());
+        }
+
+        // Phase B MeshJob substrate: fill MeshJob slot for non-job paths.
+        // - Consumer side (method has dependencies + jobSubmitter set): inject submitter.
+        // - Otherwise (incl. task=true called sync): inject null.
+        if (meshJobParamIndex != null) {
+            MeshJobSubmitter submitter = jobSubmitter.get();
+            fullArgs[meshJobParamIndex] = submitter; // null when no submitter wired
         }
 
         // Fill McpMeshTool dependencies (null if unavailable for graceful degradation)
@@ -479,6 +619,209 @@ public class MeshToolWrapper implements McpToolHandler {
         }
 
         return result;
+    }
+
+    /**
+     * Phase B MeshJob substrate: invoke the user method as a job.
+     *
+     * <p>Constructs a {@link JobController} bound to {@code jobId}, sets
+     * the Java-side {@link JobContext} (for in-process reads via
+     * {@code JobContext.current()}), injects the controller at
+     * {@link #meshJobParamIndex}, invokes the user method, and auto-
+     * completes the controller with the return value if the user did
+     * not explicitly call {@code complete()} / {@code fail()}.
+     *
+     * <p>On exception, attempts a best-effort {@code controller.fail(...)}
+     * if not already terminal, then propagates the exception so the MCP
+     * SDK surfaces it as a tool-call error.
+     *
+     * <p><b>Why no {@code mesh_run_as_job} on the Java sync path?</b>
+     * The Rust {@code mesh_run_as_job} wraps its callback in
+     * {@code jobs_runtime().block_on}; calling any
+     * {@code mesh_job_controller_*} (which also block_on internally)
+     * from inside that callback panics with a "Cannot start a runtime
+     * from within a runtime" Tokio error. The Python and TypeScript
+     * SDKs use {@code with_job} (async) so the callback's awaits don't
+     * nest block_ons — Java's only synchronous JNR-FFI bindings can't
+     * compose the same way. Cancel-registry binding for the Java path
+     * is therefore Phase B-deferred (the registry sweep is the
+     * backstop); user code sees an interrupted thread on cancel via
+     * {@link Thread#interrupt} once Phase 2 wires that up.
+     *
+     * <p>Mirrors (Java-adapted):
+     * <ul>
+     *   <li>Python {@code _mcp_mesh.engine.job_dispatch._run_and_autocomplete}</li>
+     *   <li>TypeScript {@code runWithJobContext} in inbound-job-dispatch.ts</li>
+     * </ul>
+     */
+    private Object dispatchAsJob(Map<String, Object> cleanArgs, String jobId, Long deadlineSecs) throws Exception {
+        // Build full args with the controller injected at the MeshJob slot
+        Object[] fullArgs = new Object[method.getParameterCount()];
+        for (ParamInfo param : mcpParams) {
+            Object value = cleanArgs.get(param.name());
+            if (value == null && param.required()) {
+                throw new IllegalArgumentException("Missing required parameter: " + param.name());
+            }
+            fullArgs[param.position()] = convertValue(value, param.type());
+        }
+        // Fill McpMeshTool dependencies and LLM agents (mirrors the
+        // non-job path; needed so a task=true method that ALSO has deps
+        // / LLM agents sees them populated)
+        for (int i = 0; i < meshToolPositions.size(); i++) {
+            int paramPos = meshToolPositions.get(i);
+            McpMeshTool proxy = injectedDeps.get(i);
+            fullArgs[paramPos] = proxy;
+        }
+        for (int i = 0; i < llmAgentPositions.size(); i++) {
+            int paramPos = llmAgentPositions.get(i);
+            MeshLlmAgent agent = injectedLlmAgents.get(i);
+            if (agent instanceof MeshLlmAgentProxy proxy) {
+                Map<String, Object> context = extractContextForTemplate(proxy.getContextParamName(), cleanArgs);
+                if (context != null) {
+                    proxy.setInvocationContext(context);
+                }
+            }
+            fullArgs[paramPos] = agent;
+        }
+
+        // Decide whether we can build a JobController: we need a slot
+        // index AND both binding fields. If any piece is missing the
+        // job is still routed through the wrap (so outbound calls
+        // propagate the right headers via JobContext) but without the
+        // controller — see the gate-site javadoc. (PR #891 review.)
+        boolean canInjectController = meshJobParamIndex != null
+            && instanceId.get() != null
+            && registryUrl.get() != null;
+
+        if (!canInjectController) {
+            log.warn("Job dispatch for tool={} job={} is missing wiring " +
+                "(meshJobParamIndex={}, instanceId={}, registryUrl={}); " +
+                "binding JobContext only — controller NOT injected",
+                funcId, jobId,
+                meshJobParamIndex, instanceId.get(), registryUrl.get());
+            // Fill the MeshJob slot (if any) with null — user code that
+            // declares a MeshJob param tolerates null per DDDI.
+            if (meshJobParamIndex != null) {
+                fullArgs[meshJobParamIndex] = null;
+            }
+            JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs);
+            return JobContext.withJob(snap, () -> invokeNoController(fullArgs));
+        }
+
+        // Construct the producer controller. Free in finally.
+        JobController controller = JobController.open(jobId, instanceId.get(), registryUrl.get());
+        try {
+            // Inject the controller at the MeshJob slot
+            fullArgs[meshJobParamIndex] = controller;
+
+            // Bind the Java-side ThreadLocal job context for the duration
+            // of the user method. See class javadoc on dispatchAsJob for
+            // why we don't also bind the Rust-side task-local.
+            JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs);
+            return JobContext.withJob(snap, () -> invokeAndAutoComplete(fullArgs, controller));
+        } finally {
+            controller.close();
+        }
+    }
+
+    /**
+     * Invoke the user method when we cannot construct a controller
+     * (missing wiring). Returns the user's result directly; no
+     * auto-complete because there's no controller to mark terminal.
+     * Matches the inbound non-job code path's invocation logic but
+     * stays inside the JobContext snapshot so outbound headers still
+     * carry the job id. (PR #891 review.)
+     */
+    private Object invokeNoController(Object[] fullArgs) throws Exception {
+        Object result;
+        try {
+            result = method.invoke(bean, fullArgs);
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception ex) throw ex;
+            throw new RuntimeException(cause);
+        } catch (IllegalAccessException e) {
+            throw new RuntimeException("Method access denied: " + e.getMessage(), e);
+        }
+        if (result instanceof CompletableFuture<?> future) {
+            try {
+                result = future.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            } catch (TimeoutException e) {
+                throw new RuntimeException("Async operation timed out after " + ASYNC_TIMEOUT_SECONDS + " seconds");
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof Exception ex) throw ex;
+                throw new RuntimeException(cause);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Async operation interrupted", e);
+            }
+        }
+        return result;
+    }
+
+    private Object invokeAndAutoComplete(Object[] fullArgs, JobController controller) throws Exception {
+        Object result;
+        try {
+            result = method.invoke(bean, fullArgs);
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            // Best-effort failure report — the registry will sweep stale
+            // working rows on lease expiry, but reporting eagerly means
+            // the consumer's await() resolves with the right error
+            // sooner.
+            tryFail(controller, cause != null ? cause.toString() : "method invocation failed");
+            if (cause instanceof Exception ex) throw ex;
+            throw new RuntimeException(cause);
+        } catch (IllegalAccessException e) {
+            tryFail(controller, e.toString());
+            throw new RuntimeException("Method access denied: " + e.getMessage(), e);
+        }
+
+        // If the method returns a CompletableFuture, await it before
+        // deciding whether to auto-complete (matches the Python /
+        // TypeScript async semantics).
+        if (result instanceof CompletableFuture<?> future) {
+            try {
+                result = future.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            } catch (TimeoutException e) {
+                tryFail(controller, "async operation timed out after " + ASYNC_TIMEOUT_SECONDS + "s");
+                throw new RuntimeException("Async operation timed out after " + ASYNC_TIMEOUT_SECONDS + " seconds");
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                tryFail(controller, cause != null ? cause.toString() : e.toString());
+                if (cause instanceof Exception ex) throw ex;
+                throw new RuntimeException(cause);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                tryFail(controller, "async operation interrupted");
+                throw new RuntimeException("Async operation interrupted", e);
+            }
+        }
+
+        // Auto-complete iff the user didn't already close the row
+        // themselves. Matches Python's _run_and_autocomplete + TS's
+        // runWithJobContext.
+        try {
+            if (!controller.isTerminal()) {
+                controller.complete(result);
+            }
+        } catch (Exception e) {
+            log.warn("Auto-complete failed for job {}: {}", controller.jobId(), e.getMessage());
+            // Don't shadow the user's return value — the registry sweep
+            // is the ultimate backstop for stale `working` rows.
+        }
+        return result;
+    }
+
+    private static void tryFail(JobController controller, String reason) {
+        try {
+            if (!controller.isTerminal()) {
+                controller.fail(reason);
+            }
+        } catch (Exception ignored) {
+            // Best-effort — already logged the original cause.
+        }
     }
 
     /**

@@ -55,6 +55,15 @@ public class TraceContext {
         if (!names.contains("x-mesh-timeout")) {
             names.add("x-mesh-timeout");
         }
+        // Phase B MeshJob substrate: x-mesh-job-id is captured here so the
+        // inbound MeshToolWrapper can dispatch task=true tools through the
+        // job pipeline (build a JobController + bind both Java/native
+        // contexts). Adding it to the propagate list also means outbound
+        // calls forward it to downstream task=true tools — matching the
+        // Python / TypeScript propagation behavior.
+        if (!names.contains("x-mesh-job-id")) {
+            names.add("x-mesh-job-id");
+        }
         PROPAGATE_HEADERS = Collections.unmodifiableList(names);
         PROPAGATE_HEADERS_CSV = String.join(",", PROPAGATE_HEADERS);
     }
