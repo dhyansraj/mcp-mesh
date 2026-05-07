@@ -309,7 +309,7 @@ impl JobController {
         self.flush_terminal(delta).await
     }
 
-    async fn flush_terminal(&self, delta: JobDelta) -> Result<(), JobError> {
+    async fn flush_terminal(&self, mut delta: JobDelta) -> Result<(), JobError> {
         // Mark the job terminal in the queue BEFORE dropping the lock —
         // this both removes any pending non-terminal delta (the terminal
         // supersedes it) and slams the door on any racing
@@ -319,8 +319,25 @@ impl JobController {
         // next batching-tick flush would push stale progress AFTER a
         // terminal status was already on the wire (see CoalescingQueue
         // docs for the invariant).
+        //
+        // BEFORE we drop the pending entry, harvest its `progress_message`
+        // and `progress` (if any) and fold them into the terminal delta —
+        // `complete`/`fail` don't take a message arg, and `fail()` leaves
+        // `progress=None`, so without this the registry's `progress_message`
+        // and `progress` columns would still reflect whatever the last
+        // batching-tick flush wrote (e.g. "section 6/7" / 0.5 when the
+        // user's last update_progress was "section 7/7" / 0.99 immediately
+        // before fail()). See issue #880.
         {
             let mut q = self.queue.lock().await;
+            if let Some(pending) = q.pending.get(&self.job_id) {
+                if delta.progress_message.is_none() {
+                    delta.progress_message = pending.progress_message.clone();
+                }
+                if delta.progress.is_none() {
+                    delta.progress = pending.progress;
+                }
+            }
             q.mark_terminal(&self.job_id);
         }
         self.backend
@@ -1014,6 +1031,115 @@ mod tests {
         let job = backend.get_job(&resp.id).await.unwrap();
         assert_eq!(job.status, JobStatus::Completed);
         assert_eq!(job.result, Some(serde_json::json!({"ans": 42})));
+    }
+
+    #[tokio::test]
+    async fn complete_preserves_last_progress_message_from_pending() {
+        // Issue #880: complete() must fold the pending progress_message
+        // into the terminal delta so the registry's progress_message
+        // column reflects the LAST update_progress call, not the one
+        // that happened to flush via the batching tick most recently.
+        let backend = MockBackend::new();
+        let queue = new_coalescing_queue();
+        let resp = backend
+            .create_job(CreateJobRequest {
+                capability: "cap".into(),
+                submitted_payload: serde_json::json!({}),
+                submitted_by: "inst-1".into(),
+                max_retries: None,
+                max_duration: None,
+                total_deadline: None,
+                owner_instance_id: None,
+            })
+            .await
+            .unwrap();
+        let ctrl = JobController::new(
+            resp.id.clone(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            queue.clone(),
+        );
+
+        // Two progress updates, the second is the "last word".
+        ctrl.update_progress(0.5, Some("section 6/7".into())).await;
+        ctrl.update_progress(1.0, Some("section 7/7".into())).await;
+        // No batching tick runs in this test — pending still has 7/7.
+        ctrl.complete(serde_json::json!({"ans": 42})).await.unwrap();
+
+        // Backend received exactly one batch (the terminal one), and
+        // the terminal delta carries progress_message="section 7/7".
+        assert_eq!(backend.batch_count(), 1);
+        let (_, deltas) = backend.last_batch().unwrap();
+        assert_eq!(deltas.len(), 1);
+        assert!(deltas[0].is_terminal());
+        assert_eq!(deltas[0].status, Some(JobStatus::Completed));
+        assert_eq!(
+            deltas[0].progress_message.as_deref(),
+            Some("section 7/7"),
+            "terminal delta must carry the last update_progress message",
+        );
+
+        // And the mock-applied state reflects it (registry would too).
+        let job = backend.get_job(&resp.id).await.unwrap();
+        assert_eq!(job.progress_message.as_deref(), Some("section 7/7"));
+    }
+
+    #[tokio::test]
+    async fn fail_preserves_last_progress_from_pending() {
+        // Issue #880 (follow-up): fail() builds a terminal delta with
+        // `progress: None`, so without harvesting the pending progress
+        // value we'd lose the last numeric progress (e.g. 0.99) along
+        // with the message when the batching tick hadn't fired yet.
+        let backend = MockBackend::new();
+        let queue = new_coalescing_queue();
+        let resp = backend
+            .create_job(CreateJobRequest {
+                capability: "cap".into(),
+                submitted_payload: serde_json::json!({}),
+                submitted_by: "inst-1".into(),
+                max_retries: None,
+                max_duration: None,
+                total_deadline: None,
+                owner_instance_id: None,
+            })
+            .await
+            .unwrap();
+        let ctrl = JobController::new(
+            resp.id.clone(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            queue.clone(),
+        );
+
+        // Last update_progress before fail is the "last word".
+        ctrl.update_progress(0.5, Some("section 6/7".into())).await;
+        ctrl.update_progress(0.99, Some("section 7/7".into())).await;
+        // No batching tick runs in this test — pending still has 7/7 / 0.99.
+        ctrl.fail("backend exploded").await.unwrap();
+
+        // Backend received exactly one batch (the terminal one), and the
+        // terminal delta carries BOTH the last progress_message and the
+        // last numeric progress.
+        assert_eq!(backend.batch_count(), 1);
+        let (_, deltas) = backend.last_batch().unwrap();
+        assert_eq!(deltas.len(), 1);
+        assert!(deltas[0].is_terminal());
+        assert_eq!(deltas[0].status, Some(JobStatus::Failed));
+        assert_eq!(
+            deltas[0].progress_message.as_deref(),
+            Some("section 7/7"),
+            "terminal fail() delta must carry the last update_progress message",
+        );
+        assert_eq!(
+            deltas[0].progress,
+            Some(0.99),
+            "terminal fail() delta must carry the last update_progress numeric value",
+        );
+
+        // Mock-applied state reflects it (registry would too).
+        let job = backend.get_job(&resp.id).await.unwrap();
+        assert_eq!(job.progress_message.as_deref(), Some("section 7/7"));
+        assert_eq!(job.progress, Some(0.99));
     }
 
     #[tokio::test]

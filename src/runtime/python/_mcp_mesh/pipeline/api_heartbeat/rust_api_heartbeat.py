@@ -423,6 +423,17 @@ async def rust_api_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
         handle = core.start_agent(spec)
         logger.info(f"Rust core started for API service '{service_id}'")
 
+        # Track this handle in the process-wide registry so atexit can
+        # drain it before Py_Finalize. Closes the pyo3-async-runtimes
+        # Python::attach race during abnormal exits (uvicorn bind fail,
+        # unhandled startup exception). See issue #877.
+        try:
+            from ...shared.simple_shutdown import register_rust_agent_handle
+
+            register_rust_agent_handle(handle)
+        except Exception as e:  # pragma: no cover - never block startup
+            logger.debug(f"Could not register handle for atexit drain: {e}")
+
         # Event loop - process events from Rust core
         while True:
             # Check for Python shutdown signal
@@ -483,5 +494,18 @@ async def rust_api_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
                 logger.debug(
                     f"Rust core shutdown complete for API service '{service_id}'"
                 )
+                # Only drop from atexit registry on the success path. If
+                # shutdown() raised, leave the handle registered so the
+                # atexit hook can retry — `AgentHandle.shutdown` is
+                # idempotent (sets a flag + try_send on a channel), so a
+                # second call from atexit is safe. Best-effort.
+                try:
+                    from ...shared.simple_shutdown import (
+                        unregister_rust_agent_handle,
+                    )
+
+                    unregister_rust_agent_handle(handle)
+                except Exception:
+                    pass
             except Exception as e:
                 logger.warning(f"Error during Rust core shutdown for API service: {e}")
