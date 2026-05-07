@@ -187,6 +187,26 @@ pub struct CancelJobResponse {
     pub forwarded_to_instance_id: Option<String>,
 }
 
+/// Release request body (`POST /jobs/{id}/release`). Producer voluntarily
+/// drops its lease so a peer replica can re-claim and retry — used by the
+/// SDK when a handler raised a `retry_on`-matched exception.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReleaseJobRequest {
+    pub instance_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Response from `POST /jobs/{id}/release`. `status` is either `working`
+/// (released for retry — peer can re-claim within ~5s via the HEAD-heartbeat
+/// path) or `failed` (the increment tipped `attempt_count` past
+/// `max_retries` and the registry marked the row exhausted).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReleaseJobResponse {
+    pub status: JobStatus,
+    pub attempt_count: u32,
+}
+
 /// Full job record (`Job` schema).
 #[derive(Debug, Clone, Deserialize)]
 pub struct Job {
@@ -322,6 +342,20 @@ pub trait TaskBackend: Send + Sync {
         job_id: &str,
         reason: Option<String>,
     ) -> Result<CancelJobResponse, BackendError>;
+
+    /// Producer-side: voluntarily release the lease on a `working` job
+    /// (`POST /jobs/{id}/release`). Used when the handler raised an
+    /// exception matched by the tool's `retry_on` whitelist — instead of
+    /// `fail()` (terminal), release lets a peer replica re-claim within
+    /// ~5s. If `attempt_count` exceeds `max_retries` after the registry's
+    /// increment, the response carries `status=failed` (terminal,
+    /// exhausted).
+    async fn release_lease(
+        &self,
+        job_id: &str,
+        instance_id: &str,
+        reason: Option<String>,
+    ) -> Result<ReleaseJobResponse, BackendError>;
 }
 
 // =============================================================================
@@ -467,6 +501,30 @@ impl TaskBackend for RegistryHttpBackend {
             return Err(Self::classify_error(resp).await);
         }
         Ok(resp.json::<CancelJobResponse>().await?)
+    }
+
+    async fn release_lease(
+        &self,
+        job_id: &str,
+        instance_id: &str,
+        reason: Option<String>,
+    ) -> Result<ReleaseJobResponse, BackendError> {
+        let url = format!("{}/jobs/{}/release", self.base_url, job_id);
+        let body = ReleaseJobRequest {
+            instance_id: instance_id.to_string(),
+            reason,
+        };
+        debug!(
+            "POST {} (instance_id={}, has_reason={})",
+            url,
+            instance_id,
+            body.reason.is_some()
+        );
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            return Err(Self::classify_error(resp).await);
+        }
+        Ok(resp.json::<ReleaseJobResponse>().await?)
     }
 }
 

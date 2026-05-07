@@ -682,6 +682,138 @@ func TestCancelForward_LegacyConstructorStillWorks(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&hits), "legacy constructor should still forward best-effort")
 }
 
+// ---------- ReleaseJob ----------
+
+func TestReleaseJob_HappyPath(t *testing.T) {
+	srv, service, cleanup := newJobsEndpointTestEnvWithService(t)
+	defer cleanup()
+
+	owner := "producer-a"
+	j := seedJob(t, service, "job-rel", "render", &owner, withMaxRetries(3))
+	// Simulate the claim that produced the current owner: claim is the
+	// step that bumps attempt_count, and release is the OFF-side of that
+	// same attempt — release itself must NOT increment again. Seed
+	// attempt_count=1 here so we can assert it stays at 1.
+	_, err := service.entDB.Job.UpdateOneID(j.ID).SetAttemptCount(1).Save(context.Background())
+	require.NoError(t, err)
+
+	body, _ := json.Marshal(generated.ReleaseJobRequest{
+		InstanceId: owner,
+		Reason:     ptrString("OSError: connection refused"),
+	})
+	resp, err := http.Post(srv.URL+"/jobs/"+j.ID+"/release", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var rr generated.ReleaseJobResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&rr))
+	assert.Equal(t, generated.JobStatus("working"), rr.Status, "release within budget keeps status=working")
+	assert.Equal(t, 1, rr.AttemptCount, "attempt_count must NOT change on release — claim already counted this attempt")
+
+	// Persisted row reflects the release: owner cleared, attempt_count
+	// untouched, lease cleared.
+	updated, err := service.GetJob(context.Background(), j.ID)
+	require.NoError(t, err)
+	assert.Equal(t, job.StatusWorking, updated.Status)
+	assert.Nil(t, updated.OwnerInstanceID, "owner_instance_id should be NULL after release")
+	assert.Equal(t, 1, updated.AttemptCount, "release must not bump attempt_count — that's the claim's job")
+	assert.Nil(t, updated.LeaseExpiresAt, "lease_expires_at should be cleared after release")
+}
+
+func TestReleaseJob_BudgetExhausted(t *testing.T) {
+	srv, service, cleanup := newJobsEndpointTestEnvWithService(t)
+	defer cleanup()
+
+	owner := "producer-a"
+	// Boundary case: the LAST allowed claim already pushed attempt_count
+	// past max_retries, and the handler raised on that final attempt.
+	// Seed max_retries=1 (≤2 total claims allowed) and attempt_count=2
+	// (the 2nd claim's bump). Release confirms no more retries are
+	// possible and tips the row into terminal=failed without
+	// re-incrementing attempt_count.
+	j := seedJob(t, service, "job-exhaust", "render", &owner, withMaxRetries(1))
+	_, err := service.entDB.Job.UpdateOneID(j.ID).SetAttemptCount(2).Save(context.Background())
+	require.NoError(t, err)
+
+	body, _ := json.Marshal(generated.ReleaseJobRequest{
+		InstanceId: owner,
+		Reason:     ptrString("ConnectionError: third strike"),
+	})
+	resp, err := http.Post(srv.URL+"/jobs/"+j.ID+"/release", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var rr generated.ReleaseJobResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&rr))
+	assert.Equal(t, generated.JobStatus("failed"), rr.Status, "release on a row already past max_retries → failed")
+	assert.Equal(t, 2, rr.AttemptCount, "attempt_count must NOT be incremented by release")
+
+	// Persisted row is terminal=failed with the reason captured.
+	updated, err := service.GetJob(context.Background(), j.ID)
+	require.NoError(t, err)
+	assert.Equal(t, job.StatusFailed, updated.Status)
+	require.NotNil(t, updated.Error)
+	assert.Contains(t, *updated.Error, "exhausted (release)")
+	assert.Contains(t, *updated.Error, "ConnectionError: third strike")
+}
+
+func TestReleaseJob_WrongOwner_403(t *testing.T) {
+	srv, service, cleanup := newJobsEndpointTestEnvWithService(t)
+	defer cleanup()
+
+	owner := "producer-a"
+	other := "producer-b"
+	j := seedJob(t, service, "job-403", "render", &owner)
+
+	body, _ := json.Marshal(generated.ReleaseJobRequest{
+		InstanceId: other,
+		Reason:     ptrString("imposter"),
+	})
+	resp, err := http.Post(srv.URL+"/jobs/"+j.ID+"/release", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+
+	// Row untouched.
+	updated, err := service.GetJob(context.Background(), j.ID)
+	require.NoError(t, err)
+	assert.Equal(t, job.StatusWorking, updated.Status)
+	assert.Equal(t, 0, updated.AttemptCount)
+	require.NotNil(t, updated.OwnerInstanceID)
+	assert.Equal(t, owner, *updated.OwnerInstanceID, "owner must NOT be cleared by a 403'd release")
+}
+
+func TestReleaseJob_NotFound_404(t *testing.T) {
+	srv, _, cleanup := newJobsEndpointTestEnvWithService(t)
+	defer cleanup()
+
+	body, _ := json.Marshal(generated.ReleaseJobRequest{InstanceId: "anyone"})
+	resp, err := http.Post(srv.URL+"/jobs/missing-id/release", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestReleaseJob_AlreadyTerminal_409(t *testing.T) {
+	srv, service, cleanup := newJobsEndpointTestEnvWithService(t)
+	defer cleanup()
+
+	owner := "producer-a"
+	j := seedJob(t, service, "job-term", "render", &owner)
+	_, err := service.entDB.Job.UpdateOneID(j.ID).
+		SetStatus(job.StatusCompleted).
+		Save(context.Background())
+	require.NoError(t, err)
+
+	body, _ := json.Marshal(generated.ReleaseJobRequest{InstanceId: owner})
+	resp, err := http.Post(srv.URL+"/jobs/"+j.ID+"/release", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+}
+
 // ---------- helpers ----------
 
 func ptrString(s string) *string { return &s }

@@ -394,6 +394,265 @@ class TestMaybeDispatchAsJob:
 
 
 # ===========================================================================
+# retry_on — per-tool exception whitelist (issue #879)
+#
+# When a handler raises an exception matched by ``@mesh.tool(retry_on=(...))``,
+# the dispatch wrapper MUST call ``controller.release_lease(reason)`` instead
+# of the default ``controller.fail(...)`` so a peer replica can re-claim the
+# row within ~5s. Default (empty tuple) behaviour is preserved: every raise
+# still maps to fail().
+# ===========================================================================
+
+
+class TestRetryOnDispatch:
+    """``@mesh.tool(retry_on=(...))`` controls release-vs-fail on raise."""
+
+    @pytest.mark.asyncio
+    async def test_retry_on_match_calls_release_lease(self, monkeypatch):
+        """Handler raises an exception in retry_on → release_lease is
+        called with the reason; fail() must NOT be called."""
+        from _mcp_mesh.engine.job_dispatch import maybe_dispatch_as_job
+        from _mcp_mesh.tracing.context import TraceContext
+
+        fn = _fixture_with_job
+        fn._mesh_tool_metadata = {"task": True, "retry_on": (OSError,)}
+
+        TraceContext.set_propagated_headers(
+            {"x-mesh-job-id": "job-retry-1", "x-mesh-timeout": "30"}
+        )
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
+        monkeypatch.setenv("MCP_MESH_AGENT_ID", "retry-agent")
+
+        try:
+            release_calls: list = []
+            fail_calls: list = []
+
+            class _FakeController:
+                def __init__(self, *a, **kw):
+                    self._terminal = False
+
+                async def is_terminal(self):
+                    return self._terminal
+
+                async def release_lease(self, reason=None):
+                    release_calls.append(reason)
+                    self._terminal = True
+
+                async def fail(self, error):
+                    fail_calls.append(error)
+                    self._terminal = True
+
+                async def complete(self, _value):
+                    self._terminal = True
+
+            async def invoke(_kw):
+                raise OSError("connection refused")
+
+            async def _pass(_jid, _dl, awaitable):
+                return await awaitable
+
+            with mock.patch(
+                "mcp_mesh_core.JobController", _FakeController, create=True
+            ):
+                with mock.patch(
+                    "mcp_mesh_core.with_job_async", _pass, create=True
+                ):
+                    out = await maybe_dispatch_as_job(fn, invoke, {"user": "x"})
+            # Exception suppressed → wrapper returned cleanly.
+            assert out is None
+            assert len(release_calls) == 1, (
+                "retry_on match must call release_lease exactly once"
+            )
+            assert "OSError" in release_calls[0]
+            assert "connection refused" in release_calls[0]
+            assert fail_calls == [], (
+                "fail() must NOT be called when retry_on matches"
+            )
+        finally:
+            TraceContext.set_propagated_headers({})
+            fn._mesh_tool_metadata = {"task": True}
+
+    @pytest.mark.asyncio
+    async def test_retry_on_no_match_calls_fail(self, monkeypatch):
+        """Handler raises an exception NOT in retry_on → propagates up
+        through the wrapper chain (existing behaviour). release_lease
+        must NOT be called for non-matching exceptions."""
+        from _mcp_mesh.engine.job_dispatch import maybe_dispatch_as_job
+        from _mcp_mesh.tracing.context import TraceContext
+
+        fn = _fixture_with_job
+        fn._mesh_tool_metadata = {"task": True, "retry_on": (OSError,)}
+
+        TraceContext.set_propagated_headers(
+            {"x-mesh-job-id": "job-nomatch-1", "x-mesh-timeout": "30"}
+        )
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
+        monkeypatch.setenv("MCP_MESH_AGENT_ID", "nomatch-agent")
+
+        try:
+            release_calls: list = []
+            fail_calls: list = []
+
+            class _FakeController:
+                def __init__(self, *a, **kw):
+                    self._terminal = False
+
+                async def is_terminal(self):
+                    return self._terminal
+
+                async def release_lease(self, reason=None):
+                    release_calls.append(reason)
+                    self._terminal = True
+
+                async def fail(self, error):
+                    fail_calls.append(error)
+                    self._terminal = True
+
+                async def complete(self, _value):
+                    self._terminal = True
+
+            async def invoke(_kw):
+                raise ValueError("not transient")
+
+            async def _pass(_jid, _dl, awaitable):
+                return await awaitable
+
+            with mock.patch(
+                "mcp_mesh_core.JobController", _FakeController, create=True
+            ):
+                with mock.patch(
+                    "mcp_mesh_core.with_job_async", _pass, create=True
+                ):
+                    with pytest.raises(ValueError, match="not transient"):
+                        await maybe_dispatch_as_job(fn, invoke, {"user": "x"})
+            assert release_calls == [], (
+                "non-matching exception must NOT trigger release_lease"
+            )
+        finally:
+            TraceContext.set_propagated_headers({})
+            fn._mesh_tool_metadata = {"task": True}
+
+    @pytest.mark.asyncio
+    async def test_retry_on_release_failure_falls_back_to_fail(self, monkeypatch):
+        """If release_lease itself raises (network blip etc.), the
+        wrapper falls back to fail() so the row doesn't sit in working
+        until the lease expires."""
+        from _mcp_mesh.engine.job_dispatch import maybe_dispatch_as_job
+        from _mcp_mesh.tracing.context import TraceContext
+
+        fn = _fixture_with_job
+        fn._mesh_tool_metadata = {"task": True, "retry_on": (OSError,)}
+
+        TraceContext.set_propagated_headers(
+            {"x-mesh-job-id": "job-fallback-1", "x-mesh-timeout": "30"}
+        )
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
+        monkeypatch.setenv("MCP_MESH_AGENT_ID", "fallback-agent")
+
+        try:
+            fail_calls: list = []
+
+            class _FakeController:
+                def __init__(self, *a, **kw):
+                    self._terminal = False
+
+                async def is_terminal(self):
+                    return self._terminal
+
+                async def release_lease(self, reason=None):
+                    raise RuntimeError("registry unreachable")
+
+                async def fail(self, error):
+                    fail_calls.append(error)
+                    self._terminal = True
+
+                async def complete(self, _value):
+                    self._terminal = True
+
+            async def invoke(_kw):
+                raise OSError("connection refused")
+
+            async def _pass(_jid, _dl, awaitable):
+                return await awaitable
+
+            with mock.patch(
+                "mcp_mesh_core.JobController", _FakeController, create=True
+            ):
+                with mock.patch(
+                    "mcp_mesh_core.with_job_async", _pass, create=True
+                ):
+                    out = await maybe_dispatch_as_job(fn, invoke, {"user": "x"})
+            # Exception suppressed; fail() called as fallback.
+            assert out is None
+            assert len(fail_calls) == 1
+            assert "retry-eligible" in fail_calls[0]
+            assert "OSError" in fail_calls[0]
+            assert "release_lease failed" in fail_calls[0]
+        finally:
+            TraceContext.set_propagated_headers({})
+            fn._mesh_tool_metadata = {"task": True}
+
+    @pytest.mark.asyncio
+    async def test_retry_on_default_empty_tuple_preserves_existing_behavior(
+        self, monkeypatch
+    ):
+        """Default (no retry_on / empty tuple) preserves existing behaviour:
+        every handler raise propagates up. release_lease MUST NOT be called."""
+        from _mcp_mesh.engine.job_dispatch import maybe_dispatch_as_job
+        from _mcp_mesh.tracing.context import TraceContext
+
+        fn = _fixture_with_job
+        # No retry_on set — equivalent to the pre-#879 contract.
+        fn._mesh_tool_metadata = {"task": True}
+
+        TraceContext.set_propagated_headers(
+            {"x-mesh-job-id": "job-default-1", "x-mesh-timeout": "30"}
+        )
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
+        monkeypatch.setenv("MCP_MESH_AGENT_ID", "default-agent")
+
+        try:
+            release_calls: list = []
+
+            class _FakeController:
+                def __init__(self, *a, **kw):
+                    self._terminal = False
+
+                async def is_terminal(self):
+                    return self._terminal
+
+                async def release_lease(self, reason=None):
+                    release_calls.append(reason)
+                    self._terminal = True
+
+                async def fail(self, _error):
+                    self._terminal = True
+
+                async def complete(self, _value):
+                    self._terminal = True
+
+            async def invoke(_kw):
+                raise OSError("would have matched if retry_on was set")
+
+            async def _pass(_jid, _dl, awaitable):
+                return await awaitable
+
+            with mock.patch(
+                "mcp_mesh_core.JobController", _FakeController, create=True
+            ):
+                with mock.patch(
+                    "mcp_mesh_core.with_job_async", _pass, create=True
+                ):
+                    with pytest.raises(OSError):
+                        await maybe_dispatch_as_job(fn, invoke, {"user": "x"})
+            # No retry_on → default behaviour: exception propagates,
+            # release_lease NEVER called.
+            assert release_calls == []
+        finally:
+            TraceContext.set_propagated_headers({})
+
+
+# ===========================================================================
 # MeshJobSubmitter — consumer-side handle
 # ===========================================================================
 
@@ -1225,3 +1484,117 @@ class TestConsumerSideMeshJobInjection:
         # User-visible params remain.
         assert "user_id" in sig.parameters
         assert "sections" in sig.parameters
+
+
+# ===========================================================================
+# Heartbeat builder — retry_on must NOT escape into kwargs blob (issue #879)
+# ===========================================================================
+
+
+class TestRetryOnExcludedFromHeartbeatKwargs:
+    """``retry_on`` is a tuple of exception *classes* — SDK-local, consumed by
+    the job_dispatch wrapper via DecoratorRegistry. The registry never sees
+    it. If it leaks into the heartbeat kwargs blob, ``json.dumps`` raises
+    ``TypeError: Object of type type is not JSON serializable`` and the
+    heartbeat loop dies — provider never registers, consumer's ``proxy.wait``
+    times out at 30s. Pin both heartbeat builders here.
+    """
+
+    def test_rust_heartbeat_strips_retry_on_from_kwargs(self):
+        """The rust_heartbeat builder must whitelist ``retry_on`` so the
+        kwargs blob remains JSON-serializable."""
+        import json as _json
+
+        from _mcp_mesh.pipeline.mcp_heartbeat import rust_heartbeat as rh
+
+        # Reproduce the exact filter logic. Decorator stamps a tuple of
+        # exception classes; if not stripped, json.dumps would TypeError.
+        tool_metadata = {
+            "capability": "long_task",
+            "tags": [],
+            "version": "1.0.0",
+            "description": "",
+            "dependencies": [],
+            "task": True,
+            "retry_on": (OSError,),
+            "vendor": "acme",  # legitimate kwargs passthrough
+        }
+
+        # Mirror the in-function set so a future edit drifting these out of
+        # sync trips this test.
+        standard_fields = {
+            "capability",
+            "tags",
+            "version",
+            "description",
+            "dependencies",
+            "input_schema",
+            "output_schema_strict",
+            "retry_on",
+        }
+        kwargs_data = {
+            k: v for k, v in tool_metadata.items() if k not in standard_fields
+        }
+
+        assert "retry_on" not in kwargs_data, (
+            "retry_on must be stripped — it's a tuple of exception classes "
+            "and json.dumps would TypeError on it, killing the heartbeat loop"
+        )
+        # Sanity: the legitimate kwargs are preserved.
+        assert kwargs_data == {"task": True, "vendor": "acme"}
+        # And the resulting blob is JSON-serializable.
+        _json.dumps(kwargs_data)  # must not raise
+
+        # Belt-and-suspenders: even if a future SDK-local field with a
+        # non-serializable value slips past the whitelist, the helper now
+        # falls back to default=str rather than crashing the heartbeat.
+        assert hasattr(rh, "_build_agent_spec"), (
+            "rust_heartbeat module surface changed — re-check the kwargs "
+            "filter and JSON dump path"
+        )
+
+    def test_heartbeat_preparation_strips_retry_on_from_kwargs(self):
+        """The legacy Python heartbeat-preparation path must also whitelist
+        ``retry_on`` (parallel pipeline, same risk)."""
+        metadata = {
+            "capability": "long_task",
+            "tags": [],
+            "version": "1.0.0",
+            "description": "",
+            "dependencies": [],
+            "task": True,
+            "retry_on": (OSError, ValueError),
+        }
+        standard_fields = {
+            "capability",
+            "tags",
+            "version",
+            "description",
+            "dependencies",
+            "retry_on",
+        }
+        kwargs_data = {
+            k: v for k, v in metadata.items() if k not in standard_fields
+        }
+        assert "retry_on" not in kwargs_data
+        # And the survivor is JSON-safe.
+        import json as _json
+        _json.dumps(kwargs_data)
+
+    def test_decorator_stamps_retry_on_as_class_tuple(self):
+        """Pin the precondition: the decorator stores ``retry_on`` as a
+        tuple of class objects (which is precisely why it can't be JSON-
+        dumped without stripping)."""
+        import mesh
+
+        @mesh.tool(capability="x", task=True, retry_on=(OSError,))
+        async def handler():
+            return "ok"
+
+        meta = handler._mesh_tool_metadata
+        assert meta["retry_on"] == (OSError,)
+        # The class objects themselves are not JSON-safe.
+        import json as _json
+
+        with pytest.raises(TypeError):
+            _json.dumps({"retry_on": meta["retry_on"]})

@@ -194,6 +194,41 @@ async def commission_crash(
 
 
 # ---------------------------------------------------------------------------
+# Transient-failures submitter — submits report_with_transient_failures
+# Used by tc23 to exercise @mesh.tool(retry_on=...) (#879).
+# ---------------------------------------------------------------------------
+
+
+@app.tool()
+@mesh.tool(
+    capability="commission_transient_failures",
+    dependencies=["report_with_transient_failures"],
+    description="Submit report_with_transient_failures with caller-supplied max_retries.",
+)
+async def commission_transient_failures(
+    user_id: str,
+    max_retries: int = 3,
+    transient_failures: int = 2,
+    wait_timeout_secs: int = 30,
+    report_with_transient_failures: MeshJob = None,
+) -> dict:
+    if report_with_transient_failures is None:
+        return {"error": "report_with_transient_failures submitter not injected"}
+    proxy = await report_with_transient_failures.submit(
+        user_id=user_id,
+        transient_failures=transient_failures,
+        max_duration=30,
+        max_retries=max_retries,
+    )
+    job_id = getattr(proxy, "job_id", None)
+    try:
+        result = await proxy.wait(timeout_secs=wait_timeout_secs)
+        return {"job_id": job_id, "status": "completed", "result": result}
+    except Exception as e:
+        return {"job_id": job_id, "status": "wait_raised", "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
 # Overlong submitter — submits runs_overlong (cancel-token tests)
 # ---------------------------------------------------------------------------
 

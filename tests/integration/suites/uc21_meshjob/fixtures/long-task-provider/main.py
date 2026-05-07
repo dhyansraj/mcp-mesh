@@ -174,6 +174,61 @@ async def report_that_crashes(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Transient-failure path — exercises @mesh.tool(retry_on=...) (#879)
+# ---------------------------------------------------------------------------
+#
+# Drives the fast-retry path: handler raises a retry_on-matched exception
+# on the first ``transient_failures`` attempts, then succeeds. We share the
+# attempt counter via a file under /tmp because the retry path runs each
+# attempt in a fresh handler invocation (potentially across replicas in
+# a real cluster — same process here in the integration suite, but the
+# file-based counter keeps the test resilient if the dispatcher ever
+# spawns the retry on a peer).
+_RETRY_COUNTER_PATH = "/tmp/mesh-retry-on-counter"
+
+
+def _bump_retry_counter() -> int:
+    """Atomic-ish file-based counter shared across attempts. Returns the
+    NEW (post-increment) value so the handler can decide whether this
+    attempt is in the transient window or the success window."""
+    try:
+        with open(_RETRY_COUNTER_PATH, "r") as f:
+            n = int((f.read() or "0").strip())
+    except FileNotFoundError:
+        n = 0
+    n += 1
+    with open(_RETRY_COUNTER_PATH, "w") as f:
+        f.write(str(n))
+    return n
+
+
+@app.tool()
+@mesh.tool(
+    capability="report_with_transient_failures",
+    task=True,
+    retry_on=(OSError,),
+    description="Raises OSError on the first 2 attempts, succeeds on the 3rd — exercises retry_on.",
+)
+async def report_with_transient_failures(
+    user_id: str,
+    transient_failures: int = 2,
+    job: MeshJob = None,
+) -> dict[str, Any]:
+    if job is not None:
+        await job.update_progress(0.1, "checking transient counter")
+    n = _bump_retry_counter()
+    if n <= transient_failures:
+        # Raise an OSError so the SDK's retry_on=(OSError,) match triggers
+        # a release_lease instead of fail() — the registry resets owner
+        # and a peer (or this same agent on the next claim cycle) re-tries.
+        raise OSError(f"simulated transient failure {n}/{transient_failures}")
+    payload = {"user_id": user_id, "succeeded_on_attempt": n}
+    if job is not None:
+        await job.complete(payload)
+    return payload
+
+
 @app.tool()
 @mesh.tool(
     capability="runs_overlong",

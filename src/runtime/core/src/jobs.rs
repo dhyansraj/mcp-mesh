@@ -24,7 +24,8 @@ use tracing::{debug, info, warn};
 use crate::cancel_registry;
 use crate::job_context::{self, JobContext};
 use crate::task_backend::{
-    BackendError, CreateJobRequest, CreateJobResponse, Job, JobDelta, JobStatus, TaskBackend,
+    BackendError, CreateJobRequest, CreateJobResponse, Job, JobDelta, JobStatus,
+    ReleaseJobResponse, TaskBackend,
 };
 
 // =============================================================================
@@ -353,6 +354,48 @@ impl JobController {
     pub async fn is_terminal(&self) -> bool {
         let q = self.queue.lock().await;
         q.terminal.contains(&self.job_id)
+    }
+
+    /// Voluntarily release the lease for retry. Used when the user
+    /// handler raised an exception matched by the tool's `retry_on`
+    /// whitelist (#879) — instead of marking the job `failed` (which
+    /// terminates it), we drop the lease so a peer replica can re-claim
+    /// within ~5s via the HEAD-heartbeat path.
+    ///
+    /// Locally we mark the queue terminal BEFORE the backend call, same
+    /// as `flush_terminal`: this slams the door on any racing
+    /// `update_progress` so a late progress delta can't arrive at the
+    /// registry AFTER we've voluntarily released ownership (where it
+    /// would be rejected as `not_owner` at best, or stomp on a peer's
+    /// in-flight retry attempt at worst).
+    ///
+    /// The registry's response carries the post-update status. Status
+    /// stays `working` when there's retry budget left (claim already
+    /// incremented `attempt_count` when picking the row up; release does
+    /// NOT increment). Transitions to `failed` (terminal, with
+    /// `error="exhausted (release): <reason>"`) when the row's existing
+    /// `attempt_count` is already past `max_retries` — i.e. the handler
+    /// raised on the row's final allowed attempt. Either way, this
+    /// controller is single-use after release — the queue is locked
+    /// terminal so subsequent `update_progress` / `complete` / `fail`
+    /// calls become no-ops.
+    pub async fn release_lease(
+        &self,
+        reason: Option<String>,
+    ) -> Result<ReleaseJobResponse, JobError> {
+        // Mark terminal locally first to mirror the flush_terminal pattern
+        // (#880): prevents any racing update_progress from re-enqueuing a
+        // delta that would land at the registry after we've released
+        // ownership.
+        {
+            let mut q = self.queue.lock().await;
+            q.mark_terminal(&self.job_id);
+        }
+        let resp = self
+            .backend
+            .release_lease(&self.job_id, &self.instance_id, reason)
+            .await?;
+        Ok(resp)
     }
 }
 
@@ -725,6 +768,8 @@ mod tests {
         jobs: StdMutex<HashMap<String, Job>>,
         batches: StdMutex<Vec<(String, Vec<JobDelta>)>>,
         cancels: StdMutex<Vec<(String, Option<String>)>>,
+        /// Voluntary release calls: (job_id, instance_id, reason)
+        releases: StdMutex<Vec<(String, String, Option<String>)>>,
         next_id: AtomicUsize,
         /// Auto-progress to terminal on the Nth `get_job` call. 0 = never.
         terminal_after: AtomicUsize,
@@ -747,6 +792,7 @@ mod tests {
                 jobs: StdMutex::new(HashMap::new()),
                 batches: StdMutex::new(Vec::new()),
                 cancels: StdMutex::new(Vec::new()),
+                releases: StdMutex::new(Vec::new()),
                 next_id: AtomicUsize::new(0),
                 terminal_after: AtomicUsize::new(0),
                 get_calls: AtomicUsize::new(0),
@@ -928,6 +974,39 @@ mod tests {
             Ok(CancelJobResponse {
                 status: JobStatus::Cancelled,
                 forwarded_to_instance_id: None,
+            })
+        }
+
+        async fn release_lease(
+            &self,
+            job_id: &str,
+            instance_id: &str,
+            reason: Option<String>,
+        ) -> Result<ReleaseJobResponse, BackendError> {
+            self.releases.lock().unwrap().push((
+                job_id.to_string(),
+                instance_id.to_string(),
+                reason,
+            ));
+            // Simulate the registry's atomic update: clear owner and
+            // recompute status against the EXISTING attempt_count. Release
+            // does NOT increment — the claim that picked the row up already
+            // counted this attempt (mirrors Go's EntService.ReleaseJob).
+            // Tests can pre-seed `attempt_count` to drive the exhausted
+            // branch.
+            let mut jobs = self.jobs.lock().unwrap();
+            let (status, attempt_count) = if let Some(j) = jobs.get_mut(job_id) {
+                j.owner_instance_id = None;
+                if j.attempt_count > j.max_retries {
+                    j.status = JobStatus::Failed;
+                }
+                (j.status, j.attempt_count)
+            } else {
+                (JobStatus::Working, 0)
+            };
+            Ok(ReleaseJobResponse {
+                status,
+                attempt_count,
             })
         }
     }
@@ -1185,6 +1264,91 @@ mod tests {
         let (_, deltas) = backend.last_batch().unwrap();
         assert_eq!(deltas.len(), 1);
         assert!(deltas[0].is_terminal());
+    }
+
+    #[tokio::test]
+    async fn release_lease_marks_terminal_locally_so_no_post_release_progress() {
+        // After release_lease(), any racing update_progress must be
+        // dropped — we've voluntarily handed ownership back, and a stale
+        // progress delta arriving at the registry after a peer replica
+        // claims the row would either be rejected as `not_owner` or, in
+        // a concurrency window, stomp on the peer's in-flight attempt.
+        // Mirrors the flush_terminal pattern from #880.
+        let backend = MockBackend::new();
+        let queue = new_coalescing_queue();
+        let resp = backend
+            .create_job(CreateJobRequest {
+                capability: "cap".into(),
+                submitted_payload: serde_json::json!({}),
+                submitted_by: "inst-1".into(),
+                max_retries: Some(3),
+                max_duration: None,
+                total_deadline: None,
+                owner_instance_id: Some("inst-1".into()),
+            })
+            .await
+            .unwrap();
+        let ctrl = JobController::new(
+            resp.id.clone(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            queue.clone(),
+        );
+
+        let release_resp = ctrl
+            .release_lease(Some("OSError: connection refused".into()))
+            .await
+            .unwrap();
+        // Within budget → status stays working. attempt_count UNCHANGED —
+        // claim already counted this attempt; release does NOT increment.
+        assert_eq!(release_resp.status, JobStatus::Working);
+        assert_eq!(release_resp.attempt_count, 0);
+
+        // Local terminal sentinel set so post-release update_progress is dropped.
+        assert!(ctrl.is_terminal().await);
+
+        // A racing update_progress lands AFTER release: queue must remain empty.
+        ctrl.update_progress(0.99, Some("ghost".into())).await;
+        let q = queue.lock().await;
+        assert_eq!(q.len(), 0, "post-release progress delta must be dropped");
+    }
+
+    #[tokio::test]
+    async fn release_lease_calls_backend_with_correct_reason() {
+        // The reason argument must reach the backend verbatim — the
+        // registry uses it to build the exhausted-error message when
+        // the row's existing attempt_count is already past max_retries
+        // (release does NOT increment; claim already counted the attempt).
+        let backend = MockBackend::new();
+        let queue = new_coalescing_queue();
+        let resp = backend
+            .create_job(CreateJobRequest {
+                capability: "cap".into(),
+                submitted_payload: serde_json::json!({}),
+                submitted_by: "inst-1".into(),
+                max_retries: Some(2),
+                max_duration: None,
+                total_deadline: None,
+                owner_instance_id: Some("inst-7".into()),
+            })
+            .await
+            .unwrap();
+        let ctrl = JobController::new(
+            resp.id.clone(),
+            "inst-7".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            queue,
+        );
+        ctrl.release_lease(Some("ConnectionError: refused".into()))
+            .await
+            .unwrap();
+
+        let releases = backend.releases.lock().unwrap();
+        assert_eq!(releases.len(), 1);
+        let (job_id, instance_id, reason) = &releases[0];
+        assert_eq!(job_id, &resp.id);
+        assert_eq!(instance_id, "inst-7");
+        assert_eq!(reason.as_deref(), Some("ConnectionError: refused"));
     }
 
     #[tokio::test]

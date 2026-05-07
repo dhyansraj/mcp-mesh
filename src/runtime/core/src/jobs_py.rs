@@ -269,6 +269,36 @@ impl PyJobController {
         })
     }
 
+    /// Voluntarily release the lease so a peer replica can re-claim and
+    /// retry. Used when a handler raised a ``retry_on``-matched exception
+    /// (issue #879): instead of marking the row terminal=failed, the SDK
+    /// calls ``release_lease`` so the registry resets ``owner_instance_id``
+    /// and a peer replica picks up the row within ~5s via the
+    /// HEAD-heartbeat path. Note: release does NOT increment
+    /// ``attempt_count`` — the claim that picked the row up already
+    /// counted this attempt; the next claim will count the next attempt.
+    ///
+    /// Returns ``None`` (not the response object) — the SDK only needs to
+    /// know that the call succeeded; the per-attempt state is the registry's
+    /// concern. Status stays ``working`` when there's retry budget left,
+    /// or transitions to ``failed`` (terminal, with
+    /// ``error="exhausted (release): <reason>"``) when the row's existing
+    /// ``attempt_count`` is already past ``max_retries`` — i.e. the
+    /// handler raised on the row's final allowed attempt. The consumer's
+    /// wait loop sees the exhaustion via the next poll.
+    #[pyo3(signature = (reason=None))]
+    fn release_lease<'py>(
+        &self,
+        py: Python<'py>,
+        reason: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            inner.release_lease(reason).await.map_err(job_error_to_py)?;
+            Ok(())
+        })
+    }
+
     /// Whether ``complete`` / ``fail`` has already been called on this
     /// controller. The Python dispatch wrapper uses this to decide
     /// whether a returning user function needs an auto-``complete`` —
