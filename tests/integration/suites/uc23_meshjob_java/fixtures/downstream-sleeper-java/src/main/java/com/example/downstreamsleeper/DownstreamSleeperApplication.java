@@ -49,6 +49,9 @@ public class DownstreamSleeperApplication {
     public Map<String, Object> slowDownstream(
             @Param("user_id") String userId,
             @Param(value = "seconds", required = false) Integer seconds) {
+        if (seconds != null && seconds < 0) {
+            throw new IllegalArgumentException("seconds must be >= 0");
+        }
         int totalSecs = seconds == null ? 30 : seconds;
         System.err.println("[downstream-sleeper-java] starting " + totalSecs
                 + "s sleep for user=" + userId);

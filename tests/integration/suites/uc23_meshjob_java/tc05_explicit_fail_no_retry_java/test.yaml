@@ -93,6 +93,22 @@ test:
       meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
     capture: final_status
 
+  # Whitespace-tolerant attempt_count check — JSON serializers may emit
+  # `"attempt_count": 1` (with space). Mirrors tc11's jq-based pattern
+  # from commit 2e0140cb. Read straight from registry to avoid the
+  # meshctl envelope (which would require fromjson gymnastics).
+  - name: "Verify attempt_count == 1 (explicit fail must NOT retry)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.commission_response}' | jq -r '.content[0].text | fromjson | .job_id')
+      COUNT=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.attempt_count')
+      if [ "$COUNT" != "1" ]; then
+        echo "ERROR: attempt_count=$COUNT (expected 1; explicit fail must NOT retry)"
+        exit 1
+      fi
+      echo "attempt_count=1 (correct, no retry)"
+
 assertions:
   - expr: "${captured.final_status} contains 'failed'"
     message: "status should be failed"
@@ -100,8 +116,6 @@ assertions:
     message: "error should preserve the exact reason from controller.fail()"
   - expr: "${captured.final_status} contains 'attempt_count'"
     message: "response should include attempt_count"
-  - expr: "${captured.final_status} contains '\\\"attempt_count\\\":1'"
-    message: "attempt_count must stay at 1 — explicit fail must NOT retry"
 
 post_run:
   - routine: stop_all

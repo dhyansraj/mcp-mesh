@@ -15,7 +15,7 @@ tags:
   - java
   - typescript
   - issue-890
-timeout: 480
+timeout: 720  # accommodate the 600s maven-install step + downstream test work
 
 pre_run:
   - routine: global.setup_for_typescript_agent

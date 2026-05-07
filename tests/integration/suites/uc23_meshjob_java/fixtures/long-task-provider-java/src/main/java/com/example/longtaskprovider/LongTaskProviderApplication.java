@@ -333,11 +333,16 @@ public class LongTaskProviderApplication {
                 controller.complete(result);
             }
             return result;
-        } catch (IOException | InterruptedException e) {
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             if (controller != null) {
                 controller.fail("downstream call failed: " + e.getMessage());
             }
-            Thread.currentThread().interrupt();
+            return null;
+        } catch (IOException e) {
+            if (controller != null) {
+                controller.fail("downstream call failed: " + e.getMessage());
+            }
             return null;
         }
     }
