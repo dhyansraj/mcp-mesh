@@ -44,8 +44,18 @@ public final class JobController implements MeshJob, AutoCloseable {
     private static final ObjectMapper MAPPER = MeshObjectMappers.create();
 
     private final MeshCore core;
-    private final Pointer handle;
+    /**
+     * Native handle. {@code null} after {@link #close} runs. Read/written
+     * only while holding {@link #lock} so a concurrent {@code close()}
+     * cannot free the pointer while another thread is mid-FFI-call.
+     * Without this lock the SDK had a use-after-free under contention
+     * (PR #891 review): thread A passes {@link #ensureOpen} then enters
+     * the native call; thread B closes and frees; thread A's pointer
+     * dereference hits freed memory.
+     */
+    private Pointer handle;
     private final String jobId;
+    private final Object lock = new Object();
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     private JobController(MeshCore core, Pointer handle, String jobId) {
@@ -101,10 +111,12 @@ public final class JobController implements MeshJob, AutoCloseable {
      * @throws MeshException if the controller is closed or the native call fails
      */
     public void updateProgress(double progress, String message) {
-        ensureOpen();
-        int rc = core.mesh_job_controller_update_progress(handle, progress, message);
-        if (rc != 0) {
-            throw new MeshException("mesh_job_controller_update_progress failed: " + lastError(core));
+        synchronized (lock) {
+            ensureOpen();
+            int rc = core.mesh_job_controller_update_progress(handle, progress, message);
+            if (rc != 0) {
+                throw new MeshException("mesh_job_controller_update_progress failed: " + lastError(core));
+            }
         }
     }
 
@@ -117,7 +129,9 @@ public final class JobController implements MeshJob, AutoCloseable {
      * @throws MeshException if serialization or the native call fails
      */
     public void complete(Object result) {
-        ensureOpen();
+        // Serialize OUTSIDE the lock — Jackson is thread-safe and the
+        // `writeValueAsString` call can be expensive for large payloads;
+        // we don't want to hold the FFI lock across user-data work.
         String json;
         try {
             // null → JSON null. Jackson handles this directly.
@@ -125,9 +139,12 @@ public final class JobController implements MeshJob, AutoCloseable {
         } catch (Exception e) {
             throw new MeshException("Failed to serialize job result", e);
         }
-        int rc = core.mesh_job_controller_complete(handle, json);
-        if (rc != 0) {
-            throw new MeshException("mesh_job_controller_complete failed: " + lastError(core));
+        synchronized (lock) {
+            ensureOpen();
+            int rc = core.mesh_job_controller_complete(handle, json);
+            if (rc != 0) {
+                throw new MeshException("mesh_job_controller_complete failed: " + lastError(core));
+            }
         }
     }
 
@@ -141,13 +158,15 @@ public final class JobController implements MeshJob, AutoCloseable {
      * @throws MeshException if the native call fails
      */
     public void fail(String error) {
-        ensureOpen();
         if (error == null) {
             error = "";
         }
-        int rc = core.mesh_job_controller_fail(handle, error);
-        if (rc != 0) {
-            throw new MeshException("mesh_job_controller_fail failed: " + lastError(core));
+        synchronized (lock) {
+            ensureOpen();
+            int rc = core.mesh_job_controller_fail(handle, error);
+            if (rc != 0) {
+                throw new MeshException("mesh_job_controller_fail failed: " + lastError(core));
+            }
         }
     }
 
@@ -161,12 +180,14 @@ public final class JobController implements MeshJob, AutoCloseable {
      * @throws MeshException if the native call fails
      */
     public boolean isTerminal() {
-        ensureOpen();
-        int rc = core.mesh_job_controller_is_terminal(handle);
-        if (rc < 0) {
-            throw new MeshException("mesh_job_controller_is_terminal failed: " + lastError(core));
+        synchronized (lock) {
+            ensureOpen();
+            int rc = core.mesh_job_controller_is_terminal(handle);
+            if (rc < 0) {
+                throw new MeshException("mesh_job_controller_is_terminal failed: " + lastError(core));
+            }
+            return rc == 1;
         }
-        return rc == 1;
     }
 
     /**
@@ -175,19 +196,36 @@ public final class JobController implements MeshJob, AutoCloseable {
      */
     @Override
     public void close() {
-        if (closed.compareAndSet(false, true)) {
-            try {
-                core.mesh_job_controller_free(handle);
-            } catch (RuntimeException e) {
-                // Don't swallow — but log so callers see the unusual case.
-                log.warn("mesh_job_controller_free threw for job {}: {}", jobId, e.getMessage());
-                throw e;
+        // Hold `lock` across the free so any in-flight FFI call
+        // (updateProgress / complete / fail / isTerminal) finishes
+        // before we drop the handle. The `closed` flag preserves
+        // idempotent semantics for repeated close() calls; it's still
+        // checked inside the lock by `ensureOpen` so a thread that
+        // wins the race observes the closed state.
+        synchronized (lock) {
+            if (closed.compareAndSet(false, true)) {
+                Pointer h = handle;
+                handle = null;
+                try {
+                    if (h != null) {
+                        core.mesh_job_controller_free(h);
+                    }
+                } catch (RuntimeException e) {
+                    // Don't swallow — but log so callers see the unusual case.
+                    log.warn("mesh_job_controller_free threw for job {}: {}", jobId, e.getMessage());
+                    throw e;
+                }
             }
         }
     }
 
+    /**
+     * Caller MUST hold {@link #lock} — this checks both the
+     * idempotent-close flag and the live handle before letting an FFI
+     * call dereference it.
+     */
     private void ensureOpen() {
-        if (closed.get()) {
+        if (closed.get() || handle == null) {
             throw new MeshException("JobController for job " + jobId + " is closed");
         }
     }

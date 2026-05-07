@@ -274,17 +274,46 @@ public final class ClaimDispatcher implements AutoCloseable {
                     // finally — without this, every claimed job would
                     // accumulate a Future entry holding the full payload
                     // map for the lifetime of the JVM (PR review #874).
+                    //
+                    // Construct the FutureTask FIRST and add it to
+                    // `inflight` BEFORE handing it to the executor. With
+                    // the previous `executor.submit() then add`
+                    // pattern, a fast worker could run the whole
+                    // handler + finally.remove() before the caller's
+                    // add() landed — leaving a completed-but-never-
+                    // removed Future leaked in the set (PR #891 review).
+                    final java.util.concurrent.FutureTask<?> task =
+                        new java.util.concurrent.FutureTask<Void>(() -> {
+                            try {
+                                dispatch(claimed);
+                            } finally {
+                                permits.release();
+                                // `task` is in scope via the lambda
+                                // capture; this is safe because the
+                                // FutureTask reference is established
+                                // before .execute() runs the body.
+                            }
+                            return null;
+                        });
+                    inflight.add(task);
                     permitTransferred = true;
-                    final Future<?>[] holder = new Future<?>[1];
-                    holder[0] = dispatchExecutor.submit(() -> {
-                        try {
-                            dispatch(claimed);
-                        } finally {
-                            permits.release();
-                            inflight.remove(holder[0]);
-                        }
-                    });
-                    inflight.add(holder[0]);
+                    try {
+                        dispatchExecutor.execute(() -> {
+                            try {
+                                task.run();
+                            } finally {
+                                inflight.remove(task);
+                            }
+                        });
+                    } catch (RuntimeException rejected) {
+                        // Executor refused (shutdown race). Undo the
+                        // bookkeeping so we don't leak a Future that
+                        // never completes.
+                        inflight.remove(task);
+                        permits.release();
+                        permitTransferred = false;
+                        throw rejected;
+                    }
                 } else {
                     // No work — release permit and back off.
                     permits.release();
@@ -398,8 +427,36 @@ public final class ClaimDispatcher implements AutoCloseable {
                     return null;
                 });
             } catch (Throwable t) {
-                log.warn("[mesh-claim] handler raised for job={} capability={}: {}",
-                    jobId, capability, t.getMessage());
+                // `runHandler` itself catches user-method exceptions and
+                // calls `controller.fail(...)` — anything that lands here
+                // is a dispatcher-internal error (JobContext binding,
+                // reflection on the handler lambda, etc.). Without an
+                // eager fail() the job stays in `working` until the
+                // registry's lease sweep notices, which can be minutes.
+                // (PR #891 review.)
+                log.error("[mesh-claim] dispatcher-internal error for job={} capability={}: {}",
+                    jobId, capability, t, t);
+                String reason = "dispatcher-internal: " + (t.getMessage() != null
+                    ? t.getMessage()
+                    : t.getClass().getSimpleName());
+                // Try the open controller first (cheap, already authenticated);
+                // fall back to a direct /jobs/batch POST if the controller is
+                // already terminal or its FFI call also fails.
+                boolean reported = false;
+                try {
+                    if (!controller.isTerminal()) {
+                        controller.fail(reason);
+                        reported = true;
+                    } else {
+                        reported = true;  // already terminal — nothing more to do
+                    }
+                } catch (Throwable failErr) {
+                    log.warn("[mesh-claim] controller.fail() failed for job={}: {}; " +
+                        "falling back to /jobs/batch", jobId, failErr.getMessage());
+                }
+                if (!reported) {
+                    failJobByIdDirectly(jobId, reason);
+                }
             }
         } finally {
             controller.close();

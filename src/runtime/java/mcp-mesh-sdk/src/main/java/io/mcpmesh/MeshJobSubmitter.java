@@ -12,7 +12,9 @@ import tools.jackson.databind.node.ObjectNode;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Consumer-side submitter: injected via {@link MeshJob} DDDI for tools that
@@ -29,9 +31,12 @@ import java.util.concurrent.ForkJoinPool;
  * <p><b>Async ergonomics:</b> the underlying C ABI is sync (the FFI runtime
  * blocks on the registry call). The {@link #submit(Map)} entry point wraps
  * that in a {@link CompletableFuture} so application code can compose it
- * with other async work without holding a thread. The CF is completed by
- * the common {@link ForkJoinPool} — callers that want a different executor
- * can chain {@code thenApplyAsync(.., yourExecutor)}.
+ * with other async work without holding a thread. The CF is completed on
+ * a dedicated {@link #IO_EXECUTOR} cached thread pool — NOT the common
+ * {@link java.util.concurrent.ForkJoinPool}, because {@code mesh_submit_job}
+ * blocks on a network FFI call and a sustained burst of submissions
+ * would otherwise saturate the FJP and stall every other CompletableFuture
+ * in the JVM (PR #891 review).
  *
  * <p>The submitter itself is stateless after construction (capability +
  * registry URL only); a single instance can be used for many submissions.
@@ -40,6 +45,29 @@ public final class MeshJobSubmitter implements MeshJob {
 
     private static final Logger log = LoggerFactory.getLogger(MeshJobSubmitter.class);
     private static final ObjectMapper MAPPER = MeshObjectMappers.create();
+
+    /**
+     * Dedicated executor for the blocking {@code mesh_submit_job} FFI
+     * call. Cached pool — grows on demand under burst, threads die
+     * after 60s idle. Daemon threads so the JVM can shut down without
+     * waiting on idle workers.
+     *
+     * <p>Java 17 baseline (no virtual threads); when the project moves
+     * to Java 21+ this can become {@code Thread.ofVirtual().factory()}
+     * and the cached pool can shrink to a small fixed pool driving the
+     * VTs.
+     */
+    private static final Executor IO_EXECUTOR = Executors.newCachedThreadPool(
+        new java.util.concurrent.ThreadFactory() {
+            private final AtomicInteger seq = new AtomicInteger();
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread t = new Thread(r, "mesh-job-submit-io-" + seq.incrementAndGet());
+                t.setDaemon(true);
+                return t;
+            }
+        }
+    );
 
     private final MeshCore core;
     private final String capability;
@@ -114,7 +142,7 @@ public final class MeshJobSubmitter implements MeshJob {
             return CompletableFuture.failedFuture(
                 new MeshException("Failed to encode submit args", e));
         }
-        return CompletableFuture.supplyAsync(() -> doSubmit(argsJson));
+        return CompletableFuture.supplyAsync(() -> doSubmit(argsJson), IO_EXECUTOR);
     }
 
     private JobProxy doSubmit(String argsJson) {

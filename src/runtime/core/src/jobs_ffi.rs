@@ -599,10 +599,22 @@ pub unsafe extern "C" fn mesh_job_proxy_wait(
     let handle = &*handle;
     // Uniform "no timeout" policy with mesh_run_as_job: `secs <= 0.0`
     // (covers -0.0 which `< 0.0` would miss in IEEE-754) or non-finite.
+    // Use try_from_secs_f64 — `from_secs_f64` panics on overflow (e.g.
+    // `f64::MAX`); we surface the failure cleanly via the last-error
+    // slot so a buggy caller can't crash the host process. (PR #891 review.)
     let timeout = if !timeout_secs.is_finite() || timeout_secs <= 0.0 {
         None
     } else {
-        Some(Duration::from_secs_f64(timeout_secs))
+        match Duration::try_from_secs_f64(timeout_secs) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                set_last_error(format!(
+                    "mesh_job_proxy_wait: invalid timeout_secs ({}): {}",
+                    timeout_secs, e
+                ));
+                return -1;
+            }
+        }
     };
     let inner = handle.inner.clone();
     let result = jobs_runtime().block_on(async move { inner.wait(timeout).await });
@@ -821,10 +833,20 @@ pub unsafe extern "C" fn mesh_run_as_job(
         }
     }
 
+    // `try_from_secs_f64` rather than `from_secs_f64` — the latter panics
+    // for very-large finite values (e.g. `f64::MAX`); a buggy caller
+    // shouldn't be able to abort the host process. (PR #891 review.)
     let ctx = match wire.deadline_secs {
-        Some(secs) if secs > 0.0 => {
-            JobContext::with_timeout(wire.job_id, Duration::from_secs_f64(secs))
-        }
+        Some(secs) if secs > 0.0 => match Duration::try_from_secs_f64(secs) {
+            Ok(d) => JobContext::with_timeout(wire.job_id, d),
+            Err(e) => {
+                set_last_error(format!(
+                    "mesh_run_as_job: invalid deadline_secs ({}) for job {}: {}",
+                    secs, wire.job_id, e
+                ));
+                return -1;
+            }
+        },
         _ => JobContext::new(wire.job_id),
     };
 
@@ -970,6 +992,43 @@ mod tests {
         assert!(would_be_no_timeout(f64::NEG_INFINITY));
         assert!(!would_be_no_timeout(0.001));
         assert!(!would_be_no_timeout(60.0));
+    }
+
+    /// `f64::MAX` deadline must NOT panic — `Duration::from_secs_f64`
+    /// panics on values that overflow `u64` seconds; we now use the
+    /// fallible `try_from_secs_f64` and surface the failure via the
+    /// last-error slot. (PR #891 review.)
+    #[test]
+    fn run_as_job_rejects_overflowing_deadline() {
+        extern "C" fn cb(_: *mut c_void) -> i32 { 0 }
+        // `f64::MAX` is finite, positive, and overflows u64-seconds —
+        // exactly the case that previously panicked. Wrap the FFI call
+        // in `catch_unwind` to prove the absence of a panic regression
+        // even if the fix is reverted.
+        let payload = format!(
+            r#"{{"job_id":"j-overflow","deadline_secs":{}}}"#,
+            f64::MAX
+        );
+        let snap = CString::new(payload).unwrap();
+        let res = std::panic::catch_unwind(|| unsafe {
+            mesh_run_as_job(snap.as_ptr(), cb, ptr::null_mut())
+        });
+        assert!(res.is_ok(), "f64::MAX deadline must not panic");
+        assert_eq!(res.unwrap(), -1, "f64::MAX deadline must surface as error");
+        // last-error slot should carry the diagnostic.
+        let err = take_last_error();
+        assert!(err.is_some(), "expected last_error to be populated");
+    }
+
+    /// `mesh_job_proxy_wait` with an overflowing finite timeout must
+    /// also surface as -1 rather than panic. We can't easily exercise
+    /// the FFI without a live handle, so we cover the `try_from_secs_f64`
+    /// behaviour directly to lock the contract in.
+    #[test]
+    fn proxy_wait_overflowing_timeout_does_not_panic() {
+        // `from_secs_f64` would have panicked here.
+        let res = Duration::try_from_secs_f64(f64::MAX);
+        assert!(res.is_err(), "f64::MAX must fail try_from_secs_f64");
     }
 
     /// Happy-path: snapshot with no deadline, callback returns 0.

@@ -505,9 +505,17 @@ public class MeshToolWrapper implements McpToolHandler {
         // job pipeline: build a JobController bound to this job_id, set
         // both Java + native contexts, inject the controller at
         // meshJobParamIndex, auto-complete on successful return.
-        if (task && jobIdHeader != null && !jobIdHeader.isEmpty()
-                && meshJobParamIndex != null
-                && instanceId.get() != null && registryUrl.get() != null) {
+        //
+        // Gate is intentionally narrow — only `task=true` + a present
+        // `X-Mesh-Job-Id` header. Whether a JobController gets injected
+        // (requires meshJobParamIndex + instanceId + registryUrl) is
+        // decided INSIDE dispatchAsJob; if any of those is missing, we
+        // still bind the JobContext snapshot so outbound calls
+        // propagate the right job-id headers, but invoke the user
+        // method without the controller. The previous all-or-nothing
+        // gate silently skipped the wrap when the wiring was partial,
+        // leaving downstream calls headerless. (PR #891 review.)
+        if (task && jobIdHeader != null && !jobIdHeader.isEmpty()) {
             return dispatchAsJob(cleanArgs, jobIdHeader, deadlineSecs);
         }
 
@@ -676,6 +684,30 @@ public class MeshToolWrapper implements McpToolHandler {
             fullArgs[paramPos] = agent;
         }
 
+        // Decide whether we can build a JobController: we need a slot
+        // index AND both binding fields. If any piece is missing the
+        // job is still routed through the wrap (so outbound calls
+        // propagate the right headers via JobContext) but without the
+        // controller — see the gate-site javadoc. (PR #891 review.)
+        boolean canInjectController = meshJobParamIndex != null
+            && instanceId.get() != null
+            && registryUrl.get() != null;
+
+        if (!canInjectController) {
+            log.warn("Job dispatch for tool={} job={} is missing wiring " +
+                "(meshJobParamIndex={}, instanceId={}, registryUrl={}); " +
+                "binding JobContext only — controller NOT injected",
+                funcId, jobId,
+                meshJobParamIndex, instanceId.get(), registryUrl.get());
+            // Fill the MeshJob slot (if any) with null — user code that
+            // declares a MeshJob param tolerates null per DDDI.
+            if (meshJobParamIndex != null) {
+                fullArgs[meshJobParamIndex] = null;
+            }
+            JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs);
+            return JobContext.withJob(snap, () -> invokeNoController(fullArgs));
+        }
+
         // Construct the producer controller. Free in finally.
         JobController controller = JobController.open(jobId, instanceId.get(), registryUrl.get());
         try {
@@ -690,6 +722,42 @@ public class MeshToolWrapper implements McpToolHandler {
         } finally {
             controller.close();
         }
+    }
+
+    /**
+     * Invoke the user method when we cannot construct a controller
+     * (missing wiring). Returns the user's result directly; no
+     * auto-complete because there's no controller to mark terminal.
+     * Matches the inbound non-job code path's invocation logic but
+     * stays inside the JobContext snapshot so outbound headers still
+     * carry the job id. (PR #891 review.)
+     */
+    private Object invokeNoController(Object[] fullArgs) throws Exception {
+        Object result;
+        try {
+            result = method.invoke(bean, fullArgs);
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof Exception ex) throw ex;
+            throw new RuntimeException(cause);
+        } catch (IllegalAccessException e) {
+            throw new RuntimeException("Method access denied: " + e.getMessage(), e);
+        }
+        if (result instanceof CompletableFuture<?> future) {
+            try {
+                result = future.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            } catch (TimeoutException e) {
+                throw new RuntimeException("Async operation timed out after " + ASYNC_TIMEOUT_SECONDS + " seconds");
+            } catch (ExecutionException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof Exception ex) throw ex;
+                throw new RuntimeException(cause);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Async operation interrupted", e);
+            }
+        }
+        return result;
     }
 
     private Object invokeAndAutoComplete(Object[] fullArgs, JobController controller) throws Exception {

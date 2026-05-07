@@ -147,7 +147,21 @@ public final class JobsHelperToolHandler implements McpToolHandler {
                     yield out;
                 }
                 case CANCEL -> {
-                    String reason = mcpArgs.get("reason") instanceof String s ? s : null;
+                    // Reject non-string `reason` explicitly rather than
+                    // silently coercing to null — a misformed call
+                    // should surface as a clear contract error, not as
+                    // a cancel-with-no-reason. (PR #891 review.)
+                    Object rawReason = mcpArgs.get("reason");
+                    String reason;
+                    if (rawReason == null) {
+                        reason = null;
+                    } else if (rawReason instanceof String s) {
+                        reason = s;
+                    } else {
+                        throw new IllegalArgumentException(
+                            "__mesh_job_cancel: 'reason' must be a string, got "
+                                + rawReason.getClass().getName());
+                    }
                     proxy.cancel(reason);
                     Map<String, Object> ok = new LinkedHashMap<>();
                     ok.put("ok", true);

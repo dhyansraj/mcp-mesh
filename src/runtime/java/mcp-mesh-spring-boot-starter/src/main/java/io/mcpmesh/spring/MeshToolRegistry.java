@@ -84,12 +84,19 @@ public class MeshToolRegistry {
         if (spec == null || spec.getCapability() == null) {
             return;
         }
-        for (AgentSpec.ToolSpec existing : syntheticTools) {
-            if (spec.getCapability().equals(existing.getCapability())) {
-                return;
+        // Synchronize the check-then-add: CopyOnWriteArrayList serializes
+        // mutations individually, but the iterate-then-add window is open
+        // to concurrent registrations from two threads observing
+        // "no existing capability" simultaneously and both appending.
+        // (PR #891 review.)
+        synchronized (syntheticTools) {
+            for (AgentSpec.ToolSpec existing : syntheticTools) {
+                if (spec.getCapability().equals(existing.getCapability())) {
+                    return;
+                }
             }
+            syntheticTools.add(spec);
         }
-        syntheticTools.add(spec);
     }
 
     /**

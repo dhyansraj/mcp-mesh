@@ -322,7 +322,7 @@ public class MeshAutoConfiguration {
         try {
             JobsHelperToolsRegistrar.register(toolRegistry, wrapperRegistry, resolvedRegistryUrl);
         } catch (Exception e) {
-            log.warn("Failed to register MeshJob helper tools at startup: {}", e.getMessage());
+            log.warn("Failed to register MeshJob helper tools at startup", e);
         }
 
         // Add tools from registry (dependencies are embedded in tool specs)

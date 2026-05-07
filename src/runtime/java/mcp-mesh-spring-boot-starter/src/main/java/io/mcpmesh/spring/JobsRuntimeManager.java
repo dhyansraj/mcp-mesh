@@ -2,12 +2,15 @@ package io.mcpmesh.spring;
 
 import io.mcpmesh.JobController;
 import io.mcpmesh.MeshJobSubmitter;
+import io.mcpmesh.types.McpMeshTool;
+import io.mcpmesh.types.MeshLlmAgent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -102,6 +105,17 @@ public final class JobsRuntimeManager implements SmartLifecycle {
     private void wireProducers(String instanceId, String registryUrl) {
         for (MeshToolRegistry.ToolMetadata meta : toolRegistry.getAllTools()) {
             if (!meta.task()) continue;
+            // Phase 1 limit: the claim path doesn't resolve dependency
+            // proxies (the dispatcher is a thin reflection invoker —
+            // wireConsumers / per-call dep injection is the wrapper's
+            // job, not the dispatcher's). A `task=true` producer that
+            // declares `McpMeshTool` / `MeshLlmAgent` parameters would
+            // therefore see them as null on the claim path and the
+            // user code would NPE. Reject this combination eagerly at
+            // startup so the failure mode is obvious; mirrors the
+            // "Phase 1 limit" comment in `invokeViaReflection`. (PR
+            // #891 review.)
+            validateProducerParams(meta);
             MeshToolWrapper wrapper = lookupWrapperForMethod(meta);
             if (wrapper == null) {
                 log.warn("No wrapper found for task=true tool {}; producer dispatch will be inert",
@@ -136,7 +150,22 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             // tolerates null per the DDDI contract).
             List<MeshToolRegistry.DependencyInfo> deps = meta.dependencies();
             if (deps == null || deps.isEmpty()) continue;
-            String depCapability = deps.get(0).capability();
+            // Pick the dep that backs the MeshJob slot: walk the
+            // declared dependencies and pick the first one whose
+            // capability is itself registered as `task=true` on this
+            // agent. The previous `deps.get(0)` heuristic was wrong
+            // when the user declared a `task=true` dep AFTER an
+            // ordinary dep — the submitter would be bound to the
+            // wrong capability and silently target a non-task tool.
+            // (PR #891 review.) If no task-backed dep is found, leave
+            // the slot null — the consumer probably meant to compose
+            // a JobProxy by hand.
+            String depCapability = pickTaskBackedDependency(deps);
+            if (depCapability == null) {
+                log.debug("Consumer {} declares MeshJob slot but no task=true dep found in registry; " +
+                    "skipping submitter wiring", meta.capability());
+                continue;
+            }
             try {
                 MeshJobSubmitter submitter = new MeshJobSubmitter(depCapability, instanceId, registryUrl);
                 wrapper.setJobSubmitter(submitter);
@@ -145,6 +174,60 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             } catch (Exception e) {
                 log.warn("Failed to wire MeshJobSubmitter for {}: {}",
                     wrapper.getFuncId(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Pick the capability of the first declared dependency that
+     * resolves to a {@code task=true} tool in the local registry.
+     * Returns {@code null} if no such dep is declared. Used by
+     * {@link #wireConsumers} to bind the {@link MeshJobSubmitter} to
+     * the correct slot when the consumer mixes ordinary + task deps.
+     *
+     * <p>The local registry only knows about THIS agent's tools; for
+     * remote task=true deps the consumer should rely on the registry's
+     * dependency-resolution metadata (Phase 2). Today the consumer +
+     * task producer in the same agent is the only well-tested path.
+     */
+    private String pickTaskBackedDependency(List<MeshToolRegistry.DependencyInfo> deps) {
+        for (MeshToolRegistry.DependencyInfo dep : deps) {
+            MeshToolRegistry.ToolMetadata localTool = toolRegistry.getTool(dep.capability());
+            if (localTool != null && localTool.task()) {
+                return dep.capability();
+            }
+        }
+        // Fallback: cross-agent task deps aren't introspectable from
+        // this side without a registry round-trip. If exactly one dep
+        // is declared, accept it — preserves the Phase 1 happy path
+        // for the canonical "consumer + remote task producer" example
+        // without reintroducing the wrong-pick bug above.
+        if (deps.size() == 1) {
+            return deps.get(0).capability();
+        }
+        return null;
+    }
+
+    /**
+     * Reject {@code @MeshTool(task=true)} producers that declare
+     * {@link McpMeshTool} or {@link MeshLlmAgent} parameters. The
+     * claim path runs in a thin reflection dispatcher and does not
+     * resolve dependency proxies — the params would be null and the
+     * user code would NPE. Force the user to split the helper deps
+     * into a separate non-task tool. (PR #891 review.)
+     */
+    private static void validateProducerParams(MeshToolRegistry.ToolMetadata meta) {
+        Method m = meta.method();
+        Parameter[] params = m.getParameters();
+        for (int i = 0; i < params.length; i++) {
+            Class<?> t = params[i].getType();
+            if (McpMeshTool.class.isAssignableFrom(t) || MeshLlmAgent.class.isAssignableFrom(t)) {
+                throw new IllegalStateException(String.format(
+                    "@MeshTool(task=true) method %s.%s declares a %s parameter at index %d. " +
+                    "task=true producers cannot have McpMeshTool/MeshLlmAgent dependencies " +
+                    "because the claim path doesn't resolve them. Move the dep to a " +
+                    "non-task helper method and call it from the producer.",
+                    m.getDeclaringClass().getName(), m.getName(), t.getSimpleName(), i));
             }
         }
     }

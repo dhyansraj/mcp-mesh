@@ -34,8 +34,15 @@ public final class JobProxy implements MeshJob, AutoCloseable {
     private static final ObjectMapper MAPPER = MeshObjectMappers.create();
 
     private final MeshCore core;
-    private final Pointer handle;
+    /**
+     * Native handle. {@code null} after {@link #close} runs. Read/written
+     * only while holding {@link #lock} — see {@link JobController} for
+     * the same fix; without it a concurrent close could free the
+     * pointer mid-FFI-call (PR #891 review).
+     */
+    private Pointer handle;
     private final String jobId;
+    private final Object lock = new Object();
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     JobProxy(MeshCore core, Pointer handle, String jobId) {
@@ -84,13 +91,22 @@ public final class JobProxy implements MeshJob, AutoCloseable {
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> status() {
-        ensureOpen();
-        PointerByReference out = new PointerByReference();
-        int rc = core.mesh_job_proxy_status(handle, out);
-        if (rc != 0) {
-            throw new MeshException("mesh_job_proxy_status failed: " + lastError(core));
+        // FFI call inside the lock; JSON parse afterwards. We MUST own
+        // the returned `p` before releasing the lock — once `close()`
+        // runs it would otherwise be free to free a different handle
+        // — but the result string itself was allocated by Rust and is
+        // independent of the proxy handle, so we can parse it
+        // unguarded.
+        Pointer p;
+        synchronized (lock) {
+            ensureOpen();
+            PointerByReference out = new PointerByReference();
+            int rc = core.mesh_job_proxy_status(handle, out);
+            if (rc != 0) {
+                throw new MeshException("mesh_job_proxy_status failed: " + lastError(core));
+            }
+            p = out.getValue();
         }
-        Pointer p = out.getValue();
         if (p == null) {
             throw new MeshException("mesh_job_proxy_status returned null payload");
         }
@@ -132,13 +148,22 @@ public final class JobProxy implements MeshJob, AutoCloseable {
      *                       / etc., matching the napi-rs surface).
      */
     public Object await(double timeoutSecs) {
-        ensureOpen();
-        PointerByReference out = new PointerByReference();
-        int rc = core.mesh_job_proxy_wait(handle, timeoutSecs, out);
-        if (rc != 0) {
-            throw new MeshException("mesh_job_proxy_wait failed: " + lastError(core));
+        // The wait FFI may block for the full timeout — we hold the
+        // lock for that whole duration so a concurrent close() doesn't
+        // free the handle while the Rust runtime is still polling on
+        // it. Closing the proxy from another thread is a programming
+        // error if you also have an outstanding await(), but the lock
+        // prevents the worst (use-after-free) outcome.
+        Pointer p;
+        synchronized (lock) {
+            ensureOpen();
+            PointerByReference out = new PointerByReference();
+            int rc = core.mesh_job_proxy_wait(handle, timeoutSecs, out);
+            if (rc != 0) {
+                throw new MeshException("mesh_job_proxy_wait failed: " + lastError(core));
+            }
+            p = out.getValue();
         }
-        Pointer p = out.getValue();
         if (p == null) {
             // await() succeeded but produced no payload — treat as JSON null.
             return null;
@@ -166,28 +191,39 @@ public final class JobProxy implements MeshJob, AutoCloseable {
      * @throws MeshException if the registry call fails
      */
     public void cancel(String reason) {
-        ensureOpen();
-        int rc = core.mesh_job_proxy_cancel(handle, reason);
-        if (rc != 0) {
-            throw new MeshException("mesh_job_proxy_cancel failed: " + lastError(core));
+        synchronized (lock) {
+            ensureOpen();
+            int rc = core.mesh_job_proxy_cancel(handle, reason);
+            if (rc != 0) {
+                throw new MeshException("mesh_job_proxy_cancel failed: " + lastError(core));
+            }
         }
     }
 
     /** Free the underlying native handle. Idempotent. */
     @Override
     public void close() {
-        if (closed.compareAndSet(false, true)) {
-            try {
-                core.mesh_job_proxy_free(handle);
-            } catch (RuntimeException e) {
-                log.warn("mesh_job_proxy_free threw for job {}: {}", jobId, e.getMessage());
-                throw e;
+        // See JobController.close() for the rationale: hold the lock
+        // across the free so any in-flight FFI call finishes first.
+        synchronized (lock) {
+            if (closed.compareAndSet(false, true)) {
+                Pointer h = handle;
+                handle = null;
+                try {
+                    if (h != null) {
+                        core.mesh_job_proxy_free(h);
+                    }
+                } catch (RuntimeException e) {
+                    log.warn("mesh_job_proxy_free threw for job {}: {}", jobId, e.getMessage());
+                    throw e;
+                }
             }
         }
     }
 
+    /** Caller MUST hold {@link #lock}. */
     private void ensureOpen() {
-        if (closed.get()) {
+        if (closed.get() || handle == null) {
             throw new MeshException("JobProxy for job " + jobId + " is closed");
         }
     }
