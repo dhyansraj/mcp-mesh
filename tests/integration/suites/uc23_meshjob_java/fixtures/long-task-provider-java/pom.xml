@@ -10,10 +10,6 @@
 
   Spring Boot version is intentionally 4.0.6 (newer than 4.0.5 in the
   toolcalls examples) — addresses CVEs caught during the #891 review.
-
-  The local-repo path resolves the mcp-mesh-* artifacts the suite
-  builds via src-tests; tsuite's maven-install handler strips file://
-  repos and re-points to the container's pre-populated m2 cache.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -40,6 +36,12 @@
         <mcp-mesh.version>1.4.1</mcp-mesh.version>
     </properties>
 
+    <!--
+      Depends on local mcp-mesh-* artifacts at version 1.4.1+ which are not
+      published to Maven Central. Build them first via:
+          cd src/runtime/java && mvn install -DskipTests
+      Maven and IDEs then resolve them from your local ~/.m2/repository.
+    -->
     <dependencies>
         <dependency>
             <groupId>io.mcp-mesh</groupId>
@@ -51,13 +53,6 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
     </dependencies>
-
-    <repositories>
-        <repository>
-            <id>local-maven-repo</id>
-            <url>file://${project.basedir}/../../../../../src/runtime/java/local-repo</url>
-        </repository>
-    </repositories>
 
     <build>
         <plugins>

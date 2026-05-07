@@ -24,6 +24,12 @@
         <mcp-mesh.version>1.4.1</mcp-mesh.version>
     </properties>
 
+    <!--
+      Depends on local mcp-mesh-* artifacts at version 1.4.1+ which are not
+      published to Maven Central. Build them first via:
+          cd src/runtime/java && mvn install -DskipTests
+      Maven and IDEs then resolve them from your local ~/.m2/repository.
+    -->
     <dependencies>
         <!-- MCP Mesh Spring Boot Starter -->
         <dependency>
@@ -65,11 +71,4 @@
         </plugins>
     </build>
 
-    <!-- Local repository for mcp-mesh artifacts (development) -->
-    <repositories>
-        <repository>
-            <id>local-maven-repo</id>
-            <url>file://${project.basedir}/../../../src/runtime/java/local-repo</url>
-        </repository>
-    </repositories>
 </project>
