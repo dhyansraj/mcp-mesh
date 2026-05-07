@@ -5,12 +5,133 @@ Provides clean shutdown via FastAPI lifespan events and basic signal handling.
 The Rust core handles actual deregistration from the registry.
 """
 
+import atexit
 import logging
 import signal
+import threading
+import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Active Rust agent-handle registry (issue #877)
+# =============================================================================
+#
+# The Rust core spawns a tokio runtime in a background thread. After futures
+# resolve, pyo3-async-runtimes does `spawn_blocking(|| Python::attach(...))`
+# to write the result back. If Python's interpreter has begun finalizing
+# (e.g. uvicorn failed to bind, sys.exit, unhandled exception in startup) and
+# a tokio worker happens to wake up at that moment, it tries to attach to a
+# torn-down interpreter and panics with "interpreter is not initialized".
+#
+# The cure: drain the Rust dispatcher BEFORE Python finalizes. We register
+# every live AgentHandle in this process-wide list and an atexit hook calls
+# `handle.shutdown()` on each. atexit fires before Py_Finalize tears down the
+# interpreter, so the Rust thread sees the shutdown signal and exits before
+# anyone tries to Python::attach against a dying interpreter.
+#
+# Best-effort: if shutdown raises (handle already shut down, channel closed,
+# whatever) we swallow it — we're inside atexit, the process is going away,
+# nothing useful can be done with the error.
+_active_handles_lock = threading.Lock()
+_active_handles: list = []
+_atexit_installed = False
+
+# Per-handle bound for the atexit drain. If a handle is wedged (Rust dispatcher
+# stuck, backend slow), we don't want it to block process exit. Shutdowns are
+# run concurrently in daemon threads so the total wait stays bounded by this
+# value rather than N * timeout when many handles are registered.
+_PER_HANDLE_SHUTDOWN_TIMEOUT_SECS = 2.0
+
+
+def _safe_shutdown(h: Any) -> None:
+    """Best-effort shutdown for a single handle — swallow errors at exit."""
+    try:
+        h.shutdown()
+    except Exception:
+        # Best-effort during interpreter shutdown — the channel may be
+        # closed, the runtime already gone, etc. Nothing we can do.
+        pass
+
+
+def register_rust_agent_handle(handle: Any) -> None:
+    """Track a Rust core AgentHandle so atexit can drain it before Py_Finalize.
+
+    Called by the heartbeat lifespan tasks immediately after `start_agent()`
+    returns. Idempotent on repeat: a handle registered twice is only kept
+    once. See module docstring for the race this closes.
+    """
+    global _atexit_installed
+    if handle is None:
+        return
+    with _active_handles_lock:
+        # Identity check (handle is a PyO3 object — list doesn't need __eq__).
+        if not any(h is handle for h in _active_handles):
+            _active_handles.append(handle)
+        if not _atexit_installed:
+            atexit.register(_atexit_shutdown_active_handles)
+            _atexit_installed = True
+            logger.debug("Registered atexit hook to drain Rust agent handles")
+
+
+def unregister_rust_agent_handle(handle: Any) -> None:
+    """Drop a handle from the registry (e.g. normal shutdown already drained it).
+
+    Best-effort: if the handle isn't in the list (already removed, never
+    registered), we silently no-op.
+    """
+    if handle is None:
+        return
+    with _active_handles_lock:
+        # Identity-based filter so we don't depend on __eq__ semantics of the
+        # PyO3 wrapper.
+        _active_handles[:] = [h for h in _active_handles if h is not handle]
+
+
+def _atexit_shutdown_active_handles() -> None:
+    """atexit hook: drain every still-live Rust handle before Py_Finalize.
+
+    Runs at interpreter shutdown — under abnormal exits (uvicorn bind fail,
+    unhandled startup error) the normal shutdown path in the heartbeat task
+    never gets a chance to fire, leaving the Rust tokio runtime live. That
+    runtime can then race with interpreter finalization and panic in the
+    pyo3-async-runtimes Python::attach codepath. Calling shutdown() here
+    signals the Rust core to drain its dispatcher and join its background
+    thread before the interpreter goes away.
+    """
+    with _active_handles_lock:
+        handles = list(_active_handles)
+        _active_handles.clear()
+    if not handles:
+        return
+    # Run each handle's shutdown in its own daemon thread with a bounded join.
+    # Concurrent dispatch keeps the total wall-clock bound at
+    # _PER_HANDLE_SHUTDOWN_TIMEOUT_SECS even when several handles are live.
+    # daemon=True ensures a genuinely-stuck shutdown thread can't block
+    # interpreter teardown — Python tears daemons down on exit.
+    threads = [
+        threading.Thread(
+            target=_safe_shutdown,
+            args=(h,),
+            daemon=True,
+            name=f"mesh-atexit-shutdown-{id(h)}",
+        )
+        for h in handles
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=_PER_HANDLE_SHUTDOWN_TIMEOUT_SECS)
+    # Brief grace window so the Rust dispatcher thread sees the signal and
+    # tears down its tokio runtime before atexit returns and Py_Finalize
+    # starts. Matches the 200ms used in the normal-path teardown in
+    # rust_heartbeat.py / rust_api_heartbeat.py.
+    try:
+        time.sleep(0.2)
+    except Exception:
+        pass
 
 
 class SimpleShutdownCoordinator:
