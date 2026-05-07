@@ -1,0 +1,934 @@
+//! C-ABI bindings for the MeshJob substrate (Phase 1 — Java SDK).
+//!
+//! Mirror of [`crate::jobs_py`] (PyO3) and [`crate::jobs_napi`] (napi-rs)
+//! exposed via the C ABI so JNR-FFI consumers (Java, Kotlin, etc.) can drive
+//! the producer-side [`crate::jobs::JobController`] and consumer-side
+//! [`crate::jobs::JobProxy`] from `libmcp_mesh_core.{dylib,so,dll}`.
+//!
+//! # Async pattern
+//! The C ABI cannot return Promises / Futures, so blocking-from-Java methods
+//! bridge through a process-wide [`tokio::runtime::Runtime`] (initialized
+//! lazily in [`jobs_runtime`]) and `block_on` the underlying async API.
+//! Java callers wrap these in `CompletableFuture` on their side if they
+//! want async ergonomics.
+//!
+//! # Error handling
+//! Functions return `i32` status codes (`0` = success, non-zero = error)
+//! and stash a thread-local error message in [`crate::ffi::set_last_error`]
+//! that callers fetch via `mesh_last_error`. String outputs are passed via
+//! `*mut *mut c_char` out-parameters; the caller frees with `mesh_free_string`.
+//!
+//! # Caveat — task-local visibility from Java
+//! Like the Python / TS bindings: the Rust `tokio::task_local!` bound by
+//! [`crate::job_context::with_job`] is only visible to Rust futures polled
+//! within the scope. Java threads do NOT inherit the task-local across the
+//! JNR-FFI boundary. The Java SDK MUST mirror the context in its own
+//! `ThreadLocal` (see `JobContext.java`) for visibility to user code and
+//! to Java-originated outbound calls. The Rust side handles two things:
+//!
+//!   1. cancel-registry binding so `POST /jobs/{id}/cancel` can fire the
+//!      in-flight cancel token (visible to any Rust futures polled within
+//!      the scope, including the `mesh_call_tool` outbound HTTP path);
+//!   2. header injection on Rust-originated outbound work via
+//!      [`mesh_inject_job_headers`].
+
+#![cfg(feature = "ffi")]
+
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_void};
+use std::ptr;
+use std::sync::Arc;
+use std::sync::OnceLock;
+use std::time::Duration;
+
+use tokio::runtime::Runtime;
+
+use crate::cancel_registry;
+use crate::ffi::{set_last_error, take_last_error};
+use crate::job_context::{self, JobContext};
+use crate::jobs::{
+    new_coalescing_queue, run_as_job, spawn_batching_tick, submit_job, BatchingConfig,
+    BatchingHandle, JobController, JobError, JobProxy, SubmitJobArgs,
+};
+use crate::task_backend::{Job, JobStatus, RegistryHttpBackend, TaskBackend};
+
+// =============================================================================
+// Process-wide blocking runtime
+// =============================================================================
+
+/// Lazily-initialized multi-thread tokio runtime used by the FFI layer to
+/// `block_on` async core APIs (the C ABI cannot expose async). One runtime
+/// per process keeps the resource cost down — JNR-FFI consumers don't pay
+/// per-call overhead for runtime construction.
+fn jobs_runtime() -> &'static Runtime {
+    static RT: OnceLock<Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        Runtime::new().expect("failed to construct jobs FFI tokio runtime")
+    })
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+/// Read a possibly-null `*const c_char` as `Option<&str>`. Returns `None`
+/// for null pointers; returns `Err` for invalid UTF-8 (with the error
+/// stashed in the thread-local last-error slot).
+unsafe fn opt_cstr<'a>(ptr: *const c_char, name: &str) -> Result<Option<&'a str>, ()> {
+    if ptr.is_null() {
+        return Ok(None);
+    }
+    match CStr::from_ptr(ptr).to_str() {
+        Ok(s) => Ok(Some(s)),
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in {}: {}", name, e));
+            Err(())
+        }
+    }
+}
+
+/// Read a non-null `*const c_char` as `&str`. Sets last-error and returns
+/// `Err` for null or invalid UTF-8.
+unsafe fn req_cstr<'a>(ptr: *const c_char, name: &str) -> Result<&'a str, ()> {
+    if ptr.is_null() {
+        set_last_error(format!("{} is null", name));
+        return Err(());
+    }
+    match CStr::from_ptr(ptr).to_str() {
+        Ok(s) => Ok(s),
+        Err(e) => {
+            set_last_error(format!("Invalid UTF-8 in {}: {}", name, e));
+            Err(())
+        }
+    }
+}
+
+/// Allocate a C string from a Rust string and write it to `out`. Returns
+/// 0 on success, -1 on allocation failure (with last-error set).
+unsafe fn write_out_string(out: *mut *mut c_char, value: String) -> i32 {
+    if out.is_null() {
+        set_last_error("output pointer is null");
+        return -1;
+    }
+    match CString::new(value) {
+        Ok(c) => {
+            *out = c.into_raw();
+            0
+        }
+        Err(e) => {
+            set_last_error(format!("Failed to create C string (interior NUL): {}", e));
+            -1
+        }
+    }
+}
+
+/// Build an `Arc<dyn TaskBackend>` from a registry URL. Sets last-error and
+/// returns `None` on transport-construction failure.
+fn backend_from_url(registry_url: &str) -> Option<Arc<dyn TaskBackend>> {
+    match RegistryHttpBackend::new(registry_url) {
+        Ok(b) => Some(b.into_arc()),
+        Err(e) => {
+            set_last_error(format!("backend init failed: {}", e));
+            None
+        }
+    }
+}
+
+/// Stash a [`JobError`] into the thread-local last-error slot. Returns the
+/// error code -1 so callers can `return jobs_set_err(e);` directly.
+fn jobs_set_err(err: JobError) -> i32 {
+    set_last_error(err.to_string());
+    -1
+}
+
+fn job_status_to_str(s: JobStatus) -> &'static str {
+    match s {
+        JobStatus::Working => "working",
+        JobStatus::InputRequired => "input_required",
+        JobStatus::Completed => "completed",
+        JobStatus::Failed => "failed",
+        JobStatus::Cancelled => "cancelled",
+    }
+}
+
+/// Serialize a [`Job`] row to JSON matching the wire shape Python/TS bindings
+/// expose (and the registry's `Job` schema). Java callers parse this with
+/// Jackson on their side.
+fn job_to_json_string(job: Job) -> String {
+    let value = serde_json::json!({
+        "id": job.id,
+        "capability": job.capability,
+        "owner_instance_id": job.owner_instance_id,
+        "status": job_status_to_str(job.status),
+        "progress": job.progress,
+        "progress_message": job.progress_message,
+        "result": job.result.unwrap_or(serde_json::Value::Null),
+        "error": job.error,
+        "submitted_payload": job.submitted_payload,
+        "attempt_count": job.attempt_count,
+        "max_retries": job.max_retries,
+        "max_duration": job.max_duration,
+        "total_deadline": job.total_deadline,
+        "lease_expires_at": job.lease_expires_at,
+        "last_heartbeat_at": job.last_heartbeat_at,
+        "submitted_at": job.submitted_at,
+        "submitted_by": job.submitted_by,
+    });
+    value.to_string()
+}
+
+// =============================================================================
+// Opaque handles (C-visible structs)
+// =============================================================================
+
+/// Opaque handle wrapping a [`JobController`] plus its background batching
+/// tick. The tick is held alongside the controller so it lives until the
+/// caller invokes [`mesh_job_controller_free`] (mirrors PyJobController /
+/// JsJobController which both keep a `BatchingHandle` field).
+///
+/// Not `#[repr(C)]` — internals stay opaque to C consumers.
+pub struct JobControllerHandle {
+    inner: JobController,
+    /// Per-controller batching tick — same per-instance pattern as the
+    /// Python/TS bindings. Dropped (= cancelled with final flush) when the
+    /// caller frees the handle. Optional so future feature flags can degrade
+    /// gracefully (terminal flushes work without it).
+    _batching: Option<BatchingHandle>,
+}
+
+/// Opaque handle wrapping a [`JobProxy`].
+pub struct JobProxyHandle {
+    inner: JobProxy,
+}
+
+// =============================================================================
+// JobController: producer-side C ABI
+// =============================================================================
+
+/// Construct a [`JobController`] bound to `(job_id, instance_id)` against the
+/// given `registry_url`. Spawns a per-controller background batching tick so
+/// mid-flight `update_progress` calls reach the registry on the configured
+/// cadence (default 2s — see [`BatchingConfig::default`]); the tick is torn
+/// down with a final flush when the handle is freed.
+///
+/// # Returns
+/// 0 on success (handle written to `*out_handle`), non-zero on error
+/// (check `mesh_last_error`).
+///
+/// # Safety
+/// All input strings must be valid null-terminated UTF-8. `out_handle`
+/// must point to writable memory for one `*mut JobControllerHandle`.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_controller_new(
+    job_id: *const c_char,
+    instance_id: *const c_char,
+    registry_url: *const c_char,
+    out_handle: *mut *mut JobControllerHandle,
+) -> i32 {
+    take_last_error();
+    if out_handle.is_null() {
+        set_last_error("out_handle is null");
+        return -1;
+    }
+    let job_id = match req_cstr(job_id, "job_id") {
+        Ok(s) => s.to_string(),
+        Err(()) => return -1,
+    };
+    let instance_id = match req_cstr(instance_id, "instance_id") {
+        Ok(s) => s.to_string(),
+        Err(()) => return -1,
+    };
+    let registry_url = match req_cstr(registry_url, "registry_url") {
+        Ok(s) => s,
+        Err(()) => return -1,
+    };
+    let backend = match backend_from_url(registry_url) {
+        Some(b) => b,
+        None => return -1,
+    };
+
+    let queue = new_coalescing_queue();
+    let inner = JobController::new(
+        job_id,
+        instance_id.clone(),
+        backend.clone(),
+        queue.clone(),
+    );
+
+    // Spawn the batching tick inside the FFI tokio runtime so mid-flight
+    // progress deltas actually reach the registry. Mirrors the Python /
+    // napi pattern of entering the runtime context for `tokio::spawn` to
+    // resolve a valid handle.
+    let batching = {
+        let _guard = jobs_runtime().enter();
+        spawn_batching_tick(queue, backend, instance_id, BatchingConfig::default())
+    };
+
+    let handle = Box::new(JobControllerHandle {
+        inner,
+        _batching: Some(batching),
+    });
+    *out_handle = Box::into_raw(handle);
+    0
+}
+
+/// Enqueue a progress update. Coalesces with any prior pending progress
+/// for this job — only the latest survives the next batch flush.
+///
+/// `message` may be NULL (no message).
+///
+/// # Safety
+/// `handle` must come from [`mesh_job_controller_new`] and must not yet
+/// have been freed.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_controller_update_progress(
+    handle: *mut JobControllerHandle,
+    progress: f64,
+    message: *const c_char,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    let handle = &*handle;
+    let message = match opt_cstr(message, "message") {
+        Ok(s) => s.map(str::to_string),
+        Err(()) => return -1,
+    };
+    let inner = handle.inner.clone();
+    let progress = progress as f32;
+    jobs_runtime().block_on(async move {
+        inner.update_progress(progress, message).await;
+    });
+    0
+}
+
+/// Mark the job complete with the given result (JSON-encoded). Flushes
+/// immediately.
+///
+/// # Safety
+/// `result_json` must be a valid JSON string (UTF-8). Invalid JSON
+/// returns -1 with last-error set.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_controller_complete(
+    handle: *mut JobControllerHandle,
+    result_json: *const c_char,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    let handle = &*handle;
+    let result_str = match req_cstr(result_json, "result_json") {
+        Ok(s) => s,
+        Err(()) => return -1,
+    };
+    let value: serde_json::Value = match serde_json::from_str(result_str) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(format!("invalid result_json: {}", e));
+            return -1;
+        }
+    };
+    let inner = handle.inner.clone();
+    jobs_runtime().block_on(async move { inner.complete(value).await })
+        .map(|_| 0)
+        .unwrap_or_else(jobs_set_err)
+}
+
+/// Mark the job failed with the given error reason. Flushes immediately.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_controller_fail(
+    handle: *mut JobControllerHandle,
+    error: *const c_char,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    let handle = &*handle;
+    let error_str = match req_cstr(error, "error") {
+        Ok(s) => s.to_string(),
+        Err(()) => return -1,
+    };
+    let inner = handle.inner.clone();
+    jobs_runtime().block_on(async move { inner.fail(error_str).await })
+        .map(|_| 0)
+        .unwrap_or_else(jobs_set_err)
+}
+
+/// Whether `complete` / `fail` has already been called on this controller.
+///
+/// # Returns
+/// `1` if terminal, `0` if not, `-1` on error.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_controller_is_terminal(
+    handle: *const JobControllerHandle,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    let handle = &*handle;
+    let inner = handle.inner.clone();
+    let terminal = jobs_runtime().block_on(async move { inner.is_terminal().await });
+    if terminal {
+        1
+    } else {
+        0
+    }
+}
+
+/// Read the job ID this controller is bound to. Caller frees the returned
+/// string via `mesh_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_controller_job_id(
+    handle: *const JobControllerHandle,
+    out_job_id: *mut *mut c_char,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    let handle = &*handle;
+    write_out_string(out_job_id, handle.inner.job_id().to_string())
+}
+
+/// Free a [`JobControllerHandle`] returned by [`mesh_job_controller_new`].
+///
+/// Drops the inner controller AND the background batching tick (which
+/// triggers a final flush of any pending deltas before the tick stops).
+///
+/// # Safety
+/// `handle` must come from [`mesh_job_controller_new`] or be NULL. After
+/// this call, `handle` is invalid and must not be used.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_controller_free(handle: *mut JobControllerHandle) {
+    if handle.is_null() {
+        return;
+    }
+    drop(Box::from_raw(handle));
+}
+
+// =============================================================================
+// JobProxy: consumer-side C ABI
+// =============================================================================
+
+/// Submit a new job via the registry and return a [`JobProxyHandle`].
+///
+/// `args_json` must encode a JSON object with these fields (mirroring
+/// [`SubmitJobArgs`] field-for-field):
+///
+/// ```json
+/// {
+///   "registry_url": "http://...",
+///   "capability": "...",
+///   "payload": { ... },
+///   "submitted_by": "...",
+///   "owner_instance_id": "..." | null,
+///   "max_duration": 120 | null,
+///   "max_retries": 1 | null,
+///   "total_deadline": 1700000000 | null
+/// }
+/// ```
+///
+/// JSON-shaped (rather than positional) args mirror the napi-rs
+/// `JsSubmitJobArgs` object — keeps the C ABI signature stable as fields
+/// are added.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_submit_job(
+    args_json: *const c_char,
+    out_handle: *mut *mut JobProxyHandle,
+) -> i32 {
+    take_last_error();
+    if out_handle.is_null() {
+        set_last_error("out_handle is null");
+        return -1;
+    }
+    let args_str = match req_cstr(args_json, "args_json") {
+        Ok(s) => s,
+        Err(()) => return -1,
+    };
+
+    // Parse with a permissive shape so missing optional fields default to
+    // None. Required fields (registry_url, capability, payload, submitted_by)
+    // surface a clean error if absent.
+    #[derive(serde::Deserialize)]
+    struct SubmitArgsWire {
+        registry_url: String,
+        capability: String,
+        payload: serde_json::Value,
+        submitted_by: String,
+        #[serde(default)]
+        owner_instance_id: Option<String>,
+        #[serde(default)]
+        max_duration: Option<u32>,
+        #[serde(default)]
+        max_retries: Option<u32>,
+        #[serde(default)]
+        total_deadline: Option<i64>,
+    }
+    let wire: SubmitArgsWire = match serde_json::from_str(args_str) {
+        Ok(w) => w,
+        Err(e) => {
+            set_last_error(format!("invalid args_json: {}", e));
+            return -1;
+        }
+    };
+
+    let backend = match backend_from_url(&wire.registry_url) {
+        Some(b) => b,
+        None => return -1,
+    };
+    let args = SubmitJobArgs {
+        capability: wire.capability,
+        payload: wire.payload,
+        submitted_by: wire.submitted_by,
+        owner_instance_id: wire.owner_instance_id,
+        max_duration: wire.max_duration,
+        max_retries: wire.max_retries,
+        total_deadline: wire.total_deadline,
+    };
+
+    let result = jobs_runtime().block_on(async move { submit_job(backend, args).await });
+    match result {
+        Ok((proxy, _resp)) => {
+            let handle = Box::new(JobProxyHandle { inner: proxy });
+            *out_handle = Box::into_raw(handle);
+            0
+        }
+        Err(e) => jobs_set_err(e),
+    }
+}
+
+/// Construct a [`JobProxyHandle`] bound to a known job id + registry URL.
+/// Normally callers obtain a proxy via [`mesh_submit_job`] / DDDI injection
+/// rather than constructing one directly.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_proxy_new(
+    job_id: *const c_char,
+    registry_url: *const c_char,
+    out_handle: *mut *mut JobProxyHandle,
+) -> i32 {
+    take_last_error();
+    if out_handle.is_null() {
+        set_last_error("out_handle is null");
+        return -1;
+    }
+    let job_id = match req_cstr(job_id, "job_id") {
+        Ok(s) => s.to_string(),
+        Err(()) => return -1,
+    };
+    let registry_url = match req_cstr(registry_url, "registry_url") {
+        Ok(s) => s,
+        Err(()) => return -1,
+    };
+    let backend = match backend_from_url(registry_url) {
+        Some(b) => b,
+        None => return -1,
+    };
+    let handle = Box::new(JobProxyHandle {
+        inner: JobProxy::new(job_id, backend),
+    });
+    *out_handle = Box::into_raw(handle);
+    0
+}
+
+/// Read the job id this proxy is bound to. Caller frees via `mesh_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_proxy_job_id(
+    handle: *const JobProxyHandle,
+    out_job_id: *mut *mut c_char,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    let handle = &*handle;
+    write_out_string(out_job_id, handle.inner.job_id().to_string())
+}
+
+/// Read the latest job state from the registry (single GET). The full Job
+/// row is serialized as JSON and written to `*out_job_json`; caller frees
+/// via `mesh_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_proxy_status(
+    handle: *mut JobProxyHandle,
+    out_job_json: *mut *mut c_char,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    let handle = &*handle;
+    let inner = handle.inner.clone();
+    let result = jobs_runtime().block_on(async move { inner.status().await });
+    match result {
+        Ok(job) => write_out_string(out_job_json, job_to_json_string(job)),
+        Err(e) => jobs_set_err(e),
+    }
+}
+
+/// Poll until the job reaches a terminal state. On success writes the job
+/// `result` (JSON-encoded) to `*out_result_json`; caller frees via
+/// `mesh_free_string`.
+///
+/// `timeout_secs`: wall-clock timeout. Use a negative value (e.g. `-1`)
+/// for "no timeout" (matches the Python / napi-rs `Optional<f64>` shape).
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_proxy_wait(
+    handle: *mut JobProxyHandle,
+    timeout_secs: f64,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    let handle = &*handle;
+    let timeout = if timeout_secs.is_sign_negative() || !timeout_secs.is_finite() {
+        None
+    } else {
+        Some(Duration::from_secs_f64(timeout_secs))
+    };
+    let inner = handle.inner.clone();
+    let result = jobs_runtime().block_on(async move { inner.wait(timeout).await });
+    match result {
+        Ok(value) => write_out_string(out_result_json, value.to_string()),
+        Err(e) => jobs_set_err(e),
+    }
+}
+
+/// Request cancellation. The registry forwards the signal to the owner
+/// replica when alive. `reason` may be NULL.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_proxy_cancel(
+    handle: *mut JobProxyHandle,
+    reason: *const c_char,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    let handle = &*handle;
+    let reason = match opt_cstr(reason, "reason") {
+        Ok(s) => s.map(str::to_string),
+        Err(()) => return -1,
+    };
+    let inner = handle.inner.clone();
+    jobs_runtime().block_on(async move { inner.cancel(reason).await })
+        .map(|_| 0)
+        .unwrap_or_else(jobs_set_err)
+}
+
+/// Free a [`JobProxyHandle`] returned by [`mesh_submit_job`] /
+/// [`mesh_job_proxy_new`].
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_proxy_free(handle: *mut JobProxyHandle) {
+    if handle.is_null() {
+        return;
+    }
+    drop(Box::from_raw(handle));
+}
+
+// =============================================================================
+// Context + cancel registry C ABI
+// =============================================================================
+
+/// Snapshot of the active job context on the current Rust task, or NULL
+/// if no job is in scope.
+///
+/// Writes a JSON object of shape `{"job_id": str, "deadline_secs_remaining":
+/// int|null}` to `*out_snapshot_json`. If no context is active, writes NULL
+/// (same convention as Python's `current_job` returning `None`).
+///
+/// Caller frees the JSON string via `mesh_free_string` if it is non-NULL.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_current_job(out_snapshot_json: *mut *mut c_char) -> i32 {
+    take_last_error();
+    if out_snapshot_json.is_null() {
+        set_last_error("out_snapshot_json is null");
+        return -1;
+    }
+    match job_context::current() {
+        None => {
+            *out_snapshot_json = ptr::null_mut();
+            0
+        }
+        Some(ctx) => {
+            let value = serde_json::json!({
+                "job_id": ctx.job_id,
+                "deadline_secs_remaining": ctx.remaining_seconds(),
+            });
+            write_out_string(out_snapshot_json, value.to_string())
+        }
+    }
+}
+
+/// Compute the `X-Mesh-Job-Id` / `X-Mesh-Timeout` header values for the
+/// active job context, if any.
+///
+/// Writes a JSON object `{"X-Mesh-Job-Id": "...", "X-Mesh-Timeout":
+/// "<secs>"}` (with `X-Mesh-Timeout` omitted when no deadline is set) to
+/// `*out_headers_json`. If no context is active, writes NULL.
+///
+/// Caller frees the JSON string via `mesh_free_string` if it is non-NULL.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_inject_job_headers(out_headers_json: *mut *mut c_char) -> i32 {
+    take_last_error();
+    if out_headers_json.is_null() {
+        set_last_error("out_headers_json is null");
+        return -1;
+    }
+    match job_context::current() {
+        None => {
+            *out_headers_json = ptr::null_mut();
+            0
+        }
+        Some(ctx) => {
+            let remaining = ctx.remaining_seconds();
+            let mut map = serde_json::Map::new();
+            map.insert(
+                "X-Mesh-Job-Id".to_string(),
+                serde_json::Value::String(ctx.job_id),
+            );
+            if let Some(secs) = remaining {
+                map.insert(
+                    "X-Mesh-Timeout".to_string(),
+                    serde_json::Value::String(secs.to_string()),
+                );
+            }
+            write_out_string(
+                out_headers_json,
+                serde_json::Value::Object(map).to_string(),
+            )
+        }
+    }
+}
+
+/// Fire the cancel token registered for `job_id` in the process-wide
+/// cancel registry, if any.
+///
+/// # Returns
+/// `1` if a token was found and fired, `0` if no active job for that id,
+/// `-1` on error (null/invalid `job_id`).
+#[no_mangle]
+pub unsafe extern "C" fn mesh_cancel_active_job(job_id: *const c_char) -> i32 {
+    take_last_error();
+    let job_id = match req_cstr(job_id, "job_id") {
+        Ok(s) => s,
+        Err(()) => return -1,
+    };
+    if cancel_registry::cancel_active_job(job_id) {
+        1
+    } else {
+        0
+    }
+}
+
+// =============================================================================
+// run_as_job — callback-based scope binding
+// =============================================================================
+
+/// Run a Java-provided callback inside a fresh [`crate::jobs::run_as_job`]
+/// scope so the cancel-registry entry under the snapshot's `job_id` is
+/// bound for the duration of the callback (allowing
+/// `POST /jobs/{id}/cancel` to fire the in-flight cancel token).
+///
+/// `snapshot_json` must encode a JSON object of shape
+/// `{"job_id": "...", "deadline_secs": <number>|null}` mirroring the
+/// payload Java SDK constructs from inbound `X-Mesh-Job-Id` / `X-Mesh-Timeout`
+/// headers. `deadline_secs` is the per-attempt deadline (relative); null /
+/// missing / non-positive ≡ no deadline.
+///
+/// `callback` is invoked synchronously from the runtime's `block_on`. It
+/// receives the opaque `user_data` pointer the caller passed in. The
+/// callback's `i32` return value is propagated as this function's return
+/// value (0 = success, non-zero = caller-defined error).
+///
+/// # Safety
+/// `callback` must be a valid C function pointer for the entire duration
+/// of this call. `user_data` is passed through opaquely — Rust does not
+/// dereference it. If the callback panics across the FFI boundary the
+/// behaviour is undefined; Java callers must catch all checked / unchecked
+/// exceptions in their bridge function.
+///
+/// # Caveat
+/// The Rust `tokio::task_local!` bound by `with_job` is only visible to
+/// Rust futures polled within the scope. Java code in the callback will
+/// NOT see the task-local — it must read its own `ThreadLocal` mirror.
+/// The Rust side handles two things here:
+///   1. cancel-registry binding so a `POST /jobs/{id}/cancel` arriving
+///      mid-flight fires the in-flight token (the Java SDK reads this via
+///      `mesh_cancel_active_job` from its cancel HTTP route);
+///   2. header injection on Rust-originated outbound work (the cancel
+///      token + `X-Mesh-*` headers are visible to `mesh_call_tool` and
+///      friends polled inside the scope).
+#[no_mangle]
+pub unsafe extern "C" fn mesh_run_as_job(
+    snapshot_json: *const c_char,
+    callback: extern "C" fn(*mut c_void) -> i32,
+    user_data: *mut c_void,
+) -> i32 {
+    take_last_error();
+    let snap_str = match req_cstr(snapshot_json, "snapshot_json") {
+        Ok(s) => s,
+        Err(()) => return -1,
+    };
+
+    #[derive(serde::Deserialize)]
+    struct SnapshotWire {
+        job_id: String,
+        #[serde(default)]
+        deadline_secs: Option<f64>,
+    }
+    let wire: SnapshotWire = match serde_json::from_str(snap_str) {
+        Ok(w) => w,
+        Err(e) => {
+            set_last_error(format!("invalid snapshot_json: {}", e));
+            return -1;
+        }
+    };
+
+    // Reject negative / NaN / Inf deadlines explicitly (matches the napi-rs
+    // validate_deadline_secs guard — silently aliasing them to "no deadline"
+    // would paper over upstream bugs).
+    if let Some(secs) = wire.deadline_secs {
+        if !secs.is_finite() || secs < 0.0 {
+            set_last_error(format!(
+                "mesh_run_as_job: invalid deadline_secs ({}) for job {} — must be a non-negative finite number or null",
+                secs, wire.job_id
+            ));
+            return -1;
+        }
+    }
+
+    let ctx = match wire.deadline_secs {
+        Some(secs) if secs > 0.0 => {
+            JobContext::with_timeout(wire.job_id, Duration::from_secs_f64(secs))
+        }
+        _ => JobContext::new(wire.job_id),
+    };
+
+    // Wrap the user pointer so we can move it into the async block without
+    // raw-pointer Send/Sync issues. The C contract is: `user_data` is
+    // opaque; Rust never derefs it, just hands it back to the callback.
+    struct UserDataPtr(*mut c_void);
+    unsafe impl Send for UserDataPtr {}
+    let ud = UserDataPtr(user_data);
+
+    jobs_runtime().block_on(async move {
+        run_as_job(ctx, async move {
+            let UserDataPtr(ptr) = ud;
+            callback(ptr)
+        })
+        .await
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    /// Smoke test for the [`opt_cstr`] / [`req_cstr`] helpers — they are
+    /// unsafe internally but the safe inputs below cover the happy path
+    /// and the null-pointer guard without requiring native callers.
+    #[test]
+    fn req_cstr_rejects_null() {
+        let res = unsafe { req_cstr(ptr::null(), "x") };
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn opt_cstr_returns_none_for_null() {
+        let res = unsafe { opt_cstr(ptr::null(), "x") };
+        assert_eq!(res.unwrap(), None);
+    }
+
+    #[test]
+    fn opt_cstr_returns_some_for_value() {
+        let s = CString::new("hello").unwrap();
+        let res = unsafe { opt_cstr(s.as_ptr(), "x") };
+        assert_eq!(res.unwrap(), Some("hello"));
+    }
+
+    /// `mesh_current_job` must write NULL when no context is active —
+    /// matches Python's `current_job_py` returning `None` and TS's
+    /// `currentJob` returning `null`. Java callers branch on the null
+    /// pointer rather than parsing an empty object.
+    #[test]
+    fn current_job_writes_null_outside_scope() {
+        let mut out: *mut c_char = ptr::null_mut();
+        let rc = unsafe { mesh_current_job(&mut out as *mut _) };
+        assert_eq!(rc, 0);
+        assert!(out.is_null(), "expected NULL when no active context");
+    }
+
+    /// `mesh_inject_job_headers` outside-of-scope must also be NULL — same
+    /// "no headers" semantics as the napi `injectJobHeaders() -> null`.
+    #[test]
+    fn inject_job_headers_writes_null_outside_scope() {
+        let mut out: *mut c_char = ptr::null_mut();
+        let rc = unsafe { mesh_inject_job_headers(&mut out as *mut _) };
+        assert_eq!(rc, 0);
+        assert!(out.is_null());
+    }
+
+    /// `mesh_cancel_active_job` returns 0 when no active job — same
+    /// false-on-miss semantics as `cancel_registry::cancel_active_job`.
+    #[test]
+    fn cancel_active_job_returns_zero_when_unknown() {
+        let id = CString::new("does-not-exist-ffi-test").unwrap();
+        let rc = unsafe { mesh_cancel_active_job(id.as_ptr()) };
+        assert_eq!(rc, 0);
+    }
+
+    /// `mesh_run_as_job` must reject malformed JSON cleanly via the
+    /// last-error slot rather than panicking. Matches the pattern used by
+    /// `mesh_submit_job` for the wire-args parse failure.
+    #[test]
+    fn run_as_job_rejects_invalid_snapshot_json() {
+        extern "C" fn cb(_: *mut c_void) -> i32 { 0 }
+        let bad = CString::new("not-json").unwrap();
+        let rc = unsafe { mesh_run_as_job(bad.as_ptr(), cb, ptr::null_mut()) };
+        assert_eq!(rc, -1);
+    }
+
+    /// Negative / NaN / Inf deadline rejection mirrors the napi-rs
+    /// `validate_deadline_secs` policy — surfaces a clean error instead of
+    /// silently aliasing to "no deadline".
+    #[test]
+    fn run_as_job_rejects_negative_deadline() {
+        extern "C" fn cb(_: *mut c_void) -> i32 { 0 }
+        let bad = CString::new(r#"{"job_id":"j-neg","deadline_secs":-5.0}"#).unwrap();
+        let rc = unsafe { mesh_run_as_job(bad.as_ptr(), cb, ptr::null_mut()) };
+        assert_eq!(rc, -1);
+    }
+
+    /// Happy-path: snapshot with no deadline, callback returns 0.
+    /// Verifies the callback is actually invoked AND its return value
+    /// propagates as the FFI return value.
+    #[test]
+    fn run_as_job_invokes_callback_and_propagates_return() {
+        static SEEN: AtomicI32 = AtomicI32::new(0);
+        extern "C" fn cb(_: *mut c_void) -> i32 {
+            SEEN.fetch_add(1, Ordering::SeqCst);
+            42
+        }
+        let snap = CString::new(r#"{"job_id":"j-cb"}"#).unwrap();
+        let rc = unsafe { mesh_run_as_job(snap.as_ptr(), cb, ptr::null_mut()) };
+        assert_eq!(rc, 42, "callback return value must propagate");
+        assert_eq!(SEEN.load(Ordering::SeqCst), 1, "callback should run exactly once");
+    }
+}

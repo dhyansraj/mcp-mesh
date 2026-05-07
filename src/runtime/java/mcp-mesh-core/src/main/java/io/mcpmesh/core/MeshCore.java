@@ -2,7 +2,9 @@ package io.mcpmesh.core;
 
 import jnr.ffi.LibraryLoader;
 import jnr.ffi.Pointer;
+import jnr.ffi.annotations.Delegate;
 import jnr.ffi.annotations.Encoding;
+import jnr.ffi.byref.PointerByReference;
 
 /**
  * JNR-FFI interface to the MCP Mesh Rust core library.
@@ -446,4 +448,228 @@ public interface MeshCore {
      * @return Capabilities JSON (caller must free with mesh_free_string), or NULL on error
      */
     Pointer mesh_get_vendor_capabilities(String provider);
+
+    // ==========================================================================
+    // MeshJob Functions (Phase 1 — see MESHJOB_DESIGN.org)
+    // ==========================================================================
+    //
+    // All MeshJob C-ABI functions return int32:
+    //   * 0  = success
+    //   * negative (typically -1) = error; call mesh_last_error() for details
+    // String outputs are written via PointerByReference out-parameters; caller
+    // frees with mesh_free_string. Opaque handles are owned by Java and must
+    // be freed with the matching mesh_*_free function (or leaked).
+    //
+    // Mirrors:
+    //   * jobs_py.rs (PyO3 bindings — Python SDK)
+    //   * jobs_napi.rs (napi-rs bindings — TypeScript SDK)
+    // The C ABI is the JNR-FFI consumption point.
+
+    // ---- JobController (producer-side) ---------------------------------------
+
+    /**
+     * Construct a JobController bound to (jobId, instanceId) against the
+     * given registryUrl. Spawns a per-controller background batching tick so
+     * mid-flight updateProgress calls reach the registry on the configured
+     * cadence (default 2s); the tick is torn down with a final flush when
+     * the handle is freed via mesh_job_controller_free.
+     *
+     * @param jobId       Job UUID this controller is bound to
+     * @param instanceId  Instance ID submitting deltas to the registry
+     * @param registryUrl Registry base URL
+     * @param outHandle   Out-param: receives the opaque handle on success
+     * @return 0 on success, -1 on error (see mesh_last_error)
+     */
+    int mesh_job_controller_new(String jobId, String instanceId, String registryUrl, PointerByReference outHandle);
+
+    /**
+     * Enqueue a progress update. Coalesces with any prior pending progress
+     * for this job — only the latest survives the next batch flush.
+     *
+     * @param handle  Controller handle from mesh_job_controller_new
+     * @param progress Progress value (typically 0.0..1.0)
+     * @param message Optional progress message (may be null)
+     * @return 0 on success, -1 on error
+     */
+    int mesh_job_controller_update_progress(Pointer handle, double progress, String message);
+
+    /**
+     * Mark the job complete with the given result (JSON-encoded). Flushes
+     * immediately.
+     *
+     * @param handle     Controller handle
+     * @param resultJson JSON string encoding the job result
+     * @return 0 on success, -1 on error
+     */
+    int mesh_job_controller_complete(Pointer handle, String resultJson);
+
+    /**
+     * Mark the job failed with the given error reason. Flushes immediately.
+     *
+     * @param handle Controller handle
+     * @param error  Error reason (free-form string)
+     * @return 0 on success, -1 on error
+     */
+    int mesh_job_controller_fail(Pointer handle, String error);
+
+    /**
+     * Whether complete / fail has already been called on this controller.
+     *
+     * @param handle Controller handle
+     * @return 1 if terminal, 0 if not, -1 on error
+     */
+    int mesh_job_controller_is_terminal(Pointer handle);
+
+    /**
+     * Read the job ID this controller is bound to.
+     *
+     * @param handle    Controller handle
+     * @param outJobId  Out-param: receives the job-id string (caller frees via mesh_free_string)
+     * @return 0 on success, -1 on error
+     */
+    int mesh_job_controller_job_id(Pointer handle, PointerByReference outJobId);
+
+    /**
+     * Free a JobController handle returned by mesh_job_controller_new.
+     * Drops the inner controller AND the background batching tick (which
+     * triggers a final flush of any pending deltas).
+     *
+     * @param handle Controller handle (may be null)
+     */
+    void mesh_job_controller_free(Pointer handle);
+
+    // ---- JobProxy (consumer-side) --------------------------------------------
+
+    /**
+     * Submit a new job via the registry and return a JobProxy handle.
+     *
+     * @param argsJson  JSON object encoding SubmitJobArgs (see jobs_ffi.rs)
+     * @param outHandle Out-param: receives the opaque proxy handle on success
+     * @return 0 on success, -1 on error
+     */
+    int mesh_submit_job(String argsJson, PointerByReference outHandle);
+
+    /**
+     * Construct a JobProxy bound to a known jobId + registryUrl. Normally
+     * callers obtain a proxy via mesh_submit_job rather than constructing
+     * one directly.
+     *
+     * @param jobId       Job UUID
+     * @param registryUrl Registry base URL
+     * @param outHandle   Out-param: receives the opaque proxy handle on success
+     * @return 0 on success, -1 on error
+     */
+    int mesh_job_proxy_new(String jobId, String registryUrl, PointerByReference outHandle);
+
+    /**
+     * Read the job id this proxy is bound to.
+     *
+     * @param handle   Proxy handle
+     * @param outJobId Out-param: receives the job-id string (caller frees via mesh_free_string)
+     * @return 0 on success, -1 on error
+     */
+    int mesh_job_proxy_job_id(Pointer handle, PointerByReference outJobId);
+
+    /**
+     * Read the latest job state from the registry (single GET). The full Job
+     * row is serialized as JSON.
+     *
+     * @param handle      Proxy handle
+     * @param outJobJson  Out-param: receives the JSON string (caller frees via mesh_free_string)
+     * @return 0 on success, -1 on error
+     */
+    int mesh_job_proxy_status(Pointer handle, PointerByReference outJobJson);
+
+    /**
+     * Poll until the job reaches a terminal state. On success writes the
+     * job result (JSON-encoded) to outResultJson.
+     *
+     * @param handle         Proxy handle
+     * @param timeoutSecs    Wall-clock timeout (negative = no timeout)
+     * @param outResultJson  Out-param: receives the JSON string (caller frees via mesh_free_string)
+     * @return 0 on success, -1 on error
+     */
+    int mesh_job_proxy_wait(Pointer handle, double timeoutSecs, PointerByReference outResultJson);
+
+    /**
+     * Request cancellation. The registry forwards the signal to the owner
+     * replica when alive.
+     *
+     * @param handle Proxy handle
+     * @param reason Optional cancel reason (may be null)
+     * @return 0 on success, -1 on error
+     */
+    int mesh_job_proxy_cancel(Pointer handle, String reason);
+
+    /**
+     * Free a JobProxy handle returned by mesh_submit_job / mesh_job_proxy_new.
+     *
+     * @param handle Proxy handle (may be null)
+     */
+    void mesh_job_proxy_free(Pointer handle);
+
+    // ---- Context + cancel registry ------------------------------------------
+
+    /**
+     * Snapshot of the active job context on the current Rust task, or null
+     * if no job is in scope. Writes a JSON object of shape
+     * {@code {"job_id": str, "deadline_secs_remaining": int|null}} or
+     * a null pointer.
+     *
+     * <p>Note: this reflects the Rust task-local context only. Java code
+     * should read its own ThreadLocal mirror (see {@link io.mcpmesh.JobContext}
+     * once added).
+     *
+     * @param outSnapshotJson Out-param: receives the JSON string or null pointer
+     * @return 0 on success, -1 on error
+     */
+    int mesh_current_job(PointerByReference outSnapshotJson);
+
+    /**
+     * Compute the X-Mesh-Job-Id / X-Mesh-Timeout header values for the
+     * active Rust-side job context, if any. Writes a JSON object or null.
+     *
+     * @param outHeadersJson Out-param: receives the JSON string or null pointer
+     * @return 0 on success, -1 on error
+     */
+    int mesh_inject_job_headers(PointerByReference outHeadersJson);
+
+    /**
+     * Fire the cancel token registered for jobId in the process-wide cancel
+     * registry, if any.
+     *
+     * @param jobId Job UUID
+     * @return 1 if a token was found and fired, 0 if no active job, -1 on error
+     */
+    int mesh_cancel_active_job(String jobId);
+
+    /**
+     * Callback type for {@link MeshCore#mesh_run_as_job}. The callback is
+     * invoked synchronously from the FFI runtime's block_on; its int return
+     * value propagates as mesh_run_as_job's return value.
+     */
+    interface RunAsJobCallback {
+        @Delegate
+        int invoke(Pointer userData);
+    }
+
+    /**
+     * Run a Java-provided callback inside a fresh run_as_job scope so the
+     * cancel-registry entry under the snapshot's job_id is bound for the
+     * duration of the callback. snapshotJson encodes
+     * {@code {"job_id": str, "deadline_secs": number|null}}.
+     *
+     * <p>The Rust task-local context is NOT visible to Java code in the
+     * callback — Java must mirror it in its own ThreadLocal. The Rust side
+     * handles cancel-registry binding (so {@code POST /jobs/{id}/cancel}
+     * fires the in-flight cancel token) and header injection on Rust-
+     * originated outbound work.
+     *
+     * @param snapshotJson Job context snapshot JSON
+     * @param callback     Java callback invoked inside the scope
+     * @param userData     Opaque pointer passed back to the callback (may be null)
+     * @return The callback's return value (0 = success, non-zero = caller-defined),
+     *         or -1 if the snapshot JSON is invalid (see mesh_last_error)
+     */
+    int mesh_run_as_job(String snapshotJson, RunAsJobCallback callback, Pointer userData);
 }

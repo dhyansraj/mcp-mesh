@@ -137,4 +137,45 @@ public @interface MeshTool {
      * }</pre>
      */
     boolean outputSchemaStrict() default true;
+
+    /**
+     * Marks this tool as a long-running <b>task</b> (MeshJob).
+     *
+     * <p>When {@code true}, the runtime treats this method as a producer for
+     * the MeshJob substrate (Phase 1 — see {@code MESHJOB_DESIGN.org}):
+     * <ul>
+     *   <li>Inbound HTTP calls bearing an {@code X-Mesh-Job-Id} header dispatch
+     *       through the job pipeline, with a {@link MeshJob}-typed parameter
+     *       receiving an injected {@code JobController} for progress / result /
+     *       failure reporting.</li>
+     *   <li>Pull-mode workers can claim queued jobs for this capability via
+     *       {@code POST /jobs/claim} when the registry's
+     *       {@code X-Mesh-Pending-Jobs} header signals work.</li>
+     *   <li>The capability is advertised to the registry with the
+     *       {@code task} attribute so consumers depending on it receive a
+     *       {@code MeshJobSubmitter} (rather than the synchronous
+     *       {@code McpMeshTool} proxy) via DDDI.</li>
+     * </ul>
+     *
+     * <p>The method MUST also declare exactly one {@link MeshJob} parameter (per
+     * {@code MESHJOB_DDDI_CONTRACT.md}); the resolver rejects multiple. The
+     * parameter may legitimately receive {@code null} when the tool is called
+     * synchronously via the regular {@code tools/call} fast path — user code
+     * must tolerate that.
+     *
+     * <p>Default {@code false} preserves existing tool semantics.
+     *
+     * <p>Example:
+     * <pre>{@code
+     * @MeshTool(capability = "plan_trip", task = true)
+     * public CompletableFuture<TripPlan> planTrip(
+     *     @Param("user_id") String userId,
+     *     MeshJob job
+     * ) {
+     *     if (job instanceof JobController c) c.updateProgress(0.25, "...");
+     *     return CompletableFuture.completedFuture(...);
+     * }
+     * }</pre>
+     */
+    boolean task() default false;
 }
