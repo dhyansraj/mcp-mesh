@@ -1,0 +1,140 @@
+# tc20_polyglot_cross_runtime_cancel — Python agent issues cancel for a
+# TS-owned in-flight job.
+#
+# Three agents:
+#   - long-task-provider-ts (port 9110)         — TS, runs_overlong
+#   - long-task-consumer-ts (port 9111)         — TS, submits the job
+#   - orchestrator-agent (port 9103)            — Python, no task tools
+#
+# Submit a 30s job via TS consumer; mid-flight, call __mesh_job_cancel
+# from the PYTHON orchestrator agent. The registry must:
+#   1. Receive the cancel via Python helper -> JobProxy -> POST /jobs/{id}/cancel
+#   2. Mark the row cancelled
+#   3. Forward the cancel signal to the TS provider's
+#      POST /jobs/:job_id/cancel route (registered by registerCancelRoute)
+#   4. The TS provider's cancel route fires the in-process cancel token
+#
+# Validates that registry → TS cancel-route forwarding works for
+# Python-initiated cancels (mirror of the TS-initiated cancel path
+# tested in tc06).
+
+name: "MeshJob polyglot: Python cancels TS-owned in-flight job"
+description: "Cross-runtime cancel — Python helper tool fires registry cancel; TS provider's cancel route processes the forward"
+tags:
+  - meshjob
+  - polyglot
+  - typescript
+  - python
+  - issue-884
+  - cancel
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts (TS provider + TS consumer + Python orchestrator)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-ts /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-ts /workspace/
+      cp -rL /uc-artifacts/orchestrator-agent /workspace/
+
+  - name: "Install TS provider deps"
+    handler: npm-install
+    path: /workspace/long-task-provider-ts
+
+  - name: "Install TS consumer deps"
+    handler: npm-install
+    path: /workspace/long-task-consumer-ts
+
+  - name: "Install Python orchestrator deps"
+    handler: pip-install
+    path: /workspace/orchestrator-agent
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start TS provider (port 9110)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
+
+  - name: "Wait for TS provider"
+    handler: wait
+    seconds: 15
+
+  - name: "Start TS consumer (port 9111)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+
+  - name: "Start Python orchestrator (port 9103)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=9103 -d
+
+  - name: "Wait for all 3 + DI"
+    handler: wait
+    seconds: 28
+
+  - name: "Submit 30-second overlong job via TS consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_overlong '{"user_id":"alice","seconds":30}' --raw
+    capture: submit_resp
+    timeout: 15
+
+  - name: "Wait 5s for TS provider to claim + start"
+    handler: wait
+    seconds: 5
+
+  # Python helper: __mesh_job_cancel takes snake_case job_id.
+  - name: "Cancel via the Python orchestrator agent's helper tool"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="orchestrator-agent") | .id')
+      echo "JOB_ID=${JOB_ID} AGENT=${AGENT}"
+      if [ -z "$JOB_ID" ] || [ "$JOB_ID" = "null" ] || [ -z "$AGENT" ] || [ "$AGENT" = "null" ]; then
+        echo "ERROR: required vars empty — JOB_ID='$JOB_ID' AGENT='$AGENT'"
+        exit 1
+      fi
+      meshctl call "${AGENT}:__mesh_job_cancel" "{\"job_id\":\"${JOB_ID}\",\"reason\":\"tc20 python-initiated cancel of TS job\"}"
+    capture: cancel_response
+    timeout: 15
+
+  - name: "Wait for cancel propagation"
+    handler: wait
+    seconds: 8
+
+  - name: "Read final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,owner_instance_id,error,progress}'
+    capture: final_status
+
+assertions:
+  # Anchor on the field key+value — bare `ok` matches "lookup", URLs, etc.
+  # Python helper returns {"ok": True, "job_id": ...} -> escaped envelope.
+  - expr: "${captured.cancel_response} contains '\\\"ok\\\":true'"
+    message: "Python helper cancel should ack with ok:true"
+  - expr: "${captured.final_status} contains '\"status\": \"cancelled\"'"
+    message: "final status should be cancelled (not completed) — Python -> registry -> TS cancel route worked"
+  # Owner is the TS provider — proves the registry forwarded the cancel
+  # to the TS replica that holds the lease.
+  - expr: "${captured.final_status} contains 'long-task-provider-ts'"
+    message: "owner_instance_id should be the TS provider — confirms Python -> TS forwarding path"
+  # The progress at cancel time should be < 1.0 — the TS provider should
+  # NOT have run runs_overlong's natural 30s completion.
+  - expr: "${captured.final_status} not contains '\"status\": \"completed\"'"
+    message: "TS provider must not have completed naturally — cancel must have aborted the runs_overlong loop"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

@@ -1,0 +1,140 @@
+# tc19_polyglot_cross_runtime_status_read — Python orchestrator reads job
+# state for a job submitted/run entirely on TS.
+#
+# Three agents:
+#   - long-task-provider-ts (port 9110)         — TS, task=true tools
+#   - long-task-consumer-ts (port 9111)         — TS, submits the job
+#   - orchestrator-agent (port 9103)            — Python, no task tools
+#
+# Submit a job via the TS consumer; capture job_id; then call
+# __mesh_job_status from the PYTHON orchestrator. Verifies:
+#   1. Helper tools register on every TS agent (already covered)
+#   2. Python's __mesh_job_status (using job_id arg) can read state
+#      for a job whose row was written by TS code
+#   3. job_id-as-capability semantics work cross-runtime
+#
+# This is the "registry is the single source of truth, runtime-agnostic"
+# guarantee — possession of the UUID + an agent in the mesh = read access,
+# regardless of which runtime owns either side.
+
+name: "MeshJob polyglot: Python orchestrator reads status for TS-submitted job"
+description: "Cross-runtime status read — Python helper tool fetches state for a TS-owned job"
+tags:
+  - meshjob
+  - polyglot
+  - typescript
+  - python
+  - issue-884
+  - helpers
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts (TS provider + TS consumer + Python orchestrator)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-ts /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-ts /workspace/
+      cp -rL /uc-artifacts/orchestrator-agent /workspace/
+
+  - name: "Install TS provider deps"
+    handler: npm-install
+    path: /workspace/long-task-provider-ts
+
+  - name: "Install TS consumer deps"
+    handler: npm-install
+    path: /workspace/long-task-consumer-ts
+
+  - name: "Install Python orchestrator deps"
+    handler: pip-install
+    path: /workspace/orchestrator-agent
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start TS provider (port 9110)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
+
+  - name: "Wait for TS provider"
+    handler: wait
+    seconds: 15
+
+  - name: "Start TS consumer (port 9111)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+
+  - name: "Start Python orchestrator (port 9103)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=9103 -d
+
+  - name: "Wait for all 3 to register + DI"
+    handler: wait
+    seconds: 28
+
+  - name: "Verify all 3 agents registered"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s http://localhost:8000/agents | jq -r '.agents[].name' | sort
+    capture: agent_names
+
+  - name: "Submit a quick job via TS consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["only"],"max_retries":1,"max_duration":30}' --raw
+    capture: submit_resp
+    timeout: 15
+
+  - name: "Wait for completion"
+    handler: wait
+    seconds: 10
+
+  # Now call the Python orchestrator's __mesh_job_status. Python helpers
+  # use the snake_case `job_id` arg name (vs TS `jobId`). Address the
+  # specific Python agent so the routing terminates on the Python side.
+  - name: "Call Python orchestrator's __mesh_job_status (snake_case job_id arg)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="orchestrator-agent") | .id')
+      echo "JOB_ID=${JOB_ID} AGENT=${AGENT}"
+      meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}"
+    capture: status_from_python
+
+assertions:
+  - expr: "${captured.agent_names} contains 'long-task-provider-ts'"
+    message: "TS provider should be registered"
+  - expr: "${captured.agent_names} contains 'long-task-consumer-ts'"
+    message: "TS consumer should be registered"
+  - expr: "${captured.agent_names} contains 'orchestrator-agent'"
+    message: "Python orchestrator should be registered"
+  # The cross-runtime read returns the job's terminal state. Python's
+  # response includes structuredContent (pretty-printed) so the spaced
+  # form `"status": "completed"` lands in the captured text.
+  - expr: "${captured.status_from_python} contains 'completed'"
+    message: "Python orchestrator should be able to read terminal status for the TS-submitted job"
+  # The owner_instance_id field carries the TS provider's id —
+  # confirms data flow: Python helper -> JobProxy -> registry GET ->
+  # row data identical to a TS-side read of the same job_id.
+  - expr: "${captured.status_from_python} contains 'long-task-provider-ts'"
+    message: "Python's read should expose the TS provider's owner_instance_id"
+  # No auth-flavoured errors — job_id-as-capability semantics work
+  # cross-runtime (the helper doesn't gate on owner runtime).
+  - expr: "${captured.status_from_python} not contains 'unauthorized'"
+    message: "must NOT see 'unauthorized' — cross-runtime reads are open per ID-as-capability"
+  - expr: "${captured.status_from_python} not contains 'permission denied'"
+    message: "must NOT see 'permission denied' — cross-runtime reads are open per ID-as-capability"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

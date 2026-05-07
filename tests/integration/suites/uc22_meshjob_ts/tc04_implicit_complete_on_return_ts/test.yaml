@@ -1,0 +1,98 @@
+# tc04_implicit_complete_on_return_ts — TS port of uc21/tc04.
+#
+# Producer fixture report_with_implicit_complete updates progress but
+# NEVER calls job.complete(). The TS dispatch wrapper's auto-complete
+# path should observe the non-terminal isTerminal() probe and flush the
+# user's return value as the terminal payload.
+
+name: "MeshJob TS: handler returns without complete() — auto-complete fires"
+description: "TS producer doesn't call job.complete; runtime auto-completes with the return value"
+tags:
+  - meshjob
+  - typescript
+  - issue-884
+  - auto-complete
+timeout: 90
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-ts /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-ts /workspace/
+
+  - name: "Install provider deps"
+    handler: npm-install
+    path: /workspace/long-task-provider-ts
+
+  - name: "Install consumer deps"
+    handler: npm-install
+    path: /workspace/long-task-consumer-ts
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 15
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+
+  - name: "Wait for consumer"
+    handler: wait
+    seconds: 22
+
+  - name: "POST /jobs for report_with_implicit_complete"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:8000/jobs \
+        -H 'Content-Type: application/json' \
+        -d '{"capability":"report_with_implicit_complete","submitted_payload":{"user_id":"alice"},"submitted_by":"tc04","max_duration":30,"max_retries":1}'
+    capture: submit_resp
+    timeout: 15
+
+  - name: "Extract job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.id')
+      echo "JOB_ID=${JOB_ID}"
+    capture: job_id_extract
+
+  - name: "Wait for completion"
+    handler: wait
+    seconds: 12
+
+  - name: "Read final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      meshctl call __mesh_job_status "{\"jobId\":\"${JOB_ID}\"}"
+    capture: final_status
+
+assertions:
+  # Anchor on the status field itself — bare `completed` would also match
+  # the `completed_at` timestamp field that's present on any terminal row.
+  - expr: "${captured.final_status} contains '\\\"status\\\":\\\"completed\\\"'"
+    message: "status field should be completed via auto-complete path"
+  # Anchor on the result-payload key — bare `implicit` would also match
+  # the capability name `report_with_implicit_complete` in the envelope.
+  - expr: "${captured.final_status} contains '\\\"implicit\\\":true'"
+    message: "result must be the user's return value carrying implicit:true (not just the capability name)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

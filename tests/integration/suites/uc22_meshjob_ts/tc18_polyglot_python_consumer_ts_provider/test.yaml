@@ -1,0 +1,94 @@
+# tc18_polyglot_python_consumer_ts_provider — Python consumer ↔ TS provider.
+#
+# Reverse of tc17. Validates that a Python MeshJobSubmitter can submit
+# work to a TS task=true tool. Uses the Python uc21 long-task-consumer
+# fixture (commission_report) and the TS long-task-provider-ts fixture
+# (generate_report).
+#
+# Setup:
+#   - TS long-task-provider-ts on port 9110  (capability: generate_report)
+#   - Python long-task-consumer on port 9101 (depends on generate_report)
+
+name: "MeshJob polyglot: Python consumer commissions TS provider"
+description: "Python MeshJobSubmitter -> TS addTool({task:true}), end-to-end submit + wait"
+tags:
+  - meshjob
+  - polyglot
+  - typescript
+  - python
+  - issue-884
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts (TS provider + Python consumer)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-ts /workspace/
+      cp -rL /uc-artifacts/long-task-consumer /workspace/
+
+  - name: "Install TS provider deps"
+    handler: npm-install
+    path: /workspace/long-task-provider-ts
+
+  - name: "Install Python consumer deps"
+    handler: pip-install
+    path: /workspace/long-task-consumer
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start TS provider (port 9110)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
+
+  - name: "Wait for TS provider"
+    handler: wait
+    seconds: 15
+
+  - name: "Start Python consumer (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Wait for Python consumer + DI resolution"
+    handler: wait
+    seconds: 22
+
+  - name: "Verify both runtimes registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Call commission_report — Python consumer -> TS provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report '{"user_id":"alice","sections":["intro","analysis"]}'
+    capture: commission_response
+    timeout: 60
+
+assertions:
+  - expr: "${captured.agent_list} contains 'long-task-provider-ts'"
+    message: "TS provider should be registered"
+  - expr: "${captured.agent_list} contains 'long-task-consumer'"
+    message: "Python consumer should be registered"
+  # Python wait() returns the structured result verbatim from the TS
+  # provider's complete() payload. Python serializes with spaces, the
+  # TS provider's payload is just JSON-shaped data — both produce the
+  # canonical fields.
+  - expr: "${captured.commission_response} contains 'alice'"
+    message: "result should echo the submitted user_id"
+  - expr: "${captured.commission_response} contains 'Generated content for intro'"
+    message: "result should include the intro section content from TS provider"
+  - expr: "${captured.commission_response} contains 'Generated content for analysis'"
+    message: "result should include the analysis section content from TS provider"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

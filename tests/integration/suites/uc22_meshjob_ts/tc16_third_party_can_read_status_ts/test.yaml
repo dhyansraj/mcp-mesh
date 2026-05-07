@@ -1,0 +1,150 @@
+# tc16_third_party_can_read_status_ts — TS port of uc21/tc16.
+#
+# Four TS agents: producer, consumer (submits), and two bystanders X / Y
+# (no involvement). Bystanders are distinct fixtures with unique
+# @mesh.agent names so the registry sees two genuinely independent agents.
+# Submit a job via consumer; capture job_id. Call __mesh_job_status on
+# each bystander. Presigned-URL semantics: possession of the UUID = read.
+
+name: "MeshJob TS: third-party agents can read status by job_id (presigned-URL auth)"
+description: "TS — two unrelated bystanders read job status — no auth gating, only ID-as-capability"
+tags:
+  - meshjob
+  - typescript
+  - issue-884
+  - helpers
+  - auth
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-ts /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-ts /workspace/
+      cp -rL /uc-artifacts/bystander-x-ts /workspace/
+      cp -rL /uc-artifacts/bystander-y-ts /workspace/
+
+  - name: "Install provider deps"
+    handler: npm-install
+    path: /workspace/long-task-provider-ts
+
+  - name: "Install consumer deps"
+    handler: npm-install
+    path: /workspace/long-task-consumer-ts
+
+  - name: "Install bystander-x-ts deps"
+    handler: npm-install
+    path: /workspace/bystander-x-ts
+
+  - name: "Install bystander-y-ts deps"
+    handler: npm-install
+    path: /workspace/bystander-y-ts
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 15
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+
+  - name: "Start bystander X"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start bystander-x-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9114 -d
+
+  - name: "Start bystander Y"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start bystander-y-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9115 -d
+
+  - name: "Wait for all 4 to register + DI to settle"
+    handler: wait
+    seconds: 30
+
+  - name: "Confirm all 4 agents in registry"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s http://localhost:8000/agents | jq -r '.agents[].name' | sort
+    capture: agent_names
+
+  - name: "Submit job via consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["one","two"],"max_retries":1,"max_duration":30}' --raw
+    capture: submit_resp
+    timeout: 15
+
+  - name: "Wait for completion"
+    handler: wait
+    seconds: 8
+
+  - name: "Bystander X reads status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="bystander-x-ts") | .id')
+      echo "AGENT=${AGENT} JOB=${JOB_ID}"
+      meshctl call "${AGENT}:__mesh_job_status" "{\"jobId\":\"${JOB_ID}\"}"
+    capture: bystander_x_status
+
+  - name: "Bystander Y reads status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="bystander-y-ts") | .id')
+      meshctl call "${AGENT}:__mesh_job_status" "{\"jobId\":\"${JOB_ID}\"}"
+    capture: bystander_y_status
+
+assertions:
+  - expr: "${captured.agent_names} contains 'long-task-provider-ts'"
+    message: "TS provider should be registered"
+  - expr: "${captured.agent_names} contains 'long-task-consumer-ts'"
+    message: "TS consumer should be registered"
+  - expr: "${captured.agent_names} contains 'bystander-x-ts'"
+    message: "bystander-x-ts should be registered"
+  - expr: "${captured.agent_names} contains 'bystander-y-ts'"
+    message: "bystander-y-ts should be registered"
+
+  # Both bystanders return the real status — NOT an auth error.
+  - expr: "${captured.bystander_x_status} contains 'completed'"
+    message: "bystander-x-ts should read the actual completed status (no auth gating)"
+  - expr: "${captured.bystander_y_status} contains 'completed'"
+    message: "bystander-y-ts should read the actual completed status (no auth gating)"
+
+  # Both responses must reference the producer's owner_instance_id.
+  - expr: "${captured.bystander_x_status} contains 'long-task-provider-ts'"
+    message: "bystander-x-ts's read should include the producer owner_instance_id"
+  - expr: "${captured.bystander_y_status} contains 'long-task-provider-ts'"
+    message: "bystander-y-ts's read should include the producer owner_instance_id"
+
+  - expr: "${captured.bystander_x_status} not contains 'unauthorized'"
+    message: "bystander-x-ts must NOT see 'unauthorized'"
+  - expr: "${captured.bystander_x_status} not contains 'permission denied'"
+    message: "bystander-x-ts must NOT see 'permission denied'"
+  - expr: "${captured.bystander_y_status} not contains 'unauthorized'"
+    message: "bystander-y-ts must NOT see 'unauthorized'"
+  - expr: "${captured.bystander_y_status} not contains 'permission denied'"
+    message: "bystander-y-ts must NOT see 'permission denied'"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

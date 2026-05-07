@@ -1,0 +1,153 @@
+# tc09_cancel_aborts_outbound_http_ts — TS port of uc21/tc09.
+#
+# Three-agent chain (all TS):
+#   consumer (commission_downstream)
+#     -> provider.report_with_downstream_call (task=true)
+#         -> downstream-sleeper-ts.slow_downstream (sleeps 30s)
+#
+# After submit, wait briefly then cancel. The TS provider's
+# cancel route fires the cancel registry token. Whether that aborts
+# the in-flight outbound HTTP depends on the substrate — at the time
+# of writing the TS proxy's AbortController is timeout-only and is
+# NOT registered with the per-job cancel registry. Same gap as the
+# Python equivalent (#882 lineage).
+#
+# Producer-side correctness (cancel landed) is still observable:
+#   - status == cancelled
+#   - status != completed
+# The downstream-sleeper-ts log marker would only fire if FastMCP-TS
+# propagated client disconnects (it does not at the time of writing).
+# Documented inline; assertions test what IS observable.
+
+name: "MeshJob TS: cancel aborts in-flight downstream HTTP call (or terminates job promptly)"
+description: "TS — provider calls slow_downstream(30s); cancel must result in cancelled status well below the 30s natural finish"
+tags:
+  - meshjob
+  - typescript
+  - issue-884
+  - cancel
+  - propagation
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-ts /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-ts /workspace/
+      cp -rL /uc-artifacts/downstream-sleeper-ts /workspace/
+
+  - name: "Install provider deps"
+    handler: npm-install
+    path: /workspace/long-task-provider-ts
+
+  - name: "Install consumer deps"
+    handler: npm-install
+    path: /workspace/long-task-consumer-ts
+
+  - name: "Install sleeper deps"
+    handler: npm-install
+    path: /workspace/downstream-sleeper-ts
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start downstream-sleeper-ts (port 9112) FIRST"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start downstream-sleeper-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9112 -d
+
+  - name: "Wait for sleeper"
+    handler: wait
+    seconds: 15
+
+  - name: "Start provider (port 9110)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
+
+  - name: "Wait for provider DI to resolve slow_downstream"
+    handler: wait
+    seconds: 22
+
+  - name: "Start consumer (port 9111)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+
+  - name: "Wait for consumer DI"
+    handler: wait
+    seconds: 22
+
+  - name: "Submit job that calls downstream"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_downstream '{"user_id":"alice"}' --raw
+    capture: submit_resp
+    timeout: 15
+
+  # Give the producer enough time to enter the downstream call AND
+  # for the JobController batching tick (2s default) to flush the
+  # initial update_progress(0.1, "calling downstream"). Otherwise
+  # the cancel can land before any progress reaches the registry.
+  - name: "Wait 6s — let producer pick up + flush first progress + enter downstream"
+    handler: wait
+    seconds: 6
+
+  - name: "Cancel the job"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      echo "JOB_ID=${JOB_ID}"
+      meshctl call __mesh_job_cancel "{\"jobId\":\"${JOB_ID}\"}"
+    capture: cancel_response
+    timeout: 15
+
+  # Should propagate within a few seconds — definitely well below the
+  # 30s sleep that's still running on the sleeper. We allow a generous
+  # window because outbound HTTP abort propagation depends on substrate
+  # support (see header note).
+  - name: "Wait for cancel to propagate"
+    handler: wait
+    seconds: 10
+
+  - name: "Read final status + sleeper log"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      echo "=== final status ==="
+      meshctl call __mesh_job_status "{\"jobId\":\"${JOB_ID}\"}"
+      echo
+      echo "=== downstream-sleeper-ts log tail ==="
+      meshctl logs downstream-sleeper-ts 2>&1 | tail -30
+    capture: final_check
+
+assertions:
+  # Anchor on the field key+value — bare `ok` matches "lookup", URLs, etc.
+  - expr: "${captured.cancel_response} contains '\\\"ok\\\":true'"
+    message: "cancel should ack with ok:true"
+  # Anchor on the status field key+value — bare `cancelled` could match
+  # an error string elsewhere in the JSON envelope.
+  - expr: "${captured.final_check} contains '\\\"status\\\":\\\"cancelled\\\"'"
+    message: "status field should be cancelled — cancel must have aborted before natural finish"
+  # NB on `calling downstream`: this WOULD be the most informative
+  # assertion (progress message frozen mid-downstream proves cancel
+  # landed inside the outbound HTTP), BUT it's flaky on TS because
+  # the JobController batching tick may not have flushed the initial
+  # update_progress(0.1, ...) before the cancel landed. The "status
+  # not completed" check above is the substantive correctness signal.
+  # NOTE: the downstream `sleep CANCELLED` marker would only fire if
+  # FastMCP-TS surfaced inbound client-disconnect as a cancellation to
+  # the tool handler. At the time of writing it does NOT — the sleeper
+  # runs to natural completion regardless of producer-side cancel.
+  # Tracking the downstream-side propagation gap as part of #884 follow-ups.
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

@@ -1,0 +1,98 @@
+# tc15_status_for_unknown_id_ts — TS port of uc21/tc15.
+#
+# Calls __mesh_job_status with a UUID that's not in the registry.
+# Registry returns HTTP 404 with "job not found: <id>". TS JobProxy
+# turns that into an error; the helper-tool wrapper surfaces it through
+# MCP as an isError envelope or a thrown error.
+
+name: "MeshJob TS: __mesh_job_status with unknown job_id returns structured not-found"
+description: "TS — bogus UUID returns NotFound-shaped error (not a 500, not an auth error)"
+tags:
+  - meshjob
+  - typescript
+  - issue-884
+  - helpers
+  - errors
+timeout: 90
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/orchestrator-agent-ts /workspace/
+
+  - name: "Install agent deps"
+    handler: npm-install
+    path: /workspace/orchestrator-agent-ts
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start orchestrator agent (TS)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start orchestrator-agent-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9113 -d
+
+  - name: "Wait for registration"
+    handler: wait
+    seconds: 18
+
+  - name: "Direct registry GET — confirm 404 shape"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -w "\nHTTP_CODE=%{http_code}" \
+        "http://localhost:8000/jobs/00000000-0000-0000-0000-000000000000"
+    capture: registry_404
+
+  - name: "Helper tool with bogus job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call __mesh_job_status \
+        '{"jobId":"00000000-0000-0000-0000-000000000000"}' 2>&1 || true
+    capture: helper_response
+
+  # Auth-rejection check via case-insensitive grep — the DSL has
+  # `not contains` (case-sensitive) only, but real responses might
+  # surface "Unauthorized", "UNAUTHORIZED", or "Permission Denied".
+  - name: "Assert no auth-rejection phrasing (case-insensitive)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      LOWER=$(echo '${captured.helper_response}' | tr '[:upper:]' '[:lower:]')
+      if echo "$LOWER" | grep -q -E 'unauthorized|permission denied'; then
+        echo "ERROR: helper_response contains an auth-rejection phrase (job_id-as-capability auth must be open)"
+        echo "$LOWER"
+        exit 1
+      fi
+      echo "no auth-rejection phrasing detected"
+
+assertions:
+  - expr: "${captured.registry_404} contains 'HTTP_CODE=404'"
+    message: "registry GET /jobs/<bogus-id> should return HTTP 404"
+  - expr: "${captured.registry_404} icontains 'job not found'"
+    message: "registry 404 body should say 'job not found'"
+  # The TS helper tool surfaces NotFound through MCP either as a
+  # thrown error (meshctl call exits non-zero with stderr) or as an
+  # isError envelope — both surface "not found" verbatim from the
+  # backend error message.
+  - expr: "${captured.helper_response} icontains 'not found'"
+    message: "helper-tool error should mention 'not found'"
+  # Auth-model: presigned-URL semantics → NOT gated. Validated via the
+  # case-insensitive shell step above (DSL has no `not icontains`).
+  # Must surface as the structured BackendError envelope (proves the 404
+  # round-trip), not a 5xx server error.
+  - expr: "${captured.helper_response} contains 'backend error'"
+    message: "must surface as the structured BackendError envelope"
+  - expr: "${captured.helper_response} not contains 'server error (HTTP 5'"
+    message: "must NOT surface as a 5xx server error"
+  - expr: "${captured.helper_response} not contains '500 Internal Server Error'"
+    message: "must NOT carry a literal HTTP 500 status line"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

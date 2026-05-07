@@ -1,0 +1,18 @@
+{
+  "name": "bystander-x-ts",
+  "version": "1.0.0",
+  "description": "MCP Mesh — bystander X agent (uc22 TS)",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "^1.4.1",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}

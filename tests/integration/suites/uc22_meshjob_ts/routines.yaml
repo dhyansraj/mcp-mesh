@@ -1,0 +1,60 @@
+# UC-level routines for uc22_meshjob_ts.
+#
+# Mirror of uc21_meshjob/routines.yaml — TS port of the MeshJob suite.
+# Same registry knobs (MCP_MESH_SWEEP_INTERVAL=10s + retention/health) so
+# crash-recovery / orphan-reroute / deadline tests resolve in seconds
+# instead of the registry's 5-minute defaults.
+#
+# Identical to the Python suite: the substrate's recovery + deadline
+# expiry paths are runtime-agnostic — they live entirely in the registry
+# (Go) — so the same env-var overrides apply regardless of whether the
+# producer/consumer is Python or TypeScript.
+
+routines:
+  # See uc21_meshjob/routines.yaml for the full chain-of-effects writeup
+  # of MCP_MESH_SWEEP_INTERVAL / RETENTION / HEALTH_CHECK_INTERVAL /
+  # DEFAULT_TIMEOUT_THRESHOLD. The numbers below are intentionally
+  # identical to keep the suite-suite math (~35s end-to-end after a
+  # SIGKILL for orphan reset) the same across both runtimes.
+  start_registry_with_fast_sweep:
+    description: "Start the mesh registry with all timing knobs cranked for fast recovery tests"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          MCP_MESH_SWEEP_INTERVAL=10s \
+          MCP_MESH_RETENTION=10s \
+          MCP_MESH_HEALTH_CHECK_INTERVAL=5 \
+          DEFAULT_TIMEOUT_THRESHOLD=15 \
+            meshctl start --registry-only -d
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "registry ready after ${i}s"
+              # Verify the sweep override actually stamped its log line.
+              # If MCP_MESH_SWEEP_INTERVAL didn't take effect the suite
+              # must fail loudly here, not via slow per-test timeouts.
+              # Tail the log so a stale match from an earlier run in the
+              # same shell session can't make a misconfigured current
+              # run look healthy.
+              tail -n 200 ~/.mcp-mesh/logs/registry.log \
+                | grep -qE '\[sweep\] using MCP_MESH_SWEEP_INTERVAL' \
+                || { echo "FAIL: MCP_MESH_SWEEP_INTERVAL override did not take effect"; exit 1; }
+              echo "[setup] confirmed sweep override active"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: registry did not become ready in 20s"
+          tail -50 ~/.mcp-mesh/logs/registry.log 2>/dev/null || true
+          exit 1
+        capture: registry_start
+        timeout: 30
+
+  # Stop everything started by this test (agents + registry).
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: meshctl stop 2>/dev/null || true
+        ignore_errors: true

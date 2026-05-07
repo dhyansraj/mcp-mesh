@@ -1,0 +1,144 @@
+# tc02_progress_visible_midflight_ts — TS port of uc21/tc02.
+#
+# Submit a long-enough generate_report job (7 sections * 2s = 14s) and
+# poll __mesh_job_status mid-flight. The TS producer's JobController
+# emits update_progress() after each section; deltas flow to the
+# registry via /jobs/batch on the batching tick. By the time at least
+# one mid-flight status read happens during a working interval, we
+# should observe progress > 0 AND status == "working".
+
+name: "MeshJob TS: mid-flight progress visible via __mesh_job_status"
+description: "TS submit long job, poll status mid-flight, observe progress advance through working->completed"
+tags:
+  - meshjob
+  - typescript
+  - issue-884
+  - progress
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-ts /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-ts /workspace/
+
+  - name: "Install provider deps"
+    handler: npm-install
+    path: /workspace/long-task-provider-ts
+
+  - name: "Install consumer deps"
+    handler: npm-install
+    path: /workspace/long-task-consumer-ts
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (port 9110)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 15
+
+  - name: "Start consumer (port 9111)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+
+  - name: "Wait for consumer + DI resolution"
+    handler: wait
+    seconds: 22
+
+  - name: "Submit generate_report (7 sections, ~14s) — get job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["a","b","c","d","e","f","g"],"max_retries":1,"max_duration":60}' --raw
+    capture: submit_response
+    timeout: 30
+
+  - name: "Extract job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # TS responses lack structuredContent — only content[].text holds
+      # the JSON-stringified inner payload. Pull the text field, parse
+      # the inner JSON, then read .job_id.
+      RESP='${captured.submit_response}'
+      JOB_ID=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .job_id')
+      echo "JOB_ID=${JOB_ID}"
+    capture: job_id_extract
+    timeout: 10
+
+  # Poll mid-flight: kick off after a 4s settle (claim + first
+  # iteration), then poll every 2s for 6 ticks. Producer takes
+  # ~14s for 7 sections, so this window straddles working at
+  # ~0.14, 0.28, 0.42, 0.57, 0.71, 0.85.
+  - name: "Poll status 6x mid-flight"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      echo "polling job_id=$JOB_ID"
+      sleep 4
+      for i in 1 2 3 4 5 6; do
+        echo "--- poll $i ---"
+        # TS helper uses jobId (camelCase); Python uses job_id.
+        # This is a TS agent so jobId.
+        meshctl call __mesh_job_status "{\"jobId\":\"${JOB_ID}\"}" --raw 2>&1 || true
+        sleep 2
+      done
+    capture: midflight_polls
+    timeout: 45
+
+  - name: "Wait for completion"
+    handler: wait
+    seconds: 12
+
+  - name: "Final status read"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      meshctl call __mesh_job_status "{\"jobId\":\"${JOB_ID}\"}" --raw
+    capture: final_status
+    timeout: 15
+
+assertions:
+  - expr: "${captured.submit_response} contains 'job_id'"
+    message: "submit response should carry a job_id"
+
+  # At least one mid-flight poll showed working status. The registry's
+  # GET /jobs/{id} returns snake_case status, regardless of which
+  # runtime's helper tool fielded the read.
+  - expr: "${captured.midflight_polls} contains 'working'"
+    message: "at least one mid-flight poll should observe status=working"
+
+  # At least one mid-flight poll showed in-progress (> 0, < 1.0). The
+  # captured JSON-escaped text from meshctl carries
+  # `\"progress\":0.2857...` for working-state reads. Match the
+  # `\"progress\":0.` prefix — leading 0.<nonzero> proves (0, 1).
+  - expr: "${captured.midflight_polls} contains '\\\"progress\\\":0.'"
+    message: "at least one mid-flight poll should observe progress in (0, 1)"
+
+  - expr: "${captured.final_status} contains 'completed'"
+    message: "final status should be completed"
+  # Final progress is 1 (compact JSON serializes 1.0 as 1, no decimal).
+  - expr: "${captured.final_status} contains '\\\"progress\\\":1'"
+    message: "final progress should be 1"
+
+  - expr: "${captured.final_status} contains 'Generated content for a'"
+    message: "final result should include section a content"
+  - expr: "${captured.final_status} contains 'Generated content for g'"
+    message: "final result should include section g content (7 total)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

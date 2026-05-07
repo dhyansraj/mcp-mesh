@@ -1,0 +1,98 @@
+# tc01_submit_wait_happy_ts — TS port of uc21/tc01_submit_wait_happy.
+#
+# Headline regression test for MeshJob Phase 1, TypeScript runtime.
+#
+# Scenario:
+#   - Registry up with MCP_MESH_SWEEP_INTERVAL=10s
+#   - long-task-provider-ts hosts generate_report (task=true)
+#   - long-task-consumer-ts hosts commission_report (deps=["generate_report"])
+#   - Client invokes commission_report with sections=[intro, analysis, summary]
+#   - Consumer's submit() + wait() returns the structured payload after ~6s
+
+name: "MeshJob TS: submit-and-wait happy path returns structured result"
+description: "TS producer + TS consumer: commission_report -> generate_report (3 sections) -> wait -> structured result"
+tags:
+  - meshjob
+  - smoke
+  - typescript
+  - issue-884
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-ts /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-ts /workspace/
+
+  - name: "Install provider deps"
+    handler: npm-install
+    path: /workspace/long-task-provider-ts
+
+  - name: "Install consumer deps"
+    handler: npm-install
+    path: /workspace/long-task-consumer-ts
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (port 9110)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
+
+  - name: "Wait for provider registration"
+    handler: wait
+    seconds: 15
+
+  - name: "Start consumer (port 9111)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+
+  - name: "Wait for consumer registration + DI resolution"
+    handler: wait
+    seconds: 22
+
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Call commission_report — submit + wait the full job"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report '{"user_id": "alice", "sections": ["intro", "analysis", "summary"]}'
+    capture: commission_response
+    timeout: 60
+
+assertions:
+  - expr: "${captured.agent_list} contains 'long-task-provider-ts'"
+    message: "TS provider should be registered"
+  - expr: "${captured.agent_list} contains 'long-task-consumer-ts'"
+    message: "TS consumer should be registered"
+  # NB: TS runtime serializes results compactly (no spaces around `:`)
+  # AND meshctl's MCP envelope JSON-escapes the inner text — so the
+  # captured string carries `\"user_id\":\"alice\"` (backslash-quoted).
+  # Match that escaped, compact form.
+  - expr: "${captured.commission_response} not contains '\"isError\":true'"
+    message: "commission_report should NOT return an MCP error envelope"
+  - expr: "${captured.commission_response} contains '\\\"user_id\\\":\\\"alice\\\"'"
+    message: "result should echo the submitted user_id"
+  - expr: "${captured.commission_response} contains '\\\"section\\\":\\\"intro\\\"'"
+    message: "result should include the intro section"
+  - expr: "${captured.commission_response} contains '\\\"section\\\":\\\"analysis\\\"'"
+    message: "result should include the analysis section"
+  - expr: "${captured.commission_response} contains '\\\"section\\\":\\\"summary\\\"'"
+    message: "result should include the summary section"
+  - expr: "${captured.commission_response} contains 'Generated content for intro'"
+    message: "result should include the canonical marker for intro"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
