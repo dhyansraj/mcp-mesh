@@ -79,7 +79,7 @@ test:
         OS=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="orchestrator-agent-java") | .status')
         CR=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .dependencies_resolved')
         CT=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .total_dependencies')
-        if [ "$PS" = "healthy" ] && [ "$CS" = "healthy" ] && [ "$OS" = "healthy" ] && [ "$CR" = "$CT" ] && [ "$CT" != "0" ]; then
+        if [ "$PS" = "healthy" ] && [ "$CS" = "healthy" ] && [ "$OS" = "healthy" ] && [ "$CR" = "$CT" ] && [ "$CT" != "0" ] && [ "$CT" != "null" ]; then
           echo "all 3 ready after ${i}x2s"
           exit 0
         fi

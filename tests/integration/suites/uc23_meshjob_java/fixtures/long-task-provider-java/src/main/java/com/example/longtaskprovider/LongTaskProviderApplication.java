@@ -1,5 +1,8 @@
 package com.example.longtaskprovider;
 
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 import io.mcpmesh.JobController;
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.MeshJob;
@@ -59,6 +62,8 @@ import java.util.Map;
 )
 @SpringBootApplication
 public class LongTaskProviderApplication {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     public static void main(String[] args) {
         SpringApplication.run(LongTaskProviderApplication.class, args);
@@ -281,36 +286,24 @@ public class LongTaskProviderApplication {
                 .build();
             HttpResponse<String> agentsResp = client.send(
                 agentsReq, HttpResponse.BodyHandlers.ofString());
-            String body = agentsResp.body();
-            String endpointMarker = "\"endpoint\":\"";
-            String slowDownstreamMarker = "\"name\":\"downstream-sleeper-java\"";
-            int nameIdx = body.indexOf(slowDownstreamMarker);
-            if (nameIdx < 0) {
-                // Try the polyglot variants if the Java sleeper isn't here.
-                slowDownstreamMarker = "\"name\":\"downstream-sleeper\"";
-                nameIdx = body.indexOf(slowDownstreamMarker);
+            // Parse the /agents response with Jackson — string-based
+            // indexOf scanning was brittle once the JSON object grew
+            // past the lookback window or agent ordering shifted, and
+            // could attribute the wrong endpoint to the matched name.
+            String agentEndpoint = null;
+            for (String candidate : List.of(
+                    "downstream-sleeper-java",
+                    "downstream-sleeper",
+                    "downstream-sleeper-ts")) {
+                agentEndpoint = findEndpointForAgentName(agentsResp.body(), candidate);
+                if (agentEndpoint != null) break;
             }
-            if (nameIdx < 0) {
-                slowDownstreamMarker = "\"name\":\"downstream-sleeper-ts\"";
-                nameIdx = body.indexOf(slowDownstreamMarker);
-            }
-            if (nameIdx < 0) {
+            if (agentEndpoint == null) {
                 if (controller != null) {
                     controller.fail("slow_downstream provider not registered");
                 }
                 return null;
             }
-            // Walk back from the name to the enclosing endpoint field.
-            int endpointStart = body.indexOf(endpointMarker, Math.max(0, nameIdx - 800));
-            if (endpointStart < 0 || endpointStart > nameIdx) {
-                if (controller != null) {
-                    controller.fail("could not parse slow_downstream endpoint");
-                }
-                return null;
-            }
-            int valStart = endpointStart + endpointMarker.length();
-            int valEnd = body.indexOf("\"", valStart);
-            String agentEndpoint = body.substring(valStart, valEnd); // http://10.x.y.z:9122
 
             // Call /mcp on that endpoint with a tools/call request.
             //
@@ -360,9 +353,19 @@ public class LongTaskProviderApplication {
             String agentEndpoint,
             String toolName,
             String userId) throws IOException, InterruptedException {
-        String mcpBody = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
-            + "\"params\":{\"name\":\"" + toolName + "\",\"arguments\":"
-            + "{\"user_id\":\"" + userId + "\",\"seconds\":30}}}";
+        // Build the JSON-RPC body via Jackson rather than string concat
+        // so the embedded user_id / tool name get properly escaped if
+        // they ever contain a quote, backslash, or control char.
+        ObjectNode root = MAPPER.createObjectNode();
+        root.put("jsonrpc", "2.0");
+        root.put("id", 1);
+        root.put("method", "tools/call");
+        ObjectNode params = root.putObject("params");
+        params.put("name", toolName);
+        ObjectNode args = params.putObject("arguments");
+        args.put("user_id", userId);
+        args.put("seconds", 30);
+        String mcpBody = MAPPER.writeValueAsString(root);
         HttpRequest req = HttpRequest.newBuilder()
             .uri(URI.create(agentEndpoint + "/mcp"))
             .timeout(Duration.ofSeconds(60))
@@ -371,5 +374,34 @@ public class LongTaskProviderApplication {
             .POST(HttpRequest.BodyPublishers.ofString(mcpBody))
             .build();
         return client.send(req, HttpResponse.BodyHandlers.ofString());
+    }
+
+    /**
+     * Find the {@code endpoint} field for the named agent in a
+     * registry {@code GET /agents} response body. Returns {@code null}
+     * if the agent isn't present or the response shape doesn't match.
+     *
+     * <p>Replaces an earlier indexOf-based scanner that could land on
+     * the wrong agent's endpoint when the JSON exceeded an 800-char
+     * lookback window or agent ordering shifted between requests.
+     */
+    private static String findEndpointForAgentName(String body, String agentName) {
+        try {
+            JsonNode root = MAPPER.readTree(body);
+            JsonNode agents = root.has("agents") ? root.get("agents") : root;
+            if (agents == null || !agents.isArray()) return null;
+            for (JsonNode agent : agents) {
+                JsonNode name = agent.get("name");
+                if (name != null && agentName.equals(name.asText())) {
+                    JsonNode endpoint = agent.get("endpoint");
+                    return endpoint != null && !endpoint.isNull() ? endpoint.asText() : null;
+                }
+            }
+            return null;
+        } catch (RuntimeException e) {
+            // Jackson 3.x throws unchecked JacksonException — return
+            // null so the caller falls through to controller.fail().
+            return null;
+        }
     }
 }

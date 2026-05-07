@@ -97,7 +97,7 @@ test:
         PSTATUS=$(curl -s http://localhost:8000/agents \
           | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
         if [ "$STATUS" = "healthy" ] && [ "$PSTATUS" = "healthy" ] \
-           && [ "$RESOLVED" = "$TOTAL" ] && [ "$TOTAL" != "0" ]; then
+           && [ "$RESOLVED" = "$TOTAL" ] && [ "$TOTAL" != "0" ] && [ "$TOTAL" != "null" ]; then
           echo "consumer healthy with $RESOLVED/$TOTAL deps resolved after ${i}x2s"
           exit 0
         fi

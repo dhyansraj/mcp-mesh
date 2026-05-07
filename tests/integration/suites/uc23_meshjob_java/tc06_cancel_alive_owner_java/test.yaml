@@ -82,7 +82,7 @@ test:
       for i in $(seq 1 60); do
         ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
         S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
-        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && exit 0; sleep 2
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && [ "$T" != "null" ] && exit 0; sleep 2
       done; exit 1
     timeout: 150
 
@@ -97,6 +97,28 @@ test:
   - name: "Wait 5s for claim + start"
     handler: wait
     seconds: 5
+
+  # Per #889 the registry-side cancel handler always succeeds even if
+  # the producer never claimed. Without a pre-cancel progress check
+  # this test could pass for the wrong reason. Confirm the row
+  # recorded at least one progress emission before we cancel.
+  - name: "Confirm producer is in flight (progress > 0 before cancel)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      for i in $(seq 1 20); do
+        PROG=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.progress // 0')
+        if awk "BEGIN{exit !(${PROG} > 0)}"; then
+          echo "[pre-cancel] progress=${PROG} after ${i}s — producer is in flight"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: producer never recorded progress > 0 — cancel scenario invalid"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq .
+      exit 1
+    timeout: 30
 
   - name: "Cancel the job"
     handler: shell

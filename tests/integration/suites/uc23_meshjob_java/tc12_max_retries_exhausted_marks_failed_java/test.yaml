@@ -65,7 +65,7 @@ test:
       for i in $(seq 1 60); do
         ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
         S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
-        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && exit 0; sleep 2
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && [ "$T" != "null" ] && exit 0; sleep 2
       done; exit 1
     timeout: 150
 
@@ -78,10 +78,28 @@ test:
     capture: submit_resp
     timeout: 30
 
-  # See tc10 inline comment — Java needs longer pre-kill wait.
-  - name: "Wait 12s for claim (Java is slower)"
-    handler: wait
-    seconds: 12
+  # Poll until the producer has actually claimed the job rather than
+  # waiting a static 12s — owner_instance_id flipping non-null is the
+  # deterministic signal that attempt 1 has been recorded against the
+  # row before SIGKILL closes the JVM.
+  - name: "Wait for the producer to claim the job (deterministic pre-kill, round 1)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      for i in $(seq 1 30); do
+        OWNER=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.owner_instance_id // empty')
+        if [ -n "$OWNER" ] && [ "$OWNER" != "null" ]; then
+          echo "[claim-confirmed-round1] owner=$OWNER after ${i}s"
+          sleep 2
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: producer never claimed within 30s (round 1) — scenario invalid"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq .
+      exit 1
+    timeout: 45
 
   - name: "Kill provider — round 1 (attempt 1 crashes)"
     handler: shell
@@ -136,16 +154,32 @@ test:
     workdir: /workspace
     command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
 
-  - name: "Wait for round 2 healthy + claim"
+  - name: "Wait for round 2 healthy + claim (deterministic — owner re-bound)"
     handler: shell
     workdir: /workspace
     command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      # First wait for the fresh provider to be healthy.
       for i in $(seq 1 60); do
         S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
-        [ "$S" = "healthy" ] && { sleep 5; exit 0; }
+        [ "$S" = "healthy" ] && break
         sleep 2
-      done; exit 1
-    timeout: 150
+      done
+      [ "$S" = "healthy" ] || { echo "ERROR: round 2 provider not healthy"; exit 1; }
+      # Then poll for re-claim (owner flips back to non-null).
+      for i in $(seq 1 30); do
+        OWNER=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.owner_instance_id // empty')
+        if [ -n "$OWNER" ] && [ "$OWNER" != "null" ]; then
+          echo "[claim-confirmed-round2] owner=$OWNER after ${i}s"
+          sleep 2
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: round 2 never re-claimed — scenario invalid"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq .
+      exit 1
+    timeout: 180
 
   - name: "Kill provider — round 2 (attempt 2 crashes)"
     handler: shell

@@ -94,7 +94,7 @@ test:
         CR=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .dependencies_resolved')
         CT=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .total_dependencies')
         if [ "$PS" = "healthy" ] && [ "$CS" = "healthy" ] && [ "$XS" = "healthy" ] && [ "$YS" = "healthy" ] \
-           && [ "$CR" = "$CT" ] && [ "$CT" != "0" ]; then
+           && [ "$CR" = "$CT" ] && [ "$CT" != "0" ] && [ "$CT" != "null" ]; then
           echo "all 4 ready after ${i}x2s"
           exit 0
         fi

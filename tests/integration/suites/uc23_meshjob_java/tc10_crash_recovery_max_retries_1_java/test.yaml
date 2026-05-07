@@ -71,7 +71,7 @@ test:
       for i in $(seq 1 60); do
         ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
         S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
-        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && exit 0; sleep 2
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && [ "$T" != "null" ] && exit 0; sleep 2
       done; exit 1
     timeout: 150
 
@@ -84,13 +84,29 @@ test:
     capture: submit_resp
     timeout: 30
 
-  # Java's claim worker polls less aggressively than Python (asyncio
-  # tight loop) or TS (event loop) — wait long enough for attempt 1 to
-  # be recorded against the row before SIGKILL. With max_duration=60s
-  # the lease covers the full kill+sweep window.
-  - name: "Wait 12s for the producer to claim + start (Java is slower)"
-    handler: wait
-    seconds: 12
+  # Poll until the producer has actually claimed the job rather than
+  # waiting a static 12s. owner_instance_id flipping non-null is the
+  # deterministic signal that attempt 1 has been recorded, so SIGKILL
+  # below cannot land before the claim worker writes attempt 1 → the
+  # orphan reset path can correctly increment to attempt 2 on retry.
+  - name: "Wait for the producer to claim the job (deterministic pre-kill)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      for i in $(seq 1 30); do
+        OWNER=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.owner_instance_id // empty')
+        if [ -n "$OWNER" ] && [ "$OWNER" != "null" ]; then
+          echo "[claim-confirmed] owner=$OWNER after ${i}s"
+          sleep 2
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: producer never claimed within 30s — recovery scenario invalid"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq .
+      exit 1
+    timeout: 45
 
   - name: "Kill the provider mid-flight (SIGKILL — mvn parent + java child)"
     handler: shell
@@ -149,16 +165,35 @@ test:
     workdir: /workspace
     command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
 
-  - name: "Wait for fresh provider healthy + claim + run (Java cold-start ~30s + 14s job)"
+  - name: "Wait for fresh provider to retry + complete the job (poll terminal status)"
     handler: shell
     workdir: /workspace
     command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      # First wait for the fresh provider to be healthy.
       for i in $(seq 1 60); do
         S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
-        [ "$S" = "healthy" ] && { echo "ready after ${i}x2s"; sleep 25; exit 0; }
+        [ "$S" = "healthy" ] && { echo "[provider-healthy] after ${i}x2s"; break; }
         sleep 2
-      done; echo "ERROR fresh provider"; exit 1
-    timeout: 180
+      done
+      [ "$S" = "healthy" ] || { echo "ERROR fresh provider not healthy"; exit 1; }
+      # Poll for terminal status instead of sleeping a fixed 25s — the
+      # retry path is faster than the worst-case wall-clock we used to
+      # bake in, and slow CI shouldn't have to be the limit.
+      for i in $(seq 1 60); do
+        STATUS=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status')
+        case "$STATUS" in
+          completed|failed|cancelled)
+            echo "[terminal] status=$STATUS after ${i}s"
+            exit 0
+            ;;
+        esac
+        sleep 1
+      done
+      echo "ERROR: job never reached terminal status within 60s"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq .
+      exit 1
+    timeout: 240
 
   - name: "Read final status"
     handler: shell

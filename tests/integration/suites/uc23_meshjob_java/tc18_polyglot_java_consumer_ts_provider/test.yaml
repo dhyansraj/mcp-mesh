@@ -61,7 +61,7 @@ test:
       for i in $(seq 1 60); do
         ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
         S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
-        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && exit 0; sleep 2
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && [ "$T" != "null" ] && exit 0; sleep 2
       done; exit 1
     timeout: 180
 

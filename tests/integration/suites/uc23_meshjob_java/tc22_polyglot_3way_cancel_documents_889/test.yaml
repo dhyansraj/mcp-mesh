@@ -102,7 +102,7 @@ test:
         JCR=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .dependencies_resolved')
         JCT=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .total_dependencies')
         if [ "$JP" = "healthy" ] && [ "$JC" = "healthy" ] && [ "$PO" = "healthy" ] \
-           && [ "$JCR" = "$JCT" ] && [ "$JCT" != "0" ]; then
+           && [ "$JCR" = "$JCT" ] && [ "$JCT" != "0" ] && [ "$JCT" != "null" ]; then
           echo "all 3 ready after ${i}x2s"
           exit 0
         fi
