@@ -8,7 +8,12 @@
 import { FastMCP, mesh } from "@mcpmesh/sdk";
 import { z } from "zod";
 
-const HTTP_PORT = parseInt(process.env.MCP_MESH_HTTP_PORT ?? "9115", 10);
+const HTTP_PORT = (() => {
+  const parsed = parseInt(process.env.MCP_MESH_HTTP_PORT ?? "", 10);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535
+    ? parsed
+    : 9115;
+})();
 
 const server = new FastMCP({
   name: "Bystander Y (uc22 TS)",

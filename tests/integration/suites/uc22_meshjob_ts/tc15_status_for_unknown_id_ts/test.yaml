@@ -56,6 +56,21 @@ test:
         '{"jobId":"00000000-0000-0000-0000-000000000000"}' 2>&1 || true
     capture: helper_response
 
+  # Auth-rejection check via case-insensitive grep — the DSL has
+  # `not contains` (case-sensitive) only, but real responses might
+  # surface "Unauthorized", "UNAUTHORIZED", or "Permission Denied".
+  - name: "Assert no auth-rejection phrasing (case-insensitive)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      LOWER=$(echo '${captured.helper_response}' | tr '[:upper:]' '[:lower:]')
+      if echo "$LOWER" | grep -q -E 'unauthorized|permission denied'; then
+        echo "ERROR: helper_response contains an auth-rejection phrase (job_id-as-capability auth must be open)"
+        echo "$LOWER"
+        exit 1
+      fi
+      echo "no auth-rejection phrasing detected"
+
 assertions:
   - expr: "${captured.registry_404} contains 'HTTP_CODE=404'"
     message: "registry GET /jobs/<bogus-id> should return HTTP 404"
@@ -67,11 +82,8 @@ assertions:
   # backend error message.
   - expr: "${captured.helper_response} icontains 'not found'"
     message: "helper-tool error should mention 'not found'"
-  # Auth-model assertions: presigned-URL semantics → NOT gated.
-  - expr: "${captured.helper_response} not contains 'unauthorized'"
-    message: "must NOT mention 'unauthorized' — auth model is job_id-as-capability"
-  - expr: "${captured.helper_response} not contains 'permission denied'"
-    message: "must NOT mention 'permission denied' — auth model is job_id-as-capability"
+  # Auth-model: presigned-URL semantics → NOT gated. Validated via the
+  # case-insensitive shell step above (DSL has no `not icontains`).
   # Must surface as the structured BackendError envelope (proves the 404
   # round-trip), not a 5xx server error.
   - expr: "${captured.helper_response} contains 'backend error'"

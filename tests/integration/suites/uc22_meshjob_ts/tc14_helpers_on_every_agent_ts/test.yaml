@@ -121,6 +121,30 @@ test:
         | jq -r '.agents[] | select(.name=="orchestrator-agent-ts") | .capabilities[].function_name'
     capture: orchestrator_tools
 
+  # Strong owner_instance_id check — parse the JSON field rather than
+  # relying on substring match that could fire on agent name in errors.
+  # The bystander reads job state via the framework's helper tool; the
+  # MCP envelope wraps the registry status JSON in
+  #   {"content":[{"text":"{...}"}]}
+  # so we double-decode (.content[0].text | fromjson) before reading
+  # the owner_instance_id field.
+  - name: "Assert owner_instance_id starts with producer agent name"
+    handler: shell
+    workdir: /workspace
+    command: |
+      OWNER=$(echo '${captured.status_on_orchestrator}' \
+        | jq -r '.content[0].text | fromjson | .owner_instance_id')
+      echo "owner_instance_id=${OWNER}"
+      case "$OWNER" in
+        long-task-provider-ts-*)
+          echo "OK"
+          ;;
+        *)
+          echo "ERROR: owner_instance_id should start with 'long-task-provider-ts-' but got '$OWNER'"
+          exit 1
+          ;;
+      esac
+
 assertions:
   - expr: "${captured.agent_ids} contains 'long-task-provider-ts'"
     message: "TS provider should be registered"
@@ -134,8 +158,7 @@ assertions:
     message: "__mesh_job_result on consumer should return terminal status=completed"
   - expr: "${captured.status_on_orchestrator} contains 'completed'"
     message: "__mesh_job_status on bystander orchestrator should also return completed"
-  - expr: "${captured.status_on_orchestrator} contains 'long-task-provider-ts'"
-    message: "bystander's status read should include the producer's owner_instance_id"
+  # owner_instance_id field validated by the shell step above (jq-decoded).
 
   # Auto-registration check: even the bystander orchestrator (no task
   # tools, no MeshJob deps) advertises all three __mesh_job_* helpers.

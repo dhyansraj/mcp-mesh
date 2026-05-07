@@ -99,6 +99,10 @@ test:
       JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
       AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="orchestrator-agent") | .id')
       echo "JOB_ID=${JOB_ID} AGENT=${AGENT}"
+      if [ -z "$JOB_ID" ] || [ "$JOB_ID" = "null" ] || [ -z "$AGENT" ] || [ "$AGENT" = "null" ]; then
+        echo "ERROR: required vars empty — JOB_ID='$JOB_ID' AGENT='$AGENT'"
+        exit 1
+      fi
       meshctl call "${AGENT}:__mesh_job_cancel" "{\"job_id\":\"${JOB_ID}\",\"reason\":\"tc20 python-initiated cancel of TS job\"}"
     capture: cancel_response
     timeout: 15

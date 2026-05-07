@@ -48,7 +48,9 @@ agent.addTool({
     "Sleeps for the requested number of seconds (regular tool, not task=true).",
   parameters: z.object({
     user_id: z.string(),
-    seconds: z.number().int().default(30),
+    // 0 allowed for fast-finish edge cases; negative would yield an
+    // immediate setTimeout completion and defeat the cancel scenario.
+    seconds: z.number().int().min(0).default(30),
   }),
   execute: async ({ user_id, seconds }) => {
     process.stderr.write(

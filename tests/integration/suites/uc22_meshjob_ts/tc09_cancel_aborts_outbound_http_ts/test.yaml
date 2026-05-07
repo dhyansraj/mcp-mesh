@@ -132,13 +132,10 @@ assertions:
   # Anchor on the field key+value — bare `ok` matches "lookup", URLs, etc.
   - expr: "${captured.cancel_response} contains '\\\"ok\\\":true'"
     message: "cancel should ack with ok:true"
-  - expr: "${captured.final_check} contains 'cancelled'"
-    message: "job status should be cancelled"
-  # The producer must NOT have reached job.complete() — natural finish
-  # would take 30s; cancel must have aborted before then. Status field
-  # in the compact-JSON-escaped envelope is `\"status\":\"...\"`.
-  - expr: "${captured.final_check} not contains '\\\"status\\\":\\\"completed\\\"'"
-    message: "the producer should NOT have reached job.complete() — cancel must have aborted before natural finish"
+  # Anchor on the status field key+value — bare `cancelled` could match
+  # an error string elsewhere in the JSON envelope.
+  - expr: "${captured.final_check} contains '\\\"status\\\":\\\"cancelled\\\"'"
+    message: "status field should be cancelled — cancel must have aborted before natural finish"
   # NB on `calling downstream`: this WOULD be the most informative
   # assertion (progress message frozen mid-downstream proves cancel
   # landed inside the outbound HTTP), BUT it's flaky on TS because

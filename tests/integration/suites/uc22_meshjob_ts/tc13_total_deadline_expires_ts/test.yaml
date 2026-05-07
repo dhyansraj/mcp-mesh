@@ -97,6 +97,10 @@ test:
         esac
       done
       echo "killed PIDs:$KILLED"
+      if [ -z "$KILLED" ]; then
+        echo "ERROR: No provider processes were killed — deadline scenario invalid"
+        exit 1
+      fi
       rm -f ~/.mcp-mesh/agents/long-task-provider-ts/* 2>/dev/null || true
       echo "kill done"
 
@@ -115,6 +119,25 @@ test:
       curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,attempt_count,error,total_deadline,owner_instance_id}'
     capture: final_status
 
+  # Upper-bound check: the deadline can fire before the producer claims
+  # (attempt_count=0) or during the in-flight first attempt
+  # (attempt_count=1). What MUST NOT happen is iterating up to
+  # max_retries=10 — any value > 1 means retries ran despite the deadline.
+  - name: "Assert attempt_count <= 1 (deadline must prevent retries)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Re-fetch the row directly — the captured.final_status capture
+      # is "JOB_ID=...\n{...}" (echo line + jq output) so it can't be
+      # piped back through jq. Source-of-truth read keeps the check robust.
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      COUNT=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.attempt_count')
+      if ! [ "$COUNT" -le 1 ] 2>/dev/null; then
+        echo "ERROR: attempt_count=$COUNT exceeds 1 — total_deadline should have prevented retry"
+        exit 1
+      fi
+      echo "attempt_count=$COUNT (<= 1, OK)"
+
 assertions:
   - expr: "${captured.final_status} contains '\"status\": \"failed\"'"
     message: "deadline-expired job must be marked failed"
@@ -122,15 +145,6 @@ assertions:
     message: "error must be the canonical 'deadline_exceeded' reason — NOT 'orphaned'"
   - expr: "${captured.final_status} not contains 'orphaned'"
     message: "deadline path must take precedence over orphan-reset"
-  # The deadline can fire before the producer claims (attempt_count=0)
-  # or during the in-flight first attempt (attempt_count=1). What MUST
-  # NOT happen is iterating up to max_retries=10. Belt-and-braces:
-  # check that the count is exactly 1 (typical) AND assert the count
-  # is not 2/3+ (which would mean retries had run despite the deadline).
-  - expr: "${captured.final_status} not contains '\"attempt_count\": 2'"
-    message: "attempt_count must NOT have iterated past 1 — deadline overrides max_retries=10"
-  - expr: "${captured.final_status} not contains '\"attempt_count\": 3'"
-    message: "attempt_count must NOT have iterated past 1 — deadline overrides max_retries=10"
 
 post_run:
   - routine: stop_all

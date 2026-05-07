@@ -90,6 +90,10 @@ test:
         esac
       done
       echo "killed PIDs:$KILLED"
+      if [ -z "$KILLED" ]; then
+        echo "ERROR: No provider processes were killed in round 1 — recovery scenario invalid"
+        exit 1
+      fi
       rm -f ~/.mcp-mesh/agents/long-task-provider-ts/* 2>/dev/null || true
       echo "round 1 kill done"
     capture: kill1
@@ -146,6 +150,10 @@ test:
         esac
       done
       echo "killed PIDs:$KILLED"
+      if [ -z "$KILLED" ]; then
+        echo "ERROR: No provider processes were killed in round 2 — recovery scenario invalid"
+        exit 1
+      fi
       rm -f ~/.mcp-mesh/agents/long-task-provider-ts/* 2>/dev/null || true
       echo "round 2 kill done"
     capture: kill2

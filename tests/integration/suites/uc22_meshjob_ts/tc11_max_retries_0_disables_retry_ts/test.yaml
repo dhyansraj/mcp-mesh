@@ -94,6 +94,10 @@ test:
         esac
       done
       echo "killed PIDs:$KILLED"
+      if [ -z "$KILLED" ]; then
+        echo "ERROR: No provider processes were killed — recovery scenario invalid"
+        exit 1
+      fi
       # Clear meshctl tracking so it stops watching this agent.
       rm -f ~/.mcp-mesh/agents/long-task-provider-ts/* 2>/dev/null || true
     capture: kill_output

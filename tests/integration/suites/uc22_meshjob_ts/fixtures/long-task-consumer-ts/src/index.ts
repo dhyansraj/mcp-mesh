@@ -104,8 +104,11 @@ agent.addTool({
       },
     );
     const job_id = (proxy as { jobId?: string }).jobId ?? null;
+    if (!proxy.wait) {
+      return { job_id, status: "submitted", result: null };
+    }
     try {
-      const result = await proxy.wait!(wait_timeout_secs);
+      const result = await proxy.wait(wait_timeout_secs);
       return { job_id, status: "completed", result };
     } catch (e) {
       return {
@@ -174,8 +177,11 @@ agent.addTool({
       { maxDuration: 30, maxRetries: max_retries },
     );
     const job_id = (proxy as { jobId?: string }).jobId ?? null;
+    if (!proxy.wait) {
+      return { job_id, status: "submitted", result: null };
+    }
     try {
-      const result = await proxy.wait!(wait_timeout_secs);
+      const result = await proxy.wait(wait_timeout_secs);
       return { job_id, status: "completed", result };
     } catch (e) {
       return {
