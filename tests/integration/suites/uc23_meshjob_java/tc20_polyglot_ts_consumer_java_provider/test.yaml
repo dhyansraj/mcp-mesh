@@ -1,0 +1,95 @@
+# tc20_polyglot_ts_consumer_java_provider — TS consumer ↔ Java provider.
+#
+# Reverse of tc18. Validates that a TS MeshJobSubmitter can submit work
+# to a Java task=true tool.
+#
+# Setup:
+#   - Java long-task-provider-java on port 9120 (capability: generate_report)
+#   - TS long-task-consumer-ts on port 9111 (depends on generate_report)
+
+name: "MeshJob polyglot: TS consumer commissions Java provider"
+description: "TS MeshJobSubmitter -> Java @MeshTool(task=true), end-to-end submit + await"
+tags:
+  - meshjob
+  - polyglot
+  - java
+  - typescript
+  - issue-890
+timeout: 480
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts (Java provider + TS consumer)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-ts /workspace/
+
+  - name: "Install Java provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install TS consumer deps"
+    handler: npm-install
+    path: /workspace/long-task-consumer-ts
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start Java provider (port 9120)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for Java provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start TS consumer (port 9111)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+
+  - name: "Wait for TS consumer + DI"
+    handler: wait
+    seconds: 22
+
+  - name: "Verify both runtimes registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Call commission_report — TS consumer -> Java provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report '{"user_id":"alice","sections":["intro","analysis"]}'
+    capture: commission_response
+    timeout: 90
+
+assertions:
+  - expr: "${captured.agent_list} contains 'long-task-provider-java'"
+    message: "Java provider should be registered"
+  - expr: "${captured.agent_list} contains 'long-task-consumer-ts'"
+    message: "TS consumer should be registered"
+  - expr: "${captured.commission_response} contains 'alice'"
+    message: "result should echo the submitted user_id"
+  - expr: "${captured.commission_response} contains 'Generated content for intro'"
+    message: "result should include the intro section content from Java provider"
+  - expr: "${captured.commission_response} contains 'Generated content for analysis'"
+    message: "result should include the analysis section content from Java provider"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

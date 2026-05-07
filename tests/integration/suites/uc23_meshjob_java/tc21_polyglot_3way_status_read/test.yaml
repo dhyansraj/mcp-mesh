@@ -1,0 +1,185 @@
+# tc21_polyglot_3way_status_read — All three runtimes simultaneously.
+#
+# Java provider + Java consumer submits a job; capture job_id; then
+# BOTH a Python orchestrator AND a TS bystander call __mesh_job_status
+# with that job_id. Confirms job_id-as-capability auth model + helper
+# tool routing across all 3 runtimes simultaneously.
+#
+# Java is the LAST runtime so all 3 SDKs are alive in the same suite.
+#
+# Setup:
+#   - Java long-task-provider-java (port 9120)  — task=true tools
+#   - Java long-task-consumer-java (port 9121)  — submits the job
+#   - Python orchestrator-agent     (port 9103) — pure bystander
+#   - TS bystander-x-ts             (port 9114) — pure bystander
+
+name: "MeshJob polyglot 3-way: Python and TS read status for Java-submitted job"
+description: "All 3 runtimes wired — Java consumer submits, Python + TS BOTH read job state via __mesh_job_status"
+tags:
+  - meshjob
+  - polyglot
+  - java
+  - python
+  - typescript
+  - issue-890
+  - helpers
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_typescript_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts (Java provider + Java consumer + Python orchestrator + TS bystander)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+      cp -rL /uc-artifacts/orchestrator-agent /workspace/
+      cp -rL /uc-artifacts/bystander-x-ts /workspace/
+
+  - name: "Install Java provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install Java consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - name: "Install Python orchestrator deps"
+    handler: pip-install
+    path: /workspace/orchestrator-agent
+
+  - name: "Install TS bystander deps"
+    handler: npm-install
+    path: /workspace/bystander-x-ts
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start Java provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for Java provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start Java consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Start Python orchestrator (port 9103)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=9103 -d
+
+  - name: "Start TS bystander (port 9114)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start bystander-x-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9114 -d
+
+  - name: "Wait for all 4 healthy + Java consumer DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(curl -s http://localhost:8000/agents)
+        JP=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status')
+        JC=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .status')
+        PO=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="orchestrator-agent") | .status')
+        TX=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="bystander-x-ts") | .status')
+        JCR=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .dependencies_resolved')
+        JCT=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .total_dependencies')
+        if [ "$JP" = "healthy" ] && [ "$JC" = "healthy" ] && [ "$PO" = "healthy" ] && [ "$TX" = "healthy" ] \
+           && [ "$JCR" = "$JCT" ] && [ "$JCT" != "0" ] && [ "$JCT" != "null" ]; then
+          echo "all 4 ready after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR — JP=$JP JC=$JC PO=$PO TX=$TX deps=$JCR/$JCT"
+      exit 1
+    timeout: 240
+
+  - name: "Verify all 4 agents registered"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s http://localhost:8000/agents | jq -r '.agents[].name' | sort
+    capture: agent_names
+
+  - name: "Submit a quick job via Java consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["only"],"max_retries":1,"max_duration":30}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Wait for completion"
+    handler: wait
+    seconds: 10
+
+  - name: "Call Python orchestrator's __mesh_job_status (snake_case job_id)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="orchestrator-agent") | .id')
+      echo "JOB_ID=${JOB_ID} AGENT=${AGENT}"
+      meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}"
+    capture: status_from_python
+
+  - name: "Call TS bystander's __mesh_job_status (camelCase jobId)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="bystander-x-ts") | .id')
+      echo "JOB_ID=${JOB_ID} AGENT=${AGENT}"
+      meshctl call "${AGENT}:__mesh_job_status" "{\"jobId\":\"${JOB_ID}\"}"
+    capture: status_from_ts
+
+assertions:
+  - expr: "${captured.agent_names} contains 'long-task-provider-java'"
+    message: "Java provider should be registered"
+  - expr: "${captured.agent_names} contains 'long-task-consumer-java'"
+    message: "Java consumer should be registered"
+  - expr: "${captured.agent_names} contains 'orchestrator-agent'"
+    message: "Python orchestrator should be registered"
+  - expr: "${captured.agent_names} contains 'bystander-x-ts'"
+    message: "TS bystander should be registered"
+
+  # Python read returns the terminal state including completed.
+  - expr: "${captured.status_from_python} contains 'completed'"
+    message: "Python orchestrator should read terminal status for the Java-submitted job"
+  - expr: "${captured.status_from_python} contains 'long-task-provider-java'"
+    message: "Python's read should expose the Java provider's owner_instance_id"
+  - expr: "${captured.status_from_python} not contains 'unauthorized'"
+    message: "Python read must NOT see 'unauthorized' (ID-as-capability auth)"
+
+  # TS read also returns terminal state — proves the helper tool
+  # routes correctly across all 3 runtimes simultaneously.
+  - expr: "${captured.status_from_ts} contains 'completed'"
+    message: "TS bystander should read terminal status for the Java-submitted job"
+  - expr: "${captured.status_from_ts} contains 'long-task-provider-java'"
+    message: "TS bystander's read should expose the Java provider's owner_instance_id"
+  - expr: "${captured.status_from_ts} not contains 'unauthorized'"
+    message: "TS read must NOT see 'unauthorized' (ID-as-capability auth)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

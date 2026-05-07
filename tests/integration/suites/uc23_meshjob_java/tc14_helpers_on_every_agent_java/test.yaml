@@ -1,0 +1,191 @@
+# tc14_helpers_on_every_agent_java — Java port of uc21/tc14 + uc22/tc14.
+#
+# Three Java agents: producer (task=true only), consumer (deps + submit
+# wrapper), and orchestrator (no task tools, no deps — pure bystander).
+# All three should advertise __mesh_job_status, __mesh_job_result, and
+# __mesh_job_cancel via the registry.
+
+name: "MeshJob Java: helper tools auto-registered on every mesh agent"
+description: "Java — producer, consumer, and bystander all expose __mesh_job_* and return correct data"
+tags:
+  - meshjob
+  - java
+  - issue-890
+  - helpers
+timeout: 480
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+      cp -rL /uc-artifacts/orchestrator-agent-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - name: "Install orchestrator deps"
+    handler: maven-install
+    path: /workspace/orchestrator-agent-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Start orchestrator (no task tools, no deps)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start orchestrator-agent-java --env MCP_MESH_HTTP_PORT=9123 -d
+
+  - name: "Wait for all 3 to be healthy + consumer DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(curl -s http://localhost:8000/agents)
+        PS=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status')
+        CS=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .status')
+        OS=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="orchestrator-agent-java") | .status')
+        CR=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .dependencies_resolved')
+        CT=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .total_dependencies')
+        if [ "$PS" = "healthy" ] && [ "$CS" = "healthy" ] && [ "$OS" = "healthy" ] && [ "$CR" = "$CT" ] && [ "$CT" != "0" ] && [ "$CT" != "null" ]; then
+          echo "all 3 ready after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR — provider=$PS consumer=$CS orchestrator=$OS deps=$CR/$CT"; exit 1
+    timeout: 180
+
+  - name: "Capture full agent IDs"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl list 2>&1
+      echo "---"
+      curl -s http://localhost:8000/agents | jq -r '.agents[].id'
+    capture: agent_ids
+
+  - name: "Submit a job via consumer (1 section)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["only"],"max_retries":1,"max_duration":30}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Wait for completion"
+    handler: wait
+    seconds: 8
+
+  - name: "Call __mesh_job_status on PROVIDER"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .id')
+      echo "JOB_ID=${JOB_ID} AGENT=${AGENT}"
+      meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}"
+    capture: status_on_provider
+
+  - name: "Call __mesh_job_result on CONSUMER"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .id')
+      meshctl call "${AGENT}:__mesh_job_result" "{\"job_id\":\"${JOB_ID}\"}"
+    capture: result_on_consumer
+
+  - name: "Call __mesh_job_status on ORCHESTRATOR (bystander)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="orchestrator-agent-java") | .id')
+      meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}"
+    capture: status_on_orchestrator
+
+  - name: "Confirm helper tools auto-register on the orchestrator (bystander)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s http://localhost:8000/agents \
+        | jq -r '.agents[] | select(.name=="orchestrator-agent-java") | .capabilities[].function_name'
+    capture: orchestrator_tools
+
+  - name: "Assert owner_instance_id starts with provider agent name"
+    handler: shell
+    workdir: /workspace
+    command: |
+      OWNER=$(echo '${captured.status_on_orchestrator}' \
+        | jq -r '.content[0].text | fromjson | .owner_instance_id' 2>/dev/null)
+      echo "owner_instance_id=${OWNER}"
+      case "$OWNER" in
+        long-task-provider-java-*)
+          echo "OK"
+          ;;
+        *)
+          echo "ERROR: owner_instance_id should start with 'long-task-provider-java-' but got '$OWNER'"
+          exit 1
+          ;;
+      esac
+
+assertions:
+  - expr: "${captured.agent_ids} contains 'long-task-provider-java'"
+    message: "Java provider should be registered"
+  - expr: "${captured.agent_ids} contains 'long-task-consumer-java'"
+    message: "Java consumer should be registered"
+  - expr: "${captured.agent_ids} contains 'orchestrator-agent-java'"
+    message: "Java orchestrator (bystander) should be registered"
+  - expr: "${captured.status_on_provider} contains 'completed'"
+    message: "__mesh_job_status on provider should return the same completed state"
+  - expr: "${captured.result_on_consumer} contains 'completed'"
+    message: "__mesh_job_result on consumer should return terminal status=completed"
+  - expr: "${captured.status_on_orchestrator} contains 'completed'"
+    message: "__mesh_job_status on bystander orchestrator should also return completed"
+
+  # Auto-registration check: even the bystander orchestrator (no task
+  # tools, no MeshJob deps) advertises all three __mesh_job_* helpers.
+  - expr: "${captured.orchestrator_tools} contains '__mesh_job_status'"
+    message: "orchestrator (bystander) must auto-register __mesh_job_status"
+  - expr: "${captured.orchestrator_tools} contains '__mesh_job_result'"
+    message: "orchestrator (bystander) must auto-register __mesh_job_result"
+  - expr: "${captured.orchestrator_tools} contains '__mesh_job_cancel'"
+    message: "orchestrator (bystander) must auto-register __mesh_job_cancel"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

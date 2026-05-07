@@ -1,0 +1,97 @@
+# tc19_polyglot_python_consumer_java_provider — Python consumer ↔ Java provider.
+#
+# Reverse of tc17. Validates that a Python MeshJobSubmitter can submit
+# work to a Java task=true tool. Uses the Python uc21 long-task-consumer
+# fixture (commission_report) and the Java uc23 long-task-provider-java
+# fixture (generate_report).
+#
+# Setup:
+#   - Java long-task-provider-java on port 9120 (capability: generate_report)
+#   - Python long-task-consumer on port 9101 (depends on generate_report)
+
+name: "MeshJob polyglot: Python consumer commissions Java provider"
+description: "Python MeshJobSubmitter -> Java @MeshTool(task=true), end-to-end submit + await"
+tags:
+  - meshjob
+  - polyglot
+  - java
+  - python
+  - issue-890
+timeout: 480
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts (Java provider + Python consumer)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer /workspace/
+
+  - name: "Install Java provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install Python consumer deps"
+    handler: pip-install
+    path: /workspace/long-task-consumer
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start Java provider (port 9120)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for Java provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start Python consumer (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Wait for Python consumer + DI resolution"
+    handler: wait
+    seconds: 22
+
+  - name: "Verify both runtimes registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Call commission_report — Python consumer -> Java provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report '{"user_id":"alice","sections":["intro","analysis"]}'
+    capture: commission_response
+    timeout: 90
+
+assertions:
+  - expr: "${captured.agent_list} contains 'long-task-provider-java'"
+    message: "Java provider should be registered"
+  - expr: "${captured.agent_list} contains 'long-task-consumer'"
+    message: "Python consumer should be registered"
+  - expr: "${captured.commission_response} contains 'alice'"
+    message: "result should echo the submitted user_id"
+  - expr: "${captured.commission_response} contains 'Generated content for intro'"
+    message: "result should include the intro section content from Java provider"
+  - expr: "${captured.commission_response} contains 'Generated content for analysis'"
+    message: "result should include the analysis section content from Java provider"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

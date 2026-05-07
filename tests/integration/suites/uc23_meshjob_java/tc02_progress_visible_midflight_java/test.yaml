@@ -1,0 +1,165 @@
+# tc02_progress_visible_midflight_java — Java port of uc21/tc02 + uc22/tc02.
+#
+# Submit a long-enough generate_report job (7 sections * 2s = 14s) and
+# poll __mesh_job_status mid-flight. Java's JobController emits
+# update_progress() after each section; deltas flow to the registry via
+# /jobs/batch on the batching tick. By the time at least one mid-flight
+# status read happens during a working interval, we should observe
+# progress > 0 AND status == "working".
+
+name: "MeshJob Java: mid-flight progress visible via __mesh_job_status"
+description: "Java submit long job, poll status mid-flight, observe progress advance through working->completed"
+tags:
+  - meshjob
+  - java
+  - issue-890
+  - progress
+timeout: 360
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (port 9120)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for Java provider to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -s http://localhost:8000/agents | jq -r \
+          '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        if [ "$STATUS" = "healthy" ]; then
+          echo "provider healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: provider not healthy within 120s (last='$STATUS')"
+      meshctl logs long-task-provider-java 2>&1 | tail -50 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start consumer (port 9121)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Wait for Java consumer + DI resolved"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        ROW=$(curl -s http://localhost:8000/agents \
+          | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
+        STATUS=$(echo "$ROW" | jq -r '.status' 2>/dev/null)
+        RESOLVED=$(echo "$ROW" | jq -r '.dependencies_resolved' 2>/dev/null)
+        TOTAL=$(echo "$ROW" | jq -r '.total_dependencies' 2>/dev/null)
+        if [ "$STATUS" = "healthy" ] && [ "$RESOLVED" = "$TOTAL" ] && [ "$TOTAL" != "0" ] && [ "$TOTAL" != "null" ]; then
+          echo "consumer ready ($RESOLVED/$TOTAL deps) after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: consumer not ready (status=$STATUS deps=$RESOLVED/$TOTAL)"
+      exit 1
+    timeout: 150
+
+  - name: "Submit generate_report (7 sections, ~14s) — get job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["a","b","c","d","e","f","g"],"max_retries":1,"max_duration":60}' --raw
+    capture: submit_response
+    timeout: 30
+
+  - name: "Extract job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP='${captured.submit_response}'
+      JOB_ID=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .job_id')
+      echo "JOB_ID=${JOB_ID}"
+    capture: job_id_extract
+    timeout: 10
+
+  # Poll mid-flight: kick off after a 4s settle (claim + first
+  # iteration), then poll every 2s for 6 ticks. Producer takes
+  # ~14s for 7 sections, so this window straddles working at
+  # ~0.14, 0.28, 0.42, 0.57, 0.71, 0.85.
+  #
+  # Java helper uses snake_case `job_id` (matches Python's helper API,
+  # not TS's camelCase `jobId`).
+  - name: "Poll status 6x mid-flight"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      echo "polling job_id=$JOB_ID"
+      sleep 4
+      for i in 1 2 3 4 5 6; do
+        echo "--- poll $i ---"
+        meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}" --raw 2>&1 || true
+        sleep 2
+      done
+    capture: midflight_polls
+    timeout: 45
+
+  - name: "Wait for completion"
+    handler: wait
+    seconds: 12
+
+  - name: "Final status read"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}" --raw
+    capture: final_status
+    timeout: 15
+
+assertions:
+  - expr: "${captured.submit_response} contains 'job_id'"
+    message: "submit response should carry a job_id"
+  - expr: "${captured.midflight_polls} contains 'working'"
+    message: "at least one mid-flight poll should observe status=working"
+  # The captured JSON-escaped text from meshctl carries
+  # `\"progress\":0.<nonzero>` for working-state reads.
+  - expr: "${captured.midflight_polls} contains '\\\"progress\\\":0.'"
+    message: "at least one mid-flight poll should observe progress in (0, 1)"
+  - expr: "${captured.final_status} contains 'completed'"
+    message: "final status should be completed"
+  # Final progress is 1 (compact JSON serializes 1.0 as 1, no decimal).
+  - expr: "${captured.final_status} contains '\\\"progress\\\":1'"
+    message: "final progress should be 1"
+  - expr: "${captured.final_status} contains 'Generated content for a'"
+    message: "final result should include section a content"
+  - expr: "${captured.final_status} contains 'Generated content for g'"
+    message: "final result should include section g content (7 total)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

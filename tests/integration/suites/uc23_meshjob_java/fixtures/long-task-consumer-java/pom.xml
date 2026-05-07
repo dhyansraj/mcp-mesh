@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MeshJob test-suite consumer (uc23_meshjob_java) — Java port of
+  uc21_meshjob/fixtures/long-task-consumer/main.py and
+  uc22_meshjob_ts/fixtures/long-task-consumer-ts/.
+
+  Hosts several variants of the submit-and-await pattern so individual
+  tests can exercise behavioural knobs without forking new agents.
+  Capability names match the Python and TS fixtures so the polyglot
+  tests can call them interchangeably across runtimes.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>long-task-consumer-java</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>MeshJob Long-Task Consumer (uc23 Java)</name>
+    <description>MeshJob test consumer (uc23 Java) — multi-capability fixture for the integration suite.</description>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.6</version>
+        <relativePath/>
+    </parent>
+
+    <properties>
+        <java.version>17</java.version>
+        <mcp-mesh.version>1.4.1</mcp-mesh.version>
+    </properties>
+
+    <!--
+      Depends on local mcp-mesh-* artifacts at version 1.4.1+ which are not
+      published to Maven Central. Build them first via:
+          cd src/runtime/java && mvn install -DskipTests
+      Maven and IDEs then resolve them from your local ~/.m2/repository.
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>io.mcp-mesh</groupId>
+            <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+            <version>${mcp-mesh.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.example.longtaskconsumer.LongTaskConsumerApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
