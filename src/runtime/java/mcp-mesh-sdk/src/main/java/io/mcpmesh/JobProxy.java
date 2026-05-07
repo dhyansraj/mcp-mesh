@@ -115,8 +115,16 @@ public final class JobProxy implements MeshJob, AutoCloseable {
      * TypeScript {@code .wait()} APIs semantically; the rename is purely a
      * Java language constraint.
      *
-     * @param timeoutSecs Wall-clock timeout in seconds. Use a negative
-     *                    value (e.g. {@code -1.0}) for no timeout.
+     * @param timeoutSecs Wall-clock timeout in seconds.
+     *                    <ul>
+     *                      <li>Negative or zero (including {@code -0.0})
+     *                          → no timeout (block until terminal).</li>
+     *                      <li>Positive finite → wait that many
+     *                          seconds, then surface a timeout error.</li>
+     *                      <li>Non-finite (NaN, ±Inf) → no timeout.</li>
+     *                    </ul>
+     *                    The {@link #await()} no-arg overload uses
+     *                    {@code -1.0} to opt into the no-timeout branch.
      * @return The job result payload
      * @throws MeshException on timeout, cancellation, or non-success terminal
      *                       (the message starts with the variant name —

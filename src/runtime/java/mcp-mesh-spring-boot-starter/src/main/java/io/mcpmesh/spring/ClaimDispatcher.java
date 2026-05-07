@@ -269,17 +269,22 @@ public final class ClaimDispatcher implements AutoCloseable {
                 if (claimed != null) {
                     consecutiveFailures.set(0);
                     backoffMs = POLL_BASE_MS;
-                    // Hand the permit ownership to the dispatch task.
+                    // Hand the permit ownership to the dispatch task. The
+                    // task self-removes its own Future from `inflight` in
+                    // finally — without this, every claimed job would
+                    // accumulate a Future entry holding the full payload
+                    // map for the lifetime of the JVM (PR review #874).
                     permitTransferred = true;
-                    Future<?> f = dispatchExecutor.submit(() -> {
+                    final Future<?>[] holder = new Future<?>[1];
+                    holder[0] = dispatchExecutor.submit(() -> {
                         try {
                             dispatch(claimed);
                         } finally {
                             permits.release();
+                            inflight.remove(holder[0]);
                         }
                     });
-                    inflight.add(f);
-                    f = wrapInflight(f);
+                    inflight.add(holder[0]);
                 } else {
                     // No work — release permit and back off.
                     permits.release();
@@ -296,19 +301,6 @@ public final class ClaimDispatcher implements AutoCloseable {
     }
 
     /**
-     * Wrap the dispatch future so it self-removes from {@link #inflight}
-     * on completion. Returns the original future.
-     */
-    private Future<?> wrapInflight(Future<?> f) {
-        // We can't add a completion callback to a Future directly without
-        // a CompletableFuture, so the dispatch executor's submit returns
-        // a Future we registered. Self-removal is handled by the
-        // dispatch task's finally below. Here we just return the future
-        // for the caller's reference.
-        return f;
-    }
-
-    /**
      * One {@code POST /jobs/claim} round-trip. Returns the single
      * claimed-job map (Phase 1 wire is single-claim) or null when no
      * work is available / on error. Errors increment
@@ -317,8 +309,13 @@ public final class ClaimDispatcher implements AutoCloseable {
      */
     private Map<String, Object> claimOnce() throws Exception {
         String url = registryUrl + "/jobs/claim";
-        String body = "{\"capability\":\"" + capability.replace("\"", "\\\"")
-            + "\",\"instance_id\":\"" + instanceId.replace("\"", "\\\"") + "\"}";
+        // Use Jackson rather than manual escape — capability / instance_id
+        // are well-formed in practice but a stray '\' or control char in
+        // either would otherwise produce invalid JSON (PR review #874).
+        String body = MAPPER.writeValueAsString(Map.of(
+            "capability", capability,
+            "instance_id", instanceId
+        ));
         HttpRequest req = HttpRequest.newBuilder()
             .uri(URI.create(url))
             .timeout(Duration.ofSeconds(CLAIM_HTTP_TIMEOUT_SECS))
@@ -467,17 +464,6 @@ public final class ClaimDispatcher implements AutoCloseable {
         } catch (Exception e) {
             log.warn("[mesh-claim] /jobs/batch fail-fast for job={} raised: {}", jobId, e.getMessage());
         }
-    }
-
-    private static String buildSnapshotJson(String jobId, Long deadlineSecs) {
-        StringBuilder sb = new StringBuilder("{\"job_id\":\"")
-            .append(jobId.replace("\"", "\\\""))
-            .append('"');
-        if (deadlineSecs != null) {
-            sb.append(",\"deadline_secs\":").append(deadlineSecs);
-        }
-        sb.append('}');
-        return sb.toString();
     }
 
     private static String stripTrailingSlash(String url) {

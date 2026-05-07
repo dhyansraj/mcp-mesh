@@ -488,7 +488,12 @@ public class MeshToolWrapper implements McpToolHandler {
                 try {
                     double secs = Double.parseDouble(timeoutHeader.trim());
                     if (Double.isFinite(secs) && secs > 0) {
-                        deadlineSecs = (long) secs;
+                        // Round, don't truncate. `(long) 0.7 == 0` would
+                        // collapse a sub-second budget into "immediate"
+                        // and bypass the `secs > 0` filter below; rounding
+                        // preserves at-least-the-budget semantics for
+                        // sub-second timeouts (PR review #874).
+                        deadlineSecs = Math.max(1L, Math.round(secs));
                     }
                 } catch (NumberFormatException nfe) {
                     log.debug("Invalid X-Mesh-Timeout header value '{}': {}", timeoutHeader, nfe.getMessage());

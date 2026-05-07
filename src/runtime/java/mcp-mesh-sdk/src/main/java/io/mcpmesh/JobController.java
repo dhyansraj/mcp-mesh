@@ -87,16 +87,6 @@ public final class JobController implements MeshJob, AutoCloseable {
         return new JobController(core, handle, jobId);
     }
 
-    /**
-     * Internal constructor for the inbound dispatch path (Phase B). Allows
-     * the wrapper to construct a controller from an already-allocated native
-     * handle — used when the dispatcher creates the handle inside the Rust
-     * runtime scope.
-     */
-    static JobController fromHandle(MeshCore core, Pointer handle, String jobId) {
-        return new JobController(core, handle, jobId);
-    }
-
     /** The job ID this controller is bound to. */
     public String jobId() {
         return jobId;

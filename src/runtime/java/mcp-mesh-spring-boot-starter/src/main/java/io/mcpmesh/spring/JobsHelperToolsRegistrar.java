@@ -1,8 +1,10 @@
 package io.mcpmesh.spring;
 
 import io.mcpmesh.core.AgentSpec;
+import io.mcpmesh.core.MeshObjectMappers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -34,6 +36,15 @@ import java.util.Map;
 public final class JobsHelperToolsRegistrar {
 
     private static final Logger log = LoggerFactory.getLogger(JobsHelperToolsRegistrar.class);
+
+    /**
+     * Shared mapper — hoisted out of {@link #buildSyntheticSpec} which
+     * would otherwise allocate two new {@code JsonMapper} instances per
+     * helper tool (six per agent startup) just to serialize a tiny
+     * schema. Matches the {@code static final} pattern used elsewhere
+     * (e.g. {@link ClaimDispatcher}).
+     */
+    private static final ObjectMapper MAPPER = MeshObjectMappers.create();
 
     private JobsHelperToolsRegistrar() {}
 
@@ -73,8 +84,7 @@ public final class JobsHelperToolsRegistrar {
         // Build a minimal input schema string for the registry catalog.
         Map<String, Object> schema = handler.getInputSchema();
         try {
-            String json = tools.jackson.databind.json.JsonMapper.builder().build()
-                .writeValueAsString(schema);
+            String json = MAPPER.writeValueAsString(schema);
             spec.setInputSchema(json);
         } catch (Exception e) {
             // Fall through with empty schema — heartbeat will still register
@@ -87,8 +97,7 @@ public final class JobsHelperToolsRegistrar {
         try {
             Map<String, Object> kwargs = new LinkedHashMap<>();
             kwargs.put("framework_internal", true);
-            String kwargsJson = tools.jackson.databind.json.JsonMapper.builder().build()
-                .writeValueAsString(kwargs);
+            String kwargsJson = MAPPER.writeValueAsString(kwargs);
             spec.setKwargs(kwargsJson);
         } catch (Exception ignored) {
             // Best-effort; absence of the marker doesn't break dispatch.

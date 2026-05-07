@@ -580,8 +580,11 @@ pub unsafe extern "C" fn mesh_job_proxy_status(
 /// `result` (JSON-encoded) to `*out_result_json`; caller frees via
 /// `mesh_free_string`.
 ///
-/// `timeout_secs`: wall-clock timeout. Use a negative value (e.g. `-1`)
-/// for "no timeout" (matches the Python / napi-rs `Optional<f64>` shape).
+/// `timeout_secs`: wall-clock timeout. Any value `<= 0.0` (including
+/// `-0.0` and negatives such as `-1`) means "no timeout"; non-finite
+/// values (NaN, ±Inf) also fall back to "no timeout". Matches the
+/// Python / napi-rs `Optional<f64>` shape and keeps the same policy
+/// as [`mesh_run_as_job`] for consistency.
 #[no_mangle]
 pub unsafe extern "C" fn mesh_job_proxy_wait(
     handle: *mut JobProxyHandle,
@@ -594,7 +597,9 @@ pub unsafe extern "C" fn mesh_job_proxy_wait(
         return -1;
     }
     let handle = &*handle;
-    let timeout = if timeout_secs.is_sign_negative() || !timeout_secs.is_finite() {
+    // Uniform "no timeout" policy with mesh_run_as_job: `secs <= 0.0`
+    // (covers -0.0 which `< 0.0` would miss in IEEE-754) or non-finite.
+    let timeout = if !timeout_secs.is_finite() || timeout_secs <= 0.0 {
         None
     } else {
         Some(Duration::from_secs_f64(timeout_secs))
@@ -799,13 +804,17 @@ pub unsafe extern "C" fn mesh_run_as_job(
         }
     };
 
-    // Reject negative / NaN / Inf deadlines explicitly (matches the napi-rs
-    // validate_deadline_secs guard — silently aliasing them to "no deadline"
-    // would paper over upstream bugs).
+    // Reject non-finite deadlines explicitly (NaN / ±Inf indicate an
+    // upstream bug — silently aliasing them to "no deadline" would
+    // paper over it). Any finite value `<= 0.0` (including -0.0 and
+    // negatives) is treated as "no deadline" for uniformity with
+    // [`mesh_job_proxy_wait`]. The two functions previously diverged
+    // on -0.0 handling (`is_sign_negative` vs `< 0.0`); a single
+    // policy avoids future drift.
     if let Some(secs) = wire.deadline_secs {
-        if !secs.is_finite() || secs < 0.0 {
+        if !secs.is_finite() {
             set_last_error(format!(
-                "mesh_run_as_job: invalid deadline_secs ({}) for job {} — must be a non-negative finite number or null",
+                "mesh_run_as_job: invalid deadline_secs ({}) for job {} — must be a finite number or null",
                 secs, wire.job_id
             ));
             return -1;
@@ -905,15 +914,62 @@ mod tests {
         assert_eq!(rc, -1);
     }
 
-    /// Negative / NaN / Inf deadline rejection mirrors the napi-rs
-    /// `validate_deadline_secs` policy — surfaces a clean error instead of
-    /// silently aliasing to "no deadline".
+    /// Non-finite deadline (NaN / +Inf) rejection — these indicate a real
+    /// upstream bug, so we surface a clean error rather than silently
+    /// aliasing to "no deadline". Negative + zero values are NOT
+    /// rejected; they are treated as "no deadline" for uniformity with
+    /// `mesh_job_proxy_wait` (see `wait_treats_zero_and_negative_as_no_timeout`).
     #[test]
-    fn run_as_job_rejects_negative_deadline() {
+    fn run_as_job_rejects_non_finite_deadline() {
         extern "C" fn cb(_: *mut c_void) -> i32 { 0 }
-        let bad = CString::new(r#"{"job_id":"j-neg","deadline_secs":-5.0}"#).unwrap();
+        // NaN and +Inf both rejected — JSON does not encode these as
+        // numbers, but if a buggy caller stringifies them as "NaN" /
+        // "Infinity" the snapshot parse will already fail; the
+        // is_finite branch is the defence-in-depth check for futures
+        // where the wire encoding gains support.
+        let bad = CString::new(r#"{"job_id":"j-nan","deadline_secs":1e400}"#).unwrap();
         let rc = unsafe { mesh_run_as_job(bad.as_ptr(), cb, ptr::null_mut()) };
-        assert_eq!(rc, -1);
+        assert_eq!(rc, -1, "+Inf deadline must be rejected");
+    }
+
+    /// Boundary policy for `mesh_run_as_job`: zero, -0.0, and finite
+    /// negative deadlines all collapse to "no deadline" and the callback
+    /// runs successfully. Mirrors the same policy in
+    /// `mesh_job_proxy_wait` so future maintainers don't have to choose
+    /// between two operators.
+    #[test]
+    fn run_as_job_treats_zero_and_negative_deadline_as_no_deadline() {
+        extern "C" fn cb(_: *mut c_void) -> i32 { 0 }
+        for snap_json in [
+            r#"{"job_id":"j-zero","deadline_secs":0.0}"#,
+            r#"{"job_id":"j-negzero","deadline_secs":-0.0}"#,
+            r#"{"job_id":"j-neg","deadline_secs":-5.0}"#,
+        ] {
+            let snap = CString::new(snap_json).unwrap();
+            let rc = unsafe { mesh_run_as_job(snap.as_ptr(), cb, ptr::null_mut()) };
+            assert_eq!(rc, 0, "expected no-deadline policy for {}", snap_json);
+        }
+    }
+
+    /// Boundary policy for `mesh_job_proxy_wait`'s timeout argument:
+    /// zero, -0.0, and negative values all map to "no timeout"
+    /// (Option::None passed to the inner wait), and non-finite values
+    /// (NaN, ±Inf) map to "no timeout" too. We can't easily call the
+    /// wait FFI without a real handle here, so we exercise the same
+    /// predicate the FFI uses.
+    #[test]
+    fn wait_treats_zero_and_negative_as_no_timeout() {
+        fn would_be_no_timeout(secs: f64) -> bool {
+            !secs.is_finite() || secs <= 0.0
+        }
+        assert!(would_be_no_timeout(0.0));
+        assert!(would_be_no_timeout(-0.0));
+        assert!(would_be_no_timeout(-1.0));
+        assert!(would_be_no_timeout(f64::NAN));
+        assert!(would_be_no_timeout(f64::INFINITY));
+        assert!(would_be_no_timeout(f64::NEG_INFINITY));
+        assert!(!would_be_no_timeout(0.001));
+        assert!(!would_be_no_timeout(60.0));
     }
 
     /// Happy-path: snapshot with no deadline, callback returns 0.

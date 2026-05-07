@@ -73,8 +73,22 @@ public class MeshToolRegistry {
      * Add a synthetic tool spec to be merged into the heartbeat catalog.
      * Used by {@link JobsHelperToolsRegistrar} to advertise the three
      * MeshJob helper tools as registry-visible capabilities.
+     *
+     * <p>Idempotent by capability: if a synthetic tool with the same
+     * capability is already registered the call is a no-op. Without
+     * this guard a repeated {@code buildAgentSpec()} (e.g. test refresh
+     * or context restart in the same JVM) would accumulate duplicate
+     * helper specs in the heartbeat (PR review #874).
      */
     public void addSyntheticTool(AgentSpec.ToolSpec spec) {
+        if (spec == null || spec.getCapability() == null) {
+            return;
+        }
+        for (AgentSpec.ToolSpec existing : syntheticTools) {
+            if (spec.getCapability().equals(existing.getCapability())) {
+                return;
+            }
+        }
         syntheticTools.add(spec);
     }
 
