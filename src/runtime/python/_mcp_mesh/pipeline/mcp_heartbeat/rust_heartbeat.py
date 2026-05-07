@@ -1074,11 +1074,11 @@ async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
 
                     time.sleep(0.2)
                 logger.debug(f"Rust core shutdown complete for agent '{agent_id}'")
-            except Exception as e:
-                logger.warning(f"Error during Rust core shutdown: {e}")
-            finally:
-                # Drained on the normal path — drop from atexit registry so
-                # the hook doesn't double-shutdown. Best-effort.
+                # Only drop from atexit registry on the success path. If
+                # shutdown() raised, leave the handle registered so the
+                # atexit hook can retry — `AgentHandle.shutdown` is
+                # idempotent (sets a flag + try_send on a channel), so a
+                # second call from atexit is safe. Best-effort.
                 try:
                     from ...shared.simple_shutdown import (
                         unregister_rust_agent_handle,
@@ -1087,3 +1087,5 @@ async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
                     unregister_rust_agent_handle(handle)
                 except Exception:
                     pass
+            except Exception as e:
+                logger.warning(f"Error during Rust core shutdown: {e}")
