@@ -84,10 +84,14 @@ test:
     capture: final_status
 
 assertions:
-  - expr: "${captured.final_status} contains 'completed'"
-    message: "status should be completed via auto-complete path"
-  - expr: "${captured.final_status} contains 'implicit'"
-    message: "result should be the user's return value (implicit:true)"
+  # Anchor on the status field itself — bare `completed` would also match
+  # the `completed_at` timestamp field that's present on any terminal row.
+  - expr: "${captured.final_status} contains '\\\"status\\\":\\\"completed\\\"'"
+    message: "status field should be completed via auto-complete path"
+  # Anchor on the result-payload key — bare `implicit` would also match
+  # the capability name `report_with_implicit_complete` in the envelope.
+  - expr: "${captured.final_status} contains '\\\"implicit\\\":true'"
+    message: "result must be the user's return value carrying implicit:true (not just the capability name)"
 
 post_run:
   - routine: stop_all

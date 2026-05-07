@@ -87,8 +87,8 @@ test:
 assertions:
   - expr: "${captured.final_status} contains 'completed'"
     message: "status should be completed"
-  - expr: "${captured.final_status} contains 'explicit'"
-    message: "result should include the explicit:true marker from job.complete()"
+  - expr: "${captured.final_status} contains '\\\"explicit\\\":true'"
+    message: "result must include the explicit:true marker from job.complete() (not just the capability name)"
   - expr: "${captured.final_status} contains 'marker'"
     message: "result should include the marker key from job.complete()"
   # Marker value is `\"X\"` in the JSON-escaped meshctl envelope text.

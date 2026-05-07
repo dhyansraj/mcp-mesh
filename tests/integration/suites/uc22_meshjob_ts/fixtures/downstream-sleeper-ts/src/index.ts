@@ -64,6 +64,14 @@ agent.addTool({
         void t;
       });
     } catch (err) {
+      // UNREACHABLE — the Promise above never rejects (the only signal
+      // is setTimeout's resolve). This catch + marker line is a
+      // ready-for-#886 placeholder: once the TS proxy wires AbortSignal
+      // to the per-job cancel registry AND FastMCP-TS surfaces inbound
+      // client-disconnect to the tool handler, the inner Promise will
+      // gain a `reject` path and this marker will start firing for
+      // cancelled jobs. Do NOT debug "why doesn't the marker fire" —
+      // it cannot until #886 lands. See header comment for context.
       process.stderr.write(
         `[downstream-sleeper-ts] sleep CANCELLED for user=${user_id} ` +
           `(client closed / cancel token fired) — err=${err}\n`,

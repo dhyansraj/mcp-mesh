@@ -116,8 +116,10 @@ test:
     capture: final_status
 
 assertions:
-  - expr: "${captured.cancel_response} contains 'ok'"
-    message: "Python helper cancel should ack ok"
+  # Anchor on the field key+value — bare `ok` matches "lookup", URLs, etc.
+  # Python helper returns {"ok": True, "job_id": ...} -> escaped envelope.
+  - expr: "${captured.cancel_response} contains '\\\"ok\\\":true'"
+    message: "Python helper cancel should ack with ok:true"
   - expr: "${captured.final_status} contains '\"status\": \"cancelled\"'"
     message: "final status should be cancelled (not completed) — Python -> registry -> TS cancel route worked"
   # Owner is the TS provider — proves the registry forwarded the cancel

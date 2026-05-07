@@ -90,8 +90,9 @@ test:
 
 assertions:
   # TS helper returns {ok:true, jobId:...} (camelCase); compact JSON.
-  - expr: "${captured.cancel_response} contains 'ok'"
-    message: "__mesh_job_cancel response should include ok"
+  # Anchor on the field key+value — bare `ok` matches "lookup", URLs, etc.
+  - expr: "${captured.cancel_response} contains '\\\"ok\\\":true'"
+    message: "__mesh_job_cancel response should include ok:true"
   - expr: "${captured.final_status} contains 'cancelled'"
     message: "final status should be cancelled (not completed)"
   # Belt-and-suspenders: the *status field* must not be completed.

@@ -129,8 +129,9 @@ test:
     capture: final_check
 
 assertions:
-  - expr: "${captured.cancel_response} contains 'ok'"
-    message: "cancel should ack ok"
+  # Anchor on the field key+value — bare `ok` matches "lookup", URLs, etc.
+  - expr: "${captured.cancel_response} contains '\\\"ok\\\":true'"
+    message: "cancel should ack with ok:true"
   - expr: "${captured.final_check} contains 'cancelled'"
     message: "job status should be cancelled"
   # The producer must NOT have reached job.complete() — natural finish
