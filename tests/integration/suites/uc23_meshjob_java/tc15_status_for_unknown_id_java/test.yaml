@@ -1,0 +1,95 @@
+# tc15_status_for_unknown_id_java — Java port of uc21/tc15 + uc22/tc15.
+#
+# Calls __mesh_job_status with a UUID that's not in the registry.
+# Registry returns HTTP 404 with "job not found: <id>". Java JobProxy
+# turns that into a MeshException; the helper-tool wrapper surfaces it
+# through MCP as an isError envelope.
+
+name: "MeshJob Java: __mesh_job_status with unknown job_id returns structured not-found"
+description: "Java — bogus UUID returns NotFound-shaped error (not a 500, not an auth error)"
+tags:
+  - meshjob
+  - java
+  - issue-890
+  - helpers
+  - errors
+timeout: 240
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/orchestrator-agent-java /workspace/
+
+  - name: "Install agent deps"
+    handler: maven-install
+    path: /workspace/orchestrator-agent-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start orchestrator agent (Java)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start orchestrator-agent-java --env MCP_MESH_HTTP_PORT=9123 -d
+
+  - name: "Wait for orchestrator healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="orchestrator-agent-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Direct registry GET — confirm 404 shape"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -w "\nHTTP_CODE=%{http_code}" \
+        "http://localhost:8000/jobs/00000000-0000-0000-0000-000000000000"
+    capture: registry_404
+
+  - name: "Helper tool with bogus job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call __mesh_job_status \
+        '{"job_id":"00000000-0000-0000-0000-000000000000"}' 2>&1 || true
+    capture: helper_response
+
+  - name: "Assert no auth-rejection phrasing (case-insensitive)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      LOWER=$(echo '${captured.helper_response}' | tr '[:upper:]' '[:lower:]')
+      if echo "$LOWER" | grep -q -E 'unauthorized|permission denied'; then
+        echo "ERROR: helper_response contains an auth-rejection phrase (job_id-as-capability auth must be open)"
+        echo "$LOWER"
+        exit 1
+      fi
+      echo "no auth-rejection phrasing detected"
+
+assertions:
+  - expr: "${captured.registry_404} contains 'HTTP_CODE=404'"
+    message: "registry GET /jobs/<bogus-id> should return HTTP 404"
+  - expr: "${captured.registry_404} icontains 'job not found'"
+    message: "registry 404 body should say 'job not found'"
+  # The Java helper tool surfaces NotFound through MCP either as a
+  # thrown error (meshctl call exits non-zero with stderr) or as an
+  # isError envelope — the error message bubbles up.
+  - expr: "${captured.helper_response} icontains 'not found'"
+    message: "helper-tool error should mention 'not found'"
+  - expr: "${captured.helper_response} not contains 'server error (HTTP 5'"
+    message: "must NOT surface as a 5xx server error"
+  - expr: "${captured.helper_response} not contains '500 Internal Server Error'"
+    message: "must NOT carry a literal HTTP 500 status line"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

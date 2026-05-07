@@ -1,0 +1,173 @@
+# tc22_polyglot_3way_cancel_documents_889 — Documents Java cancel-registry gap.
+#
+# Java provider + Java consumer (running long job). Mid-flight, call
+# __mesh_job_cancel from a PYTHON agent.
+#
+# Per #889 — Java cancel-registry binding inactive (sync JNR-FFI cannot
+# bind nested Tokio runtime). The cancel pipeline behaves as follows:
+#
+#   1. Python orchestrator's __mesh_job_cancel calls JobProxy.cancel
+#      (Python SDK) which POSTs /jobs/{id}/cancel to the registry
+#   2. Registry's CancelJob handler succeeds, marks the row cancelled
+#   3. Registry forwards cancel to the Java provider's
+#      POST /jobs/:job_id/cancel route
+#   4. Java cancel route returns {cancelled:false, jobId} because the
+#      local cancel-registry lookup misses (the binding never happened
+#      for this job — see #889 / MeshToolWrapper.dispatchAsJob)
+#   5. Registry already wrote status=cancelled in step 2, so the
+#      consumer's status read still observes cancelled
+#   6. The Java task body continues running until natural completion
+#      or the registry's sweep marks orphaned
+#
+# Assertion: Python helper's cancel response is ok:true (registry-side
+# success), final status=cancelled (via the registry's CancelJob
+# handler, NOT via the Java owner's cancel token). This is exactly
+# what Java supports today.
+
+name: "MeshJob polyglot 3-way cancel: Python cancels Java-owned job (documents #889)"
+description: "Cross-runtime cancel — Python helper fires registry cancel; Java cancel route returns cancelled:false (#889) but registry-side row flips cancelled regardless"
+tags:
+  - meshjob
+  - polyglot
+  - java
+  - python
+  - issue-890
+  - issue-889
+  - cancel
+timeout: 480
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts (Java provider + Java consumer + Python orchestrator)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+      cp -rL /uc-artifacts/orchestrator-agent /workspace/
+
+  - name: "Install Java provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install Java consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - name: "Install Python orchestrator deps"
+    handler: pip-install
+    path: /workspace/orchestrator-agent
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start Java provider (port 9120)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for Java provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start Java consumer (port 9121)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Start Python orchestrator (port 9103)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=9103 -d
+
+  - name: "Wait for all 3 healthy + Java consumer DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(curl -s http://localhost:8000/agents)
+        JP=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status')
+        JC=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .status')
+        PO=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="orchestrator-agent") | .status')
+        JCR=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .dependencies_resolved')
+        JCT=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .total_dependencies')
+        if [ "$JP" = "healthy" ] && [ "$JC" = "healthy" ] && [ "$PO" = "healthy" ] \
+           && [ "$JCR" = "$JCT" ] && [ "$JCT" != "0" ]; then
+          echo "all 3 ready after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR — JP=$JP JC=$JC PO=$PO deps=$JCR/$JCT"
+      exit 1
+    timeout: 240
+
+  - name: "Submit 30-second overlong job via Java consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_overlong '{"user_id":"alice","seconds":30}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Wait 5s for Java provider to claim + start"
+    handler: wait
+    seconds: 5
+
+  # Python helper: __mesh_job_cancel takes snake_case job_id.
+  - name: "Cancel via the Python orchestrator agent's helper tool"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="orchestrator-agent") | .id')
+      echo "JOB_ID=${JOB_ID} AGENT=${AGENT}"
+      if [ -z "$JOB_ID" ] || [ "$JOB_ID" = "null" ] || [ -z "$AGENT" ] || [ "$AGENT" = "null" ]; then
+        echo "ERROR: required vars empty — JOB_ID='$JOB_ID' AGENT='$AGENT'"
+        exit 1
+      fi
+      meshctl call "${AGENT}:__mesh_job_cancel" "{\"job_id\":\"${JOB_ID}\",\"reason\":\"tc22 python-initiated cancel of Java job\"}"
+    capture: cancel_response
+    timeout: 15
+
+  - name: "Wait for cancel to settle in registry"
+    handler: wait
+    seconds: 8
+
+  - name: "Read final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,owner_instance_id,error,progress}'
+    capture: final_status
+
+assertions:
+  # Python helper returns {"ok": True, "job_id": ...} (snake_case
+  # spaced JSON wrapping). The registry-side cancel succeeds even
+  # though the Java owner's local cancel token doesn't fire (#889).
+  - expr: "${captured.cancel_response} contains '\"ok\": true'"
+    message: "Python helper cancel should ack with ok:true (registry-side success)"
+  # Per #889 — registry's CancelJob handler writes status=cancelled
+  # directly. The cancel forward to the Java owner returns
+  # cancelled:false but the row is already updated.
+  - expr: "${captured.final_status} contains '\"status\": \"cancelled\"'"
+    message: "registry-side status should be cancelled (Python -> registry path works; Java cancel-registry inactive per #889)"
+  # Owner is the Java provider — proves the registry forwarded the
+  # cancel to the Java replica that holds the lease.
+  - expr: "${captured.final_status} contains 'long-task-provider-java'"
+    message: "owner_instance_id should be the Java provider — confirms Python -> Java forwarding path reached"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

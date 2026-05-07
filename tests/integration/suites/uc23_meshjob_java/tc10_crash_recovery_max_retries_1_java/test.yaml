@@ -1,0 +1,181 @@
+# tc10_crash_recovery_max_retries_1_java — Java port of uc21/tc10 + uc22/tc10.
+#
+# Submits a 14s job to a single Java provider+consumer pair, kills the
+# provider mid-flight (SIGKILL), then waits for the registry sweep to
+# detect the orphan and re-claim the row to a NEW provider replica.
+# With max_retries=1, attempt_count becomes 2 (initial + 1 retry).
+#
+# Java process tree: `meshctl start <dir>` → mvn (parent) → java (child).
+# Both must be killed; killing only one leaves the other alive and the
+# agent keeps heartbeating. Same pattern as uc22 TS (tsx parent + node
+# child) but matches Java cmdlines.
+
+name: "MeshJob Java: crash recovery with default max_retries=1 — orphan reclaim"
+description: "Java — submit, kill provider (mvn parent + java child), wait for sweep, start new provider, observe completion via retry"
+tags:
+  - meshjob
+  - java
+  - issue-890
+  - retry
+  - crash-recovery
+  - slow
+timeout: 480
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Wait for consumer + DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
+        S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Submit job (7 sections, max_retries=1)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["a","b","c","d","e","f","g"],"max_retries":1,"max_duration":60}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  # Java's claim worker polls less aggressively than Python (asyncio
+  # tight loop) or TS (event loop) — wait long enough for attempt 1 to
+  # be recorded against the row before SIGKILL. With max_duration=60s
+  # the lease covers the full kill+sweep window.
+  - name: "Wait 12s for the producer to claim + start (Java is slower)"
+    handler: wait
+    seconds: 12
+
+  - name: "Kill the provider mid-flight (SIGKILL — mvn parent + java child)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Kill EVERY mvn/java process whose cmdline mentions the provider
+      # project — meshctl start spawns mvn (parent) which forks the
+      # JVM (child). Both must die.
+      MY_PID=$$
+      MY_PPID=$PPID
+      KILLED=""
+      for p in /proc/[0-9]*; do
+        pid="${p##*/}"
+        [ "$pid" = "1" ] && continue
+        [ "$pid" = "$MY_PID" ] && continue
+        [ "$pid" = "$MY_PPID" ] && continue
+        [ -f "$p/cmdline" ] || continue
+        cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$cmd" in
+          *long-task-provider-java*spring-boot:run*|*long-task-provider-java*classpath*|*LongTaskProviderApplication*|*long-task-provider-java/target/classes*)
+            kill -9 "$pid" 2>/dev/null && KILLED="$KILLED $pid"
+            ;;
+        esac
+      done
+      echo "killed PIDs:$KILLED"
+      if [ -z "$KILLED" ]; then
+        echo "ERROR: No provider processes were killed — recovery scenario invalid"
+        exit 1
+      fi
+      rm -f ~/.mcp-mesh/agents/long-task-provider-java/* 2>/dev/null || true
+    capture: kill_output
+
+  - name: "Wait for sweep to orphan the job (~35s end-to-end)"
+    handler: wait
+    seconds: 45
+
+  - name: "Confirm orphan is back in claimable state"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      echo "JOB_ID=${JOB_ID}"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,owner_instance_id,attempt_count,error}'
+    capture: orphaned_check
+
+  - name: "Stale PID cleanup — meshctl still tracks the killed PID"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop long-task-provider-java 2>&1 || true
+      rm -f ~/.mcp-mesh/agents/long-task-provider-java/* 2>/dev/null || true
+      echo "stale entry cleared"
+
+  - name: "Start a fresh provider — same capability, new instance_id"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for fresh provider healthy + claim + run (Java cold-start ~30s + 14s job)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && { echo "ready after ${i}x2s"; sleep 25; exit 0; }
+        sleep 2
+      done; echo "ERROR fresh provider"; exit 1
+    timeout: 180
+
+  - name: "Read final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,attempt_count,progress,error}'
+    capture: final_status
+
+assertions:
+  - expr: "${captured.orphaned_check} contains '\"owner_instance_id\": null'"
+    message: "after sweep, owner should be cleared (orphan re-claim path)"
+  - expr: "${captured.final_status} contains '\"status\": \"completed\"'"
+    message: "fresh provider should have completed the retried job"
+  - expr: "${captured.final_status} contains '\"attempt_count\": 2'"
+    message: "attempt_count should be 2 (initial + 1 retry)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

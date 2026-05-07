@@ -1,0 +1,172 @@
+# tc09_cancel_aborts_outbound_http_java — Java port of uc21/tc09 + uc22/tc09.
+#
+# Three-agent chain (all Java):
+#   consumer (commission_downstream)
+#     -> provider.report_with_downstream_call (task=true)
+#         -> downstream-sleeper-java.slow_downstream (sleeps 30s)
+#
+# After submit, wait briefly then cancel.
+#
+# IMPORTANT — Java has TWO documented limitations relevant here:
+#
+#   1. #889: Java cancel-registry binding inactive (sync JNR-FFI cannot
+#      bind nested Tokio runtime). The cancel route returns
+#      cancelled:false; the in-process cancel token never fires.
+#
+#   2. uc22/tc09 already documents that even with the cancel token
+#      firing, the inbound transport on the downstream agent must
+#      surface client-disconnect as a cancellation to the tool handler.
+#      The Java SDK does not yet propagate inbound cancel either —
+#      same gap as Python (#882) and TS (open follow-up).
+#
+# Producer fixture's report_with_downstream_call also can't use a
+# McpMeshTool dependency (Java SDK rejects task=true producers with
+# Selector deps; see provider source comment) — it issues a plain
+# HTTP POST to the sleeper's /mcp endpoint instead. Same outbound HTTP
+# surface, just minus the resolution-layer wrapper.
+#
+# What DOES work for Java today:
+#   - registry-side row flips to status=cancelled (registry route works)
+#
+# What does NOT work for Java today:
+#   - producer's local cancel token doesn't fire (#889)
+#   - downstream sleeper's marker line doesn't fire (#886-style)
+#   - the runs_overlong / downstream HTTP runs to natural completion
+#     until the producer hits a sweep or the registry pre-cancels
+#
+# This test asserts what's observable: registry-side status=cancelled.
+# The downstream-sleeper-java's marker is NOT asserted (parallel to
+# uc22/tc09's pattern for the cross-runtime gap).
+
+name: "MeshJob Java: cancel registers as cancelled in registry (downstream propagation gap per #889/#886)"
+description: "Java — provider calls slow_downstream(30s) via HTTP; cancel must result in cancelled status in registry. Producer-local + downstream propagation NOT asserted (Java #889 + cross-runtime #886-style)."
+tags:
+  - meshjob
+  - java
+  - issue-890
+  - issue-889
+  - cancel
+  - propagation
+timeout: 480
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+      cp -rL /uc-artifacts/downstream-sleeper-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - name: "Install sleeper deps"
+    handler: maven-install
+    path: /workspace/downstream-sleeper-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start downstream-sleeper-java (port 9122) FIRST"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start downstream-sleeper-java --env MCP_MESH_HTTP_PORT=9122 -d
+
+  - name: "Wait for sleeper healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="downstream-sleeper-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start provider (port 9120)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start consumer (port 9121)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Wait for consumer + DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
+        S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Submit job that calls downstream"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_downstream '{"user_id":"alice"}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Wait 6s — let producer pick up + flush first progress + enter downstream"
+    handler: wait
+    seconds: 6
+
+  - name: "Cancel the job"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      echo "JOB_ID=${JOB_ID}"
+      meshctl call __mesh_job_cancel "{\"job_id\":\"${JOB_ID}\"}"
+    capture: cancel_response
+    timeout: 15
+
+  - name: "Wait for cancel to settle"
+    handler: wait
+    seconds: 10
+
+  - name: "Read final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: final_status
+
+assertions:
+  - expr: "${captured.cancel_response} contains '\\\"ok\\\":true'"
+    message: "cancel should ack with ok:true"
+  # Per #889 — registry-side row flips to cancelled (registry's
+  # CancelJob handler succeeds) even though Java's cancel-registry
+  # binding is inactive. This is the substantive signal we CAN test.
+  - expr: "${captured.final_status} contains '\\\"status\\\":\\\"cancelled\\\"'"
+    message: "registry-side status should be cancelled (Java cancel-registry inactive per #889; downstream HTTP NOT asserted aborted)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

@@ -1,0 +1,74 @@
+# UC-level routines for uc23_meshjob_java.
+#
+# Java port of the MeshJob suite — mirror of uc21_meshjob/routines.yaml
+# (Python) and uc22_meshjob_ts/routines.yaml (TypeScript). Same registry
+# knobs (MCP_MESH_SWEEP_INTERVAL=10s + retention/health) so
+# crash-recovery / orphan-reroute / deadline tests resolve in seconds
+# instead of the registry's 5-minute defaults.
+#
+# Identical to the Python and TS suites: the substrate's recovery +
+# deadline expiry paths are runtime-agnostic — they live entirely in the
+# registry (Go) — so the same env-var overrides apply regardless of
+# whether the producer/consumer is Python, TypeScript, or Java.
+
+routines:
+  # See uc21_meshjob/routines.yaml for the full chain-of-effects writeup
+  # of MCP_MESH_SWEEP_INTERVAL / RETENTION / HEALTH_CHECK_INTERVAL /
+  # DEFAULT_TIMEOUT_THRESHOLD. Numbers are intentionally identical to
+  # keep the suite-suite math (~35s end-to-end after a SIGKILL for
+  # orphan reset) the same across all three runtimes.
+  start_registry_with_fast_sweep:
+    description: "Start the mesh registry with all timing knobs cranked for fast recovery tests"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          MCP_MESH_SWEEP_INTERVAL=10s \
+          MCP_MESH_RETENTION=10s \
+          MCP_MESH_HEALTH_CHECK_INTERVAL=5 \
+          DEFAULT_TIMEOUT_THRESHOLD=15 \
+            meshctl start --registry-only -d
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "registry ready after ${i}s"
+              # Verify the sweep override actually stamped its log line.
+              # If MCP_MESH_SWEEP_INTERVAL didn't take effect the suite
+              # must fail loudly here, not via slow per-test timeouts.
+              # Tail the log so a stale match from an earlier run in the
+              # same shell session can't make a misconfigured current
+              # run look healthy.
+              tail -n 200 ~/.mcp-mesh/logs/registry.log \
+                | grep -qE '\[sweep\] using MCP_MESH_SWEEP_INTERVAL' \
+                || { echo "FAIL: MCP_MESH_SWEEP_INTERVAL override did not take effect"; exit 1; }
+              echo "[setup] confirmed sweep override active"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: registry did not become ready in 20s"
+          tail -50 ~/.mcp-mesh/logs/registry.log 2>/dev/null || true
+          exit 1
+        capture: registry_start
+        timeout: 30
+
+  # Stop everything started by this test (agents + registry).
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: meshctl stop 2>/dev/null || true
+        ignore_errors: true
+
+  # Kill all Java agent processes whose cmdline mentions a target jar /
+  # main class. Used by the SIGKILL recovery tests (tc10, tc11, tc12,
+  # tc13) — `mvn spring-boot:run` spawns a Maven parent and a Java
+  # child; killing only one leaves the other alive and the agent keeps
+  # heartbeating. Pattern mirrors uc22's TS suite (tsx parent + node
+  # child) but matches Java cmdlines (mvn / surefire / java).
+  #
+  # Inputs come via env vars set by the test before invoking this
+  # routine (we can't pass params to a routine via the routine: shorthand
+  # without restructuring; tests just inline the kill loop directly).
+  # This routine is therefore informational — see test.yaml inline for
+  # the actual implementation.

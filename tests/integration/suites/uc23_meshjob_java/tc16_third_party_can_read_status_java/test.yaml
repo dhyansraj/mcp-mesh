@@ -1,0 +1,177 @@
+# tc16_third_party_can_read_status_java — Java port of uc21/tc16 + uc22/tc16.
+#
+# Four Java agents: producer, consumer (submits), and two bystanders X / Y
+# (no involvement). Bystanders are distinct fixtures with unique
+# @MeshAgent names so the registry sees two genuinely independent agents.
+# Submit a job via consumer; capture job_id. Call __mesh_job_status on
+# each bystander. Presigned-URL semantics: possession of the UUID = read.
+
+name: "MeshJob Java: third-party agents can read status by job_id (presigned-URL auth)"
+description: "Java — two unrelated bystanders read job status — no auth gating, only ID-as-capability"
+tags:
+  - meshjob
+  - java
+  - issue-890
+  - helpers
+  - auth
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+      cp -rL /uc-artifacts/bystander-x-java /workspace/
+      cp -rL /uc-artifacts/bystander-y-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - name: "Install bystander-x-java deps"
+    handler: maven-install
+    path: /workspace/bystander-x-java
+    timeout: 600
+
+  - name: "Install bystander-y-java deps"
+    handler: maven-install
+    path: /workspace/bystander-y-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Start bystander X"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start bystander-x-java --env MCP_MESH_HTTP_PORT=9124 -d
+
+  - name: "Start bystander Y"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start bystander-y-java --env MCP_MESH_HTTP_PORT=9125 -d
+
+  - name: "Wait for all 4 healthy + consumer DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(curl -s http://localhost:8000/agents)
+        PS=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status')
+        CS=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .status')
+        XS=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="bystander-x-java") | .status')
+        YS=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="bystander-y-java") | .status')
+        CR=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .dependencies_resolved')
+        CT=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .total_dependencies')
+        if [ "$PS" = "healthy" ] && [ "$CS" = "healthy" ] && [ "$XS" = "healthy" ] && [ "$YS" = "healthy" ] \
+           && [ "$CR" = "$CT" ] && [ "$CT" != "0" ]; then
+          echo "all 4 ready after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR — provider=$PS consumer=$CS X=$XS Y=$YS deps=$CR/$CT"
+      exit 1
+    timeout: 240
+
+  - name: "Confirm all 4 agents in registry"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s http://localhost:8000/agents | jq -r '.agents[].name' | sort
+    capture: agent_names
+
+  - name: "Submit job via consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["one","two"],"max_retries":1,"max_duration":30}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Wait for completion"
+    handler: wait
+    seconds: 8
+
+  - name: "Bystander X reads status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="bystander-x-java") | .id')
+      echo "AGENT=${AGENT} JOB=${JOB_ID}"
+      meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}"
+    capture: bystander_x_status
+
+  - name: "Bystander Y reads status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      AGENT=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="bystander-y-java") | .id')
+      meshctl call "${AGENT}:__mesh_job_status" "{\"job_id\":\"${JOB_ID}\"}"
+    capture: bystander_y_status
+
+assertions:
+  - expr: "${captured.agent_names} contains 'long-task-provider-java'"
+    message: "Java provider should be registered"
+  - expr: "${captured.agent_names} contains 'long-task-consumer-java'"
+    message: "Java consumer should be registered"
+  - expr: "${captured.agent_names} contains 'bystander-x-java'"
+    message: "bystander-x-java should be registered"
+  - expr: "${captured.agent_names} contains 'bystander-y-java'"
+    message: "bystander-y-java should be registered"
+
+  - expr: "${captured.bystander_x_status} contains 'completed'"
+    message: "bystander-x-java should read the actual completed status (no auth gating)"
+  - expr: "${captured.bystander_y_status} contains 'completed'"
+    message: "bystander-y-java should read the actual completed status (no auth gating)"
+
+  - expr: "${captured.bystander_x_status} contains 'long-task-provider-java'"
+    message: "bystander-x-java's read should include the producer owner_instance_id"
+  - expr: "${captured.bystander_y_status} contains 'long-task-provider-java'"
+    message: "bystander-y-java's read should include the producer owner_instance_id"
+
+  - expr: "${captured.bystander_x_status} not contains 'unauthorized'"
+    message: "bystander-x-java must NOT see 'unauthorized'"
+  - expr: "${captured.bystander_x_status} not contains 'permission denied'"
+    message: "bystander-x-java must NOT see 'permission denied'"
+  - expr: "${captured.bystander_y_status} not contains 'unauthorized'"
+    message: "bystander-y-java must NOT see 'unauthorized'"
+  - expr: "${captured.bystander_y_status} not contains 'permission denied'"
+    message: "bystander-y-java must NOT see 'permission denied'"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

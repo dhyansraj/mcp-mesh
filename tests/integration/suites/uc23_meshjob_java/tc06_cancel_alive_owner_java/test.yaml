@@ -1,0 +1,135 @@
+# tc06_cancel_alive_owner_java — Java port of uc21/tc06 + uc22/tc06.
+#
+# Submits an overlong job (~30s), waits 5s for the producer's claim
+# worker to take ownership, then calls __mesh_job_cancel.
+#
+# IMPORTANT — Java cancel limitation (#889):
+#
+# Per #889, Java's sync JNR-FFI bindings cannot bind the per-job cancel
+# registry table — the natural binding path requires nested Tokio
+# block_on which Tokio rejects. The substrate's cancel pipeline
+# therefore behaves as follows on a Java owner:
+#
+#   - registry's CancelJob handler succeeds and marks the row cancelled
+#   - registry POSTs /jobs/{id}/cancel to the owner Java replica
+#   - the Java cancel route returns {cancelled:false, jobId} because the
+#     local cancel-registry lookup misses (binding inactive)
+#   - the Java task body does NOT abort; runs_overlong continues to its
+#     natural end (~30s) — but the registry already marked cancelled, so
+#     the consumer's status read sees status=cancelled
+#
+# Assertion: status=cancelled in the registry. We do NOT assert that
+# the task aborted faster than its natural completion, because Java
+# cannot deliver that guarantee until #889 is fixed.
+
+name: "MeshJob Java: cancel registers as cancelled in registry (Java cancel-registry inactive per #889)"
+description: "Java submit overlong job, cancel mid-flight, observe cancelled status in registry. Does NOT assert mid-flight abort (see #889 inline)."
+tags:
+  - meshjob
+  - java
+  - issue-890
+  - issue-889
+  - cancel
+timeout: 360
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Wait for consumer + DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
+        S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Submit a 30-second job"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_overlong '{"user_id":"alice","seconds":30}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Wait 5s for claim + start"
+    handler: wait
+    seconds: 5
+
+  - name: "Cancel the job"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      echo "JOB_ID=${JOB_ID}"
+      meshctl call __mesh_job_cancel "{\"job_id\":\"${JOB_ID}\",\"reason\":\"tc06 client requested abort\"}"
+    capture: cancel_response
+    timeout: 15
+
+  - name: "Wait for cancel to settle in registry"
+    handler: wait
+    seconds: 8
+
+  - name: "Read final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: final_status
+
+assertions:
+  # Java helper returns {ok:true, job_id:...} (snake_case); compact JSON.
+  - expr: "${captured.cancel_response} contains '\\\"ok\\\":true'"
+    message: "__mesh_job_cancel response should include ok:true"
+  # Per #889 — the registry-side row flips to cancelled even though the
+  # Java owner's local cancel token didn't fire. This is the substantive
+  # signal we CAN test for Java today.
+  - expr: "${captured.final_status} contains '\\\"status\\\":\\\"cancelled\\\"'"
+    message: "registry-side status should be cancelled (Java cancel-registry binding inactive per #889; this still validates the registry's CancelJob path)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

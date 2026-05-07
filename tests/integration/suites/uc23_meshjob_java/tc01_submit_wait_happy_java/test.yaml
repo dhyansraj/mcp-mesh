@@ -1,0 +1,150 @@
+# tc01_submit_wait_happy_java — Java port of uc21/tc01 + uc22/tc01.
+#
+# Headline regression test for MeshJob Phase 1, Java runtime.
+#
+# Scenario:
+#   - Registry up with MCP_MESH_SWEEP_INTERVAL=10s
+#   - long-task-provider-java hosts generate_report (task=true)
+#   - long-task-consumer-java hosts commission_report (deps=["generate_report"])
+#   - Client invokes commission_report with sections=[intro, analysis, summary]
+#   - Consumer's submit() + await() returns the structured payload after ~6s
+#
+# Java cold-start is ~30s for Spring Boot — the post-start wait (60s) is
+# generous to absorb mvn dependency resolution + JVM warmup.
+
+name: "MeshJob Java: submit-and-wait happy path returns structured result"
+description: "Java producer + Java consumer: commission_report -> generate_report (3 sections) -> wait -> structured result"
+tags:
+  - meshjob
+  - smoke
+  - java
+  - issue-890
+timeout: 360
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (port 9120)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  # Java cold-start is ~30s for Spring Boot; with the fast-sweep
+  # registry the agent can be marked unhealthy if the first heartbeat
+  # is delayed past DEFAULT_TIMEOUT_THRESHOLD=15s. Poll the /agents
+  # endpoint until status==healthy (recovers automatically once the
+  # JVM finishes booting and the heartbeat thread starts).
+  - name: "Wait for Java provider to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -s http://localhost:8000/agents | jq -r \
+          '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        if [ "$STATUS" = "healthy" ]; then
+          echo "provider healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: provider not healthy within 120s (last status='$STATUS')"
+      meshctl logs long-task-provider-java 2>&1 | tail -80 || true
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name=="long-task-provider-java")' || true
+      exit 1
+    timeout: 150
+
+  - name: "Start consumer (port 9121)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Wait for Java consumer to be healthy + DI resolved"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # /agents.dependencies_resolved is a numeric count, not a bool —
+      # equals total_dependencies once every @Selector has a matched
+      # producer bound to the local proxy registry.
+      for i in $(seq 1 60); do
+        ROW=$(curl -s http://localhost:8000/agents \
+          | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
+        STATUS=$(echo "$ROW" | jq -r '.status' 2>/dev/null)
+        RESOLVED=$(echo "$ROW" | jq -r '.dependencies_resolved' 2>/dev/null)
+        TOTAL=$(echo "$ROW" | jq -r '.total_dependencies' 2>/dev/null)
+        # Provider must also still be healthy — Java's slow startup
+        # can cause it to flap, and resolved deps might transiently
+        # drop. Assert end-state where both are healthy + all wired.
+        PSTATUS=$(curl -s http://localhost:8000/agents \
+          | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        if [ "$STATUS" = "healthy" ] && [ "$PSTATUS" = "healthy" ] \
+           && [ "$RESOLVED" = "$TOTAL" ] && [ "$TOTAL" != "0" ]; then
+          echo "consumer healthy with $RESOLVED/$TOTAL deps resolved after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: consumer not ready within 120s (status=$STATUS deps=$RESOLVED/$TOTAL provider_status=$PSTATUS)"
+      echo "=== consumer logs ==="
+      meshctl logs long-task-consumer-java 2>&1 | tail -50 || true
+      echo "=== provider logs ==="
+      meshctl logs long-task-provider-java 2>&1 | tail -50 || true
+      echo "=== /agents ==="
+      curl -s http://localhost:8000/agents | jq '.agents[] | {name, status, dependencies_resolved, total_dependencies, last_seen}'
+      exit 1
+    timeout: 150
+
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Call commission_report — submit + wait the full job"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report '{"user_id": "alice", "sections": ["intro", "analysis", "summary"]}'
+    capture: commission_response
+    timeout: 90
+
+assertions:
+  - expr: "${captured.agent_list} contains 'long-task-provider-java'"
+    message: "Java provider should be registered"
+  - expr: "${captured.agent_list} contains 'long-task-consumer-java'"
+    message: "Java consumer should be registered"
+  - expr: "${captured.commission_response} not contains '\"isError\":true'"
+    message: "commission_report should NOT return an MCP error envelope"
+  # Java's Jackson serializer emits compact JSON without spaces, and the
+  # meshctl envelope JSON-escapes the inner text — match the escaped form.
+  - expr: "${captured.commission_response} contains 'alice'"
+    message: "result should echo the submitted user_id"
+  - expr: "${captured.commission_response} contains 'Generated content for intro'"
+    message: "result should include the intro section content"
+  - expr: "${captured.commission_response} contains 'Generated content for analysis'"
+    message: "result should include the analysis section content"
+  - expr: "${captured.commission_response} contains 'Generated content for summary'"
+    message: "result should include the summary section content"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

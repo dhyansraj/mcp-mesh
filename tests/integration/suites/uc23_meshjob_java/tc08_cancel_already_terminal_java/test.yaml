@@ -1,0 +1,129 @@
+# tc08_cancel_already_terminal_java — Java port of uc21/tc08 + uc22/tc08.
+#
+# Submit a fast generate_report job and wait for it to complete. Then
+# attempt to cancel the now-completed job. Registry returns HTTP 409
+# with "job is already in a terminal state". The Java helper-tool
+# wrapper surfaces it through MCP as an isError envelope (the
+# JobProxy.cancel() throws which the wrapper marshals into
+# isError content).
+
+name: "MeshJob Java: cancel of already-terminal job returns 409 / structured error"
+description: "Java — complete a job, then cancel it; both registry HTTP and helper tool must reject as conflict"
+tags:
+  - meshjob
+  - java
+  - issue-890
+  - cancel
+timeout: 360
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Wait for consumer + DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
+        S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Submit a quick job (submit-only) to capture job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["only"],"max_retries":1,"max_duration":30}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Wait for job to complete (~3s)"
+    handler: wait
+    seconds: 8
+
+  - name: "Confirm it is terminal"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      echo "JOB_ID=${JOB_ID}"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status'
+    capture: terminal_check
+
+  - name: "Direct registry cancel — expect HTTP 409"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      curl -s -X POST "http://localhost:8000/jobs/${JOB_ID}/cancel" \
+        -H 'Content-Type: application/json' -d '{}' \
+        -w "\nHTTP_CODE=%{http_code}"
+    capture: registry_cancel
+
+  - name: "Helper-tool cancel — expect MCP isError"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      meshctl call __mesh_job_cancel "{\"job_id\":\"${JOB_ID}\"}" 2>&1 || true
+    capture: helper_cancel
+
+assertions:
+  - expr: "${captured.terminal_check} contains 'completed'"
+    message: "job should have completed before cancel attempt"
+  - expr: "${captured.registry_cancel} contains 'HTTP_CODE=409'"
+    message: "direct registry cancel of completed job must return 409"
+  - expr: "${captured.registry_cancel} contains 'terminal'"
+    message: "registry 409 message should mention terminal state"
+  # Java helper tool surfaces the registry's 409 as a MeshException —
+  # JobProxy.cancel() throws, the handler logs+rethrows, MCP wraps as
+  # isError. The error message bubbles up containing "Conflict" or
+  # the body text.
+  - expr: "${captured.helper_cancel} icontains 'conflict'"
+    message: "helper-tool cancel should surface 409 conflict"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

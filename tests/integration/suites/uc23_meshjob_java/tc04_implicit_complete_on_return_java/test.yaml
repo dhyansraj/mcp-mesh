@@ -1,0 +1,112 @@
+# tc04_implicit_complete_on_return_java — Java port of uc21/tc04 + uc22/tc04.
+#
+# Producer fixture report_with_implicit_complete updates progress but
+# NEVER calls controller.complete(). The Java dispatch wrapper's
+# auto-complete path should observe the non-terminal isTerminal() probe
+# and flush the user's return value as the terminal payload.
+
+name: "MeshJob Java: handler returns without complete() — auto-complete fires"
+description: "Java producer doesn't call controller.complete; runtime auto-completes with the return value"
+tags:
+  - meshjob
+  - java
+  - issue-890
+  - auto-complete
+timeout: 300
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0
+        sleep 2
+      done
+      echo "ERROR provider not healthy"; exit 1
+    timeout: 150
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Wait for consumer + DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
+        S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && exit 0
+        sleep 2
+      done
+      echo "ERROR consumer not ready"; exit 1
+    timeout: 150
+
+  - name: "POST /jobs for report_with_implicit_complete"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:8000/jobs \
+        -H 'Content-Type: application/json' \
+        -d '{"capability":"report_with_implicit_complete","submitted_payload":{"user_id":"alice"},"submitted_by":"tc04","max_duration":30,"max_retries":1}'
+    capture: submit_resp
+
+  - name: "Extract job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.id')
+      echo "JOB_ID=${JOB_ID}"
+    capture: job_id_extract
+
+  - name: "Wait for completion"
+    handler: wait
+    seconds: 12
+
+  - name: "Read final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: final_status
+
+assertions:
+  - expr: "${captured.final_status} contains '\\\"status\\\":\\\"completed\\\"'"
+    message: "status field should be completed via auto-complete path"
+  - expr: "${captured.final_status} contains '\\\"implicit\\\":true'"
+    message: "result must be the user's return value carrying implicit:true (not just the capability name)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

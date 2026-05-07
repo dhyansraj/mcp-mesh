@@ -1,0 +1,204 @@
+# tc12_max_retries_exhausted_marks_failed_java — Java port of uc21/tc12 + uc22/tc12.
+#
+# Two SIGKILL cycles with max_retries=1 leaves attempt_count=2,
+# max_retries=1 → orphan-reset path's check `attempt_count > max_retries`
+# (2 > 1) trips and marks failed with "orphaned: max retries exceeded".
+
+name: "MeshJob Java: retry budget exhausted via repeated crashes — marked failed"
+description: "Java — two crash + sweep cycles with max_retries=1; final attempt_count=2 > max_retries → exhausted"
+tags:
+  - meshjob
+  - java
+  - issue-890
+  - retry
+  - crash-recovery
+  - slow
+timeout: 600
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (round 1)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Wait for consumer + DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
+        S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Submit job with max_retries=1"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_submit_only \
+        '{"user_id":"alice","sections":["a","b","c","d","e","f","g","h","i"],"max_retries":1,"max_duration":60}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  # See tc10 inline comment — Java needs longer pre-kill wait.
+  - name: "Wait 12s for claim (Java is slower)"
+    handler: wait
+    seconds: 12
+
+  - name: "Kill provider — round 1 (attempt 1 crashes)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      MY_PID=$$
+      MY_PPID=$PPID
+      KILLED=""
+      for p in /proc/[0-9]*; do
+        pid="${p##*/}"
+        [ "$pid" = "1" ] && continue
+        [ "$pid" = "$MY_PID" ] && continue
+        [ "$pid" = "$MY_PPID" ] && continue
+        [ -f "$p/cmdline" ] || continue
+        cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$cmd" in
+          *long-task-provider-java*spring-boot:run*|*long-task-provider-java*classpath*|*LongTaskProviderApplication*|*long-task-provider-java/target/classes*)
+            kill -9 "$pid" 2>/dev/null && KILLED="$KILLED $pid"
+            ;;
+        esac
+      done
+      echo "killed PIDs round 1:$KILLED"
+      if [ -z "$KILLED" ]; then
+        echo "ERROR: No provider processes were killed in round 1"
+        exit 1
+      fi
+      rm -f ~/.mcp-mesh/agents/long-task-provider-java/* 2>/dev/null || true
+    capture: kill1
+
+  - name: "Wait for sweep to reset orphan (~35s end-to-end)"
+    handler: wait
+    seconds: 45
+
+  - name: "Status after round 1 (should be working, owner=null)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,owner_instance_id,attempt_count}'
+    capture: after_round_1
+
+  - name: "Stale PID cleanup before round 2"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop long-task-provider-java 2>&1 || true
+      rm -f ~/.mcp-mesh/agents/long-task-provider-java/* 2>/dev/null || true
+      echo "stale entry cleared"
+
+  - name: "Start provider (round 2)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for round 2 healthy + claim"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && { sleep 5; exit 0; }
+        sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Kill provider — round 2 (attempt 2 crashes)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      MY_PID=$$
+      MY_PPID=$PPID
+      KILLED=""
+      for p in /proc/[0-9]*; do
+        pid="${p##*/}"
+        [ "$pid" = "1" ] && continue
+        [ "$pid" = "$MY_PID" ] && continue
+        [ "$pid" = "$MY_PPID" ] && continue
+        [ -f "$p/cmdline" ] || continue
+        cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$cmd" in
+          *long-task-provider-java*spring-boot:run*|*long-task-provider-java*classpath*|*LongTaskProviderApplication*|*long-task-provider-java/target/classes*)
+            kill -9 "$pid" 2>/dev/null && KILLED="$KILLED $pid"
+            ;;
+        esac
+      done
+      echo "killed PIDs round 2:$KILLED"
+      if [ -z "$KILLED" ]; then
+        echo "ERROR: No provider processes were killed in round 2"
+        exit 1
+      fi
+      rm -f ~/.mcp-mesh/agents/long-task-provider-java/* 2>/dev/null || true
+    capture: kill2
+
+  - name: "Wait for sweep to mark exhausted (~35s end-to-end)"
+    handler: wait
+    seconds: 45
+
+  - name: "Final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,owner_instance_id,attempt_count,error}'
+    capture: final_status
+
+assertions:
+  - expr: "${captured.after_round_1} contains '\"status\": \"working\"'"
+    message: "after round 1 sweep, status should still be working (orphan reset)"
+  - expr: "${captured.after_round_1} contains '\"owner_instance_id\": null'"
+    message: "after round 1 sweep, owner should be cleared"
+  - expr: "${captured.final_status} contains '\"status\": \"failed\"'"
+    message: "after round 2 sweep with attempt_count > max_retries, must be failed"
+  - expr: "${captured.final_status} contains 'max retries exceeded'"
+    message: "error should mention max retries exceeded"
+  - expr: "${captured.final_status} contains '\"attempt_count\": 2'"
+    message: "attempt_count should be 2 (1 initial + 1 retry attempt) — budget exceeded"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

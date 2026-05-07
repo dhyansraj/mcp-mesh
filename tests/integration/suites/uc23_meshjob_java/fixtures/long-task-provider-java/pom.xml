@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  MeshJob test-suite producer (uc23_meshjob_java) — Java port of
+  uc21_meshjob/fixtures/long-task-provider/main.py and
+  uc22_meshjob_ts/fixtures/long-task-provider-ts/.
+
+  Hosts a small zoo of `task = true` capabilities, one per scenario the
+  suite needs to exercise. Same capability names as the Python and TS
+  fixtures so polyglot tests (tc17–tc22) can call them interchangeably.
+
+  Spring Boot version is intentionally 4.0.6 (newer than 4.0.5 in the
+  toolcalls examples) — addresses CVEs caught during the #891 review.
+
+  The local-repo path resolves the mcp-mesh-* artifacts the suite
+  builds via src-tests; tsuite's maven-install handler strips file://
+  repos and re-points to the container's pre-populated m2 cache.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>long-task-provider-java</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>MeshJob Long-Task Provider (uc23 Java)</name>
+    <description>MeshJob test producer (uc23 Java) — multi-capability fixture for the integration suite.</description>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.6</version>
+        <relativePath/>
+    </parent>
+
+    <properties>
+        <java.version>17</java.version>
+        <mcp-mesh.version>1.4.1</mcp-mesh.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.mcp-mesh</groupId>
+            <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+            <version>${mcp-mesh.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+    </dependencies>
+
+    <repositories>
+        <repository>
+            <id>local-maven-repo</id>
+            <url>file://${project.basedir}/../../../../../src/runtime/java/local-repo</url>
+        </repository>
+    </repositories>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.example.longtaskprovider.LongTaskProviderApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

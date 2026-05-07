@@ -1,0 +1,154 @@
+# tc13_total_deadline_expires_java — Java port of uc21/tc13 + uc22/tc13.
+#
+# Submits a job with total_deadline=now+5s and a generous max_retries=10.
+# Producer is killed mid-flight to make the row eligible for the orphan
+# path. ExpireDeadlinedJobs marks the row failed with reason
+# "deadline_exceeded" BEFORE orphan-reset can put it back in the pool.
+
+name: "MeshJob Java: total_deadline expiry overrides retry budget"
+description: "Java — deadline=now+5s with max_retries=10; deadline-sweep marks failed before any retry"
+tags:
+  - meshjob
+  - java
+  - issue-890
+  - retry
+  - deadline
+  - slow
+timeout: 360
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  - name: "Start consumer"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Wait for consumer + DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
+        S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && exit 0; sleep 2
+      done; exit 1
+    timeout: 150
+
+  # commission_with_options propagates total_deadline_secs (relative)
+  # → unix-epoch seconds for the Java submitter.
+  - name: "Submit with total_deadline=now+5s, max_retries=10"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_with_options \
+        '{"user_id":"alice","sections":["a","b","c","d","e","f","g"],"max_retries":10,"total_deadline_secs":5,"wait_timeout_secs":2}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  - name: "Capture job_id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      echo "JOB_ID=${JOB_ID}"
+    capture: job_id_extract
+
+  - name: "Kill provider — make the row a candidate for orphan/deadline sweep"
+    handler: shell
+    workdir: /workspace
+    command: |
+      MY_PID=$$
+      MY_PPID=$PPID
+      KILLED=""
+      for p in /proc/[0-9]*; do
+        pid="${p##*/}"
+        [ "$pid" = "1" ] && continue
+        [ "$pid" = "$MY_PID" ] && continue
+        [ "$pid" = "$MY_PPID" ] && continue
+        [ -f "$p/cmdline" ] || continue
+        cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)
+        case "$cmd" in
+          *long-task-provider-java*spring-boot:run*|*long-task-provider-java*classpath*|*LongTaskProviderApplication*|*long-task-provider-java/target/classes*)
+            kill -9 "$pid" 2>/dev/null && KILLED="$KILLED $pid"
+            ;;
+        esac
+      done
+      echo "killed PIDs:$KILLED"
+      if [ -z "$KILLED" ]; then
+        echo "ERROR: No provider processes were killed — deadline scenario invalid"
+        exit 1
+      fi
+      rm -f ~/.mcp-mesh/agents/long-task-provider-java/* 2>/dev/null || true
+
+  - name: "Wait for deadline sweep"
+    handler: wait
+    seconds: 30
+
+  - name: "Final status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      echo "JOB_ID=${JOB_ID}"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,attempt_count,error,total_deadline,owner_instance_id}'
+    capture: final_status
+
+  - name: "Assert attempt_count <= 1 (deadline must prevent retries)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.job_id_extract}' | grep '^JOB_ID=' | cut -d= -f2)
+      COUNT=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.attempt_count')
+      if ! [ "$COUNT" -le 1 ] 2>/dev/null; then
+        echo "ERROR: attempt_count=$COUNT exceeds 1 — total_deadline should have prevented retry"
+        exit 1
+      fi
+      echo "attempt_count=$COUNT (<= 1, OK)"
+
+assertions:
+  - expr: "${captured.final_status} contains '\"status\": \"failed\"'"
+    message: "deadline-expired job must be marked failed"
+  - expr: "${captured.final_status} contains 'deadline_exceeded'"
+    message: "error must be the canonical 'deadline_exceeded' reason — NOT 'orphaned'"
+  - expr: "${captured.final_status} not contains 'orphaned'"
+    message: "deadline path must take precedence over orphan-reset"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
