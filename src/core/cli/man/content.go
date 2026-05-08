@@ -61,6 +61,14 @@ var guideRegistry = map[string]*Guide{
 		Title:       "Streaming",
 		Description: "Token-by-token text responses via MCP progress notifications (issue #645)",
 	},
+	"jobs": {
+		Name:                 "jobs",
+		Aliases:              []string{"meshjob", "long-running", "task", "background"},
+		Title:                "Long-Running Jobs (MeshJob)",
+		Description:          "DDDI-native primitive for tasks that outlast a tools/call request — submit, await, cancel, retry_on",
+		HasTypeScriptVariant: true,
+		HasJavaVariant:       true,
+	},
 	"decorators": {
 		Name:                 "decorators",
 		Aliases:              []string{"decorator"},
@@ -318,7 +326,7 @@ func ListGuides() []*Guide {
 	order := []string{
 		"quickstart", "prerequisites", "tutorial", "overview", "capabilities", "tags",
 		"schema-matching", "decorators",
-		"dependency-injection", "audit", "streaming", "health", "registry", "llm", "media", "multimodal",
+		"dependency-injection", "audit", "streaming", "jobs", "health", "registry", "llm", "media", "multimodal",
 		"proxies", "api", "environment", "deployment", "observability", "headers",
 		"testing", "scaffold", "cli", "security",
 	}
