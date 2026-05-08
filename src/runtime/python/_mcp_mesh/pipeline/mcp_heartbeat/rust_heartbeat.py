@@ -407,7 +407,7 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
         if kwargs_data:
             try:
                 kwargs_json = json.dumps(kwargs_data)
-            except TypeError as e:
+            except (TypeError, ValueError) as e:
                 logger.debug(
                     f"kwargs_data for tool '{tool_name}' contains non-JSON-"
                     f"serializable values; coercing via str(): {e}. "

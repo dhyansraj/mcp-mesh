@@ -197,10 +197,14 @@ pub struct ReleaseJobRequest {
     pub reason: Option<String>,
 }
 
-/// Response from `POST /jobs/{id}/release`. `status` is either `working`
-/// (released for retry — peer can re-claim within ~5s via the HEAD-heartbeat
-/// path) or `failed` (the increment tipped `attempt_count` past
-/// `max_retries` and the registry marked the row exhausted).
+/// Response from `POST /jobs/{id}/release`. The `status` field reflects the
+/// post-release state — either `working` (released for retry; a peer can
+/// re-claim within ~5s via the HEAD-heartbeat path) or `failed` (the
+/// existing `attempt_count` from the claim-time increment was already past
+/// `max_retries`, so the registry marked the row exhausted on release).
+/// Release itself does NOT increment `attempt_count` — that happens only at
+/// claim time, so by the time `POST /jobs/{id}/release` runs, the field
+/// already reflects "this attempt".
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReleaseJobResponse {
     pub status: JobStatus,

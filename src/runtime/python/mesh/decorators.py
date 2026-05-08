@@ -896,7 +896,23 @@ def tool(
                         f"retry_on entries must be exception classes; "
                         f"got {exc_cls!r}"
                     )
+                if issubclass(exc_cls, (KeyboardInterrupt, SystemExit)) or issubclass(exc_cls, asyncio.CancelledError):
+                    raise ValueError(
+                        f"retry_on must not include control-flow exceptions "
+                        f"(KeyboardInterrupt, SystemExit, asyncio.CancelledError); "
+                        f"got {exc_cls!r}"
+                    )
             validated_retry_on = retry_on
+
+        # retry_on is only meaningful for task=True tools — without the job
+        # dispatch wrapper, raised exceptions propagate normally and there is
+        # nothing to retry. Fail loud at decoration time rather than silently
+        # ignore the kwarg.
+        if retry_on is not None and not task:
+            raise ValueError(
+                "retry_on is only valid with task=True; remove retry_on or "
+                "set task=True"
+            )
 
         # Validate optional parameters
         if tags is not None:

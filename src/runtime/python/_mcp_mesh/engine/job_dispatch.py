@@ -336,7 +336,7 @@ async def maybe_dispatch_as_job(
         """
         try:
             result = await invoke(final_kwargs)
-        except BaseException as exc:
+        except Exception as exc:
             # If the user already called complete/fail explicitly, leave
             # state alone — the user's terminal call is the source of truth.
             try:

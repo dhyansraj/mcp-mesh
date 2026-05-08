@@ -329,12 +329,13 @@ func (h *EntBusinessLogicHandlers) ReleaseJob(c *gin.Context, jobId string) {
 		})
 		return
 	}
+	instanceID := strings.TrimSpace(req.InstanceId)
 	reason := ""
 	if req.Reason != nil {
 		reason = *req.Reason
 	}
 
-	updated, err := h.entService.ReleaseJob(c.Request.Context(), jobId, req.InstanceId, reason)
+	updated, err := h.entService.ReleaseJob(c.Request.Context(), jobId, instanceID, reason)
 	if err != nil {
 		switch {
 		case ent.IsNotFound(err):
