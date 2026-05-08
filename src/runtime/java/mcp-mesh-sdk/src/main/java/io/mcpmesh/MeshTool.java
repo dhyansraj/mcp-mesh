@@ -178,4 +178,35 @@ public @interface MeshTool {
      * }</pre>
      */
     boolean task() default false;
+
+    /**
+     * Issue #895: per-tool retry-eligible exception whitelist.
+     *
+     * <p>When a {@code task = true} handler raises a {@link Throwable} whose
+     * class is a subtype of one of the entries (checked via
+     * {@code cls.isInstance(thrown)}), the dispatch wrapper calls
+     * {@code JobController.releaseLease(reason)} instead of
+     * {@code JobController.fail(reason)}. The registry then resets
+     * {@code owner_instance_id} so a peer replica can re-claim within ~5s
+     * — useful for transient failures (network blips, upstream
+     * unavailable) where the next attempt on a different replica is
+     * likely to succeed.
+     *
+     * <p>Constraints (validated at registration via the bean
+     * post-processor, see {@link io.mcpmesh.spring.MeshToolBeanPostProcessor}):
+     * <ul>
+     *   <li>requires {@code task = true} — synchronous tools have no
+     *       controller, so retry has no meaning;
+     *   <li>entries must be {@link Throwable} subclasses (the annotation
+     *       processor enforces this via {@code Class<? extends Throwable>}).
+     * </ul>
+     *
+     * <p>Default: empty array (no retry-eligible exceptions; all raises
+     * mark the row failed via the existing {@code controller.fail()}
+     * behaviour).
+     *
+     * @return the set of {@link Throwable} subclasses that trigger
+     *         release-and-retry on raise.
+     */
+    Class<? extends Throwable>[] retryOn() default {};
 }

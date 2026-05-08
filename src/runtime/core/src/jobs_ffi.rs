@@ -360,6 +360,44 @@ pub unsafe extern "C" fn mesh_job_controller_fail(
         .unwrap_or_else(jobs_set_err)
 }
 
+/// Voluntarily release the lease so a peer replica can re-claim and
+/// retry. Used by the Java SDK dispatch wrapper when a handler raises
+/// a retryOn-matched exception (#895). `reason` may be NULL for
+/// "no reason given"; an empty string is passed through as `Some("")`
+/// for parity with `mesh_job_proxy_cancel`.
+///
+/// See [`crate::jobs::JobController::release_lease`] for full semantics.
+/// Note: release does NOT increment `attempt_count` — the claim that
+/// picked the row up already counted this attempt; the next claim will
+/// count the next attempt.
+///
+/// Marks the controller terminal locally before the backend call so
+/// racing `update_progress` from this defunct attempt is fenced (mirror
+/// of Python's / TS's release_lease contract).
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_controller_release_lease(
+    handle: *mut JobControllerHandle,
+    reason: *const c_char,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    let handle = &*handle;
+    // `reason` is optional — NULL means "no reason given". Empty string
+    // is passed through as `Some("")` for parity with `mesh_job_proxy_cancel`.
+    let reason_opt: Option<String> = match opt_cstr(reason, "reason") {
+        Ok(opt) => opt.map(str::to_string),
+        Err(()) => return -1,
+    };
+    let inner = handle.inner.clone();
+    jobs_runtime()
+        .block_on(async move { inner.release_lease(reason_opt).await })
+        .map(|_| 0)
+        .unwrap_or_else(jobs_set_err)
+}
+
 /// Whether `complete` / `fail` has already been called on this controller.
 ///
 /// # Returns

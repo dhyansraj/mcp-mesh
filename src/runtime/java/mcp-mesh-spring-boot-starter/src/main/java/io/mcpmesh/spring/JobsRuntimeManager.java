@@ -125,16 +125,20 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             wrapper.setJobBindingContext(instanceId, registryUrl);
 
             // Spawn a ClaimDispatcher that invokes the same method via reflection.
+            // Issue #895: thread the @MeshTool(retryOn=...) whitelist through so
+            // the claim-path matches the inbound-HTTP-path's release-and-retry
+            // semantics.
             ClaimDispatcher dispatcher = new ClaimDispatcher(
                 meta.capability(),
                 instanceId,
                 registryUrl,
-                (payload, controller) -> invokeViaReflection(meta, payload, controller)
+                (payload, controller) -> invokeViaReflection(meta, payload, controller),
+                meta.retryOn()
             );
             dispatcher.start();
             dispatchers.put(meta.capability(), dispatcher);
-            log.info("MeshJob producer wired: capability={} (wrapper={}, dispatcher started)",
-                meta.capability(), wrapper.getFuncId());
+            log.info("MeshJob producer wired: capability={} (wrapper={}, dispatcher started, retryOn={})",
+                meta.capability(), wrapper.getFuncId(), meta.retryOn().length);
         }
     }
 

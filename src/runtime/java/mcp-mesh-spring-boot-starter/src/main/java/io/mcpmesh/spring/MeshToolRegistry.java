@@ -56,12 +56,18 @@ public class MeshToolRegistry {
             // Phase B MeshJob substrate: surfaced via kwargs JSON so the
             // registry / consumer SDK knows this is a task=true producer.
             annotation.task(),
+            // Issue #895: per-tool retry-eligible exception whitelist. The
+            // bean post-processor has already validated `retryOn requires
+            // task=true` before this call, so we only need to capture it
+            // here for downstream dispatch wiring.
+            annotation.retryOn(),
             bean,
             method
         );
 
         tools.put(capability, metadata);
-        log.info("Registered mesh tool: {} ({}, task={})", capability, method, annotation.task());
+        log.info("Registered mesh tool: {} ({}, task={}, retryOn={})",
+            capability, method, annotation.task(), annotation.retryOn().length);
     }
 
     // Phase B MeshJob substrate: synthetic tool specs registered outside
@@ -386,6 +392,11 @@ public class MeshToolRegistry {
      * <p>{@code outputSchemaStrict} mirrors {@link MeshTool#outputSchemaStrict()} —
      * when false, BLOCK verdicts for this tool are demoted to WARN instead of
      * refusing startup (issue #547 Phase 4).
+     *
+     * <p>{@code retryOn} mirrors {@link MeshTool#retryOn()} (issue #895) — the
+     * per-tool exception whitelist that triggers release-and-retry instead of
+     * fail() when a {@code task=true} handler raises. Always non-null (defaults
+     * to a zero-length array).
      */
     public record ToolMetadata(
         String capability,
@@ -397,6 +408,7 @@ public class MeshToolRegistry {
         Class<?> outputType,
         boolean outputSchemaStrict,
         boolean task,
+        Class<? extends Throwable>[] retryOn,
         Object bean,
         Method method
     ) {
@@ -414,8 +426,30 @@ public class MeshToolRegistry {
                 Object bean,
                 Method method) {
             this(capability, description, version, tags, dependencies, inputSchema,
-                outputType, outputSchemaStrict, false, bean, method);
+                outputType, outputSchemaStrict, false, EMPTY_RETRY_ON, bean, method);
         }
+
+        // Backward-compatible 11-arg constructor for callers that adopted
+        // the `task` flag but predate the issue #895 retryOn field.
+        public ToolMetadata(
+                String capability,
+                String description,
+                String version,
+                List<String> tags,
+                List<DependencyInfo> dependencies,
+                Map<String, Object> inputSchema,
+                Class<?> outputType,
+                boolean outputSchemaStrict,
+                boolean task,
+                Object bean,
+                Method method) {
+            this(capability, description, version, tags, dependencies, inputSchema,
+                outputType, outputSchemaStrict, task, EMPTY_RETRY_ON, bean, method);
+        }
+
+        @SuppressWarnings("unchecked")
+        private static final Class<? extends Throwable>[] EMPTY_RETRY_ON =
+            (Class<? extends Throwable>[]) new Class<?>[0];
     }
 
     /**

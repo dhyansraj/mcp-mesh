@@ -723,6 +723,22 @@ int32_t mesh_job_controller_complete(struct JobControllerHandle *handle, const c
 // Mark the job failed with the given error reason. Flushes immediately.
 int32_t mesh_job_controller_fail(struct JobControllerHandle *handle, const char *error);
 
+// Voluntarily release the lease so a peer replica can re-claim and
+// retry. Used by the Java SDK dispatch wrapper when a handler raises
+// a retryOn-matched exception (#895). `reason` may be NULL for
+// "no reason given"; an empty string is passed through as `Some("")`
+// for parity with `mesh_job_proxy_cancel`.
+//
+// See [`crate::jobs::JobController::release_lease`] for full semantics.
+// Note: release does NOT increment `attempt_count` — the claim that
+// picked the row up already counted this attempt; the next claim will
+// count the next attempt.
+//
+// Marks the controller terminal locally before the backend call so
+// racing `update_progress` from this defunct attempt is fenced (mirror
+// of Python's / TS's release_lease contract).
+int32_t mesh_job_controller_release_lease(struct JobControllerHandle *handle, const char *reason);
+
 // Whether `complete` / `fail` has already been called on this controller.
 //
 // # Returns
@@ -785,8 +801,11 @@ int32_t mesh_job_proxy_status(struct JobProxyHandle *handle, char **out_job_json
 // `result` (JSON-encoded) to `*out_result_json`; caller frees via
 // `mesh_free_string`.
 //
-// `timeout_secs`: wall-clock timeout. Use a negative value (e.g. `-1`)
-// for "no timeout" (matches the Python / napi-rs `Optional<f64>` shape).
+// `timeout_secs`: wall-clock timeout. Any value `<= 0.0` (including
+// `-0.0` and negatives such as `-1`) means "no timeout"; non-finite
+// values (NaN, ±Inf) also fall back to "no timeout". Matches the
+// Python / napi-rs `Optional<f64>` shape and keeps the same policy
+// as [`mesh_run_as_job`] for consistency.
 int32_t mesh_job_proxy_wait(struct JobProxyHandle *handle,
                             double timeout_secs,
                             char **out_result_json);

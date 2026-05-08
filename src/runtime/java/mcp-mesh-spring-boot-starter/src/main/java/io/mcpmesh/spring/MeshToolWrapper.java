@@ -53,6 +53,10 @@ public class MeshToolWrapper implements McpToolHandler {
     private static final Logger log = LoggerFactory.getLogger(MeshToolWrapper.class);
     private static final long ASYNC_TIMEOUT_SECONDS = 30;
     private static final SchemaGenerator SCHEMA_GENERATOR = MeshSchemaSupport.generator();
+    /** Issue #895: shared empty {@code retryOn} array — sentinel for "no retry-eligible exceptions". */
+    @SuppressWarnings("unchecked")
+    private static final Class<? extends Throwable>[] EMPTY_RETRY_ON =
+        (Class<? extends Throwable>[]) new Class<?>[0];
 
     private final String funcId;
     private final String capability;
@@ -60,6 +64,15 @@ public class MeshToolWrapper implements McpToolHandler {
     private final Object bean;
     private final Method method;
     private final boolean task;
+    /**
+     * Issue #895: per-tool retry-eligible exception whitelist read from
+     * {@code @MeshTool(retryOn=...)}. When a handler raises a Throwable
+     * matching one of these classes, the dispatch wrapper calls
+     * {@link JobController#releaseLease(String)} instead of
+     * {@link JobController#fail(String)} so a peer replica can re-claim
+     * the job within ~5s. Always non-null (zero-length when not set).
+     */
+    private final Class<? extends Throwable>[] retryOn;
 
     // Parameter metadata
     private final List<ParamInfo> mcpParams;           // MCP-exposed parameters (with @Param)
@@ -131,6 +144,28 @@ public class MeshToolWrapper implements McpToolHandler {
             List<String> dependencyNames,
             ObjectMapper objectMapper,
             boolean task) {
+        this(funcId, capability, description, bean, method, dependencyNames,
+            objectMapper, task, EMPTY_RETRY_ON);
+    }
+
+    /**
+     * Create a wrapper for a @MeshTool annotated method, with explicit
+     * task flag and {@code retryOn} whitelist (issue #895).
+     *
+     * @param retryOn Per-tool retry-eligible exception classes from
+     *                {@link io.mcpmesh.MeshTool#retryOn()}. May be null
+     *                or empty for "no retry-eligible exceptions".
+     */
+    public MeshToolWrapper(
+            String funcId,
+            String capability,
+            String description,
+            Object bean,
+            Method method,
+            List<String> dependencyNames,
+            ObjectMapper objectMapper,
+            boolean task,
+            Class<? extends Throwable>[] retryOn) {
 
         this.funcId = funcId;
         this.capability = capability;
@@ -138,6 +173,7 @@ public class MeshToolWrapper implements McpToolHandler {
         this.bean = bean;
         this.method = method;
         this.task = task;
+        this.retryOn = retryOn != null ? retryOn : EMPTY_RETRY_ON;
         this.dependencyNames = dependencyNames != null ? dependencyNames : List.of();
         this.objectMapper = objectMapper;
 
@@ -766,11 +802,25 @@ public class MeshToolWrapper implements McpToolHandler {
             result = method.invoke(bean, fullArgs);
         } catch (InvocationTargetException e) {
             Throwable cause = e.getCause();
-            // Best-effort failure report — the registry will sweep stale
-            // working rows on lease expiry, but reporting eagerly means
-            // the consumer's await() resolves with the right error
-            // sooner.
-            tryFail(controller, cause != null ? cause.toString() : "method invocation failed");
+            // Issue #895: retryOn-aware exception handling. Mirrors Python
+            // `_run_and_autocomplete` (job_dispatch.py:336-386) and TS
+            // `runWithJobContext` (inbound-job-dispatch.ts:160-225):
+            //   1) probe is_terminal — user's terminal call wins;
+            //   2) retryOn match → releaseLease (suppress on success,
+            //      fall back to fail() on release failure);
+            //   3) non-matching → existing best-effort fail() then rethrow.
+            if (cause != null && handleRetryOrFail(controller, cause)) {
+                // Suppressed by retryOn — registry now owns the row's
+                // lifecycle (peer replica re-claims within ~5s).
+                return null;
+            }
+            // cause==null path: nothing to match against retryOn, so preserve
+            // the original best-effort failure-report with the helpful
+            // "method invocation failed" literal and rethrow `e` unchanged.
+            if (cause == null) {
+                tryFail(controller, "method invocation failed");
+                throw e;
+            }
             if (cause instanceof Exception ex) throw ex;
             throw new RuntimeException(cause);
         } catch (IllegalAccessException e) {
@@ -788,8 +838,15 @@ public class MeshToolWrapper implements McpToolHandler {
                 tryFail(controller, "async operation timed out after " + ASYNC_TIMEOUT_SECONDS + "s");
                 throw new RuntimeException("Async operation timed out after " + ASYNC_TIMEOUT_SECONDS + " seconds");
             } catch (ExecutionException e) {
+                // Issue #895: same retryOn-aware handling as the synchronous
+                // throw path — a CompletableFuture that completes
+                // exceptionally with a retry-eligible cause should also
+                // release the lease.
                 Throwable cause = e.getCause();
-                tryFail(controller, cause != null ? cause.toString() : e.toString());
+                if (cause == null) cause = e;
+                if (handleRetryOrFail(controller, cause)) {
+                    return null;
+                }
                 if (cause instanceof Exception ex) throw ex;
                 throw new RuntimeException(cause);
             } catch (InterruptedException e) {
@@ -822,6 +879,71 @@ public class MeshToolWrapper implements McpToolHandler {
         } catch (Exception ignored) {
             // Best-effort — already logged the original cause.
         }
+    }
+
+    /**
+     * Issue #895 — central retryOn-aware terminal handler shared between
+     * the synchronous-throw path and the {@link CompletableFuture}-failure
+     * path of {@link #invokeAndAutoComplete}. Mirrors the canonical Python
+     * pattern in {@code _run_and_autocomplete} (job_dispatch.py:336-386).
+     *
+     * <p>Returns {@code true} when the exception was suppressed (caller
+     * should return {@code null} as the dispatch result; the registry
+     * now owns the row's lifecycle). Returns {@code false} when the
+     * caller must propagate {@code cause} — either because the user
+     * already terminated the controller, no retryOn entry matched, or
+     * the {@code releaseLease} call failed and we fell back to {@code fail()}.
+     */
+    private boolean handleRetryOrFail(JobController controller, Throwable cause) {
+        // Step 1: probe is_terminal — user may have already called
+        // complete()/fail(); their terminal call is the source of truth.
+        boolean alreadyTerminal = false;
+        try {
+            alreadyTerminal = controller.isTerminal();
+        } catch (Throwable probeErr) {
+            // probe failed; fall through to default best-effort report.
+            log.debug("[mesh-jobs] is_terminal probe failed for job={}: {}",
+                controller.jobId(), probeErr.toString());
+        }
+        if (alreadyTerminal) {
+            // Already terminal: user owns the outcome. Don't double-fail.
+            return false;
+        }
+
+        // Step 2 (issue #895): retryOn match → releaseLease (suppress) or
+        // fail() fallback → suppress. Non-matching falls through.
+        if (retryOn != null && retryOn.length > 0) {
+            for (Class<? extends Throwable> cls : retryOn) {
+                if (cls.isInstance(cause)) {
+                    String reason = cause.getClass().getSimpleName() +
+                        ": " + cause.getMessage();
+                    try {
+                        controller.releaseLease(reason);
+                        log.info("[mesh-jobs] retryOn match for job={} ({}); released lease for fast retry",
+                            controller.jobId(), reason);
+                        return true;
+                    } catch (Throwable releaseErr) {
+                        log.warn("[mesh-jobs] release_lease failed for job={} ({}); falling back to fail()",
+                            controller.jobId(), releaseErr.toString());
+                        try {
+                            controller.fail(
+                                "retry-eligible " + reason +
+                                "; release_lease failed: " + releaseErr.getMessage()
+                            );
+                        } catch (Throwable failErr) {
+                            log.debug("[mesh-jobs] fallback fail() also failed for job={}: {}",
+                                controller.jobId(), failErr.toString());
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Step 3: non-retryable → existing behaviour (best-effort fail
+        // then propagate). Caller propagates the cause.
+        tryFail(controller, cause.toString());
+        return false;
     }
 
     /**
