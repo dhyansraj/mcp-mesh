@@ -228,6 +228,7 @@ nav:
       - Schema Matching: concepts/schema-matching.md
       - Audit Trail: concepts/audit.md
       - Streaming: concepts/streaming.md
+      - Long-Running Jobs: concepts/jobs.md
 
   - Multimodal:
       - Getting Started: multimodal/getting-started.md
