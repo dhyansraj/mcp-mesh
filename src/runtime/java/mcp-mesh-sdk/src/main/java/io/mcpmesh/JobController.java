@@ -171,6 +171,35 @@ public final class JobController implements MeshJob, AutoCloseable {
     }
 
     /**
+     * Voluntarily release the lease so a peer replica can re-claim this job
+     * and retry. Used by the dispatch wrappers when a handler raises a
+     * {@link io.mcpmesh.MeshTool#retryOn()}-matched exception (#895).
+     *
+     * <p>The registry resets {@code owner_instance_id} on receipt so a peer
+     * replica picks up the row within ~5s via the HEAD-heartbeat path.
+     * Release does NOT increment {@code attempt_count} — the claim that
+     * picked the row up already counted this attempt; the next claim will
+     * count the next attempt.
+     *
+     * <p>Marks terminal locally before the backend call so racing
+     * {@link #updateProgress} from this defunct attempt is fenced (mirror
+     * of Python's / TS's {@code controller.release_lease} contract).
+     *
+     * @param reason short human-readable reason (may be {@code null}
+     *               or empty for "no reason given").
+     * @throws MeshException if the controller is closed or the native call fails
+     */
+    public void releaseLease(String reason) {
+        synchronized (lock) {
+            ensureOpen();
+            int rc = core.mesh_job_controller_release_lease(handle, reason);
+            if (rc != 0) {
+                throw new MeshException("mesh_job_controller_release_lease failed: " + lastError(core));
+            }
+        }
+    }
+
+    /**
      * Whether {@link #complete} / {@link #fail} has already been called on
      * this controller. The dispatch wrapper uses this to decide whether a
      * returning user method needs an auto-{@code complete} (the

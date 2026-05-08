@@ -62,6 +62,18 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor {
             if (annotation != null) {
                 log.debug("Found @MeshTool on {}.{}", targetClass.getSimpleName(), method.getName());
 
+                // Issue #895: retryOn requires task=true (no controller without it,
+                // so release-and-retry has no meaning). The Throwable-subclass
+                // bound is enforced at compile-time by the annotation field
+                // type (Class<? extends Throwable>), so no runtime check needed.
+                Class<? extends Throwable>[] retryOn = annotation.retryOn();
+                if (retryOn.length > 0 && !annotation.task()) {
+                    throw new IllegalStateException(
+                        "@MeshTool(retryOn = ...) on '" + targetClass.getName() +
+                        "#" + method.getName() + "' requires task = true; " +
+                        "remove retryOn or set task = true.");
+                }
+
                 // Register with legacy registry (for agent spec generation)
                 registry.registerTool(bean, method, annotation);
 
@@ -96,6 +108,8 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor {
         // Create wrapper. Phase B MeshJob substrate: the `task` flag controls
         // whether inbound calls bearing X-Mesh-Job-Id dispatch through the
         // job pipeline (JobController injection + auto-complete).
+        // Issue #895: retryOn whitelist drives release-and-retry on the
+        // task-dispatch path inside the wrapper.
         MeshToolWrapper wrapper = new MeshToolWrapper(
             funcId,
             annotation.capability(),
@@ -104,7 +118,8 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor {
             method,
             dependencyNames,
             objectMapper,
-            annotation.task()
+            annotation.task(),
+            annotation.retryOn()
         );
 
         // Register with wrapper registry

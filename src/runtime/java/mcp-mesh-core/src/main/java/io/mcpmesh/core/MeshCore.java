@@ -513,6 +513,24 @@ public interface MeshCore {
     int mesh_job_controller_fail(Pointer handle, String error);
 
     /**
+     * Voluntarily release the lease so a peer replica can re-claim and
+     * retry (issue #895). Used by the Java dispatch wrapper when a
+     * {@code task=true} handler raises a {@link io.mcpmesh.MeshTool#retryOn()}-
+     * matched exception. The registry resets {@code owner_instance_id} on
+     * receipt so a peer replica picks up the row within ~5s.
+     *
+     * <p>Note: release does NOT increment {@code attempt_count} — the claim
+     * that picked the row up already counted this attempt; the next claim
+     * will count the next attempt. Marks terminal locally before the backend
+     * call to fence racing progress updates from the now-defunct attempt.
+     *
+     * @param handle Controller handle
+     * @param reason Optional reason (may be null or empty for "no reason given")
+     * @return 0 on success, -1 on error
+     */
+    int mesh_job_controller_release_lease(Pointer handle, String reason);
+
+    /**
      * Whether complete / fail has already been called on this controller.
      *
      * @param handle Controller handle

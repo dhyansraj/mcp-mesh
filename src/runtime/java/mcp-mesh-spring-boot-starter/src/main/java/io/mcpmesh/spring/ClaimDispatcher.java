@@ -96,6 +96,15 @@ public final class ClaimDispatcher implements AutoCloseable {
     private final String instanceId;
     private final String registryUrl;
     private final ClaimHandler handler;
+    /**
+     * Issue #895: per-tool retry-eligible exception whitelist read from
+     * the producer's {@code @MeshTool(retryOn=...)}. When the handler
+     * raises a Throwable matching one of these classes, the dispatcher
+     * calls {@link JobController#releaseLease(String)} instead of
+     * {@link JobController#fail(String)} so a peer replica can re-claim
+     * the job within ~5s. Always non-null (zero-length when not set).
+     */
+    private final Class<? extends Throwable>[] retryOn;
 
     private final Semaphore permits = new Semaphore(MAX_CONCURRENT_DISPATCHES);
     private final AtomicBoolean stopped = new AtomicBoolean(false);
@@ -119,6 +128,23 @@ public final class ClaimDispatcher implements AutoCloseable {
     private Future<?> loopFuture;
 
     public ClaimDispatcher(String capability, String instanceId, String registryUrl, ClaimHandler handler) {
+        this(capability, instanceId, registryUrl, handler, EMPTY_RETRY_ON);
+    }
+
+    /**
+     * Construct a dispatcher with an explicit {@code retryOn} whitelist
+     * (issue #895). When the handler raises a Throwable matching one of
+     * the entries, the dispatcher calls
+     * {@link JobController#releaseLease(String)} instead of
+     * {@link JobController#fail(String)} so a peer replica can re-claim
+     * the job within ~5s.
+     *
+     * @param retryOn Per-tool retry-eligible exception classes from
+     *                {@link io.mcpmesh.MeshTool#retryOn()}. May be null
+     *                or empty for "no retry-eligible exceptions".
+     */
+    public ClaimDispatcher(String capability, String instanceId, String registryUrl,
+                           ClaimHandler handler, Class<? extends Throwable>[] retryOn) {
         if (capability == null || capability.isEmpty()) {
             throw new IllegalArgumentException("capability is required");
         }
@@ -135,6 +161,7 @@ public final class ClaimDispatcher implements AutoCloseable {
         this.instanceId = instanceId;
         this.registryUrl = stripTrailingSlash(registryUrl);
         this.handler = handler;
+        this.retryOn = retryOn != null ? retryOn : EMPTY_RETRY_ON;
         this.loopExecutor = Executors.newSingleThreadExecutor(named("mesh-claim-loop-" + capability));
         this.dispatchExecutor = Executors.newFixedThreadPool(MAX_CONCURRENT_DISPATCHES,
             named("mesh-claim-dispatch-" + capability));
@@ -142,6 +169,11 @@ public final class ClaimDispatcher implements AutoCloseable {
             .connectTimeout(Duration.ofSeconds(CLAIM_HTTP_TIMEOUT_SECS))
             .build();
     }
+
+    /** Issue #895: shared empty retryOn array — sentinel for "no retry-eligible exceptions". */
+    @SuppressWarnings("unchecked")
+    private static final Class<? extends Throwable>[] EMPTY_RETRY_ON =
+        (Class<? extends Throwable>[]) new Class<?>[0];
 
     /** Spawn the polling loop. Idempotent. */
     public synchronized void start() {
@@ -467,8 +499,18 @@ public final class ClaimDispatcher implements AutoCloseable {
         Object result;
         try {
             result = handler.handle(payload, controller);
-        } catch (Exception e) {
-            tryFail(controller, e.toString());
+        } catch (Throwable t) {
+            // Issue #895: retryOn-aware terminal handling. Mirrors Python
+            // `_run_and_autocomplete` (job_dispatch.py:336-386) and TS
+            // `runWithJobContext` (inbound-job-dispatch.ts:160-225). On a
+            // suppressed (retryOn-matched) exception we just return — the
+            // registry now owns the row's lifecycle. On non-matching, we
+            // already best-effort fail()ed inside the helper; swallow
+            // here too so the dispatch task ends without leaking the
+            // exception into the executor's uncaught handler (would just
+            // log noise; the controller already reflects the terminal
+            // state).
+            handleRetryOrFail(controller, t);
             return;
         }
         // Auto-complete iff the user didn't already close the row.
@@ -489,6 +531,64 @@ public final class ClaimDispatcher implements AutoCloseable {
         } catch (Exception ignored) {
             // Best-effort.
         }
+    }
+
+    /**
+     * Issue #895 — retryOn-aware terminal reporter for the claim path.
+     *
+     * <p>Mirrors {@link MeshToolWrapper}'s {@code handleRetryOrFail} (and
+     * Python {@code _run_and_autocomplete}: probe is_terminal → retryOn
+     * match triggers releaseLease → fall back to fail() on release
+     * failure → non-matching does best-effort fail()). Returns without
+     * propagating; the caller (runHandler) treats handler exceptions as
+     * already-reported once this returns.
+     */
+    private void handleRetryOrFail(JobController controller, Throwable cause) {
+        // Step 1: probe is_terminal — user may have already called
+        // complete()/fail(); their terminal call is the source of truth.
+        boolean alreadyTerminal = false;
+        try {
+            alreadyTerminal = controller.isTerminal();
+        } catch (Throwable probeErr) {
+            log.debug("[mesh-claim] is_terminal probe failed for job={}: {}",
+                controller.jobId(), probeErr.toString());
+        }
+        if (alreadyTerminal) {
+            return;
+        }
+
+        // Step 2 (issue #895): retryOn match → releaseLease (suppress) or
+        // fail() fallback.
+        if (retryOn != null && retryOn.length > 0) {
+            for (Class<? extends Throwable> cls : retryOn) {
+                if (cls.isInstance(cause)) {
+                    String reason = cause.getClass().getSimpleName() +
+                        ": " + cause.getMessage();
+                    try {
+                        controller.releaseLease(reason);
+                        log.info("[mesh-claim] retryOn match for job={} ({}); released lease for fast retry",
+                            controller.jobId(), reason);
+                        return;
+                    } catch (Throwable releaseErr) {
+                        log.warn("[mesh-claim] release_lease failed for job={} ({}); falling back to fail()",
+                            controller.jobId(), releaseErr.toString());
+                        try {
+                            controller.fail(
+                                "retry-eligible " + reason +
+                                "; release_lease failed: " + releaseErr.getMessage()
+                            );
+                        } catch (Throwable failErr) {
+                            log.debug("[mesh-claim] fallback fail() also failed for job={}: {}",
+                                controller.jobId(), failErr.toString());
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Step 3: non-retryable → existing best-effort fail() behaviour.
+        tryFail(controller, cause.toString());
     }
 
     /**
