@@ -393,6 +393,41 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
    */
   meshJobDepIndex?: number;
   /**
+   * Issue #894: per-tool retry-eligible exception whitelist.
+   *
+   * When a `task: true` handler raises an Error whose constructor matches
+   * one of the entries (`err instanceof cls`), the dispatch wrapper calls
+   * `controller.releaseLease(reason)` instead of `controller.fail(reason)`.
+   * The registry then resets `owner_instance_id` so a peer replica can
+   * re-claim within ~5s — useful for transient failures (network blips,
+   * upstream unavailable) where the next attempt on a different replica
+   * is likely to succeed.
+   *
+   * Constraints (validated at `addTool` time):
+   *
+   *   - requires `task: true` (no-op for synchronous tools — non-job
+   *     handlers don't have a controller, so retry has no meaning);
+   *   - entries must be Error constructor classes (functions); anything
+   *     else throws at registration.
+   *
+   * Default: `undefined` (no retry-eligible exceptions; all raises mark
+   * the row failed). Empty array is equivalent.
+   *
+   * @example
+   * ```ts
+   * agent.addTool({
+   *   task: true,
+   *   retryOn: [TransientUpstreamError, AbortError],
+   *   execute: async (args, job: MeshJob | null = null) => {
+   *     // If this throws TransientUpstreamError, the registry will
+   *     // hand the job to a peer replica within ~5s.
+   *     return await callFlakeyApi(args);
+   *   },
+   * });
+   * ```
+   */
+  retryOn?: Array<new (...args: unknown[]) => Error>;
+  /**
    * Dependencies required by this tool.
    * Injected positionally as McpMeshTool params after args.
    *

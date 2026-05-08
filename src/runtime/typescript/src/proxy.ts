@@ -17,6 +17,8 @@ import {
 } from "./tracing.js";
 import { isTimeoutError } from "./timeout-utils.js";
 import { getDispatcher } from "./http-pool.js";
+import { currentJob } from "./job-context.js";
+import { awaitJobCancel } from "@mcpmesh/core";
 
 /** Options for callMcpTool, derived from DependencyKwargs. */
 export interface CallOptions {
@@ -314,6 +316,32 @@ export async function callMcpTool(
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout);
 
+      // Wire per-job cancel propagation (#886). When the handler executing
+      // this outbound call is running under a MeshJob context AND the
+      // registry forwards a cancel via POST /jobs/{id}/cancel, fire the
+      // outbound AbortController so in-flight fetch is cancelled instead
+      // of stalling on socket reads. Fire-and-forget — the listener races
+      // against fetch completion / timeout; whichever wins, the others
+      // become no-ops (`controller.abort()` is idempotent and the dangling
+      // Promise resolves immediately once the registry entry is gone).
+      const jobSnap = currentJob();
+      if (jobSnap?.jobId) {
+        awaitJobCancel(jobSnap.jobId)
+          .then(() => {
+            if (!controller.signal.aborted) {
+              controller.abort();
+            }
+          })
+          .catch(() => {
+            // Defensive: napi rejection here would be unusual (the Rust
+            // implementation only awaits a CancellationToken), but a
+            // runtime shutdown mid-await could surface one. Swallow —
+            // the worst case is that the outbound fetch isn't proactively
+            // aborted, and the existing timeout / fetch-completion path
+            // still applies.
+          });
+      }
+
       // Build headers: custom headers first, then protocol-required headers override
       const headers: Record<string, string> = {
         ...(options.customHeaders ?? {}),
@@ -535,6 +563,28 @@ export async function* streamMcpTool(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout);
+
+  // Wire per-job cancel propagation (#886). See callMcpTool above for
+  // rationale; same pattern applied to the streaming path so a cancel
+  // arriving mid-stream aborts the SSE reader instead of waiting for
+  // the next chunk / streamTimeout (default 300s).
+  const jobSnap = currentJob();
+  if (jobSnap?.jobId) {
+    awaitJobCancel(jobSnap.jobId)
+      .then(() => {
+        if (!controller.signal.aborted) {
+          controller.abort();
+        }
+      })
+      .catch(() => {
+        // Defensive: napi rejection here would be unusual (the Rust
+        // implementation only awaits a CancellationToken), but a
+        // runtime shutdown mid-await could surface one. Swallow — the
+        // worst case is that the outbound fetch isn't proactively
+        // aborted, and the existing timeout / fetch-completion path
+        // still applies.
+      });
+  }
 
   // Build headers — FastMCP stateless HTTP requires BOTH content types in
   // Accept (it returns SSE for streaming responses; missing application/json

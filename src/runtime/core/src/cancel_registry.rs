@@ -15,7 +15,7 @@
 //! register/run/unregister dance in a panic-safe manner.
 //!
 //! # Concurrency model
-//! Backed by a `std::sync::Mutex<HashMap<String, CancellationToken>>` held
+//! Backed by a `std::sync::Mutex<HashMap<String, JobCancelState>>` held
 //! behind a `OnceLock` (matches `tracing_publish.rs`, `tls.rs`, etc.).
 //! Critical sections are short — clone-and-drop — so contention is not a
 //! concern at the scale of in-flight jobs per process.
@@ -25,10 +25,20 @@ use std::sync::{Mutex, OnceLock};
 
 use tokio_util::sync::CancellationToken;
 
-/// Process-wide map of active job ID → cancel token.
-static REGISTRY: OnceLock<Mutex<HashMap<String, CancellationToken>>> = OnceLock::new();
+/// Per-job state held by the cancel registry. The two tokens are
+/// distinct: `cancel` is fired by user-initiated cancel (the existing
+/// behaviour); `ended` is fired by the registry itself when
+/// `unregister_active_job` runs, so awaiters that need to clean up
+/// when the job finishes naturally (without cancel) can do so.
+pub struct JobCancelState {
+    pub cancel: CancellationToken,
+    pub ended: CancellationToken,
+}
 
-fn registry() -> &'static Mutex<HashMap<String, CancellationToken>> {
+/// Process-wide map of active job ID → per-job cancel state.
+static REGISTRY: OnceLock<Mutex<HashMap<String, JobCancelState>>> = OnceLock::new();
+
+fn registry() -> &'static Mutex<HashMap<String, JobCancelState>> {
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -37,10 +47,17 @@ fn registry() -> &'static Mutex<HashMap<String, CancellationToken>> {
 /// If a prior entry exists (e.g. previous attempt was never unregistered),
 /// it is silently overwritten — the latest registration wins. The old
 /// token is dropped, which does NOT fire it (cancellation requires an
-/// explicit `.cancel()` call).
+/// explicit `.cancel()` call). The companion `ended` token is freshly
+/// constructed inside the registry for each registration; it fires only
+/// on `unregister_active_job` so awaiters can wake up when a job ends
+/// naturally (without explicit cancel).
 pub fn register_active_job(job_id: &str, token: CancellationToken) {
+    let state = JobCancelState {
+        cancel: token,
+        ended: CancellationToken::new(),
+    };
     let mut map = registry().lock().expect("cancel_registry mutex poisoned");
-    map.insert(job_id.to_string(), token);
+    map.insert(job_id.to_string(), state);
 }
 
 /// Fire the cancel token for the given job ID, if one is registered.
@@ -50,10 +67,13 @@ pub fn register_active_job(job_id: &str, token: CancellationToken) {
 /// an already-cancelled token are no-ops on the token side, but only the
 /// first call returns `true` (subsequent calls still return `true` while
 /// the entry exists; once unregistered, returns `false`).
+///
+/// This does NOT fire the `ended` token — `ended` is reserved for
+/// natural lifecycle teardown via [`unregister_active_job`].
 pub fn cancel_active_job(job_id: &str) -> bool {
     let token = {
         let map = registry().lock().expect("cancel_registry mutex poisoned");
-        map.get(job_id).cloned()
+        map.get(job_id).map(|s| s.cancel.clone())
     };
     match token {
         Some(t) => {
@@ -65,12 +85,22 @@ pub fn cancel_active_job(job_id: &str) -> bool {
 }
 
 /// Remove the registry entry for the given job ID. Safe to call even if
-/// no entry exists. The associated token is NOT cancelled by this call —
-/// callers that want both behaviors should call [`cancel_active_job`]
-/// first.
+/// no entry exists. The associated `cancel` token is NOT cancelled by
+/// this call — callers that want both behaviors should call
+/// [`cancel_active_job`] first. The `ended` token IS fired before the
+/// entry is removed, so awaiters tracking natural job termination wake
+/// up promptly (used by the napi `await_job_cancel` path so per-call
+/// listeners don't leak when a job finishes without explicit cancel).
 pub fn unregister_active_job(job_id: &str) {
-    let mut map = registry().lock().expect("cancel_registry mutex poisoned");
-    map.remove(job_id);
+    let ended = {
+        let mut map = registry().lock().expect("cancel_registry mutex poisoned");
+        let ended = map.get(job_id).map(|s| s.ended.clone());
+        map.remove(job_id);
+        ended
+    };
+    if let Some(t) = ended {
+        t.cancel();
+    }
 }
 
 /// Number of active job entries currently registered. For diagnostics
@@ -78,6 +108,21 @@ pub fn unregister_active_job(job_id: &str) {
 /// hold the lock across other work.
 pub fn active_job_count() -> usize {
     registry().lock().expect("cancel_registry mutex poisoned").len()
+}
+
+/// Snapshot both per-job tokens (cancel, ended) without firing either.
+/// Used by the napi `await_job_cancel` accessor so callers in non-Rust
+/// runtimes can race their outbound work against EITHER the in-flight
+/// job's cancel signal OR its natural-termination signal — without this,
+/// an `awaitJobCancel(...)` future on a job that finishes normally would
+/// hang forever (its sole resolve path would be explicit cancel) and
+/// leak one Rust task + one JS Promise per outbound call. Returns `None`
+/// if the job is not currently registered (already terminal / never
+/// claimed) — callers should treat `None` as "no cancellation possible
+/// from here" and resolve immediately.
+pub fn get_state(job_id: &str) -> Option<(CancellationToken, CancellationToken)> {
+    let map = registry().lock().expect("cancel_registry mutex poisoned");
+    map.get(job_id).map(|s| (s.cancel.clone(), s.ended.clone()))
 }
 
 #[cfg(test)]
@@ -140,6 +185,70 @@ mod tests {
         assert!(fired);
         assert!(second.is_cancelled());
         assert!(!first.is_cancelled(), "first token should NOT be fired");
+
+        unregister_active_job(&id);
+    }
+
+    #[test]
+    fn get_state_returns_clones_for_registered_job() {
+        let id = unique_id("get-state");
+        let token = CancellationToken::new();
+        register_active_job(&id, token.clone());
+
+        let (cancel, ended) = get_state(&id).expect("state should be present");
+        // Cancel snapshot is a clone of the token the caller registered —
+        // firing it fires the original (and vice versa) since
+        // `CancellationToken::clone` shares the same underlying state.
+        assert!(!cancel.is_cancelled());
+        assert!(!ended.is_cancelled());
+        cancel.cancel();
+        assert!(token.is_cancelled(), "original token should also fire");
+        assert!(!ended.is_cancelled(), "ended must remain un-fired");
+
+        unregister_active_job(&id);
+    }
+
+    #[test]
+    fn get_state_returns_none_for_unregistered_job() {
+        let id = unique_id("get-state-missing");
+        assert!(get_state(&id).is_none());
+    }
+
+    #[test]
+    fn get_state_after_unregister_returns_none() {
+        let id = unique_id("get-state-ephemeral");
+        register_active_job(&id, CancellationToken::new());
+        assert!(get_state(&id).is_some());
+        unregister_active_job(&id);
+        assert!(get_state(&id).is_none());
+    }
+
+    #[test]
+    fn get_ended_token_fires_on_unregister() {
+        let id = unique_id("ended-on-unregister");
+        register_active_job(&id, CancellationToken::new());
+        let (_cancel, ended) = get_state(&id).expect("state should be present");
+        assert!(!ended.is_cancelled());
+        unregister_active_job(&id);
+        assert!(
+            ended.is_cancelled(),
+            "ended token must fire when job is unregistered (natural end)"
+        );
+    }
+
+    #[test]
+    fn get_cancel_token_isolated_from_ended() {
+        let id = unique_id("cancel-isolated-from-ended");
+        register_active_job(&id, CancellationToken::new());
+        let (cancel, ended) = get_state(&id).expect("state should be present");
+
+        // Firing cancel must NOT fire ended — they are distinct tokens.
+        cancel.cancel();
+        assert!(cancel.is_cancelled());
+        assert!(
+            !ended.is_cancelled(),
+            "ended must remain un-fired when only cancel is fired"
+        );
 
         unregister_active_job(&id);
     }

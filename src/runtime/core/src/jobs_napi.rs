@@ -219,6 +219,27 @@ impl JsJobController {
     pub async fn is_terminal(&self) -> bool {
         self.inner.is_terminal().await
     }
+
+    /// Voluntarily release the lease so a peer replica can re-claim and
+    /// retry. Used by the TS dispatch wrapper when a handler raises a
+    /// retryOn-matched exception (issue #894): instead of marking the row
+    /// terminal=failed, the SDK calls `releaseLease` so the registry resets
+    /// `owner_instance_id` and a peer replica picks up the row within ~5s
+    /// via the HEAD-heartbeat path. Note: release does NOT increment
+    /// `attempt_count` — the claim that picked the row up already counted
+    /// this attempt; the next claim will count the next attempt.
+    ///
+    /// Marks terminal locally before the backend call to fence racing
+    /// progress updates from the now-defunct attempt (mirror of
+    /// `JobController::release_lease` in Rust core).
+    #[napi]
+    pub async fn release_lease(&self, reason: Option<String>) -> Result<()> {
+        self.inner
+            .release_lease(reason)
+            .await
+            .map_err(job_error_to_napi)?;
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -408,6 +429,47 @@ pub fn inject_job_headers_napi() -> Option<JsJobHeaders> {
 #[napi(js_name = "cancelActiveJob")]
 pub fn cancel_active_job_napi(job_id: String) -> bool {
     cancel_registry::cancel_active_job(&job_id)
+}
+
+// =============================================================================
+// await_job_cancel
+// =============================================================================
+
+/// Await the cancel token registered for `jobId` in the process-wide
+/// cancel registry. Resolves when the token fires (i.e.
+/// [`cancel_active_job_napi`] was called for this `jobId`), or
+/// immediately if no token is currently registered (already terminal /
+/// never claimed) — callers don't hang on stale jobs.
+///
+/// Used by the TS proxy to wire outbound `AbortController`s to the
+/// active job's cancel token: when the registry's
+/// `POST /jobs/{job_id}/cancel` route fires the token, the proxy aborts
+/// in-flight outbound `fetch()` requests so cancel propagates to
+/// downstream calls instead of stalling on socket reads. Without this,
+/// the producer-side cancel only flips `JobController.is_terminal()`
+/// after the outer await returns — outbound HTTP work the handler
+/// kicked off keeps running in the background.
+///
+/// napi-rs maps `pub async fn -> ()` to `Promise<void>` on the JS side.
+///
+/// Resolves on EITHER explicit cancel OR the registry's natural-end
+/// signal. Without the latter, futures awaiting a job that finishes
+/// without an explicit cancel would hang forever (the snapshot Arc
+/// keeps the cancel token alive past `unregister_active_job`), leaking
+/// one Rust task + one JS Promise per outbound call. With the `ended`
+/// signal, awaiters wake when the registry tears down the entry.
+#[napi(js_name = "awaitJobCancel")]
+pub async fn await_job_cancel_napi(job_id: String) {
+    // Snapshot both tokens under the registry lock once. If the job is
+    // not registered (already terminal / never claimed), resolve
+    // immediately so callers don't hang on stale jobs.
+    let Some((cancel, ended)) = cancel_registry::get_state(&job_id) else {
+        return;
+    };
+    tokio::select! {
+        _ = cancel.cancelled() => {},
+        _ = ended.cancelled() => {},
+    }
 }
 
 // =============================================================================
