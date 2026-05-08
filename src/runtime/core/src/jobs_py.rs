@@ -456,6 +456,41 @@ pub fn cancel_active_job_py(job_id: &str) -> bool {
     cancel_registry::cancel_active_job(job_id)
 }
 
+/// Await the cancel token bound for `job_id` in the process-wide
+/// cancel registry. Resolves when EITHER the token fires (explicit
+/// cancel via [`cancel_active_job_py`]) OR the registry unregisters
+/// the job naturally (ended without cancel — see
+/// [`crate::cancel_registry::JobCancelState::ended`]). Resolves
+/// immediately if the job is not currently registered (already
+/// terminal / never claimed).
+///
+/// Used by the SDK's job_dispatch wrapper to race the user's
+/// coroutine against cancel-token-fire — when cancel arrives, the
+/// dispatch wrapper cancels the user's asyncio task so
+/// `await asyncio.sleep` and similar propagate CancelledError
+/// naturally. Mirror of the TypeScript SDK's `awaitJobCancel(jobId)`
+/// napi and the C ABI `mesh_await_job_cancel`.
+///
+/// Returns a Python coroutine; callers `await` it on asyncio.
+#[pyfunction(name = "await_job_cancel")]
+pub fn await_job_cancel_py<'py>(
+    py: Python<'py>,
+    job_id: String,
+) -> PyResult<Bound<'py, PyAny>> {
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        // Snapshot both tokens once. None means "not registered" —
+        // resolve immediately so callers don't hang on stale jobs.
+        let Some((cancel, ended)) = cancel_registry::get_state(&job_id) else {
+            return Ok(());
+        };
+        tokio::select! {
+            _ = cancel.cancelled() => {},
+            _ = ended.cancelled() => {},
+        }
+        Ok::<(), pyo3::PyErr>(())
+    })
+}
+
 /// Run an awaitable Python callable inside a fresh
 /// [`crate::jobs::run_as_job`] scope so the cancel-registry entry under
 /// `job_id` is bound for the duration of the call (so the

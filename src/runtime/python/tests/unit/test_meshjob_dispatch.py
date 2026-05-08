@@ -653,6 +653,123 @@ class TestRetryOnDispatch:
 
 
 # ===========================================================================
+# Cancel observability — issue #882 Part A
+#
+# When ``mcp_mesh_core.cancel_active_job(job_id)`` fires the registry's
+# cancel token (e.g. from ``POST /jobs/:id/cancel``), the user's
+# ``await asyncio.sleep`` must propagate ``CancelledError`` rather than
+# running to natural completion. The wrapper achieves this by racing the
+# user's task against ``await_job_cancel(job_id)`` and cancelling the
+# user task when the watcher resolves first.
+# ===========================================================================
+
+
+class TestCancelObservability:
+    """Mid-flight cancel via the registry interrupts the user's coroutine."""
+
+    @pytest.mark.asyncio
+    async def test_cancel_active_job_aborts_running_handler(self, monkeypatch):
+        """``cancel_active_job(job_id)`` mid-flight → user task receives
+        ``CancelledError``, wrapper returns ``None``, fail()/release_lease()
+        are NOT called (registry's CancelJob handler owns the row state)."""
+        from mcp_mesh_core import cancel_active_job, with_job_async
+
+        from _mcp_mesh.engine.job_dispatch import maybe_dispatch_as_job
+        from _mcp_mesh.tracing.context import TraceContext
+
+        fn = _fixture_with_job
+        fn._mesh_tool_metadata = {"task": True}
+
+        job_id = "job-cancel-obs-1"
+        TraceContext.set_propagated_headers(
+            {"x-mesh-job-id": job_id, "x-mesh-timeout": "30"}
+        )
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://r:9999")
+        monkeypatch.setenv("MCP_MESH_AGENT_ID", "cancel-obs-agent")
+
+        try:
+            release_calls: list = []
+            fail_calls: list = []
+            complete_calls: list = []
+            cancelled_in_user = asyncio.Event()
+            ready = asyncio.Event()
+
+            class _FakeController:
+                def __init__(self, *a, **kw):
+                    self._terminal = False
+
+                async def is_terminal(self):
+                    return self._terminal
+
+                async def release_lease(self, reason=None):
+                    release_calls.append(reason)
+                    self._terminal = True
+
+                async def fail(self, error):
+                    fail_calls.append(error)
+                    self._terminal = True
+
+                async def complete(self, value):
+                    complete_calls.append(value)
+                    self._terminal = True
+
+            async def invoke(_kw):
+                # Simulate a long-running handler. We expect the cancel
+                # watcher to interrupt this before it returns naturally.
+                ready.set()  # Signal the test that the user task has started.
+                try:
+                    await asyncio.sleep(30)
+                except asyncio.CancelledError:
+                    cancelled_in_user.set()
+                    raise
+                return "should-not-reach"
+
+            with mock.patch(
+                "mcp_mesh_core.JobController", _FakeController, create=True
+            ):
+                # Run dispatch + fire cancel in parallel. The real
+                # ``with_job_async`` registers the job in the cancel
+                # registry, so ``cancel_active_job(job_id)`` from a
+                # sibling task will fire the watcher's token.
+                async def _firer():
+                    await ready.wait()
+                    # Yield a few times so the Rust-side `with_job_async`
+                    # finishes registering the job in the cancel registry
+                    # before we fire (the Python<->Tokio bridge can take
+                    # multiple ticks to thread through).
+                    for _ in range(5):
+                        await asyncio.sleep(0)
+                    fired = cancel_active_job(job_id)
+                    return fired
+
+                dispatch_task = asyncio.create_task(
+                    maybe_dispatch_as_job(fn, invoke, {"user": "x"})
+                )
+                firer_task = asyncio.create_task(_firer())
+
+                out, fired = await asyncio.gather(dispatch_task, firer_task)
+
+            # Wrapper returned cleanly with None (registry owns terminal).
+            assert out is None
+            # Cancel actually fired the registered token.
+            assert fired is True
+            # The user's coroutine observed CancelledError.
+            assert cancelled_in_user.is_set(), (
+                "user's await asyncio.sleep must propagate CancelledError "
+                "when cancel_active_job fires mid-flight"
+            )
+            # The wrapper did NOT call fail / release / complete — the
+            # registry's CancelJob handler is the source of truth for
+            # the cancelled row.
+            assert fail_calls == []
+            assert release_calls == []
+            assert complete_calls == []
+        finally:
+            TraceContext.set_propagated_headers({})
+            fn._mesh_tool_metadata = {"task": True}
+
+
+# ===========================================================================
 # MeshJobSubmitter — consumer-side handle
 # ===========================================================================
 

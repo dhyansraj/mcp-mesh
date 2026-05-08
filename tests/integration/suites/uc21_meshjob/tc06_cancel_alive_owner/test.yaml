@@ -99,6 +99,19 @@ test:
       meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
     capture: final_status
 
+  # Issue #882 Part A: confirm the producer's handler actually observed
+  # the cancel mid-flight. The runs_overlong fixture logs a marker when
+  # CancelledError is raised inside the loop — without Part A working,
+  # the asyncio.sleep wouldn't observe the Tokio cancel token, the
+  # handler would run to natural 30s completion, and this marker would
+  # NEVER appear in the producer log.
+  - name: "Read producer log"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl logs long-task-provider 2>&1 | tail -200 | grep "\[runs_overlong\] cancelled mid-flight" | grep "user_id=alice" || true
+    capture: producer_log
+
 assertions:
   - expr: "${captured.cancel_response} contains '\"ok\": true'"
     message: "__mesh_job_cancel should return ok:true"
@@ -111,6 +124,12 @@ assertions:
   # exact status-field shape "\"status\": \"completed\"" instead.
   - expr: "${captured.final_status} not contains '\"status\": \"completed\"'"
     message: "status field must NOT be completed — cancel happened before natural finish"
+  # Issue #882 Part A: positive signal that the user's coroutine
+  # observed CancelledError. Without the SDK's cancel-watcher race
+  # in job_dispatch.py, asyncio.sleep would not propagate the cancel
+  # and this marker would never be logged.
+  - expr: "${captured.producer_log} contains '[runs_overlong] cancelled mid-flight'"
+    message: "producer must log the CancelledError marker — proves handler aborted, not just registry-side row flip"
 
 post_run:
   - routine: stop_all
