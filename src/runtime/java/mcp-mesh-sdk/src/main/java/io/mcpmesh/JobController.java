@@ -220,14 +220,54 @@ public final class JobController implements MeshJob, AutoCloseable {
     }
 
     /**
+     * Whether the cancel token bound to this controller's job in the Rust
+     * cancel registry has been fired. Returns {@code false} when the job is
+     * not currently registered (e.g. no enclosing {@code mesh_run_as_job}
+     * scope active — should not happen for handlers driven by the dispatch
+     * wrapper, but is the safe default).
+     *
+     * <p>Distinct from {@link #isTerminal}: terminal reflects local
+     * {@code complete}/{@code fail}/{@code releaseLease} intent set by
+     * <em>this</em> controller; cancelled reflects an <em>external</em>
+     * cancel signal — typically {@code POST /jobs/{id}/cancel} hitting the
+     * SDK-owned HTTP route, but also the per-attempt deadline tripping or
+     * any other cancel-token holder in the Rust runtime.
+     *
+     * <p>Java's {@link Thread#sleep} cannot be interrupted by a Tokio
+     * token firing, so long-running task handlers MUST poll this method
+     * between sleep intervals to observe mid-flight cancel — the
+     * registry-side row will already have flipped to {@code cancelled} via
+     * the cancel route's atomic update; without polling, the handler runs
+     * to natural completion and the registry's terminal state is whatever
+     * the handler eventually wrote (the cancel marker survives in row
+     * status / history but {@code final_progress} reflects the natural
+     * loop endpoint, not the cancel point). Mirrors Python's
+     * {@code asyncio.sleep} which observes cancel via the future and TS's
+     * {@code AbortSignal}-aware sleep.
+     *
+     * @return true if the cancel token has fired, false otherwise
+     * @throws MeshException if the native call fails
+     */
+    public boolean isCancelled() {
+        synchronized (lock) {
+            ensureOpen();
+            int rc = core.mesh_job_controller_is_cancelled(handle);
+            if (rc < 0) {
+                throw new MeshException("mesh_job_controller_is_cancelled failed: " + lastError(core));
+            }
+            return rc == 1;
+        }
+    }
+
+    /**
      * Free the underlying native handle and stop the background batching
      * tick (with a final flush). Idempotent — repeated calls are no-ops.
      */
     @Override
     public void close() {
         // Hold `lock` across the free so any in-flight FFI call
-        // (updateProgress / complete / fail / isTerminal) finishes
-        // before we drop the handle. The `closed` flag preserves
+        // (updateProgress / complete / fail / isTerminal / isCancelled)
+        // finishes before we drop the handle. The `closed` flag preserves
         // idempotent semantics for repeated close() calls; it's still
         // checked inside the lock by `ensureOpen` so a thread that
         // wins the race observes the closed state.

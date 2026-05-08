@@ -421,6 +421,39 @@ pub unsafe extern "C" fn mesh_job_controller_is_terminal(
     }
 }
 
+/// Whether the cancel token bound to this controller's job in the
+/// process-wide cancel registry has been fired. Returns `0` (not cancelled)
+/// when the job is not currently registered (no [`mesh_run_as_job`] scope
+/// active). Used by per-language SDKs whose blocking primitives cannot be
+/// interrupted by a Tokio cancel token firing — e.g. the Java fixture's
+/// `runs_overlong` polls this between `Thread.sleep` intervals so a
+/// mid-flight cancel can break out of the loop instead of running to
+/// natural completion. Distinct from [`mesh_job_controller_is_terminal`]:
+/// terminal reflects local complete/fail/release intent; cancelled
+/// reflects an external cancel signal (HTTP route, deadline trip, etc.).
+///
+/// # Returns
+/// `1` if cancel token fired, `0` if not (or job not registered),
+/// `-1` on error.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_controller_is_cancelled(
+    handle: *const JobControllerHandle,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    let handle = &*handle;
+    let inner = handle.inner.clone();
+    let cancelled = jobs_runtime().block_on(async move { inner.is_cancelled().await });
+    if cancelled {
+        1
+    } else {
+        0
+    }
+}
+
 /// Read the job ID this controller is bound to. Caller frees the returned
 /// string via `mesh_free_string`.
 #[no_mangle]
@@ -790,6 +823,46 @@ pub unsafe extern "C" fn mesh_cancel_active_job(job_id: *const c_char) -> i32 {
     }
 }
 
+/// Block until the cancel token bound for `job_id` in the process-wide
+/// cancel registry fires (explicit cancel via `mesh_cancel_active_job`)
+/// OR the job is unregistered naturally (ended without cancel — see
+/// `cancel_registry::JobCancelState::ended`). Resolves immediately if
+/// the job is not currently registered (already terminal / never claimed).
+///
+/// Returns 0 on success (token resolved or unregistered), -1 on a NULL
+/// `job_id_ptr` or invalid UTF-8.
+///
+/// Java SDK uses this from a watcher thread (wrapped in a
+/// `CompletableFuture.runAsync`) to abort outbound OkHttp `Call`s when
+/// the producer's job is cancelled. The `ended` arm prevents the
+/// watcher from leaking when the call completes naturally without
+/// cancel. Mirror of the napi `awaitJobCancel(jobId)` shipped in TS PR
+/// #897, but blocking instead of async because JNR-FFI doesn't expose
+/// async return types.
+///
+/// # Safety
+/// `job_id_ptr` must be a valid C string for the duration of this call.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_await_job_cancel(job_id_ptr: *const c_char) -> i32 {
+    take_last_error();
+    let job_id = match req_cstr(job_id_ptr, "job_id") {
+        Ok(s) => s.to_string(),
+        Err(()) => return -1,
+    };
+    // Snapshot both tokens once. None means "not registered" — resolve
+    // immediately so callers don't hang on stale jobs.
+    let Some((cancel, ended)) = cancel_registry::get_state(&job_id) else {
+        return 0;
+    };
+    jobs_runtime().block_on(async move {
+        tokio::select! {
+            _ = cancel.cancelled() => {},
+            _ = ended.cancelled() => {},
+        }
+    });
+    0
+}
+
 // =============================================================================
 // run_as_job — callback-based scope binding
 // =============================================================================
@@ -805,10 +878,18 @@ pub unsafe extern "C" fn mesh_cancel_active_job(job_id: *const c_char) -> i32 {
 /// headers. `deadline_secs` is the per-attempt deadline (relative); null /
 /// missing / non-positive ≡ no deadline.
 ///
-/// `callback` is invoked synchronously from the runtime's `block_on`. It
-/// receives the opaque `user_data` pointer the caller passed in. The
-/// callback's `i32` return value is propagated as this function's return
-/// value (0 = success, non-zero = caller-defined error).
+/// `callback` is invoked synchronously from the runtime's `block_on`,
+/// wrapped in [`tokio::task::block_in_place`] so it is legal for the
+/// callback to issue further blocking FFI calls (e.g.
+/// `mesh_job_controller_complete` / `_fail` / `_update_progress`) that
+/// internally re-enter `jobs_runtime().block_on(...)` — without
+/// `block_in_place` such nested `block_on` calls would panic with
+/// "Cannot start a runtime from within a runtime". This requires
+/// `jobs_runtime()` to be a multi-threaded runtime, which it is
+/// (`Runtime::new()` defaults to `multi_thread`). The callback receives
+/// the opaque `user_data` pointer the caller passed in. The callback's
+/// `i32` return value is propagated as this function's return value
+/// (0 = success, non-zero = caller-defined error).
 ///
 /// # Safety
 /// `callback` must be a valid C function pointer for the entire duration
@@ -897,8 +978,20 @@ pub unsafe extern "C" fn mesh_run_as_job(
 
     jobs_runtime().block_on(async move {
         run_as_job(ctx, async move {
+            // `block_in_place` tells the multi-threaded Tokio runtime
+            // "this call may block; move me off the worker thread so
+            // other tasks can progress." This makes nested `block_on`
+            // calls inside the callback legal — which matters because
+            // the Java SDK's controller methods (mesh_job_controller_*)
+            // each do their own `jobs_runtime().block_on(...)`
+            // internally. Without `block_in_place`, a callback that
+            // calls `controller.complete()` would panic with "Cannot
+            // start a runtime from within a runtime."
+            //
+            // Requires `jobs_runtime()` to be multi-threaded — it is
+            // (`Runtime::new()` defaults to `multi_thread`).
             let UserDataPtr(ptr) = ud;
-            callback(ptr)
+            tokio::task::block_in_place(|| callback(ptr))
         })
         .await
     })
@@ -961,6 +1054,54 @@ mod tests {
         let id = CString::new("does-not-exist-ffi-test").unwrap();
         let rc = unsafe { mesh_cancel_active_job(id.as_ptr()) };
         assert_eq!(rc, 0);
+    }
+
+    /// `mesh_await_job_cancel` must resolve immediately (return 0) when
+    /// the job is not currently registered — mirrors the napi
+    /// `awaitJobCancel` `None`-branch resolve-immediately semantic so
+    /// Java watchers don't hang on stale jobs.
+    #[test]
+    fn await_job_cancel_resolves_immediately_when_unregistered() {
+        let id = CString::new("await-cancel-not-registered").unwrap();
+        let rc = unsafe { mesh_await_job_cancel(id.as_ptr()) };
+        assert_eq!(rc, 0);
+    }
+
+    /// Null pointer must be rejected via the last-error slot rather
+    /// than panicking — same pattern as the other req_cstr-guarded
+    /// entry points.
+    #[test]
+    fn await_job_cancel_rejects_null() {
+        let rc = unsafe { mesh_await_job_cancel(ptr::null()) };
+        assert_eq!(rc, -1);
+    }
+
+    /// `mesh_await_job_cancel` must wake on the registry's `ended`
+    /// token when a job is unregistered without explicit cancel — this
+    /// is the no-leak path: the Java watcher thread reclaims itself
+    /// when the surrounding `mesh_run_as_job` scope ends naturally.
+    #[test]
+    fn await_job_cancel_wakes_on_natural_unregister() {
+        use std::thread;
+        use std::time::Duration;
+        use tokio_util::sync::CancellationToken;
+
+        let job_id = format!(
+            "await-cancel-natural-{}",
+            uuid::Uuid::new_v4().simple()
+        );
+        cancel_registry::register_active_job(&job_id, CancellationToken::new());
+
+        let job_id_for_thread = job_id.clone();
+        let unregisterer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            cancel_registry::unregister_active_job(&job_id_for_thread);
+        });
+
+        let id_c = CString::new(job_id).unwrap();
+        let rc = unsafe { mesh_await_job_cancel(id_c.as_ptr()) };
+        assert_eq!(rc, 0);
+        unregisterer.join().expect("unregister thread panicked");
     }
 
     /// `mesh_run_as_job` must reject malformed JSON cleanly via the

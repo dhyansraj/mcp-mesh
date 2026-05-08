@@ -7,44 +7,63 @@
 #
 # After submit, wait briefly then cancel.
 #
-# IMPORTANT — Java has TWO documented limitations relevant here:
+# IMPORTANT — outbound-HTTP cancel propagation, post-#900:
 #
-#   1. #889: Java cancel-registry binding inactive (sync JNR-FFI cannot
-#      bind nested Tokio runtime). The cancel route returns
-#      cancelled:false; the in-process cancel token never fires.
+# #889 (Phase A) fixed the producer-local cancel-registry binding —
+# the Java handler's cancel token now DOES fire when the registry
+# forwards a cancel (see tc06 / tc22 which assert this directly).
 #
-#   2. uc22/tc09 already documents that even with the cancel token
-#      firing, the inbound transport on the downstream agent must
-#      surface client-disconnect as a cancellation to the tool handler.
-#      The Java SDK does not yet propagate inbound cancel either —
-#      same gap as Python (#882) and TS (open follow-up).
+# #900 (this PR) wires the producer-side outbound abort hook into
+# {@link io.mcpmesh.spring.McpHttpClient}: a daemon watcher thread
+# blocks on {@code mesh_await_job_cancel} for the duration of each
+# OkHttp Call.execute() and aborts the call when the producer's
+# cancel token fires. Mirror of TypeScript PR #897. So when a Java
+# task=true handler issues outbound work via the SDK's McpHttpClient
+# (the McpMeshTool proxy path), cancel now propagates end-to-end on
+# the producer side.
 #
-# Producer fixture's report_with_downstream_call also can't use a
+# This test, however, exercises a DIFFERENT outbound surface:
+# producer fixture's report_with_downstream_call can't use a
 # McpMeshTool dependency (Java SDK rejects task=true producers with
-# Selector deps; see provider source comment) — it issues a plain
-# HTTP POST to the sleeper's /mcp endpoint instead. Same outbound HTTP
-# surface, just minus the resolution-layer wrapper.
+# Selector deps; see provider source comment), so it falls back to a
+# plain {@code java.net.http.HttpClient} send() against the sleeper's
+# /mcp endpoint. The #900 wiring is bound to OkHttp Calls inside
+# McpHttpClient — it does NOT instrument the JDK's java.net.http
+# HttpClient. So tc09 still does NOT observe a producer-side outbound
+# abort here (the substrate IS fixed for the McpHttpClient code path
+# — uc23/tc06 / tc22 cover the registry-side flip; a follow-up
+# fixture variant could exercise the McpHttpClient path with a
+# regular-tool dep on the consumer side to drive the abort end-to-end).
 #
-# What DOES work for Java today:
+# Downstream-side observability (sleeper's slowDownstream waking up
+# mid-sleep) requires the downstream handler to poll isCancelled() the
+# same way runsOverlong does — that's a downstream-side concern
+# orthogonal to #900 (#886-style cross-runtime gap). Not asserted here.
+#
+# What DOES work for Java today (post-#889 + post-#900):
 #   - registry-side row flips to status=cancelled (registry route works)
+#   - producer's local cancel token fires (#889 Phase A — see tc06/tc22)
+#   - producer's McpHttpClient outbound calls abort on cancel (#900)
 #
-# What does NOT work for Java today:
-#   - producer's local cancel token doesn't fire (#889)
-#   - downstream sleeper's marker line doesn't fire (#886-style)
-#   - the runs_overlong / downstream HTTP runs to natural completion
-#     until the producer hits a sweep or the registry pre-cancels
+# What still does NOT propagate in tc09 specifically:
+#   - producer fixture uses java.net.http.HttpClient (not McpHttpClient),
+#     so the #900 wiring doesn't apply — this is a fixture-level gap,
+#     not a substrate gap. A follow-up fixture variant using the
+#     McpHttpClient code path would close this.
+#   - downstream sleeper's slowDownstream handler doesn't poll
+#     isCancelled(), so it sleeps to natural completion (#886-style).
 #
-# This test asserts what's observable: registry-side status=cancelled.
-# The downstream-sleeper-java's marker is NOT asserted (parallel to
-# uc22/tc09's pattern for the cross-runtime gap).
+# This test asserts the registry-side row flip + cancel-elapsed wall
+# clock guard (parity with tc06's <10s threshold).
 
-name: "MeshJob Java: cancel registers as cancelled in registry (downstream propagation gap per #889/#886)"
-description: "Java — provider calls slow_downstream(30s) via HTTP; cancel must result in cancelled status in registry. Producer-local + downstream propagation NOT asserted (Java #889 + cross-runtime #886-style)."
+name: "MeshJob Java: cancel registers as cancelled in registry (#900 wires McpHttpClient abort; tc09 fixture uses java.net.http so still asserts registry-side only)"
+description: "Java — provider calls slow_downstream(30s) via HTTP; cancel must result in cancelled status in registry within <10s. McpHttpClient outbound abort wired by #900 but tc09 fixture uses java.net.http (orthogonal surface)."
 tags:
   - meshjob
   - java
   - issue-890
   - issue-889
+  - issue-900
   - cancel
   - propagation
 timeout: 480
@@ -160,6 +179,12 @@ test:
       exit 1
     timeout: 30
 
+  - name: "Capture wall-clock just before cancel"
+    handler: shell
+    workdir: /workspace
+    command: date +%s
+    capture: ts_cancel_start
+
   - name: "Cancel the job"
     handler: shell
     workdir: /workspace
@@ -170,9 +195,30 @@ test:
     capture: cancel_response
     timeout: 15
 
-  - name: "Wait for cancel to settle"
-    handler: wait
-    seconds: 10
+  # Poll until status flips to cancelled, capture elapsed time. Same
+  # pattern as tc06 — registry-side row flip happens synchronously
+  # inside CancelJob; <10s threshold leaves slack for slow CI.
+  - name: "Poll until status=cancelled, capture elapsed time"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      START='${captured.ts_cancel_start}'
+      START_NUM=$(echo "$START" | tr -d -c '0-9')
+      for i in $(seq 1 15); do
+        S=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status' 2>/dev/null)
+        if [ "$S" = "cancelled" ]; then
+          NOW=$(date +%s)
+          echo "cancel_elapsed=$((NOW - START_NUM))"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: status never flipped to cancelled within 15s (last=$S)"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq .
+      exit 1
+    capture: cancel_elapsed
+    timeout: 30
 
   - name: "Read final status"
     handler: shell
@@ -182,14 +228,33 @@ test:
       meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
     capture: final_status
 
+  # Wall-clock guard — registry-side cancel forwarding completes <10s
+  # typical (parity with tc06). Larger elapsed values indicate a
+  # regression to the slow path (sweep-driven recovery).
+  - name: "Assert cancel-to-cancelled elapsed < 10s (registry-side fast path)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      ELAPSED=$(echo '${captured.cancel_elapsed}' | grep -oE 'cancel_elapsed=[0-9]+' | sed 's/cancel_elapsed=//')
+      if [ -z "$ELAPSED" ]; then
+        echo "ERROR: could not extract cancel_elapsed from: ${captured.cancel_elapsed}"
+        exit 1
+      fi
+      if [ "$ELAPSED" -ge 10 ]; then
+        echo "ERROR: cancel_elapsed=${ELAPSED}s >= 10s — cancel forwarding may have regressed"
+        exit 1
+      fi
+      echo "OK: cancel_elapsed=${ELAPSED}s < 10s (fast cancel path active)"
+
 assertions:
   - expr: "${captured.cancel_response} contains '\\\"ok\\\":true'"
     message: "cancel should ack with ok:true"
-  # Per #889 — registry-side row flips to cancelled (registry's
-  # CancelJob handler succeeds) even though Java's cancel-registry
-  # binding is inactive. This is the substantive signal we CAN test.
+  # Per #889 + #900 — registry-side row flips to cancelled. The
+  # producer-side McpHttpClient outbound abort (#900) is wired but
+  # not exercised here because the fixture uses java.net.http
+  # directly; see header comment for the orthogonal-fixture rationale.
   - expr: "${captured.final_status} contains '\\\"status\\\":\\\"cancelled\\\"'"
-    message: "registry-side status should be cancelled (Java cancel-registry inactive per #889; downstream HTTP NOT asserted aborted)"
+    message: "registry-side status should be cancelled (#900 producer-side abort wired for McpHttpClient; tc09 fixture uses java.net.http, so registry-side flip is the substantive signal asserted here)"
 
 post_run:
   - routine: stop_all

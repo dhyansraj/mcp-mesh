@@ -539,6 +539,23 @@ public interface MeshCore {
     int mesh_job_controller_is_terminal(Pointer handle);
 
     /**
+     * Whether the cancel token bound to this controller's job in the
+     * process-wide cancel registry has been fired. Returns 0 (not cancelled)
+     * when the job is not currently registered (no mesh_run_as_job scope
+     * active). Used by Java fixtures whose blocking primitives (e.g.
+     * Thread.sleep) cannot be interrupted by a Tokio cancel token firing —
+     * the fixture polls this between sleep intervals so a mid-flight cancel
+     * can break out instead of running to natural completion. Distinct from
+     * mesh_job_controller_is_terminal: terminal reflects local
+     * complete/fail/release intent; cancelled reflects an external cancel
+     * signal (HTTP route, deadline trip, etc.).
+     *
+     * @param handle Controller handle
+     * @return 1 if cancel token fired, 0 if not (or job not registered), -1 on error
+     */
+    int mesh_job_controller_is_cancelled(Pointer handle);
+
+    /**
      * Read the job ID this controller is bound to.
      *
      * @param handle    Controller handle
@@ -660,6 +677,31 @@ public interface MeshCore {
      * @return 1 if a token was found and fired, 0 if no active job, -1 on error
      */
     int mesh_cancel_active_job(String jobId);
+
+    /**
+     * Block until the cancel token bound for {@code jobId} in the process-
+     * wide cancel registry fires, OR until the job is unregistered naturally
+     * (ended without cancel). Resolves immediately if the job is not
+     * currently registered.
+     *
+     * <p>Used by {@link io.mcpmesh.spring.McpHttpClient} via a watcher
+     * thread wrapped in {@link java.util.concurrent.CompletableFuture#runAsync}
+     * to abort in-flight outbound HTTP calls when the producer's job is
+     * cancelled mid-flight. Mirror of the TypeScript SDK's
+     * {@code awaitJobCancel(jobId)} napi (PR #897) — same primitive, sync
+     * because JNR-FFI doesn't expose async returns.
+     *
+     * <p>This call BLOCKS the calling thread until the token fires; callers
+     * must invoke it on a dedicated daemon thread (e.g., via
+     * {@link java.util.concurrent.CompletableFuture#runAsync}). The watcher
+     * future MUST be cancelled in a {@code finally} block so it doesn't leak
+     * if the outbound call completes naturally.
+     *
+     * @param jobId the job ID whose cancel token to await
+     * @return 0 on success (token resolved or job unregistered), -1 on
+     *         invalid input (see {@link #mesh_last_error})
+     */
+    int mesh_await_job_cancel(String jobId);
 
     /**
      * Callback type for {@link MeshCore#mesh_run_as_job}. The callback is

@@ -745,6 +745,22 @@ int32_t mesh_job_controller_release_lease(struct JobControllerHandle *handle, co
 // `1` if terminal, `0` if not, `-1` on error.
 int32_t mesh_job_controller_is_terminal(const struct JobControllerHandle *handle);
 
+// Whether the cancel token bound to this controller's job in the
+// process-wide cancel registry has been fired. Returns `0` (not cancelled)
+// when the job is not currently registered (no [`mesh_run_as_job`] scope
+// active). Used by per-language SDKs whose blocking primitives cannot be
+// interrupted by a Tokio cancel token firing — e.g. the Java fixture's
+// `runs_overlong` polls this between `Thread.sleep` intervals so a
+// mid-flight cancel can break out of the loop instead of running to
+// natural completion. Distinct from [`mesh_job_controller_is_terminal`]:
+// terminal reflects local complete/fail/release intent; cancelled
+// reflects an external cancel signal (HTTP route, deadline trip, etc.).
+//
+// # Returns
+// `1` if cancel token fired, `0` if not (or job not registered),
+// `-1` on error.
+int32_t mesh_job_controller_is_cancelled(const struct JobControllerHandle *handle);
+
 // Read the job ID this controller is bound to. Caller frees the returned
 // string via `mesh_free_string`.
 int32_t mesh_job_controller_job_id(const struct JobControllerHandle *handle, char **out_job_id);
@@ -846,6 +862,27 @@ int32_t mesh_inject_job_headers(char **out_headers_json);
 // `-1` on error (null/invalid `job_id`).
 int32_t mesh_cancel_active_job(const char *job_id);
 
+// Block until the cancel token bound for `job_id` in the process-wide
+// cancel registry fires (explicit cancel via `mesh_cancel_active_job`)
+// OR the job is unregistered naturally (ended without cancel — see
+// `cancel_registry::JobCancelState::ended`). Resolves immediately if
+// the job is not currently registered (already terminal / never claimed).
+//
+// Returns 0 on success (token resolved or unregistered), -1 on a NULL
+// `job_id_ptr` or invalid UTF-8.
+//
+// Java SDK uses this from a watcher thread (wrapped in a
+// `CompletableFuture.runAsync`) to abort outbound OkHttp `Call`s when
+// the producer's job is cancelled. The `ended` arm prevents the
+// watcher from leaking when the call completes naturally without
+// cancel. Mirror of the napi `awaitJobCancel(jobId)` shipped in TS PR
+// #897, but blocking instead of async because JNR-FFI doesn't expose
+// async return types.
+//
+// # Safety
+// `job_id_ptr` must be a valid C string for the duration of this call.
+int32_t mesh_await_job_cancel(const char *job_id_ptr);
+
 // Run a Java-provided callback inside a fresh [`crate::jobs::run_as_job`]
 // scope so the cancel-registry entry under the snapshot's `job_id` is
 // bound for the duration of the callback (allowing
@@ -857,10 +894,18 @@ int32_t mesh_cancel_active_job(const char *job_id);
 // headers. `deadline_secs` is the per-attempt deadline (relative); null /
 // missing / non-positive ≡ no deadline.
 //
-// `callback` is invoked synchronously from the runtime's `block_on`. It
-// receives the opaque `user_data` pointer the caller passed in. The
-// callback's `i32` return value is propagated as this function's return
-// value (0 = success, non-zero = caller-defined error).
+// `callback` is invoked synchronously from the runtime's `block_on`,
+// wrapped in [`tokio::task::block_in_place`] so it is legal for the
+// callback to issue further blocking FFI calls (e.g.
+// `mesh_job_controller_complete` / `_fail` / `_update_progress`) that
+// internally re-enter `jobs_runtime().block_on(...)` — without
+// `block_in_place` such nested `block_on` calls would panic with
+// "Cannot start a runtime from within a runtime". This requires
+// `jobs_runtime()` to be a multi-threaded runtime, which it is
+// (`Runtime::new()` defaults to `multi_thread`). The callback receives
+// the opaque `user_data` pointer the caller passed in. The callback's
+// `i32` return value is propagated as this function's return value
+// (0 = success, non-zero = caller-defined error).
 //
 // # Safety
 // `callback` must be a valid C function pointer for the entire duration

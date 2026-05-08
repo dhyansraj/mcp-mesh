@@ -8,6 +8,7 @@ import io.mcpmesh.JobController;
 import io.mcpmesh.MeshJob;
 import io.mcpmesh.MeshJobSubmitter;
 import io.mcpmesh.Param;
+import io.mcpmesh.core.MeshCore;
 import io.mcpmesh.spring.tracing.ExecutionTracer;
 import io.mcpmesh.spring.tracing.SpanScope;
 import io.mcpmesh.spring.tracing.TraceContext;
@@ -671,18 +672,20 @@ public class MeshToolWrapper implements McpToolHandler {
      * if not already terminal, then propagates the exception so the MCP
      * SDK surfaces it as a tool-call error.
      *
-     * <p><b>Why no {@code mesh_run_as_job} on the Java sync path?</b>
-     * The Rust {@code mesh_run_as_job} wraps its callback in
-     * {@code jobs_runtime().block_on}; calling any
-     * {@code mesh_job_controller_*} (which also block_on internally)
-     * from inside that callback panics with a "Cannot start a runtime
-     * from within a runtime" Tokio error. The Python and TypeScript
-     * SDKs use {@code with_job} (async) so the callback's awaits don't
-     * nest block_ons — Java's only synchronous JNR-FFI bindings can't
-     * compose the same way. Cancel-registry binding for the Java path
-     * is therefore Phase B-deferred (the registry sweep is the
-     * backstop); user code sees an interrupted thread on cancel via
-     * {@link Thread#interrupt} once Phase 2 wires that up.
+     * <p><b>How the Java sync path binds the Rust cancel registry:</b>
+     * The dispatch wraps the user invocation in {@code mesh_run_as_job}
+     * (a C-ABI export that internally calls {@code run_as_job} and binds
+     * the cancel registry entry for the job ID). The Rust side wraps the
+     * callback in {@code tokio::task::block_in_place} so nested
+     * {@code block_on} calls from inside the callback (e.g.
+     * {@code mesh_job_controller_complete}) don't panic. This makes
+     * {@code POST /jobs/{id}/cancel} fire the in-flight cancel token
+     * immediately, matching Python and TypeScript behaviour. The
+     * Java-side {@link JobContext} ThreadLocal is still bound on top
+     * because the Rust task-local isn't visible to Java code in the
+     * callback — user code's {@code JobContext.current()} reads and
+     * outbound-header injection both depend on the ThreadLocal mirror.
+     * Resolved via #889.
      *
      * <p>Mirrors (Java-adapted):
      * <ul>
@@ -741,7 +744,8 @@ public class MeshToolWrapper implements McpToolHandler {
                 fullArgs[meshJobParamIndex] = null;
             }
             JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs);
-            return JobContext.withJob(snap, () -> invokeNoController(fullArgs));
+            return runAsJobWithRegistryBinding(jobId, deadlineSecs,
+                () -> JobContext.withJob(snap, () -> invokeNoController(fullArgs)));
         }
 
         // Construct the producer controller. Free in finally.
@@ -750,13 +754,113 @@ public class MeshToolWrapper implements McpToolHandler {
             // Inject the controller at the MeshJob slot
             fullArgs[meshJobParamIndex] = controller;
 
-            // Bind the Java-side ThreadLocal job context for the duration
-            // of the user method. See class javadoc on dispatchAsJob for
-            // why we don't also bind the Rust-side task-local.
+            // Bind both the Rust-side cancel registry (via mesh_run_as_job)
+            // and the Java-side ThreadLocal job context (via JobContext.withJob)
+            // for the duration of the user method. See class javadoc on
+            // dispatchAsJob for the rationale (resolved via #889).
             JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs);
-            return JobContext.withJob(snap, () -> invokeAndAutoComplete(fullArgs, controller));
+            try {
+                return runAsJobWithRegistryBinding(jobId, deadlineSecs,
+                    () -> JobContext.withJob(snap, () -> invokeAndAutoComplete(fullArgs, controller)));
+            } catch (Throwable t) {
+                // Defensive: runAsJobWithRegistryBinding can throw BEFORE
+                // invokeAndAutoComplete runs (snapshot serialization or
+                // mesh_run_as_job rc != 0 path). The row was claimed
+                // (status=working); without a terminal call here it would
+                // sit in working until lease expiry. Mark failed best-effort
+                // before rethrowing so the consumer's await() resolves
+                // promptly. tryFail is no-op when already terminal (e.g.
+                // invokeAndAutoComplete ran and the helper already
+                // reported), so the double-cover is safe.
+                tryFail(controller, "dispatch error before user method: " +
+                    (t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName()));
+                throw t;
+            }
         } finally {
             controller.close();
+        }
+    }
+
+    /**
+     * Wrap a Java {@link Callable} in {@link MeshCore#mesh_run_as_job} so
+     * the Rust cancel-registry entry for {@code jobId} is bound while the
+     * callable runs. {@code POST /jobs/{jobId}/cancel} can then fire the
+     * in-flight cancel token via {@code mesh_cancel_active_job} — the
+     * Java-only path previously skipped this binding (Phase A of #889).
+     *
+     * <p>Throwables raised by the body callable are captured in a closure-
+     * captured holder and rethrown after {@code mesh_run_as_job} returns,
+     * preserving the original exception type for the auto-complete logic
+     * ({@code retryOn} matching, etc.) — the Rust callback's {@code int}
+     * return is too coarse to carry exception identity.
+     *
+     * <p>Snapshot serialization is a precondition, NOT part of the body:
+     * a Jackson failure inside {@link #buildRunAsJobSnapshot} (extremely
+     * unlikely given the trivial two-scalar map shape) propagates as
+     * {@link IllegalStateException} to the caller and never reaches the
+     * native FFI. The unified rethrow logic only covers exceptions raised
+     * inside the user-supplied callable.
+     */
+    private Object runAsJobWithRegistryBinding(
+            String jobId, Long deadlineSecs, java.util.concurrent.Callable<Object> body)
+            throws Exception {
+        String snapshotJson = buildRunAsJobSnapshot(jobId, deadlineSecs);
+        Object[] resultBox = new Object[1];
+        Throwable[] thrownBox = new Throwable[1];
+        MeshCore core = MeshCore.load();
+        int rc = core.mesh_run_as_job(snapshotJson, userData -> {
+            // Inside mesh_run_as_job's run_as_job scope on a Tokio worker
+            // thread (block_in_place applied on the Rust side so nested
+            // controller block_on calls are legal).
+            try {
+                resultBox[0] = body.call();
+                return 0;
+            } catch (Throwable t) {
+                thrownBox[0] = t;
+                return -1;
+            }
+        }, null);
+        if (thrownBox[0] != null) {
+            if (thrownBox[0] instanceof Exception ex) throw ex;
+            if (thrownBox[0] instanceof Error err) throw err;
+            throw new RuntimeException(thrownBox[0]);
+        }
+        if (rc != 0) {
+            throw new RuntimeException(
+                "mesh_run_as_job failed (rc=" + rc + ") for job=" + jobId
+                + ": " + readLastError(core));
+        }
+        return resultBox[0];
+    }
+
+    /**
+     * Build the {@code mesh_run_as_job} snapshot payload:
+     * {@code {"job_id": "...", "deadline_secs": <number>|null}}.
+     */
+    private String buildRunAsJobSnapshot(String jobId, Long deadlineSecs) {
+        try {
+            Map<String, Object> snap = new LinkedHashMap<>();
+            snap.put("job_id", jobId);
+            snap.put("deadline_secs", deadlineSecs);
+            return objectMapper.writeValueAsString(snap);
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                "failed to serialize mesh_run_as_job snapshot for job=" + jobId, e);
+        }
+    }
+
+    /**
+     * Drain {@code mesh_last_error} into a Java string for diagnostic use,
+     * freeing the native pointer. Returns {@code "<no error>"} when the
+     * last-error slot is empty.
+     */
+    private static String readLastError(MeshCore core) {
+        jnr.ffi.Pointer err = core.mesh_last_error();
+        if (err == null) return "<no error>";
+        try {
+            return err.getString(0);
+        } finally {
+            core.mesh_free_string(err);
         }
     }
 
