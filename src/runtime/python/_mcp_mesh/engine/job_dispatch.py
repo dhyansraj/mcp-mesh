@@ -31,6 +31,7 @@ can call into it without re-implementing the contract.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any, Awaitable, Callable, Optional
@@ -38,6 +39,15 @@ from typing import Any, Awaitable, Callable, Optional
 from .job_context import CURRENT_JOB, JobContextSnapshot
 
 logger = logging.getLogger(__name__)
+
+
+# Cancel-watcher helper for issue #882 Part A. Older mcp-mesh-core
+# builds may not export this — degrade gracefully (handler runs to
+# natural completion as before, no cancel observability).
+try:
+    from mcp_mesh_core import await_job_cancel as _await_job_cancel
+except ImportError:
+    _await_job_cancel = None
 
 
 # Header names — lowercased to match how the FastMCP middleware stores
@@ -333,9 +343,114 @@ async def maybe_dispatch_as_job(
           - If the exception doesn't match retry_on, we propagate up
             through the wrapper chain (existing behaviour). The
             inbound HTTP path or registry sweep is the backstop.
+
+        Cancel observability (issue #882 Part A):
+          The user's coroutine is wrapped in an asyncio.Task and raced
+          against ``await_job_cancel(job_id)`` — a coroutine that
+          resolves when EITHER the cancel-registry token fires
+          (explicit cancel via ``POST /jobs/:id/cancel``) OR the
+          registry unregisters the job naturally (handler returned).
+          When cancel wins the race, the user task is cancelled so
+          ``await asyncio.sleep`` / network IO inside the handler
+          propagates ``CancelledError`` naturally — without this, a
+          handler napping in ``await asyncio.sleep(30)`` would not
+          observe a Tokio-side cancel token and would run to natural
+          completion despite the registry having flipped the row to
+          ``cancelled``. Mirrors the TS SDK's ``awaitJobCancel`` race
+          (PR #897) and the Java SDK's ``controller.isCancelled()``
+          poll (PR #891).
         """
         try:
-            result = await invoke(final_kwargs)
+            if _await_job_cancel is None:
+                result = await invoke(final_kwargs)
+            else:
+                user_task = asyncio.create_task(
+                    invoke(final_kwargs), name=f"mesh-job-{job_id}-user"
+                )
+                # ``_await_job_cancel`` is a pyo3-async helper that
+                # returns a Future (not a coroutine) — use
+                # ``ensure_future`` so we accept either shape (the
+                # Python-side fallback in some test mocks may return a
+                # coroutine instead).
+                cancel_watcher = asyncio.ensure_future(
+                    _await_job_cancel(job_id)
+                )
+                done, pending = await asyncio.wait(
+                    {user_task, cancel_watcher},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                # Prefer the user task whenever it's done — even if the
+                # cancel-watcher also completed in the same tick (e.g. the
+                # job was never registered, so the watcher resolved
+                # immediately on its first poll). This keeps the path
+                # deterministic for tests + for jobs that finish before
+                # the watcher gets to schedule.
+                if user_task.done():
+                    # Drain the watcher so it doesn't linger in the loop.
+                    if not cancel_watcher.done():
+                        cancel_watcher.cancel()
+                    try:
+                        await cancel_watcher
+                    except asyncio.CancelledError:
+                        pass
+                    if user_task.cancelled():
+                        # External cancel (loop shutdown, anyio CancelScope, signal) —
+                        # propagate so structured-concurrency semantics are preserved.
+                        # NOT the watcher-fired cancel path (that's the `else` branch).
+                        raise asyncio.CancelledError()
+                    user_exc = user_task.exception()
+                    if user_exc is not None:
+                        raise user_exc
+                    result = user_task.result()
+                else:
+                    # Cancel-watcher resolved before the user task.
+                    # Defensive: if the watcher resolved with an
+                    # exception (rare; would indicate a pyo3-runtime
+                    # issue, not a real cancel), DON'T cancel the user
+                    # task — log and let the user task continue to
+                    # natural completion. Calling .exception() also
+                    # consumes it so asyncio doesn't log "Task
+                    # exception was never retrieved" at GC time.
+                    watcher_exc = cancel_watcher.exception()
+                    if watcher_exc is not None:
+                        logger.warning(
+                            "job_dispatch: cancel-watcher for job=%s "
+                            "resolved with exception (%s); ignoring "
+                            "spurious signal and awaiting user task",
+                            job_id,
+                            watcher_exc,
+                        )
+                        await user_task
+                        if user_task.cancelled():
+                            raise asyncio.CancelledError()
+                        user_exc = user_task.exception()
+                        if user_exc is not None:
+                            raise user_exc
+                        result = user_task.result()
+                    else:
+                        # Cancel arrived first — abort the user's task
+                        # so `await asyncio.sleep` / network IO inside
+                        # the handler raises CancelledError. The
+                        # registry's CancelJob handler already flipped
+                        # the row to cancelled (the cancel route is
+                        # what fired the token), so there's nothing
+                        # for us to do beyond returning None.
+                        user_task.cancel()
+                        try:
+                            await user_task
+                        except asyncio.CancelledError:
+                            logger.info(
+                                "job_dispatch: user task for job=%s cancelled via "
+                                "cancel-watcher; registry owns terminal state",
+                                job_id,
+                            )
+                            return None
+                        # User caught CancelledError, did cleanup, and returned normally.
+                        # Honor their result — fall through to auto-complete logic with
+                        # the captured value. Note: a non-CancelledError exception falls
+                        # out to the outer `except Exception as exc:` block and runs the
+                        # existing retry_on / fail handling.
+                        result = user_task.result()
         except Exception as exc:
             # If the user already called complete/fail explicitly, leave
             # state alone — the user's terminal call is the source of truth.

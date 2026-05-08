@@ -130,3 +130,13 @@ __all__ = [
     "submit_job",
     "with_job_async",
 ]
+
+# Issue #882 Part A: optional re-export. Older `mcp-mesh-core` builds
+# may not export ``await_job_cancel`` — guarding the import keeps the
+# package importable so consumers can detect absence and use their
+# fallback path (see ``_mcp_mesh.engine.job_dispatch``).
+try:
+    from .mcp_mesh_core import await_job_cancel  # noqa: F401
+    __all__.append("await_job_cancel")
+except ImportError:
+    pass

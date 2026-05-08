@@ -244,11 +244,26 @@ async def runs_overlong(
     elapsed = 0.0
     step = 0.5
     total = max(float(seconds), step)
-    while elapsed < total:
-        await asyncio.sleep(step)
-        elapsed += step
-        if job is not None:
-            await job.update_progress(min(elapsed / total, 0.99), f"alive at {elapsed:.1f}s")
+    try:
+        while elapsed < total:
+            await asyncio.sleep(step)
+            elapsed += step
+            if job is not None:
+                await job.update_progress(min(elapsed / total, 0.99), f"alive at {elapsed:.1f}s")
+    except asyncio.CancelledError:
+        # Marker for issue #882 Part A — when the SDK's cancel-watcher
+        # races and cancels the user task on a registry-driven cancel,
+        # `await asyncio.sleep` raises CancelledError. Logging here
+        # gives integration tests a positive signal that the handler
+        # observed the cancel mid-flight (rather than just relying on
+        # the registry-side row state, which flips to cancelled even
+        # without Part A working).
+        print(
+            f"[runs_overlong] cancelled mid-flight at {elapsed:.1f}s "
+            f"user_id={user_id}",
+            flush=True,
+        )
+        raise
     payload = {"user_id": user_id, "elapsed": elapsed}
     if job is not None:
         await job.complete(payload)

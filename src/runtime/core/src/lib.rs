@@ -592,6 +592,7 @@ fn mcp_mesh_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(jobs_py::submit_job_py, m)?)?;
     m.add_function(wrap_pyfunction!(jobs_py::current_job_py, m)?)?;
     m.add_function(wrap_pyfunction!(jobs_py::cancel_active_job_py, m)?)?;
+    m.add_function(wrap_pyfunction!(jobs_py::await_job_cancel_py, m)?)?;
     m.add_function(wrap_pyfunction!(jobs_py::with_job_async_py, m)?)?;
 
     Ok(())
