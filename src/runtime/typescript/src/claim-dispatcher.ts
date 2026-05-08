@@ -70,6 +70,15 @@ export class ClaimDispatcher {
   readonly instanceId: string;
   readonly registryUrl: string;
   private readonly handler: ClaimHandler;
+  /**
+   * Issue #894: per-tool retryOn whitelist. When the handler raises an
+   * Error matching one of the constructor classes, the dispatch wrapper
+   * calls `controller.releaseLease(reason)` instead of `fail(reason)`
+   * so a peer replica can re-claim within ~5s. Threaded straight through
+   * to `runWithJobContext`. `undefined` / `[]` disables retry (existing
+   * fail-on-throw behaviour).
+   */
+  private readonly retryOn?: ReadonlyArray<new (...args: unknown[]) => Error>;
 
   private _stopped = false;
   private _loopPromise: Promise<void> | null = null;
@@ -115,11 +124,13 @@ export class ClaimDispatcher {
     instanceId: string,
     registryUrl: string,
     handler: ClaimHandler,
+    retryOn?: ReadonlyArray<new (...args: unknown[]) => Error>,
   ) {
     this.capability = capability;
     this.instanceId = instanceId;
     this.registryUrl = registryUrl;
     this.handler = handler;
+    this.retryOn = retryOn;
   }
 
   /** Spawn the polling loop. Idempotent. */
@@ -421,8 +432,12 @@ export class ClaimDispatcher {
 
     try {
       await runWithPropagatedHeaders(headers, () =>
-        runWithJobContext(jobId, deadlineSecs, controller, () =>
-          this.handler(payload, controller),
+        runWithJobContext(
+          jobId,
+          deadlineSecs,
+          controller,
+          () => this.handler(payload, controller),
+          this.retryOn,
         ),
       );
     } catch (err) {

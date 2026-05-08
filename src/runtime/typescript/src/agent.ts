@@ -181,8 +181,18 @@ export class MeshAgent {
    * the local handler without re-traversing the tools map. Populated
    * by addTool() at registration time; consumed by _autoStart() to
    * spawn one dispatcher per task tool.
+   *
+   * Issue #894: also carries the per-tool retryOn whitelist so the
+   * dispatcher can pass it into `runWithJobContext` for the
+   * release-lease-on-retry-eligible-throw path.
    */
-  private _taskHandlers: Map<string, ClaimHandler> = new Map();
+  private _taskHandlers: Map<
+    string,
+    {
+      handler: ClaimHandler;
+      retryOn?: ReadonlyArray<new (...args: unknown[]) => Error>;
+    }
+  > = new Map();
   /**
    * Active claim dispatchers (one per task=true capability). Started
    * during _autoStart(); stopped during shutdown(). Empty for agents
@@ -323,6 +333,53 @@ export class MeshAgent {
       }
     }
 
+    // Issue #894: validate retryOn at registration so misuse fails loud
+    // before the agent talks to the registry. Mirror Python's
+    // `mesh.decorators` validation in spirit:
+    //   - retryOn requires task: true (without the job dispatch wrapper
+    //     there's no controller to release a lease on, so the kwarg is
+    //     meaningless);
+    //   - entries must be Error constructor classes (typeof === "function").
+    // We don't filter control-flow exceptions like Python's
+    // KeyboardInterrupt / asyncio.CancelledError — JavaScript has no
+    // direct equivalent, and AbortError-style cancellation is a legitimate
+    // retry trigger for some users. They get to choose.
+    if (def.retryOn !== undefined) {
+      if (def.task !== true) {
+        throw new Error(
+          `addTool({ retryOn }) for tool '${toolName}': retryOn is only ` +
+            `valid with task: true; remove retryOn or set task: true.`,
+        );
+      }
+      if (!Array.isArray(def.retryOn)) {
+        throw new Error(
+          `addTool({ retryOn }) for tool '${toolName}': retryOn must be ` +
+            `an array of Error constructor classes (e.g., [TypeError, MyError]).`,
+        );
+      }
+      for (const entry of def.retryOn) {
+        // Must be a function that has a prototype (i.e. an actual class
+        // or a `function` declaration — not an arrow function), AND must
+        // either be Error itself or a subclass. Arrow functions have
+        // `prototype === undefined`, so `entry.prototype instanceof Error`
+        // is `false` for them — they're rejected by the second check.
+        // Without this, `err instanceof <arrow>` at dispatch time would
+        // throw `TypeError: Right-hand side of instanceof is not callable`.
+        if (typeof entry !== "function") {
+          throw new Error(
+            `addTool({ retryOn }) for tool '${toolName}': retryOn entries ` +
+              `must be Error constructor classes (functions); got: ${String(entry)}`,
+          );
+        }
+        if (entry !== Error && !(entry.prototype instanceof Error)) {
+          throw new Error(
+            `addTool({ retryOn }) for tool '${toolName}': retryOn entries ` +
+              `must extend Error (or be Error itself); got: ${String(entry)}`,
+          );
+        }
+      }
+    }
+
     // Worker mode: register the raw execute fn in the worker tool map and
     // skip FastMCP registration, dependency wiring, and metadata storage.
     // The worker entry will look up tools by name when handling dispatched
@@ -346,6 +403,11 @@ export class MeshAgent {
     const isTaskTool = def.task === true;
     const meshJobDepIndex = def.meshJobDepIndex;
     const meshJobParamIndex = def.meshJobParamIndex;
+    // Issue #894: per-tool retryOn whitelist threaded into both
+    // dispatch paths (inbound HTTP wrapper below + ClaimHandler
+    // registered in this.taskHandlers). Captured here so the closure
+    // sees a stable reference even if def is mutated post-registration.
+    const retryOn = def.retryOn;
 
     // Phase 1 MeshJob substrate: when a job-bound tool exists AND the
     // user explicitly opted into worker isolation via env, log a single
@@ -370,7 +432,15 @@ export class MeshAgent {
     }
 
     // Create wrapper that injects dependencies positionally and handles tracing
-    const wrappedExecute = async (args: z.infer<T>): Promise<string> => {
+    const wrappedExecute = async (
+      args: z.infer<T>,
+    ): Promise<
+      | string
+      | {
+          content: Array<{ type: "text"; text: string }>;
+          structuredContent?: unknown;
+        }
+    > => {
       // Build positional deps array using composite keys (toolName:dep_index)
       // Phase 1 MeshJob substrate (consumer-side): if meshJobDepIndex is
       // set, swap the McpMeshTool proxy at that slot for a
@@ -547,10 +617,15 @@ export class MeshAgent {
                   controller,
                   meshJobParamIndex,
                 );
-                return await runWithJobContext(jobId, deadlineSecs, controller, () =>
-                  Promise.resolve(
-                    (execute as (...a: unknown[]) => unknown)(...callArgs),
-                  ),
+                return await runWithJobContext(
+                  jobId,
+                  deadlineSecs,
+                  controller,
+                  () =>
+                    Promise.resolve(
+                      (execute as (...a: unknown[]) => unknown)(...callArgs),
+                    ),
+                  retryOn,
                 );
               }
               return await execute(cleanArgs, ...(depsArray as (McpMeshTool | null)[]));
@@ -566,7 +641,13 @@ export class MeshAgent {
         } else if (result === undefined || result === null) {
           return "";
         } else {
-          return JSON.stringify(result);
+          // Emit MCP envelope with both content[0].text (JSON string) and
+          // structuredContent (parsed object) for parity with Python FastMCP.
+          const text = JSON.stringify(result);
+          return {
+            content: [{ type: "text", text }],
+            structuredContent: result,
+          };
         }
       } catch (err) {
         success = false;
@@ -625,7 +706,7 @@ export class MeshAgent {
     // needed) and bypasses FastMCP's tool-call serialisation.
     if (isTaskTool) {
       const capability = def.capability ?? toolName;
-      this._taskHandlers.set(capability, async (payload, controller) => {
+      const handler: ClaimHandler = async (payload, controller) => {
         const liveDeps: (McpMeshTool | MeshJobSubmitter | null)[] = normalizedDeps.map(
           (dep, depIndex) => {
             if (depIndex === meshJobDepIndex) {
@@ -645,7 +726,8 @@ export class MeshAgent {
           meshJobParamIndex,
         );
         return await (execute as (...a: unknown[]) => unknown)(...callArgs);
-      });
+      };
+      this._taskHandlers.set(capability, { handler, retryOn });
     }
 
     // Store mesh metadata with JSON Schema for LLM tool resolution
@@ -948,12 +1030,13 @@ export class MeshAgent {
   private startClaimDispatchers(): void {
     if (!this.config.registryUrl) return;
     if (this._taskHandlers.size === 0) return;
-    for (const [capability, handler] of this._taskHandlers.entries()) {
+    for (const [capability, entry] of this._taskHandlers.entries()) {
       const dispatcher = new ClaimDispatcher(
         capability,
         this.agentId,
         this.config.registryUrl,
-        handler,
+        entry.handler,
+        entry.retryOn,
       );
       dispatcher.start();
       this._claimDispatchers.push(dispatcher);

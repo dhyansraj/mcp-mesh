@@ -120,12 +120,19 @@ function isJsonSafe(value: unknown): boolean {
  * @param invoke - Thunk that runs the user function and returns its
  *   result. The caller has already overlaid the controller into the
  *   user function's args at `meshJobParamIndex`.
+ * @param retryOn - Issue #894: per-tool retry-eligible exception
+ *   whitelist. When the user thunk raises an Error matching one of the
+ *   constructor classes, the wrapper calls `controller.releaseLease`
+ *   instead of `controller.fail` so a peer replica can re-claim within
+ *   ~5s. `undefined` / `[]` disables retry (existing fail-on-throw
+ *   behaviour). Match check is `err instanceof cls`.
  */
 export async function runWithJobContext<T>(
   jobId: string | null,
   deadlineSecs: number | null,
   controller: JobController | null,
   invoke: () => Promise<T>,
+  retryOn?: ReadonlyArray<new (...args: unknown[]) => Error>,
 ): Promise<T> {
   if (!jobId || !controller) {
     // Not a job — run directly.
@@ -152,20 +159,83 @@ export async function runWithJobContext<T>(
   // wraps non-safe values for `controller.complete(...)`.
   let captured: T;
   let didCapture = false;
+  // Issue #894: when retryOn matches we suppress the user's exception
+  // and the wrapper returns the default value of T (undefined). The
+  // claim-dispatch path is the primary consumer; it ignores the return
+  // value when re-claim happens. Inbound HTTP path is a no-op for
+  // retryOn since headers-driven invocations don't auto-retry on the
+  // producer side anyway.
+  let suppressed = false;
   const runAndAutoComplete = async (): Promise<null> => {
     try {
       captured = await invoke();
       didCapture = true;
     } catch (err) {
-      // Best-effort terminal report so the registry doesn't have to
-      // wait on the lease expiry to mark the row failed.
+      // Step 1: probe is_terminal — if user already called complete/fail,
+      // their terminal call is the source of truth; leave the row alone
+      // and propagate.
+      let alreadyTerminal = false;
       try {
-        const alreadyTerminal = await controller.isTerminal();
-        if (!alreadyTerminal) {
-          await controller.fail(
-            err instanceof Error ? err.message : String(err),
+        alreadyTerminal = await controller.isTerminal();
+      } catch {
+        // Probe failed; treat as not-terminal so we still attempt a
+        // best-effort terminal report below.
+      }
+      if (alreadyTerminal) throw err;
+
+      // Step 2 (issue #894): retryOn match → releaseLease so a peer
+      // replica can re-claim within ~5s. Suppress the exception on
+      // success — the job lifecycle becomes the registry's responsibility.
+      if (
+        retryOn &&
+        retryOn.length > 0 &&
+        err instanceof Error &&
+        retryOn.some((cls) => err instanceof cls)
+      ) {
+        const reason = `${err.constructor.name}: ${err.message}`;
+        try {
+          await controller.releaseLease(reason);
+          suppressed = true;
+          return null;
+        } catch (releaseErr) {
+          // releaseLease failed — fall back to fail() so the row
+          // doesn't sit in `working` until lease expiry. Best-effort;
+          // swallow any further failure (the registry's lease sweeper
+          // is the ultimate backstop). Log for parity with Python
+          // (`job_dispatch.py:365-383`) so operators can correlate
+          // unexpected fail-rows with the underlying release failure.
+          console.warn(
+            `[mesh-jobs] release_lease failed for job=${jobId} (${
+              releaseErr instanceof Error
+                ? releaseErr.message
+                : String(releaseErr)
+            }); falling back to fail()`,
           );
+          try {
+            await controller.fail(
+              `retry-eligible ${reason}; release_lease failed: ${
+                releaseErr instanceof Error
+                  ? releaseErr.message
+                  : String(releaseErr)
+              }`,
+            );
+          } catch (failErr) {
+            console.debug(
+              `[mesh-jobs] fallback fail() also failed for job=${jobId}:`,
+              failErr,
+            );
+          }
+          suppressed = true;
+          return null;
         }
+      }
+
+      // Step 3: non-retryable → existing behaviour (best-effort fail()
+      // then propagate).
+      try {
+        await controller.fail(
+          err instanceof Error ? err.message : String(err),
+        );
       } catch {
         // Swallow — the registry sweep is the ultimate backstop.
       }
@@ -205,6 +275,16 @@ export async function runWithJobContext<T>(
     const body = runAndAutoComplete();
     await withJobAsync(jobId, deadlineSecs, body);
     if (!didCapture) {
+      if (suppressed) {
+        // Issue #894: the user threw a retryOn-matched exception and the
+        // wrapper called releaseLease() (or its fail() fallback). The
+        // lifecycle is now the registry's concern — return undefined to
+        // unwind. wrappedExecute (agent.ts) maps undefined/null to the
+        // empty string "" before FastMCP serialises the response, which
+        // is benign here because the registry's row state (working/failed)
+        // is what consumers poll on, not the inbound HTTP body.
+        return undefined as unknown as T;
+      }
       // Defensive: the body resolved without setting `captured` —
       // should be unreachable since runAndAutoComplete only returns
       // after invoke() succeeds (which sets captured), but guard
