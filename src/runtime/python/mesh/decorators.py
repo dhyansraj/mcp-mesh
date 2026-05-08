@@ -774,6 +774,7 @@ def tool(
     description: str | None = None,
     output_schema_strict: bool = True,
     task: bool = False,
+    retry_on: tuple[type[BaseException], ...] | None = None,
     **kwargs: Any,
 ) -> Callable[[T], T]:
     """
@@ -823,6 +824,31 @@ def tool(
             need an event loop to drive ``MeshJob.update_progress()``,
             cancellation, and outbound polling. See ``MESHJOB_DESIGN.org``
             "Producer-side flow".
+        retry_on: Optional tuple of exception classes that mark a handler
+            raise as transient/retry-eligible (issue #879). When the handler
+            raises ``e`` and ``isinstance(e, retry_on)`` matches, the SDK
+            calls ``controller.release_lease(reason)`` instead of
+            ``controller.fail(...)`` — the registry resets
+            ``owner_instance_id`` (release does NOT increment
+            ``attempt_count``; the claim that picked the row up already
+            counted this attempt) and a peer replica re-claims the row
+            within ~5s via the HEAD-heartbeat path. If the row's existing
+            ``attempt_count`` is already past ``max_retries``, the registry
+            marks the row terminal=failed with
+            ``error="exhausted (release): <reason>"``. Default
+            (``None``/``()``) preserves the previous behaviour: every
+            handler raise maps to ``job.fail()`` and burns no retry
+            budget. Only meaningful for ``task=True`` tools — ignored
+            otherwise.
+
+            Note: while ``retry_on`` accepts any ``BaseException`` subclass,
+            do NOT include ``asyncio.CancelledError``, ``KeyboardInterrupt``,
+            or ``SystemExit``. Retrying on these defeats cooperative
+            cancellation/shutdown — a CancelledError propagated from an
+            outer scope (deadline, peer cancel) would silently re-claim the
+            row instead of honouring the cancel. Stick to ``Exception``
+            subclasses representing transient I/O / availability faults
+            (``OSError``, ``ConnectionError``, custom transient types).
         **kwargs: Additional metadata
 
     Returns:
@@ -850,6 +876,42 @@ def tool(
                 f"@mesh.tool(task=True) requires an async def function; "
                 f"'{getattr(target, '__name__', '?')}' is sync. "
                 "Mark the function async or remove task=True."
+            )
+
+        # Validate retry_on (issue #879): must be a tuple of exception
+        # classes. We deliberately reject lists so the dispatch wrapper
+        # can pass it straight to ``isinstance`` without a runtime cast.
+        # Empty tuple is allowed and equivalent to None (no retry-eligible
+        # exceptions).
+        validated_retry_on: tuple[type[BaseException], ...] = ()
+        if retry_on is not None:
+            if not isinstance(retry_on, tuple):
+                raise ValueError(
+                    "retry_on must be a tuple of exception classes "
+                    "(e.g., (OSError, ConnectionError))"
+                )
+            for exc_cls in retry_on:
+                if not (isinstance(exc_cls, type) and issubclass(exc_cls, BaseException)):
+                    raise ValueError(
+                        f"retry_on entries must be exception classes; "
+                        f"got {exc_cls!r}"
+                    )
+                if issubclass(exc_cls, (KeyboardInterrupt, SystemExit)) or issubclass(exc_cls, asyncio.CancelledError):
+                    raise ValueError(
+                        f"retry_on must not include control-flow exceptions "
+                        f"(KeyboardInterrupt, SystemExit, asyncio.CancelledError); "
+                        f"got {exc_cls!r}"
+                    )
+            validated_retry_on = retry_on
+
+        # retry_on is only meaningful for task=True tools — without the job
+        # dispatch wrapper, raised exceptions propagate normally and there is
+        # nothing to retry. Fail loud at decoration time rather than silently
+        # ignore the kwarg.
+        if retry_on is not None and not task:
+            raise ValueError(
+                "retry_on is only valid with task=True; remove retry_on or "
+                "set task=True"
             )
 
         # Validate optional parameters
@@ -983,6 +1045,14 @@ def tool(
             # wrapper (next dispatch) reads this flag to decide whether
             # to bind a JobController via run_as_job before invocation.
             "task": task,
+            # Issue #879: per-tool exception whitelist for the fast retry
+            # path. The job_dispatch / claim_dispatcher wrappers compare
+            # raised exceptions against this tuple via ``isinstance`` and
+            # call ``controller.release_lease(reason)`` instead of
+            # ``controller.fail(...)`` for matches — the registry then
+            # resets owner_instance_id and a peer replica re-claims within
+            # ~5s. Empty tuple = previous behaviour (every raise → fail).
+            "retry_on": validated_retry_on,
             **kwargs,
         }
 

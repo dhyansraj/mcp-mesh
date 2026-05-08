@@ -340,7 +340,7 @@ mod tests {
     use crate::jobs::new_coalescing_queue;
     use crate::task_backend::{
         BackendError, CancelJobResponse, CreateJobRequest, CreateJobResponse, Job,
-        JobBatchResponse, JobDelta, JobStatus,
+        JobBatchResponse, JobDelta, JobStatus, ReleaseJobResponse,
     };
 
     // ---- mock backend (claim-focused) ---------------------------------------
@@ -406,6 +406,17 @@ mod tests {
             Ok(CancelJobResponse {
                 status: JobStatus::Cancelled,
                 forwarded_to_instance_id: None,
+            })
+        }
+        async fn release_lease(
+            &self,
+            _job_id: &str,
+            _instance_id: &str,
+            _reason: Option<String>,
+        ) -> Result<ReleaseJobResponse, BackendError> {
+            Ok(ReleaseJobResponse {
+                status: JobStatus::Working,
+                attempt_count: 1,
             })
         }
     }

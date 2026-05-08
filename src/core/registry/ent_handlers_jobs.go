@@ -284,6 +284,91 @@ func (h *EntBusinessLogicHandlers) ClaimJobs(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// ReleaseJob implements POST /jobs/{job_id}/release.
+//
+// Producer-side voluntary lease release. Called by the SDK when a tool
+// handler raises an exception that matches the tool's `retry_on` whitelist —
+// instead of marking the job failed (which burns the retry budget on a
+// transient error), the SDK calls release so a peer replica can re-claim
+// the job within ~5s (the HEAD-heartbeat cadence).
+//
+// Validates:
+//   - 404 when the job_id is unknown
+//   - 403 when caller's instance_id != current owner_instance_id
+//     (release is owner-only — only the holding replica may relinquish)
+//   - 409 when the job is already terminal (cannot release a finished job)
+//
+// On success the response carries the post-update status and attempt_count.
+// Status stays `working` when there's retry budget left (claim already
+// incremented attempt_count when picking the row up; release does NOT
+// increment). Transitions to `failed` (terminal, with
+// `error="exhausted (release): <reason>"`) when the row's existing
+// attempt_count is already past max_retries — i.e. the handler raised on
+// the row's final allowed attempt.
+func (h *EntBusinessLogicHandlers) ReleaseJob(c *gin.Context, jobId string) {
+	if jobId == "" {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     "job_id is required",
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	var req generated.ReleaseJobRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+	if strings.TrimSpace(req.InstanceId) == "" {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     "instance_id is required",
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+	instanceID := strings.TrimSpace(req.InstanceId)
+	reason := ""
+	if req.Reason != nil {
+		reason = *req.Reason
+	}
+
+	updated, err := h.entService.ReleaseJob(c.Request.Context(), jobId, instanceID, reason)
+	if err != nil {
+		switch {
+		case ent.IsNotFound(err):
+			c.JSON(http.StatusNotFound, generated.ErrorResponse{
+				Error:     fmt.Sprintf("job not found: %s", jobId),
+				Timestamp: time.Now().UTC(),
+			})
+		case errors.Is(err, ErrJobNotOwner):
+			c.JSON(http.StatusForbidden, generated.ErrorResponse{
+				Error:     "caller is not the current owner of this job",
+				Timestamp: time.Now().UTC(),
+			})
+		case errors.Is(err, ErrJobAlreadyTerminal):
+			c.JSON(http.StatusConflict, generated.ErrorResponse{
+				Error:     "job is already in a terminal state",
+				Timestamp: time.Now().UTC(),
+			})
+		default:
+			c.JSON(http.StatusServiceUnavailable, generated.ErrorResponse{
+				Error:     fmt.Sprintf("Failed to release job: %v", err),
+				Timestamp: time.Now().UTC(),
+			})
+		}
+		return
+	}
+
+	resp := generated.ReleaseJobResponse{
+		Status:       generated.JobStatus(string(updated.Status)),
+		AttemptCount: updated.AttemptCount,
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 // CancelJob implements POST /jobs/{job_id}/cancel.
 //
 // Three scenarios per the design:

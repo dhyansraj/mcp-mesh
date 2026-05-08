@@ -363,6 +363,101 @@ func (s *EntService) CancelJob(ctx context.Context, jobID string, reason string)
 // already reached a terminal state. The handler maps this to HTTP 409.
 var ErrJobAlreadyTerminal = fmt.Errorf("job is already in a terminal state")
 
+// ErrJobNotOwner is returned by ReleaseJob when the caller's instance_id
+// does not match the current owner_instance_id. The handler maps this to
+// HTTP 403 — release is owner-only.
+var ErrJobNotOwner = fmt.Errorf("caller is not the current owner of this job")
+
+// ReleaseJob voluntarily releases the lease on a `working` job so a peer
+// replica can re-claim and retry. Used by the Python/TS/Java SDKs when a
+// handler raised a `retry_on`-matched exception — instead of marking the
+// job failed (which would terminate it), the SDK releases the lease and
+// the registry's HEAD-heartbeat path drives a fast (<5s) re-claim by a
+// peer replica.
+//
+// Atomic update:
+//   - clears `owner_instance_id` and `lease_expires_at`
+//   - leaves `attempt_count` UNCHANGED — the claim that produced the
+//     current owner already incremented it; release is the OFF-side of
+//     that same attempt and must not double-count
+//   - if `attempt_count > max_retries` (the claim already pushed the row
+//     past its budget AND the handler raised on that final allowed
+//     attempt), transitions status to `failed` with
+//     `error="exhausted (release): <reason>"` (terminal — mirrors the
+//     orphan-sweep budget-exhaustion path)
+//   - otherwise leaves status=`working`, ready for the next claim
+//
+// Returns:
+//   - `ent.NotFoundError` when the job_id is unknown (handler: 404)
+//   - `ErrJobNotOwner` when `instanceID` is not the current owner (403)
+//   - `ErrJobAlreadyTerminal` when the job is already terminal (409)
+func (s *EntService) ReleaseJob(ctx context.Context, jobID, instanceID, reason string) (*ent.Job, error) {
+	if jobID == "" {
+		return nil, fmt.Errorf("ReleaseJob: job_id is required")
+	}
+	if instanceID == "" {
+		return nil, fmt.Errorf("ReleaseJob: instance_id is required")
+	}
+
+	var updated *ent.Job
+	err := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
+		current, err := tx.Job.Query().Where(job.IDEQ(jobID)).Only(ctx)
+		if err != nil {
+			return err // includes ent.NotFoundError
+		}
+		if isTerminalStatus(current.Status) {
+			return ErrJobAlreadyTerminal
+		}
+		// Owner must match. We allow a missing owner only by failing the
+		// 403 path — release is meaningful only when there IS an owner to
+		// release, so a NULL owner with mismatched instance_id is the same
+		// "not yours" error.
+		if current.OwnerInstanceID == nil || *current.OwnerInstanceID != instanceID {
+			return ErrJobNotOwner
+		}
+
+		now := time.Now().UTC()
+
+		upd := tx.Job.UpdateOneID(jobID).
+			ClearOwnerInstanceID().
+			ClearLeaseExpiresAt().
+			SetLastHeartbeatAt(now)
+
+		// Budget check uses the existing attempt_count (NOT +1). The claim
+		// path increments at claim time, so by the time we get here the
+		// current value already reflects "this attempt". If the handler
+		// raised on the row's final allowed attempt (i.e. claim already
+		// pushed attempt_count past max_retries), no more retries are
+		// possible — tip the row into terminal=failed.
+		//
+		// We mirror the orphan-sweep path's reason wording so operators
+		// can grep both paths the same way; the "(release)" qualifier
+		// disambiguates voluntary release from orphan reroute.
+		if current.AttemptCount > current.MaxRetries {
+			errMsg := "exhausted (release): max retries exceeded"
+			if r := strings.TrimSpace(reason); r != "" {
+				errMsg = fmt.Sprintf("exhausted (release): %s", r)
+			}
+			upd = upd.SetStatus(job.StatusFailed).SetError(errMsg)
+		}
+		// Otherwise: status stays `working`, owner cleared, attempt_count
+		// untouched — row is ready for the next claim round-trip, which
+		// will increment attempt_count itself.
+
+		u, err := upd.Save(ctx)
+		if err != nil {
+			return fmt.Errorf("update job: %w", err)
+		}
+		updated = u
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
 // isTerminalStatus reports whether a job.Status is one of the terminal
 // values (no further transitions allowed). Mirrors the design doc's state
 // machine.

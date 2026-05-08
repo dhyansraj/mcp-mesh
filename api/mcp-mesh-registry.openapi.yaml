@@ -349,6 +349,101 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /jobs/{job_id}/release:
+    post:
+      tags: [jobs]
+      summary: Producer voluntarily releases lease (for transient-error retry)
+      description: |
+        Owner replica voluntarily releases its lease on a `working` job so a
+        peer replica can re-claim and retry. Used when the handler raised a
+        retry-eligible exception (matched by `@mesh.tool(retry_on=...)`) —
+        instead of marking the job `failed` and burning the retry budget on
+        an unrelated transient failure, the SDK calls release so another
+        attempt can run within ~5s (HEAD heartbeat cadence) rather than the
+        ~lease_ttl seconds it would take the orphan-sweep path to reroute.
+
+        Atomic update: clears `owner_instance_id` and `lease_expires_at`,
+        leaves `attempt_count` UNCHANGED (the claim that produced the
+        current owner already incremented it — release is the OFF-side of
+        that same attempt and must not double-count), and recomputes
+        status:
+
+          - typical case → status stays `working`, owner cleared, row is
+            ready for the next claim round-trip (which is the next claim's
+            job to bump `attempt_count`)
+          - boundary case: if the row's existing `attempt_count` is already
+            `> max_retries` (the final allowed claim pushed it there AND
+            the handler raised on that attempt), status transitions to
+            `failed` with `error="exhausted (release): <reason>"` —
+            terminal, mirrors the orphan-sweep budget-exhaustion path
+
+        🤖 AI CRITICAL CONTRACT:
+        - Caller's `instance_id` MUST match the current `owner_instance_id`
+          (403 otherwise — release is owner-only)
+        - 409 if the job is already terminal (cannot release a finished job)
+        - Release does NOT increment `attempt_count`; only the claim path
+          does. A single attempt = one claim (+1) + one release (no-op),
+          not two budget hits.
+        - The `reason` string is recorded only when the release tips the row
+          into the exhausted/failed state; for a normal release the
+          attempt_count alone tells the story
+      operationId: releaseJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Server-assigned job identifier (UUID)
+      requestBody:
+        required: true
+        description: Caller identity + optional reason
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReleaseJobRequest"
+      responses:
+        "200":
+          description: |
+            Released for retry (typical: status=working, owner cleared,
+            attempt_count unchanged) — or, in the boundary case where the
+            row's attempt_count already exceeded max_retries before the
+            release call, marked exhausted (status=failed, terminal).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReleaseJobResponse"
+        "400":
+          description: Invalid request payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller is not the current owner of this job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Job already in a terminal state — cannot release
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /jobs/{job_id}/cancel:
     post:
       tags: [jobs]
@@ -2599,6 +2694,50 @@ components:
           type: string
           example: "user_requested"
           description: Free-form reason persisted alongside the cancellation.
+
+    ReleaseJobRequest:
+      type: object
+      required: [instance_id]
+      description: |
+        Producer-side voluntary lease release. Caller's `instance_id` must
+        match the current `owner_instance_id` of the job — release is
+        owner-only (403 otherwise).
+      properties:
+        instance_id:
+          type: string
+          example: "claude-provider-replica-2"
+          description: Caller's instance ID; must match current owner_instance_id.
+        reason:
+          type: string
+          example: "OSError: connection refused"
+          description: |
+            Human-readable reason (e.g., the exception type + message that
+            triggered the release). Recorded in the `error` field only if
+            the release tips the row over `max_retries` and marks it failed.
+
+    ReleaseJobResponse:
+      type: object
+      required: [status, attempt_count]
+      description: |
+        Result of a voluntary release. `status=working` is the typical
+        outcome — the job was released and is ready to be re-claimed by a
+        peer replica. `status=failed` only fires in the boundary case
+        where the row's `attempt_count` was already greater than
+        `max_retries` when release was called (i.e. the final allowed
+        claim's handler raised), so no further retries are possible and
+        the registry marks the job exhausted.
+      properties:
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        attempt_count:
+          type: integer
+          minimum: 0
+          example: 2
+          description: |
+            Current attempt count. Note: release does NOT increment this
+            field — only the claim path does. The value returned here is
+            the same value that was set by the claim that produced the
+            now-released owner.
 
     CancelJobResponse:
       type: object

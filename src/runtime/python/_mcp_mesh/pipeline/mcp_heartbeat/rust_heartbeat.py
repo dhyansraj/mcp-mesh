@@ -391,11 +391,31 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
             "input_schema",
             # Issue #547 Phase 4: SDK-internal verdict policy flag — don't ship.
             "output_schema_strict",
+            # Issue #879: per-tool retry whitelist is a tuple of exception
+            # *classes* (Type[BaseException]). It's consumed SDK-locally by
+            # the job_dispatch wrapper via DecoratorRegistry; the registry
+            # has no use for it and json.dumps() would TypeError on the
+            # class objects, killing the heartbeat loop. Strip it here.
+            "retry_on",
         }
         kwargs_data = {
             k: v for k, v in tool_metadata.items() if k not in standard_fields
         }
-        kwargs_json = json.dumps(kwargs_data) if kwargs_data else None
+        # Defensive: if a future SDK-local field with non-JSON-safe values
+        # slips past the whitelist, coerce via str() rather than crashing the
+        # heartbeat loop. Logged at DEBUG so the stowaway is discoverable.
+        if kwargs_data:
+            try:
+                kwargs_json = json.dumps(kwargs_data)
+            except (TypeError, ValueError) as e:
+                logger.debug(
+                    f"kwargs_data for tool '{tool_name}' contains non-JSON-"
+                    f"serializable values; coercing via str(): {e}. "
+                    f"Keys: {list(kwargs_data.keys())}"
+                )
+                kwargs_json = json.dumps(kwargs_data, default=str)
+        else:
+            kwargs_json = None
 
         tool_spec = core.ToolSpec(
             function_name=tool_name,

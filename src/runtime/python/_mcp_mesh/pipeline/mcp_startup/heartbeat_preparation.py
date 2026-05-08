@@ -194,6 +194,11 @@ class HeartbeatPreparationStep(PipelineStep):
                 "version",
                 "description",
                 "dependencies",
+                # Issue #879: SDK-local exception-class tuple; not JSON-safe
+                # and not consumed by the registry. Mirror the strip in
+                # rust_heartbeat.py so the legacy Python heartbeat path can't
+                # brick on it either.
+                "retry_on",
             }
             kwargs_data = {
                 k: v for k, v in metadata.items() if k not in standard_fields

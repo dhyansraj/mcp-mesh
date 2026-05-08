@@ -328,6 +328,10 @@ func (h *TestHandlers) CancelJob(c *gin.Context, jobId string) {
 	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
 }
 
+func (h *TestHandlers) ReleaseJob(c *gin.Context, jobId string) {
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
+}
+
 // TestHealthMonitor tests the background health monitoring functionality
 func TestHealthMonitor(t *testing.T) {
 	tests := []struct {

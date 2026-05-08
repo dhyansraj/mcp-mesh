@@ -145,15 +145,45 @@ def is_task_tool(func: Any) -> bool:
     ``mesh/decorators.py::tool``). Returns ``False`` defensively if the
     metadata is missing — non-task tools must NOT pay the dispatch cost.
     """
+    meta = _read_tool_metadata(func)
+    if meta is None:
+        return False
+    return bool(meta.get("task"))
+
+
+def _read_tool_metadata(func: Any) -> Optional[dict]:
+    """Resolve the @mesh.tool metadata dict from ``func``, following the
+    wrapper chain (``_mesh_original_func``) so wrapped DI/isolation
+    layers don't hide the decorator's intent.
+
+    Returns ``None`` when no metadata is stamped on either the function
+    or its underlying original.
+    """
     meta = getattr(func, "_mesh_tool_metadata", None)
     if not isinstance(meta, dict):
-        # Some wrappers stash metadata on the original function instead.
         original = getattr(func, "_mesh_original_func", None)
         if original is not None:
             meta = getattr(original, "_mesh_tool_metadata", None)
     if not isinstance(meta, dict):
-        return False
-    return bool(meta.get("task"))
+        return None
+    return meta
+
+
+def get_retry_on(func: Any) -> tuple:
+    """Return the ``retry_on`` exception-class tuple stamped by
+    ``@mesh.tool(retry_on=(...))`` (issue #879).
+
+    Defaults to an empty tuple when the metadata is missing or the kwarg
+    was not set — preserving the existing "every raise → fail" behaviour
+    for tools that don't opt in.
+    """
+    meta = _read_tool_metadata(func)
+    if meta is None:
+        return ()
+    raw = meta.get("retry_on")
+    if isinstance(raw, tuple):
+        return raw
+    return ()
 
 
 def get_mesh_job_param_name(func: Any) -> Optional[str]:
@@ -269,6 +299,8 @@ async def maybe_dispatch_as_job(
     if mesh_job_param:
         final_kwargs[mesh_job_param] = controller
 
+    retry_on = get_retry_on(func)
+
     async def _run_and_autocomplete() -> Any:
         """Invoke the user function and, if it returned without calling
         ``job.complete(...)`` / ``job.fail(...)`` itself, auto-complete
@@ -287,12 +319,72 @@ async def maybe_dispatch_as_job(
         the queue terminal, and we MUST NOT double-flush (the second
         complete would race with a possibly-arrived progress update on
         another replica and confuse the registry's `not_owner` checks).
-        On any handler exception we don't auto-fail here — the
-        exception propagation up the wrapper chain handles it (and the
-        registry sweep is the ultimate backstop for a totally crashed
-        replica).
+
+        Handler exception handling (issue #879):
+          - If ``retry_on`` is set on the @mesh.tool decorator and the
+            raised exception matches via ``isinstance``, we call
+            ``controller.release_lease(reason)`` so a peer replica can
+            re-claim within ~5s. The exception is then SUPPRESSED — the
+            dispatch task ends cleanly because the job lifecycle is
+            now the registry's concern.
+          - If release_lease itself fails (network blip etc.), we fall
+            back to ``controller.fail(...)`` so the row doesn't sit in
+            ``working`` until the lease expires.
+          - If the exception doesn't match retry_on, we propagate up
+            through the wrapper chain (existing behaviour). The
+            inbound HTTP path or registry sweep is the backstop.
         """
-        result = await invoke(final_kwargs)
+        try:
+            result = await invoke(final_kwargs)
+        except Exception as exc:
+            # If the user already called complete/fail explicitly, leave
+            # state alone — the user's terminal call is the source of truth.
+            try:
+                already_terminal = await controller.is_terminal()
+            except Exception:
+                already_terminal = False
+            if already_terminal:
+                raise
+
+            if retry_on and isinstance(exc, retry_on):
+                reason = f"{type(exc).__name__}: {exc}"
+                try:
+                    await controller.release_lease(reason=reason)
+                    logger.info(
+                        "job_dispatch: retry_on match for job=%s (%s); "
+                        "released lease for fast retry",
+                        job_id,
+                        reason,
+                    )
+                    # Suppress the exception: the job lifecycle is now
+                    # the registry's responsibility (re-claim within
+                    # ~5s, or mark exhausted/failed if the increment
+                    # tipped attempt_count past max_retries).
+                    return None
+                except Exception as release_err:
+                    logger.warning(
+                        "job_dispatch: release_lease failed for job=%s "
+                        "(%s); falling back to fail() so the row doesn't "
+                        "sit in working until lease expiry",
+                        job_id,
+                        release_err,
+                    )
+                    try:
+                        await controller.fail(
+                            f"retry-eligible {reason}; "
+                            f"release_lease failed: {release_err}"
+                        )
+                    except Exception as fail_err:
+                        logger.debug(
+                            "job_dispatch: fallback fail() also failed for "
+                            "job=%s: %s",
+                            job_id,
+                            fail_err,
+                        )
+                    return None
+            # Non-retryable exception: existing behaviour — propagate up.
+            raise
+
         try:
             already_terminal = await controller.is_terminal()
         except Exception as e:
