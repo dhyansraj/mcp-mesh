@@ -1,0 +1,173 @@
+# tc23_retry_on_raise_java — Java port of uc21/tc23.
+#
+# Fast-retry path via @MeshTool(retryOn={IOException.class}) (#895).
+#
+# Producer fixture report_with_transient_failures throws IOException on
+# the first 2 attempts and succeeds on the 3rd. The tool is annotated
+# with retryOn={IOException.class} so the Java dispatch wrapper calls
+# JobController.releaseLease(reason) instead of fail() — the registry
+# resets owner_instance_id (claim already counted this attempt; release
+# does NOT increment), and the next claim cycle (~5s) re-runs the
+# handler and bumps attempt_count for that attempt.
+#
+# Asserts:
+#   - status=completed
+#   - attempt_count=3 (initial + 2 retries via release-lease path)
+#   - total wall time < 30s — proves the fast retry path engaged.
+#     Lease-expiry recovery (slow path) would take ~max_duration seconds
+#     per attempt (here 30s), so 3 attempts would push past 60s.
+#
+# Tags: retry, issue-879, issue-895
+
+name: "MeshJob Java: retryOn per-tool exception whitelist drives fast retry"
+description: "Java handler raises IOException on attempts 1+2, succeeds on 3; retryOn={IOException.class} → releaseLease path completes within ~15s"
+tags:
+  - meshjob
+  - java
+  - issue-879
+  - issue-895
+  - retry
+timeout: 360
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Reset retry counter from any prior run"
+    handler: shell
+    workdir: /workspace
+    command: |
+      rm -f /tmp/mesh-retry-on-counter || true
+      echo "counter cleared"
+
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (port 9120)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for Java provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done
+      echo "ERROR: provider not healthy"
+      meshctl logs long-task-provider-java 2>&1 | tail -50 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start consumer (port 9121)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Wait for consumer + DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
+        S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && [ "$T" != "null" ] && exit 0; sleep 2
+      done
+      echo "ERROR: consumer not ready"
+      meshctl logs long-task-consumer-java 2>&1 | tail -50 || true
+      exit 1
+    timeout: 150
+
+  - name: "Capture wall-clock start"
+    handler: shell
+    workdir: /workspace
+    command: date +%s
+    capture: ts_start
+
+  - name: "Submit transient-failures job: max_retries=3, transient_failures=2"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_transient_failures \
+        '{"user_id":"alice","max_retries":3,"transient_failures":2,"wait_timeout_secs":40}' --raw
+    capture: commission_response
+    timeout: 60
+
+  - name: "Capture wall-clock end"
+    handler: shell
+    workdir: /workspace
+    command: date +%s
+    capture: ts_end
+
+  - name: "Compute elapsed wall-clock seconds"
+    handler: shell
+    workdir: /workspace
+    command: |
+      START='${captured.ts_start}'
+      END='${captured.ts_end}'
+      START_NUM=$(echo "$START" | tr -d -c '0-9')
+      END_NUM=$(echo "$END" | tr -d -c '0-9')
+      echo "elapsed=$((END_NUM - START_NUM))"
+    capture: elapsed
+
+  - name: "Read final job status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.commission_response}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      echo "JOB_ID=${JOB_ID}"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,attempt_count,error}'
+    capture: final_status
+
+  # Fast retry: 3 attempts via releaseLease should land in <30s. Lease-
+  # expiry recovery (the slow path) would require waiting for the lease
+  # to time out per attempt, pushing total well past 60s. Numeric guard
+  # avoids the false-positive/false-negative pitfalls of substring checks.
+  - name: "Assert elapsed wall-clock < 30s (fast retry, not lease-expiry)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      ELAPSED=$(echo '${captured.elapsed}' | grep -oE 'elapsed=[0-9]+' | sed 's/elapsed=//')
+      if [ -z "$ELAPSED" ]; then
+        echo "ERROR: could not extract elapsed from: ${captured.elapsed}"
+        exit 1
+      fi
+      if [ "$ELAPSED" -ge 30 ]; then
+        echo "ERROR: elapsed=$ELAPSED >= 30s — likely hit lease-expiry slow path"
+        exit 1
+      fi
+      echo "OK: elapsed=$ELAPSED < 30s (fast retry path)"
+
+assertions:
+  - expr: "${captured.final_status} contains '\"status\": \"completed\"'"
+    message: "job must complete successfully on the 3rd attempt"
+  - expr: "${captured.final_status} contains '\"attempt_count\": 3'"
+    message: "attempt_count must be 3 — initial + 2 retries via releaseLease path"
+  - expr: "${captured.commission_response} contains 'succeeded_on_attempt'"
+    message: "consumer should see the success-marker payload"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
+  - name: "Clean up retry counter file"
+    handler: shell
+    workdir: /workspace
+    command: rm -f /tmp/mesh-retry-on-counter || true

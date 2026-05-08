@@ -2,6 +2,7 @@ package io.mcpmesh.spring;
 
 import io.mcpmesh.JobContext;
 import io.mcpmesh.JobController;
+import io.mcpmesh.core.MeshCore;
 import io.mcpmesh.core.MeshObjectMappers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -446,16 +447,20 @@ public final class ClaimDispatcher implements AutoCloseable {
         }
 
         try {
-            // Bind the Java-side ThreadLocal job context for the user
-            // method's duration. We intentionally do NOT call
-            // mesh_run_as_job here for the same reason as the inbound
-            // wrapper — see MeshToolWrapper.dispatchAsJob class javadoc.
-            // (Rust task-local + cancel-registry binding is Phase B-
-            // deferred; the registry sweep is the backstop on cancel.)
+            // Bind both the Rust-side cancel registry (via mesh_run_as_job)
+            // and the Java-side ThreadLocal job context (via
+            // JobContext.withJob) for the user method's duration. The
+            // Rust callback wrapper applies tokio::task::block_in_place
+            // so nested mesh_job_controller_* block_on calls are legal.
+            // See MeshToolWrapper.dispatchAsJob class javadoc for the
+            // full rationale (resolved via #889).
             JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs);
             try {
-                JobContext.withJob(snap, () -> {
-                    runHandler(payload, controller);
+                runAsJobWithRegistryBinding(jobId, deadlineSecs, () -> {
+                    JobContext.withJob(snap, () -> {
+                        runHandler(payload, controller);
+                        return null;
+                    });
                     return null;
                 });
             } catch (Throwable t) {
@@ -620,6 +625,75 @@ public final class ClaimDispatcher implements AutoCloseable {
             }
         } catch (Exception e) {
             log.warn("[mesh-claim] /jobs/batch fail-fast for job={} raised: {}", jobId, e.getMessage());
+        }
+    }
+
+    /**
+     * Wrap a Java {@link java.util.concurrent.Callable} in
+     * {@link MeshCore#mesh_run_as_job} so the Rust cancel-registry entry
+     * for {@code jobId} is bound while the callable runs. Mirrors the
+     * inbound wrapper's helper (see
+     * {@link MeshToolWrapper#dispatchAsJob} class javadoc; resolved via
+     * #889). Throwables raised by the body callable are captured in a
+     * closure-captured holder and rethrown after {@code mesh_run_as_job}
+     * returns, preserving the original exception type — the C ABI's
+     * {@code int} return is too coarse to carry exception identity.
+     *
+     * <p>Snapshot serialization is a precondition, NOT part of the body:
+     * a Jackson failure inside {@link #buildRunAsJobSnapshot} (extremely
+     * unlikely given the trivial two-scalar map shape) propagates as
+     * {@link IllegalStateException} to the caller and never reaches the
+     * native FFI. The unified rethrow logic only covers exceptions raised
+     * inside the user-supplied callable.
+     */
+    private Object runAsJobWithRegistryBinding(
+            String jobId, Long deadlineSecs, java.util.concurrent.Callable<Object> body)
+            throws Exception {
+        String snapshotJson = buildRunAsJobSnapshot(jobId, deadlineSecs);
+        Object[] resultBox = new Object[1];
+        Throwable[] thrownBox = new Throwable[1];
+        MeshCore core = MeshCore.load();
+        int rc = core.mesh_run_as_job(snapshotJson, userData -> {
+            try {
+                resultBox[0] = body.call();
+                return 0;
+            } catch (Throwable t) {
+                thrownBox[0] = t;
+                return -1;
+            }
+        }, null);
+        if (thrownBox[0] != null) {
+            if (thrownBox[0] instanceof Exception ex) throw ex;
+            if (thrownBox[0] instanceof Error err) throw err;
+            throw new RuntimeException(thrownBox[0]);
+        }
+        if (rc != 0) {
+            throw new RuntimeException(
+                "mesh_run_as_job failed (rc=" + rc + ") for job=" + jobId
+                + ": " + readLastError(core));
+        }
+        return resultBox[0];
+    }
+
+    private static String buildRunAsJobSnapshot(String jobId, Long deadlineSecs) {
+        try {
+            java.util.Map<String, Object> snap = new java.util.LinkedHashMap<>();
+            snap.put("job_id", jobId);
+            snap.put("deadline_secs", deadlineSecs);
+            return MAPPER.writeValueAsString(snap);
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                "failed to serialize mesh_run_as_job snapshot for job=" + jobId, e);
+        }
+    }
+
+    private static String readLastError(MeshCore core) {
+        jnr.ffi.Pointer err = core.mesh_last_error();
+        if (err == null) return "<no error>";
+        try {
+            return err.getString(0);
+        } finally {
+            core.mesh_free_string(err);
         }
     }
 

@@ -12,10 +12,17 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -208,6 +215,95 @@ public class LongTaskProviderApplication {
     }
 
     // -------------------------------------------------------------------
+    // Transient-failure path — exercises @MeshTool(retryOn=...) (#895) (tc23)
+    // -------------------------------------------------------------------
+    //
+    // Mirrors Python's report_with_transient_failures
+    // (uc21_meshjob/fixtures/long-task-provider/main.py). The handler is
+    // annotated with retryOn={IOException.class}: when the body throws
+    // IOException the dispatch wrapper calls JobController.releaseLease
+    // (NOT fail), so the registry resets owner_instance_id and the next
+    // claim cycle re-runs the handler — proving the fast-retry path
+    // engaged rather than waiting for lease expiry.
+    //
+    // The attempt counter lives at /tmp/mesh-retry-on-counter so it
+    // survives across attempts even if the runtime ever hands the next
+    // claim to a peer replica. Single-process here; the file pattern
+    // matches Python so the assertions (attempt_count=3) remain
+    // language-agnostic.
+    // -------------------------------------------------------------------
+    private static final Path RETRY_COUNTER_PATH = Paths.get("/tmp/mesh-retry-on-counter");
+
+    /**
+     * Atomic-ish file-based counter shared across attempts. Returns the
+     * NEW (post-increment) value so the handler can decide whether this
+     * attempt is in the transient-failure window or the success window.
+     *
+     * <p>Uses {@link FileLock} so concurrent claims (would-be peers in a
+     * future scaled scenario) don't lose updates. Mirrors Python's
+     * {@code _bump_retry_counter} which uses a plain read-modify-write.
+     */
+    private static int bumpRetryCounter() throws IOException {
+        // Ensure the file exists before opening read-write so the first
+        // call doesn't see a FileNotFoundException.
+        if (!Files.exists(RETRY_COUNTER_PATH)) {
+            Files.write(RETRY_COUNTER_PATH, "0".getBytes(StandardCharsets.UTF_8));
+        }
+        try (RandomAccessFile raf = new RandomAccessFile(RETRY_COUNTER_PATH.toFile(), "rw");
+             FileChannel ch = raf.getChannel();
+             FileLock ignored = ch.lock()) {
+            // Read from the locked raf — Files.readAllBytes would open a
+            // separate FD and bypass the lock.
+            long len = raf.length();
+            String body = "0";
+            if (len > 0) {
+                byte[] buf = new byte[(int) len];
+                raf.seek(0);
+                raf.readFully(buf);
+                body = new String(buf, StandardCharsets.UTF_8).trim();
+            }
+            int n = body.isEmpty() ? 0 : Integer.parseInt(body);
+            n += 1;
+            raf.setLength(0);
+            raf.seek(0);
+            raf.write(Integer.toString(n).getBytes(StandardCharsets.UTF_8));
+            return n;
+        }
+    }
+
+    @MeshTool(
+        capability = "report_with_transient_failures",
+        task = true,
+        retryOn = IOException.class,
+        description = "Raises IOException on the first N attempts, succeeds on N+1 — exercises retryOn (#895)."
+    )
+    public Map<String, Object> reportWithTransientFailures(
+            @Param("user_id") String userId,
+            @Param(value = "transient_failures", required = false) Integer transientFailures,
+            MeshJob job) throws IOException {
+        int targetTransient = transientFailures == null ? 2 : transientFailures;
+        JobController controller = job instanceof JobController c ? c : null;
+        if (controller != null) {
+            controller.updateProgress(0.1, "checking transient counter");
+        }
+        int n = bumpRetryCounter();
+        if (n <= targetTransient) {
+            // Match Python's message shape so log-grep based debugging
+            // is uniform across runtimes. retryOn=IOException matches
+            // here -> dispatch wrapper calls releaseLease(reason).
+            throw new IOException(
+                "simulated transient failure " + n + "/" + targetTransient);
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("user_id", userId);
+        payload.put("succeeded_on_attempt", n);
+        if (controller != null) {
+            controller.complete(payload);
+        }
+        return payload;
+    }
+
+    // -------------------------------------------------------------------
     // Long-running task (tc06, tc09, tc10–tc13 use this via SIGKILL)
     // -------------------------------------------------------------------
     @MeshTool(
@@ -224,9 +320,24 @@ public class LongTaskProviderApplication {
         double elapsed = 0.0;
         double step = 0.5;
         double total = Math.max(totalSecs, step);
+        boolean cancelled = false;
         while (elapsed < total) {
             Thread.sleep((long) (step * 1000));
             elapsed += step;
+            // Poll the cancel-registry state between sleeps so a
+            // mid-flight POST /jobs/{id}/cancel breaks out of the loop
+            // promptly. Java's Thread.sleep can't be interrupted by a
+            // Tokio token firing the way Python's asyncio.sleep can,
+            // so this poll IS our cancellation observation point. Once
+            // observed, we skip the trailing updateProgress and the
+            // complete() below — the cancel route has already flipped
+            // the registry row to terminal `cancelled`, so any further
+            // delta from this defunct attempt would either be rejected
+            // as not_owner or stomp on the cancel marker.
+            if (controller != null && controller.isCancelled()) {
+                cancelled = true;
+                break;
+            }
             if (controller != null) {
                 controller.updateProgress(
                     Math.min(elapsed / total, 0.99),
@@ -236,7 +347,8 @@ public class LongTaskProviderApplication {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("user_id", userId);
         payload.put("elapsed", elapsed);
-        if (controller != null) {
+        payload.put("cancelled", cancelled);
+        if (controller != null && !cancelled) {
             controller.complete(payload);
         }
         return payload;

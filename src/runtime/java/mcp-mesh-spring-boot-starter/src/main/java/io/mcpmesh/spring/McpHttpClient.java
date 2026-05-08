@@ -3,6 +3,8 @@ package io.mcpmesh.spring;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import io.mcpmesh.JobContext;
+import io.mcpmesh.core.MeshCore;
 import io.mcpmesh.core.MeshCoreBridge;
 import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.spring.tracing.TraceContext;
@@ -82,6 +84,77 @@ public class McpHttpClient {
         LAST_CALL_METRICS.remove();
     }
 
+    /**
+     * Daemon executor for outbound HTTP cancel watchers (#900). One thread
+     * per concurrent in-flight job (NOT per outbound call — see
+     * {@link JobCancelWatcher} below). Daemon so it never blocks JVM
+     * shutdown. Watchers exit when {@link MeshCore#mesh_await_job_cancel}
+     * returns (cancel fired OR job unregistered naturally). Mirror of TS
+     * PR #897's outbound abort wiring.
+     */
+    private static final java.util.concurrent.ExecutorService JOB_CANCEL_WATCHER_EXECUTOR =
+        java.util.concurrent.Executors.newCachedThreadPool(r -> {
+            Thread t = new Thread(r, "mesh-job-cancel-watcher");
+            t.setDaemon(true);
+            return t;
+        });
+
+    /**
+     * Per-job cancel watcher (#900 follow-up). When a producer's task=true
+     * handler makes multiple outbound HTTP calls, we want exactly ONE
+     * watcher thread blocked in native mesh_await_job_cancel(jobId) — not
+     * N threads, one per call. Each outbound call subscribes its
+     * Call.cancel() runnable; when the underlying token fires, all
+     * subscribers run. The map auto-removes the entry on watcher exit so
+     * a fresh job under the same id (re-claim path) gets a fresh watcher.
+     *
+     * <p>Per-job, not per-call: native mesh_await_job_cancel is sync and
+     * uninterruptible from Java; spawning one thread per call would leak
+     * N stuck native threads until the job ends. The shared-watcher design
+     * caps thread cost at 1 per concurrent in-flight job.
+     */
+    private static final java.util.concurrent.ConcurrentMap<String, JobCancelWatcher>
+        ACTIVE_WATCHERS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static final class JobCancelWatcher {
+        private final java.util.List<Runnable> subscribers =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        JobCancelWatcher(String jobId) {
+            // `self` capture lets us use ConcurrentHashMap.remove(K, V)
+            // below — identity-aware removal so a watcher that finished
+            // can't accidentally evict a newer watcher installed under
+            // the same jobId in the post-cancel-pre-handler-end window.
+            final JobCancelWatcher self = this;
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try {
+                    MeshCore.load().mesh_await_job_cancel(jobId);
+                    // Token fired (cancel) OR job unregistered (natural
+                    // end). Either way, run all subscribers; on the
+                    // natural-end path the call.cancel() invocations are
+                    // no-ops because the calls have already completed.
+                    for (Runnable r : subscribers) {
+                        try {
+                            r.run();
+                        } catch (Exception swallow) {
+                            log.debug("Subscriber threw: {}", swallow.toString());
+                        }
+                    }
+                } catch (Exception e) {
+                    // Swallow Exception — Errors propagate (let the JVM
+                    // handle OOM/StackOverflow). The natural-completion
+                    // path remains the backstop on watcher failure.
+                    log.debug("Job cancel watcher for {} caught: {}", jobId, e.toString());
+                } finally {
+                    ACTIVE_WATCHERS.remove(jobId, self);
+                }
+            }, JOB_CANCEL_WATCHER_EXECUTOR);
+        }
+
+        void subscribe(Runnable r) { subscribers.add(r); }
+        void unsubscribe(Runnable r) { subscribers.remove(r); }
+    }
+
     private final OkHttpClient httpClient;
     private final ObjectMapper objectMapper;
 
@@ -111,6 +184,75 @@ public class McpHttpClient {
 
         this.httpClient = builder.build();
         this.objectMapper = objectMapper;
+    }
+
+    /**
+     * Wrap an OkHttp {@link Call#execute()} with cancel-watcher wiring so
+     * outbound HTTP calls abort when the producer's job is cancelled (#900).
+     *
+     * <p>If a {@link JobContext} is active on the calling thread, spawns a
+     * watcher on {@link #JOB_CANCEL_WATCHER_EXECUTOR} that blocks on
+     * {@link MeshCore#mesh_await_job_cancel} until either:
+     * <ul>
+     *   <li>the cancel token fires (POST /jobs/{id}/cancel forwarded by the
+     *       registry) — the watcher invokes {@link Call#cancel()} which races
+     *       with {@code execute()} and surfaces as
+     *       {@link java.io.InterruptedIOException} below; OR</li>
+     *   <li>the job is unregistered naturally (handler returned without
+     *       cancel) — the watcher exits without calling {@code cancel()}.</li>
+     * </ul>
+     * The {@code finally} block also cancels the watcher future to bound
+     * its lifetime: the {@code mesh_await_job_cancel} call will return
+     * promptly via the registry's {@code ended} token when the surrounding
+     * {@code mesh_run_as_job} scope tears down.
+     *
+     * <p>If no job context is active, this method is a thin pass-through to
+     * {@code call.execute()} with zero overhead.
+     *
+     * <p>Mirror of TypeScript PR #897's {@code awaitJobCancel} +
+     * {@code AbortController} wiring in {@code proxy.ts}.
+     *
+     * @param call OkHttp Call to execute (must not have been executed yet)
+     * @return the {@link Response} on natural success; caller is responsible
+     *         for try-with-resources
+     * @throws java.io.InterruptedIOException when cancellation races with
+     *         execute() — surfaces as an interruption signal so the
+     *         dispatch wrapper sees it as a cancel rather than an HTTP
+     *         error
+     * @throws IOException for any other transport failure
+     */
+    private Response executeWithJobCancelWatcher(Call call) throws IOException {
+        JobContext.Snapshot job = JobContext.current();
+        Runnable subscriber = null;
+        JobCancelWatcher watcher = null;
+        if (job != null && job.jobId != null) {
+            String jobId = job.jobId;
+            watcher = ACTIVE_WATCHERS.computeIfAbsent(jobId, JobCancelWatcher::new);
+            subscriber = () -> {
+                if (!call.isCanceled()) {
+                    call.cancel();
+                }
+            };
+            watcher.subscribe(subscriber);
+        }
+        try {
+            return call.execute();
+        } catch (java.io.IOException e) {
+            // OkHttp throws IOException("Canceled") when Call.cancel()
+            // races with execute(). Re-classify as a cancellation so the
+            // dispatch wrapper sees an InterruptedIOException-like signal
+            // rather than an HTTP error.
+            if (call.isCanceled()) {
+                throw new java.io.InterruptedIOException(
+                    "outbound HTTP call cancelled via mesh job cancel: "
+                        + e.getMessage());
+            }
+            throw e;
+        } finally {
+            if (watcher != null && subscriber != null) {
+                watcher.unsubscribe(subscriber);
+            }
+        }
     }
 
     /**
@@ -293,7 +435,12 @@ public class McpHttpClient {
                 .writeTimeout(effectiveTimeoutSecs + 10, TimeUnit.SECONDS)
                 .build();
 
-            try (Response response = perCallClient.newCall(httpRequest).execute()) {
+            // executeWithJobCancelWatcher (#900) wires a daemon watcher on
+            // the active job's cancel token (no-op if no job context) so a
+            // mid-flight cancel aborts the in-flight HTTP call instead of
+            // letting it run to its read timeout.
+            Call call = perCallClient.newCall(httpRequest);
+            try (Response response = executeWithJobCancelWatcher(call)) {
                 if (!response.isSuccessful()) {
                     throw new MeshToolCallException(functionName, functionName,
                         "HTTP " + response.code() + ": " + response.message());
@@ -799,7 +946,10 @@ public class McpHttpClient {
                 return;
             }
 
-            try (Response response = call.execute()) {
+            // executeWithJobCancelWatcher (#900) — same wiring as the
+            // buffered callTool path: outbound SSE stream is aborted if
+            // the producer's job is cancelled mid-flight.
+            try (Response response = executeWithJobCancelWatcher(call)) {
                 if (!response.isSuccessful()) {
                     upstreamError = new MeshToolCallException(functionName, functionName,
                         "HTTP " + response.code() + ": " + response.message());
@@ -977,7 +1127,13 @@ public class McpHttpClient {
                 .header("Accept", "application/json, text/event-stream")
                 .build();
 
-            try (Response response = httpClient.newCall(httpRequest).execute()) {
+            // executeWithJobCancelWatcher (#900) — listTools is normally
+            // a discovery call outside any job scope (helper is a pass-
+            // through when no JobContext is active), but if a user code
+            // path ever invokes it from a task=true handler the cancel
+            // wiring is consistent with the other call sites.
+            Call call = httpClient.newCall(httpRequest);
+            try (Response response = executeWithJobCancelWatcher(call)) {
                 if (!response.isSuccessful()) {
                     log.warn("Failed to list tools at {}: HTTP {}", endpoint, response.code());
                     return null;

@@ -3,27 +3,31 @@
 # Submits an overlong job (~30s), waits 5s for the producer's claim
 # worker to take ownership, then calls __mesh_job_cancel.
 #
-# IMPORTANT — Java cancel limitation (#889):
+# Post-#889 cancel pipeline (Java owner):
 #
-# Per #889, Java's sync JNR-FFI bindings cannot bind the per-job cancel
-# registry table — the natural binding path requires nested Tokio
-# block_on which Tokio rejects. The substrate's cancel pipeline
-# therefore behaves as follows on a Java owner:
+#   1. Registry's CancelJob handler succeeds and marks the row cancelled.
+#   2. Registry POSTs /jobs/{id}/cancel to the Java provider's local
+#      route.
+#   3. Java cancel route returns {cancelled: true, jobId} because Phase
+#      A wires mesh_run_as_job to bind the per-job cancel-registry
+#      token; mesh_cancel_active_job finds the bound token and fires it.
+#   4. The runs_overlong handler observes the cancel token (via
+#      JobController.is_terminal()) and breaks out of its sleep loop
+#      before the natural ~30s completion.
 #
-#   - registry's CancelJob handler succeeds and marks the row cancelled
-#   - registry POSTs /jobs/{id}/cancel to the owner Java replica
-#   - the Java cancel route returns {cancelled:false, jobId} because the
-#     local cancel-registry lookup misses (binding inactive)
-#   - the Java task body does NOT abort; runs_overlong continues to its
-#     natural end (~30s) — but the registry already marked cancelled, so
-#     the consumer's status read sees status=cancelled
-#
-# Assertion: status=cancelled in the registry. We do NOT assert that
-# the task aborted faster than its natural completion, because Java
-# cannot deliver that guarantee until #889 is fixed.
+# Assertions (all post-#889):
+#   - registry-side status=cancelled
+#   - cancel-to-cancelled wall clock < 10s (registry-side write is
+#     synchronous; this guards against pathological cases)
+#   - final progress < 0.95 — proves the handler aborted before its
+#     natural completion. The runs_overlong loop reaches progress=0.99
+#     when it runs to completion, so progress < 0.95 means cancel
+#     fired and the loop broke out early. Without Phase A, the handler
+#     would run to completion and progress would land at ~0.99 even
+#     though the registry-side row says cancelled.
 
-name: "MeshJob Java: cancel registers as cancelled in registry (Java cancel-registry inactive per #889)"
-description: "Java submit overlong job, cancel mid-flight, observe cancelled status in registry. Does NOT assert mid-flight abort (see #889 inline)."
+name: "MeshJob Java: cancel propagates through Java cancel-registry binding"
+description: "Java submit overlong job, cancel mid-flight; the Java provider's local cancel-registry binding (Phase A) fires the token and aborts the handler before natural completion"
 tags:
   - meshjob
   - java
@@ -67,7 +71,7 @@ test:
       for i in $(seq 1 60); do
         S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
         [ "$S" = "healthy" ] && exit 0; sleep 2
-      done; exit 1
+      done; echo "ERROR provider"; exit 1
     timeout: 150
 
   - name: "Start consumer"
@@ -83,7 +87,7 @@ test:
         ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
         S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
         [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && [ "$T" != "null" ] && exit 0; sleep 2
-      done; exit 1
+      done; echo "ERROR consumer"; exit 1
     timeout: 150
 
   - name: "Submit a 30-second job"
@@ -98,10 +102,9 @@ test:
     handler: wait
     seconds: 5
 
-  # Per #889 the registry-side cancel handler always succeeds even if
-  # the producer never claimed. Without a pre-cancel progress check
-  # this test could pass for the wrong reason. Confirm the row
-  # recorded at least one progress emission before we cancel.
+  # Confirm the producer is in flight (progress > 0) before cancel.
+  # Without this, a cancel landing pre-claim would mark the row
+  # cancelled trivially and pass the test for the wrong reason.
   - name: "Confirm producer is in flight (progress > 0 before cancel)"
     handler: shell
     workdir: /workspace
@@ -120,6 +123,12 @@ test:
       exit 1
     timeout: 30
 
+  - name: "Capture wall-clock just before cancel"
+    handler: shell
+    workdir: /workspace
+    command: date +%s
+    capture: ts_cancel_start
+
   - name: "Cancel the job"
     handler: shell
     workdir: /workspace
@@ -130,11 +139,42 @@ test:
     capture: cancel_response
     timeout: 15
 
-  - name: "Wait for cancel to settle in registry"
-    handler: wait
-    seconds: 8
+  # Poll until status flips to cancelled, capture elapsed time. The
+  # registry-side row flip happens synchronously inside CancelJob, so
+  # this lower-bounds at the registry RTT — typically <2s. The guard
+  # below is at <10s to leave slack for slow CI.
+  - name: "Poll until status=cancelled, capture elapsed time"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      START='${captured.ts_cancel_start}'
+      START_NUM=$(echo "$START" | tr -d -c '0-9')
+      for i in $(seq 1 15); do
+        S=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status' 2>/dev/null)
+        if [ "$S" = "cancelled" ]; then
+          NOW=$(date +%s)
+          echo "cancel_elapsed=$((NOW - START_NUM))"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: status never flipped to cancelled within 15s (last=$S)"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq .
+      exit 1
+    capture: cancel_elapsed
+    timeout: 30
 
-  - name: "Read final status"
+  # Wait a few seconds AFTER cancel observes the row flip, so any
+  # in-flight progress updates from the (now-defunct) Java handler
+  # have a chance to land. With Phase A active, the handler should
+  # have aborted via the cancel token; without it, progress would
+  # keep climbing toward 0.99 (natural runs_overlong endpoint).
+  - name: "Wait 5s for any post-cancel progress to settle"
+    handler: wait
+    seconds: 5
+
+  - name: "Read final status (capture progress for the abort-vs-natural check)"
     handler: shell
     workdir: /workspace
     command: |
@@ -142,15 +182,64 @@ test:
       meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
     capture: final_status
 
+  - name: "Capture raw progress field for assertion arithmetic"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.progress // 0'
+    capture: final_progress
+
+  # Wall-clock guard — with Phase A's cancel-registry binding active,
+  # cancel propagation completes <10s typical. Larger elapsed values
+  # indicate a regression to the slow path (sweep-driven recovery).
+  - name: "Assert cancel-to-cancelled elapsed < 10s (proves fast cancel path)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      ELAPSED=$(echo '${captured.cancel_elapsed}' | grep -oE 'cancel_elapsed=[0-9]+' | sed 's/cancel_elapsed=//')
+      if [ -z "$ELAPSED" ]; then
+        echo "ERROR: could not extract cancel_elapsed from: ${captured.cancel_elapsed}"
+        exit 1
+      fi
+      if [ "$ELAPSED" -ge 10 ]; then
+        echo "ERROR: cancel_elapsed=${ELAPSED}s >= 10s — cancel forwarding may have regressed"
+        exit 1
+      fi
+      echo "OK: cancel_elapsed=${ELAPSED}s < 10s (fast cancel path active)"
+
+  # Progress guard — runs_overlong's loop ticks updateProgress at
+  # min(elapsed/total, 0.99) each ~0.5s. If the handler aborts
+  # mid-flight (cancel token fired), progress will be well below 0.99.
+  # If the handler ran to natural completion (cancel ineffective on
+  # the handler), progress lands at 0.99. <0.95 is a tight enough
+  # threshold to flag a regression while leaving room for the handler
+  # to emit a few more progress points after cancel-token-set but
+  # before the loop re-checks isTerminal().
+  - name: "Assert final progress < 0.95 (handler aborted before natural completion)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      P='${captured.final_progress}'
+      P_TRIM=$(echo "$P" | tr -d ' \t\n\r')
+      if [ -z "$P_TRIM" ] || [ "$P_TRIM" = "null" ]; then
+        echo "ERROR: empty/null progress: '$P'"
+        exit 1
+      fi
+      if awk "BEGIN{exit !(${P_TRIM} >= 0.95)}"; then
+        echo "ERROR: final progress=${P_TRIM} >= 0.95 — handler likely ran to completion (Phase A binding regressed)"
+        exit 1
+      fi
+      echo "OK: final progress=${P_TRIM} < 0.95 (handler aborted via cancel token)"
+
 assertions:
   # Java helper returns {ok:true, job_id:...} (snake_case); compact JSON.
   - expr: "${captured.cancel_response} contains '\\\"ok\\\":true'"
     message: "__mesh_job_cancel response should include ok:true"
-  # Per #889 — the registry-side row flips to cancelled even though the
-  # Java owner's local cancel token didn't fire. This is the substantive
-  # signal we CAN test for Java today.
+  # Registry-side status flip (works irrespective of Phase A — guard
+  # against catastrophic regression of the registry's CancelJob path).
   - expr: "${captured.final_status} contains '\\\"status\\\":\\\"cancelled\\\"'"
-    message: "registry-side status should be cancelled (Java cancel-registry binding inactive per #889; this still validates the registry's CancelJob path)"
+    message: "registry-side status should be cancelled"
 
 post_run:
   - routine: stop_all

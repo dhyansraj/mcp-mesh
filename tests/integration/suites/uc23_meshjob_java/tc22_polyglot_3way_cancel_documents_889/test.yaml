@@ -1,31 +1,41 @@
-# tc22_polyglot_3way_cancel_documents_889 — Documents Java cancel-registry gap.
+# tc22_polyglot_3way_cancel — Python orchestrator cancels a Java-owned
+# job. Mirror of uc21/tc22 / uc22/tc22 for the Java owner side.
 #
-# Java provider + Java consumer (running long job). Mid-flight, call
-# __mesh_job_cancel from a PYTHON agent.
+# NOTE on directory name: the trailing "_documents_889" suffix is now
+# stale (the gap is fixed in PR #889 Phase A — Java's cancel-registry
+# binding is active and the local cancel route returns cancelled:true).
+# The directory is intentionally not renamed in this commit to keep the
+# git diff small; rename will follow in a subsequent housekeeping PR.
+# The name: / description: / tags / inline doc below all reflect the
+# post-#889 reality.
 #
-# Per #889 — Java cancel-registry binding inactive (sync JNR-FFI cannot
-# bind nested Tokio runtime). The cancel pipeline behaves as follows:
+# Post-#889 cancel pipeline (Java owner):
 #
 #   1. Python orchestrator's __mesh_job_cancel calls JobProxy.cancel
-#      (Python SDK) which POSTs /jobs/{id}/cancel to the registry
-#   2. Registry's CancelJob handler succeeds, marks the row cancelled
-#   3. Registry forwards cancel to the Java provider's
-#      POST /jobs/:job_id/cancel route
-#   4. Java cancel route returns {cancelled:false, jobId} because the
-#      local cancel-registry lookup misses (the binding never happened
-#      for this job — see #889 / MeshToolWrapper.dispatchAsJob)
-#   5. Registry already wrote status=cancelled in step 2, so the
-#      consumer's status read still observes cancelled
-#   6. The Java task body continues running until natural completion
-#      or the registry's sweep marks orphaned
+#      (Python SDK) which POSTs /jobs/{id}/cancel to the registry.
+#   2. Registry's CancelJob handler succeeds and writes status=cancelled
+#      on the job row.
+#   3. Registry forwards the cancel to the Java provider's local
+#      POST /jobs/:job_id/cancel route.
+#   4. Java cancel route returns {cancelled: true} because Phase A wires
+#      mesh_run_as_job → cancel-registry binding so mesh_cancel_active_job
+#      finds the bound token for this job.
+#   5. The Java handler's cancel token fires → JobController.is_terminal()
+#      flips → the runs_overlong sleep loop observes cancellation and
+#      breaks out before its natural ~30s completion.
+#   6. Final status: cancelled (registry-side AND Java-side).
 #
-# Assertion: Python helper's cancel response is ok:true (registry-side
-# success), final status=cancelled (via the registry's CancelJob
-# handler, NOT via the Java owner's cancel token). This is exactly
-# what Java supports today.
+# Assertions:
+#   - Python helper acks ok:true (registry-side success).
+#   - Final status is cancelled.
+#   - owner_instance_id is the Java provider (proves cross-runtime
+#     forward reached).
+#   - Wall-clock from cancel-request to status-cancelled is < 10s
+#     (the natural path would take ~30s — guards against a regression
+#     of the cancel forwarding when the Java route returns cancelled:false).
 
-name: "MeshJob polyglot 3-way cancel: Python cancels Java-owned job (documents #889)"
-description: "Cross-runtime cancel — Python helper fires registry cancel; Java cancel route returns cancelled:false (#889) but registry-side row flips cancelled regardless"
+name: "MeshJob polyglot 3-way cancel: Python cancels Java-owned job (post-#889)"
+description: "Cross-runtime cancel — Python helper fires registry cancel; registry forwards to Java owner whose cancel-registry binding (Phase A) aborts the in-flight handler"
 tags:
   - meshjob
   - polyglot
@@ -124,6 +134,33 @@ test:
     handler: wait
     seconds: 5
 
+  # Confirm the producer is actually executing (progress > 0) before
+  # cancel — guards against a false pass where the cancel landed
+  # pre-claim and the row was marked cancelled trivially.
+  - name: "Confirm producer is in flight (progress > 0 before cancel)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      for i in $(seq 1 20); do
+        PROG=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.progress // 0')
+        if awk "BEGIN{exit !(${PROG} > 0)}"; then
+          echo "[pre-cancel] progress=${PROG} after ${i}s — producer is in flight"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: producer never recorded progress > 0 — cancel scenario invalid"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq .
+      exit 1
+    timeout: 30
+
+  - name: "Capture wall-clock just before cancel"
+    handler: shell
+    workdir: /workspace
+    command: date +%s
+    capture: ts_cancel_start
+
   # Python helper: __mesh_job_cancel takes snake_case job_id.
   - name: "Cancel via the Python orchestrator agent's helper tool"
     handler: shell
@@ -140,9 +177,45 @@ test:
     capture: cancel_response
     timeout: 15
 
-  - name: "Wait for cancel to settle in registry"
+  # Poll until status flips to cancelled (or 15s elapses). Captures the
+  # exact moment the registry observes the terminal flip — this is the
+  # signal we time-bound. With #889 fixed, both the registry-side row
+  # AND the Java handler's cancel token fire fast (<5s typical).
+  - name: "Poll until status=cancelled, capture elapsed time"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      START='${captured.ts_cancel_start}'
+      START_NUM=$(echo "$START" | tr -d -c '0-9')
+      if [ -z "$START_NUM" ]; then
+        echo "ERROR: ts_cancel_start has no digits — raw='$START'"
+        echo "JOB_ID=$JOB_ID"
+        curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '.' || true
+        exit 1
+      fi
+      for i in $(seq 1 15); do
+        S=$(curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.status' 2>/dev/null)
+        if [ "$S" = "cancelled" ]; then
+          NOW=$(date +%s)
+          echo "cancel_elapsed=$((NOW - START_NUM))"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: status never flipped to cancelled within 15s (last=$S)"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq .
+      exit 1
+    capture: cancel_elapsed
+    timeout: 30
+
+  # Wait for any in-flight progress updates from the (now-defunct)
+  # Java handler to land. With Phase A active, the handler observes
+  # the cancel token and breaks out of runs_overlong's loop early —
+  # final progress will be well below 0.99.
+  - name: "Wait 5s for any post-cancel progress to settle"
     handler: wait
-    seconds: 8
+    seconds: 5
 
   - name: "Read final status"
     handler: shell
@@ -152,17 +225,69 @@ test:
       curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,owner_instance_id,error,progress}'
     capture: final_status
 
+  - name: "Capture raw progress field for assertion arithmetic"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.content[0].text | fromjson | .job_id')
+      curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq -r '.progress // 0'
+    capture: final_progress
+
+  # Wall-clock guard: registry-side row write is synchronous in
+  # CancelJob, so this lower-bounds at the registry RTT (<2s typical).
+  # Threshold <10s flags a regression where cancel handling slows
+  # catastrophically (e.g., the registry's CancelJob path itself
+  # regresses).
+  - name: "Assert cancel-to-cancelled elapsed < 10s (proves fast cancel path)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      ELAPSED=$(echo '${captured.cancel_elapsed}' | grep -oE 'cancel_elapsed=[0-9]+' | sed 's/cancel_elapsed=//')
+      if [ -z "$ELAPSED" ]; then
+        echo "ERROR: could not extract cancel_elapsed from: ${captured.cancel_elapsed}"
+        exit 1
+      fi
+      if [ "$ELAPSED" -ge 10 ]; then
+        echo "ERROR: cancel_elapsed=${ELAPSED}s >= 10s — cancel forwarding may have regressed"
+        exit 1
+      fi
+      echo "OK: cancel_elapsed=${ELAPSED}s < 10s (fast cancel path active)"
+
+  # Progress guard — runs_overlong's loop ticks updateProgress at
+  # min(elapsed/total, 0.99) each ~0.5s. If the handler aborts
+  # mid-flight (cancel token fired via Phase A binding), progress will
+  # be well below 0.99. If the cancel-token never fires (e.g., the
+  # cross-runtime forward to the Java owner was missed), the handler
+  # would run to natural completion and progress would land at 0.99
+  # — even though the registry-side row says cancelled. <0.95 is
+  # tight enough to flag a regression while leaving slack for the
+  # handler to emit a few more updates after cancel-set but before
+  # the loop re-checks isTerminal().
+  - name: "Assert final progress < 0.95 (handler aborted before natural completion)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      P='${captured.final_progress}'
+      P_TRIM=$(echo "$P" | tr -d ' \t\n\r')
+      if [ -z "$P_TRIM" ] || [ "$P_TRIM" = "null" ]; then
+        echo "ERROR: empty/null progress: '$P'"
+        exit 1
+      fi
+      if awk "BEGIN{exit !(${P_TRIM} >= 0.95)}"; then
+        echo "ERROR: final progress=${P_TRIM} >= 0.95 — Java handler likely ran to natural completion (Phase A binding regressed)"
+        exit 1
+      fi
+      echo "OK: final progress=${P_TRIM} < 0.95 (Java handler aborted via cancel token; cross-runtime forward landed)"
+
 assertions:
   # Python helper returns {"ok": True, "job_id": ...} (snake_case
-  # spaced JSON wrapping). The registry-side cancel succeeds even
-  # though the Java owner's local cancel token doesn't fire (#889).
+  # spaced JSON wrapping).
   - expr: "${captured.cancel_response} contains '\"ok\": true'"
     message: "Python helper cancel should ack with ok:true (registry-side success)"
-  # Per #889 — registry's CancelJob handler writes status=cancelled
-  # directly. The cancel forward to the Java owner returns
-  # cancelled:false but the row is already updated.
+  # Post-#889: the registry's row flips to cancelled, AND the Java
+  # cancel route's local handler aborts the in-flight task.
   - expr: "${captured.final_status} contains '\"status\": \"cancelled\"'"
-    message: "registry-side status should be cancelled (Python -> registry path works; Java cancel-registry inactive per #889)"
+    message: "registry-side status should be cancelled (Python -> registry -> Java forward path active)"
   # Owner is the Java provider — proves the registry forwarded the
   # cancel to the Java replica that holds the lease.
   - expr: "${captured.final_status} contains 'long-task-provider-java'"

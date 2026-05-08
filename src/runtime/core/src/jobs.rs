@@ -356,6 +356,28 @@ impl JobController {
         q.terminal.contains(&self.job_id)
     }
 
+    /// Whether the cancel token bound to this controller's job in the
+    /// process-wide [`cancel_registry`] has been fired. Returns `false`
+    /// if the controller's job is not currently registered (not yet
+    /// wrapped in [`run_as_job`], or already unregistered).
+    ///
+    /// Distinct from [`is_terminal`] — `is_terminal` is set by the
+    /// controller's own `complete`/`fail`/`release_lease` calls and
+    /// reflects local intent, whereas `is_cancelled` reflects an
+    /// external cancel signal (e.g. `POST /jobs/{id}/cancel` on the
+    /// SDK-owned HTTP route, the Rust task-deadline tripping, etc.).
+    /// Per-language SDKs (notably the Java fixture's `runs_overlong`
+    /// loop) poll this between blocking sleep intervals so a mid-flight
+    /// cancel can break out instead of running to natural completion —
+    /// languages whose blocking primitives can't be interrupted by a
+    /// Tokio token firing have no other observation point.
+    pub async fn is_cancelled(&self) -> bool {
+        match cancel_registry::get_state(&self.job_id) {
+            Some((cancel, _ended)) => cancel.is_cancelled(),
+            None => false,
+        }
+    }
+
     /// Voluntarily release the lease for retry. Used when the user
     /// handler raised an exception matched by the tool's `retry_on`
     /// whitelist (#879) — instead of marking the job `failed` (which

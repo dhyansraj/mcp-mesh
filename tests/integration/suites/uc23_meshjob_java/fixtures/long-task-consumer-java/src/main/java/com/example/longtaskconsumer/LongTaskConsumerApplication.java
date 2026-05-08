@@ -276,6 +276,70 @@ public class LongTaskConsumerApplication {
     }
 
     // -------------------------------------------------------------------
+    // Transient-failures submitter (tc23 — exercises @MeshTool(retryOn=...))
+    // -------------------------------------------------------------------
+    //
+    // Mirrors Python's commission_transient_failures
+    // (uc21_meshjob/fixtures/long-task-consumer/main.py). Submits a
+    // report_with_transient_failures job with caller-supplied max_retries
+    // and waits for terminal — the captured payload exposes
+    // succeeded_on_attempt so the test asserts attempt_count == 3.
+    // -------------------------------------------------------------------
+    @MeshTool(
+        capability = "commission_transient_failures",
+        description = "Submit report_with_transient_failures with caller-supplied max_retries.",
+        dependencies = @Selector(capability = "report_with_transient_failures")
+    )
+    public Map<String, Object> commissionTransientFailures(
+            @Param("user_id") String userId,
+            @Param(value = "max_retries", required = false) Integer maxRetries,
+            @Param(value = "transient_failures", required = false) Integer transientFailures,
+            @Param(value = "wait_timeout_secs", required = false) Integer waitTimeoutSecs,
+            MeshJob reportWithTransientFailures) {
+        if (!(reportWithTransientFailures instanceof MeshJobSubmitter submitter)) {
+            Map<String, Object> err = new LinkedHashMap<>();
+            err.put("error", "report_with_transient_failures submitter not injected");
+            return err;
+        }
+        int retries = maxRetries == null ? 3 : maxRetries;
+        int targetTransient = transientFailures == null ? 2 : transientFailures;
+        int waitSecs = waitTimeoutSecs == null ? 30 : waitTimeoutSecs;
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("user_id", userId);
+        payload.put("transient_failures", targetTransient);
+        // max_duration=30s mirrors Python — keeps the per-attempt budget
+        // tight so a slow-path lease-expiry recovery would push past the
+        // 30s wall-clock guard the test asserts.
+        MeshJobSubmitter.SubmitOptions opts = new MeshJobSubmitter.SubmitOptions(
+            payload, null, 30, retries, null);
+
+        try (JobProxy proxy = submitter.submit(opts).get()) {
+            String jobId = proxy.jobId();
+            try {
+                Object result = proxy.await((double) waitSecs);
+                Map<String, Object> envelope = new LinkedHashMap<>();
+                envelope.put("job_id", jobId);
+                envelope.put("status", "completed");
+                envelope.put("result", result);
+                return envelope;
+            } catch (Exception e) {
+                Map<String, Object> envelope = new LinkedHashMap<>();
+                envelope.put("job_id", jobId);
+                envelope.put("status", "wait_raised");
+                envelope.put("error", e.getMessage());
+                return envelope;
+            }
+        } catch (Exception e) {
+            Map<String, Object> envelope = new LinkedHashMap<>();
+            envelope.put("job_id", null);
+            envelope.put("status", "submit_raised");
+            envelope.put("error", e.getMessage());
+            return envelope;
+        }
+    }
+
+    // -------------------------------------------------------------------
     // Overlong submitter (tc06, tc20)
     // -------------------------------------------------------------------
     @MeshTool(
