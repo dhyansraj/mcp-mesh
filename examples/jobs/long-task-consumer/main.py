@@ -7,7 +7,7 @@ Demonstrates the consumer-side dispatch surface:
     @mesh.tool(capability="commission_report", dependencies=["generate_report"])
     async def commission_report(..., generate_report: MeshJob = None):
         proxy = await generate_report.submit(...)
-        return await proxy.wait(timeout=60)
+        return await proxy.wait(timeout_secs=60)
 
 The DI layer sees the ``MeshJob``-typed parameter whose name matches
 the declared dependency capability and injects a

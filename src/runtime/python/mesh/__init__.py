@@ -96,6 +96,8 @@ def __getattr__(name):
         return decorators.agent
     elif name == "route":
         return decorators.route
+    elif name == "a2a":
+        return decorators.a2a
     elif name == "llm":
         return decorators.llm
     elif name == "llm_provider":

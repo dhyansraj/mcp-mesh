@@ -65,7 +65,17 @@ def _build_api_agent_spec(context: dict[str, Any], service_id: str = None) -> An
             "agent_id", "unknown-api-service"
         )
     display_config = context.get("display_config", {})
-    agent_config = context.get("agent_config", {})
+    # Prefer pipeline-context override (test seams), fall back to the
+    # DecoratorRegistry's resolved config so the FastAPI app title +
+    # any update_agent_config(...) writes from api_server_setup.py
+    # land in the heartbeat. Without this fallback, base_name strips
+    # the service_id suffix and produces names like "api" instead of
+    # the actual app title.
+    agent_config = context.get("agent_config")
+    if not agent_config:
+        from ...engine.decorator_registry import DecoratorRegistry
+
+        agent_config = DecoratorRegistry.get_resolved_agent_config() or {}
 
     # Get registry URL
     from ...shared.config_resolver import get_config_value

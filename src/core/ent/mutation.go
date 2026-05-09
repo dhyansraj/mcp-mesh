@@ -64,6 +64,8 @@ type AgentMutation struct {
 	updated_at                      *time.Time
 	last_full_refresh               *time.Time
 	entity_id                       *string
+	a2a_surfaces                    *[]map[string]interface{}
+	appenda2a_surfaces              []map[string]interface{}
 	clearedFields                   map[string]struct{}
 	capabilities                    map[int]struct{}
 	removedcapabilities             map[int]struct{}
@@ -819,6 +821,71 @@ func (m *AgentMutation) ResetEntityID() {
 	delete(m.clearedFields, agent.FieldEntityID)
 }
 
+// SetA2aSurfaces sets the "a2a_surfaces" field.
+func (m *AgentMutation) SetA2aSurfaces(value []map[string]interface{}) {
+	m.a2a_surfaces = &value
+	m.appenda2a_surfaces = nil
+}
+
+// A2aSurfaces returns the value of the "a2a_surfaces" field in the mutation.
+func (m *AgentMutation) A2aSurfaces() (r []map[string]interface{}, exists bool) {
+	v := m.a2a_surfaces
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldA2aSurfaces returns the old "a2a_surfaces" field's value of the Agent entity.
+// If the Agent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AgentMutation) OldA2aSurfaces(ctx context.Context) (v []map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldA2aSurfaces is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldA2aSurfaces requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldA2aSurfaces: %w", err)
+	}
+	return oldValue.A2aSurfaces, nil
+}
+
+// AppendA2aSurfaces adds value to the "a2a_surfaces" field.
+func (m *AgentMutation) AppendA2aSurfaces(value []map[string]interface{}) {
+	m.appenda2a_surfaces = append(m.appenda2a_surfaces, value...)
+}
+
+// AppendedA2aSurfaces returns the list of values that were appended to the "a2a_surfaces" field in this mutation.
+func (m *AgentMutation) AppendedA2aSurfaces() ([]map[string]interface{}, bool) {
+	if len(m.appenda2a_surfaces) == 0 {
+		return nil, false
+	}
+	return m.appenda2a_surfaces, true
+}
+
+// ClearA2aSurfaces clears the value of the "a2a_surfaces" field.
+func (m *AgentMutation) ClearA2aSurfaces() {
+	m.a2a_surfaces = nil
+	m.appenda2a_surfaces = nil
+	m.clearedFields[agent.FieldA2aSurfaces] = struct{}{}
+}
+
+// A2aSurfacesCleared returns if the "a2a_surfaces" field was cleared in this mutation.
+func (m *AgentMutation) A2aSurfacesCleared() bool {
+	_, ok := m.clearedFields[agent.FieldA2aSurfaces]
+	return ok
+}
+
+// ResetA2aSurfaces resets all changes to the "a2a_surfaces" field.
+func (m *AgentMutation) ResetA2aSurfaces() {
+	m.a2a_surfaces = nil
+	m.appenda2a_surfaces = nil
+	delete(m.clearedFields, agent.FieldA2aSurfaces)
+}
+
 // AddCapabilityIDs adds the "capabilities" edge to the Capability entity by ids.
 func (m *AgentMutation) AddCapabilityIDs(ids ...int) {
 	if m.capabilities == nil {
@@ -1123,7 +1190,7 @@ func (m *AgentMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AgentMutation) Fields() []string {
-	fields := make([]string, 0, 14)
+	fields := make([]string, 0, 15)
 	if m.agent_type != nil {
 		fields = append(fields, agent.FieldAgentType)
 	}
@@ -1166,6 +1233,9 @@ func (m *AgentMutation) Fields() []string {
 	if m.entity_id != nil {
 		fields = append(fields, agent.FieldEntityID)
 	}
+	if m.a2a_surfaces != nil {
+		fields = append(fields, agent.FieldA2aSurfaces)
+	}
 	return fields
 }
 
@@ -1202,6 +1272,8 @@ func (m *AgentMutation) Field(name string) (ent.Value, bool) {
 		return m.LastFullRefresh()
 	case agent.FieldEntityID:
 		return m.EntityID()
+	case agent.FieldA2aSurfaces:
+		return m.A2aSurfaces()
 	}
 	return nil, false
 }
@@ -1239,6 +1311,8 @@ func (m *AgentMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldLastFullRefresh(ctx)
 	case agent.FieldEntityID:
 		return m.OldEntityID(ctx)
+	case agent.FieldA2aSurfaces:
+		return m.OldA2aSurfaces(ctx)
 	}
 	return nil, fmt.Errorf("unknown Agent field %s", name)
 }
@@ -1346,6 +1420,13 @@ func (m *AgentMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetEntityID(v)
 		return nil
+	case agent.FieldA2aSurfaces:
+		v, ok := value.([]map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetA2aSurfaces(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Agent field %s", name)
 }
@@ -1430,6 +1511,9 @@ func (m *AgentMutation) ClearedFields() []string {
 	if m.FieldCleared(agent.FieldEntityID) {
 		fields = append(fields, agent.FieldEntityID)
 	}
+	if m.FieldCleared(agent.FieldA2aSurfaces) {
+		fields = append(fields, agent.FieldA2aSurfaces)
+	}
 	return fields
 }
 
@@ -1458,6 +1542,9 @@ func (m *AgentMutation) ClearField(name string) error {
 		return nil
 	case agent.FieldEntityID:
 		m.ClearEntityID()
+		return nil
+	case agent.FieldA2aSurfaces:
+		m.ClearA2aSurfaces()
 		return nil
 	}
 	return fmt.Errorf("unknown Agent nullable field %s", name)
@@ -1508,6 +1595,9 @@ func (m *AgentMutation) ResetField(name string) error {
 		return nil
 	case agent.FieldEntityID:
 		m.ResetEntityID()
+		return nil
+	case agent.FieldA2aSurfaces:
+		m.ResetA2aSurfaces()
 		return nil
 	}
 	return fmt.Errorf("unknown Agent field %s", name)

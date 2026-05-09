@@ -225,6 +225,14 @@ type HeartbeatResponse struct {
 	DependenciesResolved map[string][]*DependencyResolution        `json:"dependencies_resolved,omitempty"`
 	LLMTools             map[string][]LLMToolInfo                  `json:"llm_tools,omitempty"`
 	LLMProviders         map[string]*generated.ResolvedLLMProvider `json:"llm_providers,omitempty"`
+
+	// A2ASurfaces is the registry-stamped surface list returned to a2a-typed
+	// agents. The handler builds the wire-shape `[]A2ASurfaceResponse` from
+	// this on the way out (see SendHeartbeat). Populated only when the
+	// request was for an a2a-typed agent that included a surfaces array;
+	// nil otherwise so the JSON `surfaces` field stays omitted from the
+	// response payload for non-a2a flows.
+	A2ASurfaces []map[string]interface{} `json:"-"`
 }
 
 // EntService provides registry operations using Ent ORM instead of raw SQL
@@ -417,6 +425,13 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 	// Extract agent metadata
 	meta := extractAgentMetadata(req.AgentID, req.Metadata)
 
+	// A2A surfaces (issue #903). Pulled here so the agent create/update path
+	// can persist them on the agent's a2a_surfaces JSON field. Empty / nil
+	// when the request isn't a2a-typed or didn't carry a surfaces array —
+	// in that case we skip the JSON SetA2aSurfaces call entirely (the
+	// optional Ent field stays unset).
+	surfaces := extractSurfacesFromMetadata(req.Metadata)
+
 	// Start a transaction for atomicity
 	err := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
 		// Upsert the agent
@@ -440,6 +455,9 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		}
 		if req.EntityID != "" {
 			agentCreate = agentCreate.SetEntityID(req.EntityID)
+		}
+		if surfaces != nil {
+			agentCreate = agentCreate.SetA2aSurfaces(surfaces)
 		}
 
 		// Check if agent already exists and update or create
@@ -486,6 +504,9 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 			}
 			if req.EntityID != "" {
 				updateBuilder = updateBuilder.SetEntityID(req.EntityID)
+			}
+			if surfaces != nil {
+				updateBuilder = updateBuilder.SetA2aSurfaces(surfaces)
 			}
 
 			existingAgent, err = updateBuilder.Save(ctx)
@@ -1184,6 +1205,11 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 					llmProviders = make(map[string]*generated.ResolvedLLMProvider)
 				}
 
+				// A2A surfaces (issue #903): for heartbeat-time first
+				// registration, fetch the persisted JSON back so the response
+				// carries the freshly-stamped surface URLs.
+				a2aSurfaces, _ := s.listA2ASurfacesForAgent(ctx, req.AgentID)
+
 				return &HeartbeatResponse{
 					Status:               regResp.Status,
 					Timestamp:            now.Format(time.RFC3339),
@@ -1192,6 +1218,7 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 					DependenciesResolved: regResp.DependenciesResolved,
 					LLMTools:             llmTools,
 					LLMProviders:         llmProviders,
+					A2ASurfaces:          a2aSurfaces,
 				}, nil
 			}
 
@@ -1257,6 +1284,13 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				}
 				if req.EntityID != "" {
 					updateBuilder = updateBuilder.SetEntityID(req.EntityID)
+				}
+
+				// A2A surfaces (issue #903). Apply only when the heartbeat
+				// carries a `surfaces` array — otherwise a non-a2a heartbeat
+				// would clobber a previously-stored surfaces list to nil.
+				if hbSurfaces := extractSurfacesFromMetadata(req.Metadata); hbSurfaces != nil {
+					updateBuilder = updateBuilder.SetA2aSurfaces(hbSurfaces)
 				}
 
 				existingAgent, err = updateBuilder.Save(ctx)
@@ -1482,6 +1516,7 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				DependenciesResolved: dependenciesResolved,
 				LLMTools:             llmTools,
 				LLMProviders:         llmProviders,
+				A2ASurfaces:          existingAgent.A2aSurfaces,
 			}, nil
 		}
 	}

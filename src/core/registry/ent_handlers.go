@@ -339,6 +339,16 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 		response["llm_providers"] = llmProvidersMap
 	}
 
+	// Include A2A surfaces with stamped FQDNs when present (issue #903).
+	// Triggers the warn-once if MCP_MESH_PUBLIC_URL_PREFIX is unset for an
+	// a2a registration so operators see the misconfiguration.
+	if len(serviceResp.A2ASurfaces) > 0 {
+		h.maybeWarnPublicURLPrefixUnset()
+		if surfacesResp := buildA2ASurfaceResponses(serviceResp.A2ASurfaces); surfacesResp != nil {
+			response["surfaces"] = surfacesResp
+		}
+	}
+
 	c.JSON(http.StatusOK, response)
 }
 
@@ -510,6 +520,36 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 		}
 	}
 	result["tools"] = toolsData
+
+	// A2A surfaces (issue #903 / A2A_SURFACE_DESIGN.org). Forwarded as
+	// []map[string]interface{} so the service layer can persist directly to
+	// the Ent JSON field. Omitted entirely when not present.
+	if reg.Surfaces != nil {
+		surfaces := make([]map[string]interface{}, 0, len(*reg.Surfaces))
+		for _, s := range *reg.Surfaces {
+			entry := map[string]interface{}{
+				"path":     s.Path,
+				"skill_id": s.SkillId,
+			}
+			if s.Name != nil {
+				entry["name"] = *s.Name
+			}
+			if s.Description != nil {
+				entry["description"] = *s.Description
+			}
+			if s.InputModes != nil {
+				entry["input_modes"] = *s.InputModes
+			}
+			if s.OutputModes != nil {
+				entry["output_modes"] = *s.OutputModes
+			}
+			if s.Tags != nil {
+				entry["tags"] = *s.Tags
+			}
+			surfaces = append(surfaces, entry)
+		}
+		result["surfaces"] = surfaces
+	}
 
 	return result
 }

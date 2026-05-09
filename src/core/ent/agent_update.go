@@ -17,6 +17,7 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 )
 
@@ -263,6 +264,24 @@ func (au *AgentUpdate) SetNillableEntityID(s *string) *AgentUpdate {
 // ClearEntityID clears the value of the "entity_id" field.
 func (au *AgentUpdate) ClearEntityID() *AgentUpdate {
 	au.mutation.ClearEntityID()
+	return au
+}
+
+// SetA2aSurfaces sets the "a2a_surfaces" field.
+func (au *AgentUpdate) SetA2aSurfaces(m []map[string]interface{}) *AgentUpdate {
+	au.mutation.SetA2aSurfaces(m)
+	return au
+}
+
+// AppendA2aSurfaces appends m to the "a2a_surfaces" field.
+func (au *AgentUpdate) AppendA2aSurfaces(m []map[string]interface{}) *AgentUpdate {
+	au.mutation.AppendA2aSurfaces(m)
+	return au
+}
+
+// ClearA2aSurfaces clears the value of the "a2a_surfaces" field.
+func (au *AgentUpdate) ClearA2aSurfaces() *AgentUpdate {
+	au.mutation.ClearA2aSurfaces()
 	return au
 }
 
@@ -572,6 +591,17 @@ func (au *AgentUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	}
 	if au.mutation.EntityIDCleared() {
 		_spec.ClearField(agent.FieldEntityID, field.TypeString)
+	}
+	if value, ok := au.mutation.A2aSurfaces(); ok {
+		_spec.SetField(agent.FieldA2aSurfaces, field.TypeJSON, value)
+	}
+	if value, ok := au.mutation.AppendedA2aSurfaces(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, agent.FieldA2aSurfaces, value)
+		})
+	}
+	if au.mutation.A2aSurfacesCleared() {
+		_spec.ClearField(agent.FieldA2aSurfaces, field.TypeJSON)
 	}
 	if au.mutation.CapabilitiesCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1051,6 +1081,24 @@ func (auo *AgentUpdateOne) ClearEntityID() *AgentUpdateOne {
 	return auo
 }
 
+// SetA2aSurfaces sets the "a2a_surfaces" field.
+func (auo *AgentUpdateOne) SetA2aSurfaces(m []map[string]interface{}) *AgentUpdateOne {
+	auo.mutation.SetA2aSurfaces(m)
+	return auo
+}
+
+// AppendA2aSurfaces appends m to the "a2a_surfaces" field.
+func (auo *AgentUpdateOne) AppendA2aSurfaces(m []map[string]interface{}) *AgentUpdateOne {
+	auo.mutation.AppendA2aSurfaces(m)
+	return auo
+}
+
+// ClearA2aSurfaces clears the value of the "a2a_surfaces" field.
+func (auo *AgentUpdateOne) ClearA2aSurfaces() *AgentUpdateOne {
+	auo.mutation.ClearA2aSurfaces()
+	return auo
+}
+
 // AddCapabilityIDs adds the "capabilities" edge to the Capability entity by IDs.
 func (auo *AgentUpdateOne) AddCapabilityIDs(ids ...int) *AgentUpdateOne {
 	auo.mutation.AddCapabilityIDs(ids...)
@@ -1387,6 +1435,17 @@ func (auo *AgentUpdateOne) sqlSave(ctx context.Context) (_node *Agent, err error
 	}
 	if auo.mutation.EntityIDCleared() {
 		_spec.ClearField(agent.FieldEntityID, field.TypeString)
+	}
+	if value, ok := auo.mutation.A2aSurfaces(); ok {
+		_spec.SetField(agent.FieldA2aSurfaces, field.TypeJSON, value)
+	}
+	if value, ok := auo.mutation.AppendedA2aSurfaces(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, agent.FieldA2aSurfaces, value)
+		})
+	}
+	if auo.mutation.A2aSurfacesCleared() {
+		_spec.ClearField(agent.FieldA2aSurfaces, field.TypeJSON)
 	}
 	if auo.mutation.CapabilitiesCleared() {
 		edge := &sqlgraph.EdgeSpec{

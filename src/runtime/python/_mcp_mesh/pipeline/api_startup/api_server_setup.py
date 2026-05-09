@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 from ...shared.config_resolver import ValidationRule, get_config_value
 from ...shared.defaults import MeshDefaults
 from ...shared.host_resolver import HostResolver
+from ...shared.slug import slugify_service_name
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
 
@@ -251,12 +252,29 @@ class APIServerSetupStep(PipelineStep):
         try:
             from ...engine.decorator_registry import DecoratorRegistry
 
-            DecoratorRegistry.update_agent_config(
-                {"agent_id": service_id, "name": app_info.get("title", "api-service")}
-            )
+            # Slugify the FastAPI app title so it matches the registry's
+            # name validation (lowercase alphanumeric + hyphens only).
+            # "MCP Mesh FastAPI Example" → "mcp-mesh-fastapi-example".
+            # Non-ASCII chars (e.g. "Café API ☕") are stripped to hyphens
+            # so registry validation doesn't reject the resulting name.
+            # Helper is shared with the A2A pipeline + service-id
+            # generators to keep the four call sites consistent.
+            raw_title = app_info.get("title")
+            slug_name = slugify_service_name(raw_title, "api-service")
+
+            # Plumb the discovered host/port into agent_config so any
+            # downstream consumer (telemetry, fallback URL builders)
+            # has the user's actual uvicorn bind info instead of the
+            # env-var-derived defaults.
+            update = {"agent_id": service_id, "name": slug_name}
+            if display_config.get("display_host"):
+                update["http_host"] = display_config["display_host"]
+            if display_config.get("display_port"):
+                update["http_port"] = display_config["display_port"]
+            DecoratorRegistry.update_agent_config(update)
 
             self.logger.debug(
-                f"🔧 Stored API service ID '{service_id}' in decorator registry for telemetry"
+                f"🔧 Stored API service ID '{service_id}' (name='{slug_name}', from title='{raw_title}') in decorator registry"
             )
         except Exception as e:
             self.logger.warning(
@@ -304,12 +322,9 @@ class APIServerSetupStep(PipelineStep):
                 rule=ValidationRule.STRING_RULE,
             )
 
-        # Clean the service name if provided
-        if api_name:
-            cleaned_name = api_name.lower().replace(" ", "-").replace("_", "-")
-            cleaned_name = "-".join(part for part in cleaned_name.split("-") if part)
-        else:
-            cleaned_name = ""
+        # Clean the service name if provided. Empty fallback is the
+        # sentinel that triggers the "api-{uuid8}" branch below.
+        cleaned_name = slugify_service_name(api_name, "")
 
         # Generate UUID suffix
         uuid_suffix = str(uuid.uuid4())[:8]

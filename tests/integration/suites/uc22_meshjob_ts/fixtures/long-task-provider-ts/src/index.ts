@@ -15,11 +15,14 @@
  *   - report_with_implicit_complete     — return value WITHOUT complete()
  *   - report_with_explicit_fail         — calls fail("reason")
  *   - report_that_crashes               — raises mid-attempt
+ *   - report_with_transient_failures    — throws TransientError on first N
+ *                                         attempts, succeeds on N+1 (retryOn)
  *   - runs_overlong                     — long sleep loop for cancel tests
  *   - report_with_downstream_call       — calls slow_downstream regular tool
  */
 import { FastMCP, mesh, type MeshJob, type McpMeshTool } from "@mcpmesh/sdk";
 import { z } from "zod";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 
 const HTTP_PORT = parseInt(process.env.MCP_MESH_HTTP_PORT ?? "9110", 10);
 
@@ -162,6 +165,74 @@ agent.addTool({
       await new Promise((r) => setTimeout(r, 300));
     }
     throw new Error("simulated crash for crash-recovery test");
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Transient-failure path — exercises retryOn (#894) (tc23 mirror)
+// ---------------------------------------------------------------------------
+//
+// Mirrors Python's report_with_transient_failures
+// (uc21_meshjob/fixtures/long-task-provider/main.py) and Java's
+// reportWithTransientFailures (uc23_meshjob_java/...). The handler is
+// declared with retryOn: [TransientError]: when the body throws
+// TransientError the dispatch wrapper calls JobController.releaseLease
+// (NOT fail), so the registry resets owner_instance_id and the next
+// claim cycle re-runs the handler — proving the fast-retry path
+// engaged rather than waiting for lease expiry.
+//
+// File-based counter shared with the Python fixture so the same
+// integration assertions (attempt_count=3) work cross-runtime.
+// ---------------------------------------------------------------------------
+class TransientError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TransientError";
+  }
+}
+
+const RETRY_COUNTER_PATH = "/tmp/mesh-retry-on-counter";
+
+function bumpRetryCounter(): number {
+  let n = 0;
+  if (existsSync(RETRY_COUNTER_PATH)) {
+    const body = readFileSync(RETRY_COUNTER_PATH, "utf8").trim();
+    n = body === "" ? 0 : parseInt(body, 10);
+    if (Number.isNaN(n)) n = 0;
+  }
+  n += 1;
+  writeFileSync(RETRY_COUNTER_PATH, String(n), "utf8");
+  return n;
+}
+
+agent.addTool({
+  name: "report_with_transient_failures",
+  capability: "report_with_transient_failures",
+  task: true,
+  meshJobParamIndex: 1,
+  retryOn: [TransientError],
+  description:
+    "Throws TransientError on the first N attempts, succeeds on N+1 — exercises retryOn (#894).",
+  parameters: z.object({
+    user_id: z.string(),
+    transient_failures: z.number().int().default(2),
+  }),
+  execute: async (
+    { user_id, transient_failures },
+    job: MeshJob | null = null,
+  ) => {
+    if (job?.updateProgress) {
+      await job.updateProgress(0.1, "checking transient counter");
+    }
+    const n = bumpRetryCounter();
+    if (n <= transient_failures) {
+      throw new TransientError(`simulated transient failure ${n}/${transient_failures}`);
+    }
+    const payload = { user_id, succeeded_on_attempt: n };
+    if (job?.complete) {
+      await job.complete(payload);
+    }
+    return payload;
   },
 });
 

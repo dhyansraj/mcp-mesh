@@ -319,6 +319,11 @@ pub enum AgentType {
     McpAgent = 0,
     /// API service that only consumes capabilities (e.g., FastAPI, Express)
     Api = 1,
+    /// A2A (Agent-to-Agent) surface — exposes JSON-RPC tasks/* endpoints and an
+    /// agent card under MCP_MESH_PUBLIC_URL_PREFIX. Issue #903 / A2A_SURFACE_DESIGN.org.
+    /// May still expose mesh tools (capabilities) — the type just signals to the registry
+    /// that it should additionally compute FQDNs from the optional `surfaces` field.
+    A2a = 2,
 }
 
 #[cfg(feature = "python")]
@@ -340,6 +345,7 @@ impl AgentType {
         match self {
             Self::McpAgent => "mcp_agent",
             Self::Api => "api",
+            Self::A2a => "a2a",
         }
     }
 
@@ -347,6 +353,7 @@ impl AgentType {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "api" => Self::Api,
+            "a2a" => Self::A2a,
             _ => Self::McpAgent,
         }
     }
@@ -450,6 +457,16 @@ pub struct AgentSpec {
 
     /// Heartbeat interval in seconds
     pub heartbeat_interval: u64,
+
+    /// A2A surfaces (issue #903 / A2A_SURFACE_DESIGN.org). Optional — populated
+    /// only when `agent_type=A2a` and the SDK has at least one `@mesh.a2a`-style
+    /// decorator. Stored as a JSON-encoded string to keep the field py-class
+    /// compatible (`pyclass(get_all, set_all)` requires fields convertible
+    /// to/from PyAny — `serde_json::Value` is not). The Python side passes
+    /// `json.dumps([{path, skill_id, ...}, ...])`; `from_spec` re-parses
+    /// before forwarding to the registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surfaces: Option<String>,
 }
 
 #[cfg(feature = "python")]
@@ -469,7 +486,8 @@ impl AgentSpec {
         tools=None,
         llm_agents=None,
         heartbeat_interval=5,
-        agent_id=None
+        agent_id=None,
+        surfaces=None
     ))]
     #[allow(clippy::too_many_arguments)]
     pub fn py_new(
@@ -486,8 +504,13 @@ impl AgentSpec {
         llm_agents: Option<Vec<LlmAgentSpec>>,
         heartbeat_interval: u64,
         agent_id: Option<String>,
+        // Issue #903 Phase 1B: A2A surfaces JSON passthrough. Accepts a JSON
+        // string from Python (built by `_build_agent_spec`) so we don't need
+        // to model `A2ASurface` as a pyclass on the Rust side — the registry
+        // is the only consumer of the shape.
+        surfaces: Option<String>,
     ) -> Self {
-        Self::new(
+        let mut spec = Self::new(
             name,
             registry_url,
             version,
@@ -501,7 +524,11 @@ impl AgentSpec {
             llm_agents,
             heartbeat_interval,
             agent_id,
-        )
+        );
+        // Empty string is treated as absent so the wire stays clean
+        // (registry's `surfaces` is omitted via `skip_serializing_if`).
+        spec.surfaces = surfaces.filter(|s| !s.trim().is_empty());
+        spec
     }
 
     fn __repr__(&self) -> String {
@@ -553,6 +580,7 @@ impl AgentSpec {
             tools: tools.unwrap_or_default(),
             llm_agents: llm_agents.unwrap_or_default(),
             heartbeat_interval,
+            surfaces: None,
         }
     }
 
@@ -761,6 +789,34 @@ mod tests {
         assert_eq!(spec.agent_type.as_api_str(), "api");
         assert_eq!(spec.runtime, RuntimeType::TypeScript);
         assert_eq!(spec.runtime.as_api_str(), "typescript");
+    }
+
+    #[test]
+    fn test_agent_type_a2a() {
+        // Issue #903 Phase 1B: A2A surface adapter agent type. The string
+        // form must round-trip via from_str/as_api_str so the registry sees
+        // exactly "a2a" on the wire.
+        assert_eq!(AgentType::from_str("a2a"), AgentType::A2a);
+        assert_eq!(AgentType::A2a.as_api_str(), "a2a");
+
+        let spec = AgentSpec::new(
+            "report-generator".to_string(),
+            "http://localhost:8100".to_string(),
+            "1.0.0".to_string(),
+            "".to_string(),
+            0,
+            "localhost".to_string(),
+            "default".to_string(),
+            Some("a2a".to_string()),
+            None,
+            None,
+            None,
+            5,
+            None,
+        );
+
+        assert_eq!(spec.agent_type, AgentType::A2a);
+        assert!(spec.surfaces.is_none());
     }
 
     #[test]

@@ -22,9 +22,9 @@ func (Agent) Fields() []ent.Field {
 			StorageKey("agent_id").
 			Comment("Unique identifier for the agent"),
 		field.Enum("agent_type").
-			Values("mcp_agent", "mesh_tool", "decorator_agent", "api").
+			Values("mcp_agent", "mesh_tool", "decorator_agent", "api", "a2a").
 			Default("mcp_agent").
-			Comment("Type of agent"),
+			Comment("Type of agent (mcp_agent | mesh_tool | decorator_agent | api | a2a)"),
 		field.Enum("runtime").
 			Values("python", "typescript", "java").
 			Default("python").
@@ -68,6 +68,9 @@ func (Agent) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Entity ID from TLS certificate verification"),
+		field.JSON("a2a_surfaces", []map[string]interface{}{}).
+			Optional().
+			Comment("A2A surface metadata (path, skill_id, description, etc.) — populated for a2a-typed agents only. JSON for v1 simplicity; promote to entity if query patterns demand it later."),
 	}
 }
 

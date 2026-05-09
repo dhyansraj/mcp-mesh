@@ -92,8 +92,9 @@ class DebounceCoordinator:
 
         Returns:
             "mcp": Only MCP agents/tools found
-            "api": Only API routes found
-            "mixed": Both MCP and API decorators found (throws exception)
+            "api": Only @mesh.route decorators found
+            "a2a": Only @mesh.a2a / mesh.a2a.mount surfaces found
+            "mixed": Conflicting decorator families coexist (throws exception)
             "none": No decorators found
         """
         from ...engine.decorator_registry import DecoratorRegistry
@@ -101,22 +102,32 @@ class DebounceCoordinator:
         agents = DecoratorRegistry.get_mesh_agents()
         tools = DecoratorRegistry.get_mesh_tools()
         routes = DecoratorRegistry.get_all_by_type("mesh_route")
+        a2a_surfaces = DecoratorRegistry.get_all_by_type("mesh_a2a")
 
         has_mcp = len(agents) > 0 or len(tools) > 0
         has_api = len(routes) > 0
+        has_a2a = len(a2a_surfaces) > 0
 
         self.logger.debug(
-            f"🔍 Pipeline type detection: MCP={has_mcp} ({len(agents)} agents, {len(tools)} tools), API={has_api} ({len(routes)} routes)"
+            f"🔍 Pipeline type detection: MCP={has_mcp} ({len(agents)} agents, {len(tools)} tools), "
+            f"API={has_api} ({len(routes)} routes), "
+            f"A2A={has_a2a} ({len(a2a_surfaces)} surfaces)"
         )
 
-        if has_api and has_mcp:
+        # Mixed-mode: MCP cannot coexist with @mesh.route or @mesh.a2a
+        # in the same process. @mesh.route + @mesh.a2a coexisting is also
+        # a mixed-mode error (each owns the user's FastAPI app + heartbeat).
+        active_families = sum([has_mcp, has_api, has_a2a])
+        if active_families > 1:
             return "mixed"
-        elif has_api:
+
+        if has_api:
             return "api"
-        elif has_mcp:
+        if has_a2a:
+            return "a2a"
+        if has_mcp:
             return "mcp"
-        else:
-            return "none"
+        return "none"
 
     def _execute_processing(self) -> None:
         """Execute the processing (called by timer)."""
@@ -139,9 +150,10 @@ class DebounceCoordinator:
 
             if pipeline_type == "mixed":
                 error_msg = (
-                    "❌ Mixed mode not supported: Cannot use @mesh.route decorators "
-                    "together with @mesh.tool/@mesh.agent decorators in the same process. "
-                    "Please use either MCP agent decorators OR API route decorators, not both."
+                    "❌ Mixed mode not supported: @mesh.tool/@mesh.agent, "
+                    "@mesh.route, and @mesh.a2a / mesh.a2a.mount decorator "
+                    "families cannot be combined in the same process. "
+                    "Please use exactly one family per process."
                 )
                 self.logger.error(error_msg)
                 raise RuntimeError(error_msg)
@@ -168,8 +180,29 @@ class DebounceCoordinator:
                 elif pipeline_type == "api":
                     # Phase 1: Run async API pipeline setup
                     result = asyncio.run(orchestrator.process_api_once())
+                elif pipeline_type == "a2a":
+                    # Phase 1: Run async A2A pipeline setup
+                    result = asyncio.run(orchestrator.process_a2a_once())
                 else:
                     raise RuntimeError(f"Unsupported pipeline type: {pipeline_type}")
+
+                # Fail fast on pipeline failure — proceeding to "DI complete" /
+                # heartbeat startup with a failed pipeline would silently leave
+                # the agent half-initialised (no surfaces mounted, no heartbeat
+                # spec, etc.) while the user's uvicorn happily serves an
+                # empty/broken app. Surface the error and abort.
+                if result.get("status") == "failed":
+                    err_detail = result.get("message") or "unknown error"
+                    errors = result.get("errors") or []
+                    if errors:
+                        err_detail = f"{err_detail}: {errors}"
+                    self.logger.error(
+                        f"❌ {pipeline_type.upper()} pipeline failed during startup; "
+                        f"aborting: {err_detail}"
+                    )
+                    raise RuntimeError(
+                        f"{pipeline_type.upper()} pipeline failed: {err_detail}"
+                    )
 
                 # Phase 2: Extract FastAPI app and start synchronous server
                 pipeline_context = result.get("context", {}).get("pipeline_context", {})
@@ -194,6 +227,24 @@ class DebounceCoordinator:
                     )
                     self.logger.info(
                         "✅ API dependency injection complete - user's FastAPI server can now start"
+                    )
+                    return  # Don't block - let user's uvicorn run
+                elif pipeline_type == "a2a":
+                    # For A2A services, mirror the API path: setup heartbeat
+                    # in background and let user's uvicorn drive the lifecycle.
+                    from ..a2a_heartbeat.a2a_lifespan_integration import (
+                        a2a_heartbeat_lifespan_task,
+                    )
+
+                    self._setup_heartbeat_background(
+                        heartbeat_config,
+                        pipeline_context,
+                        a2a_heartbeat_lifespan_task,
+                        id_field="service_id",
+                        label="A2A service",
+                    )
+                    self.logger.info(
+                        "✅ A2A dependency injection complete - user's FastAPI server can now start"
                     )
                     return  # Don't block - let user's uvicorn run
                 elif fastapi_app and binding_config:
@@ -299,8 +350,24 @@ class DebounceCoordinator:
                     result = asyncio.run(orchestrator.process_once())
                 elif pipeline_type == "api":
                     result = asyncio.run(orchestrator.process_api_once())
+                elif pipeline_type == "a2a":
+                    result = asyncio.run(orchestrator.process_a2a_once())
                 else:
                     raise RuntimeError(f"Unsupported pipeline type: {pipeline_type}")
+
+                # Mirror the auto-run branch: surface pipeline failures so
+                # tests / debug runs don't report success on a broken setup.
+                if result.get("status") == "failed":
+                    err_detail = result.get("message") or "unknown error"
+                    errors = result.get("errors") or []
+                    if errors:
+                        err_detail = f"{err_detail}: {errors}"
+                    self.logger.error(
+                        f"❌ {pipeline_type.upper()} pipeline failed in single-execution mode: {err_detail}"
+                    )
+                    raise RuntimeError(
+                        f"{pipeline_type.upper()} pipeline failed: {err_detail}"
+                    )
 
                 self.logger.info("✅ Pipeline execution completed, exiting")
 
@@ -510,6 +577,42 @@ class MeshOrchestrator:
 
         except Exception as e:
             error_msg = f"API pipeline execution failed: {e}"
+            self.logger.error(f"❌ {error_msg}")
+
+            return {
+                "status": "failed",
+                "message": error_msg,
+                "errors": [str(e)],
+                "context": {},
+                "timestamp": "unknown",
+            }
+
+    async def process_a2a_once(self) -> dict:
+        """
+        Execute the A2A pipeline once for @mesh.a2a / mesh.a2a.mount surfaces.
+
+        Issue #903 Phase 1B. Handles FastAPI app discovery, tracing
+        middleware integration, and heartbeat config preparation for an
+        A2A-only flow (sibling to ``process_api_once`` and ``process_once``).
+        """
+        self.logger.info(f"🚀 Starting A2A pipeline execution: {self.name}")
+
+        try:
+            from ..a2a_startup import A2APipeline
+
+            a2a_pipeline = A2APipeline(name=f"{self.name}-a2a")
+            result = await a2a_pipeline.execute()
+
+            return {
+                "status": result.status.value,
+                "message": result.message,
+                "errors": result.errors,
+                "context": result.context,
+                "timestamp": result.timestamp.isoformat(),
+            }
+
+        except Exception as e:
+            error_msg = f"A2A pipeline execution failed: {e}"
             self.logger.error(f"❌ {error_msg}")
 
             return {

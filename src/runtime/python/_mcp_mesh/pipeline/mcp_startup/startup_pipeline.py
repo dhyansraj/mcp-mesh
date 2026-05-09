@@ -60,6 +60,12 @@ class StartupPipeline(MeshPipeline):
             # Phase 1 MeshJob: spawn one Python claim worker per
             # @mesh.tool(task=True) handler (skipped when no task tools).
             JobsClaimWorkersStep(),
+            # Issue #903 Phase 1B: A2A discovery + JSON-RPC routes are
+            # NOT auto-mounted here — users opt in by calling
+            # ``mesh.a2a.mount(app, path=...)`` on their own FastAPI
+            # app (mirrors the @mesh.route UX). Heartbeat preparation
+            # still picks up the @mesh.a2a metadata and emits
+            # agent_type=a2a + the surfaces array on registration.
             # Note: Registry connection is handled in heartbeat pipeline for retry behavior
             # Note: FastAPI server will be started with uvicorn.run() after pipeline (or reused if discovered)
         ]

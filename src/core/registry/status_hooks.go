@@ -125,7 +125,10 @@ func handleAgentStatusChange(ctx context.Context, m *ent.AgentMutation, config *
 			}
 		}
 
-		// Create the appropriate registry event in the same transaction (skip for API services)
+		// Create the appropriate registry event in the same transaction (skip for API services).
+		// Note: a2a-typed agents still generate lifecycle events because they can hold
+		// mesh capabilities alongside their A2A surfaces (see A2A_SURFACE_DESIGN.org —
+		// "agent_type=a2a" is additive over mesh-tool handling).
 		if oldAgent.AgentType.String() != "api" {
 			eventType := getEventTypeForStatusChange(oldStatus, newStatus)
 			eventData := createEventDataForStatusChange(oldStatus, newStatus)

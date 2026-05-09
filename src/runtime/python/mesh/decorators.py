@@ -1717,6 +1717,305 @@ def route(
     return decorator
 
 
+def _derive_a2a_skill_id_from_path(path: str) -> str:
+    """Derive a default skill_id from an A2A path's last segment.
+
+    ``/agents/report-generator`` → ``report-generator``. Falls back to
+    ``"default"`` for degenerate inputs (just ``/`` or empty after strip).
+    Issue #903 / A2A_SURFACE_DESIGN.org > "API Surface (Python v1)".
+    """
+    last = path.rstrip("/").rsplit("/", 1)[-1].strip()
+    return last or "default"
+
+
+def _derive_a2a_skill_name_from_id(skill_id: str) -> str:
+    """Derive a TitleCase skill name from a skill_id.
+
+    ``report-generator`` → ``Report Generator``. Splits on ``-`` and ``_``.
+    """
+    parts = [p for p in skill_id.replace("_", "-").split("-") if p]
+    return " ".join(p.capitalize() for p in parts) if parts else skill_id
+
+
+def a2a(
+    *,
+    path: str,
+    description: str | None = None,
+    dependencies: list[str] | list[dict[str, Any]] | None = None,
+    skill_id: str | None = None,
+    skill_name: str | None = None,
+    input_modes: list[str] | None = None,
+    output_modes: list[str] | None = None,
+    tags: list[str] | None = None,
+    auth: str | None = None,
+    **kwargs: Any,
+) -> Callable[[T], T]:
+    """A2A (Agent-to-Agent) surface decorator (issue #903 Phase 1B).
+
+    Exposes a function as an A2A v1.0 protocol surface. Each decorated
+    function becomes one agent card with one skill, mounted at
+    ``GET {path}/.well-known/agent.json`` (discovery) and
+    ``POST {path}`` (JSON-RPC tasks/* entry point). The function body is
+    user-controlled and may declare DDDI dependencies (typically a single
+    underlying ``@mesh.tool`` capability).
+
+    Phase 1: discovery + agent-card generation only. ``tasks/*`` JSON-RPC
+    methods return ``Method not implemented``. Phase 2 wires actual task
+    routing.
+
+    Args:
+        path: REQUIRED URL path suffix for this surface (must start with
+            ``/``), e.g. ``/agents/report-generator``. The registry
+            concatenates ``MCP_MESH_PUBLIC_URL_PREFIX`` with this path
+            to compute the public FQDN.
+        description: Free-form skill description shown on the agent card.
+            Defaults to the function's docstring when not set.
+        dependencies: Optional list of mesh capabilities to inject (same
+            shape as ``@mesh.tool`` deps). For v1, typically a single
+            capability — multi-skill grouping is v2 (see design doc
+            "LLM-backed multi-skill cards" section).
+        skill_id: A2A skill identifier (kebab-case canonical). When unset,
+            derived from the path's last segment.
+        skill_name: Human-readable skill name. When unset, derived from
+            ``skill_id`` (TitleCase).
+        input_modes: A2A inputModes for this skill (default
+            ``["application/json"]``).
+        output_modes: A2A outputModes for this skill (default
+            ``["application/json"]``).
+        tags: Skill tags surfaced on the agent card.
+        auth: Authentication scheme. v1 accepts ``"bearer"`` or ``None``
+            (no auth). Anything else raises ``ValueError`` — broader auth
+            schemes (SPIRE/mTLS/OAuth) land in v2.
+        **kwargs: Additional metadata stamped onto the surface registration.
+
+    Returns:
+        The decorated function with ``_mesh_a2a_metadata`` attached and
+        DI wiring applied (mirrors ``@mesh.route``).
+
+    Example:
+        @mesh.a2a(
+            path="/agents/report-generator",
+            description="Generate a long-form report",
+            dependencies=["generate_report"],
+            auth="bearer",
+        )
+        async def report_generator_a2a(
+            payload: dict,
+            generate_report: McpMeshTool = None,
+        ):
+            return await generate_report(**payload)
+    """
+
+    def decorator(target: T) -> T:
+        # Validate path (REQUIRED, must start with /)
+        if not isinstance(path, str) or not path:
+            raise ValueError("path is required for @mesh.a2a and must be a non-empty string")
+        if not path.startswith("/"):
+            raise ValueError(
+                f"@mesh.a2a path must start with '/' (got {path!r})"
+            )
+
+        # Validate auth — v1 scope only allows "bearer" or None.
+        if auth is not None:
+            if not isinstance(auth, str):
+                raise ValueError("auth must be a string or None")
+            if auth != "bearer":
+                raise ValueError(
+                    f"@mesh.a2a auth={auth!r} is not supported in v1; "
+                    "only 'bearer' or None are valid. Broader auth schemes "
+                    "(SPIRE/mTLS/OAuth) are v2 scope."
+                )
+
+        if description is not None and not isinstance(description, str):
+            raise ValueError("description must be a string or None")
+
+        if skill_id is not None and not isinstance(skill_id, str):
+            raise ValueError("skill_id must be a string or None")
+
+        if skill_name is not None and not isinstance(skill_name, str):
+            raise ValueError("skill_name must be a string or None")
+
+        # Validate input/output modes
+        for field_name, value in (("input_modes", input_modes), ("output_modes", output_modes)):
+            if value is not None:
+                if not isinstance(value, list):
+                    raise ValueError(f"{field_name} must be a list of strings")
+                for entry in value:
+                    if not isinstance(entry, str):
+                        raise ValueError(f"all {field_name} entries must be strings")
+
+        # Validate tags
+        if tags is not None:
+            if not isinstance(tags, list):
+                raise ValueError("tags must be a list of strings")
+            for tag in tags:
+                if not isinstance(tag, str):
+                    raise ValueError("all tags must be strings")
+
+        # Validate and process dependencies (mirrors @mesh.route shape).
+        if dependencies is not None:
+            if not isinstance(dependencies, list):
+                raise ValueError("dependencies must be a list")
+
+            validated_dependencies = []
+            for dep in dependencies:
+                if isinstance(dep, str):
+                    validated_dependencies.append({"capability": dep, "tags": []})
+                elif isinstance(dep, dict):
+                    if "capability" not in dep:
+                        raise ValueError("dependency must have 'capability' field")
+                    if not isinstance(dep["capability"], str):
+                        raise ValueError("dependency capability must be a string")
+                    # Mirror @mesh.tool's tag validation — tags is a list
+                    # whose elements are either strings (AND-tags) or
+                    # nested lists of strings (OR-groups). Without this
+                    # check, malformed shapes (ints, nested ints, dicts)
+                    # would silently propagate to the registry and only
+                    # surface as confusing resolver mismatches at
+                    # capability-binding time.
+                    dep_tags = dep.get("tags", [])
+                    if not isinstance(dep_tags, list):
+                        raise ValueError("dependency tags must be a list")
+                    for tag in dep_tags:
+                        if isinstance(tag, str):
+                            continue
+                        elif isinstance(tag, list):
+                            for inner_tag in tag:
+                                if not isinstance(inner_tag, str):
+                                    raise ValueError(
+                                        "OR alternative tags must be strings"
+                                    )
+                        else:
+                            raise ValueError(
+                                "tags must be strings or arrays of strings (OR alternatives)"
+                            )
+                    dep_version = dep.get("version")
+                    if dep_version is not None and not isinstance(dep_version, str):
+                        raise ValueError("dependency version must be a string")
+                    dep_dict = {
+                        "capability": dep["capability"],
+                        "tags": dep_tags,
+                    }
+                    if dep_version is not None:
+                        dep_dict["version"] = dep_version
+                    validated_dependencies.append(dep_dict)
+                else:
+                    raise ValueError("dependencies must be strings or dictionaries")
+        else:
+            validated_dependencies = []
+
+        if len(validated_dependencies) > 1:
+            # v1 emits a single agent card per surface with one skill. Multi-
+            # dep is permitted (the user's function can fan out internally)
+            # but multi-skill grouping is reserved for v2 (see design doc).
+            logger.warning(
+                f"@mesh.a2a({path}) declares {len(validated_dependencies)} "
+                "dependencies; v1 emits one agent card per surface with one "
+                "skill. Multi-skill grouping in a single card is v2 scope."
+            )
+
+        # Derive defaults for skill_id and skill_name when not provided.
+        final_skill_id = skill_id if skill_id else _derive_a2a_skill_id_from_path(path)
+        final_skill_name = (
+            skill_name if skill_name else _derive_a2a_skill_name_from_id(final_skill_id)
+        )
+
+        final_input_modes = (
+            list(input_modes) if input_modes is not None else ["application/json"]
+        )
+        final_output_modes = (
+            list(output_modes) if output_modes is not None else ["application/json"]
+        )
+        final_tags = list(tags) if tags is not None else []
+
+        final_description = description
+        if final_description is None:
+            doc = getattr(target, "__doc__", None)
+            if doc:
+                final_description = doc.strip().split("\n")[0]
+
+        # Build A2A surface metadata. Stamped onto the function so the
+        # pipeline (heartbeat preparation + FastAPI route mount step) can
+        # discover it.
+        metadata = {
+            "path": path,
+            "skill_id": final_skill_id,
+            "skill_name": final_skill_name,
+            "description": final_description,
+            "input_modes": final_input_modes,
+            "output_modes": final_output_modes,
+            "tags": final_tags,
+            "auth": auth,
+            "dependencies": validated_dependencies,
+            **kwargs,
+        }
+
+        target._mesh_a2a_metadata = metadata
+
+        # Register with DecoratorRegistry under a custom decorator type so
+        # the pipeline can discover @mesh.a2a-decorated functions.
+        DecoratorRegistry.register_custom_decorator("mesh_a2a", target, metadata)
+
+        try:
+            _add_tracing_middleware_immediately()
+        except Exception as e:
+            logger.debug(f"Failed to add immediate tracing middleware for a2a: {e}")
+
+        logger.debug(
+            f"🌐 A2A surface registered: path={path}, skill_id={final_skill_id}, "
+            f"deps={len(validated_dependencies)}, auth={auth!r}"
+        )
+
+        # Wrap with DI injector when there are dependencies (mirrors @mesh.route).
+        try:
+            from _mcp_mesh.engine.dependency_injector import get_global_injector
+
+            dependency_names = [dep["capability"] for dep in validated_dependencies]
+            injector = get_global_injector()
+            wrapped = injector.create_injection_wrapper(target, dependency_names)
+
+            # Preserve metadata on wrapper so the route-mount step finds it
+            # regardless of which reference it has.
+            wrapped._mesh_a2a_metadata = metadata
+            target._mesh_injection_wrapper = wrapped
+            wrapped._mesh_is_injection_wrapper = True
+
+            _trigger_debounced_processing()
+            return wrapped
+        except Exception as e:
+            logger.error(
+                f"A2A dependency injection setup failed for {target.__name__}: {e}"
+            )
+            _trigger_debounced_processing()
+            return target
+
+    return decorator
+
+
+def _a2a_mount(*args: Any, **kwargs: Any):
+    """Attribute alias for ``mesh.a2a.mount`` (see ``mesh.a2a.mount``).
+
+    The implementation lives in ``mesh.a2a`` to keep the FastAPI import
+    out of ``mesh.decorators`` (which is loaded eagerly by ``import mesh``
+    and shouldn't pull FastAPI for users that only need ``@mesh.tool``).
+
+    Imports via ``importlib`` rather than ``from . import a2a`` because
+    the ``mesh`` package's ``__getattr__`` shadows ``a2a`` with the
+    decorator function — a plain ``from`` import would resolve
+    ``a2a`` to ``_a2a_mount`` itself and recurse.
+    """
+    import importlib
+
+    a2a_module = importlib.import_module("mesh.a2a")
+    return a2a_module.mount(*args, **kwargs)
+
+
+# Expose ``mount`` as an attribute of the ``a2a`` decorator so users can
+# write ``@mesh.a2a.mount(app, path=...)`` while still keeping
+# ``@mesh.a2a(path=...)`` callable as a plain decorator.
+a2a.mount = _a2a_mount  # type: ignore[attr-defined]
+
+
 def _add_tracing_middleware_immediately():
     """
     Request tracing middleware injection using monkey-patch approach.

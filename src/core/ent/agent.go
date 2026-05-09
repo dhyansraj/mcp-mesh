@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"mcp-mesh/src/core/ent/agent"
 	"strings"
@@ -18,7 +19,7 @@ type Agent struct {
 	// ID of the ent.
 	// Unique identifier for the agent
 	ID string `json:"id,omitempty"`
-	// Type of agent
+	// Type of agent (mcp_agent | mesh_tool | decorator_agent | api | a2a)
 	AgentType agent.AgentType `json:"agent_type,omitempty"`
 	// SDK runtime: python, typescript, or java
 	Runtime agent.Runtime `json:"runtime,omitempty"`
@@ -46,6 +47,8 @@ type Agent struct {
 	LastFullRefresh time.Time `json:"last_full_refresh,omitempty"`
 	// Entity ID from TLS certificate verification
 	EntityID *string `json:"entity_id,omitempty"`
+	// A2A surface metadata (path, skill_id, description, etc.) — populated for a2a-typed agents only. JSON for v1 simplicity; promote to entity if query patterns demand it later.
+	A2aSurfaces []map[string]interface{} `json:"a2a_surfaces,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the AgentQuery when eager-loading is set.
 	Edges        AgentEdges `json:"edges"`
@@ -119,6 +122,8 @@ func (*Agent) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case agent.FieldA2aSurfaces:
+			values[i] = new([]byte)
 		case agent.FieldHTTPPort, agent.FieldTotalDependencies, agent.FieldDependenciesResolved:
 			values[i] = new(sql.NullInt64)
 		case agent.FieldID, agent.FieldAgentType, agent.FieldRuntime, agent.FieldName, agent.FieldVersion, agent.FieldHTTPHost, agent.FieldNamespace, agent.FieldStatus, agent.FieldEntityID:
@@ -231,6 +236,14 @@ func (a *Agent) assignValues(columns []string, values []any) error {
 				a.EntityID = new(string)
 				*a.EntityID = value.String
 			}
+		case agent.FieldA2aSurfaces:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field a2a_surfaces", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &a.A2aSurfaces); err != nil {
+					return fmt.Errorf("unmarshal field a2a_surfaces: %w", err)
+				}
+			}
 		default:
 			a.selectValues.Set(columns[i], values[i])
 		}
@@ -335,6 +348,9 @@ func (a *Agent) String() string {
 		builder.WriteString("entity_id=")
 		builder.WriteString(*v)
 	}
+	builder.WriteString(", ")
+	builder.WriteString("a2a_surfaces=")
+	builder.WriteString(fmt.Sprintf("%v", a.A2aSurfaces))
 	builder.WriteByte(')')
 	return builder.String()
 }
