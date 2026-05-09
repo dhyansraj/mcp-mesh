@@ -1,4 +1,4 @@
-"""User-facing A2A surface helpers (issue #903 Phase 1B / Phase 2).
+"""User-facing A2A surface helpers (issue #903 Phase 1B / Phase 2 / Phase 3).
 
 Two complementary entry points:
 
@@ -19,11 +19,24 @@ Two complementary entry points:
     POST ``{path}``                         → JSON-RPC 2.0 entry point
 
 Phase 2 (this module) dispatches sync ``tasks/send`` into the user
-handler and wraps the result in an A2A v1.0 ``Task`` envelope. Other
-``tasks/*`` methods (``tasks/get``, ``tasks/cancel``,
-``tasks/sendSubscribe``) and ``tasks/send`` for ``task=True``
-underlying tools still return JSON-RPC ``Method not implemented`` —
-those land in Phase 3 once the MeshJob lifecycle is wired.
+handler and wraps the result in an A2A v1.0 ``Task`` envelope.
+
+Phase 2-leftover wires the long-running task lifecycle: when the user
+handler returns a ``mcp_mesh_core.JobProxy`` (i.e., the handler called
+``await meshjob_dep.submit(...)``), the framework treats the call as
+long-running — stores the proxy in a process-local map keyed by A2A
+``task_id``, and exposes ``tasks/get`` / ``tasks/cancel`` against that
+proxy. Detecting long-running via the *return value* (rather than the
+metadata-driven ``_underlying_tool_is_task`` helper) is intentional:
+the helper can't see cross-agent deps, but the return-value pattern
+works uniformly for local *and* remote ``task=True`` deps.
+
+Phase 3 wires SSE streaming via ``tasks/sendSubscribe`` and
+``tasks/resubscribe`` — the same dispatch as ``tasks/send`` but the
+response is a ``StreamingResponse`` of A2A v1.0 ``TaskStatusUpdateEvent``
+/ ``TaskArtifactUpdateEvent`` JSON-RPC envelopes. Per spec, client
+disconnect does NOT cancel the underlying job; the client may rejoin
+via ``tasks/resubscribe``.
 
 Public URL caching
 ==================
@@ -42,16 +55,148 @@ and stringified annotations cause it to misclassify ``request: Request``
 as a query parameter (yielding 422 on every POST).
 """
 
+import asyncio
 import json as _json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Long-running task store
+# ---------------------------------------------------------------------------
+#
+# Shape: ``{ task_id (str) -> { "proxy": JobProxy, "terminal_at": float|None } }``
+#
+# - ``proxy`` is a ``mcp_mesh_core.JobProxy`` returned from the user
+#   handler when it submitted a ``MeshJob``. Keeping the proxy lets
+#   ``tasks/get`` / ``tasks/cancel`` / ``tasks/resubscribe`` poll +
+#   cancel the underlying mesh job without re-resolving.
+# - ``terminal_at`` is the monotonic-clock timestamp when the task was
+#   first observed in a terminal state (``completed`` / ``failed`` /
+#   ``cancelled``). ``None`` while still working. Used by the sweep to
+#   evict entries older than ``_TERMINAL_GRACE_SECS`` so the store
+#   doesn't grow unbounded for long-lived agents.
+#
+# The store is process-local — A2A surfaces do not currently share state
+# across replicas. A client that connected to replica A and then
+# reconnects (via ``tasks/resubscribe``) to replica B would get an
+# unknown-task error. Cross-replica sharing is out of scope for v1.
+_A2A_TASK_STORE: Dict[str, dict] = {}
+
+# Evict terminal-state entries from ``_A2A_TASK_STORE`` after this many
+# seconds. Five minutes balances "give the client time to fetch the
+# final result" against "don't keep references to dead Rust JobProxy
+# objects forever".
+_TERMINAL_GRACE_SECS = 300.0
+
+
+# A2A v1.0 spec uses a single-l ``"canceled"`` (US spelling); the mesh
+# job lifecycle uses double-l ``"cancelled"`` (UK spelling, matches the
+# Rust ``JobStatus::Cancelled`` variant). Translate at the boundary.
+_MESH_TO_A2A_STATE = {
+    "working": "working",
+    "completed": "completed",
+    "failed": "failed",
+    "cancelled": "canceled",
+}
+
+
+def _map_mesh_state(mesh_status: Optional[str]) -> str:
+    """Translate a mesh job status string to its A2A v1.0 equivalent.
+
+    Unknown / unset statuses fall back to ``"working"`` — preserves the
+    invariant that we never emit an A2A state outside the spec's
+    enumerated set, even if the registry adds a new internal status
+    we haven't mapped yet.
+    """
+    if not mesh_status:
+        return "working"
+    return _MESH_TO_A2A_STATE.get(mesh_status, "working")
+
+
+def _is_job_proxy(value: Any) -> bool:
+    """Return True iff ``value`` is a ``mcp_mesh_core.JobProxy`` instance.
+
+    Lazy import: ``mcp_mesh_core`` is a Rust extension that may not be
+    available in pure-Python test environments. When the import fails
+    we fall back to ``False`` — handlers in test envs that mock the
+    proxy can still use the duck-typed helpers via ``isinstance`` checks
+    against their mock class. Production agents always have the
+    extension installed.
+    """
+    try:
+        from mcp_mesh_core import JobProxy  # type: ignore[attr-defined]
+    except Exception:
+        return False
+    return isinstance(value, JobProxy)
+
+
+def _sweep_terminal_tasks(now: Optional[float] = None) -> None:
+    """Evict entries from ``_A2A_TASK_STORE`` whose terminal_at is older
+    than ``_TERMINAL_GRACE_SECS`` ago. Best-effort housekeeping called
+    on each store access — keeps the dict bounded for long-lived agents
+    without requiring a background sweeper task.
+    """
+    if not _A2A_TASK_STORE:
+        return
+    now = now if now is not None else time.monotonic()
+    expired = [
+        tid
+        for tid, entry in _A2A_TASK_STORE.items()
+        if entry.get("terminal_at") is not None
+        and (now - entry["terminal_at"]) > _TERMINAL_GRACE_SECS
+    ]
+    for tid in expired:
+        _A2A_TASK_STORE.pop(tid, None)
+
+
+def _store_task(
+    task_id: str,
+    proxy: Any,
+    *,
+    request_message: Optional[dict] = None,
+    session_id: Optional[str] = None,
+) -> None:
+    """Register a long-running task → proxy mapping for later lookups.
+
+    Sweeps terminal entries first, then rejects duplicates: if ``task_id``
+    already maps to an in-flight task, raises ``ValueError`` rather than
+    silently overwriting (which would orphan the prior ``JobProxy`` and
+    leave the originating client unable to poll/cancel its task).
+
+    Persists ``request_message`` and ``session_id`` alongside the proxy
+    so ``tasks/get`` envelopes can echo the originating request in the
+    A2A ``history`` field (which is otherwise empty for polled lookups).
+    """
+    _sweep_terminal_tasks()
+    if task_id in _A2A_TASK_STORE:
+        raise ValueError(
+            f"A2A task id {task_id!r} is already in use; pick a fresh "
+            "id or wait for the existing task to terminate (entries are "
+            f"swept after {_TERMINAL_GRACE_SECS}s in terminal state)"
+        )
+    _A2A_TASK_STORE[task_id] = {
+        "proxy": proxy,
+        "terminal_at": None,
+        "request_message": request_message,
+        "session_id": session_id,
+    }
+
+
+def _mark_terminal(task_id: str) -> None:
+    """Record that ``task_id`` reached a terminal state, starting the
+    eviction grace window. No-op if the task isn't in the store."""
+    entry = _A2A_TASK_STORE.get(task_id)
+    if entry is not None and entry.get("terminal_at") is None:
+        entry["terminal_at"] = time.monotonic()
 
 
 # Module-level cache of the registry-stamped public URLs, keyed by
@@ -203,7 +348,14 @@ def _make_card_endpoint(
         cached = get_cached_public_url(path, skill_id)
         public_url = cached or _local_fallback_url(agent_config, path)
 
-        streaming = _underlying_tool_is_task(metadata)
+        # Per A2A v1.0 spec, capabilities.streaming = "supports
+        # tasks/sendSubscribe + tasks/resubscribe". The mount() helper
+        # ALWAYS wires both routes (sync handlers stream a single
+        # artifact + terminal event; long-running stream progress +
+        # artifact + terminal). So streaming is always advertised true.
+        # _underlying_tool_is_task remains as a documented fallback for
+        # debug/diagnostic builds that disable the SSE handlers.
+        streaming = True or _underlying_tool_is_task(metadata)
         input_schema = _underlying_tool_input_schema(metadata)
         bearer_auth = metadata.get("auth") == "bearer"
 
@@ -295,6 +447,109 @@ def _build_failed_task(
     }
 
 
+def _build_working_task(
+    task_id: str,
+    session_id: str,
+    request_message: Optional[dict],
+    *,
+    progress: Optional[Any] = None,
+    progress_message: Optional[str] = None,
+) -> dict:
+    """Build an A2A v1.0 ``Task`` envelope with ``state=working``.
+
+    Returned synchronously from ``tasks/send`` once the user handler
+    has dispatched the underlying mesh job and handed us back a
+    ``JobProxy`` — the framework owns lifecycle from this point on.
+    The artifacts list is empty because the job hasn't produced one yet;
+    the client either polls ``tasks/get`` for terminal status or
+    subscribes via ``tasks/sendSubscribe`` for incremental updates.
+    """
+    status: dict = {"state": "working", "timestamp": _utc_now_iso()}
+    if progress_message:
+        status["message"] = {
+            "role": "agent",
+            "parts": [{"type": "text", "text": progress_message}],
+        }
+    envelope: dict = {
+        "id": task_id,
+        "sessionId": session_id,
+        "status": status,
+        "artifacts": [],
+        "history": [request_message] if request_message else [],
+    }
+    if progress is not None:
+        envelope["metadata"] = {"progress": progress}
+    return envelope
+
+
+def _build_task_from_status(
+    task_id: str,
+    session_id: str,
+    request_message: Optional[dict],
+    status: dict,
+    *,
+    final_result: Any = None,
+    has_final_result: bool = False,
+) -> dict:
+    """Build an A2A v1.0 ``Task`` envelope from a ``JobProxy.status()`` dict.
+
+    ``status`` is the dict the mesh registry returns — keys include
+    ``status`` (working/completed/failed/cancelled), ``progress``,
+    ``progress_message``, ``error``, etc. We map mesh→A2A states and
+    fold ``error``/``progress_message`` into the A2A status.message
+    when present.
+
+    ``final_result`` is only populated when the caller already invoked
+    ``proxy.wait()`` and got a value back (i.e., the job is completed).
+    For ``tasks/get`` we don't block on ``wait()`` — terminal-state
+    callers that want the artifact should subscribe via SSE instead.
+    """
+    mesh_state = status.get("status") or "working"
+    a2a_state = _map_mesh_state(mesh_state)
+
+    a2a_status: dict = {"state": a2a_state, "timestamp": _utc_now_iso()}
+
+    msg_text = None
+    if a2a_state == "failed":
+        msg_text = status.get("error") or status.get("progress_message")
+    else:
+        msg_text = status.get("progress_message")
+    if msg_text:
+        a2a_status["message"] = {
+            "role": "agent",
+            "parts": [{"type": "text", "text": str(msg_text)}],
+        }
+
+    artifacts: list = []
+    if has_final_result and a2a_state == "completed":
+        text = (
+            final_result
+            if isinstance(final_result, str)
+            else _json.dumps(final_result, default=str)
+        )
+        artifacts.append(
+            {
+                "name": "result",
+                "parts": [{"type": "text", "text": text}],
+                "index": 0,
+            }
+        )
+
+    envelope: dict = {
+        "id": task_id,
+        "sessionId": session_id,
+        "status": a2a_status,
+        "artifacts": artifacts,
+        "history": [request_message] if request_message else [],
+    }
+
+    progress = status.get("progress")
+    if progress is not None:
+        envelope["metadata"] = {"progress": progress}
+
+    return envelope
+
+
 def _jsonrpc_success(req_id: Any, result_obj: Any) -> JSONResponse:
     return JSONResponse(
         status_code=200,
@@ -319,6 +574,41 @@ def _jsonrpc_error(
     )
 
 
+def _extract_task_inputs(params: dict) -> tuple[str, str, dict]:
+    """Pull (task_id, session_id, message) out of JSON-RPC ``params``.
+
+    Centralised so all four handlers (send / sendSubscribe / get /
+    cancel / resubscribe) follow the same defaulting rules: missing
+    task_id → fresh UUID4, missing sessionId → reuse task_id, missing
+    or non-dict message → empty dict.
+    """
+    if not isinstance(params, dict):
+        params = {}
+    task_id = params.get("id") or str(uuid.uuid4())
+    session_id = params.get("sessionId") or task_id
+    raw_message = params.get("message")
+    message = raw_message if isinstance(raw_message, dict) else {}
+    return task_id, session_id, message
+
+
+async def _invoke_user_handler(
+    user_handler: Callable[..., Any], message: dict
+) -> Any:
+    """Call the user handler, awaiting if it returned a coroutine.
+
+    Handler errors propagate to the caller — each tasks/* handler wraps
+    this call in its own try/except to translate exceptions into the
+    A2A v1.0 ``state=failed`` envelope (or the SSE failed event for
+    ``sendSubscribe``).
+    """
+    import inspect
+
+    result = user_handler(message)
+    if inspect.isawaitable(result):
+        result = await result
+    return result
+
+
 async def _handle_tasks_send(
     *,
     req_id: Any,
@@ -326,44 +616,28 @@ async def _handle_tasks_send(
     user_handler: Callable[..., Any],
     metadata: dict,
 ) -> JSONResponse:
-    """Phase 2 sync-only ``tasks/send`` dispatch.
+    """Phase 2 / 2-leftover ``tasks/send`` dispatch.
 
     Calls the user's ``@mesh.a2a`` handler with the A2A ``message`` dict
-    as the positional payload. Dependency injection (e.g. ``date_service``)
-    is wired by the decorator wrapper, so deps land via keyword args at
-    call time.
+    as the positional payload. Dependency injection (e.g. ``date_service``,
+    ``MeshJob`` submitters) is wired by the decorator wrapper.
 
-    Long-running surfaces (underlying mesh tool was ``@mesh.tool(task=True)``)
-    fall back to ``Method not implemented`` until Phase 3 wires the
-    MeshJob lifecycle into ``tasks/send`` + ``tasks/sendSubscribe``.
+    Sync vs long-running detection: introspect the *return value*, not
+    the metadata. If the handler returned a ``mcp_mesh_core.JobProxy``
+    instance, the user submitted a mesh job via ``MeshJob.submit(...)``
+    → store the proxy and respond with ``state=working``. Otherwise the
+    return value is the synchronous result → wrap as ``state=completed``.
+
+    Detecting via return value (rather than the local-only
+    ``_underlying_tool_is_task`` helper) is the canonical pattern because
+    it works for cross-agent ``task=True`` deps too — the helper can't
+    see remote tool metadata, but the JobProxy class membership is
+    unambiguous.
     """
-    if _underlying_tool_is_task(metadata):
-        return _jsonrpc_error(
-            req_id,
-            -32601,
-            (
-                "Method not implemented: 'tasks/send' for task=True "
-                "underlying tools requires Phase 3 (MeshJob lifecycle). "
-                "Sync handlers are supported today."
-            ),
-        )
+    task_id, session_id, message = _extract_task_inputs(params)
 
-    if not isinstance(params, dict):
-        params = {}
-
-    task_id = params.get("id") or str(uuid.uuid4())
-    session_id = params.get("sessionId") or task_id
-    message = params.get("message") if isinstance(params.get("message"), dict) else {}
-
-    # Pass the full A2A message dict to the user's handler so user code
-    # can introspect parts/role as needed. The handler is responsible for
-    # translating message → its dependency-call shape.
     try:
-        import inspect
-
-        result = user_handler(message)
-        if inspect.isawaitable(result):
-            result = await result
+        result = await _invoke_user_handler(user_handler, message)
     except Exception as exc:
         # Per A2A v1.0: handler exceptions surface as Task.state=failed,
         # NOT as a JSON-RPC -3260x error.
@@ -377,19 +651,567 @@ async def _handle_tasks_send(
             _build_failed_task(task_id, session_id, message or None, str(exc)),
         )
 
+    if _is_job_proxy(result):
+        # Long-running: park the proxy in the task store, return the
+        # working envelope. The client polls tasks/get / subscribes via
+        # tasks/sendSubscribe / tasks/resubscribe to track progress.
+        try:
+            _store_task(
+                task_id,
+                result,
+                request_message=message or None,
+                session_id=session_id,
+            )
+        except ValueError as exc:
+            return _jsonrpc_error(req_id, -32602, str(exc))
+        logger.info(
+            "A2A tasks/send: long-running task started "
+            "(task_id=%s, mesh_job_id=%s, path=%s)",
+            task_id,
+            getattr(result, "job_id", "<unknown>"),
+            metadata.get("path"),
+        )
+        return _jsonrpc_success(
+            req_id,
+            _build_working_task(task_id, session_id, message or None),
+        )
+
     return _jsonrpc_success(
         req_id,
         _build_completed_task(task_id, session_id, message or None, result),
     )
 
 
+async def _handle_tasks_get(
+    *,
+    req_id: Any,
+    params: dict,
+) -> JSONResponse:
+    """Look up a long-running A2A task by id and return its current Task envelope.
+
+    The task must have been minted by an earlier ``tasks/send`` /
+    ``tasks/sendSubscribe`` call on this process — long-running task
+    state is process-local (see ``_A2A_TASK_STORE`` doc for the
+    cross-replica caveat).
+
+    Unknown task ids surface as JSON-RPC -32602 (Invalid params) per the
+    A2A v1.0 convention — the spec doesn't dedicate an error code to
+    "task not found" so we reuse the closest standard code.
+    """
+    _sweep_terminal_tasks()
+
+    if not isinstance(params, dict):
+        params = {}
+    task_id = params.get("id")
+    if not task_id:
+        return _jsonrpc_error(
+            req_id, -32602, "Invalid params: 'id' is required for tasks/get"
+        )
+
+    entry = _A2A_TASK_STORE.get(task_id)
+    if entry is None:
+        return _jsonrpc_error(
+            req_id, -32602, f"Unknown task id: {task_id}"
+        )
+
+    proxy = entry["proxy"]
+    try:
+        status = await proxy.status()
+    except Exception as exc:
+        logger.warning(
+            "A2A tasks/get: proxy.status() raised for task %s: %s", task_id, exc
+        )
+        # Surface as a working task with the error in the message — we
+        # can't reliably tell from a status() failure whether the underlying
+        # job is dead or just transiently unreachable.
+        return _jsonrpc_success(
+            req_id,
+            _build_working_task(
+                task_id,
+                params.get("sessionId") or task_id,
+                None,
+                progress_message=f"status unavailable: {exc}",
+            ),
+        )
+
+    if not isinstance(status, dict):
+        status = {}
+
+    mesh_state = status.get("status") or "working"
+    if mesh_state in ("completed", "failed", "cancelled"):
+        _mark_terminal(task_id)
+
+    # On terminal=completed, fetch the final result via proxy.wait() so the
+    # A2A Task envelope carries the result as an artifact[0]. SSE delivers
+    # this via TaskArtifactUpdateEvent; non-streaming tasks/get callers
+    # need it embedded inline. Use a tight timeout so we don't block on a
+    # job that the registry believes is completed but whose payload is
+    # transiently unreachable — fall back to no artifact in that case.
+    final_result: Any = None
+    has_final_result = False
+    if mesh_state == "completed":
+        try:
+            final_result = await proxy.wait(timeout_secs=1)
+            has_final_result = True
+        except Exception as exc:
+            logger.debug(
+                "A2A tasks/get: proxy.wait() failed for completed task %s: %s",
+                task_id,
+                exc,
+            )
+
+    # Echo the original request_message in the A2A history field if we
+    # captured it at submit time (otherwise empty per existing behavior).
+    envelope = _build_task_from_status(
+        task_id,
+        entry.get("session_id") or params.get("sessionId") or task_id,
+        entry.get("request_message"),
+        status,
+        final_result=final_result,
+        has_final_result=has_final_result,
+    )
+    return _jsonrpc_success(req_id, envelope)
+
+
+async def _handle_tasks_cancel(
+    *,
+    req_id: Any,
+    params: dict,
+) -> JSONResponse:
+    """Cancel a long-running A2A task via its underlying mesh ``JobProxy``.
+
+    Best-effort: cancel exceptions are logged and swallowed because the
+    registry may have already terminated the job (e.g., it just finished
+    on the producer side). We always re-fetch ``proxy.status()`` after
+    the cancel attempt so the response reflects the latest state the
+    client should trust.
+    """
+    _sweep_terminal_tasks()
+
+    if not isinstance(params, dict):
+        params = {}
+    task_id = params.get("id")
+    if not task_id:
+        return _jsonrpc_error(
+            req_id, -32602, "Invalid params: 'id' is required for tasks/cancel"
+        )
+
+    entry = _A2A_TASK_STORE.get(task_id)
+    if entry is None:
+        return _jsonrpc_error(
+            req_id, -32602, f"Unknown task id: {task_id}"
+        )
+
+    proxy = entry["proxy"]
+    reason = params.get("reason")
+    try:
+        await proxy.cancel(reason=reason) if reason is not None else await proxy.cancel()
+    except Exception as exc:
+        logger.info(
+            "A2A tasks/cancel: proxy.cancel() raised for task %s "
+            "(may already be terminal): %s",
+            task_id,
+            exc,
+        )
+
+    try:
+        status = await proxy.status()
+    except Exception as exc:
+        logger.warning(
+            "A2A tasks/cancel: proxy.status() raised post-cancel for task %s: %s",
+            task_id,
+            exc,
+        )
+        status = {"status": "cancelled"}
+
+    if not isinstance(status, dict):
+        status = {"status": "cancelled"}
+
+    mesh_state = status.get("status") or "cancelled"
+    if mesh_state in ("completed", "failed", "cancelled"):
+        _mark_terminal(task_id)
+
+    envelope = _build_task_from_status(
+        task_id,
+        entry.get("session_id") or task_id,
+        entry.get("request_message"),
+        status,
+    )
+    return _jsonrpc_success(req_id, envelope)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — SSE streaming (tasks/sendSubscribe + tasks/resubscribe)
+# ---------------------------------------------------------------------------
+
+# Headers we attach to every SSE response. ``X-Accel-Buffering: no``
+# tells nginx not to buffer the stream; ``Cache-Control: no-cache``
+# stops intermediaries from caching mid-flight events; keep-alive lets
+# clients hold the connection open across keepalives.
+_A2A_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "X-Accel-Buffering": "no",
+    "Connection": "keep-alive",
+}
+
+# Polling cadence for the long-running SSE generator. One second is
+# fast enough for a human-perceptible "this is making progress" feel
+# without hammering the registry. The keepalive interval guards against
+# proxy-layer idle timeouts (most defaults are 30-60s).
+_SSE_POLL_INTERVAL_SECS = 1.0
+_SSE_KEEPALIVE_SECS = 15.0
+
+
+def _sse_event(payload: dict) -> str:
+    """Format a JSON payload as one SSE ``data:`` frame.
+
+    SSE frames are terminated by a blank line (``\\n\\n``); the JSON
+    body goes after a single ``data: `` prefix. We do NOT split across
+    multiple ``data:`` lines because the A2A v1.0 events are compact
+    JSON (one object per frame).
+    """
+    return f"data: {_json.dumps(payload, default=str)}\n\n"
+
+
+def _status_update_event(
+    req_id: Any,
+    task_id: str,
+    a2a_state: str,
+    message_text: Optional[str],
+    *,
+    final: bool,
+    progress: Optional[Any] = None,
+) -> dict:
+    """Build an A2A v1.0 ``TaskStatusUpdateEvent`` wrapped in a JSON-RPC envelope.
+
+    The ``final`` flag tells the client this is the terminal event for
+    the task — the client closes its SSE connection on ``final=True``.
+    """
+    status: dict = {"state": a2a_state, "timestamp": _utc_now_iso()}
+    if message_text:
+        status["message"] = {
+            "role": "agent",
+            "parts": [{"type": "text", "text": str(message_text)}],
+        }
+    result: dict = {
+        "id": task_id,
+        "status": status,
+        "final": final,
+    }
+    if progress is not None:
+        result["metadata"] = {"progress": progress}
+    return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+
+def _artifact_update_event(req_id: Any, task_id: str, value: Any) -> dict:
+    """Build an A2A v1.0 ``TaskArtifactUpdateEvent`` wrapped in JSON-RPC.
+
+    ``value`` is whatever ``proxy.wait()`` returned for the underlying
+    job. Strings ride verbatim in the text part; everything else gets
+    JSON-stringified so the part stays string-typed per the v1.0
+    ``TextPart`` shape.
+    """
+    text = value if isinstance(value, str) else _json.dumps(value, default=str)
+    return {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "result": {
+            "id": task_id,
+            "artifact": {
+                "name": "result",
+                "parts": [{"type": "text", "text": text}],
+                "index": 0,
+            },
+        },
+    }
+
+
+async def _stream_completed_only(
+    req_id: Any, task_id: str, _session_id: str, _message: dict, value: Any
+) -> AsyncIterator[str]:
+    """SSE stream for a sync handler return: emit one terminal event + done.
+
+    Used when ``tasks/sendSubscribe`` runs against a sync handler. We
+    fold the handler's return value into a single artifact event and
+    follow it with a final status event so the client sees both the
+    payload and the explicit completion signal before the stream closes.
+    """
+    yield _sse_event(_artifact_update_event(req_id, task_id, value))
+    yield _sse_event(
+        _status_update_event(req_id, task_id, "completed", None, final=True)
+    )
+
+
+async def _stream_failed_only(
+    req_id: Any, task_id: str, _session_id: str, _message: dict, error: str
+) -> AsyncIterator[str]:
+    """SSE stream for a handler that raised: emit one terminal failed event.
+
+    Mirrors the JSON-RPC ``state=failed`` envelope but as a single SSE
+    frame followed by stream close. No artifact event because there's
+    no result payload to carry.
+    """
+    yield _sse_event(
+        _status_update_event(req_id, task_id, "failed", error, final=True)
+    )
+
+
+async def _stream_long_running(
+    req_id: Any, task_id: str, _session_id: str, _message: dict, proxy: Any
+) -> AsyncIterator[str]:
+    """SSE stream for a JobProxy: emit working → progress → terminal events.
+
+    Loop invariants:
+      1. Always emit an initial ``state=working`` event so the client
+         confirms the subscription is live before any polling latency.
+      2. Emit a status-update only when ``progress`` or
+         ``progress_message`` actually changed — natural backpressure
+         that drops redundant events without an explicit queue.
+      3. Emit an SSE comment (``: keepalive\\n\\n``) every
+         ``_SSE_KEEPALIVE_SECS`` of inactivity to defeat proxy-layer
+         idle timeouts. Comments are ignored by SSE parsers.
+      4. On terminal state, attempt ``proxy.wait()`` for the result and
+         emit it as an artifact event, then the final status event,
+         then exit.
+      5. On client disconnect (``CancelledError`` raised mid-yield), do
+         NOT call ``proxy.cancel()`` — the A2A spec is explicit that
+         disconnect is a transient condition and the underlying job
+         keeps running. The client may rejoin via ``tasks/resubscribe``.
+    """
+    # Initial event so the client sees an immediate "subscribed" signal
+    # before the first poll. Seed last_progress/last_message to ``None``
+    # so the first poll only re-emits if the registry actually reported
+    # *real* progress — otherwise the immediate "still working with no
+    # progress" status would emit a redundant duplicate of this initial
+    # event.
+    yield _sse_event(
+        _status_update_event(req_id, task_id, "working", None, final=False)
+    )
+
+    last_progress: Any = None
+    last_message: Any = None
+    last_event_time = time.monotonic()
+
+    try:
+        while True:
+            try:
+                status = await proxy.status()
+            except Exception as exc:
+                logger.warning(
+                    "A2A SSE poll: proxy.status() raised for task %s: %s",
+                    task_id,
+                    exc,
+                )
+                yield _sse_event(
+                    _status_update_event(
+                        req_id, task_id, "failed", f"status unavailable: {exc}",
+                        final=True,
+                    )
+                )
+                _mark_terminal(task_id)
+                return
+
+            if not isinstance(status, dict):
+                status = {}
+
+            mesh_state = status.get("status") or "working"
+
+            if mesh_state in ("completed", "failed", "cancelled"):
+                # Emit artifact + final status, then exit. ``proxy.wait()``
+                # returns the result for completed jobs; for failed/cancelled
+                # it raises — we surface the error text in the status message.
+                if mesh_state == "completed":
+                    try:
+                        result = await proxy.wait(timeout_secs=1)
+                        yield _sse_event(
+                            _artifact_update_event(req_id, task_id, result)
+                        )
+                    except Exception as exc:
+                        logger.debug(
+                            "A2A SSE poll: proxy.wait() raised on completed "
+                            "task %s: %s",
+                            task_id,
+                            exc,
+                        )
+                final_msg = None
+                if mesh_state == "failed":
+                    final_msg = status.get("error") or status.get("progress_message")
+                elif mesh_state == "cancelled":
+                    final_msg = status.get("progress_message")
+                yield _sse_event(
+                    _status_update_event(
+                        req_id,
+                        task_id,
+                        _map_mesh_state(mesh_state),
+                        final_msg,
+                        final=True,
+                    )
+                )
+                _mark_terminal(task_id)
+                return
+
+            progress = status.get("progress")
+            progress_message = status.get("progress_message")
+            now = time.monotonic()
+
+            if progress != last_progress or progress_message != last_message:
+                yield _sse_event(
+                    _status_update_event(
+                        req_id,
+                        task_id,
+                        "working",
+                        progress_message,
+                        final=False,
+                        progress=progress,
+                    )
+                )
+                last_progress = progress
+                last_message = progress_message
+                last_event_time = now
+            elif (now - last_event_time) > _SSE_KEEPALIVE_SECS:
+                # No state change in a while — emit an SSE comment to
+                # keep intermediaries from idling the connection out.
+                # SSE comments start with ``:`` and are ignored by
+                # parsers but reset the proxy's keepalive timer.
+                yield ": keepalive\n\n"
+                last_event_time = now
+
+            await asyncio.sleep(_SSE_POLL_INTERVAL_SECS)
+    except asyncio.CancelledError:
+        # Client disconnected. Per A2A v1.0 this MUST NOT cancel the
+        # underlying mesh job — the client may rejoin via tasks/resubscribe.
+        logger.debug(
+            "A2A SSE poll: client disconnected for task %s; "
+            "underlying mesh job continues",
+            task_id,
+        )
+        raise
+
+
+def _sse_response(generator: AsyncIterator[str]) -> StreamingResponse:
+    """Wrap an async generator of SSE frames in a ``StreamingResponse``.
+
+    ``media_type="text/event-stream"`` is the SSE content type per
+    HTML5; the headers defeat common proxy/CDN buffering that would
+    otherwise break streaming end-to-end.
+    """
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers=_A2A_SSE_HEADERS,
+    )
+
+
+async def _handle_tasks_send_subscribe(
+    *,
+    req_id: Any,
+    params: dict,
+    user_handler: Callable[..., Any],
+    metadata: dict,
+) -> Any:
+    """Phase 3 ``tasks/sendSubscribe`` dispatch — same as send, SSE response.
+
+    The user handler runs to completion (or raises) BEFORE the SSE
+    stream opens, so the framework knows whether to spin up the long-
+    running poll loop or just emit a single completed event. Doing the
+    handler invocation eagerly (rather than inside the generator) keeps
+    handler exceptions out of the streaming codepath where they'd be
+    invisible to the FastAPI exception handler chain.
+    """
+    task_id, session_id, message = _extract_task_inputs(params)
+
+    try:
+        result = await _invoke_user_handler(user_handler, message)
+    except Exception as exc:
+        logger.warning(
+            "A2A tasks/sendSubscribe handler raised on %s: %s",
+            metadata.get("path"),
+            exc,
+        )
+        return _sse_response(
+            _stream_failed_only(req_id, task_id, session_id, message, str(exc))
+        )
+
+    if _is_job_proxy(result):
+        try:
+            _store_task(
+                task_id,
+                result,
+                request_message=message,
+                session_id=session_id,
+            )
+        except ValueError as exc:
+            # Duplicate task_id — surface as a single SSE failed event
+            # so the SSE client sees a structured A2A failure rather
+            # than an opaque HTTP error.
+            return _sse_response(
+                _stream_failed_only(req_id, task_id, session_id, message, str(exc))
+            )
+        logger.info(
+            "A2A tasks/sendSubscribe: long-running stream started "
+            "(task_id=%s, mesh_job_id=%s, path=%s)",
+            task_id,
+            getattr(result, "job_id", "<unknown>"),
+            metadata.get("path"),
+        )
+        return _sse_response(
+            _stream_long_running(req_id, task_id, session_id, message, result)
+        )
+
+    return _sse_response(
+        _stream_completed_only(req_id, task_id, session_id, message, result)
+    )
+
+
+async def _handle_tasks_resubscribe(
+    *,
+    req_id: Any,
+    params: dict,
+) -> Any:
+    """Re-attach an SSE stream to an existing long-running task.
+
+    Idempotent: returns the same poll-loop generator as the original
+    ``tasks/sendSubscribe`` call would. The client re-receives the
+    initial ``working`` event, then catches up to live progress from
+    the registry's current view (we don't replay old events because
+    we don't store them — clients that need replay should rely on
+    ``tasks/get`` for the current snapshot).
+    """
+    _sweep_terminal_tasks()
+
+    if not isinstance(params, dict):
+        params = {}
+    task_id = params.get("id")
+    if not task_id:
+        return _jsonrpc_error(
+            req_id, -32602, "Invalid params: 'id' is required for tasks/resubscribe"
+        )
+
+    entry = _A2A_TASK_STORE.get(task_id)
+    if entry is None:
+        return _jsonrpc_error(
+            req_id, -32602, f"Unknown task id: {task_id}"
+        )
+
+    proxy = entry["proxy"]
+    return _sse_response(
+        _stream_long_running(req_id, task_id, task_id, {}, proxy)
+    )
+
+
 def _make_rpc_endpoint(*, metadata: dict, user_handler: Callable[..., Any]):
     """Build a FastAPI endpoint coroutine for the JSON-RPC entry point.
 
-    Phase 2 dispatches sync ``tasks/send`` into ``user_handler`` and
-    wraps the return value in an A2A v1.0 ``Task`` envelope. All other
-    ``tasks/*`` methods still return JSON-RPC ``Method not implemented``
-    (Phase 3 territory).
+    Dispatch table:
+      - ``tasks/send`` → sync result (state=completed) OR JobProxy
+        return (state=working, parked in ``_A2A_TASK_STORE``).
+      - ``tasks/get`` → look up parked task, return current Task envelope.
+      - ``tasks/cancel`` → call ``proxy.cancel()``, return updated Task.
+      - ``tasks/sendSubscribe`` → same dispatch as ``tasks/send`` but
+        the response is an SSE stream of ``TaskStatusUpdateEvent`` /
+        ``TaskArtifactUpdateEvent`` JSON-RPC envelopes.
+      - ``tasks/resubscribe`` → re-attach SSE to an existing parked task.
+      - Anything else → JSON-RPC -32601 ``Method not implemented``.
 
     Honours the decorator's ``auth="bearer"`` setting at the header-
     presence level only — token validation (signature/issuer/audience)
@@ -468,15 +1290,30 @@ def _make_rpc_endpoint(*, metadata: dict, user_handler: Callable[..., Any]):
                 metadata=metadata,
             )
 
-        # All other tasks/* methods land in Phase 3.
+        if method == "tasks/get":
+            return await _handle_tasks_get(req_id=req_id, params=params)
+
+        if method == "tasks/cancel":
+            return await _handle_tasks_cancel(req_id=req_id, params=params)
+
+        if method == "tasks/sendSubscribe":
+            return await _handle_tasks_send_subscribe(
+                req_id=req_id,
+                params=params,
+                user_handler=user_handler,
+                metadata=metadata,
+            )
+
+        if method == "tasks/resubscribe":
+            return await _handle_tasks_resubscribe(req_id=req_id, params=params)
+
         return _jsonrpc_error(
             req_id,
             -32601,
             (
                 f"Method not implemented: {method!r}. "
-                "Phase 2 wires sync 'tasks/send' only — long-running "
-                "and streaming methods (tasks/sendSubscribe, tasks/get, "
-                "tasks/cancel) land in Phase 3 (see A2A_SURFACE_DESIGN.org)."
+                "Supported A2A v1.0 methods: tasks/send, tasks/get, "
+                "tasks/cancel, tasks/sendSubscribe, tasks/resubscribe."
             ),
         )
 

@@ -1,0 +1,86 @@
+# tc04_tasks_send_sync_completed — Phase 2 sync dispatch.
+#
+# JSON-RPC tasks/send dispatches into the user handler; the framework
+# wraps the return value in an A2A v1.0 Task envelope with state=completed.
+# The date_a2a handler returns {"date": <result-of-date_service>} so the
+# artifact[0].parts[0].text carries the JSON-stringified dict — checking
+# the substring '"date"' confirms the round-trip succeeded.
+
+name: "A2A: tasks/send sync handler returns state=completed"
+description: "POST tasks/send to date_a2a returns Task envelope with state=completed and artifact carrying the date result"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-869
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/system-agent /workspace/
+      cp -rL /uc-artifacts/date-a2a-agent /workspace/
+
+  - name: "Install system-agent deps"
+    handler: pip-install
+    path: /workspace/system-agent
+
+  - name: "Install date-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/date-a2a-agent
+
+  - routine: start_registry_a2a
+
+  - name: "Start system-agent (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for system-agent registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start date-a2a-agent (port 9090)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start date-a2a-agent/main.py -d
+
+  - name: "Wait for date_service DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "POST tasks/send to date_a2a"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:9090/agents/date \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tasks/send","params":{"id":"t1","message":{"role":"user","parts":[{"type":"text","text":"now"}]}}}'
+    capture: task_response
+    timeout: 15
+
+assertions:
+  - expr: "${captured.task_response} contains '\"state\":\"completed\"'"
+    message: "sync handler should yield state=completed"
+  - expr: "${captured.task_response} contains '\"id\":\"t1\"'"
+    message: "envelope should echo the submitted task id"
+  - expr: "${captured.task_response} contains '\"sessionId\":\"t1\"'"
+    message: "sessionId should default to task id"
+  - expr: "${captured.task_response} contains '\"artifacts\"'"
+    message: "envelope should carry artifacts array"
+  - expr: "${captured.task_response} contains '\"name\":\"result\"'"
+    message: "artifact[0].name should be 'result'"
+  # The artifact text is a JSON-stringified payload embedded as a quoted
+  # string (so {"date": ...} appears escaped as \"date\"). Just match the
+  # bare word "date" — that substring appears once, inside the artifact.
+  - expr: "${captured.task_response} contains 'date'"
+    message: "artifact text should carry the JSON-stringified {date: ...} payload"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

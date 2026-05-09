@@ -1,0 +1,60 @@
+# UC-level routines for uc24_a2a_python.
+#
+# A2A surfaces register on heartbeat with agent_type=a2a; the registry
+# stamps the agent-card public URL using MCP_MESH_PUBLIC_URL_PREFIX (set
+# below). Long-running A2A tasks (tc06/tc07/tc11) flow through the
+# MeshJob substrate, so we inherit the same fast-sweep timing knobs the
+# meshjob suite uses (uc21/routines.yaml) — short retention + frequent
+# sweep tick keep recovery / orphan / cancel paths bounded to seconds
+# instead of minutes.
+#
+# MCP_MESH_PUBLIC_URL_PREFIX is read on the *registry* side at startup;
+# exporting it inline in front of `meshctl start --registry-only` works
+# because meshctl inherits os.Environ() from the shell and forwards it
+# to the registry binary it exec's.
+
+routines:
+  # Same fast-sweep registry as uc21, plus MCP_MESH_PUBLIC_URL_PREFIX so
+  # the agent-card endpoint stamps a stable public FQDN on the card. The
+  # A2A tests don't actually need to reach that URL; we just need the
+  # ``url`` field present so card-shape assertions stay deterministic.
+  start_registry_a2a:
+    description: "Start the registry with fast-sweep timing AND MCP_MESH_PUBLIC_URL_PREFIX for A2A card stamping"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          MCP_MESH_PUBLIC_URL_PREFIX=https://test.example.com \
+          MCP_MESH_SWEEP_INTERVAL=10s \
+          MCP_MESH_RETENTION=10s \
+          MCP_MESH_HEALTH_CHECK_INTERVAL=5 \
+          DEFAULT_TIMEOUT_THRESHOLD=15 \
+            meshctl start --registry-only -d
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "registry ready after ${i}s"
+              # Verify the sweep override actually stamped its log line.
+              # If MCP_MESH_SWEEP_INTERVAL didn't take effect the suite
+              # must fail loudly here, not via slow per-test timeouts.
+              tail -n 200 ~/.mcp-mesh/logs/registry.log \
+                | grep -qE '\[sweep\] using MCP_MESH_SWEEP_INTERVAL' \
+                || { echo "FAIL: MCP_MESH_SWEEP_INTERVAL override did not take effect"; exit 1; }
+              echo "[setup] confirmed sweep override active"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: registry did not become ready in 20s"
+          tail -50 ~/.mcp-mesh/logs/registry.log 2>/dev/null || true
+          exit 1
+        capture: registry_start
+        timeout: 30
+
+  # Stop everything started by this test (agents + registry).
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: meshctl stop 2>/dev/null || true
+        ignore_errors: true
