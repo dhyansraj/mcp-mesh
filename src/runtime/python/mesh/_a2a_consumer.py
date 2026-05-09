@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -103,7 +104,7 @@ class A2AClient:
 
     async def _http(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=httpx.Timeout(60.0))
+            self._client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout_default))
         return self._client
 
     def _headers(self) -> dict[str, str]:
@@ -153,7 +154,7 @@ class A2AClient:
         timeout = timeout if timeout is not None else self.timeout_default
         deadline = time.monotonic() + timeout
         if task_id is None:
-            task_id = f"c-{int(time.time() * 1000)}-{os.urandom(3).hex()}"
+            task_id = f"c-{uuid.uuid4().hex}"
 
         result = await self._post_jsonrpc(
             "tasks/send", {"id": task_id, "message": message}, rpc_id=1

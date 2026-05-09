@@ -2100,6 +2100,11 @@ def a2a_consumer(
         for t in tags:
             if not isinstance(t, str):
                 raise ValueError("@mesh.a2a_consumer: all tags must be strings")
+            if t == _MESH_CONSUMER_SELF_SENTINEL:
+                raise ValueError(
+                    f"@mesh.a2a_consumer: tag {_MESH_CONSUMER_SELF_SENTINEL!r} is reserved "
+                    "for the framework's consumer-name auto-injection sentinel; do not supply it explicitly"
+                )
     if not isinstance(version, str):
         raise ValueError("@mesh.a2a_consumer: 'version' must be a string")
     if description is not None and not isinstance(description, str):
@@ -2111,6 +2116,13 @@ def a2a_consumer(
     user_tags = list(tags) if tags is not None else []
 
     def decorator(target: T) -> T:
+        if hasattr(target, "_mesh_a2a_consumer_metadata"):
+            raise RuntimeError(
+                f"@mesh.a2a_consumer({capability!r}): function {target.__name__!r} is already "
+                "decorated with @mesh.a2a_consumer; stacking the decorator orphans the inner "
+                "A2AClient. Apply @mesh.a2a_consumer exactly once per function."
+            )
+
         # Deferred resolution of the surrounding @mesh.agent name. The
         # convention is that @mesh.agent is the LAST decorator in the
         # file (its auto_run blocks the importing thread), so this
