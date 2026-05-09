@@ -72,20 +72,30 @@ test:
     capture: send_response
     timeout: 15
 
-  - name: "Wait for the long-running job to complete (3 sections * ~2s + claim slack)"
-    handler: wait
-    seconds: 12
-
-  - name: "POST tasks/get for the same task id"
+  - name: "Poll tasks/get until terminal state (claim latency varies under load)"
     handler: shell
     workdir: /workspace
     command: |
       TASK_ID=$(echo '${captured.send_response}' | grep '^TASK_ID=' | cut -d= -f2)
-      curl -s -X POST http://localhost:9091/agents/report \
-        -H 'Content-Type: application/json' \
-        -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tasks/get\",\"params\":{\"id\":\"${TASK_ID}\"}}"
+      # Poll up to 40s (claim latency + 3 sections × ~2s + generous slack).
+      # Fixed wait was previously 12s which proved flaky under load — the
+      # job was still claiming when the get fired, surfacing as state=working.
+      for i in $(seq 1 40); do
+        RESP=$(curl -s -X POST http://localhost:9091/agents/report \
+          -H 'Content-Type: application/json' \
+          -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tasks/get\",\"params\":{\"id\":\"${TASK_ID}\"}}")
+        STATE=$(echo "$RESP" | jq -r '.result.status.state // empty')
+        if [ "$STATE" = "completed" ] || [ "$STATE" = "failed" ] || [ "$STATE" = "canceled" ]; then
+          echo "$RESP"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: task never reached terminal state within 40s. Last response:"
+      echo "$RESP"
+      exit 1
     capture: final_get
-    timeout: 15
+    timeout: 50
 
 assertions:
   - expr: "${captured.final_get} contains '\"state\":\"completed\"'"

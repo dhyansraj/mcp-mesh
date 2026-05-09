@@ -1,0 +1,101 @@
+# tc09_tasks_cancel_mid_flight — tasks/cancel terminates an in-flight
+# long-running A2A task and the cancel response carries state=canceled.
+#
+# Flow:
+#   1. POST tasks/send with id=cancel-mid + 4 sections — generate_report
+#      runs ~2s per section so the job is in-flight for ~8s. Discard
+#      the response (the working envelope is exercised in tc06).
+#   2. Wait 2s — let the underlying mesh job claim and start running.
+#   3. POST tasks/cancel with id=cancel-mid + a reason — capture the
+#      response. The framework drains the proxy's cancel signal through
+#      MeshJob.cancel() and returns the freshly-canceled Task envelope
+#      with state=canceled and the matching id.
+#
+# A2A v1.0 spelling note: the protocol uses single-l "canceled" (the
+# US-English form Google chose). The substring assertion uses that
+# spelling intentionally.
+
+name: "A2A: tasks/cancel mid-flight returns state=canceled"
+description: "Submit a long-running A2A task, then tasks/cancel it mid-flight — response is a Task envelope with state=canceled"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-906
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - routine: start_registry_a2a
+
+  - name: "Start long-task-provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for DI resolution"
+    handler: wait
+    seconds: 18
+
+  # 4 sections * ~2s each = ~8s job runtime — plenty of cancel headroom.
+  # Response discarded (>/dev/null); tc06 already covers the
+  # state=working envelope shape on submit.
+  - name: "POST tasks/send with id=cancel-mid (4 sections, ~8s job)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:9091/agents/report \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tasks/send","params":{"id":"cancel-mid","message":{"role":"user","parts":[{"type":"text","text":"{\"user_id\": \"alice\", \"sections\": [\"intro\", \"body\", \"summary\", \"appendix\"]}"}]}}}' \
+        > /dev/null
+
+  - name: "Let the job claim + start running"
+    handler: wait
+    seconds: 2
+
+  - name: "POST tasks/cancel for id=cancel-mid"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:9091/agents/report \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":2,"method":"tasks/cancel","params":{"id":"cancel-mid","reason":"manual cancel test"}}'
+    capture: cancel_response
+    timeout: 30
+
+assertions:
+  # A2A v1.0 spells terminal-cancel "canceled" (single-l).
+  - expr: "${captured.cancel_response} contains '\"state\":\"canceled\"'"
+    message: "tasks/cancel response should carry state=canceled (A2A spelling, single-l)"
+  - expr: "${captured.cancel_response} contains '\"id\":\"cancel-mid\"'"
+    message: "tasks/cancel response should echo the canceled task id"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

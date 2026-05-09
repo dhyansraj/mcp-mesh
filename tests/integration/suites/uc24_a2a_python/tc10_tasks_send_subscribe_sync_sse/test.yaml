@@ -1,0 +1,107 @@
+# tc10_tasks_send_subscribe_sync_sse — sync handler over SSE.
+#
+# Counterpart to tc11 (long-running over SSE). When tasks/sendSubscribe
+# dispatches into a SYNC handler (date_a2a returns a plain dict, not a
+# JobProxy), the framework still streams the result as SSE per A2A v1.0
+# but the stream collapses to:
+#
+#   1. one TaskArtifactUpdateEvent carrying the synchronous return as
+#      artifact[0] (name='result', text=JSON-stringified payload)
+#   2. one terminal TaskStatusUpdateEvent with state=completed,
+#      final=true — closes the stream
+#
+# (No working / progress events because the sync path completes
+# synchronously inside the handler invocation; there's no progress to
+# report between submission and terminal.)
+#
+# Setup mirrors tc01/tc04 (sync skill: system-agent + date-a2a-agent).
+# We use -m 10 on curl because the sync handler returns immediately and
+# the stream closes on terminal — 10s is generous slack.
+
+name: "A2A: tasks/sendSubscribe on sync handler streams artifact + completed"
+description: "POST tasks/sendSubscribe to date_a2a (sync handler) opens an SSE stream that emits one artifact event then a terminal completed event"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-906
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/system-agent /workspace/
+      cp -rL /uc-artifacts/date-a2a-agent /workspace/
+
+  - name: "Install system-agent deps"
+    handler: pip-install
+    path: /workspace/system-agent
+
+  - name: "Install date-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/date-a2a-agent
+
+  - routine: start_registry_a2a
+
+  - name: "Start system-agent (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for system-agent registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start date-a2a-agent (port 9090)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start date-a2a-agent/main.py -d
+
+  - name: "Wait for DI resolution"
+    handler: wait
+    seconds: 18
+
+  # -N disables curl output buffering; -m 10 caps the consumption window
+  # (sync handler returns instantly, stream closes at final=true).
+  - name: "POST tasks/sendSubscribe and consume SSE stream"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -N -m 10 -s -X POST http://localhost:9090/agents/date \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":99,"method":"tasks/sendSubscribe","params":{"id":"sync1","message":{"role":"user","parts":[{"type":"text","text":"now"}]}}}'
+    capture: sse_stream
+    timeout: 20
+
+assertions:
+  # Each SSE record is a `data: {...}` line with a JSON-RPC envelope
+  # carrying either a TaskArtifactUpdateEvent or a TaskStatusUpdateEvent.
+  - expr: "${captured.sse_stream} contains '\"artifact\"'"
+    message: "SSE stream should emit a TaskArtifactUpdateEvent for the sync return"
+  # SSE frames serialize via json.dumps with default separators (pretty
+  # form, space after colon) — matches tc11's pattern. Non-SSE
+  # JSONResponse bodies are compact via Starlette; just an SSE↔JSONResponse
+  # formatter divergence, both still valid JSON.
+  - expr: "${captured.sse_stream} contains '\"name\": \"result\"'"
+    message: "artifact event should carry name='result'"
+  # date_a2a returns {"date": <date_service_result>} — the bare word
+  # "date" appears once inside the artifact's text payload.
+  # Match the JSON-escaped "date" KEY (\"date\") inside the artifact's
+  # text part rather than the bare word "date" — tighter assertion that
+  # verifies the artifact carries the JSON-stringified {date: ...} payload
+  # and not just any incidental occurrence of the word.
+  - expr: "${captured.sse_stream} contains '\\\"date\\\"'"
+    message: "artifact event should embed the JSON-stringified {date: ...} payload"
+  - expr: "${captured.sse_stream} contains '\"state\": \"completed\"'"
+    message: "SSE stream should emit a terminal state=completed status event"
+  - expr: "${captured.sse_stream} contains '\"final\": true'"
+    message: "terminal status event should carry final=true"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

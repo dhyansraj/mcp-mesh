@@ -1,0 +1,96 @@
+# tc02_card_discovery_long_running — A2A agent card endpoint for a
+# long-running (task=True) skill. Counterpart to tc01 which exercises
+# the sync path. The report-a2a surface wraps long-task-provider's
+# generate_report (task=True) capability — the card shape is identical
+# regardless of sync vs long-running because mount() always wires
+# tasks/sendSubscribe + tasks/resubscribe and so capabilities.streaming
+# is always advertised true (per A2A v1.0).
+#
+# Setup: registry + long-task-provider (port 9100, baked into
+# @mesh.agent) + report-a2a-agent (port 9091, baked via
+# os.environ.setdefault). No port override needed for the provider in
+# this test — it owns 9100 unchallenged.
+
+name: "A2A: agent card discovery (long-running skill)"
+description: "GET /agents/report/.well-known/agent.json returns valid A2A v1.0 card with streaming=true for the generate-report task=True skill"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-906
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - routine: start_registry_a2a
+
+  - name: "Start long-task-provider (port 9100, baked into @mesh.agent)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for provider registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for A2A surface heartbeat + card cache"
+    handler: wait
+    seconds: 18
+
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Fetch agent card"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:9091/agents/report/.well-known/agent.json
+    capture: card_response
+    timeout: 15
+
+assertions:
+  - expr: "${captured.agent_list} contains 'long-task-provider'"
+    message: "long-task-provider should be registered"
+  - expr: "${captured.agent_list} contains 'report'"
+    message: "report-a2a agent should be registered (name carries 'report')"
+  - expr: "${captured.card_response} contains '\"name\"'"
+    message: "card should carry a name field"
+  - expr: "${captured.card_response} contains '\"id\":\"generate-report\"'"
+    message: "card should expose the generate-report skill id"
+  # mount() ALWAYS wires tasks/sendSubscribe + tasks/resubscribe so
+  # capabilities.streaming is true even for sync skills (tc01) — and
+  # certainly for long-running task=True skills like generate_report.
+  - expr: "${captured.card_response} contains '\"streaming\":true'"
+    message: "card should advertise streaming=true for the long-running skill"
+  - expr: "${captured.card_response} contains '\"capabilities\"'"
+    message: "card should carry a capabilities block"
+  - expr: "${captured.card_response} contains '\"tags\"'"
+    message: "card should carry the tags array (skill_tags from mount())"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

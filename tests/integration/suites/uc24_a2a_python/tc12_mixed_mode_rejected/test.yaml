@@ -1,0 +1,85 @@
+# tc12_mixed_mode_rejected — orchestrator rejects mixed decorator
+# families in the same process.
+#
+# The mcp-mesh startup orchestrator chooses ONE pipeline per process
+# (mcp / route / a2a). Combining decorators from multiple families is
+# explicitly rejected — the debounce-coordinator's
+# _determine_pipeline_type() returns "mixed" and raises
+# RuntimeError("Mixed mode not supported: @mesh.tool/@mesh.agent,
+# @mesh.route, and @mesh.a2a / mesh.a2a.mount decorator families
+# cannot be combined in the same process. Please use exactly one
+# family per process.").
+#
+# The fixture (fixtures/mixed-mode-agent/main.py — NEW for this test,
+# NOT a symlink to examples/) intentionally combines @mesh.tool +
+# mesh.a2a.mount in one file, then calls uvicorn.run() at __main__.
+# The orchestrator's debounce timer (~1s after import) fires the
+# RuntimeError BEFORE uvicorn ever serves a request — the script
+# exits with the traceback to stderr.
+#
+# Structurally this test differs from the others in the suite:
+#  - No `meshctl start ... -d` — the fixture is launched FOREGROUND so
+#    we can capture the rejection traceback to stdout/stderr.
+#  - Combined stderr+stdout via `2>&1 | head -100` — the traceback
+#    appears on stderr, the orchestrator's logger.error() writes to
+#    stdout, and we want both.
+#  - `timeout 8` caps the run; `|| true` swallows the non-zero exit
+#    so the test step succeeds and the assertions run.
+#  - No long-running provider needed — the fixture never reaches the
+#    point where DI / heartbeat / dependency resolution would matter.
+
+name: "A2A: orchestrator rejects mixed @mesh.tool + @mesh.a2a in one process"
+description: "Importing a process that combines @mesh.tool and mesh.a2a.mount triggers RuntimeError('Mixed mode not supported...') from the startup orchestrator"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-906
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy mixed-mode fixture (cp -L resolves the symlink)"
+    handler: shell
+    workdir: /workspace
+    command: cp -rL /uc-artifacts/mixed-mode-agent /workspace/
+
+  - name: "Install mixed-mode-agent deps"
+    handler: pip-install
+    path: /workspace/mixed-mode-agent
+
+  # Registry comes up but the fixture never registers — the orchestrator
+  # rejects the import before any heartbeat fires. We still bring up the
+  # registry so the runtime's startup paths don't trip on a missing
+  # registry while collecting decorators.
+  - routine: start_registry_a2a
+
+  # Foreground run — orchestrator's debounce coordinator fires the
+  # RuntimeError ~1s after the last decorator is processed at import
+  # time. `timeout 8` is generous slack; `2>&1 | head -100` captures the
+  # traceback (stderr) AND the orchestrator's logger.error (stdout); the
+  # `|| true` swallows the non-zero exit code so the step succeeds.
+  - name: "Run mixed-mode fixture, capture combined stderr+stdout"
+    handler: shell
+    workdir: /workspace/mixed-mode-agent
+    # `tail -n 500` instead of `head -100` so a long traceback (e.g.
+    # multiple wrapped exceptions) doesn't get truncated before the
+    # RuntimeError surfaces. 500 lines is generous for an 8s run while
+    # still bounding the captured output.
+    command: timeout 8 python3 main.py 2>&1 | tail -n 500 || true
+    capture: mixed_output
+    timeout: 30
+
+assertions:
+  - expr: "${captured.mixed_output} contains 'Mixed mode not supported'"
+    message: "orchestrator should emit the 'Mixed mode not supported' error message"
+  - expr: "${captured.mixed_output} contains 'RuntimeError'"
+    message: "rejection should surface as a RuntimeError traceback"
+  - expr: "${captured.mixed_output} contains '@mesh.a2a'"
+    message: "error message should name the @mesh.a2a family as one of the conflicting decorators"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
