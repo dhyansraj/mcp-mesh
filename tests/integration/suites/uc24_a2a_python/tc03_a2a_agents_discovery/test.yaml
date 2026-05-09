@@ -1,0 +1,148 @@
+# tc03_a2a_agents_discovery — registry-side aggregation endpoint.
+#
+# GET http://<registry>/a2a/agents enumerates ALL agents that registered
+# at least one A2A surface (agent_type=a2a). For each surface the
+# registry returns:
+#
+#   { "url": "<MCP_MESH_PUBLIC_URL_PREFIX><path>",
+#     "card_url": "<MCP_MESH_PUBLIC_URL_PREFIX><path>/.well-known/agent.json",
+#     "path": "<path>",
+#     "skill_id": "<skill_id>" }
+#
+# This test brings up the FULL fleet — both an mcp-tool-only agent
+# (system-agent for date_service, port 9100) AND a long-task-provider
+# (port 9102 to avoid colliding with system-agent on 9100) AND BOTH
+# A2A surfaces (date on 9090 + report on 9091). Only the two A2A
+# surfaces should appear under /a2a/agents — the bare mcp-tool agents
+# (system-agent + long-task-provider) are not A2A and so MUST be absent
+# from this endpoint. We don't check absence here (the keyed substring
+# matches are sufficient), but the DI must work end-to-end so all 4
+# agents must be healthy before we hit the discovery endpoint.
+
+name: "A2A: registry /a2a/agents enumerates all A2A surfaces"
+description: "GET /a2a/agents returns the surfaces[] array with url + card_url + path + skill_id for both date_a2a and report_a2a"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-906
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/system-agent /workspace/
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/date-a2a-agent /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+
+  - name: "Install system-agent deps"
+    handler: pip-install
+    path: /workspace/system-agent
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install date-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/date-a2a-agent
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - routine: start_registry_a2a
+
+  - name: "Start system-agent (port 9100, provides date_service)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for system-agent registration"
+    handler: wait
+    seconds: 8
+
+  # long-task-provider bakes 9100 in @mesh.agent; override to 9102 here
+  # because system-agent already owns 9100 in this test. ENV > decorator
+  # default per config_resolver.py.
+  - name: "Start long-task-provider (port 9102, override from baked 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9102 -d
+
+  - name: "Wait for long-task-provider registration"
+    handler: wait
+    seconds: 8
+
+  - name: "Start date-a2a-agent (port 9090)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start date-a2a-agent/main.py -d
+
+  - name: "Wait for date_service DI resolution"
+    handler: wait
+    seconds: 8
+
+  - name: "Start report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for full fleet heartbeat + card cache"
+    handler: wait
+    seconds: 20
+
+  - name: "Verify all 4 agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "GET /a2a/agents on the registry"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/a2a/agents
+    capture: discovery_response
+    timeout: 15
+
+assertions:
+  - expr: "${captured.agent_list} contains 'system-agent'"
+    message: "system-agent should be registered"
+  - expr: "${captured.agent_list} contains 'long-task-provider'"
+    message: "long-task-provider should be registered"
+  - expr: "${captured.agent_list} contains 'date'"
+    message: "date-a2a agent should be registered"
+  - expr: "${captured.agent_list} contains 'report'"
+    message: "report-a2a agent should be registered"
+  # The /a2a/agents response must surface BOTH surfaces with their
+  # path / skill_id / public url / card_url stamped from
+  # MCP_MESH_PUBLIC_URL_PREFIX (start_registry_a2a sets it to
+  # https://test.example.com).
+  - expr: "${captured.discovery_response} contains '\"surfaces\"'"
+    message: "/a2a/agents response should carry a surfaces array"
+  - expr: "${captured.discovery_response} contains '\"path\":\"/agents/date\"'"
+    message: "discovery should include the date surface path"
+  - expr: "${captured.discovery_response} contains '\"path\":\"/agents/report\"'"
+    message: "discovery should include the report surface path"
+  - expr: "${captured.discovery_response} contains '\"skill_id\":\"get-date\"'"
+    message: "discovery should include the get-date skill id"
+  - expr: "${captured.discovery_response} contains '\"skill_id\":\"generate-report\"'"
+    message: "discovery should include the generate-report skill id"
+  - expr: "${captured.discovery_response} contains 'https://test.example.com/agents/date'"
+    message: "date surface should carry the public URL stamped from MCP_MESH_PUBLIC_URL_PREFIX"
+  - expr: "${captured.discovery_response} contains 'https://test.example.com/agents/report'"
+    message: "report surface should carry the public URL stamped from MCP_MESH_PUBLIC_URL_PREFIX"
+  - expr: "${captured.discovery_response} contains 'https://test.example.com/agents/date/.well-known/agent.json'"
+    message: "discovery should include the public card_url for the date surface"
+  - expr: "${captured.discovery_response} contains 'https://test.example.com/agents/report/.well-known/agent.json'"
+    message: "discovery should include the public card_url for the report surface"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

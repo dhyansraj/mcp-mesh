@@ -1,0 +1,84 @@
+# tc08_tasks_get_unknown_id — JSON-RPC error envelope when polling
+# tasks/get with a task id the surface has never seen.
+#
+# The framework keeps in-flight long-running tasks in _A2A_TASK_STORE
+# (mesh/a2a.py); a tasks/get for an id that's not in the store MUST
+# return a JSON-RPC 2.0 error envelope with code -32602 (invalid params)
+# and a message that names the offending id so callers can debug
+# (e.g. typoed id, expired retention, wrong surface).
+#
+# Setup mirrors tc06/tc07 (long-running: long-task-provider +
+# report-a2a-agent) — although the report-a2a surface is what receives
+# the tasks/get request, the unknown-id rejection happens before
+# any long-running machinery; we just need the surface live so the
+# JSON-RPC dispatcher answers.
+
+name: "A2A: tasks/get with unknown id returns -32602 invalid params"
+description: "POST tasks/get with a never-registered task id returns a JSON-RPC 2.0 error envelope code -32602 naming the unknown id"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-906
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - routine: start_registry_a2a
+
+  - name: "Start long-task-provider (port 9100, baked into @mesh.agent)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for provider registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "POST tasks/get with id=never-existed"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:9091/agents/report \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tasks/get","params":{"id":"never-existed"}}'
+    capture: error_response
+    timeout: 15
+
+assertions:
+  - expr: "${captured.error_response} contains '\"code\":-32602'"
+    message: "JSON-RPC code should be -32602 (invalid params)"
+  - expr: "${captured.error_response} contains 'Unknown task id'"
+    message: "error message should explicitly say 'Unknown task id'"
+  - expr: "${captured.error_response} contains 'never-existed'"
+    message: "error message should echo the offending task id for diagnostics"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

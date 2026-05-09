@@ -64,18 +64,21 @@ test:
 
   # -N disables curl output buffering (otherwise the stream is held in
   # the curl buffer until the stream closes anyway, but -N keeps stderr
-  # visible as the stream advances). -m 20 caps the SSE consumption at
-  # 20s so a stuck stream fails fast — the 2-section job runs ~4s and
-  # the stream closes on the terminal final=true event.
+  # visible as the stream advances). -m 45 caps the SSE consumption — the
+  # 2-section job runs ~4s of compute but claim latency varies under
+  # parallel load (the test image has several agents heart-beating in
+  # the same registry). 20s previously flaked when the registry was
+  # contended; 45s gives generous slack while still failing fast on a
+  # truly-stuck stream.
   - name: "POST tasks/sendSubscribe and consume SSE stream"
     handler: shell
     workdir: /workspace
     command: |
-      curl -N -m 20 -s -X POST http://localhost:9091/agents/report \
+      curl -N -m 45 -s -X POST http://localhost:9091/agents/report \
         -H 'Content-Type: application/json' \
         -d '{"jsonrpc":"2.0","id":99,"method":"tasks/sendSubscribe","params":{"id":"s1","message":{"role":"user","parts":[{"type":"text","text":"{\"user_id\": \"bob\", \"sections\": [\"a\", \"b\"]}"}]}}}'
     capture: sse_stream
-    timeout: 30
+    timeout: 60
 
 assertions:
   - expr: "${captured.sse_stream} contains '\"state\": \"working\"'"
