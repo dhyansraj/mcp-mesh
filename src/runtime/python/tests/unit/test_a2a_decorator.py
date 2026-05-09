@@ -188,7 +188,9 @@ class TestA2AMountHelper:
             assert task["id"] == "t-lookup-1"
             assert task["status"]["state"] == "completed"
 
-            # Other tasks/* still return Method-not-implemented.
+            # tasks/get against a sync (non-stored) task id returns
+            # -32602 (Unknown task id) — sync tasks don't go into the
+            # long-running task store.
             other = {
                 "jsonrpc": "2.0",
                 "method": "tasks/get",
@@ -197,6 +199,19 @@ class TestA2AMountHelper:
             }
             r = client.post("/agents/lookup", json=other)
             assert r.status_code == 200
+            envelope = r.json()
+            assert envelope["error"]["code"] == -32602
+            assert "Unknown task id" in envelope["error"]["message"]
+
+            # Truly-unimplemented method (not in dispatch table) still
+            # surfaces as -32601.
+            unsupported = {
+                "jsonrpc": "2.0",
+                "method": "tasks/listSupportedSkills",
+                "params": {},
+                "id": "req-3",
+            }
+            r = client.post("/agents/lookup", json=unsupported)
             envelope = r.json()
             assert envelope["error"]["code"] == -32601
             assert "Method not implemented" in envelope["error"]["message"]
@@ -688,12 +703,15 @@ class TestA2ATasksSendDispatch:
             artifact_text = r.json()["result"]["artifacts"][0]["parts"][0]["text"]
             assert _json.loads(artifact_text) == {"got_role": "user"}
 
-    def test_other_tasks_methods_still_method_not_implemented(self):
+    def test_unsupported_methods_return_method_not_implemented(self):
         async def handler(payload: dict):
             return {}
 
         with self._client({"path": "/agents/x"}, handler) as client:
-            for method in ("tasks/get", "tasks/cancel", "tasks/sendSubscribe"):
+            # Methods outside the supported A2A v1.0 set still surface
+            # JSON-RPC -32601. The dispatch table covers tasks/send,
+            # tasks/get, tasks/cancel, tasks/sendSubscribe, tasks/resubscribe.
+            for method in ("tasks/list", "tasks/wait", "agent/info"):
                 r = client.post(
                     "/agents/x",
                     json={
@@ -709,31 +727,648 @@ class TestA2ATasksSendDispatch:
                 assert envelope["error"]["code"] == -32601
                 assert "Method not implemented" in envelope["error"]["message"]
 
-    def test_tasks_send_falls_back_when_underlying_is_task_true(self):
-        # Mock _underlying_tool_is_task to simulate a task=True dep.
-        from mesh import a2a as a2a_mod
+    # NOTE: the old "Phase 3 not implemented" guard was driven by
+    # ``_underlying_tool_is_task`` metadata. Phase 2-leftover replaces
+    # that with return-value introspection (handler returns a JobProxy
+    # → state=working). Coverage for the long-running path now lives in
+    # ``TestA2ALongRunningTasksLifecycle`` below.
+
+
+# ---------------------------------------------------------------------------
+# Phase 2-leftover + Phase 3 — long-running tasks + SSE streaming
+# ---------------------------------------------------------------------------
+
+
+class _FakeJobProxy:
+    """Duck-typed stand-in for ``mcp_mesh_core.JobProxy`` used in unit tests.
+
+    The real ``JobProxy`` is a Rust class; in CI we want to drive the
+    A2A surface without actually submitting jobs to a registry. We
+    monkey-patch ``mesh.a2a._is_job_proxy`` to recognise this class so
+    the framework treats handler returns of this type as long-running
+    (state=working).
+
+    Mirrors the ``JobProxy`` contract:
+      - ``job_id`` attribute
+      - ``async status()`` returning a dict
+      - ``async cancel(reason=None)``
+      - ``async wait(timeout_secs=None)`` returning the result
+        or raising on failure / cancellation
+    """
+
+    def __init__(
+        self,
+        *,
+        job_id: str = "job-fake-1",
+        status_seq: list | None = None,
+        wait_result: Any = None,
+        wait_raises: BaseException | None = None,
+    ) -> None:
+        self.job_id = job_id
+        # status() returns successive entries from this list — last entry
+        # is "sticky" (returned forever after the list is exhausted).
+        self._status_seq = list(status_seq) if status_seq else [{"status": "working"}]
+        self._status_idx = 0
+        self._wait_result = wait_result
+        self._wait_raises = wait_raises
+        self.cancel_calls: list = []
+
+    async def status(self) -> dict:
+        idx = min(self._status_idx, len(self._status_seq) - 1)
+        self._status_idx += 1
+        return dict(self._status_seq[idx])
+
+    async def cancel(self, reason: Any = None) -> None:
+        self.cancel_calls.append(reason)
+
+    async def wait(self, timeout_secs: Any = None) -> Any:
+        if self._wait_raises is not None:
+            raise self._wait_raises
+        return self._wait_result
+
+
+@pytest.fixture
+def patch_is_job_proxy():
+    """Make the framework recognise ``_FakeJobProxy`` as a JobProxy."""
+    import mesh.a2a as a2a_mod
+
+    original = a2a_mod._is_job_proxy
+
+    def _recognise_fake(value: Any) -> bool:
+        return isinstance(value, _FakeJobProxy)
+
+    a2a_mod._is_job_proxy = _recognise_fake
+    try:
+        yield
+    finally:
+        a2a_mod._is_job_proxy = original
+
+
+@pytest.fixture
+def _reset_a2a_task_store():
+    """Wipe the long-running task store between tests that exercise the
+    long-running tasks/* lifecycle.
+
+    NOT autouse: importing ``mesh.a2a`` as a module pollutes
+    ``sys.modules`` and shadows the ``mesh.__getattr__`` shim that
+    serves the ``mesh.a2a(...)`` decorator-callable. Tests that hit
+    the task store opt in via this fixture; tests that only call
+    ``mesh.a2a(...)`` / ``mesh.a2a.mount(...)`` skip it so the shim
+    keeps working.
+    """
+    import sys
+
+    a2a_mod = sys.modules.get("mesh.a2a")
+    if a2a_mod is not None:
+        a2a_mod._A2A_TASK_STORE.clear()
+    yield
+    a2a_mod = sys.modules.get("mesh.a2a")
+    if a2a_mod is not None:
+        a2a_mod._A2A_TASK_STORE.clear()
+
+
+class TestMeshToA2AStateMapping:
+    """The mesh→A2A state translation must use A2A v1.0 spelling.
+
+    A2A v1.0 spec uses the US single-l ``"canceled"``; mesh internally
+    uses UK double-l ``"cancelled"``. The mapper must translate at the
+    boundary so wire payloads conform to the spec exactly.
+    """
+
+    def test_cancelled_maps_to_single_l_canceled(self):
+        from mesh.a2a import _map_mesh_state
+
+        assert _map_mesh_state("cancelled") == "canceled"
+
+    def test_terminal_states_pass_through(self):
+        from mesh.a2a import _map_mesh_state
+
+        assert _map_mesh_state("completed") == "completed"
+        assert _map_mesh_state("failed") == "failed"
+        assert _map_mesh_state("working") == "working"
+
+    def test_unknown_state_falls_back_to_working(self):
+        from mesh.a2a import _map_mesh_state
+
+        assert _map_mesh_state("queued") == "working"
+        assert _map_mesh_state(None) == "working"
+        assert _map_mesh_state("") == "working"
+
+
+@pytest.mark.usefixtures("_reset_a2a_task_store")
+class TestA2ALongRunningTasksLifecycle:
+    """Phase 2-leftover: handler returns JobProxy → working envelope.
+
+    Covers:
+      * tasks/send: JobProxy return → state=working, parked in store
+      * tasks/get: returns current state from JobProxy.status()
+      * tasks/get: unknown task_id → -32602
+      * tasks/cancel: invokes JobProxy.cancel() and returns updated state
+      * tasks/cancel: unknown task_id → -32602
+    """
+
+    def _client(self, mount_kwargs: dict, handler):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        app = FastAPI()
+        mesh.a2a.mount(app, **mount_kwargs)(handler)
+        return TestClient(app)
+
+    def test_tasks_send_returns_working_when_handler_returns_jobproxy(
+        self, patch_is_job_proxy
+    ):
+        proxy = _FakeJobProxy(job_id="job-r1", status_seq=[{"status": "working"}])
 
         async def handler(payload: dict):
-            # Should NOT be invoked — Phase 3 territory.
-            raise AssertionError("handler should not run for task=True deps")
+            return proxy
 
-        with patch.object(a2a_mod, "_underlying_tool_is_task", return_value=True):
-            with self._client(
-                {"path": "/agents/long", "dependencies": ["long_tool"]},
-                handler,
-            ) as client:
-                r = client.post(
-                    "/agents/long",
-                    json={
-                        "jsonrpc": "2.0",
-                        "id": "req-1",
-                        "method": "tasks/send",
-                        "params": {
-                            "id": "t-long",
-                            "message": {"role": "user", "parts": []},
-                        },
+        with self._client({"path": "/agents/r1"}, handler) as client:
+            r = client.post(
+                "/agents/r1",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "req-1",
+                    "method": "tasks/send",
+                    "params": {
+                        "id": "task-r1",
+                        "message": {"role": "user", "parts": []},
                     },
-                )
-                envelope = r.json()
-                assert envelope["error"]["code"] == -32601
-                assert "Phase 3" in envelope["error"]["message"]
+                },
+            )
+        assert r.status_code == 200
+        envelope = r.json()
+        assert envelope["id"] == "req-1"
+        task = envelope["result"]
+        assert task["id"] == "task-r1"
+        assert task["status"]["state"] == "working"
+        # Working envelopes carry no artifacts yet.
+        assert task["artifacts"] == []
+
+        # Proxy was parked in the store keyed by the task_id.
+        import mesh.a2a as a2a_mod
+
+        assert "task-r1" in a2a_mod._A2A_TASK_STORE
+        assert a2a_mod._A2A_TASK_STORE["task-r1"]["proxy"] is proxy
+
+    def test_tasks_get_returns_current_state_from_jobproxy(self, patch_is_job_proxy):
+        # tasks/send stores the proxy without calling status(); tasks/get
+        # makes the first (and only, for this test) status() call.
+        proxy = _FakeJobProxy(
+            status_seq=[
+                {
+                    "status": "working",
+                    "progress": 0.45,
+                    "progress_message": "halfway",
+                },
+            ],
+        )
+
+        async def handler(payload: dict):
+            return proxy
+
+        with self._client({"path": "/agents/r2"}, handler) as client:
+            client.post(
+                "/agents/r2",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "send",
+                    "method": "tasks/send",
+                    "params": {"id": "task-r2", "message": {}},
+                },
+            )
+            r = client.post(
+                "/agents/r2",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "get",
+                    "method": "tasks/get",
+                    "params": {"id": "task-r2"},
+                },
+            )
+        assert r.status_code == 200
+        envelope = r.json()
+        task = envelope["result"]
+        assert task["id"] == "task-r2"
+        assert task["status"]["state"] == "working"
+        assert task["status"]["message"]["parts"][0]["text"] == "halfway"
+        assert task["metadata"]["progress"] == 0.45
+
+    def test_tasks_get_unknown_task_id_returns_invalid_params(self):
+        async def handler(payload: dict):
+            return {"x": 1}
+
+        with self._client({"path": "/agents/r3"}, handler) as client:
+            r = client.post(
+                "/agents/r3",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "get",
+                    "method": "tasks/get",
+                    "params": {"id": "does-not-exist"},
+                },
+            )
+        envelope = r.json()
+        assert envelope["error"]["code"] == -32602
+        assert "Unknown task id" in envelope["error"]["message"]
+
+    def test_tasks_cancel_calls_proxy_cancel_and_returns_state(
+        self, patch_is_job_proxy
+    ):
+        # tasks/send stores the proxy (no status() call); tasks/cancel
+        # invokes cancel() then status() — that single status() call
+        # returns the post-cancel state.
+        proxy = _FakeJobProxy(
+            status_seq=[
+                {"status": "cancelled", "progress_message": "user requested"},
+            ],
+        )
+
+        async def handler(payload: dict):
+            return proxy
+
+        with self._client({"path": "/agents/r4"}, handler) as client:
+            client.post(
+                "/agents/r4",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "send",
+                    "method": "tasks/send",
+                    "params": {"id": "task-r4", "message": {}},
+                },
+            )
+            r = client.post(
+                "/agents/r4",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "cancel",
+                    "method": "tasks/cancel",
+                    "params": {"id": "task-r4", "reason": "user requested"},
+                },
+            )
+        assert r.status_code == 200
+        envelope = r.json()
+        task = envelope["result"]
+        # Mesh "cancelled" must surface as A2A v1.0 single-l "canceled".
+        assert task["status"]["state"] == "canceled"
+        # Cancel invocation captured.
+        assert proxy.cancel_calls == ["user requested"]
+
+    def test_tasks_cancel_unknown_task_id_returns_invalid_params(self):
+        async def handler(payload: dict):
+            return {"x": 1}
+
+        with self._client({"path": "/agents/r5"}, handler) as client:
+            r = client.post(
+                "/agents/r5",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "cancel",
+                    "method": "tasks/cancel",
+                    "params": {"id": "no-such-task"},
+                },
+            )
+        envelope = r.json()
+        assert envelope["error"]["code"] == -32602
+
+    def test_tasks_cancel_swallows_proxy_cancel_exception(
+        self, patch_is_job_proxy
+    ):
+        # Registry may have already terminated the job by the time the
+        # client cancels — proxy.cancel() raising should NOT bubble up
+        # as a JSON-RPC error.
+        class _RaisingCancelProxy(_FakeJobProxy):
+            async def cancel(self, reason=None):
+                raise RuntimeError("already terminal")
+
+        proxy = _RaisingCancelProxy(status_seq=[{"status": "completed"}])
+
+        async def handler(payload: dict):
+            return proxy
+
+        with self._client({"path": "/agents/r6"}, handler) as client:
+            client.post(
+                "/agents/r6",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "send",
+                    "method": "tasks/send",
+                    "params": {"id": "task-r6", "message": {}},
+                },
+            )
+            r = client.post(
+                "/agents/r6",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "cancel",
+                    "method": "tasks/cancel",
+                    "params": {"id": "task-r6"},
+                },
+            )
+        envelope = r.json()
+        assert "error" not in envelope
+        # Status is whatever the post-cancel proxy.status() returned.
+        assert envelope["result"]["status"]["state"] == "completed"
+
+
+def _parse_sse_events(body: str) -> list[dict]:
+    """Parse an SSE response body into a list of decoded JSON payloads.
+
+    Skips comment frames (lines starting with ``:``) and the SSE-spec
+    blank-line separators. Each ``data: {...}`` line yields one dict.
+    """
+    events: list[dict] = []
+    for chunk in body.split("\n\n"):
+        chunk = chunk.strip()
+        if not chunk or chunk.startswith(":"):
+            continue
+        if chunk.startswith("data:"):
+            payload = chunk[len("data:"):].strip()
+            if payload:
+                import json as _j
+
+                events.append(_j.loads(payload))
+    return events
+
+
+@pytest.mark.usefixtures("_reset_a2a_task_store")
+class TestA2ASseStreaming:
+    """Phase 3: tasks/sendSubscribe + tasks/resubscribe over SSE."""
+
+    def _client(self, mount_kwargs: dict, handler):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        app = FastAPI()
+        mesh.a2a.mount(app, **mount_kwargs)(handler)
+        return TestClient(app)
+
+    def test_sse_response_carries_event_stream_headers(self):
+        async def handler(payload: dict):
+            return {"ok": True}
+
+        with self._client({"path": "/agents/s1"}, handler) as client:
+            r = client.post(
+                "/agents/s1",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "req",
+                    "method": "tasks/sendSubscribe",
+                    "params": {"id": "task-s1", "message": {}},
+                },
+            )
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/event-stream")
+        assert r.headers["cache-control"] == "no-cache"
+        # X-Accel-Buffering avoids nginx-side stream buffering.
+        assert r.headers["x-accel-buffering"] == "no"
+
+    def test_sse_sync_handler_emits_artifact_then_completed(self):
+        async def handler(payload: dict):
+            return {"date": "2026-05-09"}
+
+        with self._client({"path": "/agents/s2"}, handler) as client:
+            r = client.post(
+                "/agents/s2",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "req-s2",
+                    "method": "tasks/sendSubscribe",
+                    "params": {
+                        "id": "task-s2",
+                        "message": {"role": "user", "parts": []},
+                    },
+                },
+            )
+        events = _parse_sse_events(r.text)
+        assert len(events) == 2
+        # First event: TaskArtifactUpdateEvent carrying the result.
+        artifact_evt = events[0]
+        assert artifact_evt["jsonrpc"] == "2.0"
+        assert artifact_evt["id"] == "req-s2"
+        artifact = artifact_evt["result"]["artifact"]
+        assert artifact["name"] == "result"
+        assert artifact["index"] == 0
+        import json as _j
+
+        assert _j.loads(artifact["parts"][0]["text"]) == {"date": "2026-05-09"}
+        # Second event: terminal status update with final=True.
+        status_evt = events[1]
+        assert status_evt["result"]["id"] == "task-s2"
+        assert status_evt["result"]["status"]["state"] == "completed"
+        assert status_evt["result"]["final"] is True
+
+    def test_sse_handler_exception_emits_single_failed_event(self):
+        async def handler(payload: dict):
+            raise RuntimeError("boom in handler")
+
+        with self._client({"path": "/agents/s3"}, handler) as client:
+            r = client.post(
+                "/agents/s3",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "req-s3",
+                    "method": "tasks/sendSubscribe",
+                    "params": {"id": "task-s3", "message": {}},
+                },
+            )
+        events = _parse_sse_events(r.text)
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["result"]["status"]["state"] == "failed"
+        assert evt["result"]["final"] is True
+        assert "boom in handler" in evt["result"]["status"]["message"]["parts"][0]["text"]
+
+    def test_sse_long_running_emits_initial_working_then_terminal(
+        self, patch_is_job_proxy, monkeypatch
+    ):
+        # Drop poll/keepalive intervals so the test runs in <1s rather
+        # than waiting on real wall-clock seconds.
+        import mesh.a2a as a2a_mod
+
+        monkeypatch.setattr(a2a_mod, "_SSE_POLL_INTERVAL_SECS", 0.01)
+
+        proxy = _FakeJobProxy(
+            status_seq=[
+                {"status": "working"},
+                {"status": "working", "progress": 0.5, "progress_message": "halfway"},
+                {"status": "completed"},
+            ],
+            wait_result={"final": "value"},
+        )
+
+        async def handler(payload: dict):
+            return proxy
+
+        with self._client({"path": "/agents/s4"}, handler) as client:
+            r = client.post(
+                "/agents/s4",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "req-s4",
+                    "method": "tasks/sendSubscribe",
+                    "params": {"id": "task-s4", "message": {}},
+                },
+            )
+        events = _parse_sse_events(r.text)
+        # Expected sequence:
+        #   [0] initial working (no progress yet)
+        #   [1] working with progress=0.5 + "halfway" message
+        #   [2] terminal artifact event
+        #   [3] terminal completed status (final=True)
+        assert len(events) == 4
+
+        assert events[0]["result"]["status"]["state"] == "working"
+        assert events[0]["result"]["final"] is False
+
+        assert events[1]["result"]["status"]["state"] == "working"
+        assert events[1]["result"]["metadata"]["progress"] == 0.5
+        assert (
+            events[1]["result"]["status"]["message"]["parts"][0]["text"] == "halfway"
+        )
+
+        # Artifact event has no ``status`` key but does have ``artifact``.
+        assert "artifact" in events[2]["result"]
+        import json as _j
+
+        assert _j.loads(
+            events[2]["result"]["artifact"]["parts"][0]["text"]
+        ) == {"final": "value"}
+
+        assert events[3]["result"]["status"]["state"] == "completed"
+        assert events[3]["result"]["final"] is True
+
+    def test_sse_long_running_failed_emits_terminal_failed(
+        self, patch_is_job_proxy, monkeypatch
+    ):
+        import mesh.a2a as a2a_mod
+
+        monkeypatch.setattr(a2a_mod, "_SSE_POLL_INTERVAL_SECS", 0.01)
+
+        proxy = _FakeJobProxy(
+            status_seq=[
+                {"status": "working"},
+                {"status": "failed", "error": "downstream exploded"},
+            ],
+        )
+
+        async def handler(payload: dict):
+            return proxy
+
+        with self._client({"path": "/agents/s5"}, handler) as client:
+            r = client.post(
+                "/agents/s5",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "req-s5",
+                    "method": "tasks/sendSubscribe",
+                    "params": {"id": "task-s5", "message": {}},
+                },
+            )
+        events = _parse_sse_events(r.text)
+        assert events[0]["result"]["status"]["state"] == "working"
+        terminal = events[-1]
+        assert terminal["result"]["status"]["state"] == "failed"
+        assert terminal["result"]["final"] is True
+        # Error text propagated into the status.message text part.
+        msg_text = terminal["result"]["status"]["message"]["parts"][0]["text"]
+        assert "downstream exploded" in msg_text
+
+    def test_resubscribe_unknown_task_id_returns_invalid_params(self):
+        async def handler(payload: dict):
+            return {"x": 1}
+
+        with self._client({"path": "/agents/s6"}, handler) as client:
+            r = client.post(
+                "/agents/s6",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "resub",
+                    "method": "tasks/resubscribe",
+                    "params": {"id": "no-such-task"},
+                },
+            )
+        envelope = r.json()
+        assert envelope["error"]["code"] == -32602
+
+    def test_resubscribe_reattaches_to_existing_task(
+        self, patch_is_job_proxy, monkeypatch
+    ):
+        import mesh.a2a as a2a_mod
+
+        monkeypatch.setattr(a2a_mod, "_SSE_POLL_INTERVAL_SECS", 0.01)
+
+        proxy = _FakeJobProxy(
+            status_seq=[
+                {"status": "working"},
+                {"status": "completed"},
+            ],
+            wait_result="ok",
+        )
+
+        async def handler(payload: dict):
+            return proxy
+
+        with self._client({"path": "/agents/s7"}, handler) as client:
+            # First, send to register the task in the store.
+            client.post(
+                "/agents/s7",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "send",
+                    "method": "tasks/send",
+                    "params": {"id": "task-s7", "message": {}},
+                },
+            )
+            # Then resubscribe — should find the parked proxy.
+            r = client.post(
+                "/agents/s7",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": "resub",
+                    "method": "tasks/resubscribe",
+                    "params": {"id": "task-s7"},
+                },
+            )
+        events = _parse_sse_events(r.text)
+        # Must see at least the initial working + a terminal event.
+        states = [e["result"].get("status", {}).get("state") for e in events]
+        assert "working" in states
+        assert states[-1] == "completed"
+        assert events[-1]["result"]["final"] is True
+
+
+@pytest.mark.usefixtures("_reset_a2a_task_store")
+class TestA2ATaskStoreEviction:
+    """Terminal-state grace-window cleanup keeps the task store bounded."""
+
+    def test_mark_terminal_then_sweep_evicts_after_grace_window(
+        self, patch_is_job_proxy, monkeypatch
+    ):
+        import mesh.a2a as a2a_mod
+
+        proxy = _FakeJobProxy()
+        a2a_mod._store_task("evict-me", proxy)
+        a2a_mod._mark_terminal("evict-me")
+
+        # No sweep yet — entry still present.
+        assert "evict-me" in a2a_mod._A2A_TASK_STORE
+
+        # Force the entry's terminal_at to be old enough to evict, then
+        # sweep with a future "now" so it's outside the grace window.
+        monkeypatch.setattr(a2a_mod, "_TERMINAL_GRACE_SECS", 1.0)
+        future = a2a_mod._A2A_TASK_STORE["evict-me"]["terminal_at"] + 100.0
+        a2a_mod._sweep_terminal_tasks(now=future)
+
+        assert "evict-me" not in a2a_mod._A2A_TASK_STORE
+
+    def test_working_entries_are_not_evicted(self, patch_is_job_proxy):
+        import time
+
+        import mesh.a2a as a2a_mod
+
+        proxy = _FakeJobProxy()
+        a2a_mod._store_task("keep-me", proxy)
+        # No mark_terminal — terminal_at stays None.
+        a2a_mod._sweep_terminal_tasks(now=time.monotonic() + 10000.0)
+        assert "keep-me" in a2a_mod._A2A_TASK_STORE

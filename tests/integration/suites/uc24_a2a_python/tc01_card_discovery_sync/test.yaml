@@ -1,0 +1,100 @@
+# tc01_card_discovery_sync — A2A agent card endpoint smoke (Phase 1B).
+#
+# Verifies the GET {path}/.well-known/agent.json endpoint returns a
+# valid A2A v1.0 AgentCard for a sync skill. The date_a2a surface wraps
+# system-agent's date_service capability — sync (no task=True), so the
+# card's capabilities.streaming should be false.
+#
+# Setup: registry + system-agent (provides date_service on port 9100)
+# + date-a2a-agent (port 9090, baked via os.environ.setdefault). The
+# system-agent example bakes http_port=9091 in @mesh.agent; we override
+# to 9100 via MCP_MESH_HTTP_PORT to avoid colliding with report_a2a's
+# 9091 in other tests AND to give the A2A surface clean ownership of
+# 9090/9091. Per config_resolver.py, ENV > decorator default.
+
+name: "A2A: agent card discovery (sync skill)"
+description: "GET /agents/date/.well-known/agent.json returns valid A2A v1.0 card with streaming=false"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-869
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/system-agent /workspace/
+      cp -rL /uc-artifacts/date-a2a-agent /workspace/
+
+  - name: "Install system-agent deps"
+    handler: pip-install
+    path: /workspace/system-agent
+
+  - name: "Install date-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/date-a2a-agent
+
+  - routine: start_registry_a2a
+
+  - name: "Start system-agent (port 9100, provides date_service)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for system-agent registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start date-a2a-agent (port 9090)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start date-a2a-agent/main.py -d
+
+  - name: "Wait for A2A surface heartbeat + card cache"
+    handler: wait
+    seconds: 18
+
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Fetch agent card"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:9090/agents/date/.well-known/agent.json
+    capture: card_response
+    timeout: 15
+
+assertions:
+  - expr: "${captured.agent_list} contains 'system-agent'"
+    message: "system-agent should be registered"
+  - expr: "${captured.agent_list} contains 'date'"
+    message: "date-a2a agent should be registered (name carries 'date')"
+  - expr: "${captured.card_response} contains '\"name\"'"
+    message: "card should carry a name field"
+  - expr: "${captured.card_response} contains '\"skills\"'"
+    message: "card should carry a skills array"
+  - expr: "${captured.card_response} contains '\"id\":\"get-date\"'"
+    message: "card should expose the get-date skill id"
+  # mount() ALWAYS wires tasks/sendSubscribe + tasks/resubscribe so per
+  # A2A v1.0 capabilities.streaming is advertised true regardless of
+  # whether the underlying tool is task=True (sync handlers stream a
+  # single artifact + terminal event).
+  - expr: "${captured.card_response} contains '\"streaming\":true'"
+    message: "card should advertise streaming=true (sendSubscribe + resubscribe always wired)"
+  - expr: "${captured.card_response} contains '\"capabilities\"'"
+    message: "card should carry a capabilities block"
+  - expr: "${captured.card_response} contains '\"defaultInputModes\"'"
+    message: "card should carry defaultInputModes (A2A v1.0 required)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

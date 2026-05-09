@@ -1,0 +1,110 @@
+# tc07_tasks_get_progression_to_completed — Phase 2-leftover lifecycle.
+#
+# Submit a long-running A2A task, wait for it to terminate, then call
+# tasks/get to fetch the final Task envelope. The framework's tasks/get
+# handler (mesh/a2a.py::_handle_tasks_get) calls proxy.wait(timeout_secs=1)
+# on completed tasks and folds the result into artifact[0] — the artifact
+# text carries the full generate_report payload (user_id + 3 sections).
+#
+# The 12s wait between submit and tasks/get covers: ~2s claim latency +
+# 3 sections * ~2s each + ~2s slack. Generate_report's terminal
+# job.complete() flushes past the batch tick so status flips before the
+# wait window closes.
+
+name: "A2A: tasks/get returns completed with full report artifact"
+description: "Submit long-running A2A task -> wait -> tasks/get returns state=completed with the full report payload as artifact[0]"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-869
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - routine: start_registry_a2a
+
+  - name: "Start long-task-provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "POST tasks/send (capture task id from response)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=$(curl -s -X POST http://localhost:9091/agents/report \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tasks/send","params":{"id":"g1","message":{"role":"user","parts":[{"type":"text","text":"{\"user_id\": \"alice\", \"sections\": [\"intro\", \"body\", \"summary\"]}"}]}}}')
+      echo "$RESP"
+      TASK_ID=$(echo "$RESP" | jq -r '.result.id')
+      echo "TASK_ID=${TASK_ID}"
+    capture: send_response
+    timeout: 15
+
+  - name: "Wait for the long-running job to complete (3 sections * ~2s + claim slack)"
+    handler: wait
+    seconds: 12
+
+  - name: "POST tasks/get for the same task id"
+    handler: shell
+    workdir: /workspace
+    command: |
+      TASK_ID=$(echo '${captured.send_response}' | grep '^TASK_ID=' | cut -d= -f2)
+      curl -s -X POST http://localhost:9091/agents/report \
+        -H 'Content-Type: application/json' \
+        -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tasks/get\",\"params\":{\"id\":\"${TASK_ID}\"}}"
+    capture: final_get
+    timeout: 15
+
+assertions:
+  - expr: "${captured.final_get} contains '\"state\":\"completed\"'"
+    message: "tasks/get should observe terminal completed state"
+  - expr: "${captured.final_get} contains '\"name\":\"result\"'"
+    message: "completed task should carry artifact[0].name='result'"
+  - expr: "${captured.final_get} contains 'report'"
+    message: "artifact text should embed the report payload"
+  - expr: "${captured.final_get} contains 'intro'"
+    message: "report should include the intro section"
+  - expr: "${captured.final_get} contains 'body'"
+    message: "report should include the body section"
+  - expr: "${captured.final_get} contains 'summary'"
+    message: "report should include the summary section"
+  - expr: "${captured.final_get} contains 'Generated content for'"
+    message: "report should carry the canonical generate_report marker"
+  - expr: "${captured.final_get} contains '\"progress\":1.0'"
+    message: "completed task should report progress=1.0"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

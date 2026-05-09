@@ -1,0 +1,84 @@
+# tc06_tasks_send_long_running_working — Phase 2-leftover long-running.
+#
+# When the user handler returns a JobProxy (i.e., it submitted a mesh
+# job via the injected MeshJob dep), the framework parks the proxy in
+# _A2A_TASK_STORE (mesh/a2a.py) and responds with state=working
+# immediately. The artifact list is empty because the underlying job
+# hasn't produced a result yet — the client polls tasks/get (tc07) or
+# subscribes via SSE (tc11) for that.
+#
+# Setup: long-task-provider (9100, baked via @mesh.agent) provides
+# generate_report (task=True). report-a2a-agent (9091, set via
+# os.environ.setdefault) wraps it as the A2A surface.
+
+name: "A2A: tasks/send long-running returns state=working"
+description: "POST tasks/send to report_a2a (task=True dep) returns Task envelope with state=working and empty artifacts"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-869
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - routine: start_registry_a2a
+
+  - name: "Start long-task-provider (port 9100, baked into @mesh.agent)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for provider registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for generate_report DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "POST tasks/send to report_a2a — submits long-running job"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:9091/agents/report \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tasks/send","params":{"id":"r1","message":{"role":"user","parts":[{"type":"text","text":"{\"user_id\": \"alice\", \"sections\": [\"intro\", \"body\", \"summary\"]}"}]}}}'
+    capture: task_response
+    timeout: 15
+
+assertions:
+  - expr: "${captured.task_response} contains '\"state\":\"working\"'"
+    message: "long-running submit should yield state=working"
+  - expr: "${captured.task_response} contains '\"id\":\"r1\"'"
+    message: "envelope should echo the submitted task id"
+  - expr: "${captured.task_response} contains '\"sessionId\":\"r1\"'"
+    message: "sessionId should default to task id"
+  - expr: "${captured.task_response} contains '\"artifacts\":[]'"
+    message: "no artifact on initial long-running submit"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
