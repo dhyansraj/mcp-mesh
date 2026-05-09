@@ -16,6 +16,8 @@
  *   - commission_crash            — submits report_that_crashes
  *   - commission_overlong         — submits runs_overlong
  *   - commission_downstream       — submits report_with_downstream_call
+ *   - commission_transient_failures — submits report_with_transient_failures
+ *                                     (#894 retryOn integration test driver)
  */
 import { FastMCP, mesh, type MeshJob } from "@mcpmesh/sdk";
 import { z } from "zod";
@@ -278,6 +280,50 @@ agent.addTool({
       { maxDuration: 120 },
     );
     return { job_id: (proxy as { jobId?: string }).jobId ?? null };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Transient-failures submitter — submits report_with_transient_failures (#894 tc23)
+// ---------------------------------------------------------------------------
+agent.addTool({
+  name: "commission_transient_failures",
+  capability: "commission_transient_failures",
+  dependencies: [{ capability: "report_with_transient_failures" }],
+  meshJobDepIndex: 0,
+  description:
+    "Submit report_with_transient_failures with caller-supplied max_retries.",
+  parameters: z.object({
+    user_id: z.string(),
+    max_retries: z.number().int().default(3),
+    transient_failures: z.number().int().default(2),
+    wait_timeout_secs: z.number().int().default(30),
+  }),
+  execute: async (
+    { user_id, max_retries, transient_failures, wait_timeout_secs },
+    reportWithTransientFailures: MeshJob | null = null,
+  ) => {
+    if (!reportWithTransientFailures?.submit) {
+      return { error: "report_with_transient_failures submitter not injected" };
+    }
+    const proxy = await reportWithTransientFailures.submit(
+      { user_id, transient_failures },
+      { maxDuration: 30, maxRetries: max_retries },
+    );
+    const job_id = (proxy as { jobId?: string }).jobId ?? null;
+    if (!proxy.wait) {
+      return { job_id, status: "submitted", result: null };
+    }
+    try {
+      const result = await proxy.wait(wait_timeout_secs);
+      return { job_id, status: "completed", result };
+    } catch (e) {
+      return {
+        job_id,
+        status: "wait_raised",
+        error: e instanceof Error ? e.message : String(e),
+      };
+    }
   },
 });
 
