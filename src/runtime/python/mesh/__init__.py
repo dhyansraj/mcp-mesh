@@ -98,6 +98,20 @@ def __getattr__(name):
         return decorators.route
     elif name == "a2a":
         return decorators.a2a
+    elif name == "a2a_consumer":
+        return decorators.a2a_consumer
+    elif name == "A2AClient":
+        from ._a2a_consumer import A2AClient
+
+        return A2AClient
+    elif name == "A2ABearer":
+        from ._a2a_consumer import A2ABearer
+
+        return A2ABearer
+    elif name == "A2AResponse":
+        from ._a2a_consumer import A2AResponse
+
+        return A2AResponse
     elif name == "llm":
         return decorators.llm
     elif name == "llm_provider":

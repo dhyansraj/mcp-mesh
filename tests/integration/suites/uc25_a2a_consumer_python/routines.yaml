@@ -1,0 +1,54 @@
+# UC-level routines for uc25_a2a_consumer_python (issue #908).
+#
+# Tests the consumer side of the A2A bridge: a mesh agent that calls
+# OUT to an external A2A backend and re-publishes the skill as a
+# regular mesh capability. Same fast-sweep registry timing as uc24
+# so failover (tc03) takes seconds, not minutes — DEFAULT_TIMEOUT_THRESHOLD
+# bounds how quickly the registry marks a stopped consumer unhealthy
+# so the surviving consumer can pick up subsequent calls.
+
+routines:
+  # Fast-sweep registry: short retention + tight health-check interval
+  # so consumer death (tc03) is detected within ~15s instead of the
+  # default 60s+ window. No MCP_MESH_PUBLIC_URL_PREFIX needed here —
+  # this suite never reads agent-card URLs (consumers register as
+  # mcp_agent, not a2a).
+  start_registry_consumer:
+    description: "Start the registry with fast-sweep timing for consumer health/failover tests"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          MCP_MESH_SWEEP_INTERVAL=10s \
+          MCP_MESH_RETENTION=10s \
+          MCP_MESH_HEALTH_CHECK_INTERVAL=5 \
+          DEFAULT_TIMEOUT_THRESHOLD=15 \
+            meshctl start --registry-only -d
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "registry ready after ${i}s"
+              # Verify the sweep override actually stamped its log line.
+              # If MCP_MESH_SWEEP_INTERVAL didn't take effect the suite
+              # must fail loudly here, not via slow per-test timeouts.
+              tail -n 200 ~/.mcp-mesh/logs/registry.log \
+                | grep -qE '\[sweep\] using MCP_MESH_SWEEP_INTERVAL' \
+                || { echo "FAIL: MCP_MESH_SWEEP_INTERVAL override did not take effect"; exit 1; }
+              echo "[setup] confirmed sweep override active"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: registry did not become ready in 20s"
+          tail -50 ~/.mcp-mesh/logs/registry.log 2>/dev/null || true
+          exit 1
+        capture: registry_start
+        timeout: 30
+
+  # Stop everything started by this test (agents + registry).
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: meshctl stop 2>/dev/null || true
+        ignore_errors: true
