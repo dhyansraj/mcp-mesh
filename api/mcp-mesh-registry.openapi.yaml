@@ -43,6 +43,8 @@ tags:
     description: Canonical schema registry (issue #547)
   - name: jobs
     description: Long-running job coordination (MeshJob — see MESHJOB_DESIGN.org)
+  - name: a2a
+    description: A2A (Agent-to-Agent) surface discovery (see A2A_SURFACE_DESIGN.org)
 paths:
   /health:
     get:
@@ -554,6 +556,33 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /a2a/agents:
+    get:
+      tags: [a2a]
+      summary: List A2A-exposed agents and their public URLs
+      description: |
+        Returns the FQDN-stamped surface list for every registered a2a-typed
+        agent. External A2A clients use this endpoint to discover where to
+        fetch agent cards (`{public_url}/.well-known/agent.json`) and where
+        to POST JSON-RPC `tasks/*` requests.
+
+        🤖 AI NOTE: Mesh-internal callers continue to use capability-based
+        resolution; this endpoint is purely the external discovery surface.
+      operationId: listA2AAgents
+      responses:
+        "200":
+          description: List of A2A surfaces with registry-stamped FQDNs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/A2AAgentsListResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /events:
     get:
       tags: [events]
@@ -752,7 +781,8 @@ components:
       description: |
         Service registration request with flattened structure.
         Used by both /agents/register and /heartbeat endpoints.
-        Supports both agents (agent_type=mcp_agent) and API services (agent_type=api).
+        Supports mesh agents (agent_type=mcp_agent), API services (agent_type=api),
+        and A2A-exposing agents (agent_type=a2a).
       properties:
         agent_id:
           type: string
@@ -763,10 +793,14 @@ components:
           description: Unique identifier for the agent
         agent_type:
           type: string
-          enum: [mcp_agent, api]
+          enum: [mcp_agent, api, a2a]
           default: "mcp_agent"
           example: "mcp_agent"
-          description: Type of service - mcp_agent provides capabilities, api consumes them
+          description: |
+            Type of service:
+            - mcp_agent: provides mesh capabilities (default)
+            - api: API-style consumer
+            - a2a: exposes A2A (Agent-to-Agent) surfaces; populates the optional surfaces field
         runtime:
           type: string
           enum: [python, typescript, java]
@@ -812,6 +846,55 @@ components:
           description: |
             Array of tools provided by this agent (@mesh.tool functions).
             Tools can optionally include llm_filter if decorated with @mesh.llm.
+        surfaces:
+          type: array
+          items:
+            $ref: "#/components/schemas/A2ASurface"
+          description: |
+            A2A surface declarations. Optional; only populated when agent_type=a2a.
+            Each surface corresponds to one @mesh.a2a decorator and carries the
+            path suffix + skill metadata the registry needs to compute the public
+            FQDN (path is concatenated with MCP_MESH_PUBLIC_URL_PREFIX).
+
+    A2ASurface:
+      type: object
+      required: [path, skill_id]
+      description: |
+        A single A2A (Agent-to-Agent) surface registered by an a2a-typed agent.
+        Carries the per-skill metadata an external A2A client needs to discover
+        and call this surface, plus the path suffix the registry uses to build
+        the publicly addressable URL.
+      properties:
+        path:
+          type: string
+          example: "/agents/report-generator"
+          description: URL path suffix for the A2A surface (e.g., /agents/report-generator)
+        skill_id:
+          type: string
+          example: "generate-report"
+          description: A2A skill identifier (kebab-case canonical)
+        name:
+          type: string
+          example: "Report Generator"
+          description: Human-readable skill name for the agent card
+        description:
+          type: string
+          example: "Generate a long-form report"
+          description: Free-form skill description shown on the agent card
+        input_modes:
+          type: array
+          items: { type: string }
+          default: ["application/json"]
+          description: A2A inputModes for this skill
+        output_modes:
+          type: array
+          items: { type: string }
+          default: ["application/json"]
+          description: A2A outputModes for this skill
+        tags:
+          type: array
+          items: { type: string }
+          description: Skill tags surfaced on the agent card
 
     MeshToolRegistration:
       type: object
@@ -1322,6 +1405,62 @@ components:
               tags: ["claude", "sonnet", "production"]
               version: "1.0.0"
               status: "available"
+        surfaces:
+          type: array
+          items:
+            $ref: "#/components/schemas/A2ASurfaceResponse"
+          description: |
+            Registry-stamped A2A surface metadata. Populated only when the
+            request was for an a2a-typed agent and the request body included
+            a `surfaces` array. The registry concatenates the configured
+            MCP_MESH_PUBLIC_URL_PREFIX with each surface's path to produce
+            the publicly addressable URL — so the agent never needs to know
+            its own external hostname.
+
+    A2ASurfaceResponse:
+      type: object
+      required: [path, skill_id]
+      description: |
+        Registry-computed A2A surface response entry. Echoes the surface's
+        declared path + skill_id and adds the FQDN-stamped public_url and
+        agent_card_url derived from MCP_MESH_PUBLIC_URL_PREFIX.
+      properties:
+        path:
+          type: string
+          example: "/agents/report-generator"
+          description: Path suffix as declared by the agent
+        skill_id:
+          type: string
+          example: "generate-report"
+          description: A2A skill identifier
+        public_url:
+          type: string
+          example: "https://agents.acme.com/agents/report-generator"
+          description: |
+            Registry-computed public URL: MCP_MESH_PUBLIC_URL_PREFIX + path.
+            Empty string when MCP_MESH_PUBLIC_URL_PREFIX is unset (registry
+            logs a warn-once telling operators to configure the prefix).
+        agent_card_url:
+          type: string
+          example: "https://agents.acme.com/agents/report-generator/.well-known/agent.json"
+          description: |
+            Convenience URL pointing at the surface's A2A agent card
+            (public_url + "/.well-known/agent.json"). Empty when
+            MCP_MESH_PUBLIC_URL_PREFIX is unset.
+
+    A2AAgentsListResponse:
+      type: object
+      required: [surfaces]
+      description: |
+        Response shape for GET /a2a/agents. The `surfaces` array is a flat
+        list of every A2A surface across all a2a-typed agents — clients use
+        public_url + agent_card_url to discover and call into surfaces.
+      properties:
+        surfaces:
+          type: array
+          items:
+            $ref: "#/components/schemas/A2ASurfaceResponse"
+          description: All A2A surfaces with registry-stamped public URLs
 
     # Core response schemas
     HealthResponse:
@@ -1634,9 +1773,13 @@ components:
           example: "hello-world"
         agent_type:
           type: string
-          enum: [mcp_agent, api]
+          enum: [mcp_agent, api, a2a]
           example: "mcp_agent"
-          description: Type of service - mcp_agent provides capabilities, api consumes them
+          description: |
+            Type of service:
+            - mcp_agent: provides mesh capabilities (default)
+            - api: API-style consumer (no capability advertisement)
+            - a2a: exposes A2A (Agent-to-Agent) surfaces in addition to standard mesh handling
         runtime:
           type: string
           enum: [python, typescript, java]

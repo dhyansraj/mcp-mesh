@@ -305,6 +305,13 @@ pub struct HeartbeatRequest {
     pub tools: Vec<ToolRegistration>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub llm_agents: Vec<LlmAgentRegistration>,
+    /// A2A surfaces (issue #903 / A2A_SURFACE_DESIGN.org). Optional —
+    /// populated only when the agent has at least one `@mesh.a2a` decorator.
+    /// Forwarded as a JSON value so the Rust core doesn't need to model the
+    /// surface schema; the registry's `MeshAgentRegistration` deserializer
+    /// reshapes this into typed `A2ASurface` entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surfaces: Option<serde_json::Value>,
 }
 
 impl HeartbeatRequest {
@@ -399,6 +406,16 @@ impl HeartbeatRequest {
             runtime: spec.runtime.as_api_str().to_string(),
             tools,
             llm_agents,
+            // Issue #903 Phase 1B: forward A2A surfaces verbatim so the
+            // registry can persist them and stamp FQDNs. The SDK passes
+            // a JSON string from Python (because pyclass(get_all, set_all)
+            // can't host a `serde_json::Value` field directly); parse it
+            // here before sending so the wire shape matches the registry's
+            // typed `MeshAgentRegistration.surfaces` deserializer.
+            surfaces: spec
+                .surfaces
+                .as_ref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
         }
     }
 }

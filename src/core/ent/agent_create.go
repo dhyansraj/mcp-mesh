@@ -213,6 +213,12 @@ func (ac *AgentCreate) SetNillableEntityID(s *string) *AgentCreate {
 	return ac
 }
 
+// SetA2aSurfaces sets the "a2a_surfaces" field.
+func (ac *AgentCreate) SetA2aSurfaces(m []map[string]interface{}) *AgentCreate {
+	ac.mutation.SetA2aSurfaces(m)
+	return ac
+}
+
 // SetID sets the "id" field.
 func (ac *AgentCreate) SetID(s string) *AgentCreate {
 	ac.mutation.SetID(s)
@@ -501,6 +507,10 @@ func (ac *AgentCreate) createSpec() (*Agent, *sqlgraph.CreateSpec) {
 	if value, ok := ac.mutation.EntityID(); ok {
 		_spec.SetField(agent.FieldEntityID, field.TypeString, value)
 		_node.EntityID = &value
+	}
+	if value, ok := ac.mutation.A2aSurfaces(); ok {
+		_spec.SetField(agent.FieldA2aSurfaces, field.TypeJSON, value)
+		_node.A2aSurfaces = value
 	}
 	if nodes := ac.mutation.CapabilitiesIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{

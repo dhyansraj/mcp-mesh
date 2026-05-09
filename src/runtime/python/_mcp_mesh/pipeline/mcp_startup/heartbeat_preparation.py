@@ -52,9 +52,14 @@ class HeartbeatPreparationStep(PipelineStep):
             # Build tools list for registration (with FastMCP schemas)
             tools_list = self._build_tools_list(mesh_tools, fastmcp_servers)
 
+            # Issue #903 Phase 1B: gather @mesh.a2a surfaces for the
+            # registry. Presence flips agent_type to "a2a" so the registry
+            # stamps FQDNs and surfaces this agent on GET /a2a/agents.
+            a2a_surfaces = self._build_a2a_surfaces()
+
             # Build agent registration payload
             registration_data = self._build_registration_payload(
-                agent_id, agent_config, tools_list
+                agent_id, agent_config, tools_list, a2a_surfaces
             )
 
             # Build health status for heartbeat
@@ -331,11 +336,28 @@ class HeartbeatPreparationStep(PipelineStep):
 
         return debug_info
 
+    def _build_a2a_surfaces(self) -> list[dict[str, Any]]:
+        """Collect ``@mesh.a2a`` surface metadata for heartbeat (issue #903 Phase 1B).
+
+        Thin delegating wrapper over
+        :func:`_mcp_mesh.engine.a2a_surfaces.collect_a2a_surfaces` (the
+        single source of truth — also used by the Rust-backed mcp_heartbeat
+        and api_heartbeat paths). Kept as an instance method so call sites
+        in this class don't change, but unit tests that previously patched
+        ``_mcp_mesh.pipeline.mcp_startup.heartbeat_preparation.DecoratorRegistry``
+        for ``get_all_by_type`` should now patch
+        ``_mcp_mesh.engine.a2a_surfaces.DecoratorRegistry`` instead.
+        """
+        from ...engine.a2a_surfaces import collect_a2a_surfaces
+
+        return collect_a2a_surfaces()
+
     def _build_registration_payload(
         self,
         agent_id: str,
         agent_config: dict[str, Any],
         tools_list: list[dict[str, Any]],
+        a2a_surfaces: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Build agent registration payload."""
         from ...shared.host_resolver import HostResolver
@@ -346,9 +368,15 @@ class HeartbeatPreparationStep(PipelineStep):
         # configured only via @mesh.tool with no @mesh.agent(name=...)).
         base_name = agent_config.get("name") or agent_id
 
-        return {
+        # Issue #903 Phase 1B: presence of @mesh.a2a surfaces flips the
+        # agent_type to "a2a" so the registry computes FQDNs and exposes
+        # this agent via GET /a2a/agents. Mesh tools coexist with A2A
+        # surfaces — agent_type=a2a does NOT mean "no mesh tools".
+        agent_type = "a2a" if a2a_surfaces else "mcp_agent"
+
+        payload: dict[str, Any] = {
             "agent_id": agent_id,
-            "agent_type": "mcp_agent",
+            "agent_type": agent_type,
             "name": base_name,
             "version": agent_config.get("version", "1.0.0"),
             "http_host": HostResolver.get_external_host(),
@@ -357,6 +385,9 @@ class HeartbeatPreparationStep(PipelineStep):
             "namespace": agent_config.get("namespace", "default"),
             "tools": tools_list,
         }
+        if a2a_surfaces:
+            payload["surfaces"] = a2a_surfaces
+        return payload
 
     def _extract_capabilities(self, tools_list: list[dict[str, Any]]) -> list[str]:
         """Extract capabilities from tools list."""

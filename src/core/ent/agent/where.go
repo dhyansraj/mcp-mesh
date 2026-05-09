@@ -795,6 +795,16 @@ func EntityIDContainsFold(v string) predicate.Agent {
 	return predicate.Agent(sql.FieldContainsFold(FieldEntityID, v))
 }
 
+// A2aSurfacesIsNil applies the IsNil predicate on the "a2a_surfaces" field.
+func A2aSurfacesIsNil() predicate.Agent {
+	return predicate.Agent(sql.FieldIsNull(FieldA2aSurfaces))
+}
+
+// A2aSurfacesNotNil applies the NotNil predicate on the "a2a_surfaces" field.
+func A2aSurfacesNotNil() predicate.Agent {
+	return predicate.Agent(sql.FieldNotNull(FieldA2aSurfaces))
+}
+
 // HasCapabilities applies the HasEdge predicate on the "capabilities" edge.
 func HasCapabilities() predicate.Agent {
 	return predicate.Agent(func(s *sql.Selector) {

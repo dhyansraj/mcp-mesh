@@ -1,0 +1,610 @@
+#+TITLE: A2A Surface Adapter: Mesh Agents as A2A-Compliant Servers
+#+AUTHOR: mcp-mesh
+#+DATE: 2026-05-08
+#+TODO: TODO IN-PROGRESS | DONE BLOCKED
+#+OPTIONS: toc:3
+
+* Abstract
+
+Add an A2A (Agent-to-Agent) surface adapter to mcp-mesh, tracking issue
+#869. A2A is Google's open Agent-to-Agent protocol — a JSON-RPC 2.0 wire
+shape over HTTP with a discovery convention (=/.well-known/agent.json=) and
+a small set of task verbs (=tasks/send=, =tasks/get=, =tasks/cancel=,
+=tasks/sendSubscribe=, =tasks/resubscribe=). v1 of this work exposes
+existing mesh agents as A2A-compliant servers so that any A2A client
+(LangGraph agents, third-party orchestrators, partner systems) can call
+into the mesh without learning mesh-native protocols. Mesh stays mesh
+internally; A2A is a translation layer at the edge.
+
+The adapter is decorator-based (=@mesh.a2a=) and reuses three existing
+mesh primitives: DDDI injection (#861), MeshJob long-running tasks (post
+#861), and the registry's heartbeat-stamped metadata channel. No
+modifications to =@mesh.tool= are required.
+
+A2A protocol version pinned: *v1.0* (current latest as of 2026-05).
+Spec: https://a2a-protocol.org/latest/specification/
+Reference: https://github.com/a2aproject/A2A
+
+* Motivation
+
+A2A has reached meaningful adoption — 150+ organizations as of 2026,
+including LangChain/LangGraph integrations, multiple cloud-vendor agent
+runtimes, and a growing partner ecosystem. The protocol is intentionally
+minimal: agent cards for discovery, JSON-RPC for invocation, SSE for
+streaming. It does not (and does not try to) solve coordination,
+capability resolution, scheduling, or replication — exactly the layers
+mesh already owns.
+
+Critically, mesh has every primitive A2A's task lifecycle requires:
+
+| A2A concept                  | Mesh primitive                                        |
+|------------------------------+-------------------------------------------------------|
+| Agent card                   | =@mesh.tool= metadata + heartbeat-stamped FQDN        |
+| =tasks/send= (sync)          | Direct tool invocation via DDDI proxy                 |
+| =tasks/send= (long-running)  | =MeshJob.submit= (#861)                               |
+| =tasks/get=                  | =MeshJob.status= → registry =GET /jobs/{id}=          |
+| =tasks/cancel=               | =MeshJob.cancel= → registry-forwarded cancel          |
+| =tasks/sendSubscribe= (SSE)  | =MeshJob.update_progress= event stream                |
+| Discovery                    | Registry FQDN stamping + new =GET /a2a/agents=        |
+
+Strategic positioning: mesh stays protocol-independent. A2A is one of N
+possible surfaces — OpenAPI, gRPC, MCP-over-HTTP, and others can follow
+the same decorator pattern without entangling the core. The adapter
+proves the pattern; subsequent surfaces are mechanical.
+
+* Key Decisions
+
+** Decorator-based, not auto-mount
+=@mesh.a2a= is a route-style decorator analogous to =@mesh.route=. The
+function body is user-controlled; the decorator handles the A2A protocol
+envelope (agent card generation, JSON-RPC method routing, task lifecycle
+shaping). Mesh tools (=@mesh.tool=) stay completely untouched — no new
+flags, no new fields, no implicit A2A exposure. Operators opt in
+explicitly per-skill. Rationale: implicit exposure of every mesh tool to
+external A2A clients would be a security and surface-area footgun;
+decorator-based opt-in keeps the surface narrow and intentional.
+
+** DDDI-injected dependencies
+The =@mesh.a2a= function declares =dependencies=[...]= like any mesh
+tool. The decorator introspects the injected =McpMeshTool= proxy at call
+time:
+
+- If the underlying tool is =task=True= → wrap call in =MeshJob.submit=,
+  return A2A task with =state: working=; =tasks/get= polls registry;
+  =tasks/sendSubscribe= streams progress events as SSE.
+- If sync → invoke inline, return A2A task with =state: completed= and
+  the artifact embedded in the response.
+
+This means the adapter never has to introspect mesh-internal state
+machines directly. It composes cleanly on the existing DDDI substrate
+shipped in the MeshJob phase.
+
+** Per-skill agent cards as default
+Each =@mesh.a2a= function emits one agent card with one skill. The A2A
+spec allows multi-skill cards, but the spec has *no =skill_id= field on
+=tasks/send=* — multi-skill routing requires either LLM intent
+classification or off-spec convention. Per-skill is deterministic and
+matches mesh's explicit-tool, explicit-capability model. It also gives
+operators per-skill auth and FQDN granularity at zero extra cost.
+
+** LLM-backed multi-skill cards (deferred to v2)
+When the injected dependency is an =@mesh.llm= agent, the decorator
+could introspect the LLM's tool-filter set and emit a multi-skill card
+where the LLM itself becomes the dispatcher (intent → tool selection →
+invocation). This is a clean composition but introduces a new failure
+mode (LLM misroutes the skill). Defer to v2 to keep v1 surface area
+small and predictable.
+
+** Registry-driven FQDN discovery
+External A2A clients need a publicly addressable URL — mesh-internal
+capability resolution is invisible to them. The registry gains a new env
+var =MCP_MESH_PUBLIC_URL_PREFIX= (e.g., =https://agents.acme.com=). Each
+=@mesh.a2a(path="/agents/...")= decorator declares a path suffix; the
+registry computes =prefix + suffix= and stamps the FQDN onto the
+agent's heartbeat-stored metadata. A new registry endpoint
+=GET /a2a/agents= returns the public FQDN list for external discovery.
+Mesh-internal callers continue using capability-based resolution
+unchanged.
+
+** Auth scope for v1: bearer-token only
+The agent card's =authentication= field declares the scheme; the
+=@mesh.a2a= route handler validates the bearer header. Defer SPIRE /
+mTLS / OAuth flow to v2. Rationale: bearer token is the lowest-friction
+deployment story (matches Replicate, OpenAI, most SaaS APIs); mesh's
+internal trust boundary is already separate (SPIRE SVIDs for mesh-to-mesh).
+Conflating the two would slow shipping.
+
+** Runtime priority: Python first only
+v1 ships Python only. TypeScript and Java ports follow once Python
+validates the decorator surface and the registry plumbing. This matches
+the MeshJob rollout cadence (Rust core was uniform, language shims
+shipped sequentially) and avoids three-way coordination cost on a still-
+evolving design.
+
+** Consumer side deferred to v2
+=mesh.A2AProxy= (mesh agents *depending on* external A2A agents) is a
+separate architectural concern: it touches the DDDI resolver (new
+injectable type), the capability table (how do you list non-mesh
+capabilities?), and the wire (outbound A2A JSON-RPC client). Not in v1
+scope. v1 is producer-only.
+
+** Surface = thin translation, no state of its own
+The =@mesh.a2a= decorator owns no persistent state. It does not cache
+agent cards, does not maintain its own task table, does not duplicate
+MeshJob's progress storage. Every read terminates at either the
+registry or the underlying mesh-tool runtime. This keeps the adapter
+boring (= small, debuggable, swappable) and matches the mesh discipline
+established in the MeshJob design (=Status read path: all reads → registry=).
+
+** JSON-RPC single endpoint per A2A spec
+Per A2A v1.0, all task verbs (=tasks/send=, =tasks/get=, =tasks/cancel=,
+=tasks/sendSubscribe=, =tasks/resubscribe=) are JSON-RPC methods on a
+*single* HTTP endpoint, not separate URLs. The decorator mounts:
+
+- =GET  {path}/.well-known/agent.json= (discovery, plain HTTP)
+- =POST {path}= (JSON-RPC entry point for all verbs)
+
+A common implementer mistake is to expose =POST {path}/tasks/send= etc.
+as separate routes; the spec is explicit that the method name lives in
+the JSON-RPC envelope's =method= field.
+
+* Architecture
+
+** Layer map
+
+| Layer                                          | Where               | Notes                                              |
+|------------------------------------------------+---------------------+----------------------------------------------------|
+| =@mesh.a2a= decorator                          | runtime/python      | New module alongside =@mesh.route= / =@mesh.tool=  |
+| Agent card schema generator                    | runtime/python      | Reads tool input schema, emits A2A AgentCard JSON  |
+| JSON-RPC dispatcher (tasks/* verbs)            | runtime/python      | Mounts on FastMCP/route subsystem                  |
+| Bearer-token auth filter                       | runtime/python      | Per-route middleware                               |
+| FQDN stamping                                  | Go registry         | New env var + heartbeat metadata field             |
+| Public discovery endpoint =GET /a2a/agents=    | Go registry         | Reads heartbeat metadata, returns FQDN list        |
+| Long-running task routing                      | runtime/python      | Composes existing =MeshJob= primitive              |
+| SSE streaming                                  | runtime/python      | Wraps =MeshJob.update_progress= events             |
+
+** Producer-side flow (sync skill)
+
+#+BEGIN_SRC text
+External A2A client                Mesh agent (HTTP)             Registry
+       |                                  |                          |
+       | GET /agents/lookup/.well-known/agent.json                   |
+       |--------------------------------->|                          |
+       |     {200 AgentCard JSON}         |                          |
+       |<---------------------------------|                          |
+       |                                  |                          |
+       | POST /agents/lookup              |                          |
+       | { jsonrpc:"2.0",                 |                          |
+       |   method:"tasks/send",           |                          |
+       |   params:{ message:{...} } }     |                          |
+       |--------------------------------->|                          |
+       |                                  | (DDDI proxy → @mesh.tool |
+       |                                  |  quick_lookup invoked    |
+       |                                  |  inline — no MeshJob)    |
+       |   {200 task: state=completed,    |                          |
+       |        artifacts:[...]}          |                          |
+       |<---------------------------------|                          |
+#+END_SRC
+
+** Producer-side flow (long-running skill)
+
+#+BEGIN_SRC text
+External A2A client                Mesh agent (HTTP)             Registry
+       |                                  |                          |
+       | POST /agents/report-generator    |                          |
+       | { method:"tasks/send",           |                          |
+       |   params:{...} }                 |                          |
+       |--------------------------------->|                          |
+       |                                  | DDDI proxy detects       |
+       |                                  | task=True → MeshJob.submit
+       |                                  |------------------------->| POST /jobs
+       |                                  |<-------------------------| {job_id}
+       |   {200 task: state=working,      |                          |
+       |        id="job-uuid"}            |                          |
+       |<---------------------------------|                          |
+       |                                  |                          |
+       | POST /agents/report-generator    |                          |
+       | { method:"tasks/get",            |                          |
+       |   params:{id:"job-uuid"} }       |                          |
+       |--------------------------------->|                          |
+       |                                  | MeshJob.status           |
+       |                                  |------------------------->| GET /jobs/{id}
+       |                                  |<-------------------------| {status,progress}
+       |   {200 task: state=working,      |                          |
+       |        progress:0.4}             |                          |
+       |<---------------------------------|                          |
+#+END_SRC
+
+** Discovery flow
+
+#+BEGIN_SRC text
+Mesh agent boot:
+  1. @mesh.a2a(path="/agents/lookup", ...) registers locally
+  2. Heartbeat to registry includes a2a_paths=["/agents/lookup", ...]
+  3. Registry computes FQDN = MCP_MESH_PUBLIC_URL_PREFIX + path
+  4. Registry stores FQDN list on agent's heartbeat metadata
+
+External A2A client discovery:
+  1. GET https://registry.acme.com/a2a/agents
+       → [{name, fqdn, agent_card_url, description}, ...]
+  2. GET https://agents.acme.com/agents/lookup/.well-known/agent.json
+       → AgentCard JSON
+  3. POST https://agents.acme.com/agents/lookup
+       → JSON-RPC tasks/send
+#+END_SRC
+
+* Registry-Side Agent Typing
+
+** Background — current state
+
+Today the registry's =agent_type= enum has two values: =mcp_agent=
+(default) and =api=. They live in the OpenAPI spec at
+=api/mcp-mesh-registry.openapi.yaml= and surface in the generated Go
+code at =src/core/registry/generated/server.go=. The =api= type already
+gets special handling in registry status hooks and auto-resolve logic —
+establishing precedent for type-driven branching.
+
+#+BEGIN_SRC go
+// src/core/registry/generated/server.go:39
+const (
+    AgentInfoAgentTypeApi      AgentInfoAgentType = "api"
+    AgentInfoAgentTypeMcpAgent AgentInfoAgentType = "mcp_agent"
+)
+#+END_SRC
+
+** Proposal — add =a2a= as a third type
+
+Single-value enum stays exclusive (one type per agent record). An
+A2A-exposing agent registers as =agent_type=a2a=. It can still hold
+capabilities (mesh tools) AND new A2A-specific surfaces — the type tells
+the registry "in addition to the usual mesh-tool handling, this agent
+has A2A surfaces; compute FQDNs and expose via the A2A discovery
+endpoint."
+
+OpenAPI diff:
+
+#+BEGIN_SRC yaml
+agent_type:
+  type: string
+  enum: [mcp_agent, api, a2a]   # NEW: a2a
+  default: "mcp_agent"
+#+END_SRC
+
+** Heartbeat schema discriminator
+
+Heartbeat payload accepts type-specific fields via discriminator
+(matches the existing =oneOf= pattern in OpenAPI):
+
+#+BEGIN_SRC yaml
+A2AHeartbeat:
+  type: object
+  required: [agent_id, agent_type, surfaces]
+  properties:
+    agent_id: { ... }
+    agent_type: { const: "a2a" }
+    capabilities: { ... }              # mesh tools still allowed
+    surfaces:                          # NEW: A2A-specific
+      type: array
+      items:
+        type: object
+        required: [path, skill_id]
+        properties:
+          path: { type: string }       # "/agents/report-generator"
+          skill_id: { type: string }
+          description: { type: string }
+          input_modes: { type: array, items: { type: string } }
+          output_modes: { type: array, items: { type: string } }
+          tags: { type: array, items: { type: string } }
+#+END_SRC
+
+** Heartbeat response — registry-stamped FQDN
+
+The registry computes =MCP_MESH_PUBLIC_URL_PREFIX + path= per surface
+and returns it in the heartbeat response so agents never need to know
+their own public hostname:
+
+#+BEGIN_SRC yaml
+A2AHeartbeatResponse:
+  type: object
+  properties:
+    surfaces:
+      items:
+        type: object
+        properties:
+          path: { type: string }
+          skill_id: { type: string }
+          public_url:                  # registry-computed
+            type: string
+            example: "https://agents.acme.com/agents/report-generator"
+          agent_card_url:              # convenience
+            type: string
+            example: "https://agents.acme.com/agents/report-generator/.well-known/agent.json"
+#+END_SRC
+
+** Why this shape
+
+- *Single registration*: agent registers once with =type=a2a=;
+  capability + surface metadata coexist on the same record. No duplicate
+  records, no two-step registration flow.
+- *Registry owns FQDN*: agents declare path suffixes in
+  =@mesh.a2a(path=...)= decorators; the registry concatenates with
+  =MCP_MESH_PUBLIC_URL_PREFIX= and returns the full URL. Agents never
+  need to know their public hostname (load-balancer / ingress concern).
+- *Type-driven discovery*: =GET /agents?type=a2a= filters;
+  =GET /a2a/agents= is the external A2A client discovery endpoint that
+  returns FQDNs per surface.
+- *Forward-compatible*: adding =grpc=, =openapi=, or other surface types
+  tomorrow follows the same pattern — new enum value + new =oneOf=
+  branch + new URL prefix env var.
+- *Backwards compatible*: existing =mcp_agent= and =api= agents are
+  untouched. Default stays =mcp_agent=.
+
+** Multi-skill grouping (forward-pointer)
+
+The =surfaces= array naturally supports the per-skill agent card model.
+Each =@mesh.a2a= decorator emits one surface entry. External A2A
+clients see N agent cards (one per skill).
+
+For the v2 LLM-backed multi-skill model, the same =surfaces= array can
+hold a =group_id= field; the registry would aggregate same-group
+surfaces into one logical agent card on the discovery endpoint. No
+schema rework needed — purely additive.
+
+*** Action items
+**** TODO Add =a2a= to AgentInfoAgentType enum in =api/mcp-mesh-registry.openapi.yaml=
+**** TODO Regenerate Go bindings: =make generate=
+**** TODO Add A2A heartbeat discriminator schema (=oneOf= branch with =surfaces= array)
+**** TODO Add A2A heartbeat response (FQDN stamping) — registry concatenates =MCP_MESH_PUBLIC_URL_PREFIX=
+**** TODO Add =MCP_MESH_PUBLIC_URL_PREFIX= env var to registry config (cli + docs)
+**** TODO Add =GET /a2a/agents= discovery endpoint returning surface FQDNs by agent
+**** TODO Update =GET /agents?type=a2a= filter handling (Ent query already supports type filter)
+**** TODO Status hooks: extend the existing api-type special-casing to handle =a2a= (likely no-op for now but verify)
+
+* API Surface (Python v1)
+
+** Canonical example
+
+#+BEGIN_SRC python
+import mesh
+from fastmcp import FastMCP
+from mesh import MeshJob, McpMeshTool
+
+@mesh.agent(name="long-task-provider", http_port=9100)
+class LongTaskProviderAgent:
+    pass
+
+app = FastMCP("Long Task Provider")
+
+# Mesh tools — completely standard, no A2A awareness
+@app.tool()
+@mesh.tool(capability="generate_report", task=True)
+async def generate_report(user_id: str, sections: list[str], job: MeshJob = None):
+    await job.update_progress(0.1, "fetching user")
+    # ... long work ...
+    await job.update_progress(0.9, "rendering")
+    return {"report_url": "https://..."}
+
+@app.tool()
+@mesh.tool(capability="quick_lookup")
+async def quick_lookup(user_id: str) -> dict:
+    return {"name": "Alice", "id": user_id}
+
+# A2A surface — separate, explicit, DDDI-injected
+@mesh.a2a(
+    path="/agents/report-generator",
+    description="Generate a long-form report",
+    dependencies=["generate_report"],
+)
+async def report_generator_a2a(payload: dict, generate_report: McpMeshTool = None):
+    return await generate_report(**payload)
+
+@mesh.a2a(
+    path="/agents/lookup",
+    description="Fetch a user record by id",
+    dependencies=["quick_lookup"],
+)
+async def lookup_a2a(payload: dict, quick_lookup: McpMeshTool = None):
+    return await quick_lookup(**payload)
+#+END_SRC
+
+** Auto-generated endpoints per =@mesh.a2a= decorator
+
+| Method | Path                              | Purpose                                                    |
+|--------+-----------------------------------+------------------------------------------------------------|
+| GET    | ={path}/.well-known/agent.json=   | A2A AgentCard, generated from decorator + dep input schema |
+| POST   | ={path}=                          | JSON-RPC 2.0 entry point for all =tasks/*= verbs           |
+
+** JSON-RPC methods handled on =POST {path}=
+
+| JSON-RPC method        | Maps to                                       | Notes                                  |
+|------------------------+-----------------------------------------------+----------------------------------------|
+| =tasks/send=           | inline call OR =MeshJob.submit=               | Branch on dep =task= flag              |
+| =tasks/get=            | =MeshJob.status= (long-running) / cached      | Reads registry =GET /jobs/{id}=        |
+| =tasks/cancel=         | =MeshJob.cancel=                              | Registry forwards to owner replica     |
+| =tasks/sendSubscribe=  | submit + SSE stream of progress + terminal    | Phase 3                                |
+| =tasks/resubscribe=    | re-attach SSE to in-flight task               | Phase 3                                |
+
+** AgentCard generation
+
+The decorator builds the AgentCard at registration time from:
+
+- =name= ← decorator =name= or function name
+- =description= ← decorator =description=
+- =url= ← registry-stamped FQDN (or empty placeholder pre-stamp)
+- =skills= ← single skill derived from the dependency's =@mesh.tool= input schema
+- =authentication= ← bearer scheme (v1)
+- =capabilities.streaming= ← =true= iff dep is =task=True= (Phase 3)
+
+* Phase 1 — Skeleton & Agent Card (~400 LOC)
+
+Goal: ship the decorator surface, agent-card generation, and discovery
+endpoint mounting. =tasks/*= verbs return =Method not implemented=. End-
+to-end discovery works; invocation lands in Phase 2.
+
+** Decorator & card generation
+*** TODO Add =@mesh.a2a= decorator to =src/runtime/python/mesh/decorators.py=
+*** TODO Decorator metadata model (path, description, dependencies, name)
+*** TODO Agent card schema generator: reads dep =@mesh.tool= input schema, emits A2A AgentCard JSON
+*** TODO Mount =GET {path}/.well-known/agent.json= via existing =mesh.route= mechanism
+*** TODO Mount =POST {path}= JSON-RPC handler (returns =Method not implemented= for now)
+*** TODO Bearer-token auth scaffold — read header, no enforcement yet (Phase 2 enforces)
+
+** Tests
+*** TODO Unit: card generation for sync tool
+*** TODO Unit: card generation for =task=True= tool (capabilities.streaming=true)
+*** TODO Unit: card schema validates against A2A v1.0 JSON schema
+*** TODO Unit: =POST {path}= returns proper JSON-RPC error envelope for unimplemented methods
+
+** Discovery (cross-phase, started here)
+*** TODO Add =MCP_MESH_PUBLIC_URL_PREFIX= env var to registry config
+*** TODO Heartbeat field for =a2a_paths: []string=
+*** TODO Registry stamps FQDN per path on heartbeat receipt
+*** TODO New endpoint =GET /a2a/agents= returns FQDN list
+
+** Acceptance
+- External A2A client can fetch =agent.json= from a deployed mesh agent
+- Card schema validates against A2A v1.0 JSON schema
+- =GET /a2a/agents= lists deployed A2A surfaces with public FQDNs
+- =POST {path}= returns well-formed JSON-RPC =Method not implemented=
+
+* Phase 2 — Sync + Long-Running Task Routing (~400 LOC)
+
+Goal: implement =tasks/send=, =tasks/get=, =tasks/cancel=. End-to-end
+external A2A client can submit a sync task and a long-running task and
+observe correct A2A-shaped responses.
+
+** Task verb routing
+*** TODO =tasks/send= dispatcher: introspect dep, route to inline OR =MeshJob.submit=
+*** TODO Build A2A =Task= response object from inline result (state=completed)
+*** TODO Build A2A =Task= response object from =MeshJob= submission (state=working)
+*** TODO =tasks/get=: =MeshJob.status= → A2A =Task= shape with progress mapping
+*** TODO =tasks/cancel=: =MeshJob.cancel= passthrough; A2A =state: cancelled= response
+*** TODO Map mesh job states to A2A states:
+    =working= → =working=,
+    =completed= → =completed=,
+    =failed= → =failed=,
+    =cancelled= → =cancelled=
+*** TODO Bearer-token auth enforcement (rejects 401 with A2A-shaped error)
+*** TODO Map A2A =Message= request shape → mesh tool args (one-to-one for v1)
+
+** Error mapping
+*** TODO Tool exception → A2A =state: failed= with =error= field
+*** TODO Timeout → A2A =state: failed= with =timeout= reason
+*** TODO Auth failure → JSON-RPC error code per A2A spec
+*** TODO Bad payload → JSON-RPC =Invalid params= error
+
+** Tests
+*** TODO Unit: sync tasks/send → state=completed roundtrip
+*** TODO Unit: long-running tasks/send → state=working + job-id passthrough
+*** TODO Unit: tasks/get state mapping for each MeshJob status
+*** TODO Unit: tasks/cancel propagates to MeshJob.cancel
+*** TODO Unit: bearer-token enforcement (401 on missing/invalid)
+*** TODO Integration: external A2A client end-to-end submit + poll + complete (long-running)
+*** TODO Integration: external A2A client end-to-end submit + immediate complete (sync)
+*** TODO Integration: cancel mid-execution; verify A2A state transition
+
+** Acceptance
+- External A2A client can submit a sync task and receive a complete result
+- External A2A client can submit a long-running task, poll =tasks/get=,
+  observe state transitions, and read the final artifact
+- =tasks/cancel= cleanly stops in-flight work
+- Bearer-token auth blocks unauthenticated callers
+
+* Phase 3 — Streaming via sendSubscribe (~200 LOC)
+
+Goal: SSE streaming of progress events. External A2A client can
+=tasks/sendSubscribe= and observe progress + terminal events as
+Server-Sent Events.
+
+** SSE plumbing
+*** TODO =tasks/sendSubscribe=: submit job + open SSE response stream
+*** TODO Subscribe to =MeshJob.update_progress= events from registry/owner
+*** TODO Emit =TaskStatusUpdateEvent= per progress tick
+*** TODO Emit =TaskArtifactUpdateEvent= on terminal complete
+*** TODO Emit terminal =TaskStatusUpdateEvent= (=final: true=) on completion/failure/cancel
+*** TODO =tasks/resubscribe=: re-attach SSE to in-flight task; replay current state
+
+** Reliability
+*** TODO SSE keepalive heartbeat (avoid proxy timeouts)
+*** TODO Client disconnect cleanup (does not cancel underlying job — A2A spec semantics)
+*** TODO Backpressure: drop progress events if client is slow (favor terminal delivery)
+
+** Tests
+*** TODO Unit: SSE event-shape conformance to A2A v1.0
+*** TODO Integration: client subscribes, observes N progress events, observes terminal
+*** TODO Integration: client disconnects mid-stream, job continues, resubscribe works
+*** TODO Integration: failure mid-stream → terminal failed event delivered
+
+** Acceptance
+- External A2A client can stream a long-running task end-to-end
+- Resubscribe after disconnect recovers the live state
+- Terminal events always delivered (or recoverable via tasks/get fallback)
+
+* Out of Scope for v1
+
+Explicitly *not* in v1; deferred to v2 or later:
+
+- TypeScript and Java SDKs (Python-only first)
+- Consumer side: =mesh.A2AProxy= for depending on external A2A agents
+- Multi-skill grouping in a single agent card
+- LLM-backed multi-skill cards (=@mesh.llm= as A2A dispatcher)
+- Auth schemes beyond bearer-token (no SPIRE / mTLS / OAuth flow)
+- Multi-turn =state: input-required= dialogues (no clean mesh primitive)
+- Push notifications / webhooks for task completion
+- gRPC variant of A2A (spec supports it; we focus on HTTP+JSON)
+- Signed agent cards (A2A v1.0 introduced these but they require key
+  management infrastructure; defer)
+- A2A's =Message= attachment / file upload semantics beyond inline JSON
+- Per-skill rate limiting / quota
+- Federated discovery (multi-registry A2A directory)
+
+* Open Questions
+
+To verify during implementation:
+
+- A2A v1.0's exact JSON-RPC method names and parameter shapes — read the
+  official spec carefully when starting Phase 1; the spec has shifted on
+  =tasks/*= naming during 2025
+- Agent-card schema for =inputModes= / =outputModes= when our tool only
+  handles JSON — likely =["application/json"]= for both, but verify
+- How to express =tags= on a skill — pull from mesh tool's =tags= field
+  if present, otherwise default to ={capability_name}=?
+- SSE event-shape: =TaskStatusUpdateEvent= vs =TaskArtifactUpdateEvent= —
+  decide which to emit on =update_progress= vs final result; spec allows
+  both during a stream
+- Bearer-token validation: match an existing mesh auth header convention
+  (=Authorization: Bearer ...= is the obvious choice) or define a new
+  one? Likely just standard Authorization header.
+- Registry env var name: =MCP_MESH_PUBLIC_URL_PREFIX= is one option;
+  check existing registry env var conventions for naming alignment
+- A2A error code mapping: spec defines its own JSON-RPC error code
+  ranges; map mesh exception types to those codes consistently
+- =tasks/get= caching: if registry calls are hot, do we add a TTL cache
+  on the adapter? Default to no-cache (matches MeshJob discipline) and
+  measure
+- Multi-skill auth scoping: when v2 adds multi-skill cards, does each
+  skill get its own bearer secret or one card-wide secret?
+- Streaming reconnect window: how long do we hold task state after a
+  client disconnects before resubscribe is impossible? MeshJob already
+  has terminal retention semantics — reuse those.
+
+* References
+
+- Issue #869 — A2A surface adapter (parent issue for this design)
+- Issue #861 — MeshJob long-running tasks (substrate dependency)
+- A2A protocol specification: https://a2a-protocol.org/latest/specification/
+- A2A protocol GitHub: https://github.com/a2aproject/A2A
+- A2A samples: https://github.com/a2aproject/a2a-samples
+- =MESHJOB_DESIGN.org= — architectural precedent for a similar feature
+  (decorator-driven, DDDI-injected, registry-coordinated)
+- =MESHJOB_DDDI_CONTRACT.md= — DDDI mechanics that =@mesh.a2a= injection
+  composes on top of
+
+* Status & Changelog
+
+** 2026-05-08
+- Initial design committed
+- Tracks GitHub issue #869 (A2A surface adapter)
+- Depends on #861 (MeshJob substrate, shipped Phase 1)
+- v1 scope: Python-only producer side; Phases 1–3 outlined
+- v2 scope captured in "Out of Scope" section for traceability

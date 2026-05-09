@@ -43,6 +43,8 @@ const (
 	FieldLastFullRefresh = "last_full_refresh"
 	// FieldEntityID holds the string denoting the entity_id field in the database.
 	FieldEntityID = "entity_id"
+	// FieldA2aSurfaces holds the string denoting the a2a_surfaces field in the database.
+	FieldA2aSurfaces = "a2a_surfaces"
 	// EdgeCapabilities holds the string denoting the capabilities edge name in mutations.
 	EdgeCapabilities = "capabilities"
 	// EdgeEvents holds the string denoting the events edge name in mutations.
@@ -119,6 +121,7 @@ var Columns = []string{
 	FieldUpdatedAt,
 	FieldLastFullRefresh,
 	FieldEntityID,
+	FieldA2aSurfaces,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -158,6 +161,7 @@ const (
 	AgentTypeMeshTool       AgentType = "mesh_tool"
 	AgentTypeDecoratorAgent AgentType = "decorator_agent"
 	AgentTypeAPI            AgentType = "api"
+	AgentTypeA2a            AgentType = "a2a"
 )
 
 func (at AgentType) String() string {
@@ -167,7 +171,7 @@ func (at AgentType) String() string {
 // AgentTypeValidator is a validator for the "agent_type" field enum values. It is called by the builders before save.
 func AgentTypeValidator(at AgentType) error {
 	switch at {
-	case AgentTypeMcpAgent, AgentTypeMeshTool, AgentTypeDecoratorAgent, AgentTypeAPI:
+	case AgentTypeMcpAgent, AgentTypeMeshTool, AgentTypeDecoratorAgent, AgentTypeAPI, AgentTypeA2a:
 		return nil
 	default:
 		return fmt.Errorf("agent: invalid enum value for agent_type field: %q", at)

@@ -466,6 +466,15 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
     # synthetic configs where @mesh.agent(name=...) wasn't used.
     base_name = agent_config.get("name") or agent_id
 
+    # Issue #903 Phase 1B: gather @mesh.a2a surfaces. Presence flips
+    # agent_type to "a2a" so the registry computes FQDNs and surfaces
+    # this agent on GET /a2a/agents. The Rust core ships the surfaces
+    # JSON string verbatim to the registry's `MeshAgentRegistration.surfaces`
+    # field. Mesh tools coexist with A2A surfaces.
+    a2a_surfaces = _build_a2a_surfaces_for_rust()
+    agent_type = "a2a" if a2a_surfaces else None
+    surfaces_json = json.dumps(a2a_surfaces) if a2a_surfaces else None
+
     # Create AgentSpec
     spec = core.AgentSpec(
         name=base_name,
@@ -475,18 +484,35 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
         http_port=http_port,
         http_host=http_host,
         namespace=namespace,
+        agent_type=agent_type,
         tools=tools if tools else None,
         llm_agents=llm_agents if llm_agents else None,
         heartbeat_interval=heartbeat_interval,
         agent_id=agent_id,
+        surfaces=surfaces_json,
     )
 
     logger.info(
-        f"Built AgentSpec: name={base_name}, agent_id={agent_id}, tools={len(tools)}, "
-        f"llm_agents={len(llm_agents)}, registry={registry_url}"
+        f"Built AgentSpec: name={base_name}, agent_id={agent_id}, "
+        f"agent_type={agent_type or 'mcp_agent'}, tools={len(tools)}, "
+        f"llm_agents={len(llm_agents)}, surfaces={len(a2a_surfaces)}, "
+        f"registry={registry_url}"
     )
 
     return spec
+
+
+def _build_a2a_surfaces_for_rust() -> list[dict[str, Any]]:
+    """Collect ``@mesh.a2a`` surfaces in the registry-bound shape (issue #903 Phase 1B).
+
+    Thin wrapper around :func:`a2a_surfaces.collect_a2a_surfaces` so the
+    legacy Python heartbeat path, the Rust-backed mcp heartbeat, and the
+    Rust-backed api heartbeat all emit identical JSON. See
+    ``_mcp_mesh.engine.a2a_surfaces`` for shape rationale.
+    """
+    from ...engine.a2a_surfaces import collect_a2a_surfaces
+
+    return collect_a2a_surfaces()
 
 
 async def _handle_mesh_event(event: Any, context: dict[str, Any]) -> None:
