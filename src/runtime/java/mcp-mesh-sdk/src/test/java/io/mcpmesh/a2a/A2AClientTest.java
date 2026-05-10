@@ -134,6 +134,25 @@ class A2AClientTest {
     }
 
     @Test
+    void send_responseMissingResultAndError_throwsException() {
+        // A producer that returns a JSON-RPC envelope with neither
+        // 'result' nor 'error' is malformed. The client must surface
+        // this as A2AException immediately rather than coercing the
+        // missing 'result' to an empty object and spinning the polling
+        // loop until the user-supplied deadline elapses.
+        mount("/agents/test", ex -> respond(ex, 200, """
+            {"jsonrpc":"2.0","id":1}
+            """));
+
+        try (A2AClient client = new A2AClient(url(), "demo")) {
+            A2AException thrown = assertThrows(A2AException.class,
+                () -> client.send(Map.of("role", "user", "parts", List.of())));
+            assertTrue(thrown.getMessage().contains("malformed JSON-RPC envelope"),
+                "exception should call out malformed envelope: " + thrown.getMessage());
+        }
+    }
+
+    @Test
     void send_jsonRpcErrorEnvelope_throwsA2AException() {
         mount("/agents/test", ex -> respond(ex, 200, """
             {"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not implemented"}}

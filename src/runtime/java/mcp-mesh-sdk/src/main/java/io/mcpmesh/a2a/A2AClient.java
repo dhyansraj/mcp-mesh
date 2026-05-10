@@ -37,6 +37,15 @@ import java.util.UUID;
  * runtime. Phase 3 ({@code submit} / {@code subscribe} / SSE) is
  * deferred to a follow-up PR.
  *
+ * <p><b>Lifecycle on JDK 17:</b> This class implements {@link AutoCloseable}
+ * for forward-compatibility, but the underlying {@link java.net.http.HttpClient}
+ * does not expose a shutdown hook prior to JDK 21. Calling {@link #close()}
+ * marks this instance closed (subsequent operations throw {@link A2AException})
+ * but the HttpClient's internal selector and worker threads remain alive
+ * until garbage collection. For long-running test suites or containers that
+ * create and discard many instances, prefer holding a single shared
+ * {@code A2AClient} instance for the process lifetime.
+ *
  * <h2>Example</h2>
  * <pre>{@code
  * private static final A2AClient CLIENT = new A2AClient(
@@ -288,7 +297,15 @@ public final class A2AClient implements AutoCloseable {
 
         JsonNode result = parsed.get("result");
         if (result == null || result.isMissingNode() || result.isNull()) {
-            return objectMapper.createObjectNode();
+            // A producer that returns {"jsonrpc":"2.0","id":1} (no result
+            // and no error) is malformed JSON-RPC. Coercing this to an
+            // empty object would make readState() return "unknown" and
+            // the polling loop spin until the user-supplied deadline.
+            // Fail fast with a clear message instead.
+            throw new A2AException(
+                "A2A " + method + " " + url
+                    + " response has neither 'result' nor 'error' field — malformed JSON-RPC envelope: "
+                    + truncate(responseBody, 256));
         }
         return result;
     }

@@ -130,7 +130,12 @@ public class MeshToolRegistry {
             spec.setCapability(meta.capability());
             spec.setDescription(meta.description());
             spec.setVersion(meta.version());
-            spec.setTags(meta.tags());
+            // Defensive copy: meta.tags() is the registry's mutable
+            // source-of-truth (mutated by injectConsumerNameTags). Aliasing
+            // it into the emitted ToolSpec would let downstream consumers
+            // mutate the registry, and would expose a concurrent-iterate
+            // window to the heartbeat thread while autoconfig appends.
+            spec.setTags(new ArrayList<>(meta.tags()));
 
             // Convert input schema Map to JSON string. The input schema is built
             // from @Param annotations only, so mesh DI parameters (McpMeshTool /
