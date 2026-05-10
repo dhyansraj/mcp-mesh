@@ -522,15 +522,25 @@ class A2AJob:
                 # update_progress signature: (progress: float, message: Optional[str])
                 # Coerce missing progress to last-known or 0.0 — mesh
                 # requires a float, but the consumer surface allows
-                # message-only progress events.
-                p = float(progress) if progress is not None else (last_progress or 0.0)
+                # message-only progress events. Clamp to [0.0, 1.0] —
+                # the MeshJob.update_progress contract expects a normalized
+                # fraction; raw A2A producer progress values are advisory.
+                raw_p = float(progress) if progress is not None else (last_progress or 0.0)
+                p = min(1.0, max(0.0, raw_p))
                 await mesh_job.update_progress(p, message)
-            except Exception as exc:
-                logger.debug(
-                    "A2AJob.bridge: mesh_job.update_progress raised "
-                    "(task=%s, progress=%s, msg=%r): %s",
-                    self.task_id, progress, message, exc,
+            except Exception:
+                # Do NOT advance ``last_progress`` / ``last_message`` on
+                # delivery failure — leaving them stale ensures the next
+                # poll's equality check sees a delta and retries the
+                # update. Bumped to WARNING so transient registry
+                # outages are observable in logs.
+                logger.warning(
+                    "A2AJob.bridge: mesh_job.update_progress failed "
+                    "(task=%s, progress=%s, msg=%r) — will retry on next poll",
+                    self.task_id, progress, message,
+                    exc_info=True,
                 )
+                return
             last_progress = progress if progress is not None else last_progress
             last_message = message
 
@@ -553,10 +563,25 @@ class A2AJob:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    # tasks/get itself failed — surface as A2AJobFailed so
-                    # the bridging contract is consistent with terminal
-                    # state=failed (the user function bubbles it; the
-                    # framework calls mesh_job.fail).
+                    # tasks/get itself failed (network error, HTTP 5xx,
+                    # malformed envelope, ...). The upstream producer is
+                    # almost certainly still running — best-effort POST
+                    # tasks/cancel so it stops billing for work whose
+                    # result we'll never observe. Cancel is best-effort:
+                    # any cancel-side error is swallowed so we don't mask
+                    # the original poll failure.
+                    try:
+                        await self.cancel(reason="consumer poll failed")
+                    except Exception:
+                        logger.debug(
+                            "A2AJob.bridge: upstream cancel after poll "
+                            "failure also failed (task=%s)",
+                            self.task_id,
+                            exc_info=True,
+                        )
+                    # Surface as A2AJobFailed so the bridging contract is
+                    # consistent with terminal state=failed (the user
+                    # function bubbles it; the framework calls mesh_job.fail).
                     raise A2AJobFailed(
                         f"A2A status poll failed for task {self.task_id}: {exc}"
                     ) from exc
@@ -700,55 +725,64 @@ class A2AStream:
         # other field lines (``event:``, ``id:``) are skipped.
         data_buf: list[str] = []
         try:
-            async for line in self._line_iter:
-                if line == "":
-                    if not data_buf:
-                        continue
-                    payload = "\n".join(data_buf)
-                    data_buf = []
-                    try:
-                        envelope = json.loads(payload)
-                    except (ValueError, TypeError) as exc:
-                        logger.debug(
-                            "A2AStream: skipping non-JSON SSE frame "
-                            "(task=%s): %s — payload=%r",
-                            self.task_id, exc, payload,
-                        )
-                        continue
-                    event = _parse_sse_envelope(envelope, self.task_id)
-                    if event is None:
-                        continue
-                    if event.final:
-                        # Drain politely so the connection can be reused.
-                        await self.aclose()
-                    return event
-                if line.startswith(":"):
-                    # SSE comment (keepalive) — ignore.
-                    continue
-                if line.startswith("data:"):
-                    # Strip ``data:`` prefix and one optional space.
-                    data_buf.append(line[5:].lstrip(" "))
-                    continue
-                # event:/id:/retry: lines and unknown — ignore for v1.0.
-        except httpx.RemoteProtocolError as exc:
-            logger.debug(
-                "A2AStream: remote closed mid-frame (task=%s): %s",
-                self.task_id, exc,
-            )
-
-        # Iterator exhausted — flush any pending frame, then stop.
-        if data_buf:
-            payload = "\n".join(data_buf)
             try:
-                envelope = json.loads(payload)
-                event = _parse_sse_envelope(envelope, self.task_id)
-                if event is not None:
-                    await self.aclose()
-                    return event
-            except (ValueError, TypeError):
-                pass
-        await self.aclose()
-        raise StopAsyncIteration
+                async for line in self._line_iter:
+                    if line == "":
+                        if not data_buf:
+                            continue
+                        payload = "\n".join(data_buf)
+                        data_buf = []
+                        try:
+                            envelope = json.loads(payload)
+                        except (ValueError, TypeError) as exc:
+                            logger.debug(
+                                "A2AStream: skipping non-JSON SSE frame "
+                                "(task=%s): %s — payload=%r",
+                                self.task_id, exc, payload,
+                            )
+                            continue
+                        event = _parse_sse_envelope(envelope, self.task_id)
+                        if event is None:
+                            continue
+                        if event.final:
+                            # Drain politely so the connection can be reused.
+                            await self.aclose()
+                        return event
+                    if line.startswith(":"):
+                        # SSE comment (keepalive) — ignore.
+                        continue
+                    if line.startswith("data:"):
+                        # Strip ``data:`` prefix and one optional space.
+                        data_buf.append(line[5:].lstrip(" "))
+                        continue
+                    # event:/id:/retry: lines and unknown — ignore for v1.0.
+            except httpx.RemoteProtocolError as exc:
+                logger.debug(
+                    "A2AStream: remote closed mid-frame (task=%s): %s",
+                    self.task_id, exc,
+                )
+
+            # Iterator exhausted — flush any pending frame, then stop.
+            if data_buf:
+                payload = "\n".join(data_buf)
+                try:
+                    envelope = json.loads(payload)
+                    event = _parse_sse_envelope(envelope, self.task_id)
+                    if event is not None:
+                        await self.aclose()
+                        return event
+                except (ValueError, TypeError):
+                    pass
+            await self.aclose()
+            raise StopAsyncIteration
+        except httpx.HTTPError:
+            # Any other transient httpx error (ReadTimeout, NetworkError,
+            # ReadError, ...) propagates — ensure the streaming response
+            # is closed so we don't leak the underlying connection. The
+            # ``aclose()`` call is idempotent via the ``self._closed``
+            # flag, so a re-entrant close from within the block is safe.
+            await self.aclose()
+            raise
 
     async def __aenter__(self) -> "A2AStream":
         return self
@@ -796,49 +830,65 @@ class A2AStream:
         terminal_message: Optional[str] = None
 
         try:
-            async for event in self:
-                if event.kind == "artifact":
-                    artifact_value = (
-                        event.artifact_text
-                        if event.artifact_text is None
-                        else _maybe_json_loads(event.artifact_text)
-                    )
-                    saw_artifact = True
-                    continue
-                # status event
-                if event.progress is not None or event.message is not None:
-                    if (
-                        event.progress != last_progress
-                        or event.message != last_message
-                    ):
-                        try:
-                            p = (
+            try:
+                async for event in self:
+                    if event.kind == "artifact":
+                        artifact_value = (
+                            event.artifact_text
+                            if event.artifact_text is None
+                            else _maybe_json_loads(event.artifact_text)
+                        )
+                        saw_artifact = True
+                        continue
+                    # status event
+                    if event.progress is not None or event.message is not None:
+                        if (
+                            event.progress != last_progress
+                            or event.message != last_message
+                        ):
+                            # Clamp to [0.0, 1.0] — the MeshJob.update_progress
+                            # contract expects a normalized fraction; raw A2A
+                            # progress values are advisory and may drift.
+                            raw_p = (
                                 float(event.progress)
                                 if event.progress is not None
                                 else (last_progress or 0.0)
                             )
-                            await mesh_job.update_progress(p, event.message)
-                        except Exception as exc:
-                            logger.debug(
-                                "A2AStream.bridge: mesh_job.update_progress "
-                                "raised (task=%s, progress=%s, msg=%r): %s",
-                                self.task_id, event.progress, event.message, exc,
-                            )
-                        last_progress = (
-                            event.progress
-                            if event.progress is not None
-                            else last_progress
-                        )
-                        last_message = event.message
-                if event.final:
-                    terminal_state = event.state
-                    terminal_message = event.message
-                    break
-        except asyncio.CancelledError:
+                            p = min(1.0, max(0.0, raw_p))
+                            try:
+                                await mesh_job.update_progress(p, event.message)
+                            except Exception:
+                                # Do NOT advance ``last_progress`` /
+                                # ``last_message`` — leaving them stale ensures
+                                # the next event with the same value still
+                                # passes the equality check below and retries.
+                                logger.warning(
+                                    "A2AStream.bridge: mesh_job.update_progress "
+                                    "failed (task=%s, progress=%s, msg=%r) — "
+                                    "will retry on next event",
+                                    self.task_id, event.progress, event.message,
+                                    exc_info=True,
+                                )
+                            else:
+                                last_progress = (
+                                    event.progress
+                                    if event.progress is not None
+                                    else last_progress
+                                )
+                                last_message = event.message
+                    if event.final:
+                        terminal_state = event.state
+                        terminal_message = event.message
+                        break
+            except asyncio.CancelledError:
+                raise A2AJobCanceled(
+                    f"A2A subscribe stream {self.task_id} canceled by mesh-side request"
+                )
+        finally:
+            # Ensure the SSE stream is closed on any exit path (normal
+            # completion, asyncio cancel, or httpx error bubbling from
+            # ``__anext__``). ``aclose()`` is idempotent.
             await self.aclose()
-            raise A2AJobCanceled(
-                f"A2A subscribe stream {self.task_id} canceled by mesh-side request"
-            )
 
         if terminal_state in ("canceled", "cancelled"):
             raise A2AJobCanceled(

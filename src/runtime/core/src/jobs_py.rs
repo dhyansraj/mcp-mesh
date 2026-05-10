@@ -594,6 +594,15 @@ pub fn with_job_async_py<'py>(
         // semantics are unchanged) and install its own drop guard. The
         // outer guard above is what closes the race window between this
         // function returning and the body being polled.
+        //
+        // Duplicate-registration note: the outer `register_active_job`
+        // above creates a `JobCancelState` whose `ended` notify token is
+        // silently dropped when `run_as_job`'s inner registration
+        // overwrites the entry. This is safe because the `cancel_token`
+        // is a clone sharing state, so cancels still propagate; only the
+        // `ended` token instance is replaced, and any awaiter that grabbed
+        // the inner entry's `ended` token is still notified when this
+        // outer drop guard fires (via the registry entry being removed).
         run_as_job(ctx, async move {
             // Awaiting `fut` yields a `PyResult<Py<PyAny>>` — propagate
             // both the success value and any Python exception verbatim.
