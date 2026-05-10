@@ -112,6 +112,30 @@ def __getattr__(name):
         from ._a2a_consumer import A2AResponse
 
         return A2AResponse
+    elif name == "A2AJob":
+        from ._a2a_consumer import A2AJob
+
+        return A2AJob
+    elif name == "A2AStream":
+        from ._a2a_consumer import A2AStream
+
+        return A2AStream
+    elif name == "A2AEvent":
+        from ._a2a_consumer import A2AEvent
+
+        return A2AEvent
+    elif name == "A2AJobError":
+        from ._a2a_consumer import A2AJobError
+
+        return A2AJobError
+    elif name == "A2AJobFailed":
+        from ._a2a_consumer import A2AJobFailed
+
+        return A2AJobFailed
+    elif name == "A2AJobCanceled":
+        from ._a2a_consumer import A2AJobCanceled
+
+        return A2AJobCanceled
     elif name == "llm":
         return decorators.llm
     elif name == "llm_provider":

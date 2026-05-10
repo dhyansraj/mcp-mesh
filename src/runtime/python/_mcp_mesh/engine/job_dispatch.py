@@ -428,29 +428,69 @@ async def maybe_dispatch_as_job(
                             raise user_exc
                         result = user_task.result()
                     else:
-                        # Cancel arrived first — abort the user's task
-                        # so `await asyncio.sleep` / network IO inside
-                        # the handler raises CancelledError. The
-                        # registry's CancelJob handler already flipped
-                        # the row to cancelled (the cancel route is
-                        # what fired the token), so there's nothing
-                        # for us to do beyond returning None.
-                        user_task.cancel()
+                        # Belt-and-braces guard against a spurious
+                        # cancel-watcher resolution. A real cancel goes
+                        # through the registry's CancelJob handler, which
+                        # marks the row terminal BEFORE firing the
+                        # process-wide token — so a true cancel implies
+                        # ``controller.is_terminal()`` is True. If the
+                        # registry is NOT terminal, the watcher resolved
+                        # for some other reason (historically: a
+                        # registration race in the Rust core where the
+                        # watcher polled before ``register_active_job``
+                        # ran and saw "no entry → resolve immediately").
+                        # Treat that case as spurious and let the user
+                        # task run to natural completion instead of
+                        # cancelling it. Mirrors the existing
+                        # ``watcher_exc is not None`` arm above.
                         try:
-                            await user_task
-                        except asyncio.CancelledError:
-                            logger.info(
-                                "job_dispatch: user task for job=%s cancelled via "
-                                "cancel-watcher; registry owns terminal state",
+                            registry_terminal = await controller.is_terminal()
+                        except Exception as is_terminal_exc:
+                            logger.warning(
+                                "job_dispatch: failed to query is_terminal for job=%s "
+                                "(%s); assuming watcher signal is real",
+                                job_id,
+                                is_terminal_exc,
+                            )
+                            registry_terminal = True
+
+                        if not registry_terminal:
+                            logger.warning(
+                                "job_dispatch: cancel-watcher for job=%s resolved without "
+                                "terminal state — treating as spurious and awaiting user task",
                                 job_id,
                             )
-                            return None
-                        # User caught CancelledError, did cleanup, and returned normally.
-                        # Honor their result — fall through to auto-complete logic with
-                        # the captured value. Note: a non-CancelledError exception falls
-                        # out to the outer `except Exception as exc:` block and runs the
-                        # existing retry_on / fail handling.
-                        result = user_task.result()
+                            await user_task
+                            if user_task.cancelled():
+                                raise asyncio.CancelledError()
+                            user_exc = user_task.exception()
+                            if user_exc is not None:
+                                raise user_exc
+                            result = user_task.result()
+                        else:
+                            # Cancel arrived first — abort the user's task
+                            # so `await asyncio.sleep` / network IO inside
+                            # the handler raises CancelledError. The
+                            # registry's CancelJob handler already flipped
+                            # the row to cancelled (the cancel route is
+                            # what fired the token), so there's nothing
+                            # for us to do beyond returning None.
+                            user_task.cancel()
+                            try:
+                                await user_task
+                            except asyncio.CancelledError:
+                                logger.info(
+                                    "job_dispatch: user task for job=%s cancelled via "
+                                    "cancel-watcher; registry owns terminal state",
+                                    job_id,
+                                )
+                                return None
+                            # User caught CancelledError, did cleanup, and returned normally.
+                            # Honor their result — fall through to auto-complete logic with
+                            # the captured value. Note: a non-CancelledError exception falls
+                            # out to the outer `except Exception as exc:` block and runs the
+                            # existing retry_on / fail handling.
+                            result = user_task.result()
         except Exception as exc:
             # If the user already called complete/fail explicitly, leave
             # state alone — the user's terminal call is the source of truth.

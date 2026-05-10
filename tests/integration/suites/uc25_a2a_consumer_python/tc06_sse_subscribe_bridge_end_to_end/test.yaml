@@ -1,0 +1,175 @@
+# tc06_sse_subscribe_bridge_end_to_end — Phase 3 SSE happy path.
+#
+# Same end-to-end shape as tc04 but the consumer uses
+# ``_a2a.subscribe()`` (SSE) instead of ``submit()/bridge()``
+# (poll-based). Validates the A2AStream async iterator + bridge()
+# helper end-to-end.
+#
+# A separate consumer fixture (consumer-report-agent-sse) registers
+# the bridged capability under a DIFFERENT name (``report-sse``) so
+# the test can run alongside the polling consumer in parallel without
+# either side stealing the other's downstream traffic.
+#
+# Stack (5 processes):
+#   1) registry
+#   2) long-task-provider (port 9100)
+#   3) report-a2a-agent   (port 9091)
+#   4) consumer-report-agent-sse (port 9212) — bridges via SSE
+#   5) caller-agent-report (port 9213) — depends on report-sse via
+#      commission_report_sse
+
+name: "A2A consumer Phase 3: SSE subscribe bridge end-to-end"
+description: "Caller -> SSE-based consumer bridge -> producer; A2AStream.bridge mirrors events into MeshJob; final artifact returned to caller"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-910
+  - sse
+timeout: 240
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+      cp -rL /uc-artifacts/consumer-report-agent-sse /workspace/
+      cp -rL /uc-artifacts/caller-agent-report /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - name: "Install consumer-report-agent-sse deps"
+    handler: pip-install
+    path: /workspace/consumer-report-agent-sse
+
+  - name: "Install caller-agent-report deps"
+    handler: pip-install
+    path: /workspace/caller-agent-report
+
+  - routine: start_registry_consumer
+
+  - name: "Start long-task-provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for long-task-provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for generate_report DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Start consumer-report-agent-sse (port 9212)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-report-agent-sse/main.py -d
+
+  - name: "Wait for SSE consumer registration"
+    handler: wait
+    seconds: 18
+
+  - name: "Start caller-agent-report (port 9213)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start caller-agent-report/main.py -d
+
+  - name: "Wait for caller report-sse DI resolution"
+    handler: wait
+    seconds: 25
+
+  - name: "Verify all 4 mesh agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  # Use submit-then-poll instead of synchronous wait — the
+  # synchronous commission_report_sse tool blocks the entire bridge
+  # duration before returning, and the registry's HTTP proxy has a
+  # ~30s upstream read timeout that bites the nested-task chain.
+  # Mirror the tc04 pattern: submit-async, then drive status reads
+  # from outside.
+  - name: "Submit report job via commission_report_sse_async — return job_id immediately"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report_sse_async '{"user_id": "alice", "sections": ["intro", "analysis", "summary"]}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  # Same nested-task timing as tc04: ~5s consumer claim + ~5s a2a
+  # producer claim + ~6s compute + SSE setup overhead ≈ 20s nominal.
+  # SSE bridge consistently lags polling-bridge by 5-10s due to the
+  # long-lived stream negotiation; under --parallel 4 add another
+  # 10s slack for cluster contention. 45s = tc04's 35s + 10s SSE lag.
+  - name: "Wait for the SSE bridge to drive the job to terminal"
+    handler: wait
+    seconds: 45
+
+  - name: "Read final mesh job status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: commission_response
+    timeout: 30
+
+assertions:
+  - expr: "${captured.agent_list} contains 'long-task-provider'"
+    message: "long-task-provider should be registered"
+  - expr: "${captured.agent_list} contains 'report-a2a-agent'"
+    message: "report-a2a-agent should be registered"
+  - expr: "${captured.agent_list} contains 'report-consumer-sse'"
+    message: "consumer-report-agent-sse should be registered as 'report-consumer-sse'"
+  - expr: "${captured.agent_list} contains 'report-caller'"
+    message: "caller-agent-report should be registered as 'report-caller'"
+
+  # Submit response carries the job_id and the dep was injected.
+  - expr: "${captured.submit_resp} contains 'job_id'"
+    message: "submit response should carry a job_id"
+  - expr: "${captured.submit_resp} not contains 'submitter not injected'"
+    message: "report_sse MeshJob submitter must be injected at the caller"
+
+  - expr: "${captured.commission_response} not contains '\"isError\": true'"
+    message: "__mesh_job_status should not return an MCP error envelope"
+
+  # Final status MUST be completed — the SSE bridge drove the job
+  # to terminal within the wait window.
+  - expr: "${captured.commission_response} contains '\"status\": \"completed\"'"
+    message: "final mesh job status should be completed (SSE bridge drove it terminal)"
+
+  # Producer's complete() payload bubbles through the A2A SSE
+  # artifact event -> consumer SSE bridge -> mesh JobController.
+  # Same canonical markers as tc04 — the SSE path must surface the
+  # EXACT same artifact contents as the polling path.
+  - expr: "${captured.commission_response} contains 'Generated content for intro'"
+    message: "result should include the intro section via the SSE bridge"
+  - expr: "${captured.commission_response} contains 'Generated content for analysis'"
+    message: "result should include the analysis section via the SSE bridge"
+  - expr: "${captured.commission_response} contains 'Generated content for summary'"
+    message: "result should include the summary section via the SSE bridge"
+  - expr: "${captured.commission_response} contains '\"user_id\": \"alice\"'"
+    message: "result should echo the submitted user_id"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

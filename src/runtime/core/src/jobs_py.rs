@@ -531,25 +531,69 @@ pub fn with_job_async_py<'py>(
     deadline_secs: Option<f64>,
     awaitable: Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    // Convert the Python awaitable to a Rust future BEFORE entering the
-    // returned future — `into_future` needs Python and the awaitable in
-    // hand right now, not later.
-    let fut = pyo3_async_runtimes::tokio::into_future(awaitable)?;
-
     // Build the JobContext on the Rust side (the deadline is set relative
     // to "now" on the Tokio runtime, which matches the semantics of the
     // SDK reading `X-Mesh-Timeout: <secs>` from the inbound request).
     let ctx = match deadline_secs {
         Some(secs) if secs > 0.0 => {
-            JobContext::with_timeout(job_id, Duration::from_secs_f64(secs))
+            JobContext::with_timeout(job_id.clone(), Duration::from_secs_f64(secs))
         }
-        _ => JobContext::new(job_id),
+        _ => JobContext::new(job_id.clone()),
+    };
+
+    // Race fix: register the cancel token in the process-wide registry
+    // BEFORE `into_future` schedules the Python coroutine on asyncio. The
+    // Python dispatch wrapper (`_run_and_autocomplete`) starts its
+    // `await_job_cancel(job_id)` watcher as soon as the coroutine begins
+    // running — and `await_job_cancel` resolves immediately if the
+    // registry has no entry for `job_id` (documented "stale job" path in
+    // `cancel_registry::get_state`). If we registered inside the spawned
+    // future (the way `run_as_job` would), the watcher could poll first,
+    // see no entry, resolve, and the dispatch wrapper would interpret
+    // that as a real cancel and abort the user task immediately. By
+    // registering here — synchronously, before any asyncio scheduling
+    // happens — the watcher always observes a live entry.
+    cancel_registry::register_active_job(&job_id, ctx.cancel_token.clone());
+    // Panic-safe RAII: cleanup runs whether the body completes normally,
+    // returns Err, or panics. Mirrors `CancelRegistryGuard` in
+    // `jobs.rs::run_as_job`.
+    struct CleanupGuard {
+        job_id: String,
+    }
+    impl Drop for CleanupGuard {
+        fn drop(&mut self) {
+            cancel_registry::unregister_active_job(&self.job_id);
+        }
+    }
+    let guard = CleanupGuard {
+        job_id: job_id.clone(),
+    };
+
+    // Convert the Python awaitable to a Rust future. Per pyo3-async-runtimes
+    // v0.27, `into_future` immediately `call_soon_threadsafe`-schedules the
+    // Python coroutine onto the asyncio event loop, so the registry entry
+    // above MUST already exist at this point.
+    let fut = match pyo3_async_runtimes::tokio::into_future(awaitable) {
+        Ok(f) => f,
+        Err(e) => {
+            // Drop the guard explicitly so the registry is cleaned up
+            // even on the early-error path.
+            drop(guard);
+            return Err(e);
+        }
     };
 
     pyo3_async_runtimes::tokio::future_into_py(py, async move {
-        // run_as_job binds both the task-local context AND registers the
-        // cancel token in the process-wide registry, with a panic-safe
-        // drop guard for cleanup.
+        // Move the guard into the async block so cleanup is tied to the
+        // future's lifetime (not this synchronous function's stack frame).
+        let _guard = guard;
+        // `run_as_job` binds the task-local JobContext for Rust-side
+        // futures inside the body. It will also re-register the cancel
+        // token (idempotent — `register_active_job` overwrites existing
+        // entries with the same `job_id` + same `cancel_token` clone, so
+        // semantics are unchanged) and install its own drop guard. The
+        // outer guard above is what closes the race window between this
+        // function returning and the body being polled.
         run_as_job(ctx, async move {
             // Awaiting `fut` yields a `PyResult<Py<PyAny>>` — propagate
             // both the success value and any Python exception verbatim.
