@@ -175,6 +175,10 @@ class A2AClient:
         # Drop the old reference and let GC handle it — closing an
         # AsyncClient from a different loop than its origin is undefined
         # behavior in httpx.
+        # Fork-after-import caveat: this swap is steady-state safe but does NOT
+        # protect coroutines mid-call holding the previous client when the loop
+        # transitions (e.g., os.fork after import). Drain in-flight work before
+        # forking, or use a per-process A2AClient instance.
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout_default))
         self._client_loop = loop
         return self._client
@@ -763,15 +767,19 @@ def _parse_sse_envelope(envelope: dict[str, Any], task_id: str) -> Optional[A2AE
 
 
 def _stream_finalizer(response_ref: "weakref.ref", task_id: str) -> None:
-    """Best-effort sync cleanup when an A2AStream is GC'd without explicit aclose.
-
-    httpx.Response carries a sync ``.close()`` that releases the connection
-    pool entry. We can't await ``aclose()`` from a finalizer (no event loop
-    is guaranteed during GC, and finalizers may run during interpreter
-    shutdown), so sync close is the best we can do. Emit a WARNING so the
-    user knows their stream lifecycle is wrong — under load this kind of
-    leak silently exhausts the httpx connection pool.
+    """Best-effort sync cleanup when an A2AStream is GC'd without
+    explicit aclose(). Warning fires unconditionally so the user sees
+    the leak even if the response was already collected. Sync close is
+    best-effort — ``httpx.Response.close()`` on an async-transport
+    response running from a finalizer (possibly on a torn-down loop)
+    may no-op rather than fully drain the async connection pool.
     """
+    logger.warning(
+        "A2AStream for task=%s was garbage-collected without explicit aclose(). "
+        "Use 'async with stream:' or 'await stream.aclose()' to release the "
+        "connection cleanly. Best-effort sync close attempted.",
+        task_id,
+    )
     response = response_ref()
     if response is None:
         return
@@ -779,12 +787,6 @@ def _stream_finalizer(response_ref: "weakref.ref", task_id: str) -> None:
         response.close()
     except Exception:
         pass
-    logger.warning(
-        "A2AStream for task=%s was garbage-collected without explicit aclose(). "
-        "Use 'async with stream:' or 'await stream.aclose()' to release the "
-        "connection cleanly. Best-effort sync close was performed.",
-        task_id,
-    )
 
 
 class A2AStream:

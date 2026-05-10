@@ -222,6 +222,13 @@ def _register_consumer_tool(
 
     _fn.__name__ = name
     _fn._mesh_a2a_consumer_pending_self_tag = pending
+    # Simulate the marker stamped by _resolve_pending_consumer_self_tags when
+    # a prior @mesh.agent has already substituted the sentinel for this tool.
+    _fn._mesh_a2a_consumer_self_resolved = (
+        not pending
+        and bool(consumer_name)
+        and consumer_name != _MESH_CONSUMER_SELF_SENTINEL
+    )
     _fn._mesh_a2a_consumer_metadata = {
         "consumer_name": consumer_name,
         "tags": [consumer_name] if consumer_name else [],
@@ -293,6 +300,7 @@ def test_resolve_pending_does_substitute_when_pending(_clean_tools, caplog):
         == ["agent-1"]
     )
     assert fn._mesh_a2a_consumer_pending_self_tag is False
+    assert fn._mesh_a2a_consumer_self_resolved is True
     assert not any(
         "first @mesh.agent wins" in r.getMessage() for r in caplog.records
     )

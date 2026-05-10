@@ -2270,11 +2270,12 @@ def _resolve_pending_consumer_self_tags(agent_name: str) -> None:
         if getattr(fn, "_mesh_a2a_consumer_pending_self_tag", False):
             pending.append(decorated)
             continue
-        consumer_meta = getattr(fn, "_mesh_a2a_consumer_metadata", None)
-        if isinstance(consumer_meta, dict):
-            cn = consumer_meta.get("consumer_name")
-            if cn and cn != _MESH_CONSUMER_SELF_SENTINEL:
-                already_resolved = True
+        # Use the explicit self-resolved marker rather than inferring from
+        # consumer_name, so a future explicit ``consumer_name=`` kwarg on
+        # @mesh.a2a_consumer (escape hatch for users who don't want the
+        # auto self-tag) doesn't false-fire the multi-agent warning.
+        if getattr(fn, "_mesh_a2a_consumer_self_resolved", False):
+            already_resolved = True
 
     if not pending:
         if already_resolved:
@@ -2312,6 +2313,10 @@ def _resolve_pending_consumer_self_tags(agent_name: str) -> None:
 
         try:
             fn._mesh_a2a_consumer_pending_self_tag = False
+            # Mark explicitly so future code can distinguish self-resolved
+            # (sentinel-substituted by this @mesh.agent) from explicit
+            # ``consumer_name=`` kwargs on @mesh.a2a_consumer.
+            fn._mesh_a2a_consumer_self_resolved = True
         except (AttributeError, TypeError):
             pass
 
