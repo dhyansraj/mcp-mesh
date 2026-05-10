@@ -5,7 +5,6 @@ import io.mcpmesh.MeshTool;
 import io.mcpmesh.a2a.A2AClient;
 import io.mcpmesh.a2a.A2AConsumer;
 import io.mcpmesh.a2a.A2AResponse;
-import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
@@ -16,8 +15,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A2A consumer example (issue #916 Phase 1) — Java port of
- * {@code examples/a2a/consumer_date_agent.py}.
+ * A2A consumer example (issue #923 — annotation-config form) — Java
+ * port of {@code examples/a2a/consumer_date_agent.py}.
  *
  * <p>Bridges the existing {@code examples/a2a/date_a2a_agent.py}
  * {@code get-date} skill into the mesh as a regular {@code current-date}
@@ -31,6 +30,11 @@ import java.util.Map;
  * {@link MeshAgent#name()} via {@link A2AConsumer} (here
  * {@code date-consumer}) so downstream resolvers can pin a specific
  * backend via the dependency tag selector.
+ *
+ * <p><b>Framework-injection (issue #923):</b> the {@link A2AClient} is
+ * provisioned by the Spring starter from the {@link A2AConsumer} fields
+ * and injected at the method's {@code A2AClient} parameter slot.
+ * Lifecycle (incl. close) is owned by the framework.
  *
  * <h2>Stack</h2>
  * <ul>
@@ -61,18 +65,6 @@ import java.util.Map;
 public class DateConsumerAgentApplication {
 
     private static final Logger log = LoggerFactory.getLogger(DateConsumerAgentApplication.class);
-
-    /**
-     * One reusable client per (url, skillId, auth) tuple — amortises
-     * the underlying {@link java.net.http.HttpClient} connection pool
-     * across calls. The producer is unauth in the example deployment
-     * so no {@code A2ABearer} is supplied.
-     */
-    private static final A2AClient A2A_CLIENT = new A2AClient(
-        "http://localhost:9090/agents/date",
-        "get-date"
-    );
-
     private static final ObjectMapper JSON = new ObjectMapper();
 
     public static void main(String[] args) {
@@ -83,16 +75,17 @@ public class DateConsumerAgentApplication {
     /**
      * Bridge the upstream A2A {@code get-date} skill onto the mesh as
      * the {@code current-date} capability. The {@link A2AConsumer}
-     * marker tells the runtime to inject the surrounding
-     * {@link MeshAgent#name()} as a tag, so this capability registers
-     * with tags {@code [a2a-bridge, date-consumer]}.
+     * carries the upstream config; the runtime constructs an
+     * {@link A2AClient} per unique config tuple and injects it at the
+     * {@code a2a} parameter slot here.
      *
      * <p>The producer-side handler returns
      * {@code {"date": "<iso-string>"}} and the A2A surface
      * JSON-stringifies it into the artifact text part — so we
      * {@code readValue} on the consumer side to recover the dict.
      *
-     * @return the producer's date payload as a Map
+     * @param a2a framework-injected A2AClient bound to the upstream.
+     * @return the producer's date payload as a Map.
      * @throws Exception on transport, JSON, or A2A protocol failure.
      */
     @MeshTool(
@@ -100,25 +93,17 @@ public class DateConsumerAgentApplication {
         description = "Get the current date by bridging the upstream A2A get-date skill",
         tags = {"a2a-bridge"}
     )
-    @A2AConsumer
-    public Map<String, Object> currentDate() throws Exception {
-        A2AResponse response = A2A_CLIENT.send(Map.of(
+    @A2AConsumer(
+        url = "http://localhost:9090/agents/date",
+        skillId = "get-date"
+    )
+    public Map<String, Object> currentDate(A2AClient a2a) throws Exception {
+        A2AResponse response = a2a.send(Map.of(
             "role", "user",
             "parts", List.of(Map.of("type", "text", "text", "now"))
         ));
         @SuppressWarnings("unchecked")
         Map<String, Object> payload = JSON.readValue(response.artifactText(), Map.class);
         return payload;
-    }
-
-    // On JDK 17 close() is cosmetic (see A2AClient Javadoc); JDK 21+ honors the AutoCloseable contract. Demonstrates proper lifecycle hygiene either way.
-    @PreDestroy
-    void releaseA2AClient() {
-        try {
-            A2A_CLIENT.close();
-        } catch (Exception e) {
-            // Best-effort — log but don't fail shutdown.
-            log.warn("Failed to close A2AClient during shutdown", e);
-        }
     }
 }

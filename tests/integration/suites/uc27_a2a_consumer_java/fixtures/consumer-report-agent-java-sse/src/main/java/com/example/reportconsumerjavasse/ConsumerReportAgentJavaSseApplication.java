@@ -18,10 +18,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * uc27 Phase 3 fixture (SSE variant) — Java A2A SSE consumer that
- * bridges {@code report_a2a_agent.py}'s {@code generate-report} skill
- * onto the mesh as a long-running {@code report-sse} capability via
- * {@link A2AClient#subscribe} + {@link A2AStream#bridge}.
+ * uc27 Phase 3 fixture, SSE variant (refactored under #923) — Java
+ * A2A SSE consumer that bridges {@code report_a2a_agent.py}'s
+ * {@code generate-report} skill onto the mesh as a long-running
+ * {@code report-sse} capability via {@link A2AClient#subscribe} +
+ * {@link A2AStream#bridge}.
  *
  * <p>Auto-tag scheme: {@code capability="report-sse"},
  * {@code tags=[a2a-bridge, sse, report-consumer-sse]} (the third tag is
@@ -37,11 +38,6 @@ import java.util.Map;
 @SpringBootApplication
 public class ConsumerReportAgentJavaSseApplication {
 
-    private static final A2AClient A2A_CLIENT = new A2AClient(
-        "http://localhost:9091/agents/report",
-        "generate-report"
-    );
-
     private static final ObjectMapper JSON = new ObjectMapper();
 
     public static void main(String[] args) {
@@ -56,25 +52,29 @@ public class ConsumerReportAgentJavaSseApplication {
         description = "Bridge upstream A2A generate-report skill via SSE as report_sse capability.",
         tags = {"a2a-bridge", "sse"}
     )
-    @A2AConsumer
+    @A2AConsumer(
+        url = "http://localhost:9091/agents/report",
+        skillId = "generate-report"
+    )
     public Object generateReportSse(
             @Param("user_id") String userId,
             @Param(value = "sections", required = false) List<String> sections,
+            A2AClient a2a,
             MeshJob job) throws Exception {
         if (sections == null) {
             sections = List.of("default");
         }
         Map<String, Object> message = buildMessage(userId, sections);
         if (!(job instanceof JobController controller)) {
-            return drainSyncFallback(message);
+            return drainSyncFallback(a2a, message);
         }
-        try (A2AStream stream = A2A_CLIENT.subscribe(message)) {
+        try (A2AStream stream = a2a.subscribe(message)) {
             return stream.bridge(controller);
         }
     }
 
-    private Object drainSyncFallback(Map<String, Object> message) throws Exception {
-        try (A2AStream stream = A2A_CLIENT.subscribe(message)) {
+    private Object drainSyncFallback(A2AClient a2a, Map<String, Object> message) throws Exception {
+        try (A2AStream stream = a2a.subscribe(message)) {
             for (A2AEvent event : stream) {
                 if (event.kind() == A2AEvent.Kind.ARTIFACT) {
                     String text = event.artifactText();

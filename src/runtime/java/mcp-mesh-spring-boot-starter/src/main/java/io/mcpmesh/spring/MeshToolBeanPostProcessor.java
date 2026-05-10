@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.core.Ordered;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.util.ReflectionUtils;
 
@@ -29,21 +30,50 @@ import java.util.List;
  * @see MeshToolWrapper
  * @see MeshToolWrapperRegistry
  */
-public class MeshToolBeanPostProcessor implements BeanPostProcessor {
+public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
 
     private static final Logger log = LoggerFactory.getLogger(MeshToolBeanPostProcessor.class);
 
     private final MeshToolRegistry registry;
     private final MeshToolWrapperRegistry wrapperRegistry;
     private final ObjectMapper objectMapper;
+    private final A2AConsumerBeanPostProcessor a2aProcessor;
 
     public MeshToolBeanPostProcessor(
             MeshToolRegistry registry,
             MeshToolWrapperRegistry wrapperRegistry,
             ObjectMapper objectMapper) {
+        this(registry, wrapperRegistry, objectMapper, null);
+    }
+
+    /**
+     * Issue #923: includes the {@link A2AConsumerBeanPostProcessor} so
+     * each created {@link MeshToolWrapper} can be told which method
+     * has an A2AClient injection slot (and which client to inject).
+     * Pass {@code null} for environments without A2A consumer support.
+     */
+    public MeshToolBeanPostProcessor(
+            MeshToolRegistry registry,
+            MeshToolWrapperRegistry wrapperRegistry,
+            ObjectMapper objectMapper,
+            A2AConsumerBeanPostProcessor a2aProcessor) {
         this.registry = registry;
         this.wrapperRegistry = wrapperRegistry;
         this.objectMapper = objectMapper;
+        this.a2aProcessor = a2aProcessor;
+    }
+
+    /**
+     * Issue #923: run AFTER {@link A2AConsumerBeanPostProcessor} so that
+     * {@link A2AConsumerBeanPostProcessor#bindingFor(Method)} returns a
+     * non-null binding for {@code @A2AConsumer} methods by the time we
+     * construct the {@link MeshToolWrapper} and call
+     * {@link MeshToolWrapper#setA2AClientBinding}. Lowest precedence (= last)
+     * is the safe default — no other framework BPP needs to run after us.
+     */
+    @Override
+    public int getOrder() {
+        return Ordered.LOWEST_PRECEDENCE;
     }
 
     @Override
@@ -121,6 +151,16 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor {
             annotation.task(),
             annotation.retryOn()
         );
+
+        // Issue #923: when @A2AConsumer wired this method, hand the
+        // wrapper the cached A2AClient + slot index so dispatch
+        // populates the parameter at invoke time.
+        if (a2aProcessor != null) {
+            A2AConsumerBeanPostProcessor.MethodBinding binding = a2aProcessor.bindingFor(method);
+            if (binding != null) {
+                wrapper.setA2AClientBinding(binding.a2aParamIndex(), binding.client());
+            }
+        }
 
         // Register with wrapper registry
         wrapperRegistry.registerWrapper(wrapper);
