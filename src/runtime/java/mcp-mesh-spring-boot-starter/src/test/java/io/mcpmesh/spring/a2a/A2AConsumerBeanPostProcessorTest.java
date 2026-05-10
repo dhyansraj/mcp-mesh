@@ -119,6 +119,52 @@ class A2AConsumerBeanPostProcessorTest {
         }
     }
 
+    public static class BlankSkillAndBlankCapabilityBean {
+        // No @MeshTool annotation at all AND no @A2AConsumer skillId —
+        // must fail fast at boot rather than caching an empty skillId.
+        // (@MeshTool's capability() has no default, so the only path to
+        // a missing capability fallback is the missing-@MeshTool case.)
+        @A2AConsumer(url = "http://x/agents/y")
+        public String noSkill(A2AClient a2a) {
+            return "x";
+        }
+    }
+
+    public static class ResolvedToBlankUrlBean {
+        // Spring property defaulted to empty string — placeholder
+        // resolves successfully but yields blank url. Distinct error
+        // message from the marker-only migration path.
+        @MeshTool(capability = "blank-url")
+        @A2AConsumer(url = "${some.url:}", skillId = "x")
+        public String blank(A2AClient a2a) {
+            return "x";
+        }
+    }
+
+    public static class AuthlessBean {
+        @MeshTool(capability = "auth-none")
+        @A2AConsumer(url = "http://x/agents/y", skillId = "skill")
+        public String none(A2AClient a2a) {
+            return "x";
+        }
+    }
+
+    public static class AuthEnvBean {
+        @MeshTool(capability = "auth-env")
+        @A2AConsumer(url = "http://x/agents/y", skillId = "skill", authBearerEnv = "MY_TOKEN")
+        public String env(A2AClient a2a) {
+            return "x";
+        }
+    }
+
+    public static class AuthLiteralBean {
+        @MeshTool(capability = "auth-literal")
+        @A2AConsumer(url = "http://x/agents/y", skillId = "skill", authBearerToken = "literal")
+        public String literal(A2AClient a2a) {
+            return "x";
+        }
+    }
+
     private static A2AConsumerBeanPostProcessor newProcessor(Environment env) {
         return new A2AConsumerBeanPostProcessor(env);
     }
@@ -235,6 +281,42 @@ class A2AConsumerBeanPostProcessorTest {
             "blank skillId must fall back to the @MeshTool capability (Python parity)");
     }
 
+    @Test
+    void boot_failsWhenBothSkillIdAndCapabilityBlank() {
+        // Fix 1: when neither @A2AConsumer(skillId) nor @MeshTool(capability)
+        // carries a value, fail fast at boot rather than caching an empty
+        // skillId and waiting for the first A2A call to fail downstream.
+        A2AConsumerBeanPostProcessor proc = newProcessor();
+        BeanInitializationException ex = assertThrows(BeanInitializationException.class,
+            () -> proc.postProcessAfterInitialization(new BlankSkillAndBlankCapabilityBean(), "noskill"));
+        assertTrue(ex.getMessage().contains("requires a non-blank"),
+            "must call out the non-blank skillId requirement, got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("skillId"),
+            "must mention the skillId field by name, got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("@MeshTool(capability"),
+            "must mention the capability fallback path, got: " + ex.getMessage());
+    }
+
+    @Test
+    void boot_failsWhenUrlPlaceholderResolvesToBlank() {
+        // Fix 3: a placeholder like ${some.url:} that resolves to empty
+        // must surface a property-pointing message, NOT the marker-only
+        // migration message (which would mislead the user — they did
+        // set a url, the property is just empty).
+        MockEnvironment env = new MockEnvironment();
+        // Don't set any property — ${some.url:} default is "".
+        A2AConsumerBeanPostProcessor proc = newProcessor(env);
+        BeanInitializationException ex = assertThrows(BeanInitializationException.class,
+            () -> proc.postProcessAfterInitialization(new ResolvedToBlankUrlBean(), "blank"));
+        assertTrue(ex.getMessage().contains("resolved to empty"),
+            "must call out the blank resolution, got: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("Spring property"),
+            "must point at the property, not the migration link, got: " + ex.getMessage());
+        assertFalse(ex.getMessage().contains("#923"),
+            "must NOT show the marker-only migration message — the user did set a url, "
+                + "got: " + ex.getMessage());
+    }
+
     // -------- Caching --------
 
     @Test
@@ -262,6 +344,39 @@ class A2AConsumerBeanPostProcessorTest {
 
         assertEquals(2, proc.cacheSize(),
             "two methods with different urls must construct two A2AClient instances");
+    }
+
+    @Test
+    void cache_separatesA2AClientsByAuthSpec_evenWithIdenticalUrlAndSkill() throws Exception {
+        // Fix 5: two methods with identical (url, skillId, timeout) but
+        // DIFFERENT auth specs (none vs env vs literal) must produce
+        // distinct cached A2AClient instances. Closes the cache-key
+        // correctness gap where credentials with different rotation
+        // surfaces would otherwise collide.
+        A2AConsumerBeanPostProcessor proc = newProcessor();
+        proc.postProcessAfterInitialization(new AuthlessBean(), "none");
+        proc.postProcessAfterInitialization(new AuthEnvBean(), "env");
+        proc.postProcessAfterInitialization(new AuthLiteralBean(), "literal");
+
+        assertEquals(3, proc.cacheSize(),
+            "auth=none, auth=env, auth=literal must each get their own cached A2AClient — "
+                + "AuthSpec is part of the cache key");
+        assertEquals(3, proc.bindings().size(),
+            "each method must record its own binding");
+
+        // Pull the three clients and verify pairwise distinctness.
+        Method noneM = AuthlessBean.class.getMethod("none", A2AClient.class);
+        Method envM = AuthEnvBean.class.getMethod("env", A2AClient.class);
+        Method literalM = AuthLiteralBean.class.getMethod("literal", A2AClient.class);
+        A2AClient noneClient = proc.bindingFor(noneM).client();
+        A2AClient envClient = proc.bindingFor(envM).client();
+        A2AClient literalClient = proc.bindingFor(literalM).client();
+        assertNotSame(noneClient, envClient,
+            "auth=none and auth=env must NOT share a cached client");
+        assertNotSame(noneClient, literalClient,
+            "auth=none and auth=literal must NOT share a cached client");
+        assertNotSame(envClient, literalClient,
+            "auth=env and auth=literal must NOT share a cached client");
     }
 
     // -------- Lifecycle --------

@@ -298,6 +298,12 @@ public final class JobsRuntimeManager implements SmartLifecycle {
                 // @A2AConsumer bridge (e.g. uc27 report consumer) would
                 // NPE on the first a2a.send(...) call when dispatched
                 // via the claim path instead of inbound HTTP.
+                if (a2aBinding == null) {
+                    log.warn("JobsRuntimeManager: method {} declares A2AClient parameter but no "
+                        + "A2AConsumerBeanPostProcessor binding exists. Tool will receive null and "
+                        + "likely NPE on first A2A call. Was the bean registered outside Spring's "
+                        + "BeanPostProcessor scan path?", meta.method().getName());
+                }
                 fullArgs[i] = a2aBinding != null ? a2aBinding.client() : null;
                 continue;
             }

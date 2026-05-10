@@ -63,6 +63,14 @@ import java.lang.annotation.Target;
  *       substitute. A consumer-only / nameless agent skips the
  *       injection cleanly with a warning.</li>
  * </ul>
+ *
+ * <p><b>Lifecycle:</b> The framework owns the {@link A2AClient}'s
+ * lifecycle. Do not retain references to the injected client across
+ * Spring context shutdown — the framework's {@code @PreDestroy} hook
+ * closes all cached clients and may run before any user
+ * {@code @PreDestroy} that retained a reference. The injection is
+ * scoped to the method invocation; let the framework manage construction
+ * + close.
  */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)

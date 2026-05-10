@@ -97,8 +97,11 @@ public class A2AConsumerBeanPostProcessor implements BeanPostProcessor, Ordered 
     }
 
     private void processConsumerMethod(Class<?> targetClass, Method method, A2AConsumer annotation) {
-        // Hard cutover (#923): the marker-only form is rejected with the
-        // exact migration message documented in the issue body.
+        // Hard cutover (#923): the marker-only form (url defaulted to "")
+        // is rejected with the exact migration message documented in the
+        // issue body. A url that is non-blank at source level but
+        // resolves to blank via Spring placeholder substitution gets a
+        // distinct message that points at the property, not the migration.
         String rawUrl = annotation.url();
         if (rawUrl == null || rawUrl.isBlank()) {
             throw new BeanInitializationException(
@@ -136,17 +139,33 @@ public class A2AConsumerBeanPostProcessor implements BeanPostProcessor, Ordered 
                 "@A2AConsumer on " + targetClass.getName() + "#" + method.getName()
                     + ": failed to resolve url placeholder '" + rawUrl + "': " + e.getMessage(), e);
         }
+        if (resolvedUrl == null || resolvedUrl.isBlank()) {
+            // rawUrl was non-blank (would have been rejected above
+            // otherwise) but resolution yielded empty — typical cause is
+            // a placeholder like ${empty.prop:} resolving to "". Point
+            // at the property, not the marker-only migration.
+            throw new BeanInitializationException(
+                "@A2AConsumer on " + targetClass.getName() + "#" + method.getName()
+                    + ": url resolved to empty (raw=" + rawUrl + "). "
+                    + "Check that the Spring property is defined and non-blank.");
+        }
 
         // Default skillId to the surrounding @MeshTool capability when
         // the user left it blank — matches the Python decorator's
-        // a2a_skill_id=None → capability default.
+        // a2a_skill_id=None → capability default. If BOTH are blank,
+        // fail fast at boot rather than caching an empty skillId and
+        // having the first A2A call fail downstream with an opaque
+        // upstream error.
         String skillId = annotation.skillId();
         if (skillId == null || skillId.isBlank()) {
             MeshTool meshTool = AnnotationUtils.findAnnotation(method, MeshTool.class);
             if (meshTool != null && meshTool.capability() != null && !meshTool.capability().isBlank()) {
                 skillId = meshTool.capability();
             } else {
-                skillId = "";
+                throw new BeanInitializationException(
+                    "@A2AConsumer on method " + method.getName() + " requires a non-blank "
+                        + "skillId — neither @A2AConsumer(skillId=...) nor @MeshTool(capability=...) "
+                        + "carries a value. Set skillId on the @A2AConsumer annotation explicitly.");
             }
         }
 
