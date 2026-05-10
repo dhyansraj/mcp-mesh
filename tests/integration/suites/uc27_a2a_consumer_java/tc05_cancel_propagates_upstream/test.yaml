@@ -1,0 +1,168 @@
+# tc05_cancel_propagates_upstream — mesh cancel reaches A2A producer (Java).
+#
+# Java port of uc25 tc05. Caller submits a long-running mesh job via the
+# bridged ``report`` capability, then mid-flight calls __mesh_job_cancel.
+# The mesh job's cancel-token flips to true; A2AJob.bridge polls
+# JobController.isCancelled() between iterations, detects the cancel,
+# POSTs ``tasks/cancel`` upstream so the Python A2A producer aborts,
+# then throws A2AJobCanceledException. The mesh wrapper records the
+# canceled outcome.
+#
+# Validation strategy mirrors uc25 tc05:
+#   - Cancel response carries ok=true.
+#   - Final mesh job status is "cancelled" (NOT completed).
+
+name: "A2A consumer (Java) Phase 3: cancel propagates upstream and aborts the job"
+description: "Caller cancels mid-flight; Java bridge propagates tasks/cancel upstream; final mesh job state=cancelled"
+tags:
+  - a2a
+  - java
+  - smoke
+  - issue-910
+  - issue-916
+  - cancel
+timeout: 1500
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+      cp -rL /uc-artifacts/consumer-report-agent-java /workspace/
+      cp -rL /uc-artifacts/caller-agent-report /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - name: "Install consumer-report-agent-java deps"
+    handler: maven-install
+    path: /workspace/consumer-report-agent-java
+    timeout: 600
+
+  - name: "Install caller-agent-report deps"
+    handler: pip-install
+    path: /workspace/caller-agent-report
+
+  - routine: start_registry_consumer
+
+  - name: "Start long-task-provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for long-task-provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for generate_report DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Start consumer-report-agent-java (port 9211)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-report-agent-java --env MCP_MESH_HTTP_PORT=9211 -d
+
+  - name: "Wait for Java consumer to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null | jq -r \
+          '.agents[] | select(.name=="report-consumer") | .status' 2>/dev/null || echo "")
+        if [ "$STATUS" = "healthy" ]; then
+          echo "Java consumer healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Java consumer not healthy within 120s (last status='$STATUS')"
+      meshctl logs consumer-report-agent-java 2>&1 | tail -80 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start caller-agent-report (port 9213)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start caller-agent-report/main.py -d
+
+  - name: "Wait for caller report-dep DI resolution"
+    handler: wait
+    seconds: 25
+
+  # 8 sections × ~2s each = ~16s natural runtime — wide cancel window.
+  - name: "Submit long-running report job (~16s) — return job_id immediately"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report_async '{"user_id":"alice","sections":["a","b","c","d","e","f","g","h"],"max_duration":120}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  # Let the consumer's bridge enter its polling loop AND the upstream
+  # producer claim + start its first sleep. Java cold-start may add
+  # ~5s to the chain compared to the Python tc05 — bump from 4 to 6s.
+  - name: "Wait for bridge to enter polling loop"
+    handler: wait
+    seconds: 6
+
+  - name: "Cancel the mesh job"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      echo "JOB_ID=${JOB_ID}"
+      meshctl call __mesh_job_cancel "{\"job_id\":\"${JOB_ID}\",\"reason\":\"tc05 client requested abort\"}"
+    capture: cancel_response
+    timeout: 30
+
+  # Allow cancel to propagate end-to-end:
+  #   wrapper sets cancel-token -> A2AJob.bridge polls isCancelled() ->
+  #   POST tasks/cancel upstream -> producer aborts inner mesh job ->
+  #   bridge throws A2AJobCanceledException -> wrapper records canceled.
+  # Java's isCancelled() is polled BETWEEN HTTP calls so the worst case
+  # is one outstanding tasks/get's timeout (~30s); typical case ~0.5-2s.
+  - name: "Wait for cancel to settle through the bridge"
+    handler: wait
+    seconds: 8
+
+  - name: "Read final mesh job status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: final_status
+    timeout: 30
+
+assertions:
+  - expr: "${captured.cancel_response} contains '\"ok\": true'"
+    message: "__mesh_job_cancel should return ok:true"
+
+  # The mesh job MUST end as cancelled, not completed — proves the Java
+  # bridge actually aborted the work before natural finish.
+  - expr: "${captured.final_status} contains '\"status\": \"cancelled\"'"
+    message: "final mesh job status field should equal cancelled"
+
+  - expr: "${captured.final_status} not contains '\"status\": \"completed\"'"
+    message: "status field must not be completed — cancel happened before natural finish"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

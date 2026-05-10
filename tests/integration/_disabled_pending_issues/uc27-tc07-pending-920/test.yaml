@@ -1,0 +1,186 @@
+# tc07_consumer_death_surfaces_failure — caller observes failure when
+# the bridging Java consumer dies mid-job.
+#
+# Java port of uc25 tc07. Same shape: kill the bridging consumer
+# mid-flight, verify the registry's purgeStaleAgents +
+# ResetOrphanedJobs unpins the caller's job within bounded window.
+#
+# We are NOT adding new code — this validates that the natural
+# job-pinning + orphan-reset behaviour works for a JAVA consumer
+# bridge identically to the Python one (uc25 tc07).
+#
+# Validation strategy mirrors uc25 tc07:
+#   - Submit + return immediately.
+#   - Wait so consumer's bridge is actively polling.
+#   - Kill ONLY the consumer (`meshctl stop consumer-report-agent-java`).
+#   - Wait for fast-sweep registry to mark the consumer unhealthy.
+#   - Read final status — MUST be non-completed; owner_instance_id null
+#     and attempt_count > 0 (orphan-reset proof).
+
+name: "A2A consumer (Java) Phase 3: caller observes failure when bridging consumer dies"
+description: "Kill the bridging Java consumer mid-job; caller's status read returns a non-completed orphaned state within bounded window"
+tags:
+  - a2a
+  - java
+  - issue-910
+  - issue-916
+  - resilience
+timeout: 1500
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+      cp -rL /uc-artifacts/consumer-report-agent-java /workspace/
+      cp -rL /uc-artifacts/caller-agent-report /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - name: "Install consumer-report-agent-java deps"
+    handler: maven-install
+    path: /workspace/consumer-report-agent-java
+    timeout: 600
+
+  - name: "Install caller-agent-report deps"
+    handler: pip-install
+    path: /workspace/caller-agent-report
+
+  - routine: start_registry_consumer
+
+  - name: "Start long-task-provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for long-task-provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for generate_report DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Start consumer-report-agent-java (port 9211)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-report-agent-java --env MCP_MESH_HTTP_PORT=9211 -d
+
+  - name: "Wait for Java consumer to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null | jq -r \
+          '.agents[] | select(.name=="report-consumer") | .status' 2>/dev/null || echo "")
+        if [ "$STATUS" = "healthy" ]; then
+          echo "Java consumer healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Java consumer not healthy within 120s (last status='$STATUS')"
+      meshctl logs consumer-report-agent-java 2>&1 | tail -80 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start caller-agent-report (port 9213)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start caller-agent-report/main.py -d
+
+  - name: "Wait for caller report-dep DI resolution"
+    handler: wait
+    seconds: 25
+
+  # 15 sections × ~2s each = ~30s natural runtime — wide kill window so
+  # the consumer is reliably mid-bridge when SIGTERM lands. Java cold-start
+  # may add ~5s vs the Python equivalent — comfortably absorbed.
+  - name: "Submit long-running report job (~30s) — return job_id immediately"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report_async '{"user_id":"alice","sections":["s01","s02","s03","s04","s05","s06","s07","s08","s09","s10","s11","s12","s13","s14","s15"],"max_duration":120}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  # Wait for the consumer's claim_dispatcher to claim the job + start
+  # the bridge polling. Bumped from 10s to 12s to absorb Java cold-path
+  # variance under parallel load.
+  - name: "Wait for consumer to claim the job + start bridging"
+    handler: wait
+    seconds: 12
+
+  # Sanity-check: confirm the job actually got claimed BEFORE we kill
+  # the consumer. If owner_instance_id is null here, the test is mis-timed.
+  - name: "Read pre-kill mesh job status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: pre_kill_status
+    timeout: 30
+
+  - name: "Kill the bridging Java consumer mid-job"
+    handler: shell
+    workdir: /workspace
+    command: meshctl stop consumer-report-agent-java
+    capture: stop_resp
+    timeout: 15
+
+  # Fast-sweep registry: HEALTH_CHECK_INTERVAL=5 +
+  # DEFAULT_TIMEOUT_THRESHOLD=15 + MCP_MESH_RETENTION=10s +
+  # MCP_MESH_SWEEP_INTERVAL=10s gives a ~15-25s detection + ~10s
+  # retention + ~10s next sweep tick = up to 35s for purgeStaleAgents
+  # -> ResetOrphanedJobs to run. We wait 45s comfortably (5s extra
+  # vs uc25 tc07 to absorb Java teardown variance).
+  - name: "Wait for registry to detect consumer death + reset / fail the job"
+    handler: wait
+    seconds: 45
+
+  - name: "Read final mesh job status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: final_status
+    timeout: 30
+
+assertions:
+  - expr: "${captured.stop_resp} not contains 'failed'"
+    message: "meshctl stop should not have failed"
+
+  - expr: "${captured.pre_kill_status} not contains '\"owner_instance_id\": null'"
+    message: "Java consumer must have claimed the job pre-kill (owner_instance_id non-null)"
+
+  - expr: "${captured.final_status} not contains '\"status\": \"completed\"'"
+    message: "job must not be completed — Java consumer died before bridge could deliver the artifact"
+
+  - expr: "${captured.final_status} contains '\"owner_instance_id\": null'"
+    message: "owner_instance_id must be null after orphan-reset — proves health monitor + ResetOrphanedJobs ran on the Java consumer death"
+
+  - expr: "${captured.final_status} not contains '\"attempt_count\": 0'"
+    message: "attempt_count must be > 0 after orphan-reset — proves the framework processed the consumer death (not a fresh-submit collision)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

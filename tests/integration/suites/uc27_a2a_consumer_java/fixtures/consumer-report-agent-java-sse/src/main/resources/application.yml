@@ -1,0 +1,18 @@
+spring:
+  application:
+    name: consumer-report-agent-java-sse
+
+server:
+  port: ${MCP_MESH_HTTP_PORT:9212}
+
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:report-consumer-sse}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+
+logging:
+  level:
+    io.mcpmesh: INFO
+    com.example: DEBUG

@@ -258,4 +258,108 @@ class A2AClientTest {
             assertThrows(IllegalArgumentException.class, () -> client.send(null));
         }
     }
+
+    @Test
+    void submit_returnsHandleWithoutPolling() {
+        // submit() MUST issue exactly one tasks/send call regardless
+        // of the upstream state — polling is the caller's job (via
+        // job.bridge / job.waitUntilTerminal).
+        AtomicInteger calls = new AtomicInteger(0);
+        mount("/agents/test", ex -> {
+            int n = calls.incrementAndGet();
+            String body = readBody(ex);
+            assertTrue(body.contains("tasks/send"),
+                "submit() must issue tasks/send (call " + n + ")");
+            respond(ex, 200, """
+                {"jsonrpc":"2.0","id":1,"result":{
+                  "status":{"state":"working"},
+                  "artifacts":[]
+                }}
+                """);
+        });
+
+        try (A2AClient client = new A2AClient(url(), "demo")) {
+            A2AJob job = client.submit(Map.of("role", "user", "parts", List.of()));
+            assertNotNull(job);
+            assertEquals(1, calls.get(),
+                "submit() MUST issue exactly one HTTP call (tasks/send), got " + calls.get());
+            assertEquals("working", job.initialState());
+            assertNotNull(job.taskId());
+            assertTrue(job.taskId().startsWith("c-"));
+        }
+    }
+
+    @Test
+    void submit_afterClose_throws() {
+        mount("/agents/test", ex -> respond(ex, 200, """
+            {"jsonrpc":"2.0","id":1,"result":{"status":{"state":"working"},"artifacts":[]}}
+            """));
+        A2AClient client = new A2AClient(url(), "demo");
+        client.close();
+        A2AException ex = assertThrows(A2AException.class,
+            () -> client.submit(Map.of("role", "user", "parts", List.of())));
+        assertTrue(ex.getMessage().contains("closed"));
+    }
+
+    @Test
+    void subscribe_returnsStreamOfEvents() {
+        // subscribe() MUST POST tasks/sendSubscribe with
+        // Accept: text/event-stream and return a stream that parses
+        // the SSE body into A2AEvent.
+        AtomicReference<String> seenAccept = new AtomicReference<>();
+        mount("/agents/test", ex -> {
+            seenAccept.set(ex.getRequestHeaders().getFirst("Accept"));
+            String body = readBody(ex);
+            assertTrue(body.contains("tasks/sendSubscribe"),
+                "subscribe() must POST tasks/sendSubscribe");
+            byte[] payload = """
+                data: {"jsonrpc":"2.0","id":1,"result":{"status":{"state":"completed"},"final":true}}
+
+                """.getBytes(StandardCharsets.UTF_8);
+            ex.getResponseHeaders().add("Content-Type", "text/event-stream");
+            ex.sendResponseHeaders(200, payload.length);
+            try (java.io.OutputStream out = ex.getResponseBody()) {
+                out.write(payload);
+            }
+        });
+
+        try (A2AClient client = new A2AClient(url(), "demo")) {
+            try (A2AStream stream = client.subscribe(Map.of("role", "user", "parts", List.of()))) {
+                assertEquals("text/event-stream", seenAccept.get(),
+                    "subscribe() request must carry Accept: text/event-stream");
+                int count = 0;
+                for (A2AEvent event : stream) {
+                    count++;
+                    assertEquals(A2AEvent.Kind.STATUS, event.kind());
+                    assertTrue(event.isFinal());
+                }
+                assertEquals(1, count);
+            }
+        }
+    }
+
+    @Test
+    void subscribe_httpErrorStatus_throwsA2AException() {
+        mount("/agents/test", ex -> {
+            byte[] body = "internal error".getBytes(StandardCharsets.UTF_8);
+            ex.getResponseHeaders().add("Content-Type", "application/json");
+            ex.sendResponseHeaders(503, body.length);
+            try (java.io.OutputStream out = ex.getResponseBody()) {
+                out.write(body);
+            }
+        });
+        try (A2AClient client = new A2AClient(url(), "demo")) {
+            A2AException thrown = assertThrows(A2AException.class,
+                () -> client.subscribe(Map.of("role", "user", "parts", List.of())));
+            assertTrue(thrown.getMessage().contains("HTTP 503"),
+                "exception should mention HTTP 503: " + thrown.getMessage());
+        }
+    }
+
+    @Test
+    void subscribe_rejectsNullMessage() {
+        try (A2AClient client = new A2AClient(url(), "demo")) {
+            assertThrows(IllegalArgumentException.class, () -> client.subscribe(null));
+        }
+    }
 }

@@ -1,0 +1,26 @@
+# MCP Mesh A2A consumer report agent (Java, polling bridge) — issue #910 Phase 3.
+#
+# Mirrors examples/a2a/consumer_report_agent.py. Override at runtime via:
+#   MCP_MESH_REGISTRY_URL - Registry URL
+#   MCP_MESH_HTTP_PORT    - Agent HTTP port
+#   MCP_MESH_AGENT_NAME   - Agent name (becomes the auto-injected
+#                            consumer-name tag for @A2AConsumer tools)
+
+spring:
+  application:
+    name: consumer-report-agent
+
+server:
+  port: ${MCP_MESH_HTTP_PORT:9211}
+
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:report-consumer}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+
+logging:
+  level:
+    io.mcpmesh: INFO
+    com.example.reportconsumer: DEBUG
