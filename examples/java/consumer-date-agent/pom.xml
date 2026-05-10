@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A2A consumer example (issue #916 Phase 1) — bridges the existing
+  ``examples/a2a/date_a2a_agent.py`` ``get-date`` skill into the mesh
+  as a regular ``current-date`` capability. Java port of
+  ``examples/a2a/consumer_date_agent.py``.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>consumer-date-agent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>A2A Consumer Date Agent (Java)</name>
+    <description>Java A2A consumer bridge — wraps the date_a2a_agent.py producer as a mesh current-date capability.</description>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.5</version>
+        <relativePath/>
+    </parent>
+
+    <properties>
+        <java.version>17</java.version>
+        <mcp-mesh.version>1.4.1</mcp-mesh.version>
+    </properties>
+
+    <!--
+      Depends on local mcp-mesh-* artifacts at version 1.4.1+ which are not
+      published to Maven Central. Build them first via:
+          cd src/runtime/java && mvn install -DskipTests
+      Maven and IDEs then resolve them from your local ~/.m2/repository.
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>io.mcp-mesh</groupId>
+            <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+            <version>${mcp-mesh.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.example.dateconsumer.DateConsumerAgentApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

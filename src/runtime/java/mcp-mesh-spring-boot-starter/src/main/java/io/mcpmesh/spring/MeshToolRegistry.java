@@ -5,6 +5,7 @@ import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
 import io.mcpmesh.SchemaMode;
 import io.mcpmesh.Selector;
+import io.mcpmesh.a2a.A2AConsumer;
 import io.mcpmesh.core.AgentSpec;
 import io.mcpmesh.core.MeshCoreBridge;
 import org.slf4j.Logger;
@@ -47,7 +48,12 @@ public class MeshToolRegistry {
             capability,
             annotation.description(),
             annotation.version(),
-            Arrays.asList(annotation.tags()),
+            // Mutable list so the @A2AConsumer auto-tag injector
+            // (issue #916) can append the surrounding agent name once
+            // the @MeshAgent has been resolved. Kept as List<String>
+            // on the record so existing readers (heartbeat builder,
+            // tests) are unaffected.
+            new ArrayList<>(Arrays.asList(annotation.tags())),
             extractDependencies(annotation.dependencies()),
             extractInputSchema(method),
             outputType,
@@ -214,6 +220,70 @@ public class MeshToolRegistry {
      */
     public Collection<ToolMetadata> getAllTools() {
         return Collections.unmodifiableCollection(tools.values());
+    }
+
+    /**
+     * Issue #916 Phase 1: append the surrounding {@code @MeshAgent} name
+     * as a tag on every tool also annotated with
+     * {@link io.mcpmesh.a2a.A2AConsumer @A2AConsumer}, idempotent.
+     *
+     * <p>Called from {@code MeshAutoConfiguration.buildAgentSpec} once
+     * the agent name is resolved (env override, properties, or the
+     * annotation literal) but BEFORE {@link #getToolSpecs()} is read
+     * into the heartbeat catalog. Skipped silently when {@code agentName}
+     * is null/blank — the consumer-only / nameless mode of the runtime
+     * never reaches this code path with a real name, so we leave the
+     * tool tags untouched and let the call go up unmodified.
+     *
+     * <p>Java equivalent of Python's
+     * {@code _resolve_pending_consumer_self_tags} (mesh.decorators):
+     * the annotation marker substitutes for the
+     * {@code __MESH_CONSUMER_SELF__} sentinel, and this method takes
+     * the role of the deferred substitution pass.
+     *
+     * @param agentName the resolved {@code @MeshAgent} name; no-op when
+     *                  null or blank.
+     */
+    public void injectConsumerNameTags(String agentName) {
+        if (agentName == null || agentName.isBlank()) {
+            return;
+        }
+        for (ToolMetadata meta : tools.values()) {
+            java.lang.reflect.Method method = meta.method();
+            if (method == null) {
+                continue;
+            }
+            if (!method.isAnnotationPresent(A2AConsumer.class)) {
+                continue;
+            }
+            List<String> current = meta.tags();
+            if (current == null) {
+                continue;
+            }
+            // Idempotent: skip when the tag is already there. Repeated
+            // calls (e.g. test refresh, context restart) must not
+            // accumulate duplicates in the heartbeat tag list.
+            if (current.contains(agentName)) {
+                log.debug("@A2AConsumer tool '{}': consumer-name tag '{}' already present, skipping",
+                    meta.capability(), agentName);
+                continue;
+            }
+            try {
+                current.add(agentName);
+                log.info("@A2AConsumer tool '{}': injected consumer-name tag '{}'",
+                    meta.capability(), agentName);
+            } catch (UnsupportedOperationException e) {
+                // Defensive: registerTool builds a mutable ArrayList,
+                // but external callers using ToolMetadata's public
+                // constructor could supply an immutable list. Surface
+                // a warning instead of crashing the agent.
+                log.warn("@A2AConsumer tool '{}': tags list is immutable, cannot inject "
+                        + "consumer-name auto-tag '{}' — the tool will be missing this tag "
+                        + "in the registry. Construct ToolMetadata with a mutable List<String> "
+                        + "(e.g. new ArrayList<>(...)) to enable auto-tag injection.",
+                    meta.capability(), agentName);
+            }
+        }
     }
 
     /**

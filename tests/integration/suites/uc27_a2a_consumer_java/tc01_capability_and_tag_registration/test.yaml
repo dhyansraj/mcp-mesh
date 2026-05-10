@@ -1,0 +1,153 @@
+# tc01_capability_and_tag_registration — Java A2A consumer registration smoke (issue #916 Phase 1).
+#
+# Java port of uc25 tc01. Verifies the Java @A2AConsumer marker
+# annotation pairs with @MeshTool to publish the capability through the
+# regular registration path AND that the consumer-name auto-tag
+# injection works end-to-end:
+#
+#   - The consumer agent appears in /agents with agent_type=mcp_agent
+#     (it is a regular mesh agent that bridges A2A — NOT an A2A
+#     producer; only date-a2a-agent has agent_type=a2a here).
+#   - The current-date capability lives under the consumer's
+#     tools[*].capabilities array.
+#   - That capability's tags carry BOTH "a2a-bridge" (user-supplied
+#     via the @MeshTool tags field) AND "date-consumer" (auto-injected
+#     from the surrounding @MeshAgent name via
+#     MeshToolRegistry.injectConsumerNameTags() at heartbeat-build
+#     time — Java equivalent of Python's
+#     _resolve_pending_consumer_self_tags substitution).
+#
+# Stack: registry + system-agent (Python, date_service on 9100) +
+# date-a2a-agent (Python A2A surface on 9090) +
+# consumer-date-agent-java (Java consumer on 9201). The Java consumer
+# reaches the Python producer over localhost:9090 because all four
+# processes share the tsuite container's network namespace.
+
+name: "A2A consumer (Java): capability + auto-tag registration"
+description: "@A2AConsumer Java marker + @MeshTool publish current-date with a2a-bridge AND auto-injected consumer-name tag"
+tags:
+  - a2a
+  - java
+  - smoke
+  - issue-916
+timeout: 360
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/system-agent /workspace/
+      cp -rL /uc-artifacts/date-a2a-agent /workspace/
+      cp -rL /uc-artifacts/consumer-date-agent-java /workspace/
+
+  - name: "Install system-agent deps"
+    handler: pip-install
+    path: /workspace/system-agent
+
+  - name: "Install date-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/date-a2a-agent
+
+  - name: "Install consumer-date-agent-java deps"
+    handler: maven-install
+    path: /workspace/consumer-date-agent-java
+    timeout: 600
+
+  - routine: start_registry_consumer
+
+  - name: "Start system-agent (port 9100, provides date_service)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for system-agent registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start date-a2a-agent (port 9090)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start date-a2a-agent/main.py -d
+
+  - name: "Wait for date_service DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Start consumer-date-agent-java (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-date-agent-java --env MCP_MESH_HTTP_PORT=9201 -d
+
+  # Java cold-start is ~30s for Spring Boot; with the fast-sweep
+  # registry the agent can be marked unhealthy if the first heartbeat
+  # is delayed past DEFAULT_TIMEOUT_THRESHOLD=15s. Poll the /agents
+  # endpoint until status==healthy (recovers automatically once the
+  # JVM finishes booting and the heartbeat thread starts).
+  - name: "Wait for Java consumer to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -s http://localhost:8000/agents | jq -r \
+          '.agents[] | select(.name=="date-consumer") | .status' 2>/dev/null)
+        if [ "$STATUS" = "healthy" ]; then
+          echo "Java consumer healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Java consumer not healthy within 120s (last status='$STATUS')"
+      meshctl logs consumer-date-agent-java 2>&1 | tail -80 || true
+      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name=="date-consumer")' || true
+      exit 1
+    timeout: 150
+
+  - name: "Verify all 3 agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "GET /agents on the registry"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_response
+    timeout: 15
+
+assertions:
+  - expr: "${captured.agent_list} contains 'system-agent'"
+    message: "system-agent should be registered"
+  - expr: "${captured.agent_list} contains 'date-a2a-agent'"
+    message: "date-a2a-agent should be registered (meshctl derives the name from the source filename)"
+  - expr: "${captured.agent_list} contains 'date-consumer'"
+    message: "Java consumer-date-agent-java should be registered as 'date-consumer' (from @MeshAgent(name=...))"
+
+  # The consumer is a REGULAR mesh agent (mcp_agent), not an A2A
+  # producer. The /agents response carries all three; the substring
+  # match below is sufficient because we already checked the names
+  # above and only one mcp_agent type is consumer-shaped.
+  - expr: "${captured.agents_response} contains '\"name\":\"date-consumer\"'"
+    message: "/agents response should include the Java consumer agent record"
+  - expr: "${captured.agents_response} contains '\"current-date\"'"
+    message: "Java consumer should publish the current-date capability"
+
+  # BOTH tags must appear scoped to the current-date capability under
+  # the date-consumer agent. We use the ${jq:captured.X:filter} operator
+  # to extract exactly the current-date capability's tags array — looser
+  # substring asserts on the raw response can pass even if the
+  # consumer-name tag injection didn't fire, since "date-consumer" also
+  # appears as the agent's name field.
+  - expr: "${jq:captured.agents_response:[.agents[] | select(.name==\"date-consumer\") | .capabilities[]? | select(.name==\"current-date\") | .tags[]]} contains 'a2a-bridge'"
+    message: "current-date capability should carry the user-supplied a2a-bridge tag"
+  - expr: "${jq:captured.agents_response:[.agents[] | select(.name==\"date-consumer\") | .capabilities[]? | select(.name==\"current-date\") | .tags[]]} contains 'date-consumer'"
+    message: "current-date capability should carry the auto-injected consumer-name tag (Java @A2AConsumer)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

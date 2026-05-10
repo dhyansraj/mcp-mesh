@@ -1,0 +1,149 @@
+# tc02_end_to_end_dispatch_via_caller — full bridge round-trip (Java consumer).
+#
+# Java port of uc25 tc02. A downstream Python mesh tool depending on the
+# bridged current-date capability actually reaches the producer through
+# the JAVA consumer's outbound A2A tasks/send call.
+#
+# Call chain:
+#   meshctl call date-caller:get_formatted_date
+#     -> caller resolves current-date dependency to JAVA consumer
+#     -> consumer's @MeshTool body issues outbound
+#        POST http://localhost:9090/agents/date  (tasks/send via java.net.http.HttpClient)
+#     -> date-a2a-agent's mounted handler resolves date_service
+#     -> system-agent's date_service returns the current time
+#     -> bubble back: producer artifact -> Java consumer json mapper
+#        -> caller returns the {"date": ...} dict
+#
+# Stack: registry + system-agent (Python) + date-a2a-agent (Python) +
+# consumer-date-agent-java (Java) + caller-agent (Python). 5 processes.
+
+name: "A2A consumer (Java): end-to-end dispatch via downstream caller"
+description: "Caller -> Java A2A consumer bridge -> producer -> system-agent round-trip returns the date payload"
+tags:
+  - a2a
+  - java
+  - smoke
+  - issue-916
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/system-agent /workspace/
+      cp -rL /uc-artifacts/date-a2a-agent /workspace/
+      cp -rL /uc-artifacts/consumer-date-agent-java /workspace/
+      cp -rL /uc-artifacts/caller-agent /workspace/
+
+  - name: "Install system-agent deps"
+    handler: pip-install
+    path: /workspace/system-agent
+
+  - name: "Install date-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/date-a2a-agent
+
+  - name: "Install consumer-date-agent-java deps"
+    handler: maven-install
+    path: /workspace/consumer-date-agent-java
+    timeout: 600
+
+  - name: "Install caller-agent deps"
+    handler: pip-install
+    path: /workspace/caller-agent
+
+  - routine: start_registry_consumer
+
+  - name: "Start system-agent (port 9100, provides date_service)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for system-agent registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start date-a2a-agent (port 9090)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start date-a2a-agent/main.py -d
+
+  - name: "Wait for date_service DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Start consumer-date-agent-java (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-date-agent-java --env MCP_MESH_HTTP_PORT=9201 -d
+
+  - name: "Wait for Java consumer to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -s http://localhost:8000/agents | jq -r \
+          '.agents[] | select(.name=="date-consumer") | .status' 2>/dev/null)
+        if [ "$STATUS" = "healthy" ]; then
+          echo "Java consumer healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Java consumer not healthy within 120s (last status='$STATUS')"
+      meshctl logs consumer-date-agent-java 2>&1 | tail -80 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start caller-agent (port 9203)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start caller-agent/main.py -d
+
+  - name: "Wait for caller current-date DI resolution"
+    handler: wait
+    seconds: 25
+
+  - name: "Verify all 4 agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Invoke caller's get_formatted_date tool"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call date-caller:get_formatted_date '{}' 2>&1
+    capture: caller_response
+    timeout: 30
+
+assertions:
+  - expr: "${captured.agent_list} contains 'system-agent'"
+    message: "system-agent should be registered"
+  - expr: "${captured.agent_list} contains 'date-consumer'"
+    message: "Java consumer-date-agent-java should be registered as 'date-consumer'"
+  - expr: "${captured.agent_list} contains 'date-caller'"
+    message: "caller-agent should be registered"
+
+  # The producer's date_service returns a timestamp; the A2A handler
+  # wraps it as {"date": "<ts>"} which the Java consumer's Jackson
+  # readValue parses back to a Map — meshctl call surfaces the dict in
+  # its output. We match the bare word `date` (the JSON key) which only
+  # appears in the successful payload, never in error envelopes.
+  - expr: "${captured.caller_response} contains 'date'"
+    message: "caller response should carry the {date: ...} payload from the producer"
+
+  # Defensive: confirm we did NOT hit the "dependency not resolved"
+  # short-circuit branch in the caller — that would mean the
+  # current-date dependency never wired up to the Java consumer.
+  - expr: "${captured.caller_response} not contains 'dependency not resolved'"
+    message: "current_date dependency must be resolved by the time the call lands"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

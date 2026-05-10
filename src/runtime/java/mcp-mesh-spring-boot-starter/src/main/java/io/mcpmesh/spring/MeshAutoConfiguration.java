@@ -325,6 +325,21 @@ public class MeshAutoConfiguration {
             log.warn("Failed to register MeshJob helper tools at startup", e);
         }
 
+        // Issue #916 Phase 1: inject the surrounding @MeshAgent name as
+        // a tag on every @A2AConsumer-annotated tool BEFORE
+        // toolRegistry.getToolSpecs() snapshots the catalog. Mirrors
+        // Python's _resolve_pending_consumer_self_tags substitution —
+        // makes a bridged capability distinguishable from sibling
+        // consumers in the registry, so downstream dependencies can
+        // pin a specific bridge by tag and untagged dependencies still
+        // auto-fail-over when one bridge dies.
+        try {
+            toolRegistry.injectConsumerNameTags(name);
+        } catch (Exception e) {
+            log.warn("Failed to inject @A2AConsumer auto-tags for agent '{}': {}",
+                name, e.getMessage());
+        }
+
         // Add tools from registry (dependencies are embedded in tool specs)
         List<AgentSpec.ToolSpec> allTools = new ArrayList<>(toolRegistry.getToolSpecs());
 
