@@ -83,6 +83,14 @@ public class A2AConsumerBeanPostProcessor implements BeanPostProcessor, Ordered 
             if (annotation == null) {
                 return;
             }
+            // @A2AConsumer is meaningful only when paired with @MeshTool —
+            // a bare @A2AConsumer on a non-mesh method has nothing to
+            // bridge, so building an A2AClient here would just leak. Skip
+            // it cleanly rather than constructing an HttpClient that no
+            // dispatch path will ever consult.
+            if (AnnotationUtils.findAnnotation(method, MeshTool.class) == null) {
+                return;
+            }
             try {
                 processConsumerMethod(targetClass, method, annotation);
             } catch (BeanInitializationException bie) {

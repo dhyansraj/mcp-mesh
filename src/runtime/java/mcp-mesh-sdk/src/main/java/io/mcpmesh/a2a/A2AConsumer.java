@@ -83,8 +83,15 @@ public @interface A2AConsumer {
      * <p>Supports Spring property placeholders, e.g.
      * {@code "${weather.a2a.url}"}, resolved against the Spring
      * {@code Environment} at boot.
+     *
+     * <p>Defaults to {@code ""} so that class files compiled against the
+     * pre-#923 marker-only annotation continue to load — the runtime
+     * surfaces a clear migration error in
+     * {@link io.mcpmesh.spring.A2AConsumerBeanPostProcessor} when the
+     * resolved value is blank, instead of throwing an opaque
+     * {@code IncompleteAnnotationException} at reflection time.
      */
-    String url();
+    String url() default "";
 
     /**
      * Optional: A2A skill ID. Defaults to the surrounding

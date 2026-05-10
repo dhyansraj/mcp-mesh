@@ -9,6 +9,7 @@ import io.mcpmesh.MeshJob;
 import io.mcpmesh.MeshJobSubmitter;
 import io.mcpmesh.Param;
 import io.mcpmesh.a2a.A2AClient;
+import io.mcpmesh.a2a.A2AConsumer;
 import io.mcpmesh.core.MeshCore;
 import io.mcpmesh.spring.tracing.ExecutionTracer;
 import io.mcpmesh.spring.tracing.SpanScope;
@@ -244,6 +245,17 @@ public class MeshToolWrapper implements McpToolHandler {
                 // exactly-one at boot, but the wrapper rejects defensively
                 // in case the wrapper is constructed without going through
                 // it (e.g. unit tests).
+                if (!method.isAnnotationPresent(A2AConsumer.class)) {
+                    // An A2AClient parameter without @A2AConsumer has no
+                    // upstream URL/auth/timeout to bind to — the dispatch
+                    // wrapper would silently inject null and the user
+                    // method would NPE on the first call. Fail BOOT, not
+                    // runtime, so the misuse is visible immediately.
+                    throw new IllegalStateException(
+                        "MeshTool method " + method.getName() + " has an A2AClient parameter "
+                            + "but is not annotated with @A2AConsumer. A2AClient injection requires "
+                            + "@A2AConsumer to declare the upstream URL + auth config (issue #923).");
+                }
                 if (a2aClientParamIndex != null) {
                     throw new IllegalStateException(
                         "Method " + method.getName() + " declares more than one A2AClient parameter; "

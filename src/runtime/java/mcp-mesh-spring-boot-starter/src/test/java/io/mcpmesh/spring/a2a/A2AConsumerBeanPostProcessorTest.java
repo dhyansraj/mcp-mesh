@@ -4,13 +4,17 @@ import io.mcpmesh.MeshTool;
 import io.mcpmesh.a2a.A2AClient;
 import io.mcpmesh.a2a.A2AConsumer;
 import io.mcpmesh.spring.A2AConsumerBeanPostProcessor;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.BeanInitializationException;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.mock.env.MockEnvironment;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -55,6 +59,24 @@ class A2AConsumerBeanPostProcessorTest {
         @MeshTool(capability = "broken-timeout")
         @A2AConsumer(url = "http://x", timeoutSeconds = 0)
         public String brokenTimeout(A2AClient a2a) {
+            return "x";
+        }
+    }
+
+    public static class NegativeTimeoutBean {
+        @MeshTool(capability = "neg-timeout")
+        @A2AConsumer(url = "http://x", timeoutSeconds = -1)
+        public String negTimeout(A2AClient a2a) {
+            return "x";
+        }
+    }
+
+    public static class NoMeshToolBean {
+        // @A2AConsumer without @MeshTool — must be a no-op (skipped by
+        // the post-processor) so we don't construct an A2AClient that
+        // no dispatch path will ever consult.
+        @A2AConsumer(url = "http://x", skillId = "skill")
+        public String orphan(A2AClient a2a) {
             return "x";
         }
     }
@@ -119,17 +141,6 @@ class A2AConsumerBeanPostProcessorTest {
         }
     }
 
-    public static class BlankSkillAndBlankCapabilityBean {
-        // No @MeshTool annotation at all AND no @A2AConsumer skillId —
-        // must fail fast at boot rather than caching an empty skillId.
-        // (@MeshTool's capability() has no default, so the only path to
-        // a missing capability fallback is the missing-@MeshTool case.)
-        @A2AConsumer(url = "http://x/agents/y")
-        public String noSkill(A2AClient a2a) {
-            return "x";
-        }
-    }
-
     public static class ResolvedToBlankUrlBean {
         // Spring property defaulted to empty string — placeholder
         // resolves successfully but yields blank url. Distinct error
@@ -165,12 +176,33 @@ class A2AConsumerBeanPostProcessorTest {
         }
     }
 
-    private static A2AConsumerBeanPostProcessor newProcessor(Environment env) {
-        return new A2AConsumerBeanPostProcessor(env);
+    // Track every processor produced via newProcessor() so the
+    // @AfterEach cleanup hook can shutdown() each one. Each A2AClient
+    // owns a JDK HttpClient + selector thread pool; without explicit
+    // shutdown the pools accumulate across tests and risk an FD leak
+    // on long suites (CodeRabbit Fix 6).
+    private final List<A2AConsumerBeanPostProcessor> processors = new ArrayList<>();
+
+    private A2AConsumerBeanPostProcessor newProcessor(Environment env) {
+        A2AConsumerBeanPostProcessor proc = new A2AConsumerBeanPostProcessor(env);
+        processors.add(proc);
+        return proc;
     }
 
-    private static A2AConsumerBeanPostProcessor newProcessor() {
+    private A2AConsumerBeanPostProcessor newProcessor() {
         return newProcessor(new StandardEnvironment());
+    }
+
+    @AfterEach
+    void cleanupProcessors() {
+        for (A2AConsumerBeanPostProcessor proc : processors) {
+            try {
+                proc.shutdown();
+            } catch (Exception ignored) {
+                // best-effort cleanup
+            }
+        }
+        processors.clear();
     }
 
     // -------- Validation --------
@@ -202,10 +234,18 @@ class A2AConsumerBeanPostProcessorTest {
     @Test
     void boot_failsWhenTimeoutZeroOrNegative() {
         A2AConsumerBeanPostProcessor proc = newProcessor();
-        BeanInitializationException ex = assertThrows(BeanInitializationException.class,
+        BeanInitializationException ex1 = assertThrows(BeanInitializationException.class,
             () -> proc.postProcessAfterInitialization(new ZeroTimeoutBean(), "zero"));
-        assertTrue(ex.getMessage().contains("timeoutSeconds"),
-            "must call out invalid timeout, got: " + ex.getMessage());
+        assertTrue(ex1.getMessage().contains("timeoutSeconds"),
+            "must call out invalid timeout for zero, got: " + ex1.getMessage());
+
+        // Negative timeouts take the same code path as zero (timeoutSeconds <= 0)
+        // but cover them explicitly so a future split of the validation
+        // doesn't silently drop one branch.
+        BeanInitializationException ex2 = assertThrows(BeanInitializationException.class,
+            () -> proc.postProcessAfterInitialization(new NegativeTimeoutBean(), "negative"));
+        assertTrue(ex2.getMessage().contains("timeoutSeconds"),
+            "must call out invalid timeout for negative, got: " + ex2.getMessage());
     }
 
     @Test
@@ -224,6 +264,20 @@ class A2AConsumerBeanPostProcessorTest {
             () -> proc.postProcessAfterInitialization(new TwoClientParamsBean(), "two"));
         assertTrue(ex.getMessage().contains("more than one A2AClient"),
             "must reject the multi-slot signature, got: " + ex.getMessage());
+    }
+
+    @Test
+    void boot_skipsMethodWithoutMeshTool() {
+        // CodeRabbit Fix 2: an @A2AConsumer that is NOT paired with
+        // @MeshTool has nothing to bridge — the post-processor must
+        // skip it cleanly rather than construct an A2AClient that no
+        // dispatch path will ever consult.
+        A2AConsumerBeanPostProcessor proc = newProcessor();
+        proc.postProcessAfterInitialization(new NoMeshToolBean(), "orphan");
+        assertEquals(0, proc.cacheSize(),
+            "no-MeshTool method must NOT trigger A2AClient construction");
+        assertEquals(0, proc.bindings().size(),
+            "no-MeshTool method must NOT record a MethodBinding");
     }
 
     // -------- Wiring --------
@@ -281,21 +335,13 @@ class A2AConsumerBeanPostProcessorTest {
             "blank skillId must fall back to the @MeshTool capability (Python parity)");
     }
 
-    @Test
-    void boot_failsWhenBothSkillIdAndCapabilityBlank() {
-        // Fix 1: when neither @A2AConsumer(skillId) nor @MeshTool(capability)
-        // carries a value, fail fast at boot rather than caching an empty
-        // skillId and waiting for the first A2A call to fail downstream.
-        A2AConsumerBeanPostProcessor proc = newProcessor();
-        BeanInitializationException ex = assertThrows(BeanInitializationException.class,
-            () -> proc.postProcessAfterInitialization(new BlankSkillAndBlankCapabilityBean(), "noskill"));
-        assertTrue(ex.getMessage().contains("requires a non-blank"),
-            "must call out the non-blank skillId requirement, got: " + ex.getMessage());
-        assertTrue(ex.getMessage().contains("skillId"),
-            "must mention the skillId field by name, got: " + ex.getMessage());
-        assertTrue(ex.getMessage().contains("@MeshTool(capability"),
-            "must mention the capability fallback path, got: " + ex.getMessage());
-    }
+    // Note: a "blank skillId AND blank @MeshTool capability" scenario was
+    // previously asserted via a no-@MeshTool stub bean. With CodeRabbit
+    // Fix 2 the post-processor now early-returns for any @A2AConsumer
+    // without @MeshTool, so that scenario is no longer reachable from
+    // user code (@MeshTool.capability() has no default, so a present
+    // @MeshTool always carries a non-blank capability). The defensive
+    // validation in processConsumerMethod remains as belt-and-suspenders.
 
     @Test
     void boot_failsWhenUrlPlaceholderResolvesToBlank() {
@@ -392,6 +438,54 @@ class A2AConsumerBeanPostProcessorTest {
         assertEquals(0, proc.cacheSize(),
             "shutdown must drop cached A2AClient instances so the context can be GC'd");
         assertEquals(0, proc.bindings().size());
+    }
+
+    @Test
+    void shutdown_closesEachCachedA2AClient() throws Exception {
+        // CodeRabbit Fix 5: clearing the cache map is necessary but not
+        // sufficient — each cached A2AClient holds an HttpClient with
+        // its own selector + worker pool, and AutoCloseable.close() is
+        // the public lifecycle signal. Verify shutdown() actually flips
+        // the `closed` flag on every cached instance, not just drops
+        // them on the floor for the GC to (eventually) reach.
+        //
+        // A2AClient is `final`, so subclassing is impossible; we read
+        // the production `closed` field via reflection — which has the
+        // upside that this test covers the real production close path,
+        // not a test-double surrogate.
+        A2AConsumerBeanPostProcessor proc = newProcessor();
+        proc.postProcessAfterInitialization(new TwoMethodsDifferentConfigBean(), "diff");
+        assertEquals(2, proc.cacheSize(),
+            "two distinct configs should populate two cache entries before shutdown");
+
+        // Snapshot the cached clients before shutdown drops the map.
+        Method m1 = TwoMethodsDifferentConfigBean.class.getMethod("first", A2AClient.class);
+        Method m2 = TwoMethodsDifferentConfigBean.class.getMethod("second", A2AClient.class);
+        A2AClient client1 = proc.bindingFor(m1).client();
+        A2AClient client2 = proc.bindingFor(m2).client();
+        assertNotSame(client1, client2,
+            "two different urls must yield two distinct cached clients");
+        assertFalse(readClosedFlag(client1), "client1 must start un-closed");
+        assertFalse(readClosedFlag(client2), "client2 must start un-closed");
+
+        proc.shutdown();
+
+        assertTrue(readClosedFlag(client1),
+            "shutdown() must call close() on every cached A2AClient — client1 leaked");
+        assertTrue(readClosedFlag(client2),
+            "shutdown() must call close() on every cached A2AClient — client2 leaked");
+    }
+
+    /**
+     * Read the package-private {@code closed} flag on an {@link A2AClient}
+     * via reflection. The field is set by {@link A2AClient#close()}; reading
+     * it lets us verify the close path ran without subclassing the final
+     * class. Used by {@link #shutdown_closesEachCachedA2AClient()}.
+     */
+    private static boolean readClosedFlag(A2AClient client) throws Exception {
+        Field f = A2AClient.class.getDeclaredField("closed");
+        f.setAccessible(true);
+        return f.getBoolean(client);
     }
 
     // -------- Task=true wiring (uc27 tc04 regression cover) --------
