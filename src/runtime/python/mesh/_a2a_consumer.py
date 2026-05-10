@@ -114,11 +114,22 @@ class A2AClient:
         return h
 
     async def _post_jsonrpc(
-        self, method: str, params: dict[str, Any], rpc_id: int = 1
+        self,
+        method: str,
+        params: dict[str, Any],
+        rpc_id: int = 1,
+        request_timeout: Any = httpx.USE_CLIENT_DEFAULT,
     ) -> dict[str, Any]:
         client = await self._http()
         envelope = {"jsonrpc": "2.0", "id": rpc_id, "method": method, "params": params}
-        resp = await client.post(self.url, headers=self._headers(), json=envelope)
+        # Default sentinel preserves the AsyncClient construction-time timeout
+        # for callers that don't pass an override (passing `None` to httpx
+        # would disable the timeout entirely, not fall back to the default).
+        # send() passes the per-call remaining-deadline so individual calls
+        # (initial tasks/send + each tasks/get poll) honor the user override.
+        resp = await client.post(
+            self.url, headers=self._headers(), json=envelope, timeout=request_timeout
+        )
         resp.raise_for_status()
         body = resp.json()
         if "error" in body:
@@ -156,8 +167,12 @@ class A2AClient:
         if task_id is None:
             task_id = f"c-{uuid.uuid4().hex}"
 
+        remaining = max(0.001, deadline - time.monotonic())
         result = await self._post_jsonrpc(
-            "tasks/send", {"id": task_id, "message": message}, rpc_id=1
+            "tasks/send",
+            {"id": task_id, "message": message},
+            rpc_id=1,
+            request_timeout=remaining,
         )
         state = (result.get("status") or {}).get("state", "unknown")
 
@@ -167,8 +182,12 @@ class A2AClient:
         interval = self.poll_interval
         while time.monotonic() < deadline:
             await asyncio.sleep(interval)
+            remaining = max(0.001, deadline - time.monotonic())
             result = await self._post_jsonrpc(
-                "tasks/get", {"id": task_id}, rpc_id=2
+                "tasks/get",
+                {"id": task_id},
+                rpc_id=2,
+                request_timeout=remaining,
             )
             state = (result.get("status") or {}).get("state", "unknown")
             if state in ("completed", "failed", "canceled"):
@@ -183,7 +202,7 @@ class A2AClient:
     def _build_response(self, task_id: str, result: dict[str, Any]) -> A2AResponse:
         artifacts = result.get("artifacts") or []
         artifact_text = ""
-        if artifacts:
+        if artifacts and isinstance(artifacts[0], dict):
             parts = artifacts[0].get("parts") or []
             if parts and isinstance(parts[0], dict):
                 artifact_text = parts[0].get("text", "")

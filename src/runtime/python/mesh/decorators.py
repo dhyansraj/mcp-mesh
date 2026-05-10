@@ -26,6 +26,11 @@ _runtime_processor: Any | None = None
 # Shared agent ID for all functions in the same process
 _SHARED_AGENT_ID: str | None = None
 
+# Sentinel placeholder used by @mesh.a2a_consumer to mark tags that should
+# be substituted with the surrounding @mesh.agent name once it is known.
+# See _resolve_pending_consumer_self_tags below.
+_MESH_CONSUMER_SELF_SENTINEL = "__MESH_CONSUMER_SELF__"
+
 
 def _find_available_port() -> int:
     """
@@ -2116,6 +2121,9 @@ def a2a_consumer(
     user_tags = list(tags) if tags is not None else []
 
     def decorator(target: T) -> T:
+        # Coupled with the marker-propagation try/except at the bottom of this
+        # decorator — that block copies _mesh_a2a_consumer_metadata onto the DI
+        # wrapper returned by tool() so this guard catches re-decoration.
         if hasattr(target, "_mesh_a2a_consumer_metadata"):
             raise RuntimeError(
                 f"@mesh.a2a_consumer({capability!r}): function {target.__name__!r} is already "
@@ -2213,6 +2221,10 @@ def a2a_consumer(
         # ``tool()`` returns the DI wrapper; copy the consumer markers
         # across so post-substitution can find them via the registry's
         # stored function reference too.
+        # Propagate the consumer markers onto the DI wrapper returned by tool() —
+        # the registry stores the wrapper, not bridge, AND the double-decoration
+        # guard at the top of this decorator depends on these attributes being
+        # observable via hasattr(target, ...).
         try:
             wrapped._mesh_a2a_consumer_metadata = bridge._mesh_a2a_consumer_metadata
             wrapped._mesh_a2a_consumer_client = bridge._mesh_a2a_consumer_client
@@ -2223,9 +2235,6 @@ def a2a_consumer(
         return wrapped
 
     return decorator
-
-
-_MESH_CONSUMER_SELF_SENTINEL = "__MESH_CONSUMER_SELF__"
 
 
 def _resolve_pending_consumer_self_tags(agent_name: str) -> None:
@@ -2241,13 +2250,10 @@ def _resolve_pending_consumer_self_tags(agent_name: str) -> None:
     if not agent_name:
         return
 
-    def _swap(tag_list: list[str]) -> bool:
-        changed = False
+    def _swap(tag_list: list[str]) -> None:
         for i, t in enumerate(tag_list):
             if t == _MESH_CONSUMER_SELF_SENTINEL:
                 tag_list[i] = agent_name
-                changed = True
-        return changed
 
     registry_tools = DecoratorRegistry.get_mesh_tools()
     for decorated in registry_tools.values():

@@ -103,8 +103,8 @@ test:
 assertions:
   - expr: "${captured.agent_list} contains 'system-agent'"
     message: "system-agent should be registered"
-  - expr: "${captured.agent_list} contains 'date'"
-    message: "date-a2a-agent should be registered (name carries 'date')"
+  - expr: "${captured.agent_list} contains 'date-a2a-agent'"
+    message: "date-a2a-agent should be registered (meshctl derives the name from the source filename)"
   - expr: "${captured.agent_list} contains 'date-consumer'"
     message: "consumer-date-agent should be registered as 'date-consumer'"
 
@@ -117,12 +117,16 @@ assertions:
   - expr: "${captured.agents_response} contains '\"current-date\"'"
     message: "consumer should publish the current-date capability"
 
-  # BOTH tags must appear: the user-supplied a2a-bridge AND the
-  # auto-injected consumer-name (date-consumer). These substrings are
-  # unique enough in the response to assert against directly.
-  - expr: "${captured.agents_response} contains '\"a2a-bridge\"'"
+  # BOTH tags must appear scoped to the current-date capability under
+  # the date-consumer agent. We use the ${jq:captured.X:filter} operator
+  # (see uc02 tc22 / uc12 tc09 for the established pattern) to extract
+  # exactly the current-date capability's tags array — looser substring
+  # asserts on the raw response can pass even if the consumer-name tag
+  # injection didn't fire, since "date-consumer" also appears as the
+  # agent's name field.
+  - expr: "${jq:captured.agents_response:[.agents[] | select(.name==\"date-consumer\") | .capabilities[]? | select(.name==\"current-date\") | .tags[]]} contains 'a2a-bridge'"
     message: "current-date capability should carry the user-supplied a2a-bridge tag"
-  - expr: "${captured.agents_response} contains '\"date-consumer\"'"
+  - expr: "${jq:captured.agents_response:[.agents[] | select(.name==\"date-consumer\") | .capabilities[]? | select(.name==\"current-date\") | .tags[]]} contains 'date-consumer'"
     message: "current-date capability should carry the auto-injected consumer-name tag"
 
   # Defensive: the sentinel literal MUST NOT leak into anything the
