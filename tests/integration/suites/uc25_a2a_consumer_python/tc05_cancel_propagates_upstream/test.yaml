@@ -162,8 +162,8 @@ assertions:
 
   # The mesh job MUST end as cancelled, not completed — proves the
   # bridge actually aborted the work before natural finish (~16s).
-  - expr: "${captured.final_status} contains '\"cancelled\"'"
-    message: "final mesh job status should be cancelled"
+  - expr: "${captured.final_status} contains '\"status\": \"cancelled\"'"
+    message: "final mesh job status field should equal cancelled"
 
   # Belt-and-suspenders: the status FIELD itself must not be completed.
   # (The response payload also serialises completed_at and similar

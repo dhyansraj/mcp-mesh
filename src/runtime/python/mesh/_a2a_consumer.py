@@ -189,7 +189,7 @@ class A2AClient:
         )
         state = (result.get("status") or {}).get("state", "unknown")
 
-        if state in ("completed", "failed", "canceled"):
+        if _is_terminal(state):
             return self._build_response(task_id, result)
 
         interval = self.poll_interval
@@ -203,7 +203,7 @@ class A2AClient:
                 request_timeout=remaining,
             )
             state = (result.get("status") or {}).get("state", "unknown")
-            if state in ("completed", "failed", "canceled"):
+            if _is_terminal(state):
                 return self._build_response(task_id, result)
             interval = min(self.poll_interval_max, interval * 1.5)
 
@@ -598,7 +598,17 @@ class A2AJob:
             # Propagate the cancel upstream so the remote producer stops
             # billing for the work, then re-raise as A2AJobCanceled so
             # the @mesh.tool wrapper records a canceled outcome.
-            await self.cancel(reason="mesh-side cancel")
+            #
+            # Shield the upstream cancel POST so a parent re-cancel doesn't
+            # interrupt it mid-flight — the remote producer must observe the
+            # cancel even if our own task gets cancelled again.
+            try:
+                await asyncio.shield(self.cancel(reason="mesh-side cancel"))
+            except asyncio.CancelledError:
+                # If our own task is cancelled while shield is propagating
+                # the inner cancel-result, swallow — the inner POST still
+                # ran (shield protects it) so the upstream is notified.
+                pass
             raise A2AJobCanceled(
                 f"A2A task {self.task_id} canceled by mesh-side request"
             )
