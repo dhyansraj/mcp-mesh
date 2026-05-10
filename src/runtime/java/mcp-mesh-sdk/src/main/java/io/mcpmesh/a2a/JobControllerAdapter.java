@@ -24,6 +24,10 @@ interface JobControllerAdapter {
      * adapter ever constructed by production code paths.
      */
     static JobControllerAdapter wrap(JobController controller) {
+        if (controller == null) {
+            throw new NullPointerException(
+                "JobControllerAdapter.wrap: controller must be non-null");
+        }
         return new JobControllerAdapter() {
             @Override
             public void updateProgress(double progress, String message) {

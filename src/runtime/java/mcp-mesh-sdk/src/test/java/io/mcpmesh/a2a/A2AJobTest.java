@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -359,6 +360,78 @@ class A2AJobTest {
                 "bridge MUST preserve the original native failure as the cause");
             assertTrue(thrown.getMessage().contains("isCancelled"),
                 "exception should mention isCancelled() failure: " + thrown.getMessage());
+        }
+    }
+
+    @Test
+    void bridge_sleepInterrupted_throwsJobCanceledException() throws Exception {
+        // Producer always returns state=working so the bridge enters the
+        // polling loop and stays there. Once the bridge thread is asleep
+        // between polls we Thread.interrupt() it: bridge() MUST surface
+        // an A2AJobCanceledException (with the original InterruptedException
+        // as the cause) AND best-effort POST tasks/cancel upstream so the
+        // producer stops billing for work whose result we'll never observe.
+        AtomicBoolean cancelPosted = new AtomicBoolean(false);
+        mount("/agents/test", ex -> {
+            String body = readBody(ex);
+            if (body.contains("tasks/cancel")) {
+                cancelPosted.set(true);
+                respond(ex, 200, """
+                    {"jsonrpc":"2.0","id":3,"result":{
+                      "status":{"state":"canceled"},
+                      "artifacts":[]
+                    }}
+                    """);
+                return;
+            }
+            respond(ex, 200, """
+                {"jsonrpc":"2.0","id":2,"result":{
+                  "status":{"state":"working"},
+                  "artifacts":[]
+                }}
+                """);
+        });
+
+        JobControllerAdapter neverCancels = new JobControllerAdapter() {
+            @Override
+            public void updateProgress(double progress, String message) {
+                // unused
+            }
+
+            @Override
+            public boolean isCancelled() {
+                return false;
+            }
+        };
+
+        try (A2AClient client = new A2AClient(url(), "demo")) {
+            A2AJob job = client.submit(Map.of("role", "user", "parts", List.of()));
+            AtomicReference<Throwable> caught = new AtomicReference<>();
+            Thread bridgeThread = new Thread(() -> {
+                try {
+                    job.bridgeInternal(neverCancels);
+                    caught.set(new AssertionError("expected A2AJobCanceledException"));
+                } catch (Throwable t) {
+                    caught.set(t);
+                }
+            }, "bridge-interrupt-test");
+            bridgeThread.start();
+            // Give the bridge time to enter the sleep between polls (default
+            // poll interval is 500ms).
+            Thread.sleep(800);
+            bridgeThread.interrupt();
+            bridgeThread.join(5000);
+            assertFalse(bridgeThread.isAlive(), "bridge thread should have terminated");
+            Throwable thrown = caught.get();
+            assertNotNull(thrown, "bridge thread should have produced an exception");
+            assertInstanceOf(A2AJobCanceledException.class, thrown,
+                "bridge MUST throw A2AJobCanceledException on local interrupt, got: " + thrown);
+            assertNotNull(thrown.getCause(),
+                "A2AJobCanceledException MUST preserve the original cause");
+            assertInstanceOf(InterruptedException.class, thrown.getCause(),
+                "cause MUST be the InterruptedException, got: " + thrown.getCause());
+            assertTrue(cancelPosted.get(),
+                "bridge MUST POST tasks/cancel upstream when interrupted locally");
         }
     }
 

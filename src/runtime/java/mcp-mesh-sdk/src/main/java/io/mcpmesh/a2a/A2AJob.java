@@ -224,7 +224,30 @@ public final class A2AJob {
                 return terminalToArtifactOrThrow(result);
             }
 
-            sleepInterruptibly(intervalMs);
+            try {
+                sleepInterruptibly(intervalMs);
+            } catch (A2AJobFailedException e) {
+                // Local thread interrupt during the bridge sleep. Mirror Python's
+                // CancelledError handling — the user intent was "stop this work",
+                // which means the upstream A2A task should be canceled too.
+                // Clear the interrupt flag for the duration of the upstream
+                // cancel POST — Java's HttpClient.send() refuses to run on an
+                // interrupted thread (throws InterruptedException immediately),
+                // and we need this best-effort cancel to actually reach the
+                // upstream producer. Restore the flag before throwing so the
+                // caller still observes the interrupted state.
+                boolean wasInterrupted = Thread.interrupted();
+                try {
+                    propagateCancelUpstream("local interrupt");
+                } finally {
+                    if (wasInterrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                throw new A2AJobCanceledException(
+                    "A2A task " + taskId + " interrupted by local thread cancel",
+                    e.getCause());
+            }
             // Re-check cancel right after the sleep — a long sleep
             // could let the controller flip to cancelled while we
             // were waiting. Without this, the loop would issue one

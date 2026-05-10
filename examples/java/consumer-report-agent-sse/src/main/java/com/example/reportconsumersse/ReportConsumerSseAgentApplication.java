@@ -84,8 +84,11 @@ public class ReportConsumerSseAgentApplication {
     @A2AConsumer
     public Object generateReportSse(
             @Param("user_id") String userId,
-            @Param("sections") List<String> sections,
+            @Param(value = "sections", required = false) List<String> sections,
             MeshJob job) throws Exception {
+        if (sections == null || sections.isEmpty()) {
+            sections = List.of("default");
+        }
         Map<String, Object> message = buildMessage(userId, sections);
         if (!(job instanceof JobController controller)) {
             // Fast-path tools/call (no X-Mesh-Job-Id header) — drain
@@ -109,7 +112,7 @@ public class ReportConsumerSseAgentApplication {
                 if (event.kind() == io.mcpmesh.a2a.A2AEvent.Kind.ARTIFACT) {
                     String text = event.artifactText();
                     if (text == null || text.isEmpty()) {
-                        return text == null ? "" : text;
+                        continue;     // skip empty/null, look for the next artifact
                     }
                     try {
                         return JSON.readValue(text, Object.class);

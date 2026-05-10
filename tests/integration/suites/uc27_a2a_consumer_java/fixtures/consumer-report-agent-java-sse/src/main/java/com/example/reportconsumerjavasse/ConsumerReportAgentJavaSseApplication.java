@@ -79,7 +79,7 @@ public class ConsumerReportAgentJavaSseApplication {
                 if (event.kind() == A2AEvent.Kind.ARTIFACT) {
                     String text = event.artifactText();
                     if (text == null || text.isEmpty()) {
-                        return text == null ? "" : text;
+                        continue;     // skip empty/null, look for the next artifact
                     }
                     try {
                         return JSON.readValue(text, Object.class);

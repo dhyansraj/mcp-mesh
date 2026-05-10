@@ -8,6 +8,7 @@ import io.mcpmesh.Param;
 import io.mcpmesh.a2a.A2AClient;
 import io.mcpmesh.a2a.A2AConsumer;
 import io.mcpmesh.a2a.A2AJob;
+import io.mcpmesh.a2a.A2AResponse;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -118,15 +119,29 @@ public class ReportConsumerAgentApplication {
     @A2AConsumer
     public Object generateReport(
             @Param("user_id") String userId,
-            @Param("sections") List<String> sections,
+            @Param(value = "sections", required = false) List<String> sections,
             MeshJob job) throws Exception {
+        if (sections == null || sections.isEmpty()) {
+            sections = List.of("default");
+        }
+        Map<String, Object> message = buildMessage(userId, sections);
         if (!(job instanceof JobController controller)) {
             // Fast-path tools/call (no X-Mesh-Job-Id header) — synchronous
             // send + return without bridging. Matches the producer-side
             // contract where task=true tools must tolerate a null MeshJob.
-            return A2A_CLIENT.send(buildMessage(userId, sections));
+            // Mirror the SSE sibling: parse the artifact text as JSON when
+            // possible, fall back to raw text on parse failure.
+            A2AResponse response = A2A_CLIENT.send(message);
+            String text = response.artifactText();
+            if (text == null || text.isEmpty()) {
+                return text == null ? "" : text;
+            }
+            try {
+                return JSON.readValue(text, Object.class);
+            } catch (Exception parseExc) {
+                return text;
+            }
         }
-        Map<String, Object> message = buildMessage(userId, sections);
         A2AJob a2aJob = A2A_CLIENT.submit(message);
         return a2aJob.bridge(controller);
     }

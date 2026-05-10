@@ -8,6 +8,7 @@ import io.mcpmesh.Param;
 import io.mcpmesh.a2a.A2AClient;
 import io.mcpmesh.a2a.A2AConsumer;
 import io.mcpmesh.a2a.A2AJob;
+import io.mcpmesh.a2a.A2AResponse;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import tools.jackson.databind.ObjectMapper;
@@ -63,7 +64,16 @@ public class ConsumerReportAgentJavaApplication {
         }
         Map<String, Object> message = buildMessage(userId, sections);
         if (!(job instanceof JobController controller)) {
-            return A2A_CLIENT.send(message);
+            A2AResponse response = A2A_CLIENT.send(message);
+            String text = response.artifactText();
+            if (text == null || text.isEmpty()) {
+                return text == null ? "" : text;
+            }
+            try {
+                return JSON.readValue(text, Object.class);
+            } catch (Exception parseExc) {
+                return text;
+            }
         }
         A2AJob a2aJob = A2A_CLIENT.submit(message);
         return a2aJob.bridge(controller);
