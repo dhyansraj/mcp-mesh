@@ -33,11 +33,11 @@ public final class A2ABearer {
     /**
      * Use a literal bearer token.
      *
-     * @param token the bearer credential, must be non-null and non-empty
+     * @param token the bearer credential, must be non-null and non-blank
      */
     public static A2ABearer of(String token) {
-        if (token == null || token.isEmpty()) {
-            throw new IllegalArgumentException("A2ABearer.of: token must be non-empty");
+        if (token == null || token.trim().isEmpty()) {
+            throw new IllegalArgumentException("A2ABearer.of: token must be non-blank");
         }
         return new A2ABearer(token, null);
     }
@@ -46,11 +46,11 @@ public final class A2ABearer {
      * Resolve the bearer token from the named environment variable on
      * each call.
      *
-     * @param envVar the environment variable name, must be non-null and non-empty
+     * @param envVar the environment variable name, must be non-null and non-blank
      */
     public static A2ABearer fromEnv(String envVar) {
-        if (envVar == null || envVar.isEmpty()) {
-            throw new IllegalArgumentException("A2ABearer.fromEnv: envVar must be non-empty");
+        if (envVar == null || envVar.trim().isEmpty()) {
+            throw new IllegalArgumentException("A2ABearer.fromEnv: envVar must be non-blank");
         }
         return new A2ABearer(null, envVar);
     }
@@ -61,14 +61,14 @@ public final class A2ABearer {
      * @return the {@code Bearer <token>} string suitable for
      *         {@code Authorization} headers.
      * @throws A2AAuthException if neither the literal token nor the
-     *         configured env var resolves to a non-empty value.
+     *         configured env var resolves to a non-blank value.
      */
     public String authorizationHeader() {
         String resolved = token;
         if (resolved == null && tokenEnv != null) {
             resolved = System.getenv(tokenEnv);
         }
-        if (resolved == null || resolved.isEmpty()) {
+        if (resolved == null || resolved.trim().isEmpty()) {
             throw new A2AAuthException(
                 "A2ABearer: no token available (token_env="
                     + (tokenEnv == null ? "<unset>" : "'" + tokenEnv + "'")

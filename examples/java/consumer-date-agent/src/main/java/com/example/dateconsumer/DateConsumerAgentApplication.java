@@ -5,6 +5,7 @@ import io.mcpmesh.MeshTool;
 import io.mcpmesh.a2a.A2AClient;
 import io.mcpmesh.a2a.A2AConsumer;
 import io.mcpmesh.a2a.A2AResponse;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
@@ -108,5 +109,16 @@ public class DateConsumerAgentApplication {
         @SuppressWarnings("unchecked")
         Map<String, Object> payload = JSON.readValue(response.artifactText(), Map.class);
         return payload;
+    }
+
+    // On JDK 17 close() is cosmetic (see A2AClient Javadoc); JDK 21+ honors the AutoCloseable contract. Demonstrates proper lifecycle hygiene either way.
+    @PreDestroy
+    void releaseA2AClient() {
+        try {
+            A2A_CLIENT.close();
+        } catch (Exception e) {
+            // Best-effort — log but don't fail shutdown.
+            log.warn("Failed to close A2AClient during shutdown", e);
+        }
     }
 }

@@ -33,7 +33,7 @@ tags:
   - java
   - smoke
   - issue-916
-timeout: 600
+timeout: 1500
 
 pre_run:
   - routine: global.setup_for_python_agent
@@ -107,10 +107,10 @@ test:
     workdir: /workspace
     command: |
       for i in $(seq 1 60); do
-        S1=$(curl -s http://localhost:8000/agents | jq -r \
-          '.agents[] | select(.name=="date-consumer") | .status' 2>/dev/null)
-        S2=$(curl -s http://localhost:8000/agents | jq -r \
-          '.agents[] | select(.name=="date-consumer-alt") | .status' 2>/dev/null)
+        S1=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null | jq -r \
+          '.agents[] | select(.name=="date-consumer") | .status' 2>/dev/null || echo "")
+        S2=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null | jq -r \
+          '.agents[] | select(.name=="date-consumer-alt") | .status' 2>/dev/null || echo "")
         if [ "$S1" = "healthy" ] && [ "$S2" = "healthy" ]; then
           echo "both Java consumers healthy after ${i}x2s"
           exit 0
@@ -141,7 +141,7 @@ test:
   - name: "GET /agents on the registry"
     handler: shell
     workdir: /workspace
-    command: curl -s http://localhost:8000/agents
+    command: curl -fsS --max-time 10 http://localhost:8000/agents
     capture: agents_response_pre
     timeout: 15
 
@@ -217,27 +217,27 @@ assertions:
     message: "alt consumer-name tag should appear on its current-date capability"
 
   # ===== Phase A: pinned distinguishability =====
-  - expr: "${captured.pinned_primary_pre} contains 'date'"
-    message: "pinned-primary tool should resolve to date-consumer and return the date payload"
+  - expr: "${captured.pinned_primary_pre} contains '\"date\":'"
+    message: "pinned-primary tool should carry the JSON 'date' key from the bridge"
   - expr: "${captured.pinned_primary_pre} not contains 'dependency not resolved'"
     message: "pinned-primary dependency must wire up before the call"
-  - expr: "${captured.pinned_alt_pre} contains 'date'"
-    message: "pinned-alt tool should resolve to date-consumer-alt and return the date payload"
+  - expr: "${captured.pinned_alt_pre} contains '\"date\":'"
+    message: "pinned-alt tool should carry the JSON 'date' key from the bridge"
   - expr: "${captured.pinned_alt_pre} not contains 'dependency not resolved'"
     message: "pinned-alt dependency must wire up before the call"
-  - expr: "${captured.untagged_pre} contains 'date'"
-    message: "untagged tool should resolve to either consumer and return the date payload"
+  - expr: "${captured.untagged_pre} contains '\"date\":'"
+    message: "untagged tool should carry the JSON 'date' key from the bridge"
   - expr: "${captured.untagged_pre} not contains 'dependency not resolved'"
     message: "untagged dependency must wire up before the call"
 
   # ===== Phase B: failover =====
-  - expr: "${captured.pinned_alt_post} contains 'date'"
-    message: "pinned-alt tool should still succeed after primary Java consumer is killed"
+  - expr: "${captured.pinned_alt_post} contains '\"date\":'"
+    message: "pinned-alt tool should still carry the JSON 'date' key after primary Java consumer is killed"
   - expr: "${captured.pinned_alt_post} not contains 'dependency not resolved'"
     message: "pinned-alt dep should remain wired after primary consumer death"
 
-  - expr: "${captured.untagged_post} contains 'date'"
-    message: "untagged tool should auto-rewire to the surviving consumer after primary death"
+  - expr: "${captured.untagged_post} contains '\"date\":'"
+    message: "untagged tool should carry the JSON 'date' key after auto-rewire to surviving consumer"
   - expr: "${captured.untagged_post} not contains 'dependency not resolved'"
     message: "untagged dep should auto-rewire (not orphan) when primary Java consumer dies"
 

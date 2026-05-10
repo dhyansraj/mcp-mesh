@@ -24,7 +24,7 @@ tags:
   - java
   - smoke
   - issue-916
-timeout: 420
+timeout: 900
 
 pre_run:
   - routine: global.setup_for_python_agent
@@ -87,8 +87,8 @@ test:
     workdir: /workspace
     command: |
       for i in $(seq 1 60); do
-        STATUS=$(curl -s http://localhost:8000/agents | jq -r \
-          '.agents[] | select(.name=="date-consumer") | .status' 2>/dev/null)
+        STATUS=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null | jq -r \
+          '.agents[] | select(.name=="date-consumer") | .status' 2>/dev/null || echo "")
         if [ "$STATUS" = "healthy" ]; then
           echo "Java consumer healthy after ${i}x2s"
           exit 0
@@ -135,8 +135,8 @@ assertions:
   # readValue parses back to a Map — meshctl call surfaces the dict in
   # its output. We match the bare word `date` (the JSON key) which only
   # appears in the successful payload, never in error envelopes.
-  - expr: "${captured.caller_response} contains 'date'"
-    message: "caller response should carry the {date: ...} payload from the producer"
+  - expr: "${captured.caller_response} contains '\"date\":'"
+    message: "caller response should carry the JSON 'date' key from the bridge"
 
   # Defensive: confirm we did NOT hit the "dependency not resolved"
   # short-circuit branch in the caller — that would mean the

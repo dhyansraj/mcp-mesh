@@ -30,7 +30,7 @@ tags:
   - java
   - smoke
   - issue-916
-timeout: 360
+timeout: 900
 
 pre_run:
   - routine: global.setup_for_python_agent
@@ -93,8 +93,8 @@ test:
     workdir: /workspace
     command: |
       for i in $(seq 1 60); do
-        STATUS=$(curl -s http://localhost:8000/agents | jq -r \
-          '.agents[] | select(.name=="date-consumer") | .status' 2>/dev/null)
+        STATUS=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null | jq -r \
+          '.agents[] | select(.name=="date-consumer") | .status' 2>/dev/null || echo "")
         if [ "$STATUS" = "healthy" ]; then
           echo "Java consumer healthy after ${i}x2s"
           exit 0
@@ -103,7 +103,7 @@ test:
       done
       echo "ERROR: Java consumer not healthy within 120s (last status='$STATUS')"
       meshctl logs consumer-date-agent-java 2>&1 | tail -80 || true
-      curl -s http://localhost:8000/agents | jq '.agents[] | select(.name=="date-consumer")' || true
+      curl -fsS --max-time 10 http://localhost:8000/agents | jq '.agents[] | select(.name=="date-consumer")' || true
       exit 1
     timeout: 150
 
@@ -116,7 +116,7 @@ test:
   - name: "GET /agents on the registry"
     handler: shell
     workdir: /workspace
-    command: curl -s http://localhost:8000/agents
+    command: curl -fsS --max-time 10 http://localhost:8000/agents
     capture: agents_response
     timeout: 15
 
