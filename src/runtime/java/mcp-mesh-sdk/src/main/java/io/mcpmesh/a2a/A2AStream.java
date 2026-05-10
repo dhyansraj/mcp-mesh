@@ -49,6 +49,12 @@ import java.util.NoSuchElementException;
  * {@link A2AClient#submit} + {@link A2AJob#bridge} instead, which
  * polls {@link JobController#isCancelled()} between iterations and
  * propagates upstream.
+ *
+ * <p><b>Threading:</b> SSE line parsing happens on the caller's thread.
+ * Iteration via {@code for (A2AEvent event : stream)} blocks the calling
+ * thread on each {@code next()} call while the next SSE frame is being
+ * read from the network. {@link #bridge(JobController)} likewise runs
+ * synchronously on the caller's thread until the stream terminates.
  */
 public final class A2AStream implements Iterable<A2AEvent>, AutoCloseable {
 

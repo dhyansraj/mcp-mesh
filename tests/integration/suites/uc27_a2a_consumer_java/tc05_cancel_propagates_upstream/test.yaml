@@ -149,6 +149,7 @@ test:
       JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
       meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
     capture: final_status
+    timeout: 30
 
 assertions:
   - expr: "${captured.cancel_response} contains '\"ok\": true'"

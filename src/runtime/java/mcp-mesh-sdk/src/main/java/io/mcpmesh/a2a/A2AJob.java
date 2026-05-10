@@ -198,7 +198,7 @@ public final class A2AJob {
         long maxIntervalMs = client.pollIntervalMaxMs();
 
         while (true) {
-            if (controller.isCancelled()) {
+            if (wasCancelled(controller)) {
                 propagateCancelUpstream("mesh-side cancel");
                 throw new A2AJobCanceledException(
                     "A2A task " + taskId + " canceled by mesh-side request");
@@ -229,12 +229,24 @@ public final class A2AJob {
             // could let the controller flip to cancelled while we
             // were waiting. Without this, the loop would issue one
             // more wasted tasks/get before checking again.
-            if (controller.isCancelled()) {
+            if (wasCancelled(controller)) {
                 propagateCancelUpstream("mesh-side cancel");
                 throw new A2AJobCanceledException(
                     "A2A task " + taskId + " canceled by mesh-side request");
             }
             intervalMs = Math.min(maxIntervalMs, (long) (intervalMs * A2AClient.POLL_BACKOFF_FACTOR));
+        }
+    }
+
+    private static boolean wasCancelled(JobControllerAdapter controller) {
+        try {
+            return controller.isCancelled();
+        } catch (RuntimeException exc) {
+            // Native handle invalidated, FFI failure, etc. Treat as a poll failure
+            // — bridge() contract documents A2AJobFailedException for this kind
+            // of unrecoverable runtime issue.
+            throw new A2AJobFailedException(
+                "JobController.isCancelled() failed (native handle issue?): " + exc.getMessage(), exc);
         }
     }
 
@@ -464,7 +476,7 @@ public final class A2AJob {
             Thread.sleep(ms);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new A2AException("A2AJob bridge poll loop interrupted", e);
+            throw new A2AJobFailedException("A2AJob bridge poll loop interrupted", e);
         }
     }
 

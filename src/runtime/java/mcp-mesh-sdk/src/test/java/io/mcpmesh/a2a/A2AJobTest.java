@@ -324,6 +324,45 @@ class A2AJobTest {
     }
 
     @Test
+    void bridge_isCancelledThrows_throwsJobFailedException() {
+        // Simulates the native handle being invalidated mid-poll (FFI race
+        // with PreDestroy, JNI library unload, etc.). controller.isCancelled()
+        // throws an arbitrary RuntimeException — bridge() MUST translate it
+        // to A2AJobFailedException so the documented exception contract
+        // (A2AJobFailedException / A2AJobCanceledException only) holds.
+        mount("/agents/test", ex -> respond(ex, 200, """
+            {"jsonrpc":"2.0","id":1,"result":{
+              "status":{"state":"working"},
+              "artifacts":[]
+            }}
+            """));
+
+        IllegalStateException nativeFailure =
+            new IllegalStateException("native handle invalidated");
+        JobControllerAdapter controller = new JobControllerAdapter() {
+            @Override
+            public void updateProgress(double progress, String message) {
+                // unused
+            }
+
+            @Override
+            public boolean isCancelled() {
+                throw nativeFailure;
+            }
+        };
+
+        try (A2AClient client = new A2AClient(url(), "demo")) {
+            A2AJob job = client.submit(Map.of("role", "user", "parts", List.of()));
+            A2AJobFailedException thrown = assertThrows(A2AJobFailedException.class,
+                () -> job.bridgeInternal(controller));
+            assertSame(nativeFailure, thrown.getCause(),
+                "bridge MUST preserve the original native failure as the cause");
+            assertTrue(thrown.getMessage().contains("isCancelled"),
+                "exception should mention isCancelled() failure: " + thrown.getMessage());
+        }
+    }
+
+    @Test
     void bridge_rejectsNullController() {
         mount("/agents/test", ex -> respond(ex, 200, """
             {"jsonrpc":"2.0","id":1,"result":{"status":{"state":"working"},"artifacts":[]}}
