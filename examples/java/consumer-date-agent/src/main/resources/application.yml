@@ -1,0 +1,26 @@
+# MCP Mesh A2A consumer date agent (Java) — issue #916 Phase 1.
+#
+# Mirrors examples/a2a/consumer_date_agent.py. Override at runtime via:
+#   MCP_MESH_REGISTRY_URL - Registry URL
+#   MCP_MESH_HTTP_PORT    - Agent HTTP port
+#   MCP_MESH_AGENT_NAME   - Agent name (becomes the auto-injected
+#                            consumer-name tag for @A2AConsumer tools)
+
+spring:
+  application:
+    name: consumer-date-agent
+
+server:
+  port: ${MCP_MESH_HTTP_PORT:9201}
+
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:date-consumer}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+
+logging:
+  level:
+    io.mcpmesh: INFO
+    com.example.dateconsumer: DEBUG

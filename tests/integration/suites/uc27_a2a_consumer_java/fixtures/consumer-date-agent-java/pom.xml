@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  uc27_a2a_consumer_java fixture — Java A2A consumer (issue #916 Phase 1).
+  Java port of the Python uc25 consumer-date-agent fixture; bridges the
+  same date_a2a_agent.py producer (localhost:9090/agents/date) onto the
+  mesh as the current-date capability.
+
+  Capability + auto-tag scheme matches the Python side EXACTLY so the
+  uc27 tests assert the same shape:
+      capability = "current-date"
+      tags       = ["a2a-bridge", "date-consumer"]
+  The "date-consumer" tag is auto-injected via @A2AConsumer at
+  registration time (see MeshToolRegistry.injectConsumerNameTags).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>consumer-date-agent-java</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>A2A Consumer Date Agent (uc27 Java)</name>
+    <description>uc27 Java A2A consumer fixture — bridges date_a2a_agent.py get-date as the current-date mesh capability.</description>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.6</version>
+        <relativePath/>
+    </parent>
+
+    <properties>
+        <java.version>17</java.version>
+        <mcp-mesh.version>1.4.1</mcp-mesh.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.mcp-mesh</groupId>
+            <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+            <version>${mcp-mesh.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.example.dateconsumerjava.ConsumerDateAgentApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
