@@ -26,6 +26,11 @@ _runtime_processor: Any | None = None
 # Shared agent ID for all functions in the same process
 _SHARED_AGENT_ID: str | None = None
 
+# Sentinel placeholder used by @mesh.a2a_consumer to mark tags that should
+# be substituted with the surrounding @mesh.agent name once it is known.
+# See _resolve_pending_consumer_self_tags below.
+_MESH_CONSUMER_SELF_SENTINEL = "__MESH_CONSUMER_SELF__"
+
 
 def _find_available_port() -> int:
     """
@@ -1385,6 +1390,12 @@ def agent(
         # Register with DecoratorRegistry for processor discovery
         DecoratorRegistry.register_mesh_agent(target, metadata)
 
+        # Resolve any @mesh.a2a_consumer self-tag sentinels now that we
+        # know the agent name. The convention puts @mesh.agent at the
+        # bottom of the file, so consumer decorators (above) ran first
+        # and stamped a placeholder; substitute it in-place here.
+        _resolve_pending_consumer_self_tags(name)
+
         # Trigger debounced processing
         _trigger_debounced_processing()
 
@@ -1990,6 +2001,288 @@ def a2a(
             return target
 
     return decorator
+
+
+def a2a_consumer(
+    *,
+    capability: str,
+    a2a_url: str,
+    a2a_skill_id: str | None = None,
+    tags: list[str] | None = None,
+    auth: Any | None = None,
+    version: str = "1.0.0",
+    description: str | None = None,
+    timeout: float = 30.0,
+    **kwargs: Any,
+) -> Callable[[T], T]:
+    """Bridge an external A2A v1.0 endpoint into a mesh capability (issue #908).
+
+    Wraps a user function as a regular ``@mesh.tool`` capability whose
+    body issues a synchronous ``tasks/send`` against an external A2A
+    backend. The decorator:
+
+    - Constructs a single ``A2AClient`` per decorator application (cached
+      in a closure, reused across calls).
+    - Injects the client as the ``_a2a`` keyword argument when the user
+      function declares it.
+    - Registers the capability with the surrounding ``@mesh.agent``'s
+      name automatically appended as a tag, so multiple consumer agents
+      bridging the same logical capability are distinguishable for mesh
+      capability+tag failover.
+
+    A consumer is NOT an A2A producer — registration goes through the
+    standard ``@mesh.tool`` path, not the ``api_startup`` / a2a-surface
+    pipeline.
+
+    Args:
+        capability: REQUIRED mesh capability name to register. Downstream
+            mesh tools depend on this string the same way they depend on
+            any other ``@mesh.tool`` capability.
+        a2a_url: REQUIRED full URL of the A2A endpoint (e.g.
+            ``http://host:port/agents/<skill>``).
+        a2a_skill_id: A2A skill identifier on the upstream side. Defaults
+            to ``capability`` when omitted. Recorded on the client for
+            future per-skill-discovery use; not yet sent on the wire
+            (Phase 1 only uses the URL itself).
+        tags: Extra mesh tags for the capability. The consumer agent's
+            name is automatically appended (or substituted in lazily
+            when no ``@mesh.agent`` is registered yet at decoration
+            time).
+        auth: ``A2ABearer`` instance for outbound bearer auth, or
+            ``None`` for unauthenticated calls.
+        version: Capability version (default ``"1.0.0"``).
+        description: Capability description; defaults to the function's
+            docstring.
+        timeout: Default timeout (seconds) for ``A2AClient.send`` calls
+            issued by this decorator. Per-call ``send(..., timeout=...)``
+            overrides the default.
+        **kwargs: Additional metadata stamped onto the underlying
+            ``@mesh.tool`` registration (passed through unchanged).
+
+    Returns:
+        The user function wrapped as a ``@mesh.tool``-style capability
+        with the ``A2AClient`` bound for ``_a2a`` injection.
+
+    Example:
+        @app.tool()
+        @mesh.a2a_consumer(
+            capability="current-date",
+            a2a_url="http://localhost:9090/agents/date",
+            a2a_skill_id="get-date",
+            tags=["a2a-bridge"],
+        )
+        async def current_date(_a2a: mesh.A2AClient = None) -> dict:
+            response = await _a2a.send(
+                message={"role": "user", "parts": [{"type": "text", "text": "now"}]},
+            )
+            return json.loads(response.artifact_text)
+    """
+    # Implementation lives in a private submodule (``_a2a_consumer``)
+    # so the public name ``mesh.a2a_consumer`` belongs to THIS decorator
+    # function. Importing from a public ``a2a_consumer`` submodule would
+    # set ``mesh.a2a_consumer`` to the module object as a Python import
+    # side effect, shadowing the decorator on subsequent attribute
+    # lookups in the same process.
+    from ._a2a_consumer import A2ABearer, A2AClient
+
+    if not isinstance(capability, str) or not capability:
+        raise ValueError(
+            "@mesh.a2a_consumer: 'capability' is required and must be a non-empty string"
+        )
+    if not isinstance(a2a_url, str) or not a2a_url:
+        raise ValueError(
+            "@mesh.a2a_consumer: 'a2a_url' is required and must be a non-empty string"
+        )
+    if a2a_skill_id is not None and not isinstance(a2a_skill_id, str):
+        raise ValueError("@mesh.a2a_consumer: 'a2a_skill_id' must be a string or None")
+    if auth is not None and not isinstance(auth, A2ABearer):
+        raise ValueError(
+            "@mesh.a2a_consumer: 'auth' must be a mesh.A2ABearer instance or None"
+        )
+    if tags is not None:
+        if not isinstance(tags, list):
+            raise ValueError("@mesh.a2a_consumer: 'tags' must be a list of strings")
+        for t in tags:
+            if not isinstance(t, str):
+                raise ValueError("@mesh.a2a_consumer: all tags must be strings")
+            if t == _MESH_CONSUMER_SELF_SENTINEL:
+                raise ValueError(
+                    f"@mesh.a2a_consumer: tag {_MESH_CONSUMER_SELF_SENTINEL!r} is reserved "
+                    "for the framework's consumer-name auto-injection sentinel; do not supply it explicitly"
+                )
+    if not isinstance(version, str):
+        raise ValueError("@mesh.a2a_consumer: 'version' must be a string")
+    if description is not None and not isinstance(description, str):
+        raise ValueError("@mesh.a2a_consumer: 'description' must be a string or None")
+    if not isinstance(timeout, (int, float)) or timeout <= 0:
+        raise ValueError("@mesh.a2a_consumer: 'timeout' must be a positive number")
+
+    final_skill_id = a2a_skill_id if a2a_skill_id else capability
+    user_tags = list(tags) if tags is not None else []
+
+    def decorator(target: T) -> T:
+        # Coupled with the marker-propagation try/except at the bottom of this
+        # decorator — that block copies _mesh_a2a_consumer_metadata onto the DI
+        # wrapper returned by tool() so this guard catches re-decoration.
+        if hasattr(target, "_mesh_a2a_consumer_metadata"):
+            raise RuntimeError(
+                f"@mesh.a2a_consumer({capability!r}): function {target.__name__!r} is already "
+                "decorated with @mesh.a2a_consumer; stacking the decorator orphans the inner "
+                "A2AClient. Apply @mesh.a2a_consumer exactly once per function."
+            )
+
+        # Deferred resolution of the surrounding @mesh.agent name. The
+        # convention is that @mesh.agent is the LAST decorator in the
+        # file (its auto_run blocks the importing thread), so this
+        # consumer typically runs BEFORE the agent is registered. We
+        # stamp a sentinel here and let the @mesh.agent decorator
+        # substitute the real name once it knows it (see
+        # _resolve_pending_consumer_self_tags below).
+        merged_tags = list(user_tags)
+        if _MESH_CONSUMER_SELF_SENTINEL not in merged_tags:
+            merged_tags.append(_MESH_CONSUMER_SELF_SENTINEL)
+
+        client = A2AClient(
+            url=a2a_url,
+            skill_id=final_skill_id,
+            auth=auth,
+            timeout_default=float(timeout),
+        )
+
+        # Detect whether the user function declares the ``_a2a`` parameter.
+        # We require the literal name (NOT a prefix match) — anything
+        # broader would be too magical and surprise users who name
+        # parameters starting with ``_a``.
+        import inspect as _inspect
+
+        try:
+            sig = _inspect.signature(target)
+            wants_a2a = "_a2a" in sig.parameters
+        except (TypeError, ValueError):
+            wants_a2a = False
+
+        if asyncio.iscoroutinefunction(target):
+
+            @wraps(target)
+            async def bridge(*args: Any, **call_kwargs: Any) -> Any:
+                if wants_a2a and "_a2a" not in call_kwargs:
+                    call_kwargs["_a2a"] = client
+                return await target(*args, **call_kwargs)
+
+        else:
+
+            @wraps(target)
+            def bridge(*args: Any, **call_kwargs: Any) -> Any:
+                if wants_a2a and "_a2a" not in call_kwargs:
+                    call_kwargs["_a2a"] = client
+                return target(*args, **call_kwargs)
+
+        # Hide the user's ``_a2a`` parameter from the inner @mesh.tool
+        # signature analyzer — we bind it ourselves in ``bridge`` and the
+        # DI single-parameter heuristic would otherwise log a noisy
+        # "consider typing as McpMeshTool" warning AND attempt to inject
+        # a remote-capability proxy into the slot. The user-facing
+        # signature for FastMCP / the agent card stays clean too.
+        if wants_a2a:
+            user_sig = _inspect.signature(target)
+            cleaned_params = [
+                p for name, p in user_sig.parameters.items() if name != "_a2a"
+            ]
+            bridge.__signature__ = user_sig.replace(parameters=cleaned_params)
+
+        # Stamp marker so debugging / introspection can see this is a
+        # consumer-side bridge (parallels ``_mesh_a2a_metadata`` on the
+        # producer side). ``consumer_name`` starts as the sentinel and
+        # is rewritten in-place by ``_resolve_pending_consumer_self_tags``
+        # when @mesh.agent runs.
+        bridge._mesh_a2a_consumer_metadata = {
+            "capability": capability,
+            "a2a_url": a2a_url,
+            "a2a_skill_id": final_skill_id,
+            "tags": list(merged_tags),
+            "auth": "bearer" if isinstance(auth, A2ABearer) else None,
+            "consumer_name": _MESH_CONSUMER_SELF_SENTINEL,
+        }
+        bridge._mesh_a2a_consumer_client = client
+        bridge._mesh_a2a_consumer_pending_self_tag = True
+
+        # Route through the standard @mesh.tool registration path. This
+        # is the only registration the consumer needs — heartbeat
+        # publishes capability + tags via the regular mcp_startup
+        # pipeline; no a2a_startup involvement.
+        wrapped = tool(
+            capability=capability,
+            tags=merged_tags,
+            version=version,
+            description=description,
+            **kwargs,
+        )(bridge)
+
+        # ``tool()`` returns the DI wrapper; copy the consumer markers
+        # across so post-substitution can find them via the registry's
+        # stored function reference too.
+        # Propagate the consumer markers onto the DI wrapper returned by tool() —
+        # the registry stores the wrapper, not bridge, AND the double-decoration
+        # guard at the top of this decorator depends on these attributes being
+        # observable via hasattr(target, ...).
+        try:
+            wrapped._mesh_a2a_consumer_metadata = bridge._mesh_a2a_consumer_metadata
+            wrapped._mesh_a2a_consumer_client = bridge._mesh_a2a_consumer_client
+            wrapped._mesh_a2a_consumer_pending_self_tag = True
+        except (AttributeError, TypeError):
+            pass
+
+        return wrapped
+
+    return decorator
+
+
+def _resolve_pending_consumer_self_tags(agent_name: str) -> None:
+    """Substitute the deferred consumer-name sentinel with the real
+    @mesh.agent name across all registered tools and bridge functions.
+
+    Called from the @mesh.agent decorator once the agent name is known.
+    Walks both the function-level ``_mesh_tool_metadata`` (and
+    ``_mesh_a2a_consumer_metadata``) AND the registry's stored copy,
+    because ``DecoratorRegistry.register_mesh_tool`` snapshots metadata
+    via ``.copy()`` at decoration time.
+    """
+    if not agent_name:
+        return
+
+    def _swap(tag_list: list[str]) -> None:
+        for i, t in enumerate(tag_list):
+            if t == _MESH_CONSUMER_SELF_SENTINEL:
+                tag_list[i] = agent_name
+
+    registry_tools = DecoratorRegistry.get_mesh_tools()
+    for decorated in registry_tools.values():
+        fn = decorated.function
+        if not getattr(fn, "_mesh_a2a_consumer_pending_self_tag", False):
+            continue
+
+        fn_meta = getattr(fn, "_mesh_tool_metadata", None)
+        if isinstance(fn_meta, dict):
+            tags = fn_meta.get("tags")
+            if isinstance(tags, list):
+                _swap(tags)
+
+        consumer_meta = getattr(fn, "_mesh_a2a_consumer_metadata", None)
+        if isinstance(consumer_meta, dict):
+            tags = consumer_meta.get("tags")
+            if isinstance(tags, list):
+                _swap(tags)
+            if consumer_meta.get("consumer_name") == _MESH_CONSUMER_SELF_SENTINEL:
+                consumer_meta["consumer_name"] = agent_name
+
+        registry_tags = decorated.metadata.get("tags") if isinstance(decorated.metadata, dict) else None
+        if isinstance(registry_tags, list):
+            _swap(registry_tags)
+
+        try:
+            fn._mesh_a2a_consumer_pending_self_tag = False
+        except (AttributeError, TypeError):
+            pass
 
 
 def _a2a_mount(*args: Any, **kwargs: Any):

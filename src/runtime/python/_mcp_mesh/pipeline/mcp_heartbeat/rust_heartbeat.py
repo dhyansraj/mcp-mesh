@@ -417,12 +417,29 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
         else:
             kwargs_json = None
 
+        # Defensive: if @mesh.a2a_consumer's deferred self-tag sentinel
+        # survived to heartbeat time, the @mesh.agent decorator never
+        # ran (no agent in this process). Strip the sentinel so we
+        # don't publish a placeholder string to the registry, and warn
+        # the user that capability+tag failover by consumer name won't
+        # work.
+        published_tags = tool_metadata.get("tags", []) or []
+        if "__MESH_CONSUMER_SELF__" in published_tags:
+            published_tags = [t for t in published_tags if t != "__MESH_CONSUMER_SELF__"]
+            logger.warning(
+                f"@mesh.a2a_consumer tool '{tool_name}': consumer-name self "
+                "tag was never resolved (no @mesh.agent in this process at "
+                "heartbeat time). Publishing without auto-tag — failover by "
+                "consumer-name will not work. Declare a @mesh.agent in the "
+                "same module to enable it."
+            )
+
         tool_spec = core.ToolSpec(
             function_name=tool_name,
             capability=tool_metadata.get("capability", tool_name),
             version=tool_metadata.get("version", "1.0.0"),
             description=tool_metadata.get("description") or "",
-            tags=tool_metadata.get("tags", []),
+            tags=published_tags,
             dependencies=deps if deps else None,
             input_schema=input_schema_json,
             output_schema=output_schema_json,

@@ -1,0 +1,136 @@
+# tc02_end_to_end_dispatch_via_caller — full bridge round-trip.
+#
+# A downstream mesh tool depending on the bridged current-date
+# capability actually reaches the producer through the consumer's
+# A2A tasks/send call.
+#
+# Call chain:
+#   meshctl call date-caller:get_formatted_date
+#     -> caller resolves current-date dependency to consumer
+#     -> consumer's @mesh.a2a_consumer body issues outbound
+#        POST http://localhost:9090/agents/date  (tasks/send)
+#     -> date-a2a-agent's mounted handler resolves date_service
+#     -> system-agent's date_service returns the current time
+#     -> bubble back: producer artifact -> consumer json.loads
+#        -> caller returns the {"date": ...} dict
+#
+# Stack: registry + system-agent + date-a2a-agent + consumer-date-agent
+# + caller-agent (5 processes total). Wait windows mirror uc24's
+# DI-resolution timing — the caller needs both the consumer's
+# heartbeat AND the resolver's downstream rewire to converge before
+# the call can succeed.
+
+name: "A2A consumer: end-to-end dispatch via downstream caller"
+description: "Caller -> consumer A2A bridge -> producer -> system-agent round-trip returns the date payload"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-908
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/system-agent /workspace/
+      cp -rL /uc-artifacts/date-a2a-agent /workspace/
+      cp -rL /uc-artifacts/consumer-date-agent /workspace/
+      cp -rL /uc-artifacts/caller-agent /workspace/
+
+  - name: "Install system-agent deps"
+    handler: pip-install
+    path: /workspace/system-agent
+
+  - name: "Install date-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/date-a2a-agent
+
+  - name: "Install consumer-date-agent deps"
+    handler: pip-install
+    path: /workspace/consumer-date-agent
+
+  - name: "Install caller-agent deps"
+    handler: pip-install
+    path: /workspace/caller-agent
+
+  - routine: start_registry_consumer
+
+  - name: "Start system-agent (port 9100, provides date_service)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for system-agent registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start date-a2a-agent (port 9090)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start date-a2a-agent/main.py -d
+
+  - name: "Wait for date_service DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Start consumer-date-agent (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-date-agent/main.py -d
+
+  - name: "Wait for consumer registration heartbeat"
+    handler: wait
+    seconds: 18
+
+  - name: "Start caller-agent (port 9203)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start caller-agent/main.py -d
+
+  - name: "Wait for caller current-date DI resolution"
+    handler: wait
+    seconds: 25
+
+  - name: "Verify all 4 agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Invoke caller's get_formatted_date tool"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call date-caller:get_formatted_date '{}' 2>&1
+    capture: caller_response
+    timeout: 30
+
+assertions:
+  - expr: "${captured.agent_list} contains 'system-agent'"
+    message: "system-agent should be registered"
+  - expr: "${captured.agent_list} contains 'date-consumer'"
+    message: "consumer-date-agent should be registered"
+  - expr: "${captured.agent_list} contains 'date-caller'"
+    message: "caller-agent should be registered"
+
+  # The producer's date_service returns a timestamp; the A2A handler
+  # wraps it as {"date": "<ts>"} which the consumer json.loads back
+  # to a dict — meshctl call surfaces that dict in its output. We
+  # match the bare word `date` (the JSON key) which only appears in
+  # the successful payload, never in error envelopes.
+  - expr: "${captured.caller_response} contains 'date'"
+    message: "caller response should carry the {date: ...} payload from the producer"
+
+  # Defensive: confirm we did NOT hit the "dependency not resolved"
+  # short-circuit branch in the caller — that would mean the
+  # current-date dependency never wired up.
+  - expr: "${captured.caller_response} not contains 'dependency not resolved'"
+    message: "current_date dependency must be resolved by the time the call lands"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

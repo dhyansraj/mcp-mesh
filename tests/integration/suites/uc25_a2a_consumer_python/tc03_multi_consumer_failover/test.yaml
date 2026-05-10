@@ -1,0 +1,243 @@
+# tc03_multi_consumer_failover — multi-consumer registration + failover.
+#
+# Two A2A consumers register the SAME current-date capability with
+# the SAME a2a-bridge tag, but under DIFFERENT @mesh.agent names
+# (date-consumer / date-consumer-alt). The auto-injected
+# consumer-name tag is what makes the two registrations
+# distinguishable for capability+tag pinning AND for the resolver's
+# untagged failover path.
+#
+# Validation strategy (two phases):
+#
+#   Phase A — pinned distinguishability:
+#     With both consumers up, the caller's tag-pinned tools each
+#     resolve to a SPECIFIC consumer (proven by the pinned
+#     dependency selector matching the auto-injected consumer-name
+#     tag — if the substitution didn't work, neither pinned tool
+#     would resolve and the caller would short-circuit with
+#     "dependency not resolved").
+#
+#   Phase B — auto-rewire on consumer death:
+#     Stop the primary consumer (date-consumer). After the
+#     fast-sweep registry marks it unhealthy
+#     (DEFAULT_TIMEOUT_THRESHOLD=15 + HEALTH_CHECK_INTERVAL=5 set
+#     in start_registry_consumer), the caller's UNTAGGED
+#     get_formatted_date dep auto-rewires to the surviving
+#     date-consumer-alt and the call still succeeds. The pinned-alt
+#     tool also still works (its dep was always wired to the
+#     surviving consumer); the pinned-primary tool is expected to
+#     fail — but we don't assert on that here to keep the test
+#     deterministic.
+#
+# Stack: registry + system-agent + date-a2a-agent + consumer-date-agent
+# + consumer-date-agent-b + caller-agent (6 processes).
+
+name: "A2A consumer: multi-consumer registration + auto-rewire failover"
+description: "Two consumers register current-date with distinct auto-tags; tag-pinning works AND untagged dep auto-rewires when one consumer dies"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-908
+timeout: 240
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/system-agent /workspace/
+      cp -rL /uc-artifacts/date-a2a-agent /workspace/
+      cp -rL /uc-artifacts/consumer-date-agent /workspace/
+      cp -rL /uc-artifacts/consumer-date-agent-b /workspace/
+      cp -rL /uc-artifacts/caller-agent /workspace/
+
+  - name: "Install system-agent deps"
+    handler: pip-install
+    path: /workspace/system-agent
+
+  - name: "Install date-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/date-a2a-agent
+
+  - name: "Install consumer-date-agent deps"
+    handler: pip-install
+    path: /workspace/consumer-date-agent
+
+  - name: "Install consumer-date-agent-b deps"
+    handler: pip-install
+    path: /workspace/consumer-date-agent-b
+
+  - name: "Install caller-agent deps"
+    handler: pip-install
+    path: /workspace/caller-agent
+
+  - routine: start_registry_consumer
+
+  - name: "Start system-agent (port 9100, provides date_service)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for system-agent registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start date-a2a-agent (port 9090)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start date-a2a-agent/main.py -d
+
+  - name: "Wait for date_service DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Start consumer-date-agent (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-date-agent/main.py -d
+
+  - name: "Start consumer-date-agent-b (port 9202)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-date-agent-b/main.py -d
+
+  - name: "Wait for both consumers to heartbeat-register"
+    handler: wait
+    seconds: 18
+
+  - name: "Start caller-agent (port 9203)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start caller-agent/main.py -d
+
+  - name: "Wait for caller pinned + untagged DI resolution"
+    handler: wait
+    seconds: 25
+
+  - name: "Verify all 5 agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "GET /agents on the registry"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:8000/agents
+    capture: agents_response_pre
+    timeout: 15
+
+  # ===== Phase A: pinned distinguishability =====
+
+  - name: "Phase A: invoke pinned-primary tool (must hit date-consumer)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call date-caller:get_formatted_date_primary '{}' 2>&1
+    capture: pinned_primary_pre
+    timeout: 30
+
+  - name: "Phase A: invoke pinned-alt tool (must hit date-consumer-alt)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call date-caller:get_formatted_date_alt '{}' 2>&1
+    capture: pinned_alt_pre
+    timeout: 30
+
+  - name: "Phase A: invoke untagged tool (any healthy consumer wins)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call date-caller:get_formatted_date '{}' 2>&1
+    capture: untagged_pre
+    timeout: 30
+
+  # ===== Phase B: kill primary consumer, verify failover =====
+
+  - name: "Phase B: stop date-consumer (primary)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl stop consumer-date-agent 2>&1 || true
+    ignore_errors: true
+
+  # DEFAULT_TIMEOUT_THRESHOLD=15 + HEALTH_CHECK_INTERVAL=5 means the
+  # registry marks a non-heartbeating agent unhealthy in ~15-20s; the
+  # caller then needs another heartbeat round to pull a fresh
+  # dependency state. Bump the wait to 35s so the rewire is
+  # comfortably converged before we re-poll.
+  - name: "Phase B: wait for fast-sweep to mark primary unhealthy + caller rewire"
+    handler: wait
+    seconds: 35
+
+  - name: "Phase B: invoke pinned-alt tool again (should still succeed — its dep never moved)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call date-caller:get_formatted_date_alt '{}' 2>&1
+    capture: pinned_alt_post
+    timeout: 30
+
+  - name: "Phase B: invoke untagged tool again (auto-rewire to surviving date-consumer-alt)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl call date-caller:get_formatted_date '{}' 2>&1
+    capture: untagged_post
+    timeout: 30
+
+assertions:
+  # ===== Setup sanity =====
+  - expr: "${captured.agent_list} contains 'date-consumer'"
+    message: "primary consumer should be registered"
+  - expr: "${captured.agent_list} contains 'date-consumer-alt'"
+    message: "alt consumer should be registered"
+  - expr: "${captured.agent_list} contains 'date-caller'"
+    message: "caller agent should be registered"
+
+  # Both auto-injected tags must be present in the registry response
+  # (proves the consumer-name self-tag substitution ran on BOTH
+  # consumers under different agent names).
+  - expr: "${captured.agents_response_pre} contains '\"date-consumer\"'"
+    message: "primary consumer-name tag should appear on its current-date capability"
+  - expr: "${captured.agents_response_pre} contains '\"date-consumer-alt\"'"
+    message: "alt consumer-name tag should appear on its current-date capability"
+  - expr: "${captured.agents_response_pre} not contains '__MESH_CONSUMER_SELF__'"
+    message: "consumer-self sentinel must never appear in the registry response"
+
+  # ===== Phase A: pinned distinguishability =====
+  # Each pinned tool returns the date payload — proves the
+  # consumer-name auto-tag actually let the resolver pick the
+  # specific bound consumer, not just any current-date provider.
+  - expr: "${captured.pinned_primary_pre} contains 'date'"
+    message: "pinned-primary tool should resolve to date-consumer and return the date payload"
+  - expr: "${captured.pinned_primary_pre} not contains 'dependency not resolved'"
+    message: "pinned-primary dependency must wire up before the call"
+  - expr: "${captured.pinned_alt_pre} contains 'date'"
+    message: "pinned-alt tool should resolve to date-consumer-alt and return the date payload"
+  - expr: "${captured.pinned_alt_pre} not contains 'dependency not resolved'"
+    message: "pinned-alt dependency must wire up before the call"
+  - expr: "${captured.untagged_pre} contains 'date'"
+    message: "untagged tool should resolve to either consumer and return the date payload"
+  - expr: "${captured.untagged_pre} not contains 'dependency not resolved'"
+    message: "untagged dependency must wire up before the call"
+
+  # ===== Phase B: failover =====
+  # Pinned-alt's dep was always wired to the surviving consumer, so
+  # it MUST still work post-kill — this isolates "did the surviving
+  # consumer keep functioning" from "did the resolver rewire".
+  - expr: "${captured.pinned_alt_post} contains 'date'"
+    message: "pinned-alt tool should still succeed after primary consumer is killed"
+  - expr: "${captured.pinned_alt_post} not contains 'dependency not resolved'"
+    message: "pinned-alt dep should remain wired after primary consumer death"
+
+  # The untagged tool USED to potentially go to either consumer; after
+  # primary dies, it must rewire to the survivor. This is the
+  # auto-rewire / failover path.
+  - expr: "${captured.untagged_post} contains 'date'"
+    message: "untagged tool should auto-rewire to the surviving consumer after primary death"
+  - expr: "${captured.untagged_post} not contains 'dependency not resolved'"
+    message: "untagged dep should auto-rewire (not orphan) when primary consumer dies"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
