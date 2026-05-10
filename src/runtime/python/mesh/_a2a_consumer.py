@@ -25,11 +25,14 @@ typical ``task=True`` consumer pattern.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
 import logging
 import os
+import threading
 import time
 import uuid
+import weakref
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
 
@@ -39,6 +42,42 @@ if TYPE_CHECKING:
     from .types import MeshJob
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Active A2AClient tracking — atexit drain (mirrors simple_shutdown.py pattern
+# for Rust agent handles). httpx.AsyncClient bound to a torn-down loop emits
+# noisy "Unclosed client" warnings at GC. We mark every live client closed at
+# interpreter exit so any in-flight user code raises cleanly; httpx's own GC
+# + the OS reclaim the actual sockets. No async aclose() in the atexit hook —
+# interpreter is finalizing and there's no guaranteed loop to await on.
+# ---------------------------------------------------------------------------
+_ACTIVE_CLIENTS: "weakref.WeakSet[A2AClient]" = weakref.WeakSet()
+_ATEXIT_LOCK = threading.Lock()
+_ATEXIT_HOOK_REGISTERED = False
+
+
+def _register_active_client(client: "A2AClient") -> None:
+    global _ATEXIT_HOOK_REGISTERED
+    with _ATEXIT_LOCK:
+        _ACTIVE_CLIENTS.add(client)
+        if not _ATEXIT_HOOK_REGISTERED:
+            atexit.register(_atexit_close_active_clients)
+            _ATEXIT_HOOK_REGISTERED = True
+
+
+def _atexit_close_active_clients() -> None:
+    """At interpreter exit: mark every living A2AClient closed so any
+    in-flight user code raises cleanly. We don't await aclose() here —
+    interpreter is finalizing and there's no guaranteed event loop to
+    drive the async close. httpx's own GC + the OS reclaim the sockets;
+    the explicit close-flag prevents post-finalize use of cached state.
+    """
+    for client in list(_ACTIVE_CLIENTS):
+        try:
+            client._closed = True
+        except Exception:
+            pass
 
 
 @dataclass
@@ -114,10 +153,30 @@ class A2AClient:
         self.poll_interval = poll_interval
         self.poll_interval_max = poll_interval_max
         self._client: Optional[httpx.AsyncClient] = None
+        self._client_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._closed: bool = False
+        _register_active_client(self)
 
     async def _http(self) -> httpx.AsyncClient:
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout_default))
+        if self._closed:
+            raise RuntimeError(
+                f"A2AClient(url={self.url!r}) is closed. "
+                "Create a new instance instead of reusing a closed one."
+            )
+        loop = asyncio.get_running_loop()
+        if (
+            self._client is not None
+            and self._client_loop is loop
+            and not self._client.is_closed
+        ):
+            return self._client
+        # Loop mismatch (fork-after-import, pytest-asyncio new-loop-per-test,
+        # or any other multi-loop scenario) OR no client yet OR client closed.
+        # Drop the old reference and let GC handle it — closing an
+        # AsyncClient from a different loop than its origin is undefined
+        # behavior in httpx.
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout_default))
+        self._client_loop = loop
         return self._client
 
     def _headers(self) -> dict[str, str]:
@@ -316,8 +375,17 @@ class A2AClient:
         return A2AStream(response=response, task_id=task_id, _cm=cm)
 
     async def aclose(self) -> None:
+        self._closed = True
         if self._client and not self._client.is_closed:
-            await self._client.aclose()
+            try:
+                await self._client.aclose()
+            except Exception:
+                # Best-effort: a loop-mismatched close (e.g. pytest-asyncio
+                # tearing down a previous loop) can raise; the client is
+                # marked closed regardless so subsequent _http() raises.
+                pass
+        self._client = None
+        self._client_loop = None
 
 
 # ---------------------------------------------------------------------------
@@ -694,6 +762,31 @@ def _parse_sse_envelope(envelope: dict[str, Any], task_id: str) -> Optional[A2AE
     return None
 
 
+def _stream_finalizer(response_ref: "weakref.ref", task_id: str) -> None:
+    """Best-effort sync cleanup when an A2AStream is GC'd without explicit aclose.
+
+    httpx.Response carries a sync ``.close()`` that releases the connection
+    pool entry. We can't await ``aclose()`` from a finalizer (no event loop
+    is guaranteed during GC, and finalizers may run during interpreter
+    shutdown), so sync close is the best we can do. Emit a WARNING so the
+    user knows their stream lifecycle is wrong — under load this kind of
+    leak silently exhausts the httpx connection pool.
+    """
+    response = response_ref()
+    if response is None:
+        return
+    try:
+        response.close()
+    except Exception:
+        pass
+    logger.warning(
+        "A2AStream for task=%s was garbage-collected without explicit aclose(). "
+        "Use 'async with stream:' or 'await stream.aclose()' to release the "
+        "connection cleanly. Best-effort sync close was performed.",
+        task_id,
+    )
+
+
 class A2AStream:
     """Async iterator over parsed A2A SSE events.
 
@@ -719,6 +812,18 @@ class A2AStream:
         self._cm = _cm
         self._line_iter: Optional[AsyncIterator[str]] = None
         self._closed = False
+        # weakref.finalize fires when self is GC'd. Holding a weakref to the
+        # response (rather than the response directly) keeps the finalizer
+        # from extending the lifetime of self. aclose() detaches the
+        # finalizer on the explicit-close path so the leak warning only
+        # fires when the caller dropped the stream without iterating to
+        # completion or awaiting aclose.
+        self._finalizer = weakref.finalize(
+            self,
+            _stream_finalizer,
+            weakref.ref(response),
+            task_id,
+        )
 
     def __aiter__(self) -> "A2AStream":
         return self
@@ -804,6 +909,9 @@ class A2AStream:
         if self._closed:
             return
         self._closed = True
+        # Explicit close — detach the finalizer so the leak warning is
+        # suppressed for the well-behaved path.
+        self._finalizer.detach()
         if self._cm is not None:
             try:
                 await self._cm.__aexit__(None, None, None)

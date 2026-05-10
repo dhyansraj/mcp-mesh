@@ -2246,6 +2246,13 @@ def _resolve_pending_consumer_self_tags(agent_name: str) -> None:
     ``_mesh_a2a_consumer_metadata``) AND the registry's stored copy,
     because ``DecoratorRegistry.register_mesh_tool`` snapshots metadata
     via ``.copy()`` at decoration time.
+
+    Multi-``@mesh.agent`` diagnostic: if a second @mesh.agent runs in the
+    same process after a first has already resolved all consumer self-tags,
+    no pending tools remain and the substitution is a silent no-op. The
+    first @mesh.agent's name "wins" and binds to all consumer tools. Emit
+    a clear WARNING so users notice the implicit binding rather than
+    debugging by archaeology.
     """
     if not agent_name:
         return
@@ -2256,10 +2263,34 @@ def _resolve_pending_consumer_self_tags(agent_name: str) -> None:
                 tag_list[i] = agent_name
 
     registry_tools = DecoratorRegistry.get_mesh_tools()
+    pending: list[Any] = []
+    already_resolved = False
     for decorated in registry_tools.values():
         fn = decorated.function
-        if not getattr(fn, "_mesh_a2a_consumer_pending_self_tag", False):
+        if getattr(fn, "_mesh_a2a_consumer_pending_self_tag", False):
+            pending.append(decorated)
             continue
+        consumer_meta = getattr(fn, "_mesh_a2a_consumer_metadata", None)
+        if isinstance(consumer_meta, dict):
+            cn = consumer_meta.get("consumer_name")
+            if cn and cn != _MESH_CONSUMER_SELF_SENTINEL:
+                already_resolved = True
+
+    if not pending:
+        if already_resolved:
+            logger.warning(
+                "@mesh.agent(%r): consumer-name self-tag substitution found 0 pending "
+                "tools, but one or more @mesh.a2a_consumer tools have already been "
+                "resolved by a prior @mesh.agent in this process. The first @mesh.agent "
+                "wins and binds its name to all consumer tools. If multiple @mesh.agent "
+                "declarations are intentional, document which one owns each consumer "
+                "explicitly via consumer-name tags.",
+                agent_name,
+            )
+        return
+
+    for decorated in pending:
+        fn = decorated.function
 
         fn_meta = getattr(fn, "_mesh_tool_metadata", None)
         if isinstance(fn_meta, dict):
