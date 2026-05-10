@@ -1,0 +1,177 @@
+# tc06_sse_subscribe_bridge_end_to_end — Phase 3 SSE happy path (Java).
+#
+# Java port of uc25 tc06. Same shape as uc27 tc04 but the Java consumer
+# uses A2AClient.subscribe() (SSE) instead of poll-based submit/bridge.
+# Validates A2AStream + A2AStream.bridge() helper end-to-end.
+#
+# Stack (5 processes):
+#   1) registry
+#   2) long-task-provider (Python, port 9100)
+#   3) report-a2a-agent   (Python, port 9091)
+#   4) consumer-report-agent-java-sse (JAVA, port 9212) — bridges via SSE
+#   5) caller-agent-report (Python, port 9213) — depends on report-sse
+
+name: "A2A consumer (Java) Phase 3: SSE subscribe bridge end-to-end"
+description: "Caller -> SSE-based Java consumer bridge -> Python A2A surface -> Python producer; A2AStream.bridge mirrors events into JobController; final artifact returned to caller"
+tags:
+  - a2a
+  - java
+  - smoke
+  - issue-910
+  - issue-916
+  - sse
+timeout: 1500
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+      cp -rL /uc-artifacts/consumer-report-agent-java-sse /workspace/
+      cp -rL /uc-artifacts/caller-agent-report /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - name: "Install consumer-report-agent-java-sse deps"
+    handler: maven-install
+    path: /workspace/consumer-report-agent-java-sse
+    timeout: 600
+
+  - name: "Install caller-agent-report deps"
+    handler: pip-install
+    path: /workspace/caller-agent-report
+
+  - routine: start_registry_consumer
+
+  - name: "Start long-task-provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for long-task-provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for generate_report DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Start consumer-report-agent-java-sse (port 9212)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-report-agent-java-sse --env MCP_MESH_HTTP_PORT=9212 -d
+
+  - name: "Wait for Java SSE consumer to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null | jq -r \
+          '.agents[] | select(.name=="report-consumer-sse") | .status' 2>/dev/null || echo "")
+        if [ "$STATUS" = "healthy" ]; then
+          echo "Java SSE consumer healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Java SSE consumer not healthy within 120s (last status='$STATUS')"
+      meshctl logs consumer-report-agent-java-sse 2>&1 | tail -80 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start caller-agent-report (port 9213)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start caller-agent-report/main.py -d
+
+  - name: "Wait for caller report-sse DI resolution"
+    handler: wait
+    seconds: 25
+
+  - name: "Verify all 4 mesh agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  # Java SSE fixture registers capability "report_sse" (underscore) —
+  # matches the Python caller-agent-report's existing report_sse
+  # dependency so we can reuse the uc25 caller fixture without changes.
+
+  - name: "Submit report job via commission_report_sse_async — return job_id immediately"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report_sse_async '{"user_id": "alice", "sections": ["intro", "analysis", "summary"]}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  # SSE bridge consistently lags polling-bridge by 5-10s due to the
+  # long-lived stream negotiation; under parallel mode add ~10s slack.
+  - name: "Wait for the SSE bridge to drive the job to terminal"
+    handler: wait
+    seconds: 50
+
+  - name: "Read final mesh job status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: commission_response
+    timeout: 30
+
+assertions:
+  - expr: "${captured.agent_list} contains 'long-task-provider'"
+    message: "long-task-provider should be registered"
+  - expr: "${captured.agent_list} contains 'report-a2a-agent'"
+    message: "report-a2a-agent should be registered"
+  - expr: "${captured.agent_list} contains 'report-consumer-sse'"
+    message: "Java SSE consumer should be registered as 'report-consumer-sse'"
+  - expr: "${captured.agent_list} contains 'report-caller'"
+    message: "caller-agent-report should be registered as 'report-caller'"
+
+  - expr: "${captured.submit_resp} contains 'job_id'"
+    message: "submit response should carry a job_id"
+  - expr: "${captured.submit_resp} not contains 'submitter not injected'"
+    message: "report_sse MeshJob submitter must be injected at the caller"
+
+  - expr: "${captured.commission_response} not contains '\"isError\": true'"
+    message: "__mesh_job_status should not return an MCP error envelope"
+
+  # Final status MUST be completed — the SSE bridge drove it terminal.
+  - expr: "${captured.commission_response} contains '\"status\": \"completed\"'"
+    message: "final mesh job status should be completed (Java SSE bridge drove it terminal)"
+
+  # Producer's complete() payload bubbles through the A2A SSE artifact
+  # event -> Java consumer SSE bridge -> mesh JobController. Same
+  # canonical markers as tc04.
+  - expr: "${captured.commission_response} contains 'Generated content for intro'"
+    message: "result should include the intro section via the SSE bridge"
+  - expr: "${captured.commission_response} contains 'Generated content for analysis'"
+    message: "result should include the analysis section via the SSE bridge"
+  - expr: "${captured.commission_response} contains 'Generated content for summary'"
+    message: "result should include the summary section via the SSE bridge"
+  - expr: "${captured.commission_response} contains '\"user_id\": \"alice\"'"
+    message: "result should echo the submitted user_id"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

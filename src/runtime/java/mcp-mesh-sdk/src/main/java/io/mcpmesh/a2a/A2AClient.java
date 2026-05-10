@@ -9,6 +9,7 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -75,7 +76,7 @@ public final class A2AClient implements AutoCloseable {
     /** Cap on the backoff between {@code tasks/get} polls. */
     static final long DEFAULT_POLL_INTERVAL_MAX_MS = 2000L;
     /** Backoff multiplier between consecutive {@code tasks/get} polls. */
-    static final double POLL_BACKOFF_FACTOR = 1.5d;
+    public static final double POLL_BACKOFF_FACTOR = 1.5d;
 
     private final URI url;
     private final String skillId;
@@ -212,6 +213,165 @@ public final class A2AClient implements AutoCloseable {
             "A2A task '" + taskId + "' on " + url
                 + " did not reach terminal state within " + callTimeout
                 + " (last state='" + state + "')");
+    }
+
+    /**
+     * POST {@code tasks/send} and return an {@link A2AJob} handle
+     * WITHOUT polling.
+     *
+     * <p>Use this when the surrounding {@code @MeshTool} is decorated
+     * with {@code task=true} and the bridging logic wants explicit
+     * control over when to poll (typically via
+     * {@link A2AJob#bridge} which mirrors progress into the
+     * framework-injected {@link io.mcpmesh.JobController}).
+     *
+     * @param message A2A v1.0 request message dict.
+     * @return an {@link A2AJob} carrying the upstream task ID + initial
+     *         envelope so callers can short-circuit when the producer
+     *         already returned a terminal state on submit.
+     * @throws A2AException on JSON-RPC error envelope, transport
+     *                      failure, or malformed response.
+     */
+    public A2AJob submit(Map<String, Object> message) {
+        if (closed) {
+            throw new A2AException(
+                "A2AClient(url=" + url + ") is closed; create a new instance instead.");
+        }
+        if (message == null) {
+            throw new IllegalArgumentException("A2AClient.submit: message must be non-null");
+        }
+        String taskId = "c-" + UUID.randomUUID().toString().replace("-", "");
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("id", taskId);
+        params.set("message", objectMapper.valueToTree(message));
+        JsonNode result = postJsonRpc("tasks/send", params, 1, defaultTimeout);
+        String state = readState(result);
+        return new A2AJob(this, taskId, state, result, objectMapper);
+    }
+
+    /**
+     * POST {@code tasks/sendSubscribe} and return an {@link A2AStream}
+     * of parsed events.
+     *
+     * <p>The returned stream MUST be either iterated to completion (the
+     * terminal {@code isFinal=true} frame auto-closes it) OR explicitly
+     * closed via try-with-resources to release the underlying
+     * connection. Failing to close leaks the JDK
+     * {@link HttpClient}-pooled connection.
+     *
+     * @param message A2A v1.0 request message dict — same shape as
+     *                {@link #send} / {@link #submit}.
+     * @return an {@link A2AStream} producing {@link A2AEvent} via its
+     *         {@link Iterable} surface.
+     * @throws A2AException on connection failure or non-2xx HTTP status.
+     */
+    public A2AStream subscribe(Map<String, Object> message) {
+        if (closed) {
+            throw new A2AException(
+                "A2AClient(url=" + url + ") is closed; create a new instance instead.");
+        }
+        if (message == null) {
+            throw new IllegalArgumentException("A2AClient.subscribe: message must be non-null");
+        }
+        String taskId = "c-" + UUID.randomUUID().toString().replace("-", "");
+
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("id", taskId);
+        params.set("message", objectMapper.valueToTree(message));
+
+        ObjectNode envelope = objectMapper.createObjectNode();
+        envelope.put("jsonrpc", "2.0");
+        envelope.put("id", 1);
+        envelope.put("method", "tasks/sendSubscribe");
+        envelope.set("params", params);
+
+        String body;
+        try {
+            body = objectMapper.writeValueAsString(envelope);
+        } catch (Exception e) {
+            throw new A2AException("Failed to serialize JSON-RPC envelope for tasks/sendSubscribe", e);
+        }
+
+        // No request timeout on the SSE call — the stream lifetime is
+        // dictated by the producer, not a per-request deadline. The
+        // connectTimeout still applies to the initial TCP handshake.
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
+            .uri(url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "text/event-stream")
+            .POST(HttpRequest.BodyPublishers.ofString(body));
+        if (auth != null) {
+            builder.header("Authorization", auth.authorizationHeader());
+        }
+
+        HttpResponse<InputStream> response;
+        try {
+            response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
+        } catch (IOException e) {
+            throw new A2AException(
+                "A2A tasks/sendSubscribe " + url + " transport failure: " + e.getMessage(), e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new A2AException("A2A tasks/sendSubscribe " + url + " interrupted", e);
+        }
+        int status = response.statusCode();
+        if (status >= 400) {
+            // Read the body so we can include it in the error message,
+            // then close it to release the connection.
+            String responseBody = "";
+            try (InputStream in = response.body()) {
+                responseBody = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            } catch (IOException ignored) {
+                // best-effort drain
+            }
+            throw new A2AException(
+                "A2A tasks/sendSubscribe " + url + " HTTP " + status + ": " + truncate(responseBody, 256));
+        }
+        return new A2AStream(response, taskId, objectMapper);
+    }
+
+    /**
+     * Internal: POST {@code tasks/get} for the supplied task ID and
+     * return the {@code result} envelope. Package-private so
+     * {@link A2AJob} can drive its own polling without re-implementing
+     * the JSON-RPC envelope or auth wiring.
+     */
+    JsonNode tasksGet(String taskId) {
+        if (closed) {
+            throw new A2AException(
+                "A2AClient(url=" + url + ") is closed; create a new instance instead.");
+        }
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("id", taskId);
+        return postJsonRpc("tasks/get", params, 2, defaultTimeout);
+    }
+
+    /**
+     * Internal: POST {@code tasks/cancel} for the supplied task ID.
+     * Package-private so {@link A2AJob} can drive cancel propagation
+     * without re-implementing the JSON-RPC envelope or auth wiring.
+     */
+    void tasksCancel(String taskId, String reason) {
+        if (closed) {
+            throw new A2AException(
+                "A2AClient(url=" + url + ") is closed; create a new instance instead.");
+        }
+        ObjectNode params = objectMapper.createObjectNode();
+        params.put("id", taskId);
+        if (reason != null) {
+            params.put("reason", reason);
+        }
+        postJsonRpc("tasks/cancel", params, 3, defaultTimeout);
+    }
+
+    /** Initial poll interval (ms) for {@link A2AJob#bridge}. */
+    long pollIntervalMs() {
+        return pollIntervalMs;
+    }
+
+    /** Capped poll interval (ms) for {@link A2AJob#bridge}. */
+    long pollIntervalMaxMs() {
+        return pollIntervalMaxMs;
     }
 
     @Override

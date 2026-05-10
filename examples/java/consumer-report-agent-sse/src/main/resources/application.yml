@@ -1,0 +1,22 @@
+# MCP Mesh A2A consumer report agent (Java, SSE bridge) — issue #910 Phase 3.
+#
+# Mirrors examples/a2a/consumer_report_agent_sse.py.
+
+spring:
+  application:
+    name: consumer-report-agent-sse
+
+server:
+  port: ${MCP_MESH_HTTP_PORT:9212}
+
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:report-consumer-sse}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+
+logging:
+  level:
+    io.mcpmesh: INFO
+    com.example.reportconsumersse: DEBUG
