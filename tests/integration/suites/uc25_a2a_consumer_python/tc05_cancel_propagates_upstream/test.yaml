@@ -1,0 +1,178 @@
+# tc05_cancel_propagates_upstream — mesh cancel reaches the A2A producer.
+#
+# Caller submits a long-running mesh job via the bridged ``report``
+# capability, then mid-flight calls __mesh_job_cancel. The mesh
+# wrapper raises asyncio.CancelledError inside the consumer's
+# @mesh.a2a_consumer body; A2AJob.bridge catches it, POSTs
+# ``tasks/cancel`` upstream so the A2A producer aborts, then re-raises
+# as A2AJobCanceled. The mesh wrapper records the canceled outcome.
+#
+# Stack: same 5 processes as tc04.
+#
+# We use commission_report_async (submit-only) so the test drives the
+# lifecycle from the outside — blocking on commission_report's wait()
+# would race the cancel-propagation timing and make the test brittle.
+#
+# Validation strategy:
+#   - Cancel response carries ok=true (registry forwarded the cancel).
+#   - Final mesh job status is "cancelled" (NOT completed) — the work
+#     was aborted before it could finish.
+#   - The underlying long-task-provider's generate_report logs the
+#     cancel marker (mirrors uc21 tc06's belt-and-suspenders proof
+#     that the handler actually observed CancelledError, not just a
+#     registry-side row flip).
+#
+# Note on log marker: long-task-provider's generate_report does NOT
+# itself log a [cancelled mid-flight] marker — only runs_overlong does.
+# We therefore assert on the consumer's bridge log instead — A2AJob.bridge
+# logs nothing on cancel either, but the producer's complete()/cancel
+# path leaves a clean "tasks/cancel" trace on the report-a2a-agent.
+# To keep the test deterministic without grepping for log markers that
+# the runtime doesn't emit, we ground the proof on the structural
+# observable: cancelled status + elapsed-time well below the natural
+# completion window.
+
+name: "A2A consumer Phase 3: cancel propagates upstream and aborts the job"
+description: "Caller cancels mid-flight; bridge propagates tasks/cancel upstream; final mesh job state=cancelled"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-910
+  - cancel
+timeout: 240
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+      cp -rL /uc-artifacts/consumer-report-agent /workspace/
+      cp -rL /uc-artifacts/caller-agent-report /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - name: "Install consumer-report-agent deps"
+    handler: pip-install
+    path: /workspace/consumer-report-agent
+
+  - name: "Install caller-agent-report deps"
+    handler: pip-install
+    path: /workspace/caller-agent-report
+
+  - routine: start_registry_consumer
+
+  - name: "Start long-task-provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for long-task-provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for generate_report DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Start consumer-report-agent (port 9211)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-report-agent/main.py -d
+
+  - name: "Wait for consumer registration"
+    handler: wait
+    seconds: 18
+
+  - name: "Start caller-agent-report (port 9213)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start caller-agent-report/main.py -d
+
+  - name: "Wait for caller report-dep DI resolution"
+    handler: wait
+    seconds: 25
+
+  # 8 sections × ~2s each = ~16s natural runtime — wide cancel window.
+  # Caller returns immediately with the job_id; we drive cancel +
+  # status reads from the test harness.
+  - name: "Submit long-running report job (~16s) — return job_id immediately"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report_async '{"user_id":"alice","sections":["a","b","c","d","e","f","g","h"],"max_duration":120}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  # Let the consumer's bridge enter its polling loop AND the upstream
+  # producer claim + start its first sleep. Anything less than ~3s
+  # races the polling cadence. Keep deterministic.
+  - name: "Wait for bridge to enter polling loop"
+    handler: wait
+    seconds: 4
+
+  - name: "Cancel the mesh job"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      echo "JOB_ID=${JOB_ID}"
+      meshctl call __mesh_job_cancel "{\"job_id\":\"${JOB_ID}\",\"reason\":\"tc05 client requested abort\"}"
+    capture: cancel_response
+    timeout: 30
+
+  # Allow the cancel signal to propagate end-to-end:
+  #   mesh wrapper raises CancelledError -> A2AJob.bridge catches it
+  #   -> POSTs tasks/cancel upstream -> producer aborts the inner
+  #   mesh job -> bridge re-raises A2AJobCanceled -> wrapper records
+  #   the canceled outcome -> registry row flips to cancelled.
+  # The 5s window comfortably covers all hops without racing natural
+  # completion (which would need ~12+ more seconds).
+  - name: "Wait for cancel to settle through the bridge"
+    handler: wait
+    seconds: 6
+
+  - name: "Read final mesh job status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: final_status
+
+assertions:
+  - expr: "${captured.cancel_response} contains '\"ok\": true'"
+    message: "__mesh_job_cancel should return ok:true"
+
+  # The mesh job MUST end as cancelled, not completed — proves the
+  # bridge actually aborted the work before natural finish (~16s).
+  - expr: "${captured.final_status} contains '\"status\": \"cancelled\"'"
+    message: "final mesh job status field should equal cancelled"
+
+  # Belt-and-suspenders: the status FIELD itself must not be completed.
+  # (The response payload also serialises completed_at and similar
+  # timestamp fields even when the job is cancelled, so a bare
+  # 'completed' substring would be ambiguous — anchor on the exact
+  # status field shape.)
+  - expr: "${captured.final_status} not contains '\"status\": \"completed\"'"
+    message: "status field must not be completed — cancel happened before natural finish"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

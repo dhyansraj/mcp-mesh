@@ -1,0 +1,194 @@
+# tc04_long_running_bridge_end_to_end — Phase 3 happy path.
+#
+# A downstream caller submits a long-running mesh job against the
+# bridged ``report`` capability and awaits the result via the
+# standard MeshJob interface. The consumer's @mesh.a2a_consumer body
+# (task=True) forwards the work to the upstream A2A producer via
+# _a2a.submit(), then mirrors A2A polling state into the framework-
+# injected MeshJob via a2a_job.bridge(job). The caller has no idea
+# the work is happening on an A2A backend.
+#
+# Stack (5 processes):
+#   1) registry
+#   2) long-task-provider (port 9100)         — task=True provider for generate_report
+#   3) report-a2a-agent   (port 9091)         — A2A surface mounting generate_report
+#   4) consumer-report-agent (port 9211)      — bridges A2A surface back into mesh as ``report``
+#   5) caller-agent-report   (port 9213)      — depends on ``report``, exposes commission_report
+#
+# Asserts:
+#   - All 4 mesh agents register (registry sees them in /agents).
+#   - commission_report's structured envelope shows status=completed
+#     with the producer's report payload (3 sections × 2s each → ~6s
+#     of compute observed by the bridge).
+#   - The consumer log mentions the @mesh.a2a_consumer body actually
+#     ran (positive signal that we exercised the bridge — not a
+#     short-circuit).
+#
+# Tags: smoke, issue-910 (the headline regression test for Phase 3).
+
+name: "A2A consumer Phase 3: long-running bridge end-to-end"
+description: "Caller submits via bridged ``report`` capability; consumer mirrors A2A polling into MeshJob; caller's wait() returns final artifact"
+tags:
+  - a2a
+  - python
+  - smoke
+  - issue-910
+timeout: 240
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+      cp -rL /uc-artifacts/consumer-report-agent /workspace/
+      cp -rL /uc-artifacts/caller-agent-report /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - name: "Install consumer-report-agent deps"
+    handler: pip-install
+    path: /workspace/consumer-report-agent
+
+  - name: "Install caller-agent-report deps"
+    handler: pip-install
+    path: /workspace/caller-agent-report
+
+  - routine: start_registry_consumer
+
+  - name: "Start long-task-provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for long-task-provider registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for generate_report DI resolution into the A2A surface"
+    handler: wait
+    seconds: 18
+
+  - name: "Start consumer-report-agent (port 9211)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-report-agent/main.py -d
+
+  - name: "Wait for consumer registration heartbeat"
+    handler: wait
+    seconds: 18
+
+  - name: "Start caller-agent-report (port 9213)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start caller-agent-report/main.py -d
+
+  - name: "Wait for caller report-dep DI resolution"
+    handler: wait
+    seconds: 25
+
+  - name: "Verify all 4 mesh agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  # Use submit-then-poll instead of synchronous wait. The
+  # commission_report tool blocks the entire bridge duration before
+  # returning, and the registry's HTTP proxy has its own upstream
+  # read timeout that is shorter than meshctl --timeout — chain
+  # totals can fairly land >30s and we hit a 502 even on a healthy
+  # bridge run. Mirror the uc21 cancel-test pattern: submit-async,
+  # then drive the status reads from outside.
+  - name: "Submit report job via commission_report_async — return job_id immediately"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report_async '{"user_id": "alice", "sections": ["intro", "analysis", "summary"]}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  # End-to-end timing for this nested-task chain:
+  #   - caller's commission_report_async returns immediately
+  #   - consumer's claim_dispatcher polls every 5s -> claims job (~5s)
+  #   - consumer's bridge calls _a2a_client.submit() to producer
+  #   - A2A surface forwards to long-task-provider's generate_report
+  #     (which is itself a task=True; another claim cycle ~5s)
+  #   - generate_report does 3 sections × ~2s = ~6s of compute
+  #   - bridge polls A2A tasks/get every 0.5-2s -> sees terminal
+  #   - bridge returns artifact -> consumer wrapper calls mesh_job.complete
+  # Total nominal: ~18-20s. Under --parallel 4 the cluster is loaded
+  # and the claim cycle can stretch to ~10s — bump the wait to 35s
+  # so the test stays deterministic across parallel modes.
+  - name: "Wait for the bridge to drive the job to terminal"
+    handler: wait
+    seconds: 35
+
+  - name: "Read final mesh job status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: commission_response
+    timeout: 30
+
+assertions:
+  - expr: "${captured.agent_list} contains 'long-task-provider'"
+    message: "long-task-provider should be registered"
+  - expr: "${captured.agent_list} contains 'report-a2a-agent'"
+    message: "report-a2a-agent should be registered"
+  - expr: "${captured.agent_list} contains 'report-consumer'"
+    message: "consumer-report-agent should be registered as 'report-consumer'"
+  - expr: "${captured.agent_list} contains 'report-caller'"
+    message: "caller-agent-report should be registered as 'report-caller'"
+
+  # The submit_resp itself MUST carry a job_id — proves the caller's
+  # commission_report_async actually executed (not the dep-not-injected
+  # short-circuit) and the registry returned a row.
+  - expr: "${captured.submit_resp} contains 'job_id'"
+    message: "submit response should carry a job_id"
+  - expr: "${captured.submit_resp} not contains 'submitter not injected'"
+    message: "report MeshJob submitter must be injected at the caller"
+
+  # __mesh_job_status MUST NOT be an error envelope.
+  - expr: "${captured.commission_response} not contains '\"isError\": true'"
+    message: "__mesh_job_status should not return an MCP error envelope"
+
+  # Final status MUST be completed — the bridge drove the job to
+  # completion within the wait window (~14s for ~6s of bridged compute).
+  - expr: "${captured.commission_response} contains '\"status\": \"completed\"'"
+    message: "final mesh job status should be completed (bridge drove it terminal)"
+
+  # The producer's complete() payload bubbles all the way back through
+  # the A2A artifact -> consumer bridge -> mesh JobController. Assert
+  # on the canonical "Generated content for X" markers from
+  # long-task-provider's generate_report — these only appear when the
+  # producer's tool body actually ran end-to-end.
+  - expr: "${captured.commission_response} contains 'Generated content for intro'"
+    message: "result should include the producer's intro section"
+  - expr: "${captured.commission_response} contains 'Generated content for analysis'"
+    message: "result should include the producer's analysis section"
+  - expr: "${captured.commission_response} contains 'Generated content for summary'"
+    message: "result should include the producer's summary section"
+  - expr: "${captured.commission_response} contains '\"user_id\": \"alice\"'"
+    message: "result should echo the submitted user_id"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

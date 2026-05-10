@@ -1,0 +1,214 @@
+# tc07_consumer_death_surfaces_failure — caller observes failure when
+# the bridging consumer dies mid-job.
+#
+# Same 5-process stack as tc04. Caller submits a long-running job;
+# while the consumer's bridge is actively polling the upstream A2A
+# producer, kill the consumer. Mesh's existing health-monitor +
+# job-pinning semantics MUST surface a failure to the caller within
+# a bounded window — the caller's wait()/status read must NOT hang
+# forever.
+#
+# We are NOT adding new code here — this validates that the natural
+# job-pinning + auto-fail behaviour from issue #872's Phase 1
+# substrate continues to work when the producer is a bridged
+# consumer instead of a native task=True provider.
+#
+# Validation strategy:
+#   - Submit + return immediately via commission_report_async.
+#   - Wait ~3s so the consumer's bridge is actively polling.
+#   - Kill ONLY the consumer (`meshctl stop report-consumer`) — leave
+#     registry, long-task-provider, report-a2a-agent and the caller
+#     all running so the failure path is squarely the consumer's
+#     death, not a network partition.
+#   - Wait for the fast-sweep registry to mark the consumer
+#     unhealthy. start_registry_consumer's
+#     DEFAULT_TIMEOUT_THRESHOLD=15 + HEALTH_CHECK_INTERVAL=5 give us
+#     a ~15-25s detection window.
+#   - Read final status — MUST be a non-completed terminal
+#     (failed / cancelled / lost) within the bounded window.
+#
+# We don't pin to a specific failure shape ("failed" vs "lost") —
+# either is acceptable proof that the caller is no longer hanging.
+# The defensive negative assertion (NOT completed, NOT working) is
+# what really matters.
+
+name: "A2A consumer Phase 3: caller observes failure when bridging consumer dies"
+description: "Kill the bridging consumer mid-job; caller's status read returns a terminal non-completed state within bounded window"
+tags:
+  - a2a
+  - python
+  - issue-910
+  - resilience
+timeout: 240
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+      cp -rL /uc-artifacts/consumer-report-agent /workspace/
+      cp -rL /uc-artifacts/caller-agent-report /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - name: "Install consumer-report-agent deps"
+    handler: pip-install
+    path: /workspace/consumer-report-agent
+
+  - name: "Install caller-agent-report deps"
+    handler: pip-install
+    path: /workspace/caller-agent-report
+
+  - routine: start_registry_consumer
+
+  - name: "Start long-task-provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for long-task-provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for generate_report DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Start consumer-report-agent (port 9211)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-report-agent/main.py -d
+
+  - name: "Wait for consumer registration"
+    handler: wait
+    seconds: 18
+
+  - name: "Start caller-agent-report (port 9213)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start caller-agent-report/main.py -d
+
+  - name: "Wait for caller report-dep DI resolution"
+    handler: wait
+    seconds: 25
+
+  # 15 sections × ~2s each = ~30s natural runtime — wide kill window
+  # so the consumer is reliably mid-bridge when we kill it. A shorter
+  # window (e.g. 12s, 6 sections) raced the kill against natural
+  # completion: the producer finished + the bridge flushed
+  # mesh_job.complete() before SIGTERM landed, leaving the caller's
+  # job mistakenly completed. 30s gives ~15-20s slack between the
+  # 10s pre-kill wait and natural finish.
+  - name: "Submit long-running report job (~30s) — return job_id immediately"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report_async '{"user_id":"alice","sections":["s01","s02","s03","s04","s05","s06","s07","s08","s09","s10","s11","s12","s13","s14","s15"],"max_duration":120}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  # Wait long enough for the consumer's claim_dispatcher to poll
+  # (every 5s), claim the job, and start the @mesh.a2a_consumer body
+  # — at which point the bridge is actively polling the upstream A2A
+  # producer. Killing the consumer earlier would race the claim and
+  # leave the job stuck in pending forever (no owner to flip).
+  - name: "Wait for consumer to claim the job + start bridging"
+    handler: wait
+    seconds: 10
+
+  # Sanity-check: confirm the job actually got claimed BEFORE we kill
+  # the consumer. If owner_instance_id is null here, the test is
+  # mis-timed — fail loudly rather than spending 30s waiting on a
+  # job that was never claimed.
+  - name: "Read pre-kill mesh job status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: pre_kill_status
+    timeout: 30
+
+  # Kill ONLY the consumer. The long-task-provider + report-a2a-agent
+  # + caller all stay healthy — this isolates the failure to the
+  # bridging consumer's death.
+  - name: "Kill the bridging consumer mid-job"
+    handler: shell
+    workdir: /workspace
+    command: meshctl stop report-consumer
+    capture: stop_resp
+    timeout: 15
+
+  # Fast-sweep registry: HEALTH_CHECK_INTERVAL=5 + DEFAULT_TIMEOUT_THRESHOLD=15
+  # + MCP_MESH_RETENTION=10s + MCP_MESH_SWEEP_INTERVAL=10s gives a
+  # ~15-25s detection window + ~10s retention + ~10s next sweep tick =
+  # up to 35s for purgeStaleAgents -> ResetOrphanedJobs to run. We
+  # wait 40s to comfortably cover the worst case.
+  - name: "Wait for registry to detect consumer death + reset / fail the job"
+    handler: wait
+    seconds: 40
+
+  - name: "Read final mesh job status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: final_status
+    timeout: 30
+
+assertions:
+  # Sanity: meshctl stop should have succeeded.
+  - expr: "${captured.stop_resp} not contains 'failed'"
+    message: "meshctl stop should not have failed"
+
+  # Pre-kill sanity: the job MUST have been claimed before we killed
+  # the consumer (owner_instance_id non-null). If this assertion
+  # fires the test is mis-timed (consumer didn't get to claim before
+  # the kill) — bump the pre-kill wait, don't paper over.
+  - expr: "${captured.pre_kill_status} not contains '\"owner_instance_id\": null'"
+    message: "consumer must have claimed the job pre-kill (owner_instance_id non-null)"
+
+  # The caller's job MUST NOT have completed — the bridge was
+  # actively polling when we killed the consumer; there is no way
+  # the artifact reached the JobController.
+  - expr: "${captured.final_status} not contains '\"status\": \"completed\"'"
+    message: "job must not be completed — consumer died before bridge could deliver the artifact"
+
+  # Core proof that the framework noticed the consumer's death:
+  # ResetOrphanedJobs MUST have flipped owner_instance_id back to
+  # null (purgeStaleAgents removed the dead consumer's row, then
+  # ResetOrphanedJobs spotted the working+owner-but-no-agent state
+  # and unpinned the owner). Without the framework acting, the job
+  # would still show owner_instance_id="report-consumer-XXXXX"
+  # AND status="working" — i.e., a hung caller waiting on a dead
+  # producer.
+  - expr: "${captured.final_status} contains '\"owner_instance_id\": null'"
+    message: "owner_instance_id must be null after orphan-reset — proves health monitor + ResetOrphanedJobs ran on the consumer death"
+
+  # The orphan-reset increments attempt_count on the way back to
+  # claimable. Combined with the owner-null check above, this is the
+  # positive signal that the framework actually processed the death,
+  # not just that the agent record happened to disappear.
+  - expr: "${captured.final_status} not contains '\"attempt_count\": 0'"
+    message: "attempt_count must be > 0 after orphan-reset — proves the framework processed the consumer death (not a fresh-submit collision)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

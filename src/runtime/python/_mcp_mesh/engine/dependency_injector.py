@@ -265,6 +265,17 @@ def _build_clean_signature(func: Any) -> inspect.Signature | None:
         get_mesh_agent_parameter_names,
     )
 
+    # Respect explicit ``__signature__`` overrides. Decorators (e.g.
+    # ``@mesh.a2a_consumer``) may stamp a curated signature on their wrapper
+    # to hide framework-injected parameters from FastMCP/Pydantic schema
+    # introspection. Per Python convention, ``__signature__`` wins over
+    # signature-from-source rebuilds — treat it as authoritative and skip
+    # the rebuild path so we don't re-introduce the hidden params by
+    # peeling back to the user's raw function via ``_get_original_func``.
+    sig_override = getattr(func, "__signature__", None)
+    if isinstance(sig_override, inspect.Signature):
+        return sig_override
+
     try:
         original = _get_original_func(func)
         injectable_names = set(get_mesh_agent_parameter_names(original))
