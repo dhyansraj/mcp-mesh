@@ -95,8 +95,26 @@ public class MeshAutoConfiguration {
     public static MeshToolBeanPostProcessor meshToolBeanPostProcessor(
             MeshToolRegistry registry,
             MeshToolWrapperRegistry wrapperRegistry,
-            ObjectMapper objectMapper) {
-        return new MeshToolBeanPostProcessor(registry, wrapperRegistry, objectMapper);
+            ObjectMapper objectMapper,
+            A2AConsumerBeanPostProcessor a2aConsumerBeanPostProcessor) {
+        return new MeshToolBeanPostProcessor(registry, wrapperRegistry, objectMapper,
+            a2aConsumerBeanPostProcessor);
+    }
+
+    /**
+     * Issue #923: scans @A2AConsumer methods at boot, constructs an
+     * A2AClient per unique (url, skillId, auth, timeout) tuple, and
+     * exposes a per-method binding for MeshToolWrapper to inject the
+     * cached client at the A2AClient parameter slot at invoke time.
+     *
+     * <p>Static factory so this processor is instantiated before user
+     * beans are created — the same pattern as MeshToolBeanPostProcessor.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public static A2AConsumerBeanPostProcessor a2aConsumerBeanPostProcessor(
+            org.springframework.core.env.Environment environment) {
+        return new A2AConsumerBeanPostProcessor(environment);
     }
 
     @Bean
@@ -227,8 +245,10 @@ public class MeshAutoConfiguration {
     public JobsRuntimeManager jobsRuntimeManager(
             MeshRuntime runtime,
             MeshToolRegistry toolRegistry,
-            MeshToolWrapperRegistry wrapperRegistry) {
-        return new JobsRuntimeManager(runtime, toolRegistry, wrapperRegistry);
+            MeshToolWrapperRegistry wrapperRegistry,
+            A2AConsumerBeanPostProcessor a2aConsumerBeanPostProcessor) {
+        return new JobsRuntimeManager(runtime, toolRegistry, wrapperRegistry,
+            a2aConsumerBeanPostProcessor);
     }
 
     private AgentSpec buildAgentSpec(

@@ -8,6 +8,8 @@ import io.mcpmesh.JobController;
 import io.mcpmesh.MeshJob;
 import io.mcpmesh.MeshJobSubmitter;
 import io.mcpmesh.Param;
+import io.mcpmesh.a2a.A2AClient;
+import io.mcpmesh.a2a.A2AConsumer;
 import io.mcpmesh.core.MeshCore;
 import io.mcpmesh.spring.tracing.ExecutionTracer;
 import io.mcpmesh.spring.tracing.SpanScope;
@@ -104,6 +106,15 @@ public class MeshToolWrapper implements McpToolHandler {
     // wrapper doesn't need a hard dep on MeshRuntime at construction time).
     private final AtomicReference<String> instanceId = new AtomicReference<>();
     private final AtomicReference<String> registryUrl = new AtomicReference<>();
+
+    // Issue #923: @A2AConsumer-injected A2AClient. The slot index is
+    // captured at construction time by analyzeParameters (so the
+    // parameter is exempt from the MCP input schema). The client itself
+    // is bound lazily by MeshToolBeanPostProcessor once the
+    // A2AConsumerBeanPostProcessor has finished computing the cached
+    // instance for this method's (url, skillId, auth, timeout) tuple.
+    private Integer a2aClientParamIndex;
+    private final AtomicReference<A2AClient> a2aClient = new AtomicReference<>();
 
     private final ObjectMapper objectMapper;
 
@@ -224,6 +235,33 @@ public class MeshToolWrapper implements McpToolHandler {
                 // by the dispatch wrapper (JobController on inbound job
                 // dispatch, MeshJobSubmitter on consumer side). No @Param
                 // required; the param is exempt from the MCP input schema.
+                continue;
+            } else if (A2AClient.class.isAssignableFrom(type)) {
+                // Issue #923: @A2AConsumer-injected A2AClient slot. The
+                // index is captured here so the dispatch wrapper can
+                // populate it from the cached client; the parameter is
+                // exempt from the MCP input schema. Multiple A2AClient
+                // params are an error — the bean post-processor enforces
+                // exactly-one at boot, but the wrapper rejects defensively
+                // in case the wrapper is constructed without going through
+                // it (e.g. unit tests).
+                if (!method.isAnnotationPresent(A2AConsumer.class)) {
+                    // An A2AClient parameter without @A2AConsumer has no
+                    // upstream URL/auth/timeout to bind to — the dispatch
+                    // wrapper would silently inject null and the user
+                    // method would NPE on the first call. Fail BOOT, not
+                    // runtime, so the misuse is visible immediately.
+                    throw new IllegalStateException(
+                        "MeshTool method " + method.getName() + " has an A2AClient parameter "
+                            + "but is not annotated with @A2AConsumer. A2AClient injection requires "
+                            + "@A2AConsumer to declare the upstream URL + auth config (issue #923).");
+                }
+                if (a2aClientParamIndex != null) {
+                    throw new IllegalStateException(
+                        "Method " + method.getName() + " declares more than one A2AClient parameter; "
+                            + "exactly one is required (issue #923).");
+                }
+                a2aClientParamIndex = i;
                 continue;
             } else if (McpMeshTool.class.isAssignableFrom(type)) {
                 // Mesh tool dependency - will be injected
@@ -392,6 +430,37 @@ public class MeshToolWrapper implements McpToolHandler {
     /** The position of the MeshJob param in the method signature, or null. */
     public Integer getMeshJobParamIndex() {
         return meshJobParamIndex;
+    }
+
+    /**
+     * Issue #923: bind the cached {@link A2AClient} that {@code @A2AConsumer}
+     * provisioned for this method. Called by {@link MeshToolBeanPostProcessor}
+     * once {@link A2AConsumerBeanPostProcessor} has finished computing the
+     * binding. Throws if the wrapper's analysed signature did not include
+     * an A2AClient slot — keeps the binding wiring honest.
+     *
+     * @param paramIndex slot index reported by the bean post-processor;
+     *                   must match the wrapper's own analysis.
+     * @param client     the cached client to inject at dispatch time.
+     */
+    public void setA2AClientBinding(int paramIndex, A2AClient client) {
+        if (a2aClientParamIndex == null) {
+            throw new IllegalStateException(
+                "Cannot bind A2AClient on " + funcId
+                    + ": method has no A2AClient parameter slot to inject into.");
+        }
+        if (a2aClientParamIndex != paramIndex) {
+            throw new IllegalStateException(
+                "A2AClient binding mismatch for " + funcId
+                    + ": wrapper analysed slot=" + a2aClientParamIndex
+                    + " but post-processor reported slot=" + paramIndex);
+        }
+        this.a2aClient.set(client);
+    }
+
+    /** The position of the A2AClient param in the method signature, or null. */
+    public Integer getA2AClientParamIndex() {
+        return a2aClientParamIndex;
     }
 
     // =========================================================================
@@ -579,6 +648,14 @@ public class MeshToolWrapper implements McpToolHandler {
             fullArgs[meshJobParamIndex] = submitter; // null when no submitter wired
         }
 
+        // Issue #923: fill the @A2AConsumer-injected A2AClient slot, if any.
+        // The bean post-processor has already validated the binding; the
+        // null-guard here is defensive (e.g. wrapper constructed without
+        // going through the post-processor in unit tests).
+        if (a2aClientParamIndex != null) {
+            fullArgs[a2aClientParamIndex] = a2aClient.get();
+        }
+
         // Fill McpMeshTool dependencies (null if unavailable for graceful degradation)
         for (int i = 0; i < meshToolPositions.size(); i++) {
             int paramPos = meshToolPositions.get(i);
@@ -721,6 +798,13 @@ public class MeshToolWrapper implements McpToolHandler {
                 }
             }
             fullArgs[paramPos] = agent;
+        }
+
+        // Issue #923: same A2AClient injection as the non-job path —
+        // needed so a task=true @A2AConsumer method (e.g. report bridge)
+        // receives the cached client when dispatched as a job.
+        if (a2aClientParamIndex != null) {
+            fullArgs[a2aClientParamIndex] = a2aClient.get();
         }
 
         // Decide whether we can build a JobController: we need a slot

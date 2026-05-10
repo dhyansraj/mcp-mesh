@@ -2,6 +2,7 @@ package io.mcpmesh.spring;
 
 import io.mcpmesh.JobController;
 import io.mcpmesh.MeshJobSubmitter;
+import io.mcpmesh.a2a.A2AClient;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshLlmAgent;
 import org.slf4j.Logger;
@@ -56,6 +57,7 @@ public final class JobsRuntimeManager implements SmartLifecycle {
     private final MeshRuntime runtime;
     private final MeshToolRegistry toolRegistry;
     private final MeshToolWrapperRegistry wrapperRegistry;
+    private final A2AConsumerBeanPostProcessor a2aProcessor;
 
     private final Map<String, ClaimDispatcher> dispatchers = new ConcurrentHashMap<>();
     private final AtomicBoolean started = new AtomicBoolean(false);
@@ -65,9 +67,27 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             MeshRuntime runtime,
             MeshToolRegistry toolRegistry,
             MeshToolWrapperRegistry wrapperRegistry) {
+        this(runtime, toolRegistry, wrapperRegistry, null);
+    }
+
+    /**
+     * Issue #923: includes the {@link A2AConsumerBeanPostProcessor} so
+     * the claim-path reflection invoker can fill {@link A2AClient}
+     * parameter slots on {@code task=true @A2AConsumer} methods.
+     * Without this, a long-running A2A bridge dispatched via the claim
+     * path would receive {@code a2a=null} and NPE on the first
+     * {@code a2a.send(...)} call. Pass {@code null} for environments
+     * without A2A consumer support.
+     */
+    public JobsRuntimeManager(
+            MeshRuntime runtime,
+            MeshToolRegistry toolRegistry,
+            MeshToolWrapperRegistry wrapperRegistry,
+            A2AConsumerBeanPostProcessor a2aProcessor) {
         this.runtime = runtime;
         this.toolRegistry = toolRegistry;
         this.wrapperRegistry = wrapperRegistry;
+        this.a2aProcessor = a2aProcessor;
     }
 
     @Override
@@ -255,12 +275,36 @@ public final class JobsRuntimeManager implements SmartLifecycle {
         Object bean = meta.bean();
         method.setAccessible(true);
 
+        // Issue #923: resolve the @A2AConsumer binding (if any) once per
+        // claim — the claim path doesn't hit MeshToolWrapper, so we
+        // can't piggy-back on its setA2AClientBinding wiring. The
+        // binding map is keyed by Method, so the lookup here uses the
+        // same Method instance the user method's reflection metadata
+        // exposes.
+        A2AConsumerBeanPostProcessor.MethodBinding a2aBinding =
+            a2aProcessor != null ? a2aProcessor.bindingFor(method) : null;
+
         Object[] fullArgs = new Object[method.getParameterCount()];
         java.lang.reflect.Parameter[] params = method.getParameters();
         for (int i = 0; i < params.length; i++) {
             Class<?> type = params[i].getType();
             if (io.mcpmesh.MeshJob.class.isAssignableFrom(type)) {
                 fullArgs[i] = controller;
+                continue;
+            }
+            if (A2AClient.class.isAssignableFrom(type)) {
+                // Issue #923: fill the @A2AConsumer-injected A2AClient
+                // slot on the claim path. Without this, a task=true
+                // @A2AConsumer bridge (e.g. uc27 report consumer) would
+                // NPE on the first a2a.send(...) call when dispatched
+                // via the claim path instead of inbound HTTP.
+                if (a2aBinding == null) {
+                    log.warn("JobsRuntimeManager: method {} declares A2AClient parameter but no "
+                        + "A2AConsumerBeanPostProcessor binding exists. Tool will receive null and "
+                        + "likely NPE on first A2A call. Was the bean registered outside Spring's "
+                        + "BeanPostProcessor scan path?", meta.method().getName());
+                }
+                fullArgs[i] = a2aBinding != null ? a2aBinding.client() : null;
                 continue;
             }
             io.mcpmesh.Param paramAnn = params[i].getAnnotation(io.mcpmesh.Param.class);

@@ -8,7 +8,6 @@ import io.mcpmesh.Param;
 import io.mcpmesh.a2a.A2AClient;
 import io.mcpmesh.a2a.A2AConsumer;
 import io.mcpmesh.a2a.A2AStream;
-import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
@@ -20,8 +19,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A2A consumer example (issue #910 / Phase 3, SSE variant) — Java
- * port of {@code examples/a2a/consumer_report_agent_sse.py}.
+ * A2A consumer example (issue #910 / Phase 3, SSE variant; refactored
+ * under #923) — Java port of {@code examples/a2a/consumer_report_agent_sse.py}.
  *
  * <p>Same end-to-end shape as
  * {@code com.example.reportconsumer.ReportConsumerAgentApplication}
@@ -50,12 +49,6 @@ import java.util.Map;
 public class ReportConsumerSseAgentApplication {
 
     private static final Logger log = LoggerFactory.getLogger(ReportConsumerSseAgentApplication.class);
-
-    private static final A2AClient A2A_CLIENT = new A2AClient(
-        "http://localhost:9091/agents/report",
-        "generate-report"
-    );
-
     private static final ObjectMapper JSON = new ObjectMapper();
 
     public static void main(String[] args) {
@@ -81,10 +74,14 @@ public class ReportConsumerSseAgentApplication {
         description = "Bridge upstream A2A generate-report skill via SSE as a mesh ``report_sse`` capability.",
         tags = {"a2a-bridge", "sse"}
     )
-    @A2AConsumer
+    @A2AConsumer(
+        url = "http://localhost:9091/agents/report",
+        skillId = "generate-report"
+    )
     public Object generateReportSse(
             @Param("user_id") String userId,
             @Param(value = "sections", required = false) List<String> sections,
+            A2AClient a2a,
             MeshJob job) throws Exception {
         if (sections == null || sections.isEmpty()) {
             sections = List.of("default");
@@ -96,18 +93,18 @@ public class ReportConsumerSseAgentApplication {
             // return the artifact text. The polling consumer falls back
             // to A2AClient.send() here; the SSE variant has no direct
             // equivalent so we drain the stream and toss progress.
-            return drainSyncFallback(message);
+            return drainSyncFallback(a2a, message);
         }
-        try (A2AStream stream = A2A_CLIENT.subscribe(message)) {
+        try (A2AStream stream = a2a.subscribe(message)) {
             return stream.bridge(controller);
         }
     }
 
-    private Object drainSyncFallback(Map<String, Object> message) throws Exception {
+    private Object drainSyncFallback(A2AClient a2a, Map<String, Object> message) throws Exception {
         // Synchronous tools/call path — no JobController to mirror to,
         // so just iterate the stream and return the first artifact's
         // parsed payload (or the raw text if it isn't JSON).
-        try (A2AStream stream = A2A_CLIENT.subscribe(message)) {
+        try (A2AStream stream = a2a.subscribe(message)) {
             for (var event : stream) {
                 if (event.kind() == io.mcpmesh.a2a.A2AEvent.Kind.ARTIFACT) {
                     String text = event.artifactText();
@@ -135,14 +132,5 @@ public class ReportConsumerSseAgentApplication {
                 "type", "text",
                 "text", JSON.writeValueAsString(argsPayload)))
         );
-    }
-
-    @PreDestroy
-    void releaseA2AClient() {
-        try {
-            A2A_CLIENT.close();
-        } catch (Exception e) {
-            log.warn("Failed to close A2AClient during shutdown", e);
-        }
     }
 }

@@ -24,7 +24,7 @@ class A2AConsumerTagInjectionTest {
     public static class ConsumerBean {
 
         @MeshTool(capability = "current-date", tags = {"a2a-bridge"})
-        @A2AConsumer
+        @A2AConsumer(url = "http://localhost:9090/agents/date", skillId = "get-date")
         public String currentDate() {
             return "today";
         }

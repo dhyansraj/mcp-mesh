@@ -9,7 +9,6 @@ import io.mcpmesh.a2a.A2AClient;
 import io.mcpmesh.a2a.A2AConsumer;
 import io.mcpmesh.a2a.A2AJob;
 import io.mcpmesh.a2a.A2AResponse;
-import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
@@ -21,8 +20,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * A2A consumer example (issue #910 / Phase 3) — Java port of
- * {@code examples/a2a/consumer_report_agent.py}.
+ * A2A consumer example (issue #910 / Phase 3, refactored under #923) —
+ * Java port of {@code examples/a2a/consumer_report_agent.py}.
  *
  * <p>Bridges the existing {@code examples/a2a/report_a2a_agent.py}
  * {@code generate-report} skill onto the mesh as a long-running
@@ -81,17 +80,6 @@ import java.util.Map;
 public class ReportConsumerAgentApplication {
 
     private static final Logger log = LoggerFactory.getLogger(ReportConsumerAgentApplication.class);
-
-    /**
-     * One reusable client per (url, skillId, auth) tuple — amortises
-     * the underlying {@link java.net.http.HttpClient} connection pool
-     * across calls.
-     */
-    private static final A2AClient A2A_CLIENT = new A2AClient(
-        "http://localhost:9091/agents/report",
-        "generate-report"
-    );
-
     private static final ObjectMapper JSON = new ObjectMapper();
 
     public static void main(String[] args) {
@@ -104,7 +92,8 @@ public class ReportConsumerAgentApplication {
      * mesh as the {@code report} capability. The {@link MeshTool}
      * carries {@code task=true} so the framework injects a
      * {@link JobController} (via the {@link MeshJob} parameter) for
-     * long-running progress mirroring.
+     * long-running progress mirroring; {@link A2AConsumer} provisions
+     * the upstream client at the {@code a2a} parameter slot.
      *
      * @return the final artifact value as parsed JSON (typically a
      *         {@code Map<String,Object>} carrying the producer's
@@ -116,10 +105,14 @@ public class ReportConsumerAgentApplication {
         description = "Bridge upstream A2A generate-report skill onto the mesh as a long-running ``report`` capability.",
         tags = {"a2a-bridge"}
     )
-    @A2AConsumer
+    @A2AConsumer(
+        url = "http://localhost:9091/agents/report",
+        skillId = "generate-report"
+    )
     public Object generateReport(
             @Param("user_id") String userId,
             @Param(value = "sections", required = false) List<String> sections,
+            A2AClient a2a,
             MeshJob job) throws Exception {
         if (sections == null || sections.isEmpty()) {
             sections = List.of("default");
@@ -131,7 +124,7 @@ public class ReportConsumerAgentApplication {
             // contract where task=true tools must tolerate a null MeshJob.
             // Mirror the SSE sibling: parse the artifact text as JSON when
             // possible, fall back to raw text on parse failure.
-            A2AResponse response = A2A_CLIENT.send(message);
+            A2AResponse response = a2a.send(message);
             String text = response.artifactText();
             if (text == null || text.isEmpty()) {
                 return text == null ? "" : text;
@@ -142,7 +135,7 @@ public class ReportConsumerAgentApplication {
                 return text;
             }
         }
-        A2AJob a2aJob = A2A_CLIENT.submit(message);
+        A2AJob a2aJob = a2a.submit(message);
         return a2aJob.bridge(controller);
     }
 
@@ -156,14 +149,5 @@ public class ReportConsumerAgentApplication {
                 "type", "text",
                 "text", JSON.writeValueAsString(argsPayload)))
         );
-    }
-
-    @PreDestroy
-    void releaseA2AClient() {
-        try {
-            A2A_CLIENT.close();
-        } catch (Exception e) {
-            log.warn("Failed to close A2AClient during shutdown", e);
-        }
     }
 }
