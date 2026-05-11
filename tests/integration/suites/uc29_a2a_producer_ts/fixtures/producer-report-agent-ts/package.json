@@ -1,0 +1,20 @@
+{
+  "name": "producer-report-agent-ts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "uc29 TypeScript A2A producer fixture (long-running) — exposes generate-report via mesh.a2a.mount on top of the mesh job substrate.",
+  "scripts": {
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "^1.4.1",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}

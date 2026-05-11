@@ -6,7 +6,7 @@ MCP Mesh implements the [A2A v1.0 protocol](https://a2a-protocol.org/latest/spec
 
 The A2A v1.0 spec defines an HTTP + JSON-RPC envelope for cross-vendor agent calls. It deliberately stops at the protocol — capability discovery is per-card, there is no resolver, no failover, no DDDI. MCP Mesh adds those layers around A2A:
 
-- **Producer** (Python, Java today; TypeScript tracked in [#933](https://github.com/dhyanraj/mcp-mesh/issues/933)): the producer entry builds the agent card automatically from declared metadata and attaches both `/.well-known/agent.json` and the JSON-RPC entrypoint to a user-owned hosting framework — `mesh.a2a.mount(app, ...)` on FastAPI in Python, `@MeshA2A` on a Spring Boot bean in Java. Sync, long-running (`task=True`/`task=true`), and SSE handlers are all supported.
+- **Producer** (Python, Java, TypeScript — all three runtimes; TS shipped via [#933](https://github.com/dhyanraj/mcp-mesh/issues/933)): the producer entry builds the agent card automatically from declared metadata and attaches both `/.well-known/agent.json` and the JSON-RPC entrypoint to a user-owned hosting framework — `mesh.a2a.mount(app, ...)` on FastAPI in Python, `@MeshA2A` on a Spring Boot bean in Java, `mesh.a2a.mount(app, ...)` on Express in TypeScript. Sync, long-running (`task=True`/`task=true`), and SSE handlers are all supported.
 - **Consumer** (Python, Java, TypeScript): a mesh capability whose body issues outbound `tasks/send` / `tasks/sendSubscribe` against a foreign A2A backend. The bridge re-publishes the upstream skill as a normal mesh capability — downstream callers do not need to know they are talking to A2A.
 
 ## The strategic value-add
@@ -23,8 +23,8 @@ Once a foreign A2A backend is bridged into the mesh as a capability, every mesh 
 | Aspect            | Producer                                                                                  | Consumer                                                    |
 | ----------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
 | Direction         | Mesh tool exposed AS A2A                                                                  | External A2A skill bridged INTO mesh                        |
-| Decorator/marker  | `mesh.a2a.mount(app, ...)` (Py) / `@MeshA2A` (Java)                                       | `@mesh.a2a_consumer` (Py) / `@A2AConsumer` (Java) / `a2aConfig` (TS) |
-| Runtime support   | Python, Java (TypeScript tracked in [#933](https://github.com/dhyanraj/mcp-mesh/issues/933)) | Python, Java, TypeScript                                    |
+| Decorator/marker  | `mesh.a2a.mount(app, ...)` (Py / TS) / `@MeshA2A` (Java)                                  | `@mesh.a2a_consumer` (Py) / `@A2AConsumer` (Java) / `a2aConfig` (TS) |
+| Runtime support   | Python, Java, TypeScript                                                                   | Python, Java, TypeScript                                    |
 | Card / discovery  | Auto-generated at `/.well-known/agent.json`                                               | Card fetched once at scaffold time (or `--offline`)         |
 | Long-running      | Return `JobProxy`; framework parks the task                                               | `task=True` body submits + `bridge(JobController)`          |
 | SSE               | `tasks/sendSubscribe` handler returns `JobProxy`                                          | `A2AClient.subscribe(...)` + `stream.bridge(JobController)` |
@@ -70,7 +70,7 @@ The consumer agent is a regular `@mesh.tool` capability whose body happens to wr
 
 - **A2A v1.0 protocol semantics.** Wire format, JSON-RPC envelopes, task lifecycle states — see the [A2A v1.0 spec](https://a2a-protocol.org/latest/specification/) and [JSON-RPC 2.0](https://www.jsonrpc.org/specification).
 - **Authentication schemes beyond bearer.** OAuth / mTLS are future work — Phase 1 ships bearer only ([Authentication](authentication.md)).
-- **TypeScript producer.** Tracked in [issue #933](https://github.com/dhyanraj/mcp-mesh/issues/933); Python and Java producers ship today ([Producer](producer.md) header).
+- **Multi-skill cards.** Each `mesh.a2a.mount(...)` / `@MeshA2A` surface emits exactly one skill per card today. Multi-skill grouping under a single card is v2 scope ([surfaces-spec.md Appendix B](surfaces-spec.md)).
 
 ## See also
 

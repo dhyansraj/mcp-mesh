@@ -2,8 +2,8 @@
 
 Expose mesh tools to external A2A clients via the A2A v1.0 protocol surface.
 
-!!! info "Python and Java today; TypeScript is future work"
-    Producer support ships in the Python and Java runtimes. TypeScript producer support is tracked in [issue #933](https://github.com/dhyanraj/mcp-mesh/issues/933). Java consumers can still bridge a TS-hosted A2A backend via [`@A2AConsumer`](consumer-quickstart.md) in the meantime.
+!!! info "Producer support is complete across all three runtimes"
+    Producer support ships in **Python**, **Java**, and **TypeScript** (issue [#933](https://github.com/dhyanraj/mcp-mesh/issues/933)) — all three runtimes have full A2A support on both the producer and consumer sides.
 
 ## Decoration and mounting
 
@@ -20,6 +20,12 @@ A producer agent's handler is decorated/mounted via a runtime-native entry point
     `@MeshA2A(path = "/agents/<skill>", ...)` on a Spring Boot bean method (sibling to `@MeshRoute`). The framework auto-mounts both routes on the application's `DispatcherServlet` — the user owns the Spring Boot lifecycle (`SpringApplication.run(...)`).
 
     Mesh dependencies are declared via `@MeshDependency` entries on the annotation and injected at `@MeshInject` parameter slots, identical to the `@MeshRoute` DDDI path.
+
+=== "TypeScript"
+
+    `mesh.a2a.mount(app, config, handler)` on a user-owned Express app (sibling to `mesh.route(...)`). The user owns the Express app AND the `app.listen()` lifecycle — same shape as `mesh.route(...)` HTTP handlers. The mesh api-runtime pipeline picks up the mounted A2A surface from the `A2AProducerRegistry` and registers the agent with the registry as `agent_type=a2a` on each heartbeat.
+
+    Mesh dependencies are declared via the `dependencies` array on the mount config and supplied to the handler under the `deps` argument keyed by capability name, identical to how `mesh.route(...)` injects resolved `McpMeshTool` proxies.
 
 ## Sync handler
 
@@ -105,6 +111,40 @@ The simplest case — the upstream returns within seconds, so there is no parkin
     }
     ```
 
+=== "TypeScript"
+
+    ```typescript
+    import express from "express";
+    import { mesh, type McpMeshTool } from "@mcpmesh/sdk";
+
+    process.env.MCP_MESH_HTTP_PORT = process.env.MCP_MESH_HTTP_PORT ?? "9090";
+    process.env.MCP_MESH_AGENT_NAME = process.env.MCP_MESH_AGENT_NAME ?? "date-a2a-agent";
+
+    const app = express();
+    app.use(express.json());
+
+    mesh.a2a.mount(
+      app,
+      {
+        path: "/agents/date",
+        skillId: "get-date",
+        skillName: "Get Date",
+        description: "Get current date/time via A2A protocol",
+        tags: ["system", "date"],
+        dependencies: ["date_service"],
+      },
+      async (deps, _payload) => {
+        const dateService = deps.date_service as McpMeshTool | null;
+        if (dateService === null) {
+          return { error: "date_service not yet resolved" };
+        }
+        return { date: await dateService.call({}) };
+      },
+    );
+
+    app.listen(9090);
+    ```
+
 Two routes are now live on port 9090:
 
 | Route                                      | Purpose                                       |
@@ -112,7 +152,7 @@ Two routes are now live on port 9090:
 | `GET  /agents/date/.well-known/agent.json` | Auto-generated agent card (capabilities, skills, auth schemes) |
 | `POST /agents/date`                        | JSON-RPC entry — dispatches `tasks/*` methods |
 
-The card is built at agent registration time from the `@mesh.tool` / `@MeshA2A` metadata of declared dependencies and the producer-entry parameters (`skill_id`, `skill_name`, `description`, `tags`). Source: `src/runtime/python/_mcp_mesh/engine/a2a_card.py` (Python), `src/runtime/java/mcp-mesh-spring-boot-starter/.../MeshA2ACardBuilder.java` (Java).
+The card is built at agent registration time from the `@mesh.tool` / `@MeshA2A` / `mesh.a2a.mount(...)` metadata of declared dependencies and the producer-entry parameters (`skill_id`, `skill_name`, `description`, `tags`). Source: `src/runtime/python/_mcp_mesh/engine/a2a_card.py` (Python), `src/runtime/java/mcp-mesh-spring-boot-starter/.../MeshA2ACardBuilder.java` (Java), `src/runtime/typescript/src/a2a/producer/card-builder.ts` (TypeScript).
 
 ## Long-running handler (`task=True`)
 
@@ -220,6 +260,52 @@ When the underlying work is long-running (`task=True` in the dependency graph), 
     }
     ```
 
+=== "TypeScript"
+
+    ```typescript
+    import express from "express";
+    import { getApiRuntime, mesh, MeshJobSubmitter } from "@mcpmesh/sdk";
+
+    process.env.MCP_MESH_HTTP_PORT = process.env.MCP_MESH_HTTP_PORT ?? "9091";
+    process.env.MCP_MESH_AGENT_NAME = process.env.MCP_MESH_AGENT_NAME ?? "report-a2a-agent";
+
+    const app = express();
+    app.use(express.json());
+
+    mesh.a2a.mount(
+      app,
+      {
+        path: "/agents/report",
+        skillId: "generate-report",
+        skillName: "Generate Report",
+        description: "Generate a long-form report via A2A (task=True streaming)",
+        tags: ["reports", "long-running"],
+      },
+      async (_deps, payload) => {
+        // mesh.a2a.mount injects McpMeshTool proxies into A2A handlers but
+        // does NOT (today) auto-wire MeshJobSubmitter for task=true deps —
+        // construct it inline from the api-runtime singleton + the registry
+        // URL the SDK already resolved. Cheap, stateless after construction.
+        const agentId = getApiRuntime().getServiceId();
+        const registryUrl =
+          process.env.MCP_MESH_REGISTRY_URL ?? "http://localhost:8000";
+        const submitter = new MeshJobSubmitter(
+          "generate_report",
+          agentId,
+          registryUrl,
+        );
+
+        const proxy = await submitter.submit({
+          user_id: "alice",
+          sections: ["intro", "body"],
+        });
+        return proxy; // long-running mode trigger
+      },
+    );
+
+    app.listen(9091);
+    ```
+
 Returning the `JobProxy` switches the framework into long-running mode:
 
 - The inbound `tasks/send` returns `state=working` immediately.
@@ -235,13 +321,50 @@ The producer-side handler does NOT need to be SSE-aware — write it once for `t
 
 ## Mixed-mode rejection
 
-A single Python process may NOT host both `@mesh.tool`-style capabilities and a `mesh.a2a.mount(...)` surface. The framework raises a clear error at agent boot if both are present in the same process — they have different registration paths (`@mesh.tool` goes through the standard heartbeat; `mesh.a2a.mount` registers the agent as `agent_type=a2a`), and the agent card cannot represent both shapes coherently. The Java runtime allows `@MeshTool` and `@MeshA2A` to coexist in the same Spring Boot app (the registration paths share a heartbeat), but the agent advertises `agent_type=a2a` as soon as one `@MeshA2A` surface is present.
+A single Python process may NOT host both `@mesh.tool`-style capabilities and a `mesh.a2a.mount(...)` surface. The framework raises a clear error at agent boot if both are present in the same process — they have different registration paths (`@mesh.tool` goes through the standard heartbeat; `mesh.a2a.mount` registers the agent as `agent_type=a2a`), and the agent card cannot represent both shapes coherently. The Java and TypeScript runtimes allow `@MeshTool` / `addTool(...)` and the A2A producer surface to coexist in the same process (the registration paths share a single heartbeat envelope), but the agent advertises `agent_type=a2a` as soon as one A2A surface is present.
 
-If you need both runtimes' parallel semantics, split into two agents (one `@mesh.tool`/`@MeshTool` provider for the underlying capability, one A2A-surface agent that depends on it via the producer-entry's dependencies). The `report_a2a_agent` example above is exactly this pattern — it depends on `generate_report` (provided by a separate `task=True` agent) and exposes it via A2A.
+If you need both runtimes' parallel semantics, split into two agents (one `@mesh.tool` / `@MeshTool` / `addTool(...)` provider for the underlying capability, one A2A-surface agent that depends on it via the producer-entry's dependencies). The `report_a2a_agent` example above is exactly this pattern — it depends on `generate_report` (provided by a separate `task=True` agent) and exposes it via A2A.
 
 ## Authentication
 
-The producer side enforces bearer auth at the JSON-RPC route. Configure the expected token via `auth="bearer"` on `mesh.a2a.mount(...)` / `@MeshA2A(...)` (Phase 1 ships bearer only — OAuth / mTLS are future work). Card auth schemes are auto-published in `/.well-known/agent.json` so consumers can scaffold against them. See [Authentication](authentication.md).
+The producer side enforces bearer auth at the JSON-RPC route. Card auth schemes are auto-published in `/.well-known/agent.json` so consumers can scaffold against them. Phase 1 ships bearer only — OAuth / mTLS are future work. See [Authentication](authentication.md).
+
+=== "Python"
+
+    ```python
+    @mesh.a2a.mount(
+        app,
+        path="/agents/date",
+        skill_id="get-date",
+        auth="bearer",
+    )
+    async def date_a2a(payload: dict): ...
+    ```
+
+=== "Java"
+
+    ```java
+    @MeshA2A(
+        path = "/agents/date",
+        skillId = "get-date",
+        auth = "bearer"
+    )
+    public Map<String, Object> getDate(Map<String, Object> message) { ... }
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    mesh.a2a.mount(
+      app,
+      {
+        path: "/agents/date",
+        skillId: "get-date",
+        auth: "bearer",
+      },
+      async (_deps, _payload) => { /* ... */ },
+    );
+    ```
 
 ## Working examples
 
@@ -249,6 +372,8 @@ The producer side enforces bearer auth at the JSON-RPC route. Configure the expe
 - `examples/a2a/report_a2a_agent.py` — Python long-running + SSE handler bridging `generate_report` (`task=True`)
 - `examples/java/producer-date-agent/` — Java sync handler bridging the `date_service` capability via `@MeshA2A`
 - `examples/java/producer-report-agent/` — Java long-running + SSE handler bridging `generate_report` (`task=true`) via `@MeshA2A`
+- `examples/typescript/producer-date-agent/` — TypeScript sync handler bridging the `date_service` capability via `mesh.a2a.mount(...)`
+- `examples/typescript/producer-report-agent/` — TypeScript long-running + SSE handler bridging `generate_report` (`task=true`) via `mesh.a2a.mount(...)`
 
 ## See also
 
