@@ -143,13 +143,27 @@ export class A2AJob {
     }
 
     let cancelObserved = false;
+    // ONE shared AbortController fans out the cancelPromise resolution
+    // to every per-iteration `raceSleep` listener. Without this the
+    // polling loop would attach a fresh `.then` to cancelPromise on
+    // every iteration — for a 30-min job at sub-second polling that's
+    // hundreds of accumulated handlers on a never-resolving promise,
+    // i.e. linear memory creep. AbortController makes the fan-out O(1).
+    const cancelAbort = new AbortController();
     cancelPromise
       .then(() => {
         cancelObserved = true;
+        cancelAbort.abort();
       })
-      .catch(() => {
-        // awaitJobCancel resolves on cancel/end OR rejects only when
-        // the napi binding fails — treat as no cancel.
+      .catch((err: unknown) => {
+        // awaitJobCancel resolves on cancel/end and only rejects when
+        // the napi binding itself fails. That's a real diagnostic
+        // signal (binding loss mid-job) — log at WARN so it surfaces
+        // without throwing into the polling loop.
+        console.warn(
+          `[a2a-job] bridge: awaitJobCancel observer failed for task ` +
+            `${this.taskId}: ${(err as Error)?.message ?? String(err)}`,
+        );
       });
 
     let intervalMs = this.client.pollIntervalMs;
@@ -186,7 +200,7 @@ export class A2AJob {
       // Race the sleep against the cancel signal — if cancel fires
       // mid-sleep we wake immediately and propagate on the next loop
       // iteration without wasting one more `tasks/get` round trip.
-      await raceSleep(intervalMs, cancelPromise);
+      await raceSleep(intervalMs, cancelAbort.signal);
       intervalMs = Math.min(
         this.client.pollIntervalMaxMs,
         Math.floor(intervalMs * POLL_BACKOFF_FACTOR),
@@ -282,20 +296,27 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Sleep for `ms` OR until `cancelPromise` resolves — whichever is
- * first. The cancel promise resolving wakes us early; the timer is
- * cleared in either path so we don't leak handles.
+ * Sleep for `ms` OR until `signal` aborts — whichever is first. The
+ * abort wakes us early; the timer is cleared in either path so we
+ * don't leak handles. Uses an `AbortSignal` instead of a raw promise
+ * so the polling loop can attach ONE upstream listener (the
+ * AbortController) and fan out to per-iteration `raceSleep` calls
+ * without accumulating handlers on a long-running cancelPromise.
  */
-function raceSleep(ms: number, cancelPromise: Promise<void>): Promise<void> {
+function raceSleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
       clearTimeout(timer);
       resolve();
     };
-    const timer = setTimeout(finish, ms);
-    cancelPromise.then(finish, finish);
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }

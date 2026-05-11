@@ -10,7 +10,7 @@ import {
   mesh,
   type A2AClient,
   type MeshJob,
-  JobController,
+  type JobController,
 } from "@mcpmesh/sdk";
 import { z } from "zod";
 

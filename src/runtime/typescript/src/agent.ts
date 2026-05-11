@@ -213,6 +213,17 @@ export class MeshAgent {
    */
   private _a2aClients: Map<string, A2AClient> = new Map();
 
+  /**
+   * Issue #917: stable opaque IDs for `A2ABearer` instances used in
+   * the A2AClient cache key. Bearer fields are private so we cannot
+   * fingerprint by content (would also be a security risk — two
+   * tools with distinct literal tokens must NEVER share a cache
+   * entry). Identity-based keying is the safe default. `WeakMap`
+   * lets bearers be GC'd when the registering tool is removed.
+   */
+  private _bearerIds: WeakMap<A2ABearer, string> = new WeakMap();
+  private _nextBearerId = 0;
+
   constructor(server: FastMCP, config: AgentConfig) {
     if (_isWorkerMode) {
       // Worker thread: skip ALL init. Only addTool() runs (in worker-mode
@@ -898,18 +909,18 @@ export class MeshAgent {
    * Issue #917: build an `A2ABearer` (or undefined) from the
    * user-friendly auth config supported on `MeshA2AConfig.auth`. The
    * config can be either an `{ token, tokenEnv }` shorthand object OR
-   * an instance that already exposes `authorizationHeader()` (e.g. a
-   * pre-built `A2ABearer` the user constructed manually).
+   * a pre-built `A2ABearer` instance the user constructed manually.
+   *
+   * Tightened to `instanceof A2ABearer` so a stray `{ token,
+   * authorizationHeader: () => ... }` object cannot duck-type its way
+   * past A2ABearer's validation (which catches blank tokens and
+   * mutually-exclusive `token`/`tokenEnv`).
    */
   private _buildBearerFromConfig(
     auth: import("./types.js").MeshA2AConfig["auth"],
   ): A2ABearer | undefined {
     if (auth === undefined) return undefined;
-    if (typeof (auth as { authorizationHeader?: unknown })
-      .authorizationHeader === "function") {
-      // Already an A2ABearer (or duck-typed equivalent) — pass through.
-      return auth as A2ABearer;
-    }
+    if (auth instanceof A2ABearer) return auth;
     return new A2ABearer(auth as { token?: string; tokenEnv?: string });
   }
 
@@ -918,23 +929,35 @@ export class MeshAgent {
    * multiple consumer tools targeting the same backend share one
    * outbound connection pool. Auth instances participate in the cache
    * key by reference (same `A2ABearer` ref → same client); two
-   * separately-constructed bearers pointing at the same env var get
-   * separate clients (rare; correctness-preserving).
+   * separately-constructed bearers — even ones holding identical
+   * tokens — get separate clients. Identity-based keying is the safe
+   * default: A2ABearer's private fields make content-fingerprinting
+   * impossible from outside, and a content-derived key risks leaking
+   * tool-A's bearer onto tool-B's outbound traffic.
    */
+  private _bearerCacheKey(
+    bearer: A2ABearer | import("./a2a/a2a-bearer.js").A2ABearerConfig | undefined,
+  ): string {
+    if (!bearer) return "none";
+    // A2AClientConfig.auth permits a raw A2ABearerConfig too, but the
+    // call site below always normalises via `_buildBearerFromConfig`
+    // first, so in practice we only ever see real A2ABearer instances.
+    // Defensively pass-through the config-shape case as a content-free
+    // fallback key — never collide with the bearer-id namespace.
+    if (!(bearer instanceof A2ABearer)) return "raw-config";
+    let id = this._bearerIds.get(bearer);
+    if (id === undefined) {
+      id = `bearer-${this._nextBearerId++}`;
+      this._bearerIds.set(bearer, id);
+    }
+    return id;
+  }
+
   private _getOrBuildA2AClient(config: A2AClientConfig): A2AClient {
-    const authKey = config.auth
-      ? Object.prototype.hasOwnProperty.call(config.auth, "tokenEnv")
-        ? `env:${(config.auth as { tokenEnv?: string }).tokenEnv ?? ""}`
-        : `lit:${
-            (config.auth as { token?: string }).token === undefined
-              ? "?"
-              : "set"
-          }`
-      : "none";
     const key = [
       config.url,
       config.skillId,
-      authKey,
+      this._bearerCacheKey(config.auth),
       config.timeoutMs ?? "default",
       config.pollIntervalMs ?? "default",
       config.pollIntervalMaxMs ?? "default",

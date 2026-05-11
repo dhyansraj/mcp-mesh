@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { z } from "zod";
 import { MeshAgent } from "../../agent.js";
 import { A2AClient } from "../../a2a/a2a-client.js";
+import { A2ABearer } from "../../a2a/a2a-bearer.js";
 
 function makeFastMCPStub() {
   return {
@@ -131,6 +132,60 @@ describe("A2AClient cache", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const cache = (agent as any)._a2aClients as Map<string, A2AClient>;
     expect(cache.size).toBe(2);
+  });
+
+  it("cache_distinguishesA2AClientsByDistinctBearerInstances", () => {
+    // Regression for the BLOCKER: two A2ABearer instances holding
+    // distinct literal tokens MUST NOT collide in the A2AClient cache.
+    // Pre-fix the cache key used `Object.prototype.hasOwnProperty.call`
+    // against `tokenEnv` — which always returned true because A2ABearer
+    // assigns both fields unconditionally — so both bearers hashed to
+    // `env:` and tool-B's outbound HTTP would carry tool-A's secret.
+    const agent = newAgent();
+    const bearerA = new A2ABearer({ token: "secret-A" });
+    const bearerB = new A2ABearer({ token: "secret-B" });
+    agent.addTool({
+      name: "tool-a",
+      capability: "x",
+      parameters: z.object({}),
+      a2aConfig: { url: "http://x/agents/x", skillId: "x", auth: bearerA },
+      execute: async () => "ok",
+    });
+    agent.addTool({
+      name: "tool-b",
+      capability: "x",
+      parameters: z.object({}),
+      a2aConfig: { url: "http://x/agents/x", skillId: "x", auth: bearerB },
+      execute: async () => "ok",
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cache = (agent as any)._a2aClients as Map<string, A2AClient>;
+    expect(cache.size).toBe(2);
+  });
+
+  it("reuses one A2AClient when the SAME A2ABearer instance is shared", () => {
+    // Counterpart to the above — sharing one bearer reference across
+    // multiple tools SHOULD hit the cache (the desired connection-pool
+    // sharing behaviour). Identity-based keying preserves this.
+    const agent = newAgent();
+    const sharedBearer = new A2ABearer({ tokenEnv: "MY_TOKEN" });
+    agent.addTool({
+      name: "tool-a",
+      capability: "x",
+      parameters: z.object({}),
+      a2aConfig: { url: "http://x/agents/x", skillId: "x", auth: sharedBearer },
+      execute: async () => "ok",
+    });
+    agent.addTool({
+      name: "tool-b",
+      capability: "x",
+      parameters: z.object({}),
+      a2aConfig: { url: "http://x/agents/x", skillId: "x", auth: sharedBearer },
+      execute: async () => "ok",
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cache = (agent as any)._a2aClients as Map<string, A2AClient>;
+    expect(cache.size).toBe(1);
   });
 });
 
