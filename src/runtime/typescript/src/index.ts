@@ -56,6 +56,25 @@ import { bindToExpress } from "./api-runtime.js";
 import { llm } from "./llm.js";
 import { llmProvider } from "./llm-provider.js";
 import { sseStream } from "./sse-stream.js";
+import { mount as a2aMount } from "./a2a/producer/index.js";
+
+/**
+ * `mesh.a2a` namespace — A2A v1.0 producer surface (issue #933).
+ *
+ * Sibling to `mesh.route(...)` for "user-owned Express app, DDDI of mesh
+ * tools" — but tailored to the A2A protocol's two-routes-per-skill shape
+ * (dispatch + agent card). One call to `mesh.a2a.mount(app, config,
+ * handler)` wires both routes plus the heartbeat surface emission.
+ */
+interface MeshA2ANamespace {
+  /**
+   * Mount an A2A v1.0 producer surface. Wires the JSON-RPC dispatch route
+   * and the agent-card discovery route on the provided Express app.
+   */
+  mount: typeof a2aMount;
+}
+
+const a2a: MeshA2ANamespace = { mount: a2aMount };
 
 // Create mesh namespace with route and llm attached
 interface MeshNamespace {
@@ -70,6 +89,8 @@ interface MeshNamespace {
   llmProvider: typeof llmProvider;
   /** Pipe an AsyncIterable<string> to an Express response as text/event-stream */
   sseStream: typeof sseStream;
+  /** A2A v1.0 producer surface (issue #933). */
+  a2a: MeshA2ANamespace;
 }
 
 /**
@@ -89,6 +110,7 @@ const mesh: MeshNamespace = Object.assign(meshFn, {
   llm,
   llmProvider,
   sseStream,
+  a2a,
 });
 
 // Main API
@@ -328,6 +350,35 @@ export {
   type A2AEvent,
   type A2AEventKind,
 } from "./a2a/index.js";
+
+// A2A producer surface (issue #933 — Chunk 1A: sync skeleton). Users invoke
+// `mesh.a2a.mount(app, config, handler)`; the producer types + registry
+// classes are exported for advanced wiring / testability.
+export {
+  A2AProducerRegistry,
+  A2ATaskStore,
+  buildAgentCard,
+  buildBearerAuthMiddleware,
+  buildCompletedTask,
+  buildDispatcherMiddleware,
+  buildFailedTask,
+  buildWorkingTask,
+  stringifyResult,
+  TERMINAL_EVICTION_MS,
+  DEFAULT_INPUT_MODES as A2A_DEFAULT_INPUT_MODES,
+  DEFAULT_OUTPUT_MODES as A2A_DEFAULT_OUTPUT_MODES,
+  JSONRPC_AUTH_ERROR as A2A_JSONRPC_AUTH_ERROR,
+  JSONRPC_PARSE_ERROR as A2A_JSONRPC_PARSE_ERROR,
+  JSONRPC_INVALID_REQUEST as A2A_JSONRPC_INVALID_REQUEST,
+  JSONRPC_METHOD_NOT_FOUND as A2A_JSONRPC_METHOD_NOT_FOUND,
+  JSONRPC_INVALID_PARAMS as A2A_JSONRPC_INVALID_PARAMS,
+  type A2AMountConfig,
+  type A2ASurfaceMetadata,
+  type A2ADependencies,
+  type A2AHandler,
+  type CardRenderContext as A2ACardRenderContext,
+  type TaskRecord as A2ATaskRecord,
+} from "./a2a/producer/index.js";
 
 // Types
 export type {

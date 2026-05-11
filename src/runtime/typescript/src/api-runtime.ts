@@ -45,6 +45,7 @@ import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { createProxy } from "./proxy.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
 import { getTlsConfigCached, prepareTls, cleanupTls } from "./tls-config.js";
+import { A2AProducerRegistry } from "./a2a/producer/registry.js";
 
 /**
  * Build tool specs from registered routes.
@@ -209,7 +210,25 @@ class ApiRuntime {
       const routes = registry.getRoutes();
       const tools = buildToolSpecs(routes);
 
-      // Create AgentSpec with agent_type: "api"
+      // Issue #933: flip agent_type to "a2a" when any mesh.a2a.mount(...)
+      // surface is registered (spec §2.3 / §8). A2A surfaces and
+      // mesh.route() / mesh.tool capabilities coexist on the same agent;
+      // agent_type=a2a does NOT mean "no other routes/tools" (spec §2.3,
+      // matches Python's heartbeat_preparation.py:371-389).
+      const a2aRegistry = A2AProducerRegistry.getInstance();
+      const a2aSurfaces = a2aRegistry.hasSurfaces()
+        ? a2aRegistry.buildHeartbeatSurfaces()
+        : [];
+      const agentType = a2aSurfaces.length > 0 ? "a2a" : "api";
+      // Serialize surfaces JSON for the napi binding's `surfaces?: string`
+      // passthrough — the Rust core re-parses before forwarding verbatim
+      // to the registry's `MeshAgentRegistration.surfaces` field. Empty
+      // arrays are encoded as undefined so the wire stays clean.
+      const surfacesJson = a2aSurfaces.length > 0
+        ? JSON.stringify(a2aSurfaces)
+        : undefined;
+
+      // Create AgentSpec
       const spec: JsAgentSpec = {
         // Base name (shared across replicas), unique ID via agentId.
         name: namePart,
@@ -220,9 +239,10 @@ class ApiRuntime {
         httpPort: port,
         httpHost: autoDetectIp(),
         namespace,
-        agentType: "api", // API services only consume capabilities
+        agentType,
         tools,
         heartbeatInterval,
+        surfaces: surfacesJson,
       };
 
       // Start the agent via Rust core

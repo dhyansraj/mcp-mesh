@@ -240,11 +240,18 @@ pub struct JsAgentSpec {
     pub llm_agents: Option<Vec<JsLlmAgentSpec>>,
     /// Heartbeat interval in seconds
     pub heartbeat_interval: u32,
+    /// A2A surfaces JSON (issue #933 — TS A2A producer parity with Python /
+    /// Java). Optional — populated only when `agent_type=a2a` and the SDK has
+    /// at least one `mesh.a2a.mount(...)` surface registered. Stored as a
+    /// JSON-encoded string to match the Python `surfaces: Option<String>`
+    /// shape on `AgentSpec`; the Rust core re-parses before forwarding
+    /// verbatim to the registry's `MeshAgentRegistration.surfaces` field.
+    pub surfaces: Option<String>,
 }
 
 impl From<JsAgentSpec> for RustAgentSpec {
     fn from(js: JsAgentSpec) -> Self {
-        RustAgentSpec::new(
+        let mut spec = RustAgentSpec::new(
             js.name,
             js.registry_url,
             js.version,
@@ -252,14 +259,18 @@ impl From<JsAgentSpec> for RustAgentSpec {
             js.http_port,
             js.http_host,
             js.namespace,
-            js.agent_type, // "mcp_agent" or "api", defaults to "mcp_agent"
+            js.agent_type, // "mcp_agent" or "api" or "a2a", defaults to "mcp_agent"
             // Default to "typescript" for TypeScript SDK
             Some(js.runtime.unwrap_or_else(|| "typescript".to_string())),
             Some(js.tools.into_iter().map(|t| t.into()).collect()),
             js.llm_agents.map(|agents| agents.into_iter().map(|a| a.into()).collect()),
             js.heartbeat_interval as u64,
             js.agent_id,
-        )
+        );
+        // Forward `surfaces` JSON passthrough (empty string treated as absent
+        // so the wire stays clean — matches Python's `py_new` behavior).
+        spec.surfaces = js.surfaces.filter(|s| !s.trim().is_empty());
+        spec
     }
 }
 
@@ -988,6 +999,7 @@ mod tests {
             tools: vec![],
             llm_agents: None,
             heartbeat_interval: 5,
+            surfaces: None,
         };
 
         let rust_spec: RustAgentSpec = js_spec.into();
@@ -1014,6 +1026,7 @@ mod tests {
             tools: vec![],
             llm_agents: None,
             heartbeat_interval: 5,
+            surfaces: None,
         };
 
         let rust_spec: RustAgentSpec = js_spec.into();
@@ -1037,6 +1050,7 @@ mod tests {
             tools: vec![],
             llm_agents: None,
             heartbeat_interval: 5,
+            surfaces: None,
         };
 
         let rust_spec: RustAgentSpec = js_spec.into();
@@ -1098,6 +1112,7 @@ mod tests {
                 max_iterations: 10,
             }]),
             heartbeat_interval: 5,
+            surfaces: None,
         };
 
         let rust_spec: RustAgentSpec = js_spec.into();

@@ -61,11 +61,11 @@ runtime-implementation choices.
 The user-facing API differs by language, but all three forms expand to the same
 wire contract:
 
-| Concept                       | Python                          | Java (implemented)         | TypeScript (planned, issue #933) |
+| Concept                       | Python                          | Java (implemented)         | TypeScript (implemented) |
 |-------------------------------|---------------------------------|----------------------------|----------------------------------|
-| Decorator-level metadata stamp | `@mesh.a2a(path=...)`           | `@MeshA2A(path=...)`       | `mesh.a2a({path: ...})` (functional helper) |
-| Mount + DI                    | `mesh.a2a.mount(app, path=...)` | annotation processor       | `mesh.a2a()` returns a router    |
-| Source-of-truth file          | `src/runtime/python/mesh/a2a.py` | `src/runtime/java/mcp-mesh-spring-boot-starter/src/main/java/io/mcpmesh/spring/web/` | (TBD)                            |
+| Decorator-level metadata stamp | `@mesh.a2a(path=...)`           | `@MeshA2A(path=...)`       | `mesh.a2a.mount(app, {path, skillId, ...}, handler)` |
+| Mount + DI                    | `mesh.a2a.mount(app, path=...)` | annotation processor       | `mesh.a2a.mount(app, ...)` wires both routes on the user-owned Express app |
+| Source-of-truth file          | `src/runtime/python/mesh/a2a.py` | `src/runtime/java/mcp-mesh-spring-boot-starter/src/main/java/io/mcpmesh/spring/web/` | `src/runtime/typescript/src/a2a/producer/` (`mount.ts`, `dispatcher.ts`, `sse-emitter.ts`, `card-builder.ts`, `auth-filter.ts`, `task-store.ts`, `state-translator.ts`, `registry.ts`) |
 
 > The Python implementation is the de-facto reference. New runtimes must match
 > wire shape, NOT implementation structure.

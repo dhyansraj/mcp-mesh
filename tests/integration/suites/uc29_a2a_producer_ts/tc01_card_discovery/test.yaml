@@ -1,0 +1,122 @@
+# tc01_card_discovery — TypeScript A2A producer agent card endpoint smoke (issue #933 Chunk 1C-integration).
+#
+# Verifies the TS mesh.a2a.mount(...) path mounts a valid
+# /.well-known/agent.json at the surface path AND that the card carries
+# the A2A v1.0 required fields: name, skills[*].id/name/description/tags,
+# capabilities.streaming, defaultInputModes/defaultOutputModes. TS port
+# of uc24 tc01 / uc28 tc01.
+#
+# Sync skill — capabilities.streaming is still advertised true because
+# the framework ALWAYS wires sendSubscribe + resubscribe on every
+# mesh.a2a.mount surface (matches Python/Java producer behavior; sync
+# handlers stream a single artifact + terminal event over SSE).
+
+name: "A2A Producer (TS): agent card discovery"
+description: "GET /agents/date/.well-known/agent.json on TS mesh.a2a.mount returns valid A2A v1.0 card"
+tags:
+  - a2a
+  - typescript
+  - smoke
+  - issue-933
+  - producer
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/system-agent /workspace/
+      cp -rL /uc-artifacts/producer-date-agent-ts /workspace/
+
+  - name: "Install system-agent deps"
+    handler: pip-install
+    path: /workspace/system-agent
+
+  - name: "Install producer-date-agent-ts deps"
+    handler: npm-install
+    path: /workspace/producer-date-agent-ts
+
+  - routine: start_registry_a2a
+
+  - name: "Start system-agent (port 9100, provides date_service)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for system-agent registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start producer-date-agent-ts (port 9090)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start producer-date-agent-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9090 -d
+
+  # TS cold-start ~5-10s for tsx; the fast-sweep registry could mark
+  # the agent unhealthy if the first heartbeat is delayed past
+  # DEFAULT_TIMEOUT_THRESHOLD=15s. Poll until status==healthy AND
+  # agent_type=a2a (which only flips once mesh.a2a.mount has populated
+  # the api-runtime surfaces array — confirms the producer surface
+  # registered).
+  - name: "Wait for TS producer to be healthy and agent_type=a2a"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        RESP=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null || echo "")
+        STATUS=$(echo "$RESP" | jq -r '.agents[] | select(.name=="date-a2a-agent") | .status' 2>/dev/null || echo "")
+        TYPE=$(echo "$RESP" | jq -r '.agents[] | select(.name=="date-a2a-agent") | .agent_type' 2>/dev/null || echo "")
+        if [ "$STATUS" = "healthy" ] && [ "$TYPE" = "a2a" ]; then
+          echo "TS producer healthy after ${i}x2s (agent_type=a2a)"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: TS producer not healthy as agent_type=a2a within 120s (last status='$STATUS' type='$TYPE')"
+      meshctl logs producer-date-agent-ts 2>&1 | tail -120 || true
+      exit 1
+    timeout: 150
+
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Fetch agent card"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:9090/agents/date/.well-known/agent.json
+    capture: card_response
+    timeout: 15
+
+assertions:
+  - expr: "${captured.agent_list} contains 'system-agent'"
+    message: "system-agent should be registered"
+  - expr: "${captured.agent_list} contains 'date-a2a-agent'"
+    message: "TS producer should be registered as 'date-a2a-agent'"
+
+  # Card shape per A2A v1.0 (spec §3).
+  - expr: "${captured.card_response} contains '\"name\"'"
+    message: "card should carry a name field"
+  - expr: "${captured.card_response} contains '\"skills\"'"
+    message: "card should carry a skills array"
+  - expr: "${captured.card_response} contains '\"id\":\"get-date\"'"
+    message: "card should expose the get-date skill id"
+  - expr: "${captured.card_response} contains '\"name\":\"Get Date\"'"
+    message: "card should carry the skill display name 'Get Date'"
+  - expr: "${captured.card_response} contains '\"streaming\":true'"
+    message: "card should advertise streaming=true (sendSubscribe + resubscribe always wired)"
+  - expr: "${captured.card_response} contains '\"capabilities\"'"
+    message: "card should carry a capabilities block"
+  - expr: "${captured.card_response} contains '\"defaultInputModes\"'"
+    message: "card should carry defaultInputModes (A2A v1.0 required)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

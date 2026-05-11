@@ -1,0 +1,129 @@
+# tc06_auth_gate_bearer — TS A2A producer bearer auth gate (issue #933 Chunk 1C-integration).
+#
+# Verifies the mesh.a2a.mount(..., auth: "bearer") gate per spec §6:
+#
+#   - GET {path}/.well-known/agent.json: always reachable without auth
+#     (card discovery is unauthenticated by design — clients need it
+#     to discover the scheme). Card MUST advertise the bearer scheme.
+#   - POST {path} without Authorization header: HTTP 401 + JSON-RPC
+#     error -32001 ("Authentication required").
+#   - POST {path} with Authorization: Bearer <token>: 200 + valid
+#     Task envelope. Phase 1 only checks header presence, NOT value.
+
+name: "A2A Producer (TS): bearer auth gate (200 with header, 401 -32001 without)"
+description: "mesh.a2a.mount(auth=\"bearer\") rejects missing Authorization headers with -32001; accepts any present Bearer token"
+tags:
+  - a2a
+  - typescript
+  - smoke
+  - issue-933
+  - producer
+  - auth
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/producer-date-auth-agent-ts /workspace/
+
+  - name: "Install producer-date-auth-agent-ts deps"
+    handler: npm-install
+    path: /workspace/producer-date-auth-agent-ts
+
+  - routine: start_registry_a2a
+
+  - name: "Start producer-date-auth-agent-ts (port 9092)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start producer-date-auth-agent-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9092 -d
+
+  - name: "Wait for TS producer healthy + a2a"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        RESP=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null || echo "")
+        STATUS=$(echo "$RESP" | jq -r '.agents[] | select(.name=="date-auth-agent") | .status' 2>/dev/null || echo "")
+        TYPE=$(echo "$RESP" | jq -r '.agents[] | select(.name=="date-auth-agent") | .agent_type' 2>/dev/null || echo "")
+        if [ "$STATUS" = "healthy" ] && [ "$TYPE" = "a2a" ]; then
+          echo "TS auth producer healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: TS auth producer not healthy within 120s"
+      meshctl logs producer-date-auth-agent-ts 2>&1 | tail -120 || true
+      exit 1
+    timeout: 150
+
+  # 1) Card is reachable WITHOUT auth (spec §6.2 — clients need it for
+  #    scheme discovery) and advertises authentication.schemes=["bearer"].
+  - name: "Fetch agent card (no auth header)"
+    handler: shell
+    workdir: /workspace
+    command: curl -s http://localhost:9092/agents/date/.well-known/agent.json
+    capture: card_response
+    timeout: 15
+
+  # 2) POST WITHOUT Authorization header → 401 + JSON-RPC -32001.
+  - name: "POST tasks/send WITHOUT Authorization header"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -o /tmp/no_auth_body.json -w "HTTP_STATUS=%{http_code}" \
+        -X POST http://localhost:9092/agents/date \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tasks/send","params":{"id":"t1","message":{"role":"user","parts":[{"type":"text","text":"now"}]}}}'
+      echo ""
+      cat /tmp/no_auth_body.json
+    capture: no_auth_response
+    timeout: 15
+
+  # 3) POST WITH Authorization: Bearer <token> → 200 + valid envelope.
+  # Token value is just a placeholder — Phase 1 checks header presence
+  # only, not the value. Use ${BEARER_TOKEN} so the suite can be re-run
+  # against a real token without editing the YAML; the default is an
+  # obvious test placeholder so secret scanners don't flag it.
+  - name: "POST tasks/send WITH Authorization: Bearer header"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -o /tmp/with_auth_body.json -w "HTTP_STATUS=%{http_code}" \
+        -X POST http://localhost:9092/agents/date \
+        -H "Authorization: Bearer ${BEARER_TOKEN:-test-token}" \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":2,"method":"tasks/send","params":{"id":"t2","message":{"role":"user","parts":[{"type":"text","text":"now"}]}}}'
+      echo ""
+      cat /tmp/with_auth_body.json
+    capture: with_auth_response
+    timeout: 15
+
+assertions:
+  # Card discovery — scheme advertised, no auth needed.
+  - expr: "${captured.card_response} contains '\"name\"'"
+    message: "card endpoint should return JSON (always reachable, even on auth-protected surfaces)"
+  - expr: "${captured.card_response} contains 'bearer'"
+    message: "card should advertise the bearer authentication scheme"
+
+  # No-auth: 401 + -32001 (spec §6.3).
+  - expr: "${captured.no_auth_response} contains 'HTTP_STATUS=401'"
+    message: "POST without Authorization should return HTTP 401"
+  - expr: "${captured.no_auth_response} contains '-32001'"
+    message: "401 body should carry JSON-RPC error code -32001"
+
+  # With-auth: 200 + state=completed (Phase 1 doesn't validate token value).
+  - expr: "${captured.with_auth_response} contains 'HTTP_STATUS=200'"
+    message: "POST with Authorization: Bearer should return HTTP 200"
+  - expr: "${captured.with_auth_response} contains '\"state\":\"completed\"'"
+    message: "POST with Authorization: Bearer should reach the handler and return state=completed"
+  - expr: "${captured.with_auth_response} contains '\"id\":\"t2\"'"
+    message: "envelope should echo the submitted task id"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

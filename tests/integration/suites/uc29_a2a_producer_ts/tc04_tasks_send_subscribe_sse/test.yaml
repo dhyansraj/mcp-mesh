@@ -1,0 +1,142 @@
+# tc04_tasks_send_subscribe_sse — TS A2A producer SSE wire framing (issue #933 Chunk 1C-integration).
+#
+# tasks/sendSubscribe dispatches the same as tasks/send but the response
+# is an SSE stream of TaskStatusUpdateEvent + TaskArtifactUpdateEvent
+# JSON-RPC envelopes (spec §4.6 / §5). For a long-running JobProxy
+# return, the stream sequence is:
+#
+#   1. initial state=working event (final=false) — confirms subscription
+#   2. zero-or-more progress events (working, progress=N, final=false)
+#      — emitted only when progress / progress_message actually changed
+#   3. terminal artifact event (TaskArtifactUpdateEvent — carries result)
+#   4. terminal status event (state=completed, final=true) — closes stream
+#
+# We assert the SSE wire framing per Appendix A of surfaces-spec:
+#   - "data:" prefix on each event line
+#   - "final" boolean appears (true and false)
+#   - "progress" number appears at least once
+#   - terminal artifact event carries the producer payload
+#
+# Use a 2-section job (~4s + slight overhead) and -m 60 on curl to cap
+# consumption (TS cold-start + claim latency leaves comfortable headroom;
+# the stream closes on its own at final=true).
+
+name: "A2A Producer (TS): tasks/sendSubscribe SSE stream → working → progress → artifact → completed"
+description: "POST tasks/sendSubscribe to TS mesh.a2a.mount producer opens an SSE stream that progresses to terminal completed"
+tags:
+  - a2a
+  - typescript
+  - smoke
+  - issue-933
+  - producer
+  - sse
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/producer-report-agent-ts /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install producer-report-agent-ts deps"
+    handler: npm-install
+    path: /workspace/producer-report-agent-ts
+
+  - routine: start_registry_a2a
+
+  - name: "Start long-task-provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start producer-report-agent-ts (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start producer-report-agent-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9091 -d
+
+  - name: "Wait for TS producer healthy + a2a"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        RESP=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null || echo "")
+        STATUS=$(echo "$RESP" | jq -r '.agents[] | select(.name=="report-a2a-agent") | .status' 2>/dev/null || echo "")
+        TYPE=$(echo "$RESP" | jq -r '.agents[] | select(.name=="report-a2a-agent") | .agent_type' 2>/dev/null || echo "")
+        if [ "$STATUS" = "healthy" ] && [ "$TYPE" = "a2a" ]; then
+          echo "TS producer healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: TS producer not healthy within 120s"
+      meshctl logs producer-report-agent-ts 2>&1 | tail -120 || true
+      exit 1
+    timeout: 150
+
+  # -N disables curl buffering; -m 60 caps the consumption window.
+  # Accept: text/event-stream forces the SSE branch of the dispatcher
+  # middleware (spec §4.6 — SSE is selected via the Accept header).
+  - name: "POST tasks/sendSubscribe and consume SSE stream"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -N -m 60 -s -X POST http://localhost:9091/agents/report \
+        -H 'Accept: text/event-stream' \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":99,"method":"tasks/sendSubscribe","params":{"id":"s1","message":{"role":"user","parts":[{"type":"text","text":"{\"user_id\": \"bob\", \"sections\": [\"a\", \"b\"]}"}]}}}'
+    capture: sse_stream
+    timeout: 90
+
+assertions:
+  # SSE wire framing per spec §5.1 + Appendix A.
+  - expr: "${captured.sse_stream} contains 'data:'"
+    message: "SSE stream must use 'data:' frame prefix (spec §5.1)"
+
+  # Status update event sequence (working → ... → completed).
+  - expr: "${captured.sse_stream} contains '\"state\":\"working\"'"
+    message: "SSE stream should emit a state=working event"
+  - expr: "${captured.sse_stream} contains '\"state\":\"completed\"'"
+    message: "SSE stream should emit a terminal state=completed status event"
+
+  # Final boolean per Appendix A — both false (non-terminal) and true
+  # (terminal) appear over the stream lifetime. The producer MUST emit
+  # a real JSON boolean, NOT the string "true".
+  - expr: "${captured.sse_stream} contains '\"final\":false'"
+    message: "non-terminal events should carry final=false (JSON boolean, not string)"
+  - expr: "${captured.sse_stream} contains '\"final\":true'"
+    message: "terminal status event should carry final=true (JSON boolean, not string)"
+
+  # Progress number — the long-task-provider emits progress 1/2, 2/2.
+  # The producer MUST emit a JSON number (not stringified) per spec.
+  - expr: "${captured.sse_stream} contains '\"progress\"'"
+    message: "SSE stream should emit at least one progress event (progress field)"
+
+  # Terminal artifact event (TaskArtifactUpdateEvent).
+  - expr: "${captured.sse_stream} contains '\"artifact\"'"
+    message: "SSE stream should emit a terminal artifact event"
+  - expr: "${captured.sse_stream} contains 'Generated content for'"
+    message: "artifact event should embed the generate_report marker text"
+
+  # Spec Appendix A: parts[0].type must be the literal string "text"
+  # for forward compatibility (consumers ignore the field but producers
+  # MUST emit it).
+  - expr: "${captured.sse_stream} contains '\"type\":\"text\"'"
+    message: "artifact text parts must carry type=text per Appendix A"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

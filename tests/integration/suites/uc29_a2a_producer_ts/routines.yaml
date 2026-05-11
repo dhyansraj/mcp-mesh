@@ -1,0 +1,55 @@
+# UC-level routines for uc29_a2a_producer_ts (issue #933 Chunk 1C-integration).
+#
+# Exercises the producer side of mesh.a2a.mount in the TypeScript
+# runtime. Test cases cover the same matrix as uc24_a2a_python (Python
+# producer) and uc28_a2a_producer_java (Java producer) but against a
+# TS mesh.a2a.mount(...) surface:
+#
+#   tc01 — agent card (.well-known/agent.json) shape
+#   tc02 — tasks/send sync → state=completed (Python consumer driver)
+#   tc03 — tasks/send long-running → state=working (JobProxy parking)
+#   tc04 — tasks/sendSubscribe SSE wire framing (data: + final + progress)
+#   tc05 — tasks/cancel propagates to the JobProxy
+#   tc06 — bearer auth gate (200 with valid header, 401 + -32001 without)
+#
+# Reuses the fast-sweep + MCP_MESH_PUBLIC_URL_PREFIX registry-start
+# routine from uc24/uc28 so card public URL stamping is exercised on
+# the TS path too.
+
+routines:
+  start_registry_a2a:
+    description: "Start the registry with fast-sweep timing AND MCP_MESH_PUBLIC_URL_PREFIX for A2A card stamping"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          MCP_MESH_PUBLIC_URL_PREFIX=https://test.example.com \
+          MCP_MESH_SWEEP_INTERVAL=10s \
+          MCP_MESH_RETENTION=10s \
+          MCP_MESH_HEALTH_CHECK_INTERVAL=5 \
+          DEFAULT_TIMEOUT_THRESHOLD=15 \
+            meshctl start --registry-only -d
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "registry ready after ${i}s"
+              tail -n 200 ~/.mcp-mesh/logs/registry.log \
+                | grep -qE '\[sweep\] using MCP_MESH_SWEEP_INTERVAL' \
+                || { echo "FAIL: MCP_MESH_SWEEP_INTERVAL override did not take effect"; exit 1; }
+              echo "[setup] confirmed sweep override active"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: registry did not become ready in 20s"
+          tail -50 ~/.mcp-mesh/logs/registry.log 2>/dev/null || true
+          exit 1
+        capture: registry_start
+        timeout: 30
+
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: meshctl stop 2>/dev/null || true
+        ignore_errors: true
