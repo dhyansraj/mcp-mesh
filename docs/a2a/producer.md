@@ -3,7 +3,7 @@
 Expose mesh tools to external A2A clients via the A2A v1.0 protocol surface.
 
 !!! info "Producer support is complete across all three runtimes"
-    Producer support ships in **Python**, **Java**, and **TypeScript** (issue [#933](https://github.com/dhyanraj/mcp-mesh/issues/933)) — all three runtimes have full A2A support on both the producer and consumer sides.
+    Producer support ships in **Python**, **Java**, and **TypeScript** — all three runtimes have full A2A support on both the producer and consumer sides.
 
 ## Decoration and mounting
 

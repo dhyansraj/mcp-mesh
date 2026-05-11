@@ -241,7 +241,7 @@ nav:
 
   - A2A:
       - Overview: a2a/overview.md
-      - Producer (Python): a2a/producer.md
+      - Producer: a2a/producer.md
       - Consumer Quick Start: a2a/consumer-quickstart.md
       - Failover & Federation: a2a/failover.md
       - Long-Running & SSE: a2a/long-running.md

@@ -5,7 +5,7 @@ Bridge an external A2A `get-date` skill into the mesh as a `current-date` capabi
 ## Prereqs
 
 - A registry — `meshctl start --registry-only`
-- An external A2A producer reachable at `http://localhost:9090/agents/date` exposing a `get-date` skill (the canonical example is `examples/a2a/date_a2a_agent.py` — see the [Producer (Python)](producer.md) page).
+- An external A2A producer reachable at `http://localhost:9090/agents/date` exposing a `get-date` skill (the canonical example is `examples/a2a/date_a2a_agent.py` — see the [Producer](producer.md) page).
 
 ## The bridge
 
