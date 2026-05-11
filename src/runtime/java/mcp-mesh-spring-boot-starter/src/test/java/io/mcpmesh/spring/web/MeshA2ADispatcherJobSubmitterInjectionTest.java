@@ -239,7 +239,7 @@ class MeshA2ADispatcherJobSubmitterInjectionTest {
     }
 
     @Test
-    @DisplayName("Three-arg dispatcher constructor: handler with submitter param gets null (back-compat)")
+    @DisplayName("Four-arg dispatcher constructor: handler with submitter param gets null (back-compat)")
     void legacyConstructor_doesNotCrashOnMeshJobSubmitterParam() throws Exception {
         registry.register(surfaceFor("/svc", "generate-report", List.of()));
 

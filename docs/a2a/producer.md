@@ -240,6 +240,14 @@ When the underlying work is long-running (`task=True` in the dependency graph), 
                 // declared @MeshDependency or, when none is declared, to the
                 // skillId with '-' replaced by '_' (so "generate-report"
                 // resolves to the generate_report task capability).
+                if (jobSubmitter == null) {
+                    // MeshRuntime hasn't finished initialising yet — surface
+                    // a clear retryable error rather than NPE on .submit().
+                    throw new IllegalStateException(
+                        "MeshJobSubmitter injection unavailable — runtime "
+                            + "not yet started. This is a transient startup "
+                            + "condition; retry the request.");
+                }
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("user_id", "alice");
                 payload.put("sections", java.util.List.of("intro", "body"));

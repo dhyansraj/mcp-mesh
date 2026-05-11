@@ -21,6 +21,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -267,6 +268,7 @@ public class MeshAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(name = "meshA2ARouterFunctionInitializer")
     public SmartInitializingSingleton meshA2ARouterFunctionInitializer(
+            @Qualifier("meshA2ARouterFunction")
             RouterFunction<ServerResponse> meshA2ARouterFunction) {
         return () -> {
             if (meshA2ARouterFunction instanceof MeshA2ALazyRouterFunction lazy) {
