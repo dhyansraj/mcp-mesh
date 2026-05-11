@@ -19,6 +19,7 @@ import io.mcpmesh.spring.web.MeshRouteRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -30,6 +31,9 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationListener;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.servlet.function.RouterFunction;
+import org.springframework.web.servlet.function.RouterFunctions;
+import org.springframework.web.servlet.function.ServerResponse;
 
 import io.mcpmesh.spring.tracing.TracingFilter;
 
@@ -149,8 +153,17 @@ public class MeshAutoConfiguration {
             MeshA2ARegistry registry,
             MeshA2ATaskStore taskStore,
             ObjectMapper objectMapper,
-            ObjectProvider<MeshDependencyInjector> injectorProvider) {
-        return new MeshA2ADispatcher(registry, taskStore, objectMapper, injectorProvider);
+            ObjectProvider<MeshDependencyInjector> injectorProvider,
+            ObjectProvider<MeshRuntime> runtimeProvider) {
+        // Issue #936: thread the MeshRuntime ObjectProvider through so the
+        // dispatcher can auto-inject MeshJobSubmitter parameters on
+        // @MeshA2A handlers (long-running producers). The provider is
+        // resolved lazily at the first request that actually declares a
+        // MeshJobSubmitter parameter — the dispatcher never resolves it at
+        // construction time, which keeps it off the bean-creation cycle
+        // that #937 fixed.
+        return new MeshA2ADispatcher(
+            registry, taskStore, objectMapper, injectorProvider, runtimeProvider);
     }
 
     /**
@@ -200,35 +213,66 @@ public class MeshAutoConfiguration {
      * controllers, static-resource serving, and error pages continue to
      * work alongside the A2A producer routes.
      *
-     * <p>The bean is built lazily from
-     * {@link MeshA2ADispatcherController#buildRouterFunction()} which
-     * iterates {@link MeshA2ARegistry} at bean-creation time. Because
-     * the controller depends on the registry and the registry is
-     * populated by {@link MeshA2ABeanPostProcessor} (which runs before
-     * this configuration's bean methods complete), the iteration sees
-     * the full surface set.
+     * <h2>Why this returns a lazy wrapper</h2>
+     *
+     * <p>An earlier revision walked {@code @Component}/{@code @Service}
+     * beans eagerly in this factory to force {@link MeshA2ABeanPostProcessor}
+     * to populate {@link MeshA2ARegistry} before the router was built. That
+     * eager walk caused a bean-creation cycle (issue #937): any user
+     * {@code @Component} that autowires {@link MeshRuntime} would re-enter
+     * {@code MeshRuntime}'s factory mid-creation and Spring 2.6+ rejects
+     * the cycle with {@code BeanCurrentlyInCreationException}.
+     *
+     * <p>This factory now returns a {@link MeshA2ALazyRouterFunction}: the
+     * router-function bean materialises immediately so {@code RouterFunctionMapping}
+     * can detect it as a bean, but {@link MeshA2ADispatcherController#buildRouterFunction()}
+     * is not invoked until either Spring asks for a route match
+     * (per-request {@code route(...)} call) or visits the route tree
+     * (e.g. {@code accept(ChangePathPatternParserVisitor)} from
+     * {@code RouterFunctionMapping.afterPropertiesSet()}). At those
+     * moments the {@link MeshA2ARegistry} is fully populated because
+     * {@link MeshA2ABeanPostProcessor} runs as part of each candidate
+     * bean's lifecycle — the eager walk is no longer required.
+     *
+     * <p>To guarantee the inner router exists before the first request,
+     * we additionally register a {@link SmartInitializingSingleton} below
+     * that proactively materialises it after all singletons have been
+     * created (and well before {@link MeshRuntime} starts).
      */
     @Bean
     @ConditionalOnMissingBean(name = "meshA2ARouterFunction")
-    public org.springframework.web.servlet.function.RouterFunction<
-            org.springframework.web.servlet.function.ServerResponse>
-            meshA2ARouterFunction(MeshA2ADispatcherController controller) {
-        // Force eager instantiation of all candidate beans so
-        // MeshA2ABeanPostProcessor populates MeshA2ARegistry before we
-        // build the router function. Without this, Spring's bean creation
-        // order would let the router-function be built BEFORE the user's
-        // @Component / @Service classes are instantiated, leaving the
-        // registry empty.
-        //
-        // The same eager-touch trick is used by buildAgentSpec() for the
-        // route-registry-based consumer-only mode detection.
-        applicationContext.getBeansWithAnnotation(
-            org.springframework.stereotype.Component.class);
-        applicationContext.getBeansWithAnnotation(
-            org.springframework.stereotype.Service.class);
-        applicationContext.getBeansWithAnnotation(
-            org.springframework.web.bind.annotation.RestController.class);
-        return controller.buildRouterFunction();
+    public RouterFunction<ServerResponse> meshA2ARouterFunction(
+            MeshA2ADispatcherController controller) {
+        return new MeshA2ALazyRouterFunction(controller);
+    }
+
+    /**
+     * Materialises the lazy {@link MeshA2ALazyRouterFunction} once Spring
+     * has finished creating all singletons. Running here (instead of
+     * inside the {@code meshA2ARouterFunction} factory) keeps the bean
+     * factory off the user-{@code @Component} bean-creation path that
+     * triggered issue #937, while ensuring the registry-driven route
+     * table is built before the first HTTP request can reach the
+     * dispatcher.
+     *
+     * <p>This runs as a {@link SmartInitializingSingleton} — Spring
+     * guarantees it fires AFTER every singleton has been instantiated
+     * (so every {@code @MeshA2A}-bearing {@code @Component} has been
+     * post-processed into the registry) and BEFORE any
+     * {@link org.springframework.context.SmartLifecycle#start()} call
+     * (so {@link MeshRuntime}'s heartbeat loop sees a fully-built
+     * surface set — see {@link #meshA2ASpecFinalizer} which mutates the
+     * agent spec in the same phase).
+     */
+    @Bean
+    @ConditionalOnMissingBean(name = "meshA2ARouterFunctionInitializer")
+    public SmartInitializingSingleton meshA2ARouterFunctionInitializer(
+            RouterFunction<ServerResponse> meshA2ARouterFunction) {
+        return () -> {
+            if (meshA2ARouterFunction instanceof MeshA2ALazyRouterFunction lazy) {
+                lazy.materialise();
+            }
+        };
     }
 
     /**
@@ -338,19 +382,61 @@ public class MeshAutoConfiguration {
     public MeshRuntime meshRuntime(
             MeshProperties properties,
             MeshToolRegistry toolRegistry,
-            MeshToolWrapperRegistry wrapperRegistry,
             MeshLlmRegistry llmRegistry,
             MeshConfigResolver configResolver,
+            ObjectMapper objectMapper) {
+
+        // Build the bare agent spec — identity, ports, registry URL.
+        // Tools, route/A2A dependencies, and surfaces are folded in by
+        // meshAgentSpecFinalizer below, AFTER Spring has finished creating
+        // every singleton. Walking @Component beans from this factory
+        // (the old behaviour) triggered a bean-creation cycle for any user
+        // @Component that autowired MeshRuntime — see issue #937.
+        AgentSpec spec = buildBaseAgentSpec(properties, toolRegistry, llmRegistry,
+            configResolver);
+        log.info("Creating MeshRuntime for agent '{}' (tools/surfaces populated post-init)",
+            spec.getName());
+
+        return new MeshRuntime(spec, objectMapper);
+    }
+
+    /**
+     * Fold tools, route/A2A dependencies, LLM provider tools, and A2A
+     * surfaces into the agent spec AFTER every singleton has been
+     * instantiated. Runs as a {@link SmartInitializingSingleton} which
+     * Spring guarantees fires:
+     *
+     * <ul>
+     *   <li>AFTER every {@code @Component}/{@code @Service}/{@code @RestController}
+     *       singleton (so {@link MeshA2ABeanPostProcessor},
+     *       {@link MeshToolBeanPostProcessor}, and
+     *       {@link io.mcpmesh.spring.web.MeshRouteBeanPostProcessor} have
+     *       seen every candidate bean and populated their registries).</li>
+     *   <li>BEFORE any {@link org.springframework.context.SmartLifecycle#start()}
+     *       call — including {@link MeshRuntime#start()} — so the spec
+     *       handed to the native core's heartbeat loop reflects the full
+     *       tool/surface set on the very first heartbeat envelope.</li>
+     * </ul>
+     *
+     * <p>This deliberately replaces the previous eager
+     * {@code applicationContext.getBeansWithAnnotation(...)} calls inside
+     * the {@code meshRuntime} factory; those calls re-entered user
+     * {@code @Component} beans that autowired {@code MeshRuntime}, which
+     * Spring 2.6+ rejects as {@code BeanCurrentlyInCreationException}
+     * (issue #937).
+     */
+    @Bean
+    @ConditionalOnMissingBean(name = "meshAgentSpecFinalizer")
+    public SmartInitializingSingleton meshAgentSpecFinalizer(
+            MeshRuntime runtime,
+            MeshToolRegistry toolRegistry,
+            MeshToolWrapperRegistry wrapperRegistry,
+            MeshLlmRegistry llmRegistry,
             ObjectMapper objectMapper,
             ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
             ObjectProvider<MeshA2ARegistry> a2aRegistryProvider) {
-
-        AgentSpec spec = buildAgentSpec(properties, toolRegistry, wrapperRegistry, llmRegistry,
-            configResolver, objectMapper, routeRegistryProvider, a2aRegistryProvider);
-        log.info("Creating MeshRuntime for agent '{}' with {} tools",
-            spec.getName(), spec.getTools().size());
-
-        return new MeshRuntime(spec, objectMapper);
+        return () -> finalizeAgentSpec(runtime.getAgentSpec(), toolRegistry, wrapperRegistry,
+            llmRegistry, objectMapper, routeRegistryProvider, a2aRegistryProvider);
     }
 
     @Bean
@@ -457,15 +543,25 @@ public class MeshAutoConfiguration {
             a2aConsumerBeanPostProcessor);
     }
 
-    private AgentSpec buildAgentSpec(
+    /**
+     * Build the bare {@link AgentSpec} — identity, ports, host, namespace,
+     * heartbeat interval, registry URL. Does NOT walk {@code @Component}
+     * beans or read the tool/route/A2A registries; that work is done by
+     * {@link #finalizeAgentSpec} after every singleton has been
+     * instantiated.
+     *
+     * <p>Splitting the spec build into a "metadata-only" phase here and a
+     * "tools and surfaces" phase post-singleton-init is the structural
+     * fix for issue #937 — the old factory walked
+     * {@code @Component}/{@code @Service} beans synchronously, which
+     * re-entered any user component that autowired {@link MeshRuntime}
+     * and triggered Spring's circular-reference guard.
+     */
+    private AgentSpec buildBaseAgentSpec(
             MeshProperties properties,
             MeshToolRegistry toolRegistry,
-            MeshToolWrapperRegistry wrapperRegistry,
             MeshLlmRegistry llmRegistry,
-            MeshConfigResolver configResolver,
-            ObjectMapper objectMapper,
-            ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
-            ObjectProvider<MeshA2ARegistry> a2aRegistryProvider) {
+            MeshConfigResolver configResolver) {
 
         // Find @MeshAgent annotation
         MeshAgent agentAnnotation = findMeshAgentAnnotation();
@@ -479,18 +575,17 @@ public class MeshAutoConfiguration {
         String name = configResolver.resolve("agent_name", paramName);
 
         if (name == null || name.isBlank()) {
-            // No agent name configured — check if this is consumer-only mode.
-            // Force RestController beans to be created first so MeshRouteBeanPostProcessor
-            // populates MeshRouteRegistry before we check it.
-            applicationContext.getBeansWithAnnotation(
-                org.springframework.web.bind.annotation.RestController.class);
-            MeshRouteRegistry routeRegistry = routeRegistryProvider.getIfAvailable();
-            if (routeRegistry != null && routeRegistry.hasRoutes()) {
-                log.info("No @MeshAgent found, but @MeshRoute dependencies detected — starting in consumer-only mode");
-                return buildConsumerAgentSpec(properties, configResolver, routeRegistryProvider);
-            }
-            throw new IllegalStateException(
-                "Agent name is required. Set MCP_MESH_AGENT_NAME, mesh.agent.name, or @MeshAgent(name=...)");
+            // No agent name configured — fall back to consumer-only mode.
+            // We can't yet check MeshRouteRegistry (it's populated by a
+            // BeanPostProcessor as @RestController beans are created); we
+            // build a consumer-only spec optimistically and the post-init
+            // finalizer will populate route deps. If neither @MeshAgent
+            // nor any @MeshRoute is present, the finalizer would have
+            // nothing to add — in that case the agent has no reason to
+            // start. To preserve the previous fail-fast behaviour we
+            // re-check inside the finalizer (see finalizeAgentSpec).
+            log.info("No agent name configured — provisional consumer-only spec; will validate after singletons init");
+            return buildConsumerAgentSpec(properties, configResolver);
         }
 
         // Append UUID suffix like Python/TypeScript SDKs: {name}-{8char_uuid}.
@@ -537,35 +632,58 @@ public class MeshAutoConfiguration {
         String propertiesRegistryUrl = properties.getRegistry().getUrl();
         spec.setRegistryUrl(configResolver.resolve("registry_url", propertiesRegistryUrl));
 
-        // Phase B MeshJob substrate: register the three helper tools as
-        // synthetic specs BEFORE getToolSpecs() is read into the
-        // heartbeat catalog. Without this the registry never learns the
-        // helpers exist (they were registered too late in JobsRuntimeManager).
-        // Also registers the wrapper-side handlers so MCP tools/call
-        // requests for the helper names dispatch correctly. Skips
-        // gracefully when no registry URL is configured.
-        String resolvedRegistryUrl = configResolver.resolve("registry_url",
-            properties.getRegistry().getUrl());
-        try {
-            JobsHelperToolsRegistrar.register(toolRegistry, wrapperRegistry, resolvedRegistryUrl);
-        } catch (Exception e) {
-            log.warn("Failed to register MeshJob helper tools at startup", e);
-        }
-
         // Issue #916 Phase 1: inject the surrounding @MeshAgent name as
-        // a tag on every @A2AConsumer-annotated tool BEFORE
-        // toolRegistry.getToolSpecs() snapshots the catalog. Mirrors
-        // Python's _resolve_pending_consumer_self_tags substitution —
-        // makes a bridged capability distinguishable from sibling
-        // consumers in the registry, so downstream dependencies can
-        // pin a specific bridge by tag and untagged dependencies still
-        // auto-fail-over when one bridge dies.
+        // a tag on every @A2AConsumer-annotated tool. This only mutates
+        // ToolSpec metadata captured by the @A2AConsumer post-processor
+        // at bean-creation time — no bean walking, no cycle risk.
         try {
             toolRegistry.injectConsumerNameTags(name);
         } catch (Exception e) {
             log.warn("Failed to inject @A2AConsumer auto-tags for agent '{}': {}",
                 name, e.getMessage());
         }
+
+        // Start with an empty tools list; finalizeAgentSpec populates it
+        // post-singleton-init. We initialise to an empty list (not null)
+        // so any callers reading getTools() between now and the finalizer
+        // get a stable, non-null reference.
+        spec.setTools(new ArrayList<>());
+        return spec;
+    }
+
+    /**
+     * Second-phase agent-spec build: fold tools, route/A2A dependencies,
+     * LLM provider tools, MeshJob helper tools, and A2A surfaces into the
+     * spec built by {@link #buildBaseAgentSpec}. Called from
+     * {@link #meshAgentSpecFinalizer} as a {@link SmartInitializingSingleton}
+     * — runs AFTER every bean has been post-processed (so every registry
+     * is fully populated) and BEFORE {@link MeshRuntime#start()} fires.
+     */
+    private void finalizeAgentSpec(
+            AgentSpec spec,
+            MeshToolRegistry toolRegistry,
+            MeshToolWrapperRegistry wrapperRegistry,
+            MeshLlmRegistry llmRegistry,
+            ObjectMapper objectMapper,
+            ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
+            ObjectProvider<MeshA2ARegistry> a2aRegistryProvider) {
+
+        // Phase B MeshJob substrate: register the three helper tools as
+        // synthetic specs BEFORE getToolSpecs() is read into the
+        // heartbeat catalog. Skips gracefully when no registry URL is
+        // configured.
+        try {
+            JobsHelperToolsRegistrar.register(toolRegistry, wrapperRegistry, spec.getRegistryUrl());
+        } catch (Exception e) {
+            log.warn("Failed to register MeshJob helper tools at startup", e);
+        }
+
+        // Consumer-only fallback validation: if buildBaseAgentSpec
+        // produced a consumer-only spec (agent_type="api") because no
+        // agent name was configured, surface a clear error when the user
+        // also has no @MeshRoute dependencies — otherwise the agent has
+        // no reason to start.
+        boolean consumerOnly = "api".equals(spec.getAgentType());
 
         // Add tools from registry (dependencies are embedded in tool specs)
         List<AgentSpec.ToolSpec> allTools = new ArrayList<>(toolRegistry.getToolSpecs());
@@ -579,18 +697,24 @@ public class MeshAutoConfiguration {
         // Add @MeshRoute dependencies as a synthetic tool
         addRouteDependencies(allTools, routeRegistryProvider);
 
-        // Issue #932 Phase 1A: force user beans (containing @MeshA2A) to be
-        // created so MeshA2ABeanPostProcessor populates MeshA2ARegistry
-        // before we read it.
-        applicationContext.getBeansWithAnnotation(
-            org.springframework.stereotype.Component.class);
-        applicationContext.getBeansWithAnnotation(
-            org.springframework.stereotype.Service.class);
-
         // Add @MeshA2A dependencies as a synthetic tool so the Rust core
         // resolves them via the registry's dependency mechanism (same
-        // pattern as addRouteDependencies).
+        // pattern as addRouteDependencies). No eager bean-walk needed —
+        // MeshA2ABeanPostProcessor populated the registry as each
+        // @Component was created during the singleton init phase.
         addA2ADependencies(allTools, a2aRegistryProvider);
+
+        if (consumerOnly) {
+            MeshRouteRegistry routeRegistry = routeRegistryProvider.getIfAvailable();
+            boolean hasRoutes = routeRegistry != null && routeRegistry.hasRoutes();
+            if (!hasRoutes) {
+                throw new IllegalStateException(
+                    "Agent name is required. Set MCP_MESH_AGENT_NAME, mesh.agent.name, "
+                        + "or @MeshAgent(name=...)");
+            }
+            log.info("Consumer-only mode confirmed: {} @MeshRoute dependency tool(s) registered",
+                allTools.size());
+        }
 
         spec.setTools(allTools);
 
@@ -600,7 +724,8 @@ public class MeshAutoConfiguration {
         // capabilities.
         applyA2ASurfaces(spec, a2aRegistryProvider, objectMapper);
 
-        return spec;
+        log.info("Agent spec finalized for '{}' with {} tool(s)",
+            spec.getName(), spec.getTools().size());
     }
 
     /**
@@ -672,8 +797,7 @@ public class MeshAutoConfiguration {
      */
     private AgentSpec buildConsumerAgentSpec(
             MeshProperties properties,
-            MeshConfigResolver configResolver,
-            ObjectProvider<MeshRouteRegistry> routeRegistryProvider) {
+            MeshConfigResolver configResolver) {
 
         AgentSpec spec = new AgentSpec();
 
@@ -718,13 +842,11 @@ public class MeshAutoConfiguration {
         String propertiesRegistryUrl = properties.getRegistry().getUrl();
         spec.setRegistryUrl(configResolver.resolve("registry_url", propertiesRegistryUrl));
 
-        // No tools or LLM agents — only route dependencies
-        List<AgentSpec.ToolSpec> tools = new ArrayList<>();
-        addRouteDependencies(tools, routeRegistryProvider);
-        spec.setTools(tools);
+        // Tools populated by finalizeAgentSpec (post-singleton-init).
+        spec.setTools(new ArrayList<>());
 
-        log.info("Consumer-only AgentSpec: name='{}', agentType='api', dependencies={}",
-            spec.getName(), tools.size());
+        log.info("Consumer-only AgentSpec (base): name='{}', agentType='api' "
+            + "(route deps populated post-init)", spec.getName());
 
         return spec;
     }

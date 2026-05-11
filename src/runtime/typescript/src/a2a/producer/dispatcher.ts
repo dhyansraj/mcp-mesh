@@ -40,6 +40,7 @@ import { JobProxy } from "@mcpmesh/core";
 
 import type { McpMeshTool } from "../../types.js";
 import { RouteRegistry } from "../../route.js";
+import { MeshJobSubmitter } from "../../mesh-job-submitter.js";
 import type { A2ASurfaceMetadata } from "./registry.js";
 import { A2ATaskStore, type TaskRecord } from "./task-store.js";
 import {
@@ -70,9 +71,22 @@ export const JSONRPC_INVALID_PARAMS = -32602;
 export type A2ADependencies = Record<string, McpMeshTool | null>;
 
 /**
- * Handler signature for `mesh.a2a.mount(...)`. Receives resolved
- * dependencies first (so destructuring is ergonomic) and the raw A2A
- * `tasks/send` `params` object second.
+ * Handler signature for `mesh.a2a.mount(...)`. Receives:
+ *
+ * 1. Resolved dependencies (`deps`) — keyed by capability name, same shape
+ *    as `mesh.route()`'s `deps` parameter. Destructure to access individual
+ *    `McpMeshTool` proxies.
+ * 2. The raw A2A `tasks/send` `payload` (the `message` object the client
+ *    sent).
+ * 3. A framework-managed {@link MeshJobSubmitter} (`jobSubmitter`) — issue
+ *    #936. Bound to the producer's task capability so long-running handlers
+ *    can `await jobSubmitter.submit(payload)` without hand-constructing the
+ *    submitter from `getApiRuntime().getServiceId()` and the registry URL.
+ *    The capability defaults to the first declared `dependencies[]` entry
+ *    on the mount config; when no deps are declared, falls back to the
+ *    `skillId` with `-` replaced by `_` (the canonical kebab-to-snake
+ *    convention — so a `"generate-report"` skill submits to the
+ *    `generate_report` task capability without further configuration).
  *
  * Return value: any JSON-serializable value or a `JobProxy`.
  * - JSON-serializable value → framework wraps it into the A2A v1.0 `Task`
@@ -88,7 +102,8 @@ export type A2ADependencies = Record<string, McpMeshTool | null>;
  */
 export type A2AHandler<D extends A2ADependencies = A2ADependencies> = (
   deps: D,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  jobSubmitter: MeshJobSubmitter | null
 ) => unknown | Promise<unknown>;
 
 /**
@@ -106,6 +121,17 @@ export interface DispatcherDeps {
   readonly taskStore: A2ATaskStore;
   /** Shared `RouteRegistry` for dependency resolution (DDDI). */
   readonly routeRegistry: RouteRegistry;
+  /**
+   * Lazy provider for the {@link MeshJobSubmitter} auto-injected on the
+   * third handler arg (issue #936). Called on every dispatch so the
+   * provider can return `null` until the api-runtime has finished
+   * initialising; the dispatcher caches the resolved value internally
+   * after the first non-null return.
+   *
+   * Optional for back-compat with existing callers; when omitted the
+   * handler receives `null` on the third arg.
+   */
+  readonly jobSubmitterProvider?: () => MeshJobSubmitter | null;
 }
 
 /**
@@ -121,7 +147,7 @@ export interface DispatcherDeps {
  * `next()` and execution falls through here.
  */
 export function buildDispatcherMiddleware(deps: DispatcherDeps): RequestHandler {
-  const { surface, handler, taskStore, routeRegistry } = deps;
+  const { surface, handler, taskStore, routeRegistry, jobSubmitterProvider } = deps;
 
   return async function a2aDispatcher(
     req: Request,
@@ -170,6 +196,7 @@ export function buildDispatcherMiddleware(deps: DispatcherDeps): RequestHandler 
           handler,
           taskStore,
           routeRegistry,
+          jobSubmitterProvider,
         });
         return;
 
@@ -256,9 +283,13 @@ async function handleTasksSend(
     }
   }
 
+  const jobSubmitter = deps.jobSubmitterProvider
+    ? deps.jobSubmitterProvider()
+    : null;
+
   let handlerResult: unknown;
   try {
-    handlerResult = await deps.handler(resolvedDeps, message);
+    handlerResult = await deps.handler(resolvedDeps, message, jobSubmitter);
   } catch (err) {
     // Spec §4.3 "Response — handler raised": exceptions become
     // state=failed Tasks, NOT JSON-RPC errors. Upgrade the placeholder
@@ -473,9 +504,13 @@ export async function buildSendSubscribeStream(
     }
   }
 
+  const jobSubmitter = deps.jobSubmitterProvider
+    ? deps.jobSubmitterProvider()
+    : null;
+
   let handlerResult: unknown;
   try {
-    handlerResult = await deps.handler(resolvedDeps, message);
+    handlerResult = await deps.handler(resolvedDeps, message, jobSubmitter);
   } catch (err) {
     const errorText = errorTextOf(err);
     // Cache the failed envelope so a subsequent tasks/get returns it

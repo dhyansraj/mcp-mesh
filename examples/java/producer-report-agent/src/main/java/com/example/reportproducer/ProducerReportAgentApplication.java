@@ -3,14 +3,11 @@ package com.example.reportproducer;
 import io.mcpmesh.JobProxy;
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.MeshJobSubmitter;
-import io.mcpmesh.spring.MeshRuntime;
 import io.mcpmesh.spring.web.MeshA2A;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
@@ -47,16 +44,14 @@ import java.util.concurrent.TimeoutException;
  *
  * <h2>MeshJobSubmitter wiring</h2>
  *
- * <p>{@code @MeshA2A} handlers receive {@link io.mcpmesh.types.McpMeshTool}
- * proxies at parameter slots but the framework does not (today) inject
- * a {@link MeshJobSubmitter} via the {@code dependencies} array — that
- * auto-wiring is reserved for {@code @MeshTool}-decorated consumers.
- * For long-running producers we construct the submitter manually from
- * the autowired {@link MeshRuntime}: it carries both the registry URL
- * and the local agent id (the {@code submitted_by} identity recorded
- * on every new job row). The submitter is cheap to construct (no I/O
- * until {@link MeshJobSubmitter#submit(java.util.Map)} fires) and
- * stateless after construction.
+ * <p>Issue #936: the dispatcher auto-injects {@link MeshJobSubmitter}
+ * at any handler parameter typed {@code MeshJobSubmitter}. The capability
+ * defaults to the first declared {@code @MeshDependency} on the surface,
+ * or — when none is declared, as in this example — to the {@code skillId}
+ * with {@code '-'} replaced by {@code '_'} (so {@code "generate-report"}
+ * resolves to the {@code generate_report} task capability). The submitter
+ * is stateless and reused across requests; user code never has to autowire
+ * {@code MeshRuntime} or know about agent identity / registry URL.
  *
  * <h2>Stack</h2>
  *
@@ -121,38 +116,6 @@ public class ProducerReportAgentApplication {
         private static final ObjectMapper JSON = new ObjectMapper();
 
         /**
-         * Reference to the MeshRuntime — we read the registry URL and
-         * the local agent id from {@link MeshRuntime#getAgentSpec()} at
-         * request time. Autowiring (rather than constructor injection)
-         * keeps the component decoupled from runtime construction order
-         * (the runtime bean is created late, after auto-config).
-         *
-         * <p><strong>Why {@code @Lazy}.</strong> The user-level workaround
-         * of injecting {@link MeshRuntime} into a {@code @Component} to
-         * construct a {@code MeshJobSubmitter} by hand creates a bean-
-         * creation cycle in Spring 6+: {@code MeshRuntime#buildAgentSpec}
-         * eagerly walks {@code @Component} beans → finds this
-         * {@code ReportSkill} (currently in creation) → cycle. The
-         * {@code @Lazy} annotation tells Spring to inject a CGLIB proxy
-         * that defers actual runtime resolution to first method call (at
-         * request time, not at construction time), so the
-         * {@code ReportSkill -> MeshRuntime} edge of the dependency graph
-         * is broken structurally — regardless of which side is constructed
-         * first. Same fix pattern as {@code MeshHealthController} in
-         * {@code MeshAutoConfiguration}.
-         *
-         * <p>The cleaner long-term fix is for the {@code @MeshA2A}
-         * dispatcher to auto-inject {@link io.mcpmesh.MeshJobSubmitter}
-         * for {@code task=true} dependencies (today it only injects
-         * {@link io.mcpmesh.types.McpMeshTool}). Tracked as a follow-up
-         * issue; once that lands this autowire-and-hand-construct dance
-         * goes away entirely.
-         */
-        @Autowired
-        @Lazy
-        private MeshRuntime meshRuntime;
-
-        /**
          * Handle inbound A2A {@code tasks/send} (and {@code tasks/get},
          * {@code tasks/cancel}, {@code tasks/sendSubscribe},
          * {@code tasks/resubscribe} — same handler, the framework picks
@@ -167,6 +130,9 @@ public class ProducerReportAgentApplication {
          * long-running mode (see class Javadoc).
          *
          * @param message inbound A2A request message
+         * @param jobSubmitter framework-injected submitter bound to the
+         *                     {@code generate_report} capability (derived
+         *                     from {@code skillId} per issue #936)
          * @return the parked job proxy (long-running mode trigger)
          * @throws Exception on registry submission failure (becomes
          *         state=failed)
@@ -178,7 +144,9 @@ public class ProducerReportAgentApplication {
             description = "Generate a long-form report via A2A (task=True streaming)",
             tags = {"reports", "long-running"}
         )
-        public Object generateReport(Map<String, Object> message) throws Exception {
+        public Object generateReport(
+                Map<String, Object> message,
+                MeshJobSubmitter jobSubmitter) throws Exception {
             // Parse the user payload from the message's first text part.
             // Tolerant: empty payload defaults to a single "overview" section.
             String userId = "anon";
@@ -207,14 +175,13 @@ public class ProducerReportAgentApplication {
                 }
             }
 
-            // Construct a MeshJobSubmitter bound to the long-task-provider's
-            // generate_report capability. The framework's @MeshTool-side
-            // auto-wiring (JobsRuntimeManager.wireConsumers) does not run
-            // for @MeshA2A handlers; we wire by hand. Cheap to construct
-            // — no I/O until submit() fires.
-            String registryUrl = meshRuntime.getAgentSpec().getRegistryUrl();
-            String agentId = meshRuntime.getAgentSpec().getAgentId();
-            MeshJobSubmitter submitter = new MeshJobSubmitter("generate_report", agentId, registryUrl);
+            if (jobSubmitter == null) {
+                // The framework injects the submitter; null only happens
+                // when MeshRuntime hasn't finished initialising (transient).
+                throw new IllegalStateException(
+                    "MeshJobSubmitter not yet available — mesh runtime is still initialising. "
+                        + "Retry tasks/send shortly.");
+            }
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("user_id", userId);
@@ -231,7 +198,7 @@ public class ProducerReportAgentApplication {
             // failed A2A task, not as an indefinite hang on the dispatcher.
             JobProxy proxy;
             try {
-                proxy = submitter.submit(payload).get(30, TimeUnit.SECONDS);
+                proxy = jobSubmitter.submit(payload).get(30, TimeUnit.SECONDS);
             } catch (TimeoutException te) {
                 throw new RuntimeException(
                     "submit() did not return a JobProxy within 30s — "

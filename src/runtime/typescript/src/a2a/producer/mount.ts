@@ -38,6 +38,7 @@ import type { AgentConfig } from "../../types.js";
 import { RouteRegistry } from "../../route.js";
 import { normalizeDependency } from "../../proxy.js";
 import { getApiRuntime } from "../../api-runtime.js";
+import { MeshJobSubmitter } from "../../mesh-job-submitter.js";
 
 import {
   A2AProducerRegistry,
@@ -264,6 +265,19 @@ export function mount<D extends A2ADependencies = A2ADependencies>(
   // ── Register in A2AProducerRegistry ──────────────────────────────────
   A2AProducerRegistry.getInstance().register(surface);
 
+  // ── Build a lazy MeshJobSubmitter provider (issue #936) ──────────────
+  // The submitter is bound to the producer's task capability + the
+  // api-runtime singleton's service id + the resolved registry URL.
+  // Lazy because the api-runtime's `serviceId` is `""` until its first
+  // tick, so we can't construct the submitter at mount time — instead
+  // we resolve on first request that actually uses it, then memoize.
+  const submitterCapability = pickSubmitterCapability(surface);
+  const jobSubmitterProvider = buildJobSubmitterProvider(
+    submitterCapability,
+    surface.path,
+    surface.skillId
+  );
+
   // ── Wire dispatch route ──────────────────────────────────────────────
   // Per spec §4.6 / §4.7, `tasks/sendSubscribe` and `tasks/resubscribe`
   // emit a `text/event-stream` body while the other three verbs emit a
@@ -276,6 +290,7 @@ export function mount<D extends A2ADependencies = A2ADependencies>(
     handler: handler as A2AHandler,
     taskStore: SHARED_TASK_STORE,
     routeRegistry,
+    jobSubmitterProvider,
   };
   const sseDispatcher = buildSseDispatcherMiddleware(dispatcherDeps);
   const jsonDispatcher = buildDispatcherMiddleware(dispatcherDeps);
@@ -360,6 +375,120 @@ export function __buildCardRenderContextForTests(
     agentDescription: undefined,
     publicUrl: undefined,
     ...overrides,
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// MeshJobSubmitter auto-injection helpers (issue #936)
+// ────────────────────────────────────────────────────────────────────────
+
+/**
+ * Pick the capability the framework-injected {@link MeshJobSubmitter}
+ * should target for the given surface. Resolution order matches Java's
+ * {@code MeshA2ADispatcher.pickSubmitterCapability}:
+ *
+ * 1. The first declared dependency capability on the mount config — matches
+ *    what user code typically hand-constructs the submitter against today.
+ * 2. The `skillId` with `-` replaced by `_` (kebab-to-snake). Matches the
+ *    existing producer-report-agent example: skill `"generate-report"`
+ *    becomes capability `"generate_report"`.
+ *
+ * Returns `null` only when neither source yields a non-empty capability —
+ * the dispatcher then injects `null` into the handler's `jobSubmitter`
+ * arg and the user code must surface a clear error (mirrors Java's
+ * fallback).
+ */
+function pickSubmitterCapability(surface: A2ASurfaceMetadata): string | null {
+  if (surface.dependencies && surface.dependencies.length > 0) {
+    const first = surface.dependencies[0]?.capability;
+    if (typeof first === "string" && first.length > 0) {
+      return first;
+    }
+  }
+  if (surface.skillId && surface.skillId.length > 0) {
+    return surface.skillId.replace(/-/g, "_");
+  }
+  return null;
+}
+
+/**
+ * Build a `() => MeshJobSubmitter | null` provider for the dispatcher.
+ * Memoizes the first successful construction; before that point (when
+ * `getApiRuntime().getServiceId()` is still empty) it logs once and
+ * returns `null` so the dispatcher can pass `null` through to the
+ * handler. The handler observes the null and surfaces a clear error —
+ * the same fallback path Java uses when MeshRuntime isn't yet
+ * available.
+ *
+ * The registry URL is resolved on first call (env-var lookup is cheap
+ * but we still avoid doing it per-request once we have a submitter).
+ */
+function buildJobSubmitterProvider(
+  capability: string | null,
+  path: string,
+  skillId: string
+): () => MeshJobSubmitter | null {
+  let cached: MeshJobSubmitter | null = null;
+  let warnedUnresolvable = false;
+
+  if (!capability) {
+    return () => {
+      if (!warnedUnresolvable) {
+        warnedUnresolvable = true;
+        console.warn(
+          `mesh.a2a.mount(${path}): MeshJobSubmitter cannot be built — ` +
+            `no capability resolvable from dependencies[] or skillId='${skillId}'. ` +
+            `Handler's jobSubmitter arg will be null.`
+        );
+      }
+      return null;
+    };
+  }
+
+  return () => {
+    if (cached) return cached;
+    let agentId: string | undefined;
+    try {
+      // getServiceId() may be missing in test fixtures that mock the
+      // api-runtime singleton with a partial object; treat that as
+      // "runtime not started yet" rather than a hard failure so the
+      // dispatcher's user-facing fallback (handler observes null
+      // jobSubmitter and surfaces a clear error) still fires.
+      const runtime = getApiRuntime() as { getServiceId?: () => string };
+      agentId = typeof runtime.getServiceId === "function"
+        ? runtime.getServiceId()
+        : undefined;
+    } catch {
+      agentId = undefined;
+    }
+    if (!agentId) {
+      // api-runtime not yet started — handler observes null. Common on
+      // the very first tasks/send if the client races the agent's
+      // scheduled start; subsequent requests succeed.
+      return null;
+    }
+    // Match the original example's resolution path so users see the
+    // same behavior. process.env.MCP_MESH_REGISTRY_URL is the env var
+    // the SDK's resolveConfig("registry_url", ...) reads.
+    const registryUrl =
+      process.env.MCP_MESH_REGISTRY_URL ?? "http://localhost:8000";
+    try {
+      cached = new MeshJobSubmitter(capability, agentId, registryUrl);
+      return cached;
+    } catch (err) {
+      const msg = (err as Error)?.message ?? String(err);
+      // Don't memoize transient construction failures — try again on
+      // the next request. The submitter constructor itself is currently
+      // trivial (no I/O until submit() fires) so failures here are rare.
+      if (!warnedUnresolvable) {
+        warnedUnresolvable = true;
+        console.warn(
+          `mesh.a2a.mount(${path}): failed to construct MeshJobSubmitter ` +
+            `(capability='${capability}'): ${msg}`
+        );
+      }
+      return null;
+    }
   };
 }
 

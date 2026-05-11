@@ -880,3 +880,131 @@ describe("dispatcher: JSON-RPC error semantics (spec §4.1)", () => {
     expect(body.id).toBeNull();
   });
 });
+
+// ────────────────────────────────────────────────────────────────────────
+// jobSubmitter injection (issue #936)
+// ────────────────────────────────────────────────────────────────────────
+
+describe("dispatcher: handler jobSubmitter arg (issue #936)", () => {
+  let store: A2ATaskStore;
+  beforeEach(() => {
+    RouteRegistry.reset();
+    store = new A2ATaskStore();
+  });
+
+  /**
+   * The framework auto-injects a MeshJobSubmitter on the third positional
+   * arg so long-running handlers don't have to hand-construct one from
+   * getApiRuntime().getServiceId() + MCP_MESH_REGISTRY_URL. Mirrors Java's
+   * MeshA2ADispatcher behavior.
+   */
+  it("passes provided submitter through to the handler as the third arg", async () => {
+    let captured3rdArg: unknown = "<not-called>";
+    const handler: A2AHandler = async (_deps, _payload, jobSubmitter) => {
+      captured3rdArg = jobSubmitter;
+      return "ok";
+    };
+    const baseDeps = makeDeps(handler, store);
+    const fakeSubmitter = { __fake: "submitter" } as never;
+    const deps: DispatcherDeps = {
+      ...baseDeps,
+      jobSubmitterProvider: () => fakeSubmitter,
+    };
+
+    await dispatch(deps, {
+      jsonrpc: "2.0",
+      method: "tasks/send",
+      params: { id: "t-with-submitter" },
+    });
+
+    expect(captured3rdArg).toBe(fakeSubmitter);
+  });
+
+  /**
+   * Without a `jobSubmitterProvider` (e.g. test fixtures, advanced
+   * wiring) the dispatcher passes `null` — handler can check and
+   * surface a clear error rather than blow up.
+   */
+  it("passes null when no jobSubmitterProvider is configured", async () => {
+    let captured3rdArg: unknown = "<not-called>";
+    const handler: A2AHandler = async (_deps, _payload, jobSubmitter) => {
+      captured3rdArg = jobSubmitter;
+      return "ok";
+    };
+    const deps = makeDeps(handler, store);
+
+    await dispatch(deps, {
+      jsonrpc: "2.0",
+      method: "tasks/send",
+      params: { id: "t-no-provider" },
+    });
+
+    expect(captured3rdArg).toBeNull();
+  });
+
+  /**
+   * The provider is called per-request — the dispatcher does NOT memoize
+   * inside itself. (Caching is the provider's responsibility — `mount.ts`
+   * memoizes after the first successful construction.) This matters for
+   * the early-startup case where the provider returns null on the first
+   * call but a real instance on the second.
+   */
+  it("calls the provider on every dispatch (no internal memoization)", async () => {
+    const handler: A2AHandler = async () => "ok";
+    const baseDeps = makeDeps(handler, store);
+
+    const providerCalls: number[] = [];
+    let callIndex = 0;
+    const deps: DispatcherDeps = {
+      ...baseDeps,
+      jobSubmitterProvider: () => {
+        callIndex += 1;
+        providerCalls.push(callIndex);
+        return null;
+      },
+    };
+
+    await dispatch(deps, {
+      jsonrpc: "2.0",
+      method: "tasks/send",
+      params: { id: "t-call-1" },
+    });
+    await dispatch(deps, {
+      jsonrpc: "2.0",
+      method: "tasks/send",
+      params: { id: "t-call-2" },
+    });
+
+    expect(providerCalls).toEqual([1, 2]);
+  });
+
+  /**
+   * The handler's third arg must be passed on the SSE
+   * (`tasks/sendSubscribe`) path too — not just JSON-RPC. Java's
+   * dispatcher exercises both call sites; the TS equivalent must
+   * match.
+   */
+  it("threads jobSubmitter through to tasks/sendSubscribe handler", async () => {
+    let captured3rdArg: unknown = "<not-called>";
+    const fakeProxyResult = fakeProxy({ jobId: "job-stream" });
+    const handler: A2AHandler = async (_deps, _payload, jobSubmitter) => {
+      captured3rdArg = jobSubmitter;
+      return fakeProxyResult;
+    };
+    const baseDeps = makeDeps(handler, store);
+    const fakeSubmitter = { __fake: "submitter" } as never;
+    const deps: DispatcherDeps = {
+      ...baseDeps,
+      jobSubmitterProvider: () => fakeSubmitter,
+    };
+
+    // Call buildSendSubscribeStream directly — the dispatcher's
+    // tasks/sendSubscribe entry point.
+    const { buildSendSubscribeStream } = await import(
+      "../../../a2a/producer/dispatcher.js"
+    );
+    await buildSendSubscribeStream("req-1", { id: "t-sse-1" }, deps);
+
+    expect(captured3rdArg).toBe(fakeSubmitter);
+  });
+});

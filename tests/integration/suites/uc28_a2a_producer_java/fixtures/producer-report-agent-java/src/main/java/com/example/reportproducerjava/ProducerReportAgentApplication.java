@@ -3,11 +3,9 @@ package com.example.reportproducerjava;
 import io.mcpmesh.JobProxy;
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.MeshJobSubmitter;
-import io.mcpmesh.spring.MeshRuntime;
 import io.mcpmesh.spring.web.MeshA2A;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.stereotype.Component;
@@ -29,6 +27,12 @@ import java.util.concurrent.TimeoutException;
  * long-running mode (parks the task in the A2A task store, services
  * {@code tasks/get}, {@code tasks/cancel}, {@code tasks/sendSubscribe},
  * {@code tasks/resubscribe} from it).
+ *
+ * <p>Issue #936: the {@link MeshJobSubmitter} is auto-injected by the
+ * dispatcher — capability defaults to the {@code skillId} with
+ * {@code '-'} replaced by {@code '_'} (so {@code "generate-report"}
+ * resolves to {@code generate_report}). No more {@code @Lazy MeshRuntime}
+ * workaround.
  */
 @MeshAgent(
     name = "report-a2a-agent",
@@ -50,9 +54,6 @@ public class ProducerReportAgentApplication {
 
         private static final ObjectMapper JSON = new ObjectMapper();
 
-        @Autowired
-        private MeshRuntime meshRuntime;
-
         @MeshA2A(
             path = "/agents/report",
             skillId = "generate-report",
@@ -60,7 +61,9 @@ public class ProducerReportAgentApplication {
             description = "Generate a long-form report via A2A (task=True streaming)",
             tags = {"reports", "long-running"}
         )
-        public Object generateReport(Map<String, Object> message) throws Exception {
+        public Object generateReport(
+                Map<String, Object> message,
+                MeshJobSubmitter jobSubmitter) throws Exception {
             String userId = "anon";
             List<String> sections = List.of("overview");
             Object partsObj = message != null ? message.get("parts") : null;
@@ -84,9 +87,11 @@ public class ProducerReportAgentApplication {
                 }
             }
 
-            String registryUrl = meshRuntime.getAgentSpec().getRegistryUrl();
-            String agentId = meshRuntime.getAgentSpec().getAgentId();
-            MeshJobSubmitter submitter = new MeshJobSubmitter("generate_report", agentId, registryUrl);
+            if (jobSubmitter == null) {
+                throw new IllegalStateException(
+                    "MeshJobSubmitter not yet available — mesh runtime is still initialising. "
+                        + "Retry tasks/send shortly.");
+            }
 
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("user_id", userId);
@@ -97,7 +102,7 @@ public class ProducerReportAgentApplication {
             // hang on the dispatcher thread.
             JobProxy proxy;
             try {
-                proxy = submitter.submit(payload).get(30, TimeUnit.SECONDS);
+                proxy = jobSubmitter.submit(payload).get(30, TimeUnit.SECONDS);
             } catch (TimeoutException te) {
                 throw new RuntimeException(
                     "submit() did not return a JobProxy within 30s — "
