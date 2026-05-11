@@ -39,14 +39,14 @@ app = FastMCP("{{ toPascalCase .Name }} Bridge")
 
 @app.tool()
 @mesh.a2a_consumer(
-    capability="{{ .Capability }}",
-    a2a_url="{{ $.A2AURL }}",
-    a2a_skill_id="{{ .ID }}",
+    capability={{ toJSON .Capability }},
+    a2a_url={{ toJSON $.A2AURL }},
+    a2a_skill_id={{ toJSON .ID }},
     tags={{ if .Tags }}{{ toJSON .Tags }}{{ else }}[]{{ end }},{{ if $.AuthBearer }}
-    auth=mesh.A2ABearer(token_env="{{ $.AuthEnvVar }}"),{{ end }}
+    auth=mesh.A2ABearer(token_env={{ toJSON $.AuthEnvVar }}),{{ end }}
 )
+# {{ .Description }}
 async def {{ .FunctionName }}(_a2a: mesh.A2AClient = None) -> dict:
-    """{{ .Description }}"""
     response = await _a2a.send(
         message={"role": "user", "parts": [{"type": "text", "text": "TODO: build A2A message"}]},
     )
@@ -61,9 +61,9 @@ async def {{ .FunctionName }}(_a2a: mesh.A2AClient = None) -> dict:
 
 # @mesh.agent MUST be last - see module docstring for why.
 @mesh.agent(
-    name="{{ .Name }}",
+    name={{ toJSON .Name }},
     version="1.0.0",{{ if .Description }}
-    description="{{ .Description }}",{{ end }}
+    description={{ toJSON .Description }},{{ end }}
     http_port=HTTP_PORT,
 )
 class {{ toPascalCase .Name }}:

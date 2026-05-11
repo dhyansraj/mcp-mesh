@@ -26,9 +26,9 @@ import java.util.Map;
 {{ else }} * <p>Generated from: {{ .A2AURL }}/.well-known/agent.json
 {{ end }} */
 @MeshAgent(
-    name = "{{ .Name }}",
+    name = {{ toJSON .Name }},
     version = "1.0.0",
-    description = "{{ if .Description }}{{ .Description }}{{ else }}A2A consumer bridge{{ end }}",
+    description = {{ if .Description }}{{ toJSON .Description }}{{ else }}"A2A consumer bridge"{{ end }},
     port = {{ .Port }}
 )
 @SpringBootApplication
@@ -41,16 +41,16 @@ public class {{ .NamePascal }}Application {
     }
 {{ range .Skills }}
     @MeshTool(
-        capability = "{{ .Capability }}",
-        description = "{{ .Description }}",
-        tags = { {{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}"{{ $t }}"{{ end }} }
+        capability = {{ toJSON .Capability }},
+        description = {{ toJSON .Description }},
+        tags = { {{ range $i, $t := .Tags }}{{ if $i }}, {{ end }}{{ toJSON $t }}{{ end }} }
     )
     @A2AConsumer(
-        url = "{{ $.A2AURL }}",
-        skillId = "{{ .ID }}"{{ if $.AuthBearer }},
-        authBearerEnv = "{{ $.AuthEnvVar }}"{{ end }}
+        url = {{ toJSON $.A2AURL }},
+        skillId = {{ toJSON .ID }}{{ if $.AuthBearer }},
+        authBearerEnv = {{ toJSON $.AuthEnvVar }}{{ end }}
     )
-    public Map<String, Object> {{ .FunctionName | toCamelCase }}(A2AClient a2a) throws Exception {
+    public Map<String, Object> {{ .MethodName }}(A2AClient a2a) throws Exception {
         A2AResponse response = a2a.send(Map.of(
             "role", "user",
             "parts", List.of(Map.of("type", "text", "text", "TODO: build A2A message"))

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -21,8 +22,9 @@ type ScaffoldSkill struct {
 	Description  string
 	Tags         []string
 	Capability   string
-	FunctionName string
-	ClassName    string
+	FunctionName string // snake_case (Python)
+	ClassName    string // PascalCase (Java/TS class names)
+	MethodName   string // camelCase, sanitized (Java method names)
 }
 
 // newScaffoldA2AConsumerCommand builds `meshctl scaffold a2a-consumer`.
@@ -176,6 +178,12 @@ func runScaffoldA2AConsumer(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+// validJavaPackagePattern restricts --package to standard Java package
+// identifier syntax (lowercase letters/digits/underscores, dot-separated)
+// so producer-supplied or user-supplied values cannot escape the output
+// directory via path traversal segments like "../../etc".
+var validJavaPackagePattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)*$`)
+
 // validateA2AConsumerContext reuses the common name/language validation but
 // skips the static provider's template enum check (a2a-consumer isn't in the
 // classic template list).
@@ -187,7 +195,35 @@ func validateA2AConsumerContext(ctx *ScaffoldContext) error {
 		sanitized := strings.ReplaceAll(strings.ReplaceAll(ctx.Name, "-", ""), "_", "")
 		ctx.JavaPackage = "com.example." + strings.ToLower(sanitized)
 	}
+	if ctx.JavaPackage != "" && !validJavaPackagePattern.MatchString(ctx.JavaPackage) {
+		return fmt.Errorf("--package must be a valid Java package identifier (lowercase letters, digits, underscores, dot-separated): got %q", ctx.JavaPackage)
+	}
 	return nil
+}
+
+// sanitizeIdentifier ensures the result is a safe identifier across
+// Python/TypeScript/Java: starts with a letter or underscore, contains
+// only [A-Za-z0-9_]. Used for function/method/class names derived from
+// arbitrary producer-supplied skill IDs.
+func sanitizeIdentifier(raw string) string {
+	var b strings.Builder
+	for _, r := range raw {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	cleaned := b.String()
+	if cleaned == "" {
+		return "skill"
+	}
+	// Identifiers cannot start with a digit — prefix with underscore.
+	first := cleaned[0]
+	if first >= '0' && first <= '9' {
+		return "_" + cleaned
+	}
+	return cleaned
 }
 
 // buildScaffoldSkills converts card.skills[] into the per-skill template
@@ -203,18 +239,30 @@ func buildScaffoldSkills(card *AgentCard) []ScaffoldSkill {
 			Capability:   "TODO-capability",
 			FunctionName: "todo_skill",
 			ClassName:    "TodoSkill",
+			MethodName:   "todoSkill",
 		}}
 	}
 
 	out := make([]ScaffoldSkill, 0, len(card.Skills))
 	for _, s := range card.Skills {
-		fname := toSnakeCase(s.ID)
+		// Sanitize BEFORE the case-conversion helpers so digit-prefixed
+		// or special-char-bearing skill IDs cannot produce uncompilable
+		// identifiers in the generated source. Re-apply sanitization
+		// AFTER PascalCase too — splitWords() drops empty leading
+		// fragments, which strips a sanitizer-added underscore prefix
+		// (e.g., "_123_x" -> PascalCase -> "123X").
+		safeID := sanitizeIdentifier(s.ID)
+		fname := toSnakeCase(safeID)
 		if fname == "" {
 			fname = "todo_skill"
 		}
-		cname := toPascalCase(s.ID)
+		cname := sanitizeIdentifier(toPascalCase(safeID))
 		if cname == "" {
 			cname = "TodoSkill"
+		}
+		mname := sanitizeIdentifier(toCamelCase(safeID))
+		if mname == "" {
+			mname = "todoSkill"
 		}
 		desc := s.Description
 		if desc == "" {
@@ -228,6 +276,7 @@ func buildScaffoldSkills(card *AgentCard) []ScaffoldSkill {
 			Capability:   s.ID,
 			FunctionName: fname,
 			ClassName:    cname,
+			MethodName:   mname,
 		})
 	}
 	return out

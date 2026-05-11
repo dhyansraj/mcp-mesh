@@ -173,3 +173,20 @@ func TestFetchAgentCard_BadURL(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid producer URL")
 }
+
+func TestFetchAgentCard_RejectsOversizeBody(t *testing.T) {
+	// Serve a body just over the 1 MiB cap. Content type is irrelevant —
+	// the fetcher must short-circuit before JSON parsing.
+	oversize := make([]byte, maxAgentCardBytes+1024)
+	for i := range oversize {
+		oversize[i] = 'a'
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(oversize)
+	}))
+	defer srv.Close()
+
+	_, err := FetchAgentCard(srv.URL)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "agent card body exceeded")
+}

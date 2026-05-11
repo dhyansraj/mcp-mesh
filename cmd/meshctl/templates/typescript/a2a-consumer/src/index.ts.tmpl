@@ -24,22 +24,22 @@ const server = new FastMCP({
 });
 
 const agent = mesh(server, {
-  name: "{{ .Name }}",
+  name: {{ toJSON .Name }},
   httpPort: HTTP_PORT,{{ if .Description }}
-  description: "{{ .Description }}",{{ end }}
+  description: {{ toJSON .Description }},{{ end }}
 });
 
 {{ range .Skills }}
 agent.addTool({
-  name: "{{ .FunctionName }}",
-  capability: "{{ .Capability }}",
+  name: {{ toJSON .FunctionName }},
+  capability: {{ toJSON .Capability }},
   tags: {{ if .Tags }}{{ toJSON .Tags }}{{ else }}[]{{ end }},
-  description: "{{ .Description }}",
+  description: {{ toJSON .Description }},
   parameters: z.object({}),
   a2aConfig: {
-    url: "{{ $.A2AURL }}",
-    skillId: "{{ .ID }}",{{ if $.AuthBearer }}
-    authBearerEnv: "{{ $.AuthEnvVar }}",{{ end }}
+    url: {{ toJSON $.A2AURL }},
+    skillId: {{ toJSON .ID }},{{ if $.AuthBearer }}
+    authBearerEnv: {{ toJSON $.AuthEnvVar }},{{ end }}
   },
   execute: async (_args, ..._injected) => {
     // _injected[0] is the framework-injected A2AClient. If you later add

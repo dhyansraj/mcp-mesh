@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+// maxAgentCardBytes caps the size of an /.well-known/agent.json response body.
+// A2A v1.0 cards are typically well under 10 KB; 1 MiB is generous and
+// prevents a hostile producer from exhausting memory via an unbounded body.
+const maxAgentCardBytes = 1024 * 1024 // 1 MiB
+
 // AgentCard mirrors the A2A v1.0 /.well-known/agent.json shape (issue #909).
 // Only fields the scaffolder reads are typed; unknown fields are ignored
 // so future card extensions don't break consumer scaffolding.
@@ -63,9 +68,15 @@ func FetchAgentCard(producerURL string) (*AgentCard, error) {
 		return nil, fmt.Errorf("agent card fetch returned HTTP %d for %s", resp.StatusCode, cardURL)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	// Read one byte beyond the cap so we can detect oversize bodies
+	// without first slurping the entire (potentially huge) response.
+	limited := io.LimitReader(resp.Body, maxAgentCardBytes+1)
+	body, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read agent card response: %w", err)
+	}
+	if int64(len(body)) > maxAgentCardBytes {
+		return nil, fmt.Errorf("agent card body exceeded %d bytes (got %d) — refusing to parse", maxAgentCardBytes, len(body))
 	}
 
 	var card AgentCard
