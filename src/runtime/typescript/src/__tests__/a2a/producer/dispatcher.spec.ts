@@ -28,6 +28,7 @@ import {
   JSONRPC_INVALID_PARAMS,
 } from "../../../a2a/producer/dispatcher.js";
 import type { A2ASurfaceMetadata } from "../../../a2a/producer/registry.js";
+import type { MeshJobSubmitter } from "../../../mesh-job-submitter.js";
 
 // ────────────────────────────────────────────────────────────────────────
 // Test fixtures
@@ -905,7 +906,7 @@ describe("dispatcher: handler jobSubmitter arg (issue #936)", () => {
       return "ok";
     };
     const baseDeps = makeDeps(handler, store);
-    const fakeSubmitter = { __fake: "submitter" } as never;
+    const fakeSubmitter = { __fake: "submitter" } as unknown as MeshJobSubmitter;
     const deps: DispatcherDeps = {
       ...baseDeps,
       jobSubmitterProvider: () => fakeSubmitter,
@@ -992,7 +993,7 @@ describe("dispatcher: handler jobSubmitter arg (issue #936)", () => {
       return fakeProxyResult;
     };
     const baseDeps = makeDeps(handler, store);
-    const fakeSubmitter = { __fake: "submitter" } as never;
+    const fakeSubmitter = { __fake: "submitter" } as unknown as MeshJobSubmitter;
     const deps: DispatcherDeps = {
       ...baseDeps,
       jobSubmitterProvider: () => fakeSubmitter,

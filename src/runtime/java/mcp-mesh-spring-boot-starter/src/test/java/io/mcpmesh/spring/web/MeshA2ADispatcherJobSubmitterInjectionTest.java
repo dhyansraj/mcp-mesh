@@ -174,6 +174,71 @@ class MeshA2ADispatcherJobSubmitterInjectionTest {
     }
 
     @Test
+    @DisplayName("Class load + dispatch resilient when runtimeProvider.getIfAvailable() throws")
+    void dispatcherClassLoadIsIndependentOfRuntimeProviderHealth() throws Exception {
+        // Regression for the BLOCKER review finding: the dispatcher used to
+        // construct a static sentinel MeshJobSubmitter at class load via
+        // an unguarded constructor call. If MeshJobSubmitter ever started
+        // doing real work in its constructor (FFI load, registry registration,
+        // etc.), class load would cascade-fail with ExceptionInInitializerError
+        // and brick the entire A2A starter — even for surfaces that don't use
+        // MeshJobSubmitter at all.
+        //
+        // The two-collection refactor eliminates that risk: we no longer
+        // construct a sentinel statically. This test asserts the contract
+        // structurally by wiring a runtime provider whose getIfAvailable()
+        // raises — equivalent in effect to "MeshJobSubmitter ctor would
+        // explode" without our test needing to depend on the ctor's health.
+        // The dispatcher must:
+        //   (a) construct without throwing,
+        //   (b) handle the explosion from getIfAvailable() gracefully,
+        //   (c) inject null into the MeshJobSubmitter slot,
+        //   (d) NOT memoize this transient failure (next call retries).
+        registry.register(surfaceFor("/svc", "generate-report", List.of()));
+
+        AtomicReference<Integer> providerCalls = new AtomicReference<>(0);
+        ObjectProvider<MeshRuntime> faultyProvider = new ObjectProvider<>() {
+            @Override public MeshRuntime getObject() { throw new IllegalStateException("bean init failed"); }
+            @Override public MeshRuntime getObject(Object... args) { throw new IllegalStateException("bean init failed"); }
+            @Override public MeshRuntime getIfAvailable() {
+                providerCalls.updateAndGet(v -> v + 1);
+                throw new IllegalStateException("simulated bean-init failure");
+            }
+            @Override public MeshRuntime getIfUnique() { throw new IllegalStateException("bean init failed"); }
+        };
+
+        // (a) Dispatcher constructs cleanly even though the provider would
+        // throw if asked.
+        MeshA2ADispatcher dispatcher = new MeshA2ADispatcher(
+            registry, taskStore, mapper,
+            A2ATestFixtures.emptyInjectorProvider(),
+            faultyProvider);
+        assertNotNull(dispatcher);
+
+        // (b) + (c) First call falls through to null injection without
+        // crashing the dispatch. The handler bean treats null submitter as
+        // a controlled error → state=failed.
+        ResponseEntity<String> resp = dispatcher.dispatch("/svc",
+            A2ATestFixtures.jsonRpcBody(1, "tasks/send",
+                Map.of("id", "t1", "message", Map.of())));
+        assertEquals(200, resp.getStatusCode().value(),
+            "Dispatcher must not surface provider faults as HTTP errors");
+        JsonNode env = mapper.readTree(resp.getBody());
+        assertEquals("failed", env.get("result").get("status").get("state").asText());
+        assertEquals(1, providerCalls.get(),
+            "Provider must have been consulted exactly once on the first call");
+
+        // (d) Second call also invokes the provider — the provider fault is
+        // treated as transient, NOT memoized as permanent-unbuildable.
+        ResponseEntity<String> resp2 = dispatcher.dispatch("/svc",
+            A2ATestFixtures.jsonRpcBody(2, "tasks/send",
+                Map.of("id", "t2", "message", Map.of())));
+        assertEquals(200, resp2.getStatusCode().value());
+        assertEquals(2, providerCalls.get(),
+            "Transient provider fault must NOT be cached — provider must be retried on the next call");
+    }
+
+    @Test
     @DisplayName("Three-arg dispatcher constructor: handler with submitter param gets null (back-compat)")
     void legacyConstructor_doesNotCrashOnMeshJobSubmitterParam() throws Exception {
         registry.register(surfaceFor("/svc", "generate-report", List.of()));

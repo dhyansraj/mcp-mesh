@@ -446,7 +446,7 @@ function buildJobSubmitterProvider(
   }
 
   return () => {
-    if (cached) return cached;
+    if (cached !== null) return cached;
     let agentId: string | undefined;
     try {
       // getServiceId() may be missing in test fixtures that mock the

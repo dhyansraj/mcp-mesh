@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -79,45 +80,33 @@ public class MeshA2ADispatcher {
     private final ObjectProvider<MeshRuntime> runtimeProvider;
 
     /**
-     * Per-surface cache of {@link MeshJobSubmitter} instances. Issue #936:
-     * {@code @MeshA2A} handlers may declare a {@link MeshJobSubmitter}
+     * Per-surface cache of REAL {@link MeshJobSubmitter} instances. Issue
+     * #936: {@code @MeshA2A} handlers may declare a {@link MeshJobSubmitter}
      * parameter that the framework auto-injects at call time. Submitters
      * are stateless after construction (capability + agent id + registry
      * URL), so one cached instance per surface is correct — we look up
      * by {@code handlerMethodId} since the same surface can be re-resolved
      * across requests but always points at the same skill.
+     *
+     * <p>This map ONLY contains successfully constructed submitters; the
+     * sibling {@link #unbuildableSurfaces} set tracks surfaces we have
+     * determined can never produce a submitter. Splitting the two states
+     * into separate collections (rather than using a sentinel value)
+     * eliminates the risk of accidentally exposing a fake submitter
+     * identity through any future getter / debug API and keeps class-load
+     * independent of {@link MeshJobSubmitter}'s constructor health.
      */
     private final Map<String, MeshJobSubmitter> jobSubmitterCache = new ConcurrentHashMap<>();
 
     /**
-     * Sentinel marker used by {@link #jobSubmitterCache} to memoize a
-     * "no submitter buildable" outcome (e.g. {@link MeshRuntime} not
-     * yet available, or no capability can be resolved). We can't store
-     * {@code null} in a {@link ConcurrentHashMap} so a sentinel instance
-     * lets us treat "definitively unbuildable" as a distinct cached
-     * outcome from "not yet attempted".
+     * Set of surface handler IDs we have determined can NEVER produce a
+     * usable {@link MeshJobSubmitter} — either because no capability can
+     * be derived or because the dispatcher was constructed without a
+     * runtime provider. This is the "permanent unbuildable" memo; transient
+     * conditions (runtime not yet available, agent id empty, constructor
+     * threw) are NOT recorded here so they can be retried on the next call.
      */
-    private static final MeshJobSubmitter UNBUILDABLE_SUBMITTER = makeUnbuildableSentinel();
-
-    /**
-     * Construct an unbuildable sentinel using legal placeholder arguments
-     * — the constructor refuses null/empty so we pass throwaway strings
-     * the cache will never expose to user code.
-     */
-    private static MeshJobSubmitter makeUnbuildableSentinel() {
-        // The constructor validates non-empty args but doesn't touch the
-        // FFI runtime until submit() is called; safe to instantiate here
-        // purely as a unique reference value.
-        try {
-            return new MeshJobSubmitter("__sentinel__", "__sentinel__", "__sentinel__");
-        } catch (Throwable t) {
-            // If even the sentinel can't be built (e.g. core load fails
-            // in test JVMs without the native lib), fall back to a proxy
-            // that's distinguishable by identity — but every test JVM
-            // does load the native lib so this path is defensive.
-            throw new IllegalStateException("Failed to build MeshJobSubmitter sentinel", t);
-        }
-    }
+    private final Set<String> unbuildableSurfaces = ConcurrentHashMap.newKeySet();
 
     public MeshA2ADispatcher(
             MeshA2ARegistry registry,
@@ -682,24 +671,41 @@ public class MeshA2ADispatcher {
      * </ol>
      */
     private MeshJobSubmitter resolveJobSubmitter(MeshA2ARegistry.SurfaceMetadata surface) {
-        MeshJobSubmitter cached = jobSubmitterCache.get(surface.handlerMethodId());
+        String surfaceId = surface.handlerMethodId();
+        // Permanent-unbuildable check first: surfaces marked here will
+        // NEVER produce a submitter (no capability, or no runtime provider
+        // wired) so short-circuit without touching the runtime provider.
+        if (unbuildableSurfaces.contains(surfaceId)) {
+            return null;
+        }
+        MeshJobSubmitter cached = jobSubmitterCache.get(surfaceId);
         if (cached != null) {
-            return cached == UNBUILDABLE_SUBMITTER ? null : cached;
+            return cached;
         }
         if (runtimeProvider == null) {
             log.warn("@MeshA2A {} declares MeshJobSubmitter parameter but the dispatcher was "
                 + "constructed without a MeshRuntime provider — injecting null. Use the "
                 + "five-arg MeshA2ADispatcher constructor (the Spring autoconfiguration wires "
-                + "this automatically).", surface.handlerMethodId());
-            jobSubmitterCache.put(surface.handlerMethodId(), UNBUILDABLE_SUBMITTER);
+                + "this automatically).", surfaceId);
+            unbuildableSurfaces.add(surfaceId);
             return null;
         }
-        MeshRuntime runtime = runtimeProvider.getIfAvailable();
+        MeshRuntime runtime;
+        try {
+            runtime = runtimeProvider.getIfAvailable();
+        } catch (Exception e) {
+            // Treat provider faults (Spring bean init exceptions) as
+            // transient — the bean may be available on a later request
+            // once Spring finishes its init pass.
+            log.warn("@MeshA2A {}: MeshRuntime provider raised on getIfAvailable() — injecting null: {}",
+                surfaceId, e.getMessage());
+            return null;
+        }
         if (runtime == null || runtime.getAgentSpec() == null) {
             log.warn("@MeshA2A {} declares MeshJobSubmitter parameter but MeshRuntime is not "
                 + "yet available — injecting null. This usually means tasks/send fired before "
                 + "the runtime finished initialising; retrying the request shortly should succeed.",
-                surface.handlerMethodId());
+                surfaceId);
             // Don't memoize this — the runtime may become available later.
             return null;
         }
@@ -708,7 +714,7 @@ public class MeshA2ADispatcher {
         if (agentId == null || agentId.isEmpty() || registryUrl == null || registryUrl.isEmpty()) {
             log.warn("@MeshA2A {} declares MeshJobSubmitter parameter but agent id / registry URL "
                 + "is not configured (agentId='{}' registryUrl='{}') — injecting null.",
-                surface.handlerMethodId(), agentId, registryUrl);
+                surfaceId, agentId, registryUrl);
             // Don't memoize — config may be filled in later if the runtime
             // is mid-finalize.
             return null;
@@ -717,19 +723,19 @@ public class MeshA2ADispatcher {
         if (capability == null || capability.isEmpty()) {
             log.warn("@MeshA2A {} declares MeshJobSubmitter parameter but no capability can be "
                 + "derived (no @MeshDependency declared and skillId is empty) — injecting null.",
-                surface.handlerMethodId());
-            jobSubmitterCache.put(surface.handlerMethodId(), UNBUILDABLE_SUBMITTER);
+                surfaceId);
+            unbuildableSurfaces.add(surfaceId);
             return null;
         }
         try {
             MeshJobSubmitter submitter = new MeshJobSubmitter(capability, agentId, registryUrl);
-            jobSubmitterCache.put(surface.handlerMethodId(), submitter);
+            jobSubmitterCache.put(surfaceId, submitter);
             log.info("@MeshA2A {}: auto-injected MeshJobSubmitter (capability={}, agentId={})",
-                surface.handlerMethodId(), capability, agentId);
+                surfaceId, capability, agentId);
             return submitter;
         } catch (Exception e) {
             log.warn("@MeshA2A {}: failed to construct MeshJobSubmitter: {}",
-                surface.handlerMethodId(), e.getMessage());
+                surfaceId, e.getMessage());
             // Don't memoize a transient construction failure — the FFI
             // runtime may be in a recoverable state.
             return null;
