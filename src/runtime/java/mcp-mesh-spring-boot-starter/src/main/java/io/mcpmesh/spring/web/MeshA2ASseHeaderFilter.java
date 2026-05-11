@@ -6,9 +6,11 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.List;
 
 /**
  * Adds the SSE-buffering hints that Spring's
@@ -47,13 +49,43 @@ public class MeshA2ASseHeaderFilter extends OncePerRequestFilter {
     protected void doFilterInternal(
             HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        String accept = request.getHeader("Accept");
-        if (accept != null && accept.contains("text/event-stream")) {
+        if (acceptsEventStream(request.getHeader("Accept"))) {
             response.setHeader("Cache-Control", "no-cache");
             response.setHeader("X-Accel-Buffering", "no");
             response.setHeader("Connection", "keep-alive");
             log.debug("SSE buffering hints stamped on {} {}", request.getMethod(), request.getRequestURI());
         }
         chain.doFilter(request, response);
+    }
+
+    /**
+     * Returns true when the {@code Accept} header asks for
+     * {@code text/event-stream}. Uses Spring's {@link MediaType#parseMediaTypes}
+     * so case ("TEXT/EVENT-STREAM"), parameter suffixes ("text/event-stream;
+     * charset=UTF-8"), and compound values ("application/json,
+     * text/event-stream;q=0.9") are all handled correctly — a raw
+     * {@code String.contains("text/event-stream")} check is brittle on all
+     * three counts.
+     */
+    static boolean acceptsEventStream(String acceptHeader) {
+        if (acceptHeader == null || acceptHeader.isBlank()) {
+            return false;
+        }
+        try {
+            List<MediaType> media = MediaType.parseMediaTypes(acceptHeader);
+            for (MediaType m : media) {
+                if (m.isCompatibleWith(MediaType.TEXT_EVENT_STREAM)) {
+                    return true;
+                }
+            }
+        } catch (org.springframework.http.InvalidMediaTypeException
+            | org.springframework.util.InvalidMimeTypeException e) {
+            // Malformed Accept header: fall back to a defensive substring
+            // check so we don't drop legitimate SSE clients on a header parse
+            // failure that's outside our control. Both Spring exception types
+            // are caught — different Spring versions raise different subclasses.
+            return acceptHeader.toLowerCase().contains("text/event-stream");
+        }
+        return false;
     }
 }

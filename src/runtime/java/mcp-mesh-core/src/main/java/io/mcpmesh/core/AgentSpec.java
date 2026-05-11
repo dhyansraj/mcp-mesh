@@ -62,8 +62,10 @@ public class AgentSpec {
      * JSONB column).
      *
      * <p>When {@code null} or empty, the field is omitted from the heartbeat
-     * envelope (Jackson's {@code @JsonInclude(NON_NULL)} on the class).
+     * envelope (per-field {@code @JsonInclude(NON_EMPTY)} overrides the
+     * class-level {@code NON_NULL} so accidental empty strings are dropped).
      */
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
     private String surfaces;
 
     public AgentSpec() {

@@ -61,11 +61,11 @@ runtime-implementation choices.
 The user-facing API differs by language, but all three forms expand to the same
 wire contract:
 
-| Concept                       | Python                          | Java (planned, issue #932) | TypeScript (planned, issue #933) |
+| Concept                       | Python                          | Java (implemented)         | TypeScript (planned, issue #933) |
 |-------------------------------|---------------------------------|----------------------------|----------------------------------|
 | Decorator-level metadata stamp | `@mesh.a2a(path=...)`           | `@MeshA2A(path=...)`       | `mesh.a2a({path: ...})` (functional helper) |
 | Mount + DI                    | `mesh.a2a.mount(app, path=...)` | annotation processor       | `mesh.a2a()` returns a router    |
-| Source-of-truth file          | `src/runtime/python/mesh/a2a.py` | (TBD)                      | (TBD)                            |
+| Source-of-truth file          | `src/runtime/python/mesh/a2a.py` | `src/runtime/java/mcp-mesh-spring-boot-starter/src/main/java/io/mcpmesh/spring/web/` | (TBD)                            |
 
 > The Python implementation is the de-facto reference. New runtimes must match
 > wire shape, NOT implementation structure.
@@ -1039,7 +1039,7 @@ A new producer runtime MUST satisfy every item below.
 - [ ] When `auth="bearer"`, `authentication.schemes` is `["bearer"]`.
 - [ ] When auth is unset, `authentication.schemes` is `[]` (empty array, never `["none"]`).
 - [ ] `url` is omitted (not emitted as empty string) when no public URL is available.
-- [ ] Trailing-slash request `{path}/.well-known/agent.json` and slash-less `{path}/.well-known/agent.json` both work.
+- [ ] Trailing-slash request `{path}/.well-known/agent.json/` and slash-less `{path}/.well-known/agent.json` both work.
 
 ### JSON-RPC `POST {path}` dispatch
 - [ ] Non-JSON request body returns HTTP 400 with JSON-RPC error code `-32700`.

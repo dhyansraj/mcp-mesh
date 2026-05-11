@@ -570,12 +570,12 @@ public class MeshEventProcessor implements SmartLifecycle {
         String path = event.getCapability();
         String skillId = event.getSkillId();
         String publicUrl = event.getEndpoint();
-        if (path == null || path.isEmpty()) {
+        if (path == null || path.isBlank()) {
             log.debug("Surface update event missing path: {}", event);
             return;
         }
-        publicUrlCache.put(path, skillId, publicUrl);
+        publicUrlCache.put(path.trim(), skillId, publicUrl);
         log.info("Surface updated: path={} skill_id={} public_url={}",
-            path, skillId, publicUrl);
+            path.trim(), skillId, publicUrl);
     }
 }

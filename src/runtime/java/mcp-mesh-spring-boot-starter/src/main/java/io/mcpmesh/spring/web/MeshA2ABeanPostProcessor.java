@@ -44,6 +44,14 @@ public class MeshA2ABeanPostProcessor implements BeanPostProcessor {
         Class<?> targetClass = AopUtils.getTargetClass(bean);
 
         for (Method method : targetClass.getDeclaredMethods()) {
+            // Skip compiler-generated bridge/synthetic methods. Generic erasure
+            // causes javac to emit a bridge method alongside the real handler,
+            // and AnnotationUtils#findAnnotation returns the same annotation
+            // on both — double-registering the surface (and tripping the
+            // duplicate-path guard in MeshA2ARegistry).
+            if (method.isBridge() || method.isSynthetic()) {
+                continue;
+            }
             MeshA2A annotation = AnnotationUtils.findAnnotation(method, MeshA2A.class);
             if (annotation == null) {
                 continue;

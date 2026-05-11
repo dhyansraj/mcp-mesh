@@ -346,6 +346,14 @@ public class MeshA2ADispatcher {
             return SseStreamPlan.error(jsonRpcError(null, JSONRPC_PARSE_ERROR,
                 "Parse error: request body is not valid JSON"), HttpStatus.BAD_REQUEST);
         }
+        // Mirror the dispatch() guard: Jackson 3's readTree(...) returns a
+        // MissingNode rather than throwing for whitespace-only bodies — treat
+        // that as a parse error too so we never fall through with a JsonNode
+        // that can't be inspected.
+        if (bodyNode == null || bodyNode.isMissingNode()) {
+            return SseStreamPlan.error(jsonRpcError(null, JSONRPC_PARSE_ERROR,
+                "Parse error: request body is not valid JSON"), HttpStatus.BAD_REQUEST);
+        }
         Object reqId = extractId(bodyNode);
         Map<String, Object> params = readParams(bodyNode.get("params"));
 
@@ -414,6 +422,10 @@ public class MeshA2ADispatcher {
         try {
             bodyNode = objectMapper.readTree(requestBody);
         } catch (Exception e) {
+            return SseStreamPlan.error(jsonRpcError(null, JSONRPC_PARSE_ERROR,
+                "Parse error: request body is not valid JSON"), HttpStatus.BAD_REQUEST);
+        }
+        if (bodyNode == null || bodyNode.isMissingNode()) {
             return SseStreamPlan.error(jsonRpcError(null, JSONRPC_PARSE_ERROR,
                 "Parse error: request body is not valid JSON"), HttpStatus.BAD_REQUEST);
         }

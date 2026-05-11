@@ -16,6 +16,9 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * uc28_a2a_producer_java fixture (long-running) — Java A2A producer
@@ -88,7 +91,24 @@ public class ProducerReportAgentApplication {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("user_id", userId);
             payload.put("sections", sections);
-            JobProxy proxy = submitter.submit(payload).get();
+            // Bounded wait: submit() is a registry round-trip, NOT the long
+            // job itself. Anything beyond 30s is a registry/network problem
+            // and should surface as a failed A2A task, not as an indefinite
+            // hang on the dispatcher thread.
+            JobProxy proxy;
+            try {
+                proxy = submitter.submit(payload).get(30, TimeUnit.SECONDS);
+            } catch (TimeoutException te) {
+                throw new RuntimeException(
+                    "submit() did not return a JobProxy within 30s — "
+                        + "registry / provider-side timeout", te);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("submit() interrupted", ie);
+            } catch (ExecutionException ee) {
+                Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
+                throw new RuntimeException("submit() failed: " + cause.getMessage(), cause);
+            }
             log.info("@MeshA2A generate-report: parked job_id={}", proxy.jobId());
             return proxy;
         }

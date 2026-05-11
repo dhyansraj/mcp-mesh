@@ -188,11 +188,17 @@ public class MeshA2ASseDispatcher {
                 log.warn("SSE long-running stream for task {} exceeded {}ms cap; closing "
                     + "(task state preserved — clients may resubscribe)",
                     taskId, MAX_STREAM_MILLIS);
+                // final=false: the task is NOT terminal; we are only closing
+                // the SSE transport. A `final=true` here would tell A2A clients
+                // the task has reached a terminal state and they should not
+                // reconnect — but the worker is still running and the task
+                // store still holds non-terminal state. Clients should reopen
+                // via tasks/resubscribe.
                 writeFrame(builder, dispatcher.buildStatusUpdateFrame(
                     reqId, taskId, MeshA2AStateTranslator.A2A_WORKING,
                     "stream closed: producer-side cap exceeded "
                         + "(task still running; reconnect via tasks/resubscribe)",
-                    true, null));
+                    false, null));
                 return;
             }
 

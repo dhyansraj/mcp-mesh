@@ -9,9 +9,9 @@ import java.lang.annotation.Target;
 /**
  * Marks a method as an A2A (Agent-to-Agent) producer surface. The framework
  * mounts a JSON-RPC 2.0 entry point at {@code POST {path}} and an A2A v1.0
- * AgentCard at {@code GET {path}/.well-known/agent.json}, dispatching to the
- * annotated method whenever a client sends a {@code tasks/send} (Phase 1A
- * scope) or — once Chunk 1B lands — any other {@code tasks/*} verb.
+ * AgentCard at {@code GET {path}/.well-known/agent.json}, dispatching for
+ * the full {@code tasks/*} verb set ({@code tasks/send}, {@code tasks/get},
+ * {@code tasks/cancel}, {@code tasks/sendSubscribe}, {@code tasks/resubscribe}).
  *
  * <p>This annotation is the Spring equivalent of Python's {@code @mesh.a2a}
  * decorator + {@code mesh.a2a.mount(app, path=...)} call. It carries the

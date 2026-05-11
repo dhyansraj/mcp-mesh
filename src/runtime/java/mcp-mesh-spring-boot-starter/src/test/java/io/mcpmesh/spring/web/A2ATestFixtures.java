@@ -6,6 +6,7 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.lang.reflect.Method;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -80,15 +81,22 @@ final class A2ATestFixtures {
         );
     }
 
-    /** Build a JSON-RPC request body string with the given method + params map. */
+    /** Build a JSON-RPC request body string with the given method + params map.
+     *
+     *  <p>Uses {@link HashMap} (not {@link Map#of}) so {@code null} is allowed
+     *  as the id value — the JSON-RPC 2.0 spec permits {@code "id": null} for
+     *  notifications, and the dispatcher's parse-error responses also emit
+     *  {@code id: null}. Coercing {@code null} to {@code ""} (the old
+     *  behaviour) lost the notification/null-id semantics the producer must
+     *  round-trip exactly. */
     static String jsonRpcBody(Object id, String method, Map<String, Object> params) {
         try {
-            return objectMapper().writeValueAsString(Map.of(
-                "jsonrpc", "2.0",
-                "id", id == null ? "" : id,
-                "method", method,
-                "params", params == null ? Map.of() : params
-            ));
+            Map<String, Object> body = new HashMap<>();
+            body.put("jsonrpc", "2.0");
+            body.put("id", id); // null is a legal JSON-RPC id; keep it.
+            body.put("method", method);
+            body.put("params", params == null ? Map.of() : params);
+            return objectMapper().writeValueAsString(body);
         } catch (Exception e) {
             throw new AssertionError("Failed to serialize JSON-RPC body", e);
         }

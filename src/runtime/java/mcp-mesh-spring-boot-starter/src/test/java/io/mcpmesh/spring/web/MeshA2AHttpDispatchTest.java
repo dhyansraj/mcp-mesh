@@ -10,6 +10,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -48,10 +49,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 'null'} error with {@code id=null}.
  *
  * <p>This test reproduces the production failure mode by booting a real
- * Spring Boot context on a random port and POSTing via
- * {@link TestRestTemplate} — the same converter resolution path the JVM
- * actually walks in production. The slice test cannot exercise this path
- * by construction.
+ * Spring Boot context on a random port and POSTing via the JDK
+ * {@link java.net.http.HttpClient} (Spring Boot 4 removed
+ * {@code TestRestTemplate}; we want zero test-side message-converter
+ * machinery so the only converter resolution that happens is on the producer
+ * side — exactly what we want to exercise). The slice test cannot exercise
+ * this path by construction.
  *
  * <p>The test covers the four canonical body-read outcomes per JSON-RPC
  * spec §4.1:
@@ -249,6 +252,31 @@ class MeshA2AHttpDispatchTest {
             .isEqualTo(4);
     }
 
+    /** Regression for the body-size cap (CodeRabbit A8). A request body larger
+     *  than {@link MeshA2ADispatcherController#DEFAULT_MAX_BODY_BYTES} (1 MiB)
+     *  MUST be rejected with HTTP 400 + JSON-RPC -32700 rather than draining
+     *  the entire stream into memory. */
+    @Test
+    @DisplayName("POST body > 1 MiB → 400 Parse error, NOT OOM")
+    void oversizedBody_returnsParseErrorNotOom() throws Exception {
+        // 1 MiB + 1 byte of arbitrary garbage. Doesn't need to be valid JSON —
+        // the size cap must trip before the parser sees a single byte.
+        int oversized = (int) MeshA2ADispatcherController.DEFAULT_MAX_BODY_BYTES + 1;
+        char[] padding = new char[oversized];
+        java.util.Arrays.fill(padding, 'x');
+        String body = new String(padding);
+
+        HttpResponse<String> resp = post(body);
+
+        assertThat(resp.statusCode())
+            .as("Oversized body MUST be rejected with 400 (got body=%s)", resp.body())
+            .isEqualTo(400);
+        JsonNode env = parse(resp.body());
+        assertThat(env.get("error").get("code").asInt())
+            .as("Oversize-body rejection MUST surface as JSON-RPC -32700 Parse error")
+            .isEqualTo(MeshA2ADispatcher.JSONRPC_PARSE_ERROR);
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // Test fixtures
     // ─────────────────────────────────────────────────────────────────
@@ -283,8 +311,11 @@ class MeshA2AHttpDispatchTest {
         @Bean
         public MeshRuntime meshRuntime(ApplicationContext applicationContext) {
             // Mirror MeshAutoConfiguration.buildAgentSpec()'s eager scan so the
-            // bean-creation graph matches production.
+            // bean-creation graph matches production — production scans BOTH
+            // @Component and @Service, so the test must too if it wants to
+            // exercise the same cycle scenario.
             applicationContext.getBeansWithAnnotation(Component.class);
+            applicationContext.getBeansWithAnnotation(Service.class);
 
             AgentSpec spec = new AgentSpec();
             spec.setName("http-dispatch-test-agent");

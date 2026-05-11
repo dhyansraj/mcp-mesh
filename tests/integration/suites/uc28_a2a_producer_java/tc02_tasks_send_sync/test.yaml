@@ -74,7 +74,7 @@ test:
     handler: shell
     workdir: /workspace
     command: |
-      for i in $(seq 1 60); do
+      for i in $(seq 1 75); do
         RESP=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null || echo "")
         STATUS=$(echo "$RESP" | jq -r '.agents[] | select(.name=="date-a2a-agent") | .status' 2>/dev/null || echo "")
         TYPE=$(echo "$RESP" | jq -r '.agents[] | select(.name=="date-a2a-agent") | .agent_type' 2>/dev/null || echo "")
@@ -84,7 +84,7 @@ test:
         fi
         sleep 2
       done
-      echo "ERROR: Java producer not healthy within 120s (last status='$STATUS' type='$TYPE')"
+      echo "ERROR: Java producer not healthy within 150s (last status='$STATUS' type='$TYPE')"
       meshctl logs producer-date-agent-java 2>&1 | tail -120 || true
       exit 1
     timeout: 150

@@ -17,6 +17,9 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * A2A producer example for LONG-RUNNING tasks (issue #932 Chunk 1C) —
@@ -220,7 +223,26 @@ public class ProducerReportAgentApplication {
             // because the @MeshA2A dispatcher itself runs on a servlet
             // thread that's already waiting for the handler return —
             // returning the future would be misinterpreted as a sync result.
-            JobProxy proxy = submitter.submit(payload).get();
+            //
+            // Bounded wait: submit() is a registry round-trip (and any
+            // capability claim handshake), NOT the long job itself. 30s
+            // covers normal-case latency with comfortable headroom; anything
+            // longer is a network / provider problem and should surface as a
+            // failed A2A task, not as an indefinite hang on the dispatcher.
+            JobProxy proxy;
+            try {
+                proxy = submitter.submit(payload).get(30, TimeUnit.SECONDS);
+            } catch (TimeoutException te) {
+                throw new RuntimeException(
+                    "submit() did not return a JobProxy within 30s — "
+                        + "registry / provider-side timeout", te);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("submit() interrupted", ie);
+            } catch (ExecutionException ee) {
+                Throwable cause = ee.getCause() != null ? ee.getCause() : ee;
+                throw new RuntimeException("submit() failed: " + cause.getMessage(), cause);
+            }
             log.info("@MeshA2A generate-report: submitted job_id={} (will park in A2A task store)",
                 proxy.jobId());
             return proxy;

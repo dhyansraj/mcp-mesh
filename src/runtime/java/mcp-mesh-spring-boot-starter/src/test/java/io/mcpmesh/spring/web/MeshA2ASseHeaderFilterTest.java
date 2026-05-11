@@ -144,6 +144,95 @@ class MeshA2ASseHeaderFilterTest {
         }
     }
 
+    /** Case-insensitive Accept value still triggers the SSE branch. The
+     *  HTTP spec says media types are case-insensitive; a raw
+     *  {@code String.contains("text/event-stream")} would miss
+     *  {@code TEXT/EVENT-STREAM}, but {@code MediaType.parseMediaTypes}
+     *  normalises case. */
+    @Test
+    @DisplayName("Accept: TEXT/EVENT-STREAM (uppercase) → stamps SSE headers")
+    void uppercaseAccept_stampsHeaders() throws Exception {
+        MockHttpServletRequest req = new MockHttpServletRequest("POST", "/agents/x");
+        req.addHeader("Accept", "TEXT/EVENT-STREAM");
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+
+        invokeDoFilter(filter, req, resp, chain);
+
+        assertEquals("no-cache", resp.getHeader("Cache-Control"),
+            "Media types are case-insensitive per HTTP spec");
+        assertEquals(1, chainInvocations.get());
+    }
+
+    /** Accept with charset parameter → still stamps. The MediaType parser
+     *  knows {@code text/event-stream;charset=UTF-8} is compatible with
+     *  bare {@code text/event-stream}. */
+    @Test
+    @DisplayName("Accept: text/event-stream;charset=UTF-8 → stamps SSE headers")
+    void acceptWithCharsetParam_stampsHeaders() throws Exception {
+        MockHttpServletRequest req = new MockHttpServletRequest("POST", "/agents/x");
+        req.addHeader("Accept", "text/event-stream;charset=UTF-8");
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+
+        invokeDoFilter(filter, req, resp, chain);
+
+        assertEquals("no-cache", resp.getHeader("Cache-Control"));
+    }
+
+    /** Compound Accept value listing JSON first then SSE → still stamps. The
+     *  order of media types in Accept does NOT affect compatibility; the
+     *  filter only checks "does any listed type accept SSE". */
+    @Test
+    @DisplayName("Accept: application/json, text/event-stream → stamps SSE headers")
+    void compoundAcceptWithJsonFirst_stampsHeaders() throws Exception {
+        MockHttpServletRequest req = new MockHttpServletRequest("POST", "/agents/x");
+        req.addHeader("Accept", "application/json, text/event-stream");
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+
+        invokeDoFilter(filter, req, resp, chain);
+
+        assertEquals("no-cache", resp.getHeader("Cache-Control"),
+            "Compound Accept that includes SSE among its entries MUST trigger stamping");
+    }
+
+    /** Malformed Accept header → defensive substring fallback still works for
+     *  the common case. We never want a stray invalid header to drop a
+     *  legitimate SSE client. */
+    @Test
+    @DisplayName("Malformed Accept header containing 'text/event-stream' still stamps via fallback")
+    void malformedAcceptWithSubstring_stillStamps() throws Exception {
+        MockHttpServletRequest req = new MockHttpServletRequest("POST", "/agents/x");
+        // Intentionally malformed (unbalanced quote) — MediaType.parseMediaTypes
+        // throws InvalidMimeTypeException, we fall back to a lowercase substring
+        // check.
+        req.addHeader("Accept", "\"text/event-stream");
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+
+        invokeDoFilter(filter, req, resp, chain);
+
+        assertEquals("no-cache", resp.getHeader("Cache-Control"),
+            "Malformed Accept should not drop legitimate SSE clients");
+    }
+
+    /** Direct unit tests of {@code acceptsEventStream} — pure helper, no
+     *  filter chain machinery. */
+    @Test
+    @DisplayName("acceptsEventStream() helper — case + compound + null + blank coverage")
+    void acceptsEventStreamHelperCoverage() {
+        assertTrue(MeshA2ASseHeaderFilter.acceptsEventStream("text/event-stream"));
+        assertTrue(MeshA2ASseHeaderFilter.acceptsEventStream("TEXT/EVENT-STREAM"));
+        assertTrue(MeshA2ASseHeaderFilter.acceptsEventStream(
+            "text/event-stream;charset=UTF-8"));
+        assertTrue(MeshA2ASseHeaderFilter.acceptsEventStream(
+            "application/json, text/event-stream"));
+        assertTrue(MeshA2ASseHeaderFilter.acceptsEventStream(
+            "text/event-stream;q=1.0, application/json;q=0.5"));
+        assertFalse(MeshA2ASseHeaderFilter.acceptsEventStream("application/json"));
+        assertFalse(MeshA2ASseHeaderFilter.acceptsEventStream("text/plain"));
+        assertFalse(MeshA2ASseHeaderFilter.acceptsEventStream(""));
+        assertFalse(MeshA2ASseHeaderFilter.acceptsEventStream("   "));
+        assertFalse(MeshA2ASseHeaderFilter.acceptsEventStream(null));
+    }
+
     /** {@link MeshA2ASseHeaderFilter#doFilterInternal} is protected (inherited
      *  from {@code OncePerRequestFilter}). Use reflection to invoke it directly
      *  so we don't need to register the filter into a real chain. */

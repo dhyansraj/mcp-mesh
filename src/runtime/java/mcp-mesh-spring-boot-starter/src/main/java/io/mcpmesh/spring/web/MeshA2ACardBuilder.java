@@ -167,7 +167,15 @@ public class MeshA2ACardBuilder {
         if (host == null || host.isBlank() || port <= 0) {
             return null;
         }
-        return "http://" + host + ":" + port + path;
+        // IPv6 literals (e.g. "::1") must be wrapped in brackets when paired
+        // with a port — otherwise the result is an ambiguous, invalid URL like
+        // "http://::1:9090/...". Detect by colon-presence: an IPv6 literal
+        // contains at least one ":" and is NOT already bracketed.
+        String hostPart = host;
+        if (host.indexOf(':') >= 0 && host.charAt(0) != '[') {
+            hostPart = "[" + host + "]";
+        }
+        return "http://" + hostPart + ":" + port + path;
     }
 
     /**
@@ -179,8 +187,10 @@ public class MeshA2ACardBuilder {
         try {
             return objectMapper.writeValueAsString(card);
         } catch (Exception e) {
+            // Rethrow so the dispatcher returns a real 5xx — silently shipping
+            // "{}" hides serialization bugs and produces an A2A-invalid card.
             log.warn("Failed to serialize A2A agent card: {}", e.getMessage());
-            return "{}";
+            throw new RuntimeException("Failed to serialize A2A agent card", e);
         }
     }
 

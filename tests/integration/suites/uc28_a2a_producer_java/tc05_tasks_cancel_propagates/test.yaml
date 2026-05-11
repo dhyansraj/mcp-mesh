@@ -81,7 +81,7 @@ test:
     handler: shell
     workdir: /workspace
     command: |
-      curl -s -X POST http://localhost:9091/agents/report \
+      curl -fsS -X POST http://localhost:9091/agents/report \
         -H 'Content-Type: application/json' \
         -d '{"jsonrpc":"2.0","id":1,"method":"tasks/send","params":{"id":"cancel-mid","message":{"role":"user","parts":[{"type":"text","text":"{\"user_id\": \"alice\", \"sections\": [\"intro\", \"body\", \"summary\", \"appendix\"]}"}]}}}' \
         > /dev/null
@@ -94,7 +94,7 @@ test:
     handler: shell
     workdir: /workspace
     command: |
-      curl -s -X POST http://localhost:9091/agents/report \
+      curl -fsS -X POST http://localhost:9091/agents/report \
         -H 'Content-Type: application/json' \
         -d '{"jsonrpc":"2.0","id":2,"method":"tasks/cancel","params":{"id":"cancel-mid","reason":"manual cancel test"}}'
     capture: cancel_response

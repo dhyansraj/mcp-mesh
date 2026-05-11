@@ -13,6 +13,7 @@ import org.springframework.web.servlet.function.ServerRequest;
 import org.springframework.web.servlet.function.ServerResponse;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
@@ -53,6 +54,27 @@ public class MeshA2ADispatcherController {
     private static final Logger log = LoggerFactory.getLogger(MeshA2ADispatcherController.class);
 
     private static final String AGENT_CARD_SUFFIX = "/.well-known/agent.json";
+
+    /**
+     * Hard cap on the size of an inbound JSON-RPC body read by {@link #readBody}.
+     * Matches Spring's typical {@code spring.servlet.multipart.max-request-size}
+     * default order of magnitude. A 1 MiB body is far larger than any realistic
+     * {@code tasks/*} envelope (the canonical {@code tasks/send} request is
+     * well under a kilobyte). Anything bigger is treated as a parse error —
+     * unbounded {@code readAllBytes()} would be an OOM vector.
+     */
+    static final long DEFAULT_MAX_BODY_BYTES = 1L * 1024 * 1024;
+
+    /**
+     * Static JSON-RPC parse-error envelope returned when {@link #readBody}
+     * fails (I/O error or oversized body). The body is fixed (no per-request
+     * id or message), so we hold it as a constant rather than re-rendering it
+     * through Jackson on every error.
+     */
+    private static final String PARSE_ERROR_BODY =
+        "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":"
+            + MeshA2ADispatcher.JSONRPC_PARSE_ERROR
+            + ",\"message\":\"Parse error: failed to read request body\"},\"id\":null}";
 
     private final MeshA2ARegistry registry;
     private final MeshA2ADispatcher dispatcher;
@@ -112,11 +134,10 @@ public class MeshA2ADispatcherController {
             // a JSON-RPC Parse error (-32700) with HTTP 400, not a generic 500.
             log.warn("@MeshA2A: failed to read request body for {}: {}",
                 surface.path(), e.getMessage());
-            String errorJson = parseErrorJson();
             return ServerResponse
                 .status(HttpStatus.BAD_REQUEST)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(errorJson);
+                .body(PARSE_ERROR_BODY);
         }
         ResponseEntity<String> response = dispatcher.dispatch(surface.path(), body);
         return ServerResponse
@@ -142,11 +163,10 @@ public class MeshA2ADispatcherController {
             // get a JSON envelope back for the pre-stream parse failure.
             log.warn("@MeshA2A SSE: failed to read request body for {}: {}",
                 surface.path(), e.getMessage());
-            String errorJson = parseErrorJson();
             return ServerResponse
                 .status(HttpStatus.BAD_REQUEST)
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(errorJson);
+                .body(PARSE_ERROR_BODY);
         }
         String method = dispatcher.peekJsonRpcMethod(body);
         MeshA2ADispatcher.SseStreamPlan plan = switch (method == null ? "" : method) {
@@ -175,14 +195,40 @@ public class MeshA2ADispatcherController {
      * "Method not implemented: 'null'" errors for every well-formed
      * {@code tasks/send} request (issue #932).
      *
+     * <p>The read is bounded to {@link #DEFAULT_MAX_BODY_BYTES} so a malicious
+     * or buggy client cannot OOM the JVM by streaming a multi-gigabyte body.
+     * A Content-Length header that already exceeds the cap short-circuits the
+     * read; otherwise we count bytes as they arrive and abort the moment we
+     * cross the threshold.
+     *
      * <p>Wrapping in {@link BodyReadException} surfaces I/O failures to the
      * caller, which converts them into a proper {@code -32700 Parse error}
      * response per spec §4.1 instead of swallowing them.
      */
     private static String readBody(ServerRequest request) {
-        try {
-            byte[] bytes = request.servletRequest().getInputStream().readAllBytes();
-            return new String(bytes, StandardCharsets.UTF_8);
+        jakarta.servlet.http.HttpServletRequest servletRequest = request.servletRequest();
+        long declaredLength = servletRequest.getContentLengthLong();
+        if (declaredLength > DEFAULT_MAX_BODY_BYTES) {
+            throw new BodyReadException(
+                "Request body exceeds limit: declared Content-Length " + declaredLength
+                    + " > " + DEFAULT_MAX_BODY_BYTES + " bytes");
+        }
+        try (InputStream in = servletRequest.getInputStream()) {
+            java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream(
+                declaredLength > 0 ? (int) Math.min(declaredLength, 8192) : 1024);
+            byte[] chunk = new byte[4096];
+            long total = 0;
+            int read;
+            while ((read = in.read(chunk)) != -1) {
+                total += read;
+                if (total > DEFAULT_MAX_BODY_BYTES) {
+                    throw new BodyReadException(
+                        "Request body exceeds limit: read " + total
+                            + " > " + DEFAULT_MAX_BODY_BYTES + " bytes");
+                }
+                buf.write(chunk, 0, read);
+            }
+            return buf.toString(StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new BodyReadException("Failed to read request body", e);
         }
@@ -202,24 +248,16 @@ public class MeshA2ADispatcherController {
             .body(response.getBody() == null ? "" : response.getBody());
     }
 
-    /** Unchecked wrapper for {@link IOException} during body read so the
-     *  router-handler signature (no checked exceptions) stays intact. */
+    /** Unchecked wrapper for I/O failures and oversize-body conditions during
+     *  body read so the router-handler signature (no checked exceptions) stays
+     *  intact. */
     static final class BodyReadException extends RuntimeException {
+        BodyReadException(String message) {
+            super(message);
+        }
         BodyReadException(String message, Throwable cause) {
             super(message, cause);
         }
-    }
-
-    /**
-     * Build a canonical JSON-RPC parse-error envelope for body-read failures.
-     * Hand-rolled (rather than going through the dispatcher's
-     * {@code ObjectMapper}) because the message is fixed and constructing a
-     * mapper on every error would be wasteful.
-     */
-    private static String parseErrorJson() {
-        return "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":"
-            + MeshA2ADispatcher.JSONRPC_PARSE_ERROR
-            + ",\"message\":\"Parse error: failed to read request body\"},\"id\":null}";
     }
 
     private ServerResponse handleGetCard(MeshA2ARegistry.SurfaceMetadata surface) {

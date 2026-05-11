@@ -174,6 +174,7 @@ When the underlying work is long-running (`task=True` in the dependency graph), 
 
     import java.util.LinkedHashMap;
     import java.util.Map;
+    import java.util.concurrent.TimeUnit;
 
     @MeshAgent(name = "report-a2a-agent", port = 9091)
     @SpringBootApplication
@@ -208,7 +209,11 @@ When the underlying work is long-running (`task=True` in the dependency graph), 
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("user_id", "alice");
                 payload.put("sections", java.util.List.of("intro", "body"));
-                JobProxy proxy = submitter.submit(payload).get();
+                // Bounded wait — submit() is a registry round-trip, NOT the
+                // long job itself. 30s is comfortable headroom; anything
+                // longer is a registry/provider problem and should surface
+                // as a failed A2A task rather than an indefinite hang.
+                JobProxy proxy = submitter.submit(payload).get(30, TimeUnit.SECONDS);
                 return proxy; // long-running mode trigger
             }
         }

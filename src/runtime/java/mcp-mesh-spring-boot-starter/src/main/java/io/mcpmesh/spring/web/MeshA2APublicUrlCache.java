@@ -50,7 +50,7 @@ public class MeshA2APublicUrlCache {
      */
     public void put(String path, String skillId, String publicUrl) {
         Key key = new Key(path, skillId);
-        if (publicUrl == null || publicUrl.isEmpty()) {
+        if (publicUrl == null || publicUrl.isBlank()) {
             String removed = cache.remove(key);
             if (removed != null) {
                 log.debug("MeshA2A public URL cache: cleared entry for {} (skillId={})",
