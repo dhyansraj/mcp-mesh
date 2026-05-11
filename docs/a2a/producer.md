@@ -5,14 +5,14 @@ Expose mesh tools to external A2A clients via the A2A v1.0 protocol surface.
 !!! info "Python only (today)"
     Producer support ships in the Python runtime only. Java and TypeScript producer support is future work — track the A2A consumer arc for the Java/TS sides ([Consumer Quick Start](consumer-quickstart.md)).
 
-## The two-piece pattern
+## Decoration and mounting
 
-A producer agent has two pieces, both Python-side:
+A producer agent's handler is decorated/mounted via the unified entry point `@mesh.a2a.mount(app, path="/agents/<skill>", ...)`, which simultaneously:
 
-1. **Handler** — a function decorated with `@mesh.a2a` that processes the inbound A2A request body. Dependencies on other mesh capabilities are declared on the decorator the same way they would be on `@mesh.tool`.
-2. **Mount** — `mesh.a2a.mount(app, path="/agents/<skill>", ...)` attaches both the JSON-RPC entry route AND the `/.well-known/agent.json` card route to a user-owned FastAPI app. The user owns the uvicorn lifecycle (no `@mesh.agent` decorator on the producer file).
+1. **Stamps metadata** — applies `@mesh.a2a(...)` to the function for DI + A2A registration (capability, dependencies, skill_id, skill_name, tags). Dependencies on other mesh capabilities are declared on the decorator the same way they would be on `@mesh.tool`.
+2. **Attaches routes** — mounts both the JSON-RPC entry route at `path` AND the `/.well-known/agent.json` card route on the user-owned FastAPI app. The user owns the uvicorn lifecycle (no `@mesh.agent` decorator on the producer file).
 
-This is intentionally the same shape as `@mesh.route` for HTTP routes — same FastAPI mounting, same uvicorn ownership, same DDDI for declared dependencies. The difference is that `mesh.a2a.mount` registers the agent with the registry as `agent_type=a2a` (with the surfaces array populated), so other mesh agents and external scaffolding tools can discover the agent's A2A skills.
+The standalone `@mesh.a2a(...)` decorator is also exposed for advanced cases (multi-app fan-out, custom mounting), but the recommended path for typical producer agents is `@mesh.a2a.mount(...)`. This is intentionally the same shape as `@mesh.route` for HTTP routes — same FastAPI mounting, same uvicorn ownership, same DDDI for declared dependencies. The difference is that `mesh.a2a.mount` registers the agent with the registry as `agent_type=a2a` (with the surfaces array populated), so other mesh agents and external scaffolding tools can discover the agent's A2A skills.
 
 ## Sync handler
 

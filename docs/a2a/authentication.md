@@ -22,7 +22,7 @@ Each runtime exposes a small bearer-credential type that resolves the token at c
         ...
     ```
 
-    `mesh.A2ABearer` accepts either `token_env` (env-var name; resolved per call) or `token` (literal). They are mutually exclusive — supplying both raises `RuntimeError`.
+    `mesh.A2ABearer` requires exactly one of `token_env` (env-var name; resolved per call) or `token` (literal) — supplying both raises `RuntimeError`, and supplying neither also raises. Omit the entire `auth=` argument from `@mesh.a2a_consumer` for upstreams that don't require authentication.
 
 === "TypeScript"
 
@@ -77,7 +77,7 @@ If the env var is unset and no literal token was supplied, the consumer raises a
 
 ## Mutual exclusion
 
-Across all three runtimes: literal token and env-var token are mutually exclusive. Set zero or one.
+Across all three runtimes: literal token and env-var token are mutually exclusive. If you opt into bearer auth, supply exactly one — never both. To declare a no-auth upstream, omit the auth parameter entirely (`@mesh.a2a_consumer(...)` without `auth=`, `@A2AConsumer` without `authBearerEnv`/`authBearerToken`, `a2aConfig` without `auth`).
 
 | Runtime    | Validation site                                          |
 | ---------- | -------------------------------------------------------- |
