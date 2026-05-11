@@ -416,10 +416,44 @@ export class MeshAgent {
             `a non-empty string.`,
         );
       }
-      if (cfg.timeoutMs !== undefined && cfg.timeoutMs <= 0) {
+      if (cfg.timeoutMs !== undefined) {
+        if (!Number.isFinite(cfg.timeoutMs) || cfg.timeoutMs <= 0) {
+          throw new Error(
+            `addTool({ a2aConfig }) for tool '${toolName}': timeoutMs ` +
+              `must be a finite positive number (got ${cfg.timeoutMs}).`,
+          );
+        }
+      }
+      if (cfg.pollIntervalMs !== undefined) {
+        if (!Number.isFinite(cfg.pollIntervalMs) || cfg.pollIntervalMs <= 0) {
+          throw new Error(
+            `addTool({ a2aConfig }) for tool '${toolName}': ` +
+              `pollIntervalMs must be a finite positive number ` +
+              `(got ${cfg.pollIntervalMs}).`,
+          );
+        }
+      }
+      if (cfg.pollIntervalMaxMs !== undefined) {
+        if (
+          !Number.isFinite(cfg.pollIntervalMaxMs) ||
+          cfg.pollIntervalMaxMs <= 0
+        ) {
+          throw new Error(
+            `addTool({ a2aConfig }) for tool '${toolName}': ` +
+              `pollIntervalMaxMs must be a finite positive number ` +
+              `(got ${cfg.pollIntervalMaxMs}).`,
+          );
+        }
+      }
+      if (
+        cfg.pollIntervalMs !== undefined &&
+        cfg.pollIntervalMaxMs !== undefined &&
+        cfg.pollIntervalMaxMs < cfg.pollIntervalMs
+      ) {
         throw new Error(
-          `addTool({ a2aConfig }) for tool '${toolName}': timeoutMs ` +
-            `must be > 0 (got ${cfg.timeoutMs}).`,
+          `addTool({ a2aConfig }) for tool '${toolName}': ` +
+            `pollIntervalMaxMs (${cfg.pollIntervalMaxMs}) must be >= ` +
+            `pollIntervalMs (${cfg.pollIntervalMs}).`,
         );
       }
       if (!this._workerMode) {
@@ -1720,14 +1754,15 @@ export class MeshAgent {
     this._claimDispatchers = [];
     // Issue #917: mark all cached A2AClients closed so any in-flight
     // user code raises cleanly instead of reusing a torn-down instance.
-    // The undici Agent pool is shared via closeHttpPool() below.
-    for (const client of this._a2aClients.values()) {
-      try {
-        await client.close();
-      } catch (err) {
+    // Close in parallel so one slow client doesn't block the others —
+    // the undici Agent pool is shared via closeHttpPool() below.
+    const closePromises = Array.from(this._a2aClients.values()).map((client) =>
+      client.close().catch((err) => {
         console.warn("[mesh-a2a] Error closing A2AClient:", err);
-      }
-    }
+        return null;
+      }),
+    );
+    await Promise.allSettled(closePromises);
     this._a2aClients.clear();
     try {
       await closeHttpPool();

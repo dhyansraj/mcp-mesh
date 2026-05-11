@@ -325,6 +325,61 @@ describe("A2AClient.submit", () => {
   });
 });
 
+describe("A2AClient.tasksCancel", () => {
+  let server: TestServer;
+  afterEach(async () => {
+    await server?.close();
+  });
+
+  it("succeeds against a producer that returns {jsonrpc,id} (no result, no error)", async () => {
+    server = await startServer(({ method }) => {
+      if (method === "tasks/send") return { status: { state: "working" } };
+      if (method === "tasks/cancel") return "__NO_RESULT_NO_ERROR__";
+      return { status: { state: "working" } };
+    });
+    const client = new A2AClient({ url: server.url, skillId: "x" });
+    const job = await client.submit({ role: "user", parts: [] });
+    // Should not throw — tasks/cancel uses result-or-error mode.
+    await expect(job.cancel("ok")).resolves.toBeUndefined();
+    expect(server.envelopes.some((e) => e.method === "tasks/cancel")).toBe(true);
+  });
+});
+
+describe("A2AClient JSON-RPC id uniqueness", () => {
+  let server: TestServer;
+  afterEach(async () => {
+    await server?.close();
+  });
+
+  it("emits a unique JSON-RPC id per request (per-instance monotonic counter)", async () => {
+    let pollCount = 0;
+    const ids: number[] = [];
+    server = await startServer(({ method, rpcId }) => {
+      ids.push(rpcId);
+      if (method === "tasks/send") return { status: { state: "working" } };
+      if (method === "tasks/get") {
+        pollCount += 1;
+        if (pollCount < 3) return { status: { state: "working" } };
+        return {
+          status: { state: "completed" },
+          artifacts: [{ parts: [{ type: "text", text: "ok" }] }],
+        };
+      }
+      return null;
+    });
+    const client = new A2AClient({
+      url: server.url,
+      skillId: "x",
+      pollIntervalMs: 5,
+      pollIntervalMaxMs: 20,
+    });
+    await client.send({ role: "user", parts: [] });
+    // Send + 3 polls = 4 envelopes, all with distinct ids.
+    expect(ids).toHaveLength(4);
+    expect(new Set(ids).size).toBe(4);
+  });
+});
+
 describe("A2AClient construction", () => {
   it("throws on empty url", () => {
     expect(() => new A2AClient({ url: "", skillId: "x" })).toThrow(A2AError);

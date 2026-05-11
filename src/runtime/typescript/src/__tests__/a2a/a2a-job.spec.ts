@@ -172,10 +172,14 @@ describe("A2AJob.bridge", () => {
     ]);
     server.responses.set("tasks/cancel", [{ status: { state: "canceled" } }]);
 
-    // Resolve cancel signal after a short delay so bridge enters poll loop first.
-    awaitJobCancelMock.mockReturnValue(
-      new Promise((resolve) => setTimeout(resolve, 30)),
-    );
+    // Resolver-controlled cancel — eliminates the previous timing-
+    // sensitive setTimeout(30ms). We trigger it explicitly after the
+    // bridge has had a chance to enter its poll loop (one tick).
+    let cancelResolve!: () => void;
+    const cancelPromise = new Promise<void>((r) => {
+      cancelResolve = r;
+    });
+    awaitJobCancelMock.mockReturnValue(cancelPromise);
 
     const client = new A2AClient({
       url: server.url,
@@ -184,9 +188,12 @@ describe("A2AJob.bridge", () => {
       pollIntervalMaxMs: 20,
     });
     const job = await client.submit({ role: "user", parts: [] });
-    await expect(job.bridge(makeMockController())).rejects.toBeInstanceOf(
-      A2AJobCanceledError,
-    );
+    const bridgePromise = job.bridge(makeMockController());
+    // Yield once so bridge attaches its .then on cancelPromise + enters
+    // the poll loop, then explicitly fire the cancel signal.
+    await Promise.resolve();
+    cancelResolve();
+    await expect(bridgePromise).rejects.toBeInstanceOf(A2AJobCanceledError);
     // The bridge MUST have POSTed tasks/cancel upstream.
     expect(server.envelopes.some((e) => e.method === "tasks/cancel")).toBe(true);
   });

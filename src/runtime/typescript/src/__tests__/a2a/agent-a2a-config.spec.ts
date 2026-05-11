@@ -68,7 +68,76 @@ describe("addTool({ a2aConfig }) — registration-time validation", () => {
         a2aConfig: { url: "http://x", timeoutMs: 0 },
         execute: async () => "ok",
       }),
-    ).toThrow(/timeoutMs.*must be > 0/);
+    ).toThrow(/timeoutMs.*must be a finite positive number/);
+  });
+
+  it("rejects Infinity timeoutMs", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "bad",
+        capability: "x",
+        parameters: z.object({}),
+        a2aConfig: { url: "http://x", timeoutMs: Number.POSITIVE_INFINITY },
+        execute: async () => "ok",
+      }),
+    ).toThrow(/timeoutMs.*must be a finite positive number/);
+  });
+
+  it("rejects NaN timeoutMs", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "bad",
+        capability: "x",
+        parameters: z.object({}),
+        a2aConfig: { url: "http://x", timeoutMs: Number.NaN },
+        execute: async () => "ok",
+      }),
+    ).toThrow(/timeoutMs.*must be a finite positive number/);
+  });
+
+  it("rejects negative timeoutMs", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "bad",
+        capability: "x",
+        parameters: z.object({}),
+        a2aConfig: { url: "http://x", timeoutMs: -100 },
+        execute: async () => "ok",
+      }),
+    ).toThrow(/timeoutMs.*must be a finite positive number/);
+  });
+
+  it("rejects non-positive pollIntervalMs", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "bad",
+        capability: "x",
+        parameters: z.object({}),
+        a2aConfig: { url: "http://x", pollIntervalMs: 0 },
+        execute: async () => "ok",
+      }),
+    ).toThrow(/pollIntervalMs.*must be a finite positive number/);
+  });
+
+  it("rejects pollIntervalMaxMs < pollIntervalMs", () => {
+    const agent = newAgent();
+    expect(() =>
+      agent.addTool({
+        name: "bad",
+        capability: "x",
+        parameters: z.object({}),
+        a2aConfig: {
+          url: "http://x",
+          pollIntervalMs: 500,
+          pollIntervalMaxMs: 100,
+        },
+        execute: async () => "ok",
+      }),
+    ).toThrow(/pollIntervalMaxMs.*must be >= pollIntervalMs/);
   });
 
   it("accepts a valid a2aConfig and registers the tool", () => {

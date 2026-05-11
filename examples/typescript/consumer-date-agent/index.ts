@@ -64,10 +64,10 @@ agent.addTool({
     skillId: "get-date",
   },
   execute: async (_args, ..._injected) => {
-    // The framework injects an `A2AClient` at the trailing slot when
-    // `a2aConfig` is set on this tool. Pull + assert here so the rest
-    // of the body is statically typed.
-    const a2a = _injected[_injected.length - 1] as A2AClient | null;
+    // The framework injects an `A2AClient` at slot 0 when `a2aConfig`
+    // is set on this tool (no other injection sources are wired here).
+    // Pull + assert here so the rest of the body is statically typed.
+    const a2a = _injected[0] as A2AClient | null;
     if (!a2a) {
       throw new Error("A2AClient was not injected — did you set a2aConfig?");
     }
@@ -78,7 +78,12 @@ agent.addTool({
     // The producer-side handler returns `{"date": "<iso-string>"}` and
     // the A2A surface JSON-stringifies it into the artifact text part —
     // so we JSON.parse on the consumer side to recover the dict.
-    return JSON.parse(r.artifactText);
+    if (!r.artifactText) return "";
+    try {
+      return JSON.parse(r.artifactText);
+    } catch {
+      return r.artifactText;
+    }
   },
 });
 

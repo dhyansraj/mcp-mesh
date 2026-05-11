@@ -97,6 +97,10 @@ export class A2AClient {
   readonly pollIntervalMs: number;
   readonly pollIntervalMaxMs: number;
   private closed = false;
+  // JSON-RPC requires a unique id per request — a per-instance monotonic
+  // counter is the spec-conforming choice. Some servers/middleware
+  // enforce this, so don't reuse `2` across every tasks/get poll.
+  private nextRpcId = 1;
 
   constructor(config: A2AClientConfig) {
     if (!config.url || config.url.trim() === "") {
@@ -149,7 +153,6 @@ export class A2AClient {
     let result = await this._postJsonRpc(
       "tasks/send",
       { id: taskId, message },
-      1,
       Math.max(1, deadline - Date.now()),
     );
     let state = readState(result);
@@ -165,7 +168,6 @@ export class A2AClient {
       result = await this._postJsonRpc(
         "tasks/get",
         { id: taskId },
-        2,
         remaining,
       );
       state = readState(result);
@@ -204,7 +206,6 @@ export class A2AClient {
     const result = await this._postJsonRpc(
       "tasks/send",
       { id: taskId, message },
-      1,
       this.timeoutMs,
     );
     const state = readState(result);
@@ -230,7 +231,7 @@ export class A2AClient {
     const taskId = options?.taskId ?? this._newTaskId();
     const envelope: JsonRpcEnvelope = {
       jsonrpc: "2.0",
-      id: 1,
+      id: this.nextRpcId++,
       method: "tasks/sendSubscribe",
       params: { id: taskId, message },
     };
@@ -294,7 +295,7 @@ export class A2AClient {
   /** Internal: POST `tasks/get` for the supplied task ID. */
   async tasksGet(taskId: string): Promise<A2ATaskEnvelope> {
     this._ensureOpen();
-    return this._postJsonRpc("tasks/get", { id: taskId }, 2, this.timeoutMs);
+    return this._postJsonRpc("tasks/get", { id: taskId }, this.timeoutMs);
   }
 
   /** Internal: POST `tasks/cancel`. Best-effort; transport errors swallowed by caller. */
@@ -302,7 +303,16 @@ export class A2AClient {
     this._ensureOpen();
     const params: Record<string, unknown> = { id: taskId };
     if (reason !== undefined) params.reason = reason;
-    await this._postJsonRpc("tasks/cancel", params, 3, this.timeoutMs);
+    // A2A spec-conforming producers may return `{jsonrpc:"2.0",id:N}` for
+    // tasks/cancel (no result, no error) — accept that envelope shape so
+    // we don't false-fail the cancel on producers that don't echo a Task
+    // body back.
+    await this._postJsonRpc(
+      "tasks/cancel",
+      params,
+      this.timeoutMs,
+      "result-or-error",
+    );
   }
 
   /** Internal: build an `A2AResponse` from a Task envelope. */
@@ -327,13 +337,12 @@ export class A2AClient {
   private async _postJsonRpc(
     method: string,
     params: Record<string, unknown>,
-    rpcId: number,
     timeoutMs: number,
     accept: JsonRpcAcceptShape = "result-required",
   ): Promise<A2ATaskEnvelope> {
     const envelope: JsonRpcEnvelope = {
       jsonrpc: "2.0",
-      id: rpcId,
+      id: this.nextRpcId++,
       method,
       params,
     };

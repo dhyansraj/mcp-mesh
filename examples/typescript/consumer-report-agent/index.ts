@@ -101,7 +101,7 @@ agent.addTool({
     // controller arrives — fall back to a simple sync send + parse.
     if (!job || typeof (job as JobController).updateProgress !== "function") {
       const r = await a2a.send(message);
-      if (!r.artifactText) return r.artifactText;
+      if (!r.artifactText) return "";
       try {
         return JSON.parse(r.artifactText);
       } catch {

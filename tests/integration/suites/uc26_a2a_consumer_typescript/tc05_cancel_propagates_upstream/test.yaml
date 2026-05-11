@@ -125,6 +125,11 @@ test:
     workdir: /workspace
     command: |
       JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      if [ -z "$JOB_ID" ] || [ "$JOB_ID" = "null" ]; then
+        echo "ERROR: failed to extract JOB_ID from submit response"
+        echo "submit_resp was: ${captured.submit_resp}"
+        exit 1
+      fi
       echo "JOB_ID=${JOB_ID}"
       meshctl call __mesh_job_cancel "{\"job_id\":\"${JOB_ID}\",\"reason\":\"tc05 client requested abort\"}"
     capture: cancel_response
@@ -145,6 +150,11 @@ test:
     workdir: /workspace
     command: |
       JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      if [ -z "$JOB_ID" ] || [ "$JOB_ID" = "null" ]; then
+        echo "ERROR: failed to extract JOB_ID from submit response"
+        echo "submit_resp was: ${captured.submit_resp}"
+        exit 1
+      fi
       meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
     capture: final_status
     timeout: 30

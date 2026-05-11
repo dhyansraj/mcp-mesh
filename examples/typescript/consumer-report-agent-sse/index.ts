@@ -103,7 +103,10 @@ agent.addTool({
       } finally {
         await stream.aclose();
       }
-      return "";
+      // Surface a real failure mode — the SSE stream completed without
+      // ever yielding an artifact event. Returning "" silently here
+      // would mask producer-side bugs from sync callers.
+      throw new Error("No artifact received from SSE stream");
     }
     const stream = await a2a.subscribe(message);
     return await stream.bridge(job as JobController);

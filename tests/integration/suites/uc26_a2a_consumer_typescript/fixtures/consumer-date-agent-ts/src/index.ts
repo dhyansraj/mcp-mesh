@@ -43,7 +43,12 @@ agent.addTool({
       role: "user",
       parts: [{ type: "text", text: "now" }],
     });
-    return JSON.parse(r.artifactText);
+    if (!r.artifactText) return "";
+    try {
+      return JSON.parse(r.artifactText);
+    } catch {
+      return r.artifactText;
+    }
   },
 });
 

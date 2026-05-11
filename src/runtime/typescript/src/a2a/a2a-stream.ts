@@ -126,6 +126,12 @@ export class A2AStream implements AsyncIterable<A2AEvent> {
           terminalMessage ?? `A2A task ${this.taskId} failed`,
         );
       }
+      // Parity with A2AJob._terminalToArtifactOrThrow — completed
+      // with no artifact event seen returns "" rather than throwing,
+      // matching the polling-bridge semantics.
+      if (lower === "completed" && !sawArtifact) {
+        return "";
+      }
     }
     if (!sawArtifact) {
       throw new A2AJobFailedError(

@@ -274,7 +274,7 @@ describe("A2AStream.bridge", () => {
     );
   });
 
-  it("throws A2AJobFailedError when stream ends without an artifact", async () => {
+  it("returns empty string on terminal completed with no artifact (parity with A2AJob)", async () => {
     server = await startSseServer([
       [
         sse({
@@ -283,6 +283,28 @@ describe("A2AStream.bridge", () => {
           result: {
             status: { state: "completed" },
             final: true,
+          },
+        }),
+      ],
+    ]);
+    const client = new A2AClient({ url: server.url, skillId: "x" });
+    const stream = await client.subscribe({ role: "user", parts: [] });
+    const value = await stream.bridge(makeMockController());
+    expect(value).toBe("");
+  });
+
+  it("throws A2AJobFailedError when stream ends with no terminal state and no artifact", async () => {
+    server = await startSseServer([
+      [
+        sse({
+          jsonrpc: "2.0",
+          id: 1,
+          result: {
+            status: {
+              state: "working",
+              message: { parts: [{ text: "still going" }] },
+            },
+            metadata: { progress: 0.1 },
           },
         }),
       ],

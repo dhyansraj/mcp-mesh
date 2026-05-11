@@ -27,6 +27,7 @@ import {
 import {
   A2AJobCanceledError,
   A2AJobFailedError,
+  A2ATimeoutError,
 } from "./errors.js";
 
 export class A2AJob {
@@ -106,7 +107,6 @@ export class A2AJob {
       );
     }
 
-    const { A2ATimeoutError } = await import("./errors.js");
     throw new A2ATimeoutError(
       `A2A task '${this.taskId}' on ${this.client.url} did not reach ` +
         `terminal state within ${timeout}ms`,
@@ -156,14 +156,19 @@ export class A2AJob {
         cancelAbort.abort();
       })
       .catch((err: unknown) => {
-        // awaitJobCancel resolves on cancel/end and only rejects when
-        // the napi binding itself fails. That's a real diagnostic
-        // signal (binding loss mid-job) — log at WARN so it surfaces
-        // without throwing into the polling loop.
+        // awaitJobCancel rejects only when the napi binding itself
+        // fails (binding loss mid-job). If we ignored the rejection
+        // the polling loop would never observe a cancel signal and
+        // could poll the A2A backend until the user-supplied deadline.
+        // Treat as a degraded-but-recoverable cancel signal so the
+        // bridge fails fast and propagates `tasks/cancel` upstream.
         console.warn(
           `[a2a-job] bridge: awaitJobCancel observer failed for task ` +
-            `${this.taskId}: ${(err as Error)?.message ?? String(err)}`,
+            `${this.taskId} (treating as degraded cancel): ` +
+            `${(err as Error)?.message ?? String(err)}`,
         );
+        cancelObserved = true;
+        cancelAbort.abort();
       });
 
     let intervalMs = this.client.pollIntervalMs;
