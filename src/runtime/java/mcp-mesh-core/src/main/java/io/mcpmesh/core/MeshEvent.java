@@ -40,6 +40,16 @@ public class MeshEvent {
     private String reason;
     private String status;
 
+    /**
+     * Carried on {@link EventType#SURFACE_UPDATED} events: the A2A skill id
+     * the registry is stamping the public URL for. Combined with
+     * {@link #capability} (re-used as the path) this is the cache key in
+     * {@link io.mcpmesh.core.MeshEvent}'s consumer (the Spring starter's
+     * public-URL cache).
+     */
+    @JsonProperty("skill_id")
+    private String skillId;
+
     private List<LlmToolInfo> tools;
 
     @JsonProperty("provider_info")
@@ -89,6 +99,10 @@ public class MeshEvent {
 
     public String getStatus() {
         return status;
+    }
+
+    public String getSkillId() {
+        return skillId;
     }
 
     public List<LlmToolInfo> getTools() {
@@ -144,6 +158,20 @@ public class MeshEvent {
 
         @JsonProperty("registry_disconnected")
         REGISTRY_DISCONNECTED,
+
+        /**
+         * Registry stamped a public URL for a registered {@code @MeshA2A}
+         * surface (spec §2.4 / §8.2). Carried fields: {@code capability}
+         * (re-used as the {@code path}), {@code endpoint} (the public URL),
+         * and a {@code skill_id} field on the event payload.
+         *
+         * <p>The Rust core does not emit this variant today — it's reserved
+         * for the registry → Java consumer wiring that the A2A producer
+         * roadmap adds. Until then the cache stays empty and producers fall
+         * back to their local-form URL.
+         */
+        @JsonProperty("surface_updated")
+        SURFACE_UPDATED,
 
         @JsonProperty("shutdown")
         SHUTDOWN

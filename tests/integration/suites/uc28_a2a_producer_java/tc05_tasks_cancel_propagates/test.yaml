@@ -1,0 +1,115 @@
+# tc05_tasks_cancel_propagates — Java A2A producer tasks/cancel (issue #932 Chunk 1C).
+#
+# Java port of uc24 tc09. Verifies tasks/cancel on a parked task
+# propagates JobProxy.cancel(reason) to the underlying mesh job AND
+# returns a Task envelope with state=canceled.
+#
+# A2A v1.0 spelling note: the protocol uses single-l "canceled" (the
+# US-English form Google chose). The Java MeshA2AStateTranslator
+# enforces this on the wire even when the mesh-side state is the
+# UK-spelled "cancelled".
+
+name: "A2A Producer (Java): tasks/cancel mid-flight returns state=canceled"
+description: "tasks/cancel on Java @MeshA2A long-running task → JobProxy.cancel propagates → state=canceled envelope"
+tags:
+  - a2a
+  - java
+  - smoke
+  - issue-932
+  - producer
+  - cancel
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/producer-report-agent-java /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install producer-report-agent-java deps"
+    handler: maven-install
+    path: /workspace/producer-report-agent-java
+    timeout: 600
+
+  - routine: start_registry_a2a
+
+  - name: "Start long-task-provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start producer-report-agent-java (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start producer-report-agent-java --env MCP_MESH_HTTP_PORT=9091 -d
+
+  - name: "Wait for Java producer healthy + a2a"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        RESP=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null || echo "")
+        STATUS=$(echo "$RESP" | jq -r '.agents[] | select(.name=="report-a2a-agent") | .status' 2>/dev/null || echo "")
+        TYPE=$(echo "$RESP" | jq -r '.agents[] | select(.name=="report-a2a-agent") | .agent_type' 2>/dev/null || echo "")
+        if [ "$STATUS" = "healthy" ] && [ "$TYPE" = "a2a" ]; then
+          echo "Java producer healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Java producer not healthy within 120s"
+      meshctl logs producer-report-agent-java 2>&1 | tail -120 || true
+      exit 1
+    timeout: 150
+
+  # 4 sections * ~2s each = ~8s job runtime — plenty of cancel headroom.
+  - name: "POST tasks/send with id=cancel-mid (4 sections, ~8s job)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:9091/agents/report \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tasks/send","params":{"id":"cancel-mid","message":{"role":"user","parts":[{"type":"text","text":"{\"user_id\": \"alice\", \"sections\": [\"intro\", \"body\", \"summary\", \"appendix\"]}"}]}}}' \
+        > /dev/null
+
+  - name: "Let the job claim + start running"
+    handler: wait
+    seconds: 3
+
+  - name: "POST tasks/cancel for id=cancel-mid"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:9091/agents/report \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":2,"method":"tasks/cancel","params":{"id":"cancel-mid","reason":"manual cancel test"}}'
+    capture: cancel_response
+    timeout: 30
+
+assertions:
+  # Spec §4.5 + §7.2: the post-cancel envelope MUST carry state=canceled
+  # (US spelling, single 'l') even though the underlying mesh job uses
+  # the UK "cancelled" spelling internally — the Java state translator
+  # enforces this on the wire (mirrors a2a.py:817-826 fallback path).
+  - expr: "${captured.cancel_response} contains '\"state\":\"canceled\"'"
+    message: "tasks/cancel response should carry state=canceled (A2A spelling, single-l)"
+  - expr: "${captured.cancel_response} contains '\"id\":\"cancel-mid\"'"
+    message: "tasks/cancel response should echo the canceled task id"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

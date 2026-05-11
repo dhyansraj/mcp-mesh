@@ -2,6 +2,7 @@ package io.mcpmesh.spring;
 
 import io.mcpmesh.core.MeshEvent;
 import io.mcpmesh.spring.media.MediaStore;
+import io.mcpmesh.spring.web.MeshA2APublicUrlCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
@@ -150,6 +151,7 @@ public class MeshEventProcessor implements SmartLifecycle {
             case DEPENDENCY_CHANGED -> handleDependencyChanged(event);
             case LLM_TOOLS_UPDATED -> handleLlmToolsUpdated(event);
             case LLM_PROVIDER_AVAILABLE -> handleLlmProviderAvailable(event);
+            case SURFACE_UPDATED -> handleSurfaceUpdated(event);
             case SHUTDOWN -> handleShutdown(event);
             case REGISTRATION_FAILED -> handleRegistrationFailed(event);
             default -> log.debug("Unhandled event type: {}", event.getEventType());
@@ -543,5 +545,44 @@ public class MeshEventProcessor implements SmartLifecycle {
 
     private void handleRegistrationFailed(MeshEvent event) {
         log.error("Registration failed: {}", event.getError());
+    }
+
+    /**
+     * Cache a registry-stamped public URL for an {@code @MeshA2A} surface
+     * (spec §2.4 / §8.2). The event carries:
+     * <ul>
+     *   <li>{@code capability} → the surface path (e.g. {@code "/agents/date"})</li>
+     *   <li>{@code skill_id}  → the surface skill id</li>
+     *   <li>{@code endpoint}  → the externally-reachable public URL</li>
+     * </ul>
+     *
+     * <p>The cache bean is optional — looked up lazily from the
+     * application context so the {@link MeshEventProcessor} dependency
+     * graph doesn't force loading the cache (which lives in the
+     * {@code spring.web} package and is only relevant when the producer
+     * has registered at least one A2A surface).
+     *
+     * <p>The Rust core does not currently emit this event; the handler is
+     * wired so a future registry-side change lands without an SDK ship.
+     */
+    private void handleSurfaceUpdated(MeshEvent event) {
+        String path = event.getCapability();
+        String skillId = event.getSkillId();
+        String publicUrl = event.getEndpoint();
+        if (path == null || path.isEmpty()) {
+            log.debug("Surface update event missing path: {}", event);
+            return;
+        }
+        MeshA2APublicUrlCache cache;
+        try {
+            cache = applicationContext.getBean(MeshA2APublicUrlCache.class);
+        } catch (BeansException e) {
+            // No A2A surfaces registered in this process; nothing to cache.
+            log.debug("Surface update event received but no MeshA2APublicUrlCache bean; ignoring");
+            return;
+        }
+        cache.put(path, skillId, publicUrl);
+        log.info("Surface updated: path={} skill_id={} public_url={}",
+            path, skillId, publicUrl);
     }
 }

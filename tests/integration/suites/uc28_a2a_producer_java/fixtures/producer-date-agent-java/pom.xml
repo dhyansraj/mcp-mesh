@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  uc28_a2a_producer_java fixture — Java A2A producer (issue #932 Chunk 1C).
+  Sync producer: @MeshA2A method exposes the get-date skill via the A2A
+  v1.0 protocol surface, depending on the existing date_service mesh
+  capability (provided by examples/simple/system_agent.py).
+
+  Mirrors examples/a2a/date_a2a_agent.py shape: same path
+  (/agents/date), same skill id (get-date), same artifact shape
+  ({"date": "<value>"} JSON-stringified into parts[0].text).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>producer-date-agent-java</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>A2A Producer Date Agent (uc28 Java)</name>
+    <description>uc28 Java A2A producer fixture — exposes the get-date skill via @MeshA2A.</description>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.6</version>
+        <relativePath/>
+    </parent>
+
+    <properties>
+        <java.version>17</java.version>
+        <mcp-mesh.version>1.4.1</mcp-mesh.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.mcp-mesh</groupId>
+            <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+            <version>${mcp-mesh.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.example.dateproducerjava.ProducerDateAgentApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

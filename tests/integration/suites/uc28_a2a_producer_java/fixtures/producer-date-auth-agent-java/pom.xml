@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  uc28_a2a_producer_java fixture (bearer auth) — Java A2A producer
+  with @MeshA2A(auth="bearer") so the JSON-RPC entry rejects requests
+  without an Authorization: Bearer <token> header. The agent card
+  endpoint stays publicly reachable (spec §6.2 — clients need it for
+  scheme discovery).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>producer-date-auth-agent-java</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>A2A Producer Date Auth Agent (uc28 Java)</name>
+    <description>uc28 Java A2A producer (bearer auth gate) — exposes get-date via @MeshA2A(auth="bearer").</description>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.6</version>
+        <relativePath/>
+    </parent>
+
+    <properties>
+        <java.version>17</java.version>
+        <mcp-mesh.version>1.4.1</mcp-mesh.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.mcp-mesh</groupId>
+            <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+            <version>${mcp-mesh.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.example.dateauthproducer.ProducerDateAuthAgentApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A2A producer example for LONG-RUNNING tasks (issue #932 Chunk 1C) —
+  Java port of ``examples/a2a/report_a2a_agent.py``. Exposes a
+  ``generate-report`` skill via the A2A v1.0 protocol surface using
+  ``@MeshA2A`` on a Spring Boot bean method. Returns a ``JobProxy`` to
+  hand the long-running task off to the framework, which parks it in
+  the A2A task store and services ``tasks/get``, ``tasks/cancel``,
+  ``tasks/sendSubscribe``, ``tasks/resubscribe`` for the lifetime of
+  the underlying mesh job.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>producer-report-agent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>A2A Producer Report Agent (Java, long-running)</name>
+    <description>Java A2A producer (long-running) — exposes generate-report via the A2A v1.0 protocol surface.</description>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.6</version>
+        <relativePath/>
+    </parent>
+
+    <properties>
+        <java.version>17</java.version>
+        <mcp-mesh.version>1.4.1</mcp-mesh.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.mcp-mesh</groupId>
+            <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+            <version>${mcp-mesh.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.example.reportproducer.ProducerReportAgentApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

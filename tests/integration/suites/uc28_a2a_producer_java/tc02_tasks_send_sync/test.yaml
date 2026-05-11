@@ -1,0 +1,159 @@
+# tc02_tasks_send_sync — Python consumer ↔ Java producer sync round-trip (issue #932 Chunk 1C).
+#
+# Polyglot pairing: a known-good Python A2A consumer
+# (examples/a2a/consumer_date_agent.py) bridges the Java producer's
+# get-date skill onto the mesh as a regular current-date capability,
+# then meshctl call drives the consumer end-to-end. This exercises:
+#
+#   - Java @MeshA2A JSON-RPC dispatch (tasks/send → state=completed)
+#   - Artifact-text round-trip (handler dict → JSON-stringified into
+#     parts[0].text → consumer json.loads back to dict)
+#   - Java-side DDDI: producer's @MeshDependency(capability="date_service")
+#     resolves against the Python system-agent (cross-runtime DDDI
+#     inside an A2A handler).
+#
+# Same artifact-text contract as uc25 tc02 (Python ↔ Python) — the only
+# moving piece is which runtime owns the producer. tc02's success here
+# proves the Java producer is wire-compatible with the existing Python
+# consumer ecosystem.
+
+name: "A2A Producer (Java): tasks/send sync via Python consumer"
+description: "Python consumer drives Java @MeshA2A tasks/send → state=completed → artifact text round-trip"
+tags:
+  - a2a
+  - java
+  - polyglot
+  - smoke
+  - issue-932
+  - producer
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/system-agent /workspace/
+      cp -rL /uc-artifacts/producer-date-agent-java /workspace/
+      cp -rL /uc-artifacts/consumer-date-agent /workspace/
+
+  - name: "Install system-agent deps"
+    handler: pip-install
+    path: /workspace/system-agent
+
+  - name: "Install producer-date-agent-java deps"
+    handler: maven-install
+    path: /workspace/producer-date-agent-java
+    timeout: 600
+
+  - name: "Install consumer-date-agent deps"
+    handler: pip-install
+    path: /workspace/consumer-date-agent
+
+  - routine: start_registry_a2a
+
+  - name: "Start system-agent (port 9100, provides date_service)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for system-agent registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start producer-date-agent-java (port 9090)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start producer-date-agent-java --env MCP_MESH_HTTP_PORT=9090 -d
+
+  - name: "Wait for Java producer to be healthy + a2a"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        RESP=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null || echo "")
+        STATUS=$(echo "$RESP" | jq -r '.agents[] | select(.name=="date-a2a-agent") | .status' 2>/dev/null || echo "")
+        TYPE=$(echo "$RESP" | jq -r '.agents[] | select(.name=="date-a2a-agent") | .agent_type' 2>/dev/null || echo "")
+        if [ "$STATUS" = "healthy" ] && [ "$TYPE" = "a2a" ]; then
+          echo "Java producer healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Java producer not healthy within 120s (last status='$STATUS' type='$TYPE')"
+      meshctl logs producer-date-agent-java 2>&1 | tail -120 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start consumer-date-agent (port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-date-agent/main.py -d
+
+  - name: "Wait for consumer registration + DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Verify all 3 agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Call the consumer's current-date tool (drives Java producer via A2A)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call current_date '{}' --raw
+    capture: tool_response
+    timeout: 30
+
+  # ALSO call the Java producer directly with raw JSON-RPC to assert the
+  # exact wire shape (state=completed, artifacts[0].name=result, etc.) per
+  # spec §4.3.
+  - name: "POST tasks/send directly to Java producer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:9090/agents/date \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tasks/send","params":{"id":"t1","message":{"role":"user","parts":[{"type":"text","text":"now"}]}}}'
+    capture: direct_send_response
+    timeout: 15
+
+assertions:
+  - expr: "${captured.agent_list} contains 'system-agent'"
+    message: "system-agent should be registered"
+  - expr: "${captured.agent_list} contains 'date-a2a-agent'"
+    message: "Java producer should be registered"
+  - expr: "${captured.agent_list} contains 'date-consumer'"
+    message: "Python consumer should be registered"
+
+  # Direct JSON-RPC: verify the wire shape (spec §4.3).
+  - expr: "${captured.direct_send_response} contains '\"state\":\"completed\"'"
+    message: "sync handler should yield state=completed"
+  - expr: "${captured.direct_send_response} contains '\"id\":\"t1\"'"
+    message: "envelope should echo the submitted task id"
+  - expr: "${captured.direct_send_response} contains '\"sessionId\":\"t1\"'"
+    message: "sessionId should default to task id"
+  - expr: "${captured.direct_send_response} contains '\"artifacts\"'"
+    message: "envelope should carry artifacts array"
+  - expr: "${captured.direct_send_response} contains '\"name\":\"result\"'"
+    message: "artifact[0].name should be 'result'"
+  - expr: "${captured.direct_send_response} contains 'date'"
+    message: "artifact text should carry the JSON-stringified {date: ...} payload"
+
+  # End-to-end via Python consumer: the consumer parsed parts[0].text as
+  # JSON and returns the original {"date": ...} dict to meshctl.
+  - expr: "${captured.tool_response} not contains '\"isError\": true'"
+    message: "tool call should not return an MCP error envelope"
+  - expr: "${captured.tool_response} contains 'date'"
+    message: "tool response should carry the producer's date payload"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

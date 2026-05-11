@@ -1,0 +1,26 @@
+# MCP Mesh A2A producer date agent (Java) — issue #932 Chunk 1C.
+#
+# Mirrors examples/a2a/date_a2a_agent.py. Override at runtime via:
+#   MCP_MESH_REGISTRY_URL - Registry URL
+#   MCP_MESH_HTTP_PORT    - Agent HTTP port (also where the agent card lives)
+#   MCP_MESH_AGENT_NAME   - Agent name (registers as agent_type=a2a once
+#                           the @MeshA2A surface is discovered at boot)
+
+spring:
+  application:
+    name: producer-date-agent
+
+server:
+  port: ${MCP_MESH_HTTP_PORT:9090}
+
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:date-a2a-agent}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+
+logging:
+  level:
+    io.mcpmesh: INFO
+    com.example.dateproducer: DEBUG
