@@ -135,7 +135,7 @@ The simplest case — the upstream returns within seconds, so there is no parkin
       },
       async (deps, _payload) => {
         const dateService = deps.date_service as McpMeshTool | null;
-        if (dateService === null) {
+        if (dateService == null) {
           return { error: "date_service not yet resolved" };
         }
         return { date: await dateService.call({}) };
@@ -287,6 +287,12 @@ When the underlying work is long-running (`task=True` in the dependency graph), 
         // construct it inline from the api-runtime singleton + the registry
         // URL the SDK already resolved. Cheap, stateless after construction.
         const agentId = getApiRuntime().getServiceId();
+        if (!agentId) {
+          // Runtime not yet fully initialised — serviceId is empty until
+          // the api-runtime singleton finishes start(). Surface a clear
+          // error rather than constructing a submitter with a blank agentId.
+          throw new Error("api-runtime not ready: serviceId is empty");
+        }
         const registryUrl =
           process.env.MCP_MESH_REGISTRY_URL ?? "http://localhost:8000";
         const submitter = new MeshJobSubmitter(

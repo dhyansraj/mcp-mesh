@@ -999,6 +999,7 @@ mod tests {
             tools: vec![],
             llm_agents: None,
             heartbeat_interval: 5,
+            surfaces: None,
         };
 
         let rust_spec: RustAgentSpec = js_spec.into();
@@ -1025,6 +1026,7 @@ mod tests {
             tools: vec![],
             llm_agents: None,
             heartbeat_interval: 5,
+            surfaces: None,
         };
 
         let rust_spec: RustAgentSpec = js_spec.into();
@@ -1048,6 +1050,7 @@ mod tests {
             tools: vec![],
             llm_agents: None,
             heartbeat_interval: 5,
+            surfaces: None,
         };
 
         let rust_spec: RustAgentSpec = js_spec.into();
@@ -1109,6 +1112,7 @@ mod tests {
                 max_iterations: 10,
             }]),
             heartbeat_interval: 5,
+            surfaces: None,
         };
 
         let rust_spec: RustAgentSpec = js_spec.into();

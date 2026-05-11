@@ -361,8 +361,8 @@ async function runLongRunningStream(
       const progressMessage = status["progress_message"];
       const now = Date.now();
 
-      const progressChanged = !shallowEqual(progress, lastProgress);
-      const messageChanged = !shallowEqual(progressMessage, lastMessage);
+      const progressChanged = !primitiveOrNullishEqual(progress, lastProgress);
+      const messageChanged = !primitiveOrNullishEqual(progressMessage, lastMessage);
 
       if (progressChanged || messageChanged) {
         const msgText = (progressMessage !== null && progressMessage !== undefined)
@@ -514,7 +514,7 @@ function errorTextOf(err: unknown): string {
  * undefined) and `progress_message` (string or undefined). A full deep
  * equal would be overkill.
  */
-function shallowEqual(a: unknown, b: unknown): boolean {
+function primitiveOrNullishEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   // Treat null == undefined for the change-detect heuristic so
   // toggling between absent and null doesn't spam frames.

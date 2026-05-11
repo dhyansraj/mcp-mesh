@@ -74,10 +74,21 @@
 
 // Set MCP_MESH_HTTP_PORT BEFORE importing the SDK so the api-runtime
 // picks up the same port we'll bind the Express listener to.
-const HTTP_PORT = parseInt(
-  (process.env.MCP_MESH_HTTP_PORT = process.env.MCP_MESH_HTTP_PORT ?? "9091"),
-  10,
-);
+// Validate the parsed value is a finite TCP port — parseInt("abc")
+// returns NaN and parseInt("99999") returns an out-of-range value;
+// either would break listen() with an opaque error. Fall back to the
+// default 9091 and re-export it so the SDK observes the same string.
+const DEFAULT_HTTP_PORT = 9091;
+function resolveHttpPort(): number {
+  const raw = process.env.MCP_MESH_HTTP_PORT;
+  const parsed = raw === undefined ? NaN : parseInt(raw, 10);
+  if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 65535) {
+    return parsed;
+  }
+  process.env.MCP_MESH_HTTP_PORT = String(DEFAULT_HTTP_PORT);
+  return DEFAULT_HTTP_PORT;
+}
+const HTTP_PORT = resolveHttpPort();
 process.env.MCP_MESH_AGENT_NAME =
   process.env.MCP_MESH_AGENT_NAME ?? "report-a2a-agent";
 

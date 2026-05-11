@@ -208,6 +208,15 @@ export function mount<D extends A2ADependencies = A2ADependencies>(
   if (!config.path.startsWith("/")) {
     throw new Error(`mesh.a2a.mount: config.path must start with '/': got '${config.path}'`);
   }
+  if (config.path === "/") {
+    // Mounting at root would produce '//.well-known/agent.json' (double
+    // slash, unreachable). Spec §3.1 requires a non-empty mount path so
+    // the card endpoint is well-formed. Match Java's MeshA2AMountValidator.
+    throw new Error(
+      "mesh.a2a.mount: config.path must not be '/': mount under a real " +
+        "path so the agent-card URL is well-formed (spec §3.1)"
+    );
+  }
   if (config.path.length > 1 && config.path.endsWith("/")) {
     throw new Error(
       `mesh.a2a.mount: config.path must not end with '/': got '${config.path}' ` +

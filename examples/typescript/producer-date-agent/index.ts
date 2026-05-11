@@ -52,10 +52,21 @@
 // picks up the same port we'll bind the Express listener to. Without
 // this, the agent card's `url` field falls back to the framework
 // default instead of the actual Express port.
-const HTTP_PORT = parseInt(
-  (process.env.MCP_MESH_HTTP_PORT = process.env.MCP_MESH_HTTP_PORT ?? "9090"),
-  10,
-);
+// Validate the parsed value is a finite TCP port — parseInt("abc")
+// returns NaN and parseInt("99999") returns an out-of-range value;
+// either would break listen() with an opaque error. Fall back to the
+// default 9090 and re-export it so the SDK observes the same string.
+const DEFAULT_HTTP_PORT = 9090;
+function resolveHttpPort(): number {
+  const raw = process.env.MCP_MESH_HTTP_PORT;
+  const parsed = raw === undefined ? NaN : parseInt(raw, 10);
+  if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 65535) {
+    return parsed;
+  }
+  process.env.MCP_MESH_HTTP_PORT = String(DEFAULT_HTTP_PORT);
+  return DEFAULT_HTTP_PORT;
+}
+const HTTP_PORT = resolveHttpPort();
 // MCP_MESH_AGENT_NAME drives the heartbeat envelope's `name` field and
 // the agent card's top-level `name`. Default mirrors Python/Java port.
 process.env.MCP_MESH_AGENT_NAME = process.env.MCP_MESH_AGENT_NAME ?? "date-a2a-agent";

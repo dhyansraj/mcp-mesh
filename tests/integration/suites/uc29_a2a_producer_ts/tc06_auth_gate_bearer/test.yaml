@@ -85,13 +85,17 @@ test:
     timeout: 15
 
   # 3) POST WITH Authorization: Bearer <token> → 200 + valid envelope.
+  # Token value is just a placeholder — Phase 1 checks header presence
+  # only, not the value. Use ${BEARER_TOKEN} so the suite can be re-run
+  # against a real token without editing the YAML; the default is an
+  # obvious test placeholder so secret scanners don't flag it.
   - name: "POST tasks/send WITH Authorization: Bearer header"
     handler: shell
     workdir: /workspace
     command: |
       curl -s -o /tmp/with_auth_body.json -w "HTTP_STATUS=%{http_code}" \
         -X POST http://localhost:9092/agents/date \
-        -H 'Authorization: Bearer abc123testtoken' \
+        -H "Authorization: Bearer ${BEARER_TOKEN:-test-token}" \
         -H 'Content-Type: application/json' \
         -d '{"jsonrpc":"2.0","id":2,"method":"tasks/send","params":{"id":"t2","message":{"role":"user","parts":[{"type":"text","text":"now"}]}}}'
       echo ""

@@ -544,3 +544,28 @@ describe("mesh.a2a.mount: end-to-end via Express + node http", () => {
     expect(p2[0].text).toBe("from-m2");
   });
 });
+
+describe("mesh.a2a.mount: config.path validation (spec §3.1)", () => {
+  beforeEach(() => {
+    A2AProducerRegistry.reset();
+    RouteRegistry.reset();
+    __getA2ATaskStore().clear();
+  });
+
+  /**
+   * Regression: mounting at root produces a card URL with a double-slash
+   * (`//.well-known/agent.json`) which is unreachable. Validation must
+   * reject `config.path === "/"` outright with a clear error message.
+   */
+  it("rejects config.path === '/' (would produce '//.well-known/agent.json')", () => {
+    const app = express();
+    app.use(express.json());
+    expect(() =>
+      mount(
+        app,
+        { path: "/", skillId: "root-skill" },
+        async () => "ok",
+      ),
+    ).toThrow(/must not be '\/'/i);
+  });
+});

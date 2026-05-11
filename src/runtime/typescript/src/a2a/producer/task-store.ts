@@ -78,6 +78,37 @@ export class A2ATaskStore {
   }
 
   /**
+   * Atomically reserve `taskId` for an in-flight request by inserting a
+   * placeholder record. Returns `true` when the slot was free and is now
+   * reserved by the caller; returns `false` when the slot was already taken
+   * (caller must surface the spec §4.3 "already in use" error).
+   *
+   * Closes the race window between `contains(taskId)` and `put(taskId, ...)`
+   * for two concurrently-arriving `tasks/send` requests with the same id:
+   * Node's event loop is single-threaded, but `await deps.handler(...)`
+   * between the pre-check and the final `put()` yields control, letting
+   * another request slip its own check through.
+   */
+  reserveTask(taskId: string, placeholder: TaskRecord): boolean {
+    this.sweepExpired();
+    if (this.store.has(taskId)) {
+      return false;
+    }
+    this.store.set(taskId, placeholder);
+    return true;
+  }
+
+  /**
+   * Drop a previously-reserved placeholder for `taskId`. Used by callers
+   * when the handler raised before producing a terminal envelope and the
+   * reservation needs to be released so the failure envelope can be put
+   * cleanly. No-op when the record is absent.
+   */
+  remove(taskId: string): void {
+    this.store.delete(taskId);
+  }
+
+  /**
    * @returns the record for `taskId`, or `undefined` when missing or
    *     already evicted. Triggers a lazy sweep on each call.
    */

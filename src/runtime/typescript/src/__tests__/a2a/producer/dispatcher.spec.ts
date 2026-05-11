@@ -260,6 +260,50 @@ describe("dispatcher: tasks/send (spec §4.3)", () => {
     expect(err.code).toBe(JSONRPC_INVALID_PARAMS);
     expect((err.message as string).toLowerCase()).toContain("already in use");
   });
+
+  /**
+   * Regression: two concurrent tasks/send with the same id must NOT both
+   * slip through. Atomic reserveTask() in the task store closes the race
+   * window between a non-atomic `contains()` pre-check and the post-await
+   * `put()` (the `await handler(...)` between them yields control to the
+   * event loop, so a separate request can pass the same pre-check).
+   *
+   * Acceptance: exactly one request returns state=completed, the other
+   * returns JSON-RPC -32602 "already in use".
+   */
+  it("concurrent tasks/send with same id -> exactly one succeeds, other -32602", async () => {
+    // Handler that yields to the event loop a couple of times before
+    // returning — simulates the original race window between the
+    // pre-check and the post-await put().
+    const handler: A2AHandler = async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      return "ok";
+    };
+    const deps = makeDeps(handler, store);
+    const body = {
+      jsonrpc: "2.0",
+      method: "tasks/send",
+      params: { id: "concurrent-1" },
+    };
+    const [first, second] = await Promise.all([
+      dispatch(deps, body),
+      dispatch(deps, body),
+    ]);
+    const firstBody = parseBody(first);
+    const secondBody = parseBody(second);
+    // Exactly one is a JSON-RPC error -32602, the other is a success.
+    const errorBodies = [firstBody, secondBody].filter((b) => "error" in b);
+    const successBodies = [firstBody, secondBody].filter((b) => "result" in b);
+    expect(errorBodies).toHaveLength(1);
+    expect(successBodies).toHaveLength(1);
+    const err = errorBodies[0].error as Record<string, unknown>;
+    expect(err.code).toBe(JSONRPC_INVALID_PARAMS);
+    expect((err.message as string).toLowerCase()).toContain("already in use");
+    const result = successBodies[0].result as Record<string, unknown>;
+    const status = result.status as Record<string, unknown>;
+    expect(status.state).toBe("completed");
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────────
@@ -478,6 +522,86 @@ describe("dispatcher: tasks/get (spec §4.4)", () => {
     const result = parseBody(captured).result as Record<string, unknown>;
     // metadata must be absent (no spec-violating string-typed progress).
     expect(result.metadata).toBeUndefined();
+  });
+
+  /**
+   * Regression: after a live-status poll returns a terminal state
+   * (completed / failed / canceled), the envelope MUST be persisted via
+   * markTerminal() so subsequent tasks/get calls hit the cache and don't
+   * re-poll the JobProxy. Without this, every tasks/get after the task
+   * finishes makes another expensive status() + wait() round-trip.
+   */
+  it("terminal live-status -> persisted; subsequent tasks/get hits cache (no re-poll)", async () => {
+    const proxy = fakeProxy({
+      status: async () => ({ status: "completed" }),
+      wait: async () => "final-payload",
+    });
+    store.put("t-cache", { sessionId: "t-cache", jobProxy: proxy as never });
+    const deps = makeDeps((async () => null) as A2AHandler, store);
+
+    // First tasks/get: polls the proxy and observes terminal state.
+    const first = await dispatch(deps, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tasks/get",
+      params: { id: "t-cache" },
+    });
+    const firstResult = parseBody(first).result as Record<string, unknown>;
+    expect((firstResult.status as Record<string, unknown>).state).toBe(
+      "completed",
+    );
+    expect(proxy.status).toHaveBeenCalledTimes(1);
+    expect(proxy.wait).toHaveBeenCalledTimes(1);
+
+    // The record is now terminal (markTerminal stamped it).
+    const parked = store.get("t-cache");
+    expect(parked!.terminalEnvelope).toBeDefined();
+    expect(parked!.terminalAt).toBeDefined();
+
+    // Second tasks/get: must hit the cached terminal envelope — no
+    // additional proxy.status() / proxy.wait() invocations.
+    const second = await dispatch(deps, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tasks/get",
+      params: { id: "t-cache" },
+    });
+    const secondResult = parseBody(second).result as Record<string, unknown>;
+    expect((secondResult.status as Record<string, unknown>).state).toBe(
+      "completed",
+    );
+    expect(proxy.status).toHaveBeenCalledTimes(1);
+    expect(proxy.wait).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Negative case: working (non-terminal) live-status MUST NOT mark the
+   * record terminal. tasks/get should re-poll on the next call so the
+   * client sees fresh progress.
+   */
+  it("working live-status -> NOT persisted; next tasks/get re-polls", async () => {
+    const proxy = fakeProxy({
+      status: async () => ({ status: "running", progress: 0.3 }),
+    });
+    store.put("t-working", { sessionId: "t-working", jobProxy: proxy as never });
+    const deps = makeDeps((async () => null) as A2AHandler, store);
+
+    await dispatch(deps, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tasks/get",
+      params: { id: "t-working" },
+    });
+    await dispatch(deps, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tasks/get",
+      params: { id: "t-working" },
+    });
+    // Each call must re-poll — no cached envelope for non-terminal records.
+    expect(proxy.status).toHaveBeenCalledTimes(2);
+    const parked = store.get("t-working");
+    expect(parked!.terminalEnvelope).toBeUndefined();
   });
 });
 
@@ -740,5 +864,19 @@ describe("dispatcher: JSON-RPC error semantics (spec §4.1)", () => {
     });
     const body = parseBody(captured);
     expect(body.id).toBe(0);
+  });
+
+  it("echoes id verbatim including null", async () => {
+    const handler: A2AHandler = async () => "ok";
+    const deps = makeDeps(handler, store);
+
+    const captured = await dispatch(deps, {
+      jsonrpc: "2.0",
+      id: null,
+      method: "tasks/send",
+      params: { id: "t-id-null" },
+    });
+    const body = parseBody(captured);
+    expect(body.id).toBeNull();
   });
 });

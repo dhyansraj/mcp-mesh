@@ -133,6 +133,13 @@ describe("state-translator: meshStatusOf", () => {
   it("returns null for null / undefined / non-object payloads", () => {
     expect(meshStatusOf(null)).toBeNull();
     expect(meshStatusOf(undefined)).toBeNull();
+    expect(meshStatusOf(123 as unknown as Record<string, unknown>)).toBeNull();
+    expect(meshStatusOf("a" as unknown as Record<string, unknown>)).toBeNull();
+    expect(meshStatusOf(true as unknown as Record<string, unknown>)).toBeNull();
+    expect(
+      meshStatusOf(Symbol("x") as unknown as Record<string, unknown>),
+    ).toBeNull();
+    expect(meshStatusOf([] as unknown as Record<string, unknown>)).toBeNull();
   });
 
   /** Coerces non-string statuses to strings (defensive). */

@@ -225,7 +225,16 @@ async function handleTasksSend(
 
   // Spec §4.3: duplicate in-flight task_id → -32602 already in use.
   // Terminal entries within the eviction window are also rejected.
-  if (deps.taskStore.contains(taskId)) {
+  // Atomic reservation — closes the race between two concurrent
+  // tasks/send requests with the same id (the pre-check + handler
+  // await yields control, so a separate `contains()` then `put()`
+  // would let both slip through).
+  const reserved = deps.taskStore.reserveTask(taskId, {
+    sessionId,
+    requestMessage: hasOwn(message) ? message : undefined,
+    jobProxy: null,
+  });
+  if (!reserved) {
     writeJsonRpc(res, jsonRpcError(reqId, JSONRPC_INVALID_PARAMS,
       `A2A task id '${taskId}' is already in use`));
     return;
@@ -252,7 +261,8 @@ async function handleTasksSend(
     handlerResult = await deps.handler(resolvedDeps, message);
   } catch (err) {
     // Spec §4.3 "Response — handler raised": exceptions become
-    // state=failed Tasks, NOT JSON-RPC errors.
+    // state=failed Tasks, NOT JSON-RPC errors. Upgrade the placeholder
+    // reservation to a terminal failed envelope.
     const errorText = errorTextOf(err);
     const envelope = buildFailedTask(taskId, sessionId, message, errorText);
     deps.taskStore.put(taskId, {
@@ -278,6 +288,7 @@ async function handleTasksSend(
   }
 
   // Sync path: handler returned a value → state=completed envelope.
+  // Upgrade the placeholder reservation to the terminal record.
   const envelope = buildCompletedTask(taskId, sessionId, message, handlerResult);
   deps.taskStore.put(taskId, {
     sessionId,
@@ -435,7 +446,15 @@ export async function buildSendSubscribeStream(
   }
   const message = mapFromParams(params, "message");
 
-  if (deps.taskStore.contains(taskId)) {
+  // Atomic reservation — closes the race between two concurrent
+  // tasks/sendSubscribe requests with the same id (await deps.handler
+  // yields control between a separate `contains()` and `put()`).
+  const reserved = deps.taskStore.reserveTask(taskId, {
+    sessionId,
+    requestMessage: hasOwn(message) ? message : undefined,
+    jobProxy: null,
+  });
+  if (!reserved) {
     // Duplicate in-flight task_id — surface as a single SSE failed
     // event so the SSE client sees a structured A2A failure rather
     // than an opaque HTTP error (Python a2a.py:1143-1149).
@@ -582,7 +601,7 @@ export function buildResubscribeStream(
  * synthesis.
  */
 export async function buildTaskFromLiveStatus(
-  _taskStore: A2ATaskStore,
+  taskStore: A2ATaskStore,
   taskId: string,
   record: TaskRecord
 ): Promise<Record<string, unknown>> {
@@ -590,7 +609,19 @@ export async function buildTaskFromLiveStatus(
   if (!proxy) {
     return buildWorkingTask(taskId, record.sessionId, record.requestMessage);
   }
-  return buildTaskFromLiveStatusInternal(taskId, record, proxy);
+  const envelope = await buildTaskFromLiveStatusInternal(taskId, record, proxy);
+  // Persist terminal envelopes so subsequent tasks/get calls hit the cache
+  // and don't re-poll the JobProxy (spec §4.4 / Appendix B item 5). For
+  // working / live states leave the record as-is — the next tasks/get
+  // should re-poll for fresh progress.
+  const statusObj = envelope["status"] as Record<string, unknown> | undefined;
+  const state = statusObj && typeof statusObj["state"] === "string"
+    ? statusObj["state"]
+    : null;
+  if (state === A2A_COMPLETED || state === A2A_FAILED || state === A2A_CANCELED) {
+    taskStore.markTerminal(taskId, envelope);
+  }
+  return envelope;
 }
 
 async function buildTaskFromLiveStatusInternal(
@@ -886,7 +917,11 @@ export function stringifyResult(value: unknown): string {
     return value;
   }
   try {
-    return JSON.stringify(value);
+    // JSON.stringify returns `undefined` (the literal value, NOT a string)
+    // for functions / symbols / and undefined itself. Coerce via String()
+    // so the artifact text body is always a real string.
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" ? serialized : String(value);
   } catch {
     return String(value);
   }
@@ -1112,7 +1147,11 @@ function errorTextOf(err: unknown): string {
   }
   if (typeof err === "string") return err;
   try {
-    return JSON.stringify(err);
+    // JSON.stringify returns `undefined` (the literal value, NOT a string)
+    // for functions / symbols / and undefined itself. Coerce via String()
+    // so callers always receive a real string.
+    const serialized = JSON.stringify(err);
+    return typeof serialized === "string" ? serialized : String(err);
   } catch {
     return String(err);
   }

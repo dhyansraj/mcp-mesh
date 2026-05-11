@@ -137,11 +137,13 @@ export class A2AProducerRegistry {
   /**
    * Build the heartbeat `a2a_surfaces[]` array (spec §2.1).
    *
-   * Required fields (`path`, `skill_id`) are always emitted. Optional fields
-   * (`name`, `description`, `tags`) are emitted ONLY when set — never as
-   * empty strings or empty arrays — so the registry's OpenAPI defaults
-   * (`input_modes: ["application/json"]`, etc.) aren't overridden with empty
-   * values. Spec §2.1 is explicit about this.
+   * Required fields (`path`, `skill_id`) are always emitted. `name` is
+   * always emitted because mount-time defaults `skillName` to `skillId`
+   * (see mount.ts), so it is never empty at this point. The remaining
+   * optional fields (`description`, `tags`) are emitted ONLY when set —
+   * never as empty strings or empty arrays — so the registry's OpenAPI
+   * defaults (`input_modes: ["application/json"]`, etc.) aren't overridden
+   * with empty values. Spec §2.1 is explicit about this.
    *
    * @returns list of plain-object surface entries ready for JSON serialization
    */
