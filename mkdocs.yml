@@ -249,6 +249,7 @@ nav:
       - Scaffolding: a2a/scaffolding.md
       - Examples Gallery: a2a/examples.md
       - Architecture & Decisions: a2a/architecture.md
+      - Producer Spec (Conformance): a2a/surfaces-spec.md
 
   - API Reference:
       - MediaResult: api/media-result.md

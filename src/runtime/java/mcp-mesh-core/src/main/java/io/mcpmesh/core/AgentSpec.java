@@ -53,6 +53,21 @@ public class AgentSpec {
     @JsonProperty("heartbeat_interval")
     private long heartbeatInterval = 5;
 
+    /**
+     * A2A surfaces JSON (issue #903 / #932). Optional — populated only when
+     * {@code agentType="a2a"} and the SDK has at least one {@code @MeshA2A}
+     * surface registered. Stored as a JSON-encoded string to match the Rust
+     * core's {@code surfaces: Option<String>} field shape (the Rust side
+     * forwards it verbatim to the registry's {@code MeshAgentRegistration.surfaces}
+     * JSONB column).
+     *
+     * <p>When {@code null} or empty, the field is omitted from the heartbeat
+     * envelope (per-field {@code @JsonInclude(NON_EMPTY)} overrides the
+     * class-level {@code NON_NULL} so accidental empty strings are dropped).
+     */
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    private String surfaces;
+
     public AgentSpec() {
     }
 
@@ -123,6 +138,11 @@ public class AgentSpec {
         return this;
     }
 
+    public AgentSpec surfaces(String surfaces) {
+        this.surfaces = surfaces;
+        return this;
+    }
+
     // Standard getters
 
     public String getName() {
@@ -188,6 +208,10 @@ public class AgentSpec {
         return heartbeatInterval;
     }
 
+    public String getSurfaces() {
+        return surfaces;
+    }
+
     // Standard setters
 
     public void setName(String name) {
@@ -240,6 +264,10 @@ public class AgentSpec {
 
     public void setHeartbeatInterval(long heartbeatInterval) {
         this.heartbeatInterval = heartbeatInterval;
+    }
+
+    public void setSurfaces(String surfaces) {
+        this.surfaces = surfaces;
     }
 
     /**

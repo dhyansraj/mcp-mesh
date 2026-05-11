@@ -5,6 +5,16 @@ import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.Selector;
 import io.mcpmesh.core.AgentSpec;
+import io.mcpmesh.spring.web.MeshA2AAuthFilter;
+import io.mcpmesh.spring.web.MeshA2ABeanPostProcessor;
+import io.mcpmesh.spring.web.MeshA2ACardBuilder;
+import io.mcpmesh.spring.web.MeshA2ADispatcher;
+import io.mcpmesh.spring.web.MeshA2ADispatcherController;
+import io.mcpmesh.spring.web.MeshA2APublicUrlCache;
+import io.mcpmesh.spring.web.MeshA2ARegistry;
+import io.mcpmesh.spring.web.MeshA2ASseDispatcher;
+import io.mcpmesh.spring.web.MeshA2ASseHeaderFilter;
+import io.mcpmesh.spring.web.MeshA2ATaskStore;
 import io.mcpmesh.spring.web.MeshRouteRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -90,6 +100,179 @@ public class MeshAutoConfiguration {
         return MeshObjectMappers.create();
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    // Issue #932: @MeshA2A producer-side support (Chunk 1A — sync only).
+    //
+    // Adds five beans:
+    //   * MeshA2ARegistry          — collects @MeshA2A surfaces
+    //   * MeshA2ABeanPostProcessor — scans beans at boot for @MeshA2A
+    //   * MeshA2ATaskStore         — process-local A2A task store (300s eviction)
+    //   * MeshA2ACardBuilder       — renders /.well-known/agent.json
+    //   * MeshA2ADispatcher        — JSON-RPC entry point dispatcher
+    //   * MeshA2ADispatcherController — @RestController mounted at /**
+    //   * meshA2AAuthFilter        — bearer-auth gate (filter registration)
+    //
+    // The dispatcher + card builder + controller depend on a populated
+    // MeshA2ARegistry. The bean post-processor is declared as a static
+    // factory so it instantiates before user beans (same pattern as the
+    // route bean post-processor).
+    // ─────────────────────────────────────────────────────────────────
+
+    @Bean
+    @ConditionalOnMissingBean
+    public static MeshA2ARegistry meshA2ARegistry() {
+        return new MeshA2ARegistry();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public static MeshA2ABeanPostProcessor meshA2ABeanPostProcessor(MeshA2ARegistry registry) {
+        return new MeshA2ABeanPostProcessor(registry);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public MeshA2ATaskStore meshA2ATaskStore() {
+        return new MeshA2ATaskStore();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public MeshA2ACardBuilder meshA2ACardBuilder(
+            MeshToolRegistry toolRegistry, ObjectMapper objectMapper) {
+        return new MeshA2ACardBuilder(toolRegistry, objectMapper);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public MeshA2ADispatcher meshA2ADispatcher(
+            MeshA2ARegistry registry,
+            MeshA2ATaskStore taskStore,
+            ObjectMapper objectMapper,
+            ObjectProvider<MeshDependencyInjector> injectorProvider) {
+        return new MeshA2ADispatcher(registry, taskStore, objectMapper, injectorProvider);
+    }
+
+    /**
+     * Process-local cache of registry-stamped public URLs (spec §8.2). Populated
+     * by {@link MeshEventProcessor} when the Rust core surfaces a
+     * {@code surface_updated} event; read by
+     * {@link MeshA2ADispatcherController#buildRouterFunction()} at agent-card
+     * render time. Empty by default — controller falls back to the local
+     * host:port URL form.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public MeshA2APublicUrlCache meshA2APublicUrlCache() {
+        return new MeshA2APublicUrlCache();
+    }
+
+    /**
+     * Spring-MVC SSE adapter for the dispatcher's framework-agnostic
+     * stream-plan (spec §4.6 / §4.7 / §5). The adapter contains the only
+     * code that imports Spring MVC's functional SSE API; the dispatcher
+     * itself stays unit-testable without a servlet container.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public MeshA2ASseDispatcher meshA2ASseDispatcher(MeshA2ADispatcher dispatcher) {
+        return new MeshA2ASseDispatcher(dispatcher);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    public MeshA2ADispatcherController meshA2ADispatcherController(
+            MeshA2ARegistry registry,
+            MeshA2ADispatcher dispatcher,
+            MeshA2ASseDispatcher sseDispatcher,
+            MeshA2ACardBuilder cardBuilder,
+            ObjectProvider<MeshProperties> propertiesProvider,
+            ObjectProvider<MeshA2APublicUrlCache> publicUrlCacheProvider) {
+        return new MeshA2ADispatcherController(
+            registry, dispatcher, sseDispatcher, cardBuilder,
+            propertiesProvider, publicUrlCacheProvider);
+    }
+
+    /**
+     * Functional router for every registered {@code @MeshA2A} surface.
+     * Spring MVC composes this {@link org.springframework.web.servlet.function.RouterFunction}
+     * with annotation-based {@code @RestController} mappings, so user
+     * controllers, static-resource serving, and error pages continue to
+     * work alongside the A2A producer routes.
+     *
+     * <p>The bean is built lazily from
+     * {@link MeshA2ADispatcherController#buildRouterFunction()} which
+     * iterates {@link MeshA2ARegistry} at bean-creation time. Because
+     * the controller depends on the registry and the registry is
+     * populated by {@link MeshA2ABeanPostProcessor} (which runs before
+     * this configuration's bean methods complete), the iteration sees
+     * the full surface set.
+     */
+    @Bean
+    @ConditionalOnMissingBean(name = "meshA2ARouterFunction")
+    public org.springframework.web.servlet.function.RouterFunction<
+            org.springframework.web.servlet.function.ServerResponse>
+            meshA2ARouterFunction(MeshA2ADispatcherController controller) {
+        // Force eager instantiation of all candidate beans so
+        // MeshA2ABeanPostProcessor populates MeshA2ARegistry before we
+        // build the router function. Without this, Spring's bean creation
+        // order would let the router-function be built BEFORE the user's
+        // @Component / @Service classes are instantiated, leaving the
+        // registry empty.
+        //
+        // The same eager-touch trick is used by buildAgentSpec() for the
+        // route-registry-based consumer-only mode detection.
+        applicationContext.getBeansWithAnnotation(
+            org.springframework.stereotype.Component.class);
+        applicationContext.getBeansWithAnnotation(
+            org.springframework.stereotype.Service.class);
+        applicationContext.getBeansWithAnnotation(
+            org.springframework.web.bind.annotation.RestController.class);
+        return controller.buildRouterFunction();
+    }
+
+    /**
+     * Bearer-auth filter (spec §6). Registered at HIGHEST_PRECEDENCE + 10
+     * so it runs BEFORE Spring's dispatcher servlet matches the request to
+     * the {@link MeshA2ADispatcherController} — rejection short-circuits
+     * the chain with HTTP 401 + JSON-RPC -32001 before the dispatcher sees
+     * the body. The filter is conditional only on the registry being
+     * present; it no-ops on every request that isn't a POST to a registered
+     * bearer-protected surface, so it's safe to register unconditionally.
+     */
+    /**
+     * Stamps SSE buffering hints ({@code Cache-Control: no-cache},
+     * {@code X-Accel-Buffering: no}, {@code Connection: keep-alive}) on
+     * every request that opts into {@code text/event-stream}. Registered at
+     * {@code HIGHEST_PRECEDENCE + 6}, just after the bearer-auth filter.
+     */
+    @Bean
+    @ConditionalOnMissingBean(name = "meshA2ASseHeaderFilter")
+    public FilterRegistrationBean<MeshA2ASseHeaderFilter> meshA2ASseHeaderFilter() {
+        FilterRegistrationBean<MeshA2ASseHeaderFilter> registration = new FilterRegistrationBean<>();
+        registration.setFilter(new MeshA2ASseHeaderFilter());
+        registration.addUrlPatterns("/*");
+        registration.setName("meshA2ASseHeaderFilter");
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 6);
+        return registration;
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(name = "meshA2AAuthFilter")
+    public FilterRegistrationBean<MeshA2AAuthFilter> meshA2AAuthFilter(MeshA2ARegistry registry) {
+        FilterRegistrationBean<MeshA2AAuthFilter> registration = new FilterRegistrationBean<>();
+        registration.setFilter(new MeshA2AAuthFilter(registry));
+        registration.addUrlPatterns("/*");
+        registration.setName("meshA2AAuthFilter");
+        // Run AFTER the tracing filter (which is at HIGHEST_PRECEDENCE).
+        // Lower precedence = higher numeric order in Spring, so
+        // HIGHEST_PRECEDENCE + 5 places auth one step behind tracing —
+        // tracing first, auth second — and even rejected requests are
+        // still traced for debuggability.
+        registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 5);
+        return registration;
+    }
+
     @Bean
     @ConditionalOnMissingBean
     public static MeshToolBeanPostProcessor meshToolBeanPostProcessor(
@@ -159,9 +342,11 @@ public class MeshAutoConfiguration {
             MeshLlmRegistry llmRegistry,
             MeshConfigResolver configResolver,
             ObjectMapper objectMapper,
-            ObjectProvider<MeshRouteRegistry> routeRegistryProvider) {
+            ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
+            ObjectProvider<MeshA2ARegistry> a2aRegistryProvider) {
 
-        AgentSpec spec = buildAgentSpec(properties, toolRegistry, wrapperRegistry, llmRegistry, configResolver, objectMapper, routeRegistryProvider);
+        AgentSpec spec = buildAgentSpec(properties, toolRegistry, wrapperRegistry, llmRegistry,
+            configResolver, objectMapper, routeRegistryProvider, a2aRegistryProvider);
         log.info("Creating MeshRuntime for agent '{}' with {} tools",
             spec.getName(), spec.getTools().size());
 
@@ -209,16 +394,37 @@ public class MeshAutoConfiguration {
             McpHttpClient mcpHttpClient,
             McpMeshToolProxyFactory proxyFactory,
             ToolInvoker toolInvoker,
-            ApplicationContext applicationContext) {
+            ApplicationContext applicationContext,
+            MeshA2APublicUrlCache publicUrlCache) {
 
         return new MeshEventProcessor(runtime, injector, wrapperRegistry,
-            llmRegistry, mcpHttpClient, proxyFactory, toolInvoker, applicationContext);
+            llmRegistry, mcpHttpClient, proxyFactory, toolInvoker, applicationContext,
+            publicUrlCache);
     }
 
+    /**
+     * Health endpoint controller — produces a CGLIB-proxied {@link MeshRuntime}
+     * via {@link org.springframework.context.annotation.Lazy @Lazy} so the
+     * runtime is NOT resolved at controller construction time.
+     *
+     * <p>Without {@code @Lazy} this factory transitively triggered a
+     * bean-creation cycle: {@link #meshA2ARouterFunction} and
+     * {@link MeshRuntime#buildAgentSpec}-style eager-touches both walk
+     * {@code @Component} beans (which match {@code MeshHealthController}
+     * via its {@code @Controller} stereotype). The two touches interleaved
+     * so that {@code meshHealthController} was constructed while
+     * {@code meshRuntime} was already in creation — at which point
+     * {@code getIfAvailable()} could not resolve and Spring rejected the
+     * cycle. Using {@code @Lazy} on the direct {@link MeshRuntime} parameter
+     * defers resolution to the first {@code /health} request: the
+     * controller is fully constructed without touching the real runtime,
+     * the cycle is broken, and the runtime is resolved transparently when
+     * a probe arrives.
+     */
     @Bean
     @ConditionalOnMissingBean
-    public MeshHealthController meshHealthController(ObjectProvider<MeshRuntime> runtimeProvider) {
-        MeshRuntime runtime = runtimeProvider.getIfAvailable();
+    public MeshHealthController meshHealthController(
+            @org.springframework.context.annotation.Lazy MeshRuntime runtime) {
         return new MeshHealthController(runtime);
     }
 
@@ -258,7 +464,8 @@ public class MeshAutoConfiguration {
             MeshLlmRegistry llmRegistry,
             MeshConfigResolver configResolver,
             ObjectMapper objectMapper,
-            ObjectProvider<MeshRouteRegistry> routeRegistryProvider) {
+            ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
+            ObjectProvider<MeshA2ARegistry> a2aRegistryProvider) {
 
         // Find @MeshAgent annotation
         MeshAgent agentAnnotation = findMeshAgentAnnotation();
@@ -372,9 +579,83 @@ public class MeshAutoConfiguration {
         // Add @MeshRoute dependencies as a synthetic tool
         addRouteDependencies(allTools, routeRegistryProvider);
 
+        // Issue #932 Phase 1A: force user beans (containing @MeshA2A) to be
+        // created so MeshA2ABeanPostProcessor populates MeshA2ARegistry
+        // before we read it.
+        applicationContext.getBeansWithAnnotation(
+            org.springframework.stereotype.Component.class);
+        applicationContext.getBeansWithAnnotation(
+            org.springframework.stereotype.Service.class);
+
+        // Add @MeshA2A dependencies as a synthetic tool so the Rust core
+        // resolves them via the registry's dependency mechanism (same
+        // pattern as addRouteDependencies).
+        addA2ADependencies(allTools, a2aRegistryProvider);
+
         spec.setTools(allTools);
 
+        // Flip agent_type to "a2a" and emit a2a_surfaces[] (spec §2 / §8)
+        // when at least one @MeshA2A surface is registered. Tools coexist
+        // with surfaces — A2A producers may also expose @MeshTool
+        // capabilities.
+        applyA2ASurfaces(spec, a2aRegistryProvider, objectMapper);
+
         return spec;
+    }
+
+    /**
+     * Add {@code @MeshA2A} dependencies as a synthetic
+     * {@code __mesh_a2a_deps} tool. Mirrors {@link #addRouteDependencies}
+     * exactly — without this, the registry's dependency resolution
+     * mechanism never learns about the capabilities each surface needs,
+     * so the {@link MeshDependencyInjector}'s proxy stays stuck in the
+     * unavailable state.
+     */
+    private void addA2ADependencies(List<AgentSpec.ToolSpec> tools,
+                                    ObjectProvider<io.mcpmesh.spring.web.MeshA2ARegistry> a2aRegistryProvider) {
+        io.mcpmesh.spring.web.MeshA2ARegistry registry = a2aRegistryProvider.getIfAvailable();
+        if (registry == null || !registry.hasSurfaces()) {
+            return;
+        }
+        List<AgentSpec.DependencySpec> deps = registry.getUniqueDependencySpecs();
+        if (deps.isEmpty()) {
+            return;
+        }
+        AgentSpec.ToolSpec syntheticTool = new AgentSpec.ToolSpec();
+        syntheticTool.setFunctionName("__mesh_a2a_deps");
+        syntheticTool.setCapability("__mesh_a2a_deps");
+        syntheticTool.setDescription("Synthetic tool for @MeshA2A dependency resolution");
+        syntheticTool.setDependencies(deps);
+        tools.add(syntheticTool);
+        log.info("Added {} @MeshA2A dependencies to agent registration", deps.size());
+    }
+
+    /**
+     * Apply {@code agent_type="a2a"} + serialized {@code surfaces} JSON onto
+     * {@code spec} when at least one {@code @MeshA2A} surface is registered
+     * (spec §2 / §8). No-op when the A2A registry is unavailable or empty —
+     * the agent falls back to its existing {@code agent_type} (typically
+     * {@code mcp_agent}) and omits the surfaces field on the wire.
+     */
+    private void applyA2ASurfaces(
+            AgentSpec spec,
+            ObjectProvider<MeshA2ARegistry> a2aRegistryProvider,
+            ObjectMapper objectMapper) {
+        MeshA2ARegistry a2aRegistry = a2aRegistryProvider.getIfAvailable();
+        if (a2aRegistry == null || !a2aRegistry.hasSurfaces()) {
+            return;
+        }
+        List<Map<String, Object>> heartbeatSurfaces = a2aRegistry.buildHeartbeatSurfaces();
+        try {
+            String surfacesJson = objectMapper.writeValueAsString(heartbeatSurfaces);
+            spec.setSurfaces(surfacesJson);
+            spec.setAgentType("a2a");
+            log.info("@MeshA2A: {} surface(s) registered — agent_type=a2a, surfaces={}",
+                heartbeatSurfaces.size(), surfacesJson);
+        } catch (Exception e) {
+            log.warn("Failed to serialize @MeshA2A surfaces — leaving agent_type unchanged: {}",
+                e.getMessage());
+        }
     }
 
     /**

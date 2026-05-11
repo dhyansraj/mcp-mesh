@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  uc28_a2a_producer_java fixture (long-running) — Java A2A producer
+  exposing generate-report via @MeshA2A on top of the existing
+  generate_report task=true capability (examples/jobs/long-task-provider).
+
+  Handler submits work to the mesh job substrate via a hand-wired
+  MeshJobSubmitter (DDDI for @MeshA2A doesn't auto-inject MeshJob —
+  the @MeshTool path does, but the dispatcher here injects McpMeshTool
+  proxies only) and returns the resulting JobProxy to switch the
+  framework into long-running mode (parks the task in the A2A task
+  store, services tasks/get/cancel/sendSubscribe/resubscribe from it).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>producer-report-agent-java</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>A2A Producer Report Agent (uc28 Java, long-running)</name>
+    <description>uc28 Java A2A producer fixture (long-running) — exposes generate-report via @MeshA2A on top of the mesh job substrate.</description>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.0.6</version>
+        <relativePath/>
+    </parent>
+
+    <properties>
+        <java.version>17</java.version>
+        <mcp-mesh.version>1.4.1</mcp-mesh.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.mcp-mesh</groupId>
+            <artifactId>mcp-mesh-spring-boot-starter</artifactId>
+            <version>${mcp-mesh.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <mainClass>com.example.reportproducerjava.ProducerReportAgentApplication</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

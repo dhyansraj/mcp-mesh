@@ -1,0 +1,125 @@
+# tc03_tasks_send_long_running — Java A2A producer long-running (issue #932 Chunk 1C).
+#
+# The Java producer's handler obtains a MeshJobSubmitter (hand-wired in
+# the @MeshA2A path because the dispatcher only auto-injects McpMeshTool
+# proxies, not MeshJob — see fixture ProducerReportAgentApplication
+# Javadoc), submits a job to the Python long-task-provider's
+# generate_report (task=True) capability, and returns the resulting
+# JobProxy. The framework parks it in the A2A task store and responds
+# with state=working immediately.
+#
+# Java port of uc24 tc06.
+
+name: "A2A Producer (Java): tasks/send long-running returns state=working"
+description: "Java @MeshA2A handler returns JobProxy → framework parks task and responds with state=working"
+tags:
+  - a2a
+  - java
+  - smoke
+  - issue-932
+  - producer
+  - long-running
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/producer-report-agent-java /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install producer-report-agent-java deps"
+    handler: maven-install
+    path: /workspace/producer-report-agent-java
+    timeout: 600
+
+  - routine: start_registry_a2a
+
+  - name: "Start long-task-provider (port 9100, provides generate_report task=true)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for provider registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start producer-report-agent-java (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start producer-report-agent-java --env MCP_MESH_HTTP_PORT=9091 -d
+
+  - name: "Wait for Java producer to be healthy + a2a"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        RESP=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null || echo "")
+        STATUS=$(echo "$RESP" | jq -r '.agents[] | select(.name=="report-a2a-agent") | .status' 2>/dev/null || echo "")
+        TYPE=$(echo "$RESP" | jq -r '.agents[] | select(.name=="report-a2a-agent") | .agent_type' 2>/dev/null || echo "")
+        if [ "$STATUS" = "healthy" ] && [ "$TYPE" = "a2a" ]; then
+          echo "Java producer healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Java producer not healthy within 120s (last status='$STATUS' type='$TYPE')"
+      meshctl logs producer-report-agent-java 2>&1 | tail -120 || true
+      exit 1
+    timeout: 150
+
+  - name: "POST tasks/send to Java producer — submits long-running job"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:9091/agents/report \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"tasks/send","params":{"id":"r1","message":{"role":"user","parts":[{"type":"text","text":"{\"user_id\": \"alice\", \"sections\": [\"intro\", \"body\", \"summary\"]}"}]}}}'
+    capture: task_response
+    timeout: 30
+
+  # Poll tasks/get to confirm the parked task is reachable.
+  - name: "Wait briefly so producer can poll the parked job once"
+    handler: wait
+    seconds: 3
+
+  - name: "POST tasks/get to confirm parked task is readable"
+    handler: shell
+    workdir: /workspace
+    command: |
+      curl -s -X POST http://localhost:9091/agents/report \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":2,"method":"tasks/get","params":{"id":"r1"}}'
+    capture: get_response
+    timeout: 30
+
+assertions:
+  # tasks/send returns state=working immediately per spec §4.3 long-running branch.
+  - expr: "${captured.task_response} contains '\"state\":\"working\"'"
+    message: "long-running submit should yield state=working"
+  - expr: "${captured.task_response} contains '\"id\":\"r1\"'"
+    message: "envelope should echo the submitted task id"
+  - expr: "${captured.task_response} contains '\"sessionId\":\"r1\"'"
+    message: "sessionId should default to task id"
+  - expr: "${captured.task_response} contains '\"artifacts\":[]'"
+    message: "no artifact on initial long-running submit"
+
+  # tasks/get on the parked task returns a live status (working OR completed
+  # depending on whether the underlying job has finished its 3 * 2s sections).
+  - expr: "${captured.get_response} contains '\"id\":\"r1\"'"
+    message: "tasks/get should echo the parked task id"
+  - expr: "${captured.get_response} contains '\"status\"'"
+    message: "tasks/get should carry a status block"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
