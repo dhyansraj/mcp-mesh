@@ -390,3 +390,178 @@ describe("addTool — W4 worker-isolation force-disable warning", () => {
     expect(isolationCall).toBeUndefined();
   });
 });
+
+// =============================================================================
+// Regression for #925 — wrappedExecute MUST return a bare string for object
+// results, NOT an envelope with `structuredContent`. FastMCP TS validates
+// the tool-result via ContentResultZodSchema.strict(), which rejects unknown
+// keys at the server-side dispatcher BEFORE the response leaves the process.
+// PR #897 originally added `structuredContent` for Python-FastMCP parity,
+// but it broke uc26 tc02/tc03 (Python caller -> TS sync tool with object
+// return). Field is part of the MCP spec; re-enable when FastMCP TS upstream
+// accepts it.
+// =============================================================================
+
+describe("addTool — #925 wrappedExecute return shape (no structuredContent)", () => {
+  // Mirror FastMCP TS's strict ContentResultZodSchema so the test is
+  // self-contained and breaks loudly if anyone re-introduces
+  // `structuredContent` (or any other unknown key) into the wrapped
+  // execute return value.
+  const StrictContentResultSchema = z
+    .object({
+      content: z.array(
+        z.object({
+          type: z.literal("text"),
+          text: z.string(),
+        }),
+      ),
+      isError: z.boolean().optional(),
+    })
+    .strict();
+
+  // Mimics FastMCP's `tool.execute()` dispatch path: when the wrapped
+  // execute returns a bare string, FastMCP wraps it as
+  // {content: [{type: "text", text: <string>}]} and validates with
+  // ContentResultZodSchema.strict().
+  function fastmcpDispatch(maybeStringResult: unknown): unknown {
+    if (maybeStringResult === undefined || maybeStringResult === null) {
+      return StrictContentResultSchema.parse({ content: [] });
+    } else if (typeof maybeStringResult === "string") {
+      return StrictContentResultSchema.parse({
+        content: [{ text: maybeStringResult, type: "text" }],
+      });
+    } else if (
+      typeof maybeStringResult === "object" &&
+      "type" in (maybeStringResult as Record<string, unknown>)
+    ) {
+      return StrictContentResultSchema.parse({ content: [maybeStringResult] });
+    } else {
+      return StrictContentResultSchema.parse(maybeStringResult);
+    }
+  }
+
+  // Capture the wrapped execute fn that MeshAgent registers with
+  // FastMCP so the test can drive it directly (no worker pool, no HTTP).
+  function captureWrappedExecute() {
+    let wrapped: ((args: unknown) => Promise<unknown>) | null = null;
+    const stub = {
+      addTool: vi.fn((tool: { execute: (a: unknown) => Promise<unknown> }) => {
+        wrapped = tool.execute;
+      }),
+      start: vi.fn(),
+      getApp: vi.fn(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+    const agent = new MeshAgent(stub, {
+      name: "test-agent-925",
+      httpPort: 0,
+    });
+    return { agent, getWrapped: () => wrapped };
+  }
+
+  // Force-disable worker isolation so the test exercises the inline
+  // path. Worker dispatch can't be trivially serialised over the
+  // worker_threads boundary in a unit test harness — the inline branch
+  // is the same return-shape codepath, just without the postMessage hop.
+  const originalIsolation = process.env.MCP_MESH_TOOL_ISOLATION;
+  beforeEach(() => {
+    process.env.MCP_MESH_TOOL_ISOLATION = "false";
+  });
+  afterEach(() => {
+    if (originalIsolation === undefined) {
+      delete process.env.MCP_MESH_TOOL_ISOLATION;
+    } else {
+      process.env.MCP_MESH_TOOL_ISOLATION = originalIsolation;
+    }
+  });
+
+  it("returns a bare JSON-stringified string (NOT an envelope) for object results", async () => {
+    const { agent, getWrapped } = captureWrappedExecute();
+    agent.addTool({
+      name: "object-tool",
+      parameters: z.object({}),
+      execute: async () => ({ foo: "bar", n: 42 }),
+    });
+    const wrapped = getWrapped();
+    expect(wrapped).not.toBeNull();
+    const result = await wrapped!({});
+    expect(typeof result).toBe("string");
+    expect(result).toBe('{"foo":"bar","n":42}');
+    // No structuredContent key — the return value is a primitive string.
+    expect(result).not.toHaveProperty("structuredContent");
+    expect(result).not.toHaveProperty("content");
+  });
+
+  it("returns a bare string unchanged for string results", async () => {
+    const { agent, getWrapped } = captureWrappedExecute();
+    agent.addTool({
+      name: "string-tool",
+      parameters: z.object({}),
+      execute: async () => "hello",
+    });
+    const result = await getWrapped()!({});
+    expect(result).toBe("hello");
+  });
+
+  it("returns an empty string for null/undefined results", async () => {
+    const { agent, getWrapped } = captureWrappedExecute();
+    agent.addTool({
+      name: "null-tool",
+      parameters: z.object({}),
+      execute: async () => null,
+    });
+    expect(await getWrapped()!({})).toBe("");
+
+    const { agent: agent2, getWrapped: getWrapped2 } = captureWrappedExecute();
+    agent2.addTool({
+      name: "undef-tool",
+      parameters: z.object({}),
+      execute: async () => undefined,
+    });
+    expect(await getWrapped2()!({})).toBe("");
+  });
+
+  it("FastMCP-style dispatch validates without ContentResultZodSchema error (object return)", async () => {
+    const { agent, getWrapped } = captureWrappedExecute();
+    agent.addTool({
+      name: "object-tool-strict",
+      parameters: z.object({}),
+      execute: async () => ({ foo: "bar" }),
+    });
+    const result = await getWrapped()!({});
+    // Simulating FastMCP's strict-schema validation must not throw.
+    let dispatched: unknown;
+    expect(() => {
+      dispatched = fastmcpDispatch(result);
+    }).not.toThrow();
+    expect(dispatched).toEqual({
+      content: [{ type: "text", text: '{"foo":"bar"}' }],
+    });
+  });
+
+  it("FastMCP-style dispatch validates without error for arrays and numbers", async () => {
+    const { agent, getWrapped } = captureWrappedExecute();
+    agent.addTool({
+      name: "array-tool",
+      parameters: z.object({}),
+      execute: async () => [1, 2, 3],
+    });
+    const arrResult = await getWrapped()!({});
+    expect(() => fastmcpDispatch(arrResult)).not.toThrow();
+    expect(fastmcpDispatch(arrResult)).toEqual({
+      content: [{ type: "text", text: "[1,2,3]" }],
+    });
+
+    const { agent: agent2, getWrapped: getWrapped2 } = captureWrappedExecute();
+    agent2.addTool({
+      name: "number-tool",
+      parameters: z.object({}),
+      execute: async () => 42,
+    });
+    const numResult = await getWrapped2()!({});
+    expect(() => fastmcpDispatch(numResult)).not.toThrow();
+    expect(fastmcpDispatch(numResult)).toEqual({
+      content: [{ type: "text", text: "42" }],
+    });
+  });
+});

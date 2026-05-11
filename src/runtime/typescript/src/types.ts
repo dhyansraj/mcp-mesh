@@ -275,6 +275,40 @@ export interface DependencyKwargs {
 }
 
 /**
+ * Per-tool A2A bridge configuration (issue #917).
+ *
+ * When set on a `MeshToolDef`, the framework constructs a per-config
+ * `A2AClient` and injects it into the user's `execute` function as the
+ * LAST positional argument (after the standard dependency proxies and
+ * — for `task: true` tools — after the `JobController`). Multiple
+ * tools sharing the same `(url, skillId, auth, timeoutMs)` tuple share
+ * one cached client so the underlying undici connection pool is
+ * amortised.
+ *
+ * The presence of `a2aConfig` ALSO opts the tool into auto-tag
+ * injection: at heartbeat-build time the framework appends the
+ * surrounding agent name to the tool's tags array so downstream
+ * resolvers can pin a specific bridge via the tag selector. Mirrors
+ * Python's `@mesh.a2a_consumer` and Java's `@A2AConsumer`.
+ */
+export interface MeshA2AConfig {
+  /** Required: A2A endpoint URL. Trailing slashes are stripped. */
+  url: string;
+  /** Optional: skill ID to invoke. Defaults to the tool's `capability`. */
+  skillId?: string;
+  /** Optional: bearer credential (instance or `{ tokenEnv }` / `{ token }` config). */
+  auth?:
+    | { token?: string; tokenEnv?: string }
+    | { authorizationHeader: () => string };
+  /** Optional: per-call deadline (ms). Default 30_000. */
+  timeoutMs?: number;
+  /** Optional: initial backoff between `tasks/get` polls (ms). Default 500. */
+  pollIntervalMs?: number;
+  /** Optional: cap on the backoff between polls (ms). Default 2_000. */
+  pollIntervalMaxMs?: number;
+}
+
+/**
  * Tool definition for MeshAgent.
  */
 export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
@@ -449,6 +483,13 @@ export interface MeshToolDef<T extends z.ZodType = z.ZodType> {
    */
   dependencyKwargs?: DependencyKwargs[];
   /**
+   * Issue #917: A2A bridge configuration. When set, the framework
+   * constructs a cached `A2AClient` and injects it at the trailing
+   * positional slot of `execute` (after deps + JobController). Also
+   * opts the tool into consumer-name auto-tag injection.
+   */
+  a2aConfig?: MeshA2AConfig;
+  /**
    * Tool implementation.
    *
    * Returns any serializable value - the SDK auto-converts to string:
@@ -596,6 +637,14 @@ export interface ToolMeta {
    * whose slot should hold a MeshJobSubmitter (instead of a regular
    * McpMeshTool proxy). */
   meshJobDepIndex?: number;
+  /** Issue #917: A2A bridge marker — when true, the heartbeat-build
+   * pass appends the surrounding agent name to the tool's tags before
+   * the registry sees them. */
+  a2aConsumer?: boolean;
+  /** Issue #917: agent name captured at addTool time so the heartbeat
+   * pass injects the correct value (in case the agent is renamed via
+   * env between addTool and heartbeat). */
+  a2aAgentName?: string;
 }
 
 // ============================================================================

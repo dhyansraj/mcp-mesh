@@ -305,6 +305,30 @@ export { registerCancelRoute } from "./jobs-cancel-route.js";
 // from a known job_id).
 export { JobController, JobProxy } from "@mcpmesh/core";
 
+// A2A consumer surface (issue #917) — sync send / non-blocking submit /
+// SSE subscribe + bridge. The framework constructs A2AClient instances
+// from `addTool({ a2aConfig: {...} })` and injects them into execute;
+// users only reach for these classes directly in advanced scenarios.
+export {
+  A2AClient,
+  A2AJob,
+  A2AStream,
+  A2ABearer,
+  A2AError,
+  A2ATimeoutError,
+  A2AAuthError,
+  A2AJobError,
+  A2AJobFailedError,
+  A2AJobCanceledError,
+  type A2AClientConfig,
+  type A2ABearerConfig,
+  type A2AMessage,
+  type A2AResponse,
+  type A2ATaskEnvelope,
+  type A2AEvent,
+  type A2AEventKind,
+} from "./a2a/index.js";
+
 // Types
 export type {
   AgentConfig,
@@ -352,6 +376,8 @@ export type {
   LlmProviderConfig,
   // Media parameter types
   MediaParamMeta,
+  // A2A consumer config (issue #917)
+  MeshA2AConfig,
 } from "./types.js";
 
 // Default export for convenience

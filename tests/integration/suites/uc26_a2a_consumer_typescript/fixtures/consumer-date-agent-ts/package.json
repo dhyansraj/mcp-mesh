@@ -1,0 +1,20 @@
+{
+  "name": "consumer-date-agent-ts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "uc26 TypeScript A2A consumer fixture — bridges date_a2a_agent.py get-date as the current-date capability.",
+  "scripts": {
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "^1.4.1",
+    "fastmcp": "^3.34.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}
