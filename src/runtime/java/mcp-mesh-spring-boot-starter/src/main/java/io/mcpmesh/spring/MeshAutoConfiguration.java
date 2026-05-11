@@ -264,10 +264,11 @@ public class MeshAutoConfiguration {
         registration.setFilter(new MeshA2AAuthFilter(registry));
         registration.addUrlPatterns("/*");
         registration.setName("meshA2AAuthFilter");
-        // Run BEFORE the tracing filter (which is at HIGHEST_PRECEDENCE);
-        // we still want rejected requests to skip tracing entirely. Using
-        // HIGHEST_PRECEDENCE + 5 keeps tracing first and auth second, so
-        // even rejected requests are traced for debuggability.
+        // Run AFTER the tracing filter (which is at HIGHEST_PRECEDENCE).
+        // Lower precedence = higher numeric order in Spring, so
+        // HIGHEST_PRECEDENCE + 5 places auth one step behind tracing —
+        // tracing first, auth second — and even rejected requests are
+        // still traced for debuggability.
         registration.setOrder(Ordered.HIGHEST_PRECEDENCE + 5);
         return registration;
     }
@@ -393,10 +394,12 @@ public class MeshAutoConfiguration {
             McpHttpClient mcpHttpClient,
             McpMeshToolProxyFactory proxyFactory,
             ToolInvoker toolInvoker,
-            ApplicationContext applicationContext) {
+            ApplicationContext applicationContext,
+            MeshA2APublicUrlCache publicUrlCache) {
 
         return new MeshEventProcessor(runtime, injector, wrapperRegistry,
-            llmRegistry, mcpHttpClient, proxyFactory, toolInvoker, applicationContext);
+            llmRegistry, mcpHttpClient, proxyFactory, toolInvoker, applicationContext,
+            publicUrlCache);
     }
 
     /**

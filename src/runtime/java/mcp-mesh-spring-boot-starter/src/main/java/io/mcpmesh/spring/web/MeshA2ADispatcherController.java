@@ -148,7 +148,7 @@ public class MeshA2ADispatcherController {
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(errorJson);
         }
-        String method = peekJsonRpcMethod(body);
+        String method = dispatcher.peekJsonRpcMethod(body);
         MeshA2ADispatcher.SseStreamPlan plan = switch (method == null ? "" : method) {
             case "tasks/sendSubscribe" -> dispatcher.buildSendSubscribeStream(surface.path(), body);
             case "tasks/resubscribe"   -> dispatcher.buildResubscribeStream(body);
@@ -220,25 +220,6 @@ public class MeshA2ADispatcherController {
         return "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":"
             + MeshA2ADispatcher.JSONRPC_PARSE_ERROR
             + ",\"message\":\"Parse error: failed to read request body\"},\"id\":null}";
-    }
-
-    /**
-     * Peek at the JSON-RPC body's {@code method} field without committing
-     * to the full parse — the dispatcher re-parses for full validation.
-     * Returns {@code null} on parse failure; the SSE branch then falls
-     * through to JSON-RPC dispatch, which produces the canonical parse
-     * error response.
-     */
-    private String peekJsonRpcMethod(String body) {
-        if (body == null || body.isEmpty()) return null;
-        try {
-            tools.jackson.databind.JsonNode node =
-                new tools.jackson.databind.ObjectMapper().readTree(body);
-            tools.jackson.databind.JsonNode m = node.get("method");
-            return m != null && m.isTextual() ? m.asText() : null;
-        } catch (Exception e) {
-            return null;
-        }
     }
 
     private ServerResponse handleGetCard(MeshA2ARegistry.SurfaceMetadata surface) {

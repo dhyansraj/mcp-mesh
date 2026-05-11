@@ -859,6 +859,27 @@ public class MeshA2ADispatcher {
         return toJson(envelope);
     }
 
+    /**
+     * Peek at the {@code method} field of a JSON-RPC request body without
+     * committing to a full parse. Returns {@code null} when the body is
+     * empty, unparseable, or has no textual {@code method} field — callers
+     * fall through to the JSON-RPC dispatcher which produces the canonical
+     * parse-error response.
+     *
+     * <p>Reuses the dispatcher's injected {@link ObjectMapper} so the SSE
+     * controller does not have to construct a fresh mapper on every POST.
+     */
+    public String peekJsonRpcMethod(String body) {
+        if (body == null || body.isEmpty()) return null;
+        try {
+            tools.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            tools.jackson.databind.JsonNode m = node.get("method");
+            return m != null && m.isTextual() ? m.asText() : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────
     // Task store interaction
     // ─────────────────────────────────────────────────────────────────

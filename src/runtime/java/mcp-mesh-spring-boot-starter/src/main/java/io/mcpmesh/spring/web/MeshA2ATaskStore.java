@@ -115,22 +115,23 @@ public class MeshA2ATaskStore {
      * @return the new terminal record, or {@code null} when the task is unknown
      */
     public TaskRecord markTerminal(String taskId, Map<String, Object> terminalEnvelope) {
-        TaskRecord existing = store.get(taskId);
-        if (existing == null) {
-            return null;
-        }
-        if (existing.terminalAt() != null) {
-            return existing;
-        }
-        TaskRecord updated = new TaskRecord(
-            existing.sessionId(),
-            existing.requestMessage(),
-            terminalEnvelope,
-            System.currentTimeMillis(),
-            existing.jobProxy()
-        );
-        store.put(taskId, updated);
-        return updated;
+        // Atomically flip to terminal so concurrent callers (e.g. SSE
+        // stream completion + tasks/cancel arriving simultaneously) cannot
+        // race past the null/terminal-at check and clobber each other's
+        // terminal envelope. First-write-wins is preserved: a record that
+        // already has terminalAt set is returned unchanged.
+        return store.computeIfPresent(taskId, (id, existing) -> {
+            if (existing.terminalAt() != null) {
+                return existing;
+            }
+            return new TaskRecord(
+                existing.sessionId(),
+                existing.requestMessage(),
+                terminalEnvelope,
+                System.currentTimeMillis(),
+                existing.jobProxy()
+            );
+        });
     }
 
     /**

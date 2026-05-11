@@ -46,6 +46,7 @@ public class MeshEventProcessor implements SmartLifecycle {
     private final McpMeshToolProxyFactory proxyFactory;
     private final ToolInvoker toolInvoker;
     private final ApplicationContext applicationContext; // For MediaStore bean lookup
+    private final MeshA2APublicUrlCache publicUrlCache;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ExecutorService executor;
 
@@ -72,7 +73,8 @@ public class MeshEventProcessor implements SmartLifecycle {
             McpHttpClient mcpClient,
             McpMeshToolProxyFactory proxyFactory,
             ToolInvoker toolInvoker,
-            ApplicationContext applicationContext) {
+            ApplicationContext applicationContext,
+            MeshA2APublicUrlCache publicUrlCache) {
         this.runtime = runtime;
         this.injector = injector;
         this.wrapperRegistry = wrapperRegistry;
@@ -81,6 +83,7 @@ public class MeshEventProcessor implements SmartLifecycle {
         this.proxyFactory = proxyFactory;
         this.toolInvoker = toolInvoker;
         this.applicationContext = applicationContext;
+        this.publicUrlCache = publicUrlCache;
         this.executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "mesh-event-processor");
             t.setDaemon(true);
@@ -556,11 +559,9 @@ public class MeshEventProcessor implements SmartLifecycle {
      *   <li>{@code endpoint}  → the externally-reachable public URL</li>
      * </ul>
      *
-     * <p>The cache bean is optional — looked up lazily from the
-     * application context so the {@link MeshEventProcessor} dependency
-     * graph doesn't force loading the cache (which lives in the
-     * {@code spring.web} package and is only relevant when the producer
-     * has registered at least one A2A surface).
+     * <p>The cache bean is registered unconditionally by
+     * {@code MeshAutoConfiguration} and constructor-injected here, so the
+     * handler can write to it directly without a defensive lookup.
      *
      * <p>The Rust core does not currently emit this event; the handler is
      * wired so a future registry-side change lands without an SDK ship.
@@ -573,15 +574,7 @@ public class MeshEventProcessor implements SmartLifecycle {
             log.debug("Surface update event missing path: {}", event);
             return;
         }
-        MeshA2APublicUrlCache cache;
-        try {
-            cache = applicationContext.getBean(MeshA2APublicUrlCache.class);
-        } catch (BeansException e) {
-            // No A2A surfaces registered in this process; nothing to cache.
-            log.debug("Surface update event received but no MeshA2APublicUrlCache bean; ignoring");
-            return;
-        }
-        cache.put(path, skillId, publicUrl);
+        publicUrlCache.put(path, skillId, publicUrl);
         log.info("Surface updated: path={} skill_id={} public_url={}",
             path, skillId, publicUrl);
     }

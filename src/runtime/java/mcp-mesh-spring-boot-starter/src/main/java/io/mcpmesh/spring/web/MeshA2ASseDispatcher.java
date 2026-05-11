@@ -61,6 +61,16 @@ public class MeshA2ASseDispatcher {
     public static final long KEEPALIVE_MILLIS = 15_000L;
     /** Maximum total stream duration as a defensive cap (1 hour). */
     public static final long MAX_STREAM_MILLIS = 60L * 60_000L;
+    /**
+     * Consecutive {@code proxy.status()} failures to tolerate during the SSE
+     * poll loop before giving up on the stream. Spec §4.4 conformance:
+     * transient unreachability is NOT authoritative evidence the job is dead,
+     * so we keep emitting {@code state=working} status frames and continue
+     * polling. Once this counter is reached we close the SSE stream without
+     * marking the task store record terminal — subsequent {@code tasks/get}
+     * resumes polling normally.
+     */
+    public static final int MAX_CONSECUTIVE_STATUS_FAILURES = 5;
 
     private final MeshA2ADispatcher dispatcher;
 
@@ -165,35 +175,59 @@ public class MeshA2ASseDispatcher {
         Object lastProgress = null;
         Object lastMessage = null;
         long lastEventTime = System.currentTimeMillis();
+        int consecutiveStatusFailures = 0;
 
         while (true) {
-            // Defensive cap so a stuck job can't pin a worker thread forever.
+            // Stream-level cap — preserves task state in the store so callers
+            // can resume via tasks/resubscribe or check status via tasks/get.
+            // The cap protects the worker thread from a stuck job; it is NOT
+            // a job-death signal, so we emit a non-terminal status frame and
+            // do NOT call markTaskTerminal (spec §4.4: producer-side resource
+            // limits must not poison the task store).
             if (System.currentTimeMillis() - started > MAX_STREAM_MILLIS) {
-                log.warn("SSE long-running stream for task {} exceeded {}ms cap; closing",
+                log.warn("SSE long-running stream for task {} exceeded {}ms cap; closing "
+                    + "(task state preserved — clients may resubscribe)",
                     taskId, MAX_STREAM_MILLIS);
                 writeFrame(builder, dispatcher.buildStatusUpdateFrame(
-                    reqId, taskId, MeshA2AStateTranslator.A2A_FAILED,
-                    "stream timeout: producer-side cap exceeded", true, null));
+                    reqId, taskId, MeshA2AStateTranslator.A2A_WORKING,
+                    "stream closed: producer-side cap exceeded "
+                        + "(task still running; reconnect via tasks/resubscribe)",
+                    true, null));
                 return;
             }
 
             Map<String, Object> status;
             try {
                 status = proxy.status();
+                consecutiveStatusFailures = 0;
             } catch (Exception e) {
-                log.warn("A2A SSE poll: proxy.status() raised for task {}: {}", taskId, e.getMessage());
-                writeFrame(builder, dispatcher.buildStatusUpdateFrame(
-                    reqId, taskId, MeshA2AStateTranslator.A2A_FAILED,
-                    "status unavailable: " + e.getMessage(), true, null));
-                // Mark the parked record terminal so subsequent tasks/get
-                // doesn't re-poll a broken proxy.
-                Map<String, Object> failedEnvelope = dispatcher.buildTaskFromStatus(
-                    taskId, taskId, null,
-                    MeshA2AStateTranslator.A2A_FAILED,
-                    Map.of("error", "status unavailable: " + e.getMessage()),
-                    null, false);
-                dispatcher.markTaskTerminal(taskId, failedEnvelope);
-                return;
+                consecutiveStatusFailures++;
+                log.warn("A2A SSE poll: proxy.status() raised for task {} (failure {}/{}): {}",
+                    taskId, consecutiveStatusFailures, MAX_CONSECUTIVE_STATUS_FAILURES, e.getMessage());
+                // Spec §4.4 conformance: transient unreachability is NOT
+                // authoritative evidence the job is dead. Emit a state=working
+                // status frame carrying the error in status.message and
+                // CONTINUE polling. Do NOT mark the task store terminal —
+                // subsequent tasks/get must keep re-polling the proxy.
+                if (!writeFrame(builder, dispatcher.buildStatusUpdateFrame(
+                        reqId, taskId, MeshA2AStateTranslator.A2A_WORKING,
+                        "status unavailable: " + e.getMessage(), false, null))) {
+                    return; // Client gone.
+                }
+                if (consecutiveStatusFailures >= MAX_CONSECUTIVE_STATUS_FAILURES) {
+                    log.warn("A2A SSE poll: giving up on task {} after {} consecutive status() "
+                        + "failures (task state preserved — clients may retry via tasks/get)",
+                        taskId, consecutiveStatusFailures);
+                    return;
+                }
+                try {
+                    Thread.sleep(POLL_INTERVAL_MILLIS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    log.debug("SSE long-running stream for task {} interrupted; exiting", taskId);
+                    return;
+                }
+                continue;
             }
             if (status == null) {
                 status = new LinkedHashMap<>();

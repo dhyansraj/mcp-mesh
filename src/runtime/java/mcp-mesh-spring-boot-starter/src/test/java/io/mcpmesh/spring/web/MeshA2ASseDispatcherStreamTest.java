@@ -345,6 +345,153 @@ class MeshA2ASseDispatcherStreamTest {
         verify(proxy, never()).cancel(any()); // critical: do NOT cancel on disconnect.
     }
 
+    /**
+     * Spec §4.4 conformance regression: transient {@code proxy.status()}
+     * failures during the SSE poll loop MUST NOT be treated as authoritative
+     * evidence the job is dead.
+     *
+     * <p>Before the fix, a single status() exception emitted a terminal
+     * {@code state=failed} frame AND called {@code dispatcher.markTaskTerminal},
+     * permanently poisoning the task store so subsequent {@code tasks/get}
+     * returned the cached failed envelope forever — even though the job
+     * may still have been running.
+     *
+     * <p>After the fix, transient failures surface as non-terminal
+     * {@code state=working} status frames carrying the error text in
+     * {@code status.message}, polling resumes when the proxy comes back, and
+     * {@code markTaskTerminal} is NEVER called for a transient failure.
+     */
+    @Test
+    @DisplayName("Transient proxy.status() failure → working frames, no terminal, polling resumes")
+    void longRunning_transientStatusFailure_doesNotPoisonTaskStore() throws Exception {
+        // Pre-park the task in the store with a non-terminal record so a
+        // hypothetical markTaskTerminal call would actually flip state we
+        // can observe (markTerminal is a no-op for unknown records).
+        String taskId = "t-transient";
+        taskStore.put(taskId, new MeshA2ATaskStore.TaskRecord(
+            taskId, null, null, null, null));
+
+        JobProxy proxy = mock(JobProxy.class);
+        AtomicInteger calls = new AtomicInteger(0);
+        // First 3 status() calls throw, 4th returns terminal completed so
+        // the loop exits cleanly without hitting the consecutive-failure cap.
+        when(proxy.status()).thenAnswer(inv -> {
+            int n = calls.getAndIncrement();
+            if (n < 3) {
+                throw new RuntimeException("transient registry blip #" + n);
+            }
+            return Map.of("status", "completed");
+        });
+        when(proxy.await(1.0)).thenReturn("eventual result");
+
+        CapturingBuilder cap = new CapturingBuilder();
+        invokeRunLongRunningStream(sseDispatcher, cap.mockBuilder, 1, taskId, proxy);
+
+        // Verify NO failed-terminal frame was emitted during the transient
+        // window. The only legitimate terminal frame in this test is the
+        // completed one at the end.
+        for (int i = 0; i < cap.dataFrames.size(); i++) {
+            JsonNode env = cap.parsed(i, mapper);
+            JsonNode result = env.get("result");
+            if (result == null) continue;
+            JsonNode statusNode = result.get("status");
+            JsonNode finalNode = result.get("final");
+            if (statusNode == null || finalNode == null) continue;
+            String state = statusNode.get("state").asText();
+            boolean isFinal = finalNode.asBoolean();
+            assertFalse(isFinal && "failed".equals(state),
+                "Transient status() failure MUST NOT emit a terminal state=failed frame; "
+                    + "frame[" + i + "]=" + cap.dataFrames.get(i));
+        }
+
+        // Verify at least one frame surfaced the transient error text inside
+        // a state=working (non-terminal) status.message — spec §4.4 contract.
+        boolean sawWorkingErrorFrame = false;
+        for (int i = 0; i < cap.dataFrames.size(); i++) {
+            JsonNode env = cap.parsed(i, mapper);
+            JsonNode result = env.get("result");
+            if (result == null) continue;
+            JsonNode statusNode = result.get("status");
+            if (statusNode == null) continue;
+            if (!"working".equals(statusNode.get("state").asText())) continue;
+            JsonNode message = statusNode.get("message");
+            if (message == null) continue;
+            String text = message.get("parts").get(0).get("text").asText();
+            if (text != null && text.contains("status unavailable")) {
+                sawWorkingErrorFrame = true;
+                assertTrue(env.get("result").get("final").isBoolean());
+                assertFalse(env.get("result").get("final").asBoolean(),
+                    "Transient-failure error frame MUST be non-terminal (final=false)");
+                break;
+            }
+        }
+        assertTrue(sawWorkingErrorFrame,
+            "Expected a state=working frame surfacing the transient error in status.message");
+
+        // Verify polling resumed and the proxy was queried at least 4 times
+        // (3 failures + 1 successful terminal). This proves the dispatcher
+        // did NOT bail after the first failure.
+        assertTrue(calls.get() >= 4,
+            "Polling MUST resume after transient failures; proxy.status() called "
+                + calls.get() + " time(s) — expected >= 4");
+
+        // Verify the task store record was NOT poisoned during the transient
+        // window. After the final completed status, the record should be
+        // marked terminal with the COMPLETED envelope, not a failed one.
+        MeshA2ATaskStore.TaskRecord finalRecord = taskStore.get(taskId);
+        assertNotNull(finalRecord, "Task record must still exist after the stream");
+        assertNotNull(finalRecord.terminalEnvelope(),
+            "Terminal envelope expected after the eventual completed status");
+        JsonNode finalEnv = mapper.valueToTree(finalRecord.terminalEnvelope());
+        assertEquals("completed", finalEnv.get("status").get("state").asText(),
+            "Stored terminal envelope MUST reflect the eventual completed state, "
+                + "NOT a poisoned failed envelope from the transient failure");
+    }
+
+    /**
+     * Defensive guard: when {@code proxy.status()} keeps failing past the
+     * {@link MeshA2ASseDispatcher#MAX_CONSECUTIVE_STATUS_FAILURES} threshold,
+     * the dispatcher gives up on the SSE stream but STILL does not poison
+     * the task store — clients can retry via {@code tasks/get}.
+     */
+    @Test
+    @DisplayName("Persistent proxy.status() failures → stream closes, task store NOT marked terminal")
+    void longRunning_persistentStatusFailure_preservesTaskStore() throws Exception {
+        String taskId = "t-persist";
+        taskStore.put(taskId, new MeshA2ATaskStore.TaskRecord(
+            taskId, null, null, null, null));
+
+        JobProxy proxy = mock(JobProxy.class);
+        when(proxy.status()).thenThrow(new RuntimeException("registry down"));
+
+        CapturingBuilder cap = new CapturingBuilder();
+        invokeRunLongRunningStream(sseDispatcher, cap.mockBuilder, 1, taskId, proxy);
+
+        // No failed-terminal frame should appear: even when we give up on
+        // the stream after MAX_CONSECUTIVE_STATUS_FAILURES, we do not claim
+        // the job is dead.
+        for (int i = 0; i < cap.dataFrames.size(); i++) {
+            JsonNode env = cap.parsed(i, mapper);
+            JsonNode result = env.get("result");
+            if (result == null) continue;
+            JsonNode finalNode = result.get("final");
+            JsonNode statusNode = result.get("status");
+            if (statusNode == null || finalNode == null) continue;
+            assertFalse(finalNode.asBoolean() && "failed".equals(statusNode.get("state").asText()),
+                "Persistent failure MUST NOT emit a terminal state=failed frame");
+        }
+
+        // Task store record MUST stay non-terminal so subsequent tasks/get
+        // can resume polling normally.
+        MeshA2ATaskStore.TaskRecord record = taskStore.get(taskId);
+        assertNotNull(record);
+        assertNull(record.terminalAt(),
+            "Persistent status() failures MUST NOT mark the task store terminal "
+                + "(spec §4.4: transient unreachability is not job death)");
+        assertNull(record.terminalEnvelope(),
+            "Persistent status() failures MUST leave terminalEnvelope null");
+    }
+
     /** ERROR plan — emits a JSON-RPC error body, NOT SSE framing.
      *  Asserted via the public {@code render(plan)} which short-circuits
      *  to {@code ServerResponse.status(...).body(...)} for ERROR kind. */
