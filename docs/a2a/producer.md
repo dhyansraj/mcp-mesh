@@ -205,9 +205,7 @@ When the underlying work is long-running (`task=True` in the dependency graph), 
     import io.mcpmesh.JobProxy;
     import io.mcpmesh.MeshAgent;
     import io.mcpmesh.MeshJobSubmitter;
-    import io.mcpmesh.spring.MeshRuntime;
     import io.mcpmesh.spring.web.MeshA2A;
-    import org.springframework.beans.factory.annotation.Autowired;
     import org.springframework.boot.SpringApplication;
     import org.springframework.boot.autoconfigure.SpringBootApplication;
     import org.springframework.stereotype.Component;
@@ -227,9 +225,6 @@ When the underlying work is long-running (`task=True` in the dependency graph), 
         @Component
         static class ReportSkill {
 
-            @Autowired
-            private MeshRuntime meshRuntime;
-
             @MeshA2A(
                 path = "/agents/report",
                 skillId = "generate-report",
@@ -237,15 +232,22 @@ When the underlying work is long-running (`task=True` in the dependency graph), 
                 description = "Generate a long-form report via A2A (task=True streaming)",
                 tags = {"reports", "long-running"}
             )
-            public Object generateReport(Map<String, Object> message) throws Exception {
-                // @MeshA2A injects McpMeshTool proxies at parameter slots but does
-                // not (today) auto-wire MeshJobSubmitter — construct it inline from
-                // the autowired MeshRuntime. Cheap to construct, stateless after.
-                String registryUrl = meshRuntime.getAgentSpec().getRegistryUrl();
-                String agentId = meshRuntime.getAgentSpec().getAgentId();
-                MeshJobSubmitter submitter =
-                    new MeshJobSubmitter("generate_report", agentId, registryUrl);
-
+            public Object generateReport(
+                    Map<String, Object> message,
+                    MeshJobSubmitter jobSubmitter) throws Exception {
+                // Issue #936: the framework auto-injects a MeshJobSubmitter
+                // bound to the task capability — defaults to the first
+                // declared @MeshDependency or, when none is declared, to the
+                // skillId with '-' replaced by '_' (so "generate-report"
+                // resolves to the generate_report task capability).
+                if (jobSubmitter == null) {
+                    // MeshRuntime hasn't finished initialising yet — surface
+                    // a clear retryable error rather than NPE on .submit().
+                    throw new IllegalStateException(
+                        "MeshJobSubmitter injection unavailable — runtime "
+                            + "not yet started. This is a transient startup "
+                            + "condition; retry the request.");
+                }
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("user_id", "alice");
                 payload.put("sections", java.util.List.of("intro", "body"));
@@ -253,7 +255,7 @@ When the underlying work is long-running (`task=True` in the dependency graph), 
                 // long job itself. 30s is comfortable headroom; anything
                 // longer is a registry/provider problem and should surface
                 // as a failed A2A task rather than an indefinite hang.
-                JobProxy proxy = submitter.submit(payload).get(30, TimeUnit.SECONDS);
+                JobProxy proxy = jobSubmitter.submit(payload).get(30, TimeUnit.SECONDS);
                 return proxy; // long-running mode trigger
             }
         }
@@ -264,7 +266,7 @@ When the underlying work is long-running (`task=True` in the dependency graph), 
 
     ```typescript
     import express from "express";
-    import { getApiRuntime, mesh, MeshJobSubmitter } from "@mcpmesh/sdk";
+    import { mesh } from "@mcpmesh/sdk";
 
     process.env.MCP_MESH_HTTP_PORT = process.env.MCP_MESH_HTTP_PORT ?? "9091";
     process.env.MCP_MESH_AGENT_NAME = process.env.MCP_MESH_AGENT_NAME ?? "report-a2a-agent";
@@ -281,27 +283,20 @@ When the underlying work is long-running (`task=True` in the dependency graph), 
         description: "Generate a long-form report via A2A (task=True streaming)",
         tags: ["reports", "long-running"],
       },
-      async (_deps, payload) => {
-        // mesh.a2a.mount injects McpMeshTool proxies into A2A handlers but
-        // does NOT (today) auto-wire MeshJobSubmitter for task=true deps —
-        // construct it inline from the api-runtime singleton + the registry
-        // URL the SDK already resolved. Cheap, stateless after construction.
-        const agentId = getApiRuntime().getServiceId();
-        if (!agentId) {
-          // Runtime not yet fully initialised — serviceId is empty until
-          // the api-runtime singleton finishes start(). Surface a clear
-          // error rather than constructing a submitter with a blank agentId.
-          throw new Error("api-runtime not ready: serviceId is empty");
+      async (_deps, payload, jobSubmitter) => {
+        // Issue #936: the framework auto-injects a MeshJobSubmitter as the
+        // third positional handler arg. The capability defaults to the
+        // first declared dependency or, when none is declared, to the
+        // skillId with '-' replaced by '_' (so "generate-report" resolves
+        // to the generate_report task capability).
+        if (!jobSubmitter) {
+          // api-runtime not yet started — submitter is unavailable until
+          // the very first heartbeat. Surface a clear error so the client
+          // knows to retry rather than hang.
+          throw new Error("MeshJobSubmitter not yet available — retry shortly.");
         }
-        const registryUrl =
-          process.env.MCP_MESH_REGISTRY_URL ?? "http://localhost:8000";
-        const submitter = new MeshJobSubmitter(
-          "generate_report",
-          agentId,
-          registryUrl,
-        );
 
-        const proxy = await submitter.submit({
+        const proxy = await jobSubmitter.submit({
           user_id: "alice",
           sections: ["intro", "body"],
         });

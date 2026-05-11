@@ -1,7 +1,9 @@
 package io.mcpmesh.spring.web;
 
 import io.mcpmesh.JobProxy;
+import io.mcpmesh.MeshJobSubmitter;
 import io.mcpmesh.spring.MeshDependencyInjector;
+import io.mcpmesh.spring.MeshRuntime;
 import io.mcpmesh.types.McpMeshTool;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -21,7 +23,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * JSON-RPC 2.0 dispatcher for {@code @MeshA2A} producer surfaces (spec §4).
@@ -73,16 +77,64 @@ public class MeshA2ADispatcher {
     private final MeshA2ATaskStore taskStore;
     private final ObjectMapper objectMapper;
     private final ObjectProvider<MeshDependencyInjector> injectorProvider;
+    private final ObjectProvider<MeshRuntime> runtimeProvider;
+
+    /**
+     * Per-surface cache of REAL {@link MeshJobSubmitter} instances. Issue
+     * #936: {@code @MeshA2A} handlers may declare a {@link MeshJobSubmitter}
+     * parameter that the framework auto-injects at call time. Submitters
+     * are stateless after construction (capability + agent id + registry
+     * URL), so one cached instance per surface is correct — we look up
+     * by {@code handlerMethodId} since the same surface can be re-resolved
+     * across requests but always points at the same skill.
+     *
+     * <p>This map ONLY contains successfully constructed submitters; the
+     * sibling {@link #unbuildableSurfaces} set tracks surfaces we have
+     * determined can never produce a submitter. Splitting the two states
+     * into separate collections (rather than using a sentinel value)
+     * eliminates the risk of accidentally exposing a fake submitter
+     * identity through any future getter / debug API and keeps class-load
+     * independent of {@link MeshJobSubmitter}'s constructor health.
+     */
+    private final Map<String, MeshJobSubmitter> jobSubmitterCache = new ConcurrentHashMap<>();
+
+    /**
+     * Set of surface handler IDs we have determined can NEVER produce a
+     * usable {@link MeshJobSubmitter} — either because no capability can
+     * be derived or because the dispatcher was constructed without a
+     * runtime provider. This is the "permanent unbuildable" memo; transient
+     * conditions (runtime not yet available, agent id empty, constructor
+     * threw) are NOT recorded here so they can be retried on the next call.
+     */
+    private final Set<String> unbuildableSurfaces = ConcurrentHashMap.newKeySet();
 
     public MeshA2ADispatcher(
             MeshA2ARegistry registry,
             MeshA2ATaskStore taskStore,
             ObjectMapper objectMapper,
             ObjectProvider<MeshDependencyInjector> injectorProvider) {
+        this(registry, taskStore, objectMapper, injectorProvider, null);
+    }
+
+    /**
+     * Full constructor — accepts an {@link MeshRuntime} provider so the
+     * dispatcher can auto-inject {@link MeshJobSubmitter} parameters
+     * on {@code @MeshA2A} handlers (issue #936). Pass {@code null} for
+     * the runtime provider in tests that don't exercise the submitter
+     * injection path; the dispatcher then falls back to leaving any
+     * {@code MeshJobSubmitter} parameter slot as {@code null}.
+     */
+    public MeshA2ADispatcher(
+            MeshA2ARegistry registry,
+            MeshA2ATaskStore taskStore,
+            ObjectMapper objectMapper,
+            ObjectProvider<MeshDependencyInjector> injectorProvider,
+            ObjectProvider<MeshRuntime> runtimeProvider) {
         this.registry = registry;
         this.taskStore = taskStore;
         this.objectMapper = objectMapper;
         this.injectorProvider = injectorProvider;
+        this.runtimeProvider = runtimeProvider;
     }
 
     /**
@@ -544,7 +596,17 @@ public class MeshA2ADispatcher {
      *   <li>{@link McpMeshTool} proxies at any parameter annotated
      *       {@link MeshInject} (or whose type is {@link McpMeshTool}),
      *       resolved through {@link MeshDependencyInjector} — same DDDI
-     *       wiring used by {@code @MeshRoute} and {@code @A2AConsumer}.</li>
+     *       wiring used by {@code @MeshRoute} and {@code @A2AConsumer};</li>
+     *   <li>a {@link MeshJobSubmitter} at any parameter typed
+     *       {@code MeshJobSubmitter} (issue #936) — auto-constructed by the
+     *       framework with the surface's task capability + the local agent
+     *       id + registry URL, so long-running producers no longer need to
+     *       autowire {@link MeshRuntime} and hand-construct the submitter.
+     *       The capability defaults to the first declared
+     *       {@code @MeshDependency} entry; when no deps are declared we
+     *       derive it from {@code skillId} by replacing {@code '-'} with
+     *       {@code '_'} (the canonical skill-id-to-capability mapping —
+     *       matches the existing examples' usage).</li>
      * </ul>
      */
     @SuppressWarnings("unchecked")
@@ -560,6 +622,11 @@ public class MeshA2ADispatcher {
             MeshInject inj = p.getAnnotation(MeshInject.class);
             if (inj != null || McpMeshTool.class.isAssignableFrom(p.getType())) {
                 args[i] = resolveDependency(surface, p, inj);
+            } else if (MeshJobSubmitter.class.isAssignableFrom(p.getType())) {
+                // Issue #936: framework-injected MeshJobSubmitter for
+                // long-running producers. Cache per surface — the submitter
+                // is stateless after construction.
+                args[i] = resolveJobSubmitter(surface);
             } else if (Map.class.isAssignableFrom(p.getType()) && !messageAssigned) {
                 args[i] = message;
                 messageAssigned = true;
@@ -582,6 +649,117 @@ public class MeshA2ADispatcher {
         } catch (InvocationTargetException ite) {
             throw ite.getCause() != null ? ite.getCause() : ite;
         }
+    }
+
+    /**
+     * Resolve (and cache) a {@link MeshJobSubmitter} bound to the given
+     * surface (issue #936). Returns {@code null} if the runtime isn't
+     * available or no capability can be derived — callers that hit this
+     * fallback will surface a clear error from the user's handler when
+     * they invoke {@link MeshJobSubmitter#submit(Map)} on a null reference,
+     * which is the same failure mode as forgetting to autowire today.
+     *
+     * <p>Capability resolution order:
+     * <ol>
+     *   <li>The first declared {@code @MeshDependency} capability on the
+     *       surface — matches what the existing user-side workaround
+     *       hand-constructs against today.</li>
+     *   <li>{@code skillId} with {@code '-'} replaced by {@code '_'} —
+     *       e.g. {@code "generate-report"} becomes {@code "generate_report"},
+     *       the canonical kebab-to-snake convention. Matches the
+     *       producer-report-agent example's hardcoded capability.</li>
+     * </ol>
+     */
+    private MeshJobSubmitter resolveJobSubmitter(MeshA2ARegistry.SurfaceMetadata surface) {
+        String surfaceId = surface.handlerMethodId();
+        // Permanent-unbuildable check first: surfaces marked here will
+        // NEVER produce a submitter (no capability, or no runtime provider
+        // wired) so short-circuit without touching the runtime provider.
+        if (unbuildableSurfaces.contains(surfaceId)) {
+            return null;
+        }
+        MeshJobSubmitter cached = jobSubmitterCache.get(surfaceId);
+        if (cached != null) {
+            return cached;
+        }
+        if (runtimeProvider == null) {
+            log.warn("@MeshA2A {} declares MeshJobSubmitter parameter but the dispatcher was "
+                + "constructed without a MeshRuntime provider — injecting null. Use the "
+                + "five-arg MeshA2ADispatcher constructor (the Spring autoconfiguration wires "
+                + "this automatically).", surfaceId);
+            unbuildableSurfaces.add(surfaceId);
+            return null;
+        }
+        MeshRuntime runtime;
+        try {
+            runtime = runtimeProvider.getIfAvailable();
+        } catch (Exception e) {
+            // Treat provider faults (Spring bean init exceptions) as
+            // transient — the bean may be available on a later request
+            // once Spring finishes its init pass.
+            log.warn("@MeshA2A {}: MeshRuntime provider raised on getIfAvailable() — injecting null: {}",
+                surfaceId, e.getMessage());
+            return null;
+        }
+        if (runtime == null || runtime.getAgentSpec() == null) {
+            log.warn("@MeshA2A {} declares MeshJobSubmitter parameter but MeshRuntime is not "
+                + "yet available — injecting null. This usually means tasks/send fired before "
+                + "the runtime finished initialising; retrying the request shortly should succeed.",
+                surfaceId);
+            // Don't memoize this — the runtime may become available later.
+            return null;
+        }
+        String agentId = runtime.getAgentSpec().getAgentId();
+        String registryUrl = runtime.getAgentSpec().getRegistryUrl();
+        if (agentId == null || agentId.isEmpty() || registryUrl == null || registryUrl.isEmpty()) {
+            log.warn("@MeshA2A {} declares MeshJobSubmitter parameter but agent id / registry URL "
+                + "is not configured (agentId='{}' registryUrl='{}') — injecting null.",
+                surfaceId, agentId, registryUrl);
+            // Don't memoize — config may be filled in later if the runtime
+            // is mid-finalize.
+            return null;
+        }
+        String capability = pickSubmitterCapability(surface);
+        if (capability == null || capability.isEmpty()) {
+            log.warn("@MeshA2A {} declares MeshJobSubmitter parameter but no capability can be "
+                + "derived (no @MeshDependency declared and skillId is empty) — injecting null.",
+                surfaceId);
+            unbuildableSurfaces.add(surfaceId);
+            return null;
+        }
+        try {
+            MeshJobSubmitter submitter = new MeshJobSubmitter(capability, agentId, registryUrl);
+            jobSubmitterCache.put(surfaceId, submitter);
+            log.info("@MeshA2A {}: auto-injected MeshJobSubmitter (capability={}, agentId={})",
+                surfaceId, capability, agentId);
+            return submitter;
+        } catch (Exception e) {
+            log.warn("@MeshA2A {}: failed to construct MeshJobSubmitter: {}",
+                surfaceId, e.getMessage());
+            // Don't memoize a transient construction failure — the FFI
+            // runtime may be in a recoverable state.
+            return null;
+        }
+    }
+
+    /**
+     * Pick the capability the auto-injected {@link MeshJobSubmitter}
+     * should target for the given surface. See {@link #resolveJobSubmitter}
+     * for the resolution order rationale.
+     */
+    private static String pickSubmitterCapability(MeshA2ARegistry.SurfaceMetadata surface) {
+        List<MeshRouteRegistry.DependencySpec> deps = surface.dependencies();
+        if (deps != null && !deps.isEmpty()) {
+            String cap = deps.get(0).getCapability();
+            if (cap != null && !cap.isEmpty()) {
+                return cap;
+            }
+        }
+        String skillId = surface.skillId();
+        if (skillId == null || skillId.isEmpty()) {
+            return null;
+        }
+        return skillId.replace('-', '_');
     }
 
     private McpMeshTool resolveDependency(

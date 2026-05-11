@@ -21,20 +21,16 @@
  * wait}`. When it's a plain object/string, the surface treats the task
  * as sync (`state=completed` inline).
  *
- * `MeshJobSubmitter` wiring
- * =========================
+ * `MeshJobSubmitter` wiring (issue #936)
+ * ======================================
  *
- * The Java analog autowires `MeshRuntime` to read `registryUrl` and
- * `agentId` for hand-constructing a `MeshJobSubmitter` inside the
- * `@MeshA2A` handler (a framework gap — `@MeshA2A` injects
- * `McpMeshTool` proxies but NOT `MeshJobSubmitter` for `task=true`
- * deps).
- *
- * The TS equivalent is `getApiRuntime().getServiceId()` for the agent
- * id + `process.env.MCP_MESH_REGISTRY_URL` for the registry URL (the
- * same env var the SDK's `resolveConfig("registry_url", ...)` reads).
- * Cheap to construct (no I/O until `.submit(...)` fires) and stateless
- * after construction.
+ * The framework auto-injects a `MeshJobSubmitter` as the third positional
+ * argument of the handler. The submitter is bound to the producer's task
+ * capability — derived from the first declared dependency or, when none
+ * are declared, from the `skillId` with `-` replaced by `_` (so
+ * `"generate-report"` resolves to the `generate_report` task capability).
+ * No more hand-construction from `getApiRuntime().getServiceId()` and
+ * `MCP_MESH_REGISTRY_URL` — the framework owns this plumbing now.
  *
  * Stack
  * =====
@@ -93,7 +89,7 @@ process.env.MCP_MESH_AGENT_NAME =
   process.env.MCP_MESH_AGENT_NAME ?? "report-a2a-agent";
 
 import express from "express";
-import { getApiRuntime, mesh, MeshJobSubmitter } from "@mcpmesh/sdk";
+import { mesh } from "@mcpmesh/sdk";
 
 const app = express();
 app.use(express.json());
@@ -107,7 +103,7 @@ mesh.a2a.mount(
     description: "Generate a long-form report via A2A (task=True streaming)",
     tags: ["reports", "long-running"],
   },
-  async (_deps, payload) => {
+  async (_deps, payload, jobSubmitter) => {
     // The A2A request message carries the user payload as a text part
     // with JSON-encoded args. Real-world clients can use any parts
     // shape; for this example we parse parts[0].text as JSON.
@@ -132,32 +128,19 @@ mesh.a2a.mount(
       }
     }
 
-    // Construct a MeshJobSubmitter bound to the long-task-provider's
-    // generate_report capability. `@MeshA2A`-style auto-wiring of
-    // `MeshJobSubmitter` for `task=true` deps inside A2A handlers is
-    // not implemented today — the dispatcher only injects
-    // `McpMeshTool` proxies. We wire by hand from the api-runtime
-    // singleton (same pattern Java's example uses with autowired
-    // MeshRuntime).
-    //
-    // Cheap to construct — no I/O until submit() fires; stateless
-    // after construction.
-    const agentId = getApiRuntime().getServiceId();
-    if (!agentId) {
+    if (!jobSubmitter) {
+      // The framework injects a MeshJobSubmitter bound to the
+      // generate_report capability (derived from skillId per issue
+      // #936). Null only when the api-runtime hasn't finished
+      // initialising; surface a clear error so the client knows to
+      // retry rather than hang.
       throw new Error(
-        "api-runtime not yet started — cannot resolve agentId. " +
-        "Wait for the first heartbeat before calling tasks/send.",
+        "MeshJobSubmitter not yet available — mesh runtime is still " +
+          "initialising. Retry tasks/send shortly."
       );
     }
-    const registryUrl =
-      process.env.MCP_MESH_REGISTRY_URL ?? "http://localhost:8000";
-    const submitter = new MeshJobSubmitter(
-      "generate_report",
-      agentId,
-      registryUrl,
-    );
 
-    const proxy = await submitter.submit({
+    const proxy = await jobSubmitter.submit({
       user_id: userId,
       sections,
     });

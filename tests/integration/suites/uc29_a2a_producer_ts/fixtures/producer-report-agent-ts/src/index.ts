@@ -7,10 +7,10 @@
  * task store, services tasks/get, tasks/cancel, tasks/sendSubscribe,
  * tasks/resubscribe from it).
  *
- * MeshJobSubmitter is hand-constructed from the api-runtime singleton
- * + MCP_MESH_REGISTRY_URL because the @MeshA2A-style dispatcher only
- * auto-injects McpMeshTool proxies, not MeshJobSubmitter — same
- * framework gap noted in the Java fixture's Javadoc.
+ * Issue #936: the MeshJobSubmitter is auto-injected as the third
+ * positional handler arg — capability derives from skillId
+ * ("generate-report" → "generate_report"). No more hand-construction
+ * from getApiRuntime().getServiceId() + MCP_MESH_REGISTRY_URL.
  */
 const HTTP_PORT = parseInt(
   (process.env.MCP_MESH_HTTP_PORT = process.env.MCP_MESH_HTTP_PORT ?? "9091"),
@@ -20,7 +20,7 @@ process.env.MCP_MESH_AGENT_NAME =
   process.env.MCP_MESH_AGENT_NAME ?? "report-a2a-agent";
 
 import express from "express";
-import { getApiRuntime, mesh, MeshJobSubmitter } from "@mcpmesh/sdk";
+import { mesh } from "@mcpmesh/sdk";
 
 const app = express();
 app.use(express.json());
@@ -34,7 +34,7 @@ mesh.a2a.mount(
     description: "Generate a long-form report via A2A (task=True streaming)",
     tags: ["reports", "long-running"],
   },
-  async (_deps, payload) => {
+  async (_deps, payload, jobSubmitter) => {
     let userId = "anon";
     let sections: string[] = ["overview"];
     const parts =
@@ -56,22 +56,14 @@ mesh.a2a.mount(
       }
     }
 
-    const agentId = getApiRuntime().getServiceId();
-    if (!agentId) {
+    if (!jobSubmitter) {
       throw new Error(
-        "api-runtime not yet started — agentId unknown. " +
-        "Wait for the first heartbeat before calling tasks/send.",
+        "MeshJobSubmitter not yet available — mesh runtime is still " +
+          "initialising. Retry tasks/send shortly.",
       );
     }
-    const registryUrl =
-      process.env.MCP_MESH_REGISTRY_URL ?? "http://localhost:8000";
-    const submitter = new MeshJobSubmitter(
-      "generate_report",
-      agentId,
-      registryUrl,
-    );
 
-    const proxy = await submitter.submit({
+    const proxy = await jobSubmitter.submit({
       user_id: userId,
       sections,
     });
