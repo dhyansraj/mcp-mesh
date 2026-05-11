@@ -549,6 +549,102 @@ describe("renderSsePlan: long-running poll loop (spec §5.3)", () => {
   });
 
   /**
+   * W2 regression: a transient-failure frame counts as activity, so
+   * `lastEventTime` MUST be refreshed when one is emitted. Otherwise
+   * the keepalive branch can trip KEEPALIVE_MILLIS after the LAST
+   * successful frame even though a transient data frame went out in
+   * between. Cosmetic — but a deviation from the progress-changed
+   * branch and the keepalive branch which BOTH update
+   * `lastEventTime`.
+   *
+   * Scenario: drive the loop with continuous transient failures
+   * starting at t=0. The cap (MAX_CONSECUTIVE_STATUS_FAILURES=5)
+   * closes the stream within ~5 seconds — well under
+   * KEEPALIVE_MILLIS=15s — so a legitimate keepalive should never
+   * fire. We assert exactly MAX_CONSECUTIVE_STATUS_FAILURES
+   * "status unavailable" data frames and ZERO keepalive comment
+   * lines. With the bug, the test still passes because the bug
+   * manifests on a SUBSEQUENT suppressed-progress poll, not within
+   * the transient loop itself — so we additionally insert one
+   * suppressed-progress poll between transients to expose the
+   * stale-`lastEventTime` path: the bug emits a keepalive between
+   * the transient frames within KEEPALIVE_MILLIS; the fix does not.
+   */
+  it("transient frames refresh lastEventTime — no spurious keepalive within KEEPALIVE_MILLIS (W2)", async () => {
+    let n = 0;
+    const proxy = fakeProxy({
+      status: async () => {
+        n += 1;
+        // First call: success frame to anchor `lastEventTime`.
+        if (n === 1) return { status: "running" };
+        // Throw on every subsequent call so we hit the transient
+        // branch repeatedly. The cap (5 consecutive) closes the
+        // stream — but we want to span > KEEPALIVE_MILLIS, so use a
+        // higher consecutive count via interleaved successes.
+        // Strategy: alternate throw / success-with-same-status so
+        // `consecutiveStatusFailures` resets, but no progress change
+        // → keepalive check is the only thing that can refresh
+        // `lastEventTime` (in the bug path). With the fix, transient
+        // frames refresh it. We drive 18 polls (well past
+        // KEEPALIVE_MILLIS) and assert that with the fix at most 1
+        // keepalive fires, vs. ≥ 2 without the fix.
+        if (n % 2 === 0) throw new Error("transient");
+        return { status: "running" };
+      },
+    });
+
+    const res = makeRes();
+    const req = makeReq();
+    const store = new A2ATaskStore();
+    store.put("task-w2", { sessionId: "task-w2", jobProxy: proxy as never });
+    const plan: SseStreamPlan = {
+      kind: "long-running",
+      reqId: 1,
+      taskId: "task-w2",
+      proxy: proxy as never,
+    };
+
+    const renderPromise = renderSsePlan(
+      req as unknown as Request,
+      res as unknown as Response,
+      plan,
+      store,
+    );
+
+    // Drive 2 × KEEPALIVE_MILLIS worth of polls so two keepalives
+    // could in principle fire. With the fix, transient frames keep
+    // `lastEventTime` fresh — keepalives only fire when `now -
+    // lastEventTime > KEEPALIVE_MILLIS` AND we hit the
+    // suppressed-progress branch with no transient in between. Per
+    // our alternating pattern, transient frames are emitted on
+    // every even poll → `lastEventTime` is refreshed at most 1s
+    // apart, suppressing every spurious keepalive.
+    const iters = Math.ceil((2 * KEEPALIVE_MILLIS) / POLL_INTERVAL_MILLIS) + 2;
+    for (let i = 0; i < iters; i++) {
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MILLIS);
+    }
+    res.writableEnded = true;
+    res.emit("close");
+    await renderPromise;
+
+    const transients = res._written.filter(
+      (w) => w.startsWith("data: ") && w.includes("status unavailable:"),
+    );
+    const keepalives = res._written.filter((s) => s === ": keepalive\n\n");
+
+    // Several transient frames were emitted (one per even poll up
+    // until disconnect).
+    expect(transients.length).toBeGreaterThanOrEqual(2);
+    // With the fix, every transient frame refreshes `lastEventTime`
+    // so the gap to the next suppressed-progress poll is at most 1s
+    // — well under KEEPALIVE_MILLIS=15s. ZERO keepalives are
+    // expected. Without the fix, suppressed polls at t≈16, 17, ...
+    // emit redundant keepalives even though a transient frame just
+    // went out a poll earlier.
+    expect(keepalives.length).toBe(0);
+  });
+
+  /**
    * #934 BLOCKER fix: status() throws transiently → emit state=working
    * frame (NOT terminal failed) and continue polling.
    */

@@ -286,6 +286,10 @@ async function runLongRunningStream(
         ))) {
           return;
         }
+        // Transient-failure frame counts as activity — refresh
+        // `lastEventTime` so the keepalive branch doesn't fire a
+        // redundant `: keepalive\n\n` right after a data frame.
+        lastEventTime = Date.now();
         if (consecutiveStatusFailures >= MAX_CONSECUTIVE_STATUS_FAILURES) {
           // Cap hit — close the stream WITHOUT marking terminal so the
           // client can retry via tasks/get / tasks/resubscribe.

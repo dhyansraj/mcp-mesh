@@ -859,9 +859,14 @@ export function buildTaskFromStatus(
     artifacts,
     history: historyOf(requestMessage ?? {}),
   };
-  const progress = meshStatus["progress"];
-  if (progress !== null && progress !== undefined) {
-    envelope.metadata = { progress };
+  // Appendix A: `metadata.progress` MUST be a real JSON number. If the
+  // underlying status payload exposes `progress` as a non-number
+  // (string, boolean, object), omit `metadata` entirely rather than
+  // emitting a spec-violating typed-value. Mirrors the SSE emitter's
+  // `typeof progress === "number" ? progress : null` coercion.
+  const progressRaw = meshStatus["progress"];
+  if (typeof progressRaw === "number") {
+    envelope.metadata = { progress: progressRaw };
   }
   return envelope;
 }

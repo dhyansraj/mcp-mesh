@@ -452,6 +452,33 @@ describe("dispatcher: tasks/get (spec §4.4)", () => {
     expect(typeof meta.progress).toBe("number");
     expect(meta.progress).toBe(0.42);
   });
+
+  /**
+   * Appendix A defensive guard (W1): if `proxy.status()` returns
+   * `progress` as a non-number (e.g. a string `"50%"`), the dispatcher
+   * MUST NOT emit it verbatim — the SSE emitter already coerces to
+   * `typeof progress === "number" ? progress : null` so the
+   * `tasks/get` path needs to match. Omit `metadata` entirely when the
+   * raw value isn't a number.
+   */
+  it("Appendix A defensive: non-number progress -> metadata omitted (W1)", async () => {
+    const proxy = fakeProxy({
+      status: async () => ({ status: "running", progress: "50%" }),
+    });
+    store.put("t-prog-str", { sessionId: "t-prog-str", jobProxy: proxy as never });
+    const deps = makeDeps((async () => null) as A2AHandler, store);
+
+    const captured = await dispatch(deps, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tasks/get",
+      params: { id: "t-prog-str" },
+    });
+
+    const result = parseBody(captured).result as Record<string, unknown>;
+    // metadata must be absent (no spec-violating string-typed progress).
+    expect(result.metadata).toBeUndefined();
+  });
 });
 
 // ────────────────────────────────────────────────────────────────────────
