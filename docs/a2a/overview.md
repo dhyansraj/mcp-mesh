@@ -6,7 +6,7 @@ MCP Mesh implements the [A2A v1.0 protocol](https://a2a-protocol.org/latest/spec
 
 The A2A v1.0 spec defines an HTTP + JSON-RPC envelope for cross-vendor agent calls. It deliberately stops at the protocol — capability discovery is per-card, there is no resolver, no failover, no DDDI. MCP Mesh adds those layers around A2A:
 
-- **Producer** (Python, Java, TypeScript — all three runtimes; TS shipped via [#933](https://github.com/dhyanraj/mcp-mesh/issues/933)): the producer entry builds the agent card automatically from declared metadata and attaches both `/.well-known/agent.json` and the JSON-RPC entrypoint to a user-owned hosting framework — `mesh.a2a.mount(app, ...)` on FastAPI in Python, `@MeshA2A` on a Spring Boot bean in Java, `mesh.a2a.mount(app, ...)` on Express in TypeScript. Sync, long-running (`task=True`/`task=true`), and SSE handlers are all supported.
+- **Producer** (Python, Java, TypeScript — all three runtimes): the producer entry builds the agent card automatically from declared metadata and attaches both `/.well-known/agent.json` and the JSON-RPC entrypoint to a user-owned hosting framework — `mesh.a2a.mount(app, ...)` on FastAPI in Python, `@MeshA2A` on a Spring Boot bean in Java, `mesh.a2a.mount(app, ...)` on Express in TypeScript. Sync, long-running (`task=True`/`task=true`), and SSE handlers are all supported.
 - **Consumer** (Python, Java, TypeScript): a mesh capability whose body issues outbound `tasks/send` / `tasks/sendSubscribe` against a foreign A2A backend. The bridge re-publishes the upstream skill as a normal mesh capability — downstream callers do not need to know they are talking to A2A.
 
 ## The strategic value-add

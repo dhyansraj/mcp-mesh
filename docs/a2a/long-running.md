@@ -2,7 +2,7 @@
 
 External A2A skills that take longer than a sync `tools/call` window need to be bridged into the mesh as `MeshJob`-shaped capabilities. This page covers the consumer-side bridging primitives — `A2AJob.bridge(JobController)` for polling and `A2AStream.bridge(JobController)` for SSE — plus cancel propagation and SSE constraints.
 
-The producer side (Python `mesh.a2a.mount` returning a `JobProxy`) is covered in [Producer (Python)](producer.md).
+The producer side — Python's `mesh.a2a.mount`, Java's `@MeshA2A`, or TypeScript's `mesh.a2a.mount` returning a `JobProxy` — is covered in [Producer](producer.md).
 
 ## The bridge model
 

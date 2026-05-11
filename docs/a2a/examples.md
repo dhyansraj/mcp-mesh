@@ -2,12 +2,26 @@
 
 Every A2A-related example in the repo, grouped by runtime, with the scenario each one demonstrates.
 
-## Producer (Python)
+## Producer — Python
 
 | Example                                  | Scenario                                                |
 | ---------------------------------------- | ------------------------------------------------------- |
 | `examples/a2a/date_a2a_agent.py`         | Sync handler — bridges the `date_service` mesh capability via A2A `tasks/send` |
 | `examples/a2a/report_a2a_agent.py`       | Long-running + SSE handler — bridges `generate_report` (`task=True`) via A2A `tasks/send` / `tasks/get` / `tasks/cancel` / `tasks/sendSubscribe` / `tasks/resubscribe` |
+
+## Producer — TypeScript
+
+| Example                                                  | Scenario                                       |
+| -------------------------------------------------------- | ---------------------------------------------- |
+| `examples/typescript/producer-date-agent/`               | Sync `mesh.a2a.mount(app, ...)` Express producer — bridges `date_service` via A2A `tasks/send` |
+| `examples/typescript/producer-report-agent/`             | Long-running `mesh.a2a.mount` returning a `JobProxy` — bridges `generate_report` (`task=true`) via A2A `tasks/send` / `tasks/get` / `tasks/cancel` / `tasks/sendSubscribe` / `tasks/resubscribe` |
+
+## Producer — Java
+
+| Example                                                  | Scenario                                       |
+| -------------------------------------------------------- | ---------------------------------------------- |
+| `examples/java/producer-date-agent/`                     | Sync `@MeshA2A` Spring Boot producer — bridges `date_service` via A2A `tasks/send` |
+| `examples/java/producer-report-agent/`                   | Long-running `@MeshA2A` returning a `JobProxy` — bridges `generate_report` (`task = true`) via A2A `tasks/send` / `tasks/get` / `tasks/cancel` / `tasks/sendSubscribe` / `tasks/resubscribe` |
 
 ## Consumer — Python
 
@@ -78,7 +92,7 @@ Or chain it from a downstream caller (a separate mesh agent depending on `curren
 ## See also
 
 - [Overview](overview.md)
-- [Producer (Python)](producer.md)
+- [Producer](producer.md)
 - [Consumer Quick Start](consumer-quickstart.md)
 - [Failover & Federation](failover.md)
 - [Long-Running & SSE](long-running.md)

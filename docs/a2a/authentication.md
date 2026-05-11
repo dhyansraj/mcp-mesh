@@ -99,7 +99,7 @@ If the card declares no authentication scheme, no auth block is generated. See [
 
 ## Producer-side bearer
 
-On the producer side, `mesh.a2a.mount(...)` accepts `auth="bearer"` (a literal string, not an `A2ABearer` instance). This advertises the bearer scheme on the published agent card and gates the JSON-RPC entry route — incoming requests must carry an `Authorization: Bearer ...` header to pass the gate. Phase 1 does NOT validate the token value itself: the producer-side `auth=` parameter takes only the string `"bearer"` (or `None` for no auth), and downstream verification of the token is left to the user (e.g., a FastAPI dependency, a sidecar, or the broader auth stack). The full token-resolution model — `token` literal vs `token_env` — lives on the **consumer** side via `mesh.A2ABearer`. Card auth schemes are auto-published in `/.well-known/agent.json` so external scaffolders (mesh's own or third-party A2A tooling) can detect bearer requirements automatically. Token-value validation on the producer side is deferred to a future phase. See [Producer (Python)](producer.md).
+On the producer side, all three runtimes accept the literal string `"bearer"` — Python `mesh.a2a.mount(..., auth="bearer")`, Java `@MeshA2A(auth = "bearer")`, TypeScript `mesh.a2a.mount(app, { auth: "bearer", ... })`. This advertises the bearer scheme on the published agent card and gates the JSON-RPC entry route — incoming requests must carry an `Authorization: Bearer ...` header to pass the gate. Phase 1 does NOT validate the token value itself: the producer-side `auth` parameter takes only the string `"bearer"` (or unset for no auth), and downstream verification of the token is left to the user (e.g., a FastAPI dependency, a Spring Security filter, an Express middleware, a sidecar, or the broader auth stack). The full token-resolution model — `token` literal vs `token_env` — lives on the **consumer** side via `mesh.A2ABearer` / `@A2AConsumer(authBearerEnv = ...)` / `a2aConfig.auth`. Card auth schemes are auto-published in `/.well-known/agent.json` so external scaffolders (mesh's own or third-party A2A tooling) can detect bearer requirements automatically. Token-value validation on the producer side is deferred to a future phase. See [Producer](producer.md).
 
 ## Phase 1 scope and deferred work
 
@@ -114,5 +114,5 @@ For non-bearer schemes today the workaround is to handle the auth headers in you
 
 ## See also
 
-- [Producer (Python)](producer.md) — producer-side bearer enforcement
+- [Producer](producer.md) — producer-side bearer enforcement
 - [Scaffolding](scaffolding.md) — card-driven auth wiring
