@@ -16,7 +16,15 @@
 import { FastMCP, mesh, type A2AClient } from "@mcpmesh/sdk";
 import { z } from "zod";
 
-const HTTP_PORT = parseInt(process.env.MCP_MESH_HTTP_PORT ?? "{{ .Port }}", 10);
+function parsePort(raw: string | undefined, fallback: number): number {
+  const candidate = parseInt(raw ?? "", 10);
+  if (!Number.isFinite(candidate) || candidate < 1 || candidate > 65535) {
+    return fallback;
+  }
+  return candidate;
+}
+
+const HTTP_PORT = parsePort(process.env.MCP_MESH_HTTP_PORT, {{ .Port }});
 
 const server = new FastMCP({
   name: "{{ toPascalCase .Name }} Bridge",

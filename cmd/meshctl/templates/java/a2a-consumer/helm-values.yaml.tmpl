@@ -2,13 +2,13 @@
 # Usage: helm install {{ .Name }} oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent -f helm-values.yaml
 
 image:
-  repository: your-registry/{{ .Name }}
+  repository: "your-registry/{{ .Name }}"
   tag: "v1.0.0"
-  pullPolicy: IfNotPresent
+  pullPolicy: "IfNotPresent"
 
 agent:
-  name: {{ .Name }}
-  runtime: java
+  name: "{{ .Name }}"
+  runtime: "java"
 
 resources:
   limits:
