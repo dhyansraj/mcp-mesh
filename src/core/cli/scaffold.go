@@ -133,6 +133,11 @@ Infrastructure:
 	// and print follow-up messages cross-linking provider/consumer scaffolds.
 	scaffold.AttachLLMSubcommands(cmd)
 
+	// Attach `a2a-consumer` subcommand (#909). Fetches an external A2A
+	// producer's /.well-known/agent.json and emits a runnable consumer
+	// agent skeleton with one mesh capability per skill in the card.
+	scaffold.AttachA2AConsumerSubcommand(cmd)
+
 	return cmd
 }
 

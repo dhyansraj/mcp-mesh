@@ -1,0 +1,34 @@
+# Helm values for deploying {{ .Name }} (A2A consumer bridge)
+# Usage: helm install {{ .Name }} oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent -f helm-values.yaml
+
+image:
+  repository: your-registry/{{ .Name }}
+  tag: "v1.0.0"
+  pullPolicy: IfNotPresent
+
+agent:
+  name: {{ .Name }}
+  runtime: typescript
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+mesh:
+  enabled: true
+
+registry:
+  host: "mcp-core-mcp-mesh-registry"
+  port: "8000"
+
+# {{ if .AuthBearer }}The producer requires bearer authentication. Provide the
+# token via a K8s Secret and uncomment the secrets block below.
+# secrets:
+#   {{ .AuthEnvVar }}: "your-bearer-token-here"
+# {{ else }}# This consumer does not require authentication (the producer's
+# agent card did not advertise any auth schemes).
+# {{ end }}
