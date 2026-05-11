@@ -99,7 +99,7 @@ If the card declares no authentication scheme, no auth block is generated. See [
 
 ## Producer-side bearer
 
-The producer side enforces bearer on the JSON-RPC entry route via the `auth=` parameter on `mesh.a2a.mount(...)` (Python). The same token model — env var or literal — applies. Card auth schemes are auto-published in `/.well-known/agent.json` so external scaffolders (mesh's own or third-party A2A tooling) can detect bearer requirements automatically. See [Producer (Python)](producer.md).
+On the producer side, `mesh.a2a.mount(...)` accepts `auth="bearer"` (a literal string, not an `A2ABearer` instance). This advertises the bearer scheme on the published agent card and gates the JSON-RPC entry route — incoming requests must carry an `Authorization: Bearer ...` header to pass the gate. Phase 1 does NOT validate the token value itself: the producer-side `auth=` parameter takes only the string `"bearer"` (or `None` for no auth), and downstream verification of the token is left to the user (e.g., a FastAPI dependency, a sidecar, or the broader auth stack). The full token-resolution model — `token` literal vs `token_env` — lives on the **consumer** side via `mesh.A2ABearer`. Card auth schemes are auto-published in `/.well-known/agent.json` so external scaffolders (mesh's own or third-party A2A tooling) can detect bearer requirements automatically. Token-value validation on the producer side is deferred to a future phase. See [Producer (Python)](producer.md).
 
 ## Phase 1 scope and deferred work
 

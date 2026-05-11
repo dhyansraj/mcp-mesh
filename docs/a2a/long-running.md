@@ -36,7 +36,10 @@ When a downstream caller cancels the mesh job, the registry forwards the cancel 
 1. Caller invokes `await proxy.cancel(reason="...")`.
 2. Mesh registry POSTs `/jobs/{id}/cancel` to the consumer agent.
 3. The consumer's job-cancel hook flips the `JobController` to cancelled state.
-4. The poll bridge detects the cancel between iterations (Python `awaitJobCancel(jobId)` race; Java `controller.isCancelled()` check).
+4. The poll bridge observes the cancel — mechanism differs per runtime:
+    - **Python**: the outer dispatch wrapper (`_mcp_mesh.engine.job_dispatch`) races the user task against `_await_job_cancel(job_id)` (a pyo3 binding to the Rust core); when cancel wins, the user task is cancelled and the bridge's `await asyncio.sleep` raises `CancelledError`, which `A2AJob.bridge` catches in its outer `try`.
+    - **TypeScript**: `A2AJob.bridge` races `awaitJobCancel(jobId)` against each poll's sleep via a shared `AbortController`.
+    - **Java**: `A2AJob.bridge` polls `controller.isCancelled()` between iterations (poll-only, no race).
 5. The bridge POSTs `tasks/cancel` to the upstream A2A producer.
 6. The upstream producer cancels the underlying work and reports `state=canceled`.
 7. The bridge raises `A2AJobCanceled` (Py) / `A2AJobCanceledException` (Java) / `A2AJobCanceledError` (TS); the mesh wrapper records the canceled outcome.

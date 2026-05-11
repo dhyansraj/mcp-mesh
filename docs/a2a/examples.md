@@ -67,9 +67,11 @@ python examples/a2a/consumer_date_agent.py
 Then call the bridged capability via `meshctl`:
 
 ```bash
-meshctl call date-consumer:current_date '{}'
+meshctl call current_date '{}'
 # Returns: {"date": "2026-05-09T..."}
 ```
+
+Use `meshctl call <tool-name>` to invoke any registered capability — the registry resolves to the right consumer. The `agent:tool` form works too but requires the agent's full UID-suffixed ID (e.g., `date-consumer-7f3a2b:current_date`); the bare-name form is simpler when you just want to hit the capability.
 
 Or chain it from a downstream caller (a separate mesh agent depending on `current-date` with the `date-consumer` tag).
 

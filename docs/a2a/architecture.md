@@ -27,7 +27,7 @@ Capability+tag failover applies differently depending on call shape:
 - **Sync consumers.** Every `tools/call` is a fresh resolution. A dead consumer is detoured cleanly on the next call. Caller experience: transparent rewire to a peer consumer in seconds (see [Failover & Federation](failover.md)).
 
 - **Long-running consumers (`task=True`).** The job is **pinned** to the consumer that submitted it. The state lives on the external A2A backend; the consumer holds the open polling / SSE channel as the only mesh-side handle on it. Killing the consumer mid-job:
-    - Surfaces as `JobLost` to the caller.
+    - Surfaces to the caller as a job-lost terminal: the registry's orphan-reset sweep moves the job to a failed/lost terminal state once the consumer's lease expires, and the caller's `proxy.wait()` returns that terminal (no in-process resume).
     - The caller MAY retry the submission — the retry routes to a peer consumer via the standard resolver, which submits a fresh A2A task on the upstream (no portable "resume" semantic exists on A2A v1.0).
     - The orphaned upstream A2A task may still be running; the upstream's own deadline / cancel policy applies. Mesh cannot orphan-cancel it because the original consumer (which held the task id) is dead.
 
@@ -39,14 +39,14 @@ The cancel chain — caller through to upstream A2A producer — for the polling
 
 1. **Caller-side.** `await proxy.cancel(reason)` invokes `MeshJob.cancel(...)` which POSTs `/jobs/{id}/cancel` to the registry.
 2. **Registry.** Forwards to the consumer's `/jobs/{id}/cancel` endpoint (auto-registered on every mesh agent's FastAPI app).
-3. **Consumer cancel hook.** Flips the `JobController` to cancelled state. Python: `with_job_async_py` in the Rust core (`src/runtime/rust/src/with_job_async.rs`); Java: `JobController.isCancelled()` returns true; TS: `awaitJobCancel(jobId)` resolves.
-4. **Bridge detection.** `A2AJob.bridge` polls between iterations:
-    - Python: `src/runtime/python/mesh/_a2a_consumer.py` — `A2AJob.bridge` races each iteration's sleep against the cancel signal.
-    - Java: `src/runtime/java/mcp-mesh-sdk/src/main/java/io/mcpmesh/a2a/A2AJob.java` — `controller.isCancelled()` checked between polls.
-    - TypeScript: `src/runtime/typescript/src/a2a/a2a-job.ts` — `awaitJobCancel(jobId)` raced against polling sleep.
+3. **Consumer cancel hook.** Flips the `JobController` to cancelled state. Python: `with_job_async_py` in the Rust core (`src/runtime/core/src/jobs_py.rs`); Java: `JobController.isCancelled()` returns true; TS: `awaitJobCancel(jobId)` resolves.
+4. **Bridge detection.** Cancel observation differs per runtime:
+    - Python: the outer dispatch wrapper (`src/runtime/python/_mcp_mesh/engine/job_dispatch.py`) races the user task against `_await_job_cancel(job_id)` (a pyo3 binding to the Rust core) and cancels the user task when the watcher fires. Inside `A2AJob.bridge` (`src/runtime/python/mesh/_a2a_consumer.py`), the plain `await asyncio.sleep(...)` then raises `CancelledError`, which the bridge catches in its outer `try`.
+    - TypeScript: `A2AJob.bridge` (`src/runtime/typescript/src/a2a/a2a-job.ts`) literally races `awaitJobCancel(jobId)` against each poll's sleep via a shared `AbortController`.
+    - Java: `A2AJob.bridge` (`src/runtime/java/mcp-mesh-sdk/src/main/java/io/mcpmesh/a2a/A2AJob.java`) polls `controller.isCancelled()` between iterations (poll-only, no race).
 5. **Outbound cancel.** Bridge POSTs `tasks/cancel` to the upstream A2A producer's JSON-RPC endpoint.
 6. **Upstream propagation.** The A2A producer cancels the underlying work (mesh `MeshJob.cancel(...)` if the producer is itself a mesh agent) and reports `state=canceled`.
-7. **Mesh-side terminal.** Bridge raises `A2AJobCanceled` (Py) / `A2AJobCanceledException` (Java) / `A2AJobCanceledError` (TS); the `task=True` wrapper records the canceled outcome in the `JobController`; the caller's `proxy.wait()` raises `JobCancelledError`.
+7. **Mesh-side terminal.** Bridge raises `A2AJobCanceled` (Py, exported from `mesh._a2a_consumer`) / `A2AJobCanceledException` (Java) / `A2AJobCanceledError` (TS); the `task=True` wrapper records the canceled outcome in the `JobController`; the caller's `proxy.wait()` raises the runtime's standard cancel exception (Java/TS expose a typed `JobCancelledError`; Python surfaces the canceled state via `MeshJob.wait()`).
 
 ```mermaid
 sequenceDiagram
