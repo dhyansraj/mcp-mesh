@@ -256,6 +256,35 @@ impl AgentHandle {
             .is_ok()
     }
 
+    /// Update the A2A surfaces and agent_type registered with the registry
+    /// (issue #938). Uses smart diffing — only triggers a heartbeat if the
+    /// payload actually changed. Call this from the SDK after each
+    /// `mesh.a2a.mount(...)` (or unmount, when supported) so deferred mounts
+    /// are reflected in the next heartbeat envelope rather than silently
+    /// dropped.
+    ///
+    /// Mirrors Python's per-heartbeat `_build_a2a_surfaces` semantics
+    /// (`heartbeat_preparation.py:371-389`) without paying the per-tick FFI
+    /// cost: TS recomputes locally and pushes only on change.
+    pub fn update_surfaces(&self, agent_type: String, surfaces: Option<String>) -> bool {
+        self.command_tx
+            .try_send(RuntimeCommand::UpdateSurfaces { agent_type, surfaces })
+            .is_ok()
+    }
+
+    /// Update the A2A surfaces and agent_type — async version. Use this
+    /// when calling from an async context (e.g., napi-rs).
+    pub async fn update_surfaces_async(
+        &self,
+        agent_type: String,
+        surfaces: Option<String>,
+    ) -> bool {
+        self.command_tx
+            .send(RuntimeCommand::UpdateSurfaces { agent_type, surfaces })
+            .await
+            .is_ok()
+    }
+
     /// Get a reference to the command sender (for language bindings that need direct access).
     pub fn command_tx(&self) -> mpsc::Sender<RuntimeCommand> {
         self.command_tx.clone()
@@ -364,6 +393,52 @@ mod tests {
                 assert_eq!(received_tools[0].function_name, "GET:/time");
             }
             _ => panic!("Expected UpdateTools command"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_update_surfaces() {
+        let (_event_tx, event_rx) = mpsc::channel(10);
+        let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
+        let (command_tx, mut command_rx) = mpsc::channel(10);
+        let state = Arc::new(RwLock::new(HandleState::default()));
+
+        let handle = AgentHandle::new(event_rx, state.clone(), shutdown_tx, command_tx);
+
+        let surfaces_json = r#"[{"path":"/agents/date","skill_id":"get-date"}]"#.to_string();
+        assert!(handle.update_surfaces("a2a".to_string(), Some(surfaces_json.clone())));
+
+        let cmd = command_rx.try_recv().unwrap();
+        match cmd {
+            RuntimeCommand::UpdateSurfaces { agent_type, surfaces } => {
+                assert_eq!(agent_type, "a2a");
+                assert_eq!(surfaces, Some(surfaces_json));
+            }
+            _ => panic!("Expected UpdateSurfaces command"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_update_surfaces_clear() {
+        let (_event_tx, event_rx) = mpsc::channel(10);
+        let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
+        let (command_tx, mut command_rx) = mpsc::channel(10);
+        let state = Arc::new(RwLock::new(HandleState::default()));
+
+        let handle = AgentHandle::new(event_rx, state.clone(), shutdown_tx, command_tx);
+
+        // Clearing surfaces should still propagate as a command — the
+        // runtime's smart-diff inside handle_update_surfaces decides
+        // whether to fire a heartbeat. The handle just enqueues.
+        assert!(handle.update_surfaces("api".to_string(), None));
+
+        let cmd = command_rx.try_recv().unwrap();
+        match cmd {
+            RuntimeCommand::UpdateSurfaces { agent_type, surfaces } => {
+                assert_eq!(agent_type, "api");
+                assert_eq!(surfaces, None);
+            }
+            _ => panic!("Expected UpdateSurfaces command"),
         }
     }
 }

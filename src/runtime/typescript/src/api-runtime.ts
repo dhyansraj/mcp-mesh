@@ -210,23 +210,15 @@ class ApiRuntime {
       const routes = registry.getRoutes();
       const tools = buildToolSpecs(routes);
 
-      // Issue #933: flip agent_type to "a2a" when any mesh.a2a.mount(...)
-      // surface is registered (spec §2.3 / §8). A2A surfaces and
-      // mesh.route() / mesh.tool capabilities coexist on the same agent;
-      // agent_type=a2a does NOT mean "no other routes/tools" (spec §2.3,
-      // matches Python's heartbeat_preparation.py:371-389).
-      const a2aRegistry = A2AProducerRegistry.getInstance();
-      const a2aSurfaces = a2aRegistry.hasSurfaces()
-        ? a2aRegistry.buildHeartbeatSurfaces()
-        : [];
-      const agentType = a2aSurfaces.length > 0 ? "a2a" : "api";
-      // Serialize surfaces JSON for the napi binding's `surfaces?: string`
-      // passthrough — the Rust core re-parses before forwarding verbatim
-      // to the registry's `MeshAgentRegistration.surfaces` field. Empty
-      // arrays are encoded as undefined so the wire stays clean.
-      const surfacesJson = a2aSurfaces.length > 0
-        ? JSON.stringify(a2aSurfaces)
-        : undefined;
+      // Issue #933 / #938: flip agent_type to "a2a" when any
+      // mesh.a2a.mount(...) surface is registered (spec §2.3 / §8). A2A
+      // surfaces and mesh.route() / mesh.tool capabilities coexist on the
+      // same agent; agent_type=a2a does NOT mean "no other routes/tools"
+      // (matches Python's heartbeat_preparation.py:371-389). Centralized in
+      // A2AProducerRegistry.buildAgentSpecContribution so the startup-time
+      // value matches the post-mount push path (#938 fix).
+      const { agentType, surfacesJson } =
+        A2AProducerRegistry.getInstance().buildAgentSpecContribution("api");
 
       // Create AgentSpec
       const spec: JsAgentSpec = {
@@ -483,6 +475,35 @@ class ApiRuntime {
    * @param port - Port detected from req.socket.localPort
    * @param routeCount - Number of routes discovered via introspection
    */
+  /**
+   * Push the current A2A surfaces + agent_type into the Rust core (issue #938).
+   *
+   * Called from `mesh.a2a.mount(...)` after each surface registration so
+   * deferred mounts (mounts registered after `startAgent()` / first
+   * heartbeat) are reflected in the next heartbeat envelope rather than
+   * silently dropped. Mirrors Python's per-heartbeat
+   * `_build_a2a_surfaces` semantics (`heartbeat_preparation.py:371-389`).
+   *
+   * No-op when the runtime hasn't started yet — the value will be picked
+   * up via `buildAgentSpecContribution()` at startup time. Smart-diffed
+   * inside the Rust runtime, so re-mounting an identical payload doesn't
+   * generate a redundant heartbeat.
+   */
+  pushSurfacesUpdate(): void {
+    if (!this.handle) {
+      // Runtime hasn't started yet — startup-time computation in
+      // start() will pick up the current registry state.
+      return;
+    }
+    const { agentType, surfacesJson } =
+      A2AProducerRegistry.getInstance().buildAgentSpecContribution("api");
+    this.handle
+      .updateSurfaces(agentType, surfacesJson ?? null)
+      .catch((err) => {
+        console.warn("Failed to push A2A surfaces update:", err);
+      });
+  }
+
   updateExpressInfo(port: number, routeCount: number): void {
     if (!this.handle) {
       console.warn("Cannot update Express info: handle not available");

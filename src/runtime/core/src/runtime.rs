@@ -28,6 +28,20 @@ pub enum RuntimeCommand {
     UpdateTools(Vec<ToolSpec>),
     /// Update the HTTP port (e.g., after auto-detection).
     UpdatePort(u16),
+    /// Update the A2A surfaces and agent_type registered with the registry
+    /// (issue #938 — mid-flight `mesh.a2a.mount(...)` parity with Python's
+    /// per-heartbeat `_build_a2a_surfaces`). Triggers a full heartbeat when
+    /// either field actually changes; no-op otherwise so re-mounting the
+    /// same surface doesn't generate redundant POSTs.
+    ///
+    /// Carries a JSON-encoded surfaces payload (matches `AgentSpec.surfaces`
+    /// shape) and the new `agent_type` (`"a2a"`, `"api"`, or `"mcp_agent"`).
+    /// `surfaces=None` means clear the field; an empty-string payload is
+    /// treated as `None` so callers don't have to special-case the wire.
+    UpdateSurfaces {
+        agent_type: String,
+        surfaces: Option<String>,
+    },
 }
 
 /// Internal provider tracking (non-PyO3 to avoid GIL issues in tokio thread).
@@ -279,7 +293,51 @@ impl AgentRuntime {
                     self.force_full_heartbeat = true;
                 }
             }
+            RuntimeCommand::UpdateSurfaces { agent_type, surfaces } => {
+                self.handle_update_surfaces(agent_type, surfaces);
+            }
         }
+    }
+
+    /// Handle an A2A surfaces update (issue #938). Smart-diffs the incoming
+    /// payload against the current spec — only forces a full heartbeat when
+    /// either `agent_type` or the serialized `surfaces` JSON actually
+    /// changes. Empty-string payloads are normalized to `None` so the wire
+    /// stays clean (matches `AgentSpec::py_new`'s `filter(|s| !s.trim().is_empty())`).
+    fn handle_update_surfaces(&mut self, agent_type: String, surfaces: Option<String>) {
+        use crate::spec::AgentType;
+        // Normalize empty/whitespace-only surfaces JSON to None so the wire
+        // stays clean (registry's `surfaces` is omitted via skip_serializing_if).
+        let new_surfaces = surfaces.filter(|s| !s.trim().is_empty());
+        let new_agent_type = AgentType::from_str(&agent_type);
+
+        let surfaces_changed = self.spec.surfaces != new_surfaces;
+        let agent_type_changed = self.spec.agent_type != new_agent_type;
+
+        if !surfaces_changed && !agent_type_changed {
+            trace!("Surfaces unchanged, skipping heartbeat");
+            return;
+        }
+
+        if agent_type_changed {
+            info!(
+                "Updating agent_type from '{}' to '{}'",
+                self.spec.agent_type.as_api_str(),
+                new_agent_type.as_api_str()
+            );
+            self.spec.agent_type = new_agent_type;
+        }
+        if surfaces_changed {
+            let count = new_surfaces
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .as_ref()
+                .and_then(|v| v.as_array().map(|a| a.len()))
+                .unwrap_or(0);
+            info!("Updating A2A surfaces ({} entries)", count);
+            self.spec.surfaces = new_surfaces;
+        }
+        self.force_full_heartbeat = true;
     }
 
     /// Handle tools update with smart diffing.

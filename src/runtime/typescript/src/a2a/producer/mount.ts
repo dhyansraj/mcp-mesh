@@ -329,7 +329,25 @@ export function mount<D extends A2ADependencies = A2ADependencies>(
   // We trigger even without dependencies so surfaces with auth-only mounts
   // still surface on the heartbeat envelope (the api-runtime would
   // otherwise sit idle).
-  getApiRuntime().scheduleStart();
+  const runtime = getApiRuntime();
+  runtime.scheduleStart();
+
+  // Issue #938: push the updated surfaces + agent_type into the Rust core
+  // so deferred mounts (mounts called after `startAgent()` / first
+  // heartbeat) are reflected in the next heartbeat envelope. No-op when
+  // the runtime hasn't started yet — startup-time computation in
+  // `ApiRuntime.start()` already picks up the current registry state via
+  // `buildAgentSpecContribution()`. Smart-diffed inside the Rust runtime,
+  // so the canonical "mount before startAgent" pattern (which queues
+  // multiple mounts before the first heartbeat fires) generates at most
+  // one redundant no-op command.
+  //
+  // Tolerant of test fixtures that mock the api-runtime singleton with
+  // a partial object — same defensive pattern as the job submitter
+  // provider above.
+  if (typeof (runtime as { pushSurfacesUpdate?: () => void }).pushSurfacesUpdate === "function") {
+    (runtime as { pushSurfacesUpdate: () => void }).pushSurfacesUpdate();
+  }
 }
 
 /**

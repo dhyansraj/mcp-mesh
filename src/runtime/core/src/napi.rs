@@ -419,6 +419,33 @@ impl JsAgentHandle {
         let handle = self.inner.lock().await;
         Ok(handle.update_port_async(port).await)
     }
+
+    /// Update the A2A surfaces and agent_type registered with the registry
+    /// (issue #938 — mid-flight `mesh.a2a.mount(...)` parity with Python's
+    /// per-heartbeat `_build_a2a_surfaces`).
+    ///
+    /// Uses smart diffing — only triggers a full heartbeat when either the
+    /// agent_type or the serialized surfaces JSON has actually changed.
+    /// Empty-string surfaces payloads are treated as `null` so the wire
+    /// stays clean (matches the constructor-time normalization).
+    ///
+    /// Call this from the SDK after each `mesh.a2a.mount(...)` so deferred
+    /// mounts (mounts registered after `startAgent()` / first heartbeat) are
+    /// reflected in the next heartbeat envelope rather than silently dropped.
+    ///
+    /// @param agentType - New agent_type ("a2a", "api", or "mcp_agent")
+    /// @param surfaces - JSON-encoded surfaces array (matches `JsAgentSpec.surfaces`),
+    ///                   or null to clear the field
+    /// @returns true if the update was sent successfully
+    #[napi]
+    pub async fn update_surfaces(
+        &self,
+        agent_type: String,
+        surfaces: Option<String>,
+    ) -> Result<bool> {
+        let handle = self.inner.lock().await;
+        Ok(handle.update_surfaces_async(agent_type, surfaces).await)
+    }
 }
 
 /// Start an agent runtime with the given specification.

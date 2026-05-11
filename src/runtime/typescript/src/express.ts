@@ -273,18 +273,15 @@ export class MeshExpress {
     const routes = registry.getRoutes();
     const tools = buildToolSpecs(routes);
 
-    // Issue #933: flip agent_type to "a2a" when any mesh.a2a.mount(...)
-    // surface is registered (spec §2.3 / §8). A2A surfaces and mesh.route()
-    // routes coexist on the same agent; agent_type=a2a does NOT mean "no
-    // other routes" (matches Python's heartbeat_preparation.py:371-389).
-    const a2aRegistry = A2AProducerRegistry.getInstance();
-    const a2aSurfaces = a2aRegistry.hasSurfaces()
-      ? a2aRegistry.buildHeartbeatSurfaces()
-      : [];
-    const agentType = a2aSurfaces.length > 0 ? "a2a" : "api";
-    const surfacesJson = a2aSurfaces.length > 0
-      ? JSON.stringify(a2aSurfaces)
-      : undefined;
+    // Issue #933 / #938: flip agent_type to "a2a" when any
+    // mesh.a2a.mount(...) surface is registered (spec §2.3 / §8). A2A
+    // surfaces and mesh.route() routes coexist on the same agent;
+    // agent_type=a2a does NOT mean "no other routes" (matches Python's
+    // heartbeat_preparation.py:371-389). Centralized in
+    // A2AProducerRegistry.buildAgentSpecContribution so the startup-time
+    // value matches the post-mount push path (#938 fix).
+    const { agentType, surfacesJson } =
+      A2AProducerRegistry.getInstance().buildAgentSpecContribution("api");
 
     const spec: JsAgentSpec = {
       // Base name (shared across replicas), unique ID via agentId.
