@@ -69,6 +69,11 @@ import { findAndSetBasePath } from "./template.js";
 import { getTlsOptions, getTlsConfigCached, prepareTls, cleanupTls } from "./tls-config.js";
 import { closeHttpPool } from "./http-pool.js";
 import { dispatch as poolDispatch, closePool } from "./tool-worker-pool.js";
+import {
+  A2AClient,
+  A2ABearer,
+  type A2AClientConfig,
+} from "./a2a/index.js";
 
 /**
  * Globally-set symbol that user agent code can check to detect whether it
@@ -199,6 +204,25 @@ export class MeshAgent {
    * that own no task=true tools.
    */
   private _claimDispatchers: ClaimDispatcher[] = [];
+
+  /**
+   * Issue #917: cache of `A2AClient` instances keyed by their
+   * `(url, skillId, auth, timeoutMs)` tuple so multiple consumer
+   * tools targeting the same backend share one outbound connection
+   * pool. Closed via `close()` on agent shutdown.
+   */
+  private _a2aClients: Map<string, A2AClient> = new Map();
+
+  /**
+   * Issue #917: stable opaque IDs for `A2ABearer` instances used in
+   * the A2AClient cache key. Bearer fields are private so we cannot
+   * fingerprint by content (would also be a security risk — two
+   * tools with distinct literal tokens must NEVER share a cache
+   * entry). Identity-based keying is the safe default. `WeakMap`
+   * lets bearers be GC'd when the registering tool is removed.
+   */
+  private _bearerIds: WeakMap<A2ABearer, string> = new WeakMap();
+  private _nextBearerId = 0;
 
   constructor(server: FastMCP, config: AgentConfig) {
     if (_isWorkerMode) {
@@ -380,6 +404,71 @@ export class MeshAgent {
       }
     }
 
+    // Issue #917: validate a2aConfig at registration time so misuse fails
+    // loud BEFORE the agent talks to the registry. Match the Python
+    // `mesh.a2a_consumer` and Java `@A2AConsumer` startup-time checks.
+    let a2aClient: A2AClient | null = null;
+    if (def.a2aConfig !== undefined) {
+      const cfg = def.a2aConfig;
+      if (!cfg.url || cfg.url.trim() === "") {
+        throw new Error(
+          `addTool({ a2aConfig }) for tool '${toolName}': url must be ` +
+            `a non-empty string.`,
+        );
+      }
+      if (cfg.timeoutMs !== undefined) {
+        if (!Number.isFinite(cfg.timeoutMs) || cfg.timeoutMs <= 0) {
+          throw new Error(
+            `addTool({ a2aConfig }) for tool '${toolName}': timeoutMs ` +
+              `must be a finite positive number (got ${cfg.timeoutMs}).`,
+          );
+        }
+      }
+      if (cfg.pollIntervalMs !== undefined) {
+        if (!Number.isFinite(cfg.pollIntervalMs) || cfg.pollIntervalMs <= 0) {
+          throw new Error(
+            `addTool({ a2aConfig }) for tool '${toolName}': ` +
+              `pollIntervalMs must be a finite positive number ` +
+              `(got ${cfg.pollIntervalMs}).`,
+          );
+        }
+      }
+      if (cfg.pollIntervalMaxMs !== undefined) {
+        if (
+          !Number.isFinite(cfg.pollIntervalMaxMs) ||
+          cfg.pollIntervalMaxMs <= 0
+        ) {
+          throw new Error(
+            `addTool({ a2aConfig }) for tool '${toolName}': ` +
+              `pollIntervalMaxMs must be a finite positive number ` +
+              `(got ${cfg.pollIntervalMaxMs}).`,
+          );
+        }
+      }
+      if (
+        cfg.pollIntervalMs !== undefined &&
+        cfg.pollIntervalMaxMs !== undefined &&
+        cfg.pollIntervalMaxMs < cfg.pollIntervalMs
+      ) {
+        throw new Error(
+          `addTool({ a2aConfig }) for tool '${toolName}': ` +
+            `pollIntervalMaxMs (${cfg.pollIntervalMaxMs}) must be >= ` +
+            `pollIntervalMs (${cfg.pollIntervalMs}).`,
+        );
+      }
+      if (!this._workerMode) {
+        const skillId = cfg.skillId ?? def.capability ?? toolName;
+        a2aClient = this._getOrBuildA2AClient({
+          url: cfg.url,
+          skillId,
+          auth: this._buildBearerFromConfig(cfg.auth),
+          timeoutMs: cfg.timeoutMs,
+          pollIntervalMs: cfg.pollIntervalMs,
+          pollIntervalMaxMs: cfg.pollIntervalMaxMs,
+        });
+      }
+    }
+
     // Worker mode: register the raw execute fn in the worker tool map and
     // skip FastMCP registration, dependency wiring, and metadata storage.
     // The worker entry will look up tools by name when handling dispatched
@@ -434,13 +523,7 @@ export class MeshAgent {
     // Create wrapper that injects dependencies positionally and handles tracing
     const wrappedExecute = async (
       args: z.infer<T>,
-    ): Promise<
-      | string
-      | {
-          content: Array<{ type: "text"; text: string }>;
-          structuredContent?: unknown;
-        }
-    > => {
+    ): Promise<string> => {
       // Build positional deps array using composite keys (toolName:dep_index)
       // Phase 1 MeshJob substrate (consumer-side): if meshJobDepIndex is
       // set, swap the McpMeshTool proxy at that slot for a
@@ -524,9 +607,16 @@ export class MeshAgent {
       // long-running by definition and benefit less from isolation
       // (their wall-clock time is dominated by the user's `await`s,
       // not CPU bursts that block the event loop).
+      // Issue #917: A2A consumer tools force-disable isolation along
+      // with job-bound tools. The framework-injected `A2AClient` wraps
+      // an undici dispatcher handle that cannot be cleanly serialised
+      // across the worker_threads boundary; running inline keeps the
+      // cached client + connection pool intact across calls.
+      const isA2aBound = a2aClient !== null;
       const isJobBound = isTaskTool || meshJobDepIndex !== undefined;
       const isolationEnabled =
         !isJobBound &&
+        !isA2aBound &&
         (process.env.MCP_MESH_TOOL_ISOLATION ?? "true").toLowerCase() !== "false";
 
       try {
@@ -617,6 +707,14 @@ export class MeshAgent {
                   controller,
                   meshJobParamIndex,
                 );
+                // Issue #917: append the framework-cached A2AClient as
+                // the trailing positional arg when this tool declares
+                // a2aConfig. Mirrors the producer-side JobController
+                // splice — A2AClient never participates in the
+                // ordered-deps math, it always lands last.
+                if (a2aClient !== null) {
+                  callArgs.push(a2aClient);
+                }
                 return await runWithJobContext(
                   jobId,
                   deadlineSecs,
@@ -628,26 +726,33 @@ export class MeshAgent {
                   retryOn,
                 );
               }
+              if (a2aClient !== null) {
+                return await (execute as (...a: unknown[]) => unknown)(
+                  cleanArgs,
+                  ...(depsArray as (McpMeshTool | null)[]),
+                  a2aClient,
+                );
+              }
               return await execute(cleanArgs, ...(depsArray as (McpMeshTool | null)[]));
             });
           });
         }
 
-        // Auto-serialize non-string results (like Python SDK does)
-        // This allows users to return natural types (numbers, objects, arrays)
-        // without manually calling JSON.stringify() or String()
+        // Auto-serialize non-string results (like Python SDK does).
+        // NOTE: structuredContent removed in #917 — FastMCP TS rejects it via
+        // strict zod schema (ContentResultZodSchema.strict()) even though
+        // the field is part of the MCP spec. Re-enable when FastMCP TS
+        // upstream accepts the field. Tracked in #925.
         if (typeof result === "string") {
           return result;
         } else if (result === undefined || result === null) {
           return "";
         } else {
-          // Emit MCP envelope with both content[0].text (JSON string) and
-          // structuredContent (parsed object) for parity with Python FastMCP.
-          const text = JSON.stringify(result);
-          return {
-            content: [{ type: "text", text }],
-            structuredContent: result,
-          };
+          // Return JSON-stringified text only — every consumer parses
+          // content[0].text back into an object anyway. FastMCP TS will
+          // auto-build {content: [{type: "text", text: <string>}]} from
+          // this bare string return, satisfying its strict schema.
+          return JSON.stringify(result);
         }
       } catch (err) {
         success = false;
@@ -725,6 +830,12 @@ export class MeshAgent {
           controller,
           meshJobParamIndex,
         );
+        // Issue #917: A2A consumer tools dispatched via the claim
+        // path get the same trailing A2AClient argument as the
+        // inbound HTTP path.
+        if (a2aClient !== null) {
+          callArgs.push(a2aClient);
+        }
         return await (execute as (...a: unknown[]) => unknown)(...callArgs);
       };
       this._taskHandlers.set(capability, { handler, retryOn });
@@ -757,6 +868,13 @@ export class MeshAgent {
       task: def.task === true,
       meshJobParamIndex: def.meshJobParamIndex,
       meshJobDepIndex: def.meshJobDepIndex,
+      // Issue #917: A2A consumer marker so heartbeat-build appends the
+      // surrounding agent name to the tag list before shipping to the
+      // registry. Captured here at addTool time so a downstream rename
+      // of `this.config.name` doesn't desync the registered tag.
+      a2aConsumer: def.a2aConfig !== undefined,
+      a2aAgentName:
+        def.a2aConfig !== undefined ? this.config.name : undefined,
     });
 
     return this;
@@ -819,6 +937,70 @@ export class MeshAgent {
     }
 
     return this;
+  }
+
+  /**
+   * Issue #917: build an `A2ABearer` (or undefined) from the
+   * user-friendly auth config supported on `MeshA2AConfig.auth`. The
+   * config can be either an `{ token, tokenEnv }` shorthand object OR
+   * a pre-built `A2ABearer` instance the user constructed manually.
+   *
+   * Tightened to `instanceof A2ABearer` so a stray `{ token,
+   * authorizationHeader: () => ... }` object cannot duck-type its way
+   * past A2ABearer's validation (which catches blank tokens and
+   * mutually-exclusive `token`/`tokenEnv`).
+   */
+  private _buildBearerFromConfig(
+    auth: import("./types.js").MeshA2AConfig["auth"],
+  ): A2ABearer | undefined {
+    if (auth === undefined) return undefined;
+    if (auth instanceof A2ABearer) return auth;
+    return new A2ABearer(auth as { token?: string; tokenEnv?: string });
+  }
+
+  /**
+   * Issue #917: cache `A2AClient` instances by their config tuple so
+   * multiple consumer tools targeting the same backend share one
+   * outbound connection pool. Auth instances participate in the cache
+   * key by reference (same `A2ABearer` ref → same client); two
+   * separately-constructed bearers — even ones holding identical
+   * tokens — get separate clients. Identity-based keying is the safe
+   * default: A2ABearer's private fields make content-fingerprinting
+   * impossible from outside, and a content-derived key risks leaking
+   * tool-A's bearer onto tool-B's outbound traffic.
+   */
+  private _bearerCacheKey(
+    bearer: A2ABearer | import("./a2a/a2a-bearer.js").A2ABearerConfig | undefined,
+  ): string {
+    if (!bearer) return "none";
+    // A2AClientConfig.auth permits a raw A2ABearerConfig too, but the
+    // call site below always normalises via `_buildBearerFromConfig`
+    // first, so in practice we only ever see real A2ABearer instances.
+    // Defensively pass-through the config-shape case as a content-free
+    // fallback key — never collide with the bearer-id namespace.
+    if (!(bearer instanceof A2ABearer)) return "raw-config";
+    let id = this._bearerIds.get(bearer);
+    if (id === undefined) {
+      id = `bearer-${this._nextBearerId++}`;
+      this._bearerIds.set(bearer, id);
+    }
+    return id;
+  }
+
+  private _getOrBuildA2AClient(config: A2AClientConfig): A2AClient {
+    const key = [
+      config.url,
+      config.skillId,
+      this._bearerCacheKey(config.auth),
+      config.timeoutMs ?? "default",
+      config.pollIntervalMs ?? "default",
+      config.pollIntervalMaxMs ?? "default",
+    ].join("|");
+    const existing = this._a2aClients.get(key);
+    if (existing) return existing;
+    const client = new A2AClient(config);
+    this._a2aClients.set(key, client);
+    return client;
   }
 
   /**
@@ -1188,11 +1370,29 @@ export class MeshAgent {
           combinedWarnings.push(...r.warnings);
         }
 
+        // Issue #917: when this tool was registered with a2aConfig,
+        // append the consumer agent's name to the tag list (defensive
+        // copy — never mutate meta.tags). Skips when the agent has
+        // no name (consumer-only / nameless agent) or when the tag
+        // already appears, mirrors Java's
+        // MeshToolRegistry.injectConsumerNameTags semantics.
+        let effectiveTags = meta.tags;
+        if (meta.a2aConsumer) {
+          const agentName = meta.a2aAgentName;
+          if (
+            agentName &&
+            agentName.trim() !== "" &&
+            !meta.tags.includes(agentName)
+          ) {
+            effectiveTags = [...meta.tags, agentName];
+          }
+        }
+
         return {
           functionName: name,
           capability: meta.capability,
           version: meta.version,
-          tags: meta.tags,
+          tags: effectiveTags,
           description: meta.description,
           // Pass dependencies to Rust core for registry resolution
           // Note: tags may contain nested arrays for OR alternatives (TagSpec[])
@@ -1552,6 +1752,18 @@ export class MeshAgent {
       }
     }
     this._claimDispatchers = [];
+    // Issue #917: mark all cached A2AClients closed so any in-flight
+    // user code raises cleanly instead of reusing a torn-down instance.
+    // Close in parallel so one slow client doesn't block the others —
+    // the undici Agent pool is shared via closeHttpPool() below.
+    const closePromises = Array.from(this._a2aClients.values()).map((client) =>
+      client.close().catch((err) => {
+        console.warn("[mesh-a2a] Error closing A2AClient:", err);
+        return null;
+      }),
+    );
+    await Promise.allSettled(closePromises);
+    this._a2aClients.clear();
     try {
       await closeHttpPool();
     } catch (err) {

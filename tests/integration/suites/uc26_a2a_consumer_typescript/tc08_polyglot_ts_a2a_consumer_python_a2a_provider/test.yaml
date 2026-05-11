@@ -1,0 +1,164 @@
+# tc08_polyglot_ts_a2a_consumer_python_a2a_provider — explicit
+# polyglot smoke for issue #917 Phase 3.
+#
+# While tc04/tc05/tc06 ARE all polyglot by construction (TS consumer +
+# Python A2A surface + Python producer + Python caller), this dedicated
+# test is tagged "polyglot" so it shows up in the polyglot tag filter
+# alongside uc23 tc17-tc22 (the MeshJob polyglot matrix) and uc27 tc08
+# (Java polyglot). Validates the same shape as tc04 but is the
+# canonical entry-point for "TS A2A consumer can bridge a Python A2A
+# producer end-to-end".
+#
+# Stack identical to tc04 — caller submits + waits, asserts the
+# producer's payload bubbles all the way back through the TS bridge.
+
+name: "MeshA2A polyglot: TS A2A consumer commissions Python A2A provider"
+description: "TS A2AClient.submit + A2AJob.bridge -> Python A2A surface -> Python long-task-provider; Python caller observes completed report"
+tags:
+  - a2a
+  - typescript
+  - python
+  - polyglot
+  - issue-917
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts (Python provider + A2A surface + TS consumer + Python caller)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/report-a2a-agent /workspace/
+      cp -rL /uc-artifacts/consumer-report-agent-ts /workspace/
+      cp -rL /uc-artifacts/caller-agent-report /workspace/
+
+  - name: "Install long-task-provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install report-a2a-agent deps"
+    handler: pip-install
+    path: /workspace/report-a2a-agent
+
+  - name: "Install consumer-report-agent-ts deps"
+    handler: npm-install
+    path: /workspace/consumer-report-agent-ts
+
+  - name: "Install caller-agent-report deps"
+    handler: pip-install
+    path: /workspace/caller-agent-report
+
+  - routine: start_registry_consumer
+
+  - name: "Start Python long-task-provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py -d
+
+  - name: "Wait for Python provider"
+    handler: wait
+    seconds: 12
+
+  - name: "Start Python report-a2a-agent (port 9091)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start report-a2a-agent/main.py -d
+
+  - name: "Wait for generate_report DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Start TS consumer-report-agent-ts (port 9211)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start consumer-report-agent-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9211 -d
+
+  - name: "Wait for TS consumer to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null | jq -r \
+          '.agents[] | select(.name=="report-consumer") | .status' 2>/dev/null || echo "")
+        if [ "$STATUS" = "healthy" ]; then
+          echo "TS consumer healthy after ${i}x2s"
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: TS consumer not healthy within 120s (last status='$STATUS')"
+      meshctl logs consumer-report-agent-ts 2>&1 | tail -80 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start Python caller-agent-report (port 9213)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start caller-agent-report/main.py -d
+
+  - name: "Wait for caller report-dep DI resolution"
+    handler: wait
+    seconds: 25
+
+  - name: "Verify all 4 agents registered (polyglot stack)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  - name: "Submit report job via Python caller's commission_report_async"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_report_async '{"user_id":"polyglot","sections":["intro","analysis"]}' --raw
+    capture: submit_resp
+    timeout: 30
+
+  # Same nominal timing as tc04 — 2 sections × ~2s = ~4s compute +
+  # nested claim cycles ~10s + TS startup slack.
+  - name: "Wait for TS bridge to drive the polyglot job to terminal"
+    handler: wait
+    seconds: 30
+
+  - name: "Read final mesh job status"
+    handler: shell
+    workdir: /workspace
+    command: |
+      JOB_ID=$(echo '${captured.submit_resp}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      meshctl call __mesh_job_status "{\"job_id\":\"${JOB_ID}\"}"
+    capture: commission_response
+    timeout: 30
+
+assertions:
+  - expr: "${captured.agent_list} contains 'long-task-provider'"
+    message: "Python long-task-provider should be registered"
+  - expr: "${captured.agent_list} contains 'report-a2a-agent'"
+    message: "Python report-a2a-agent should be registered"
+  - expr: "${captured.agent_list} contains 'report-consumer'"
+    message: "TS consumer-report-agent-ts should be registered as 'report-consumer'"
+  - expr: "${captured.agent_list} contains 'report-caller'"
+    message: "Python caller-agent-report should be registered as 'report-caller'"
+
+  - expr: "${captured.submit_resp} contains 'job_id'"
+    message: "Python caller MUST receive a job_id from the TS-bridged report capability"
+
+  - expr: "${captured.commission_response} contains '\"status\": \"completed\"'"
+    message: "polyglot end-to-end MUST drive the job to completed"
+
+  # Producer's payload makes it all the way back: Python producer ->
+  # Python A2A surface -> TS A2AClient -> TS A2AJob.bridge ->
+  # TS JobController.complete -> registry -> Python caller's status read.
+  - expr: "${captured.commission_response} contains 'Generated content for intro'"
+    message: "polyglot path MUST surface the Python producer's intro section"
+  - expr: "${captured.commission_response} contains 'Generated content for analysis'"
+    message: "polyglot path MUST surface the Python producer's analysis section"
+  - expr: "${captured.commission_response} contains '\"user_id\": \"polyglot\"'"
+    message: "polyglot path MUST round-trip the user_id field through every hop"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
