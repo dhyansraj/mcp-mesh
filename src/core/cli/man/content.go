@@ -69,6 +69,12 @@ var guideRegistry = map[string]*Guide{
 		HasTypeScriptVariant: true,
 		HasJavaVariant:       true,
 	},
+	"a2a": {
+		Name:        "a2a",
+		Aliases:     []string{"a2a-consumer", "a2a-producer", "agent-to-agent"},
+		Title:       "A2A (Agent-to-Agent Protocol)",
+		Description: "Bridge external A2A v1.0 endpoints into the mesh and expose mesh tools as A2A skills",
+	},
 	"decorators": {
 		Name:                 "decorators",
 		Aliases:              []string{"decorator"},
@@ -326,7 +332,7 @@ func ListGuides() []*Guide {
 	order := []string{
 		"quickstart", "prerequisites", "tutorial", "overview", "capabilities", "tags",
 		"schema-matching", "decorators",
-		"dependency-injection", "audit", "streaming", "jobs", "health", "registry", "llm", "media", "multimodal",
+		"dependency-injection", "audit", "streaming", "jobs", "a2a", "health", "registry", "llm", "media", "multimodal",
 		"proxies", "api", "environment", "deployment", "observability", "headers",
 		"testing", "scaffold", "cli", "security",
 	}

@@ -239,6 +239,17 @@ nav:
       - Provider Support: multimodal/provider-support.md
       - Storage Configuration: multimodal/media-store.md
 
+  - A2A:
+      - Overview: a2a/overview.md
+      - Producer (Python): a2a/producer.md
+      - Consumer Quick Start: a2a/consumer-quickstart.md
+      - Failover & Federation: a2a/failover.md
+      - Long-Running & SSE: a2a/long-running.md
+      - Authentication: a2a/authentication.md
+      - Scaffolding: a2a/scaffolding.md
+      - Examples Gallery: a2a/examples.md
+      - Architecture & Decisions: a2a/architecture.md
+
   - API Reference:
       - MediaResult: api/media-result.md
       - MediaParam: api/media-param.md

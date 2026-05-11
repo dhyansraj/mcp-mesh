@@ -89,10 +89,42 @@ class A2ABearer:
     so rotating the env var between calls picks up the new value
     without re-decorating the consumer. Raises ``RuntimeError`` if
     neither source yields a value.
+
+    Validates at construction so misconfigurations fail fast at
+    decoration time, not at first call:
+      * exactly one of ``token`` / ``token_env`` must be supplied;
+      * supplied values must be non-blank.
+
+    Mirrors Java ``io.mcpmesh.a2a.A2ABearer`` (PR #919) and TypeScript
+    ``A2ABearer`` (PR #927) for runtime parity.
     """
 
     token_env: Optional[str] = None
     token: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # Mirror Java A2ABearer (PR #919) and TS A2ABearer (PR #927):
+        # validate at construction so misconfigurations fail fast at
+        # decoration time, not at first call. Trim-empty rejection
+        # matches Java's ``trim().isEmpty()`` check.
+        has_token = self.token is not None and self.token.strip() != ""
+        has_env = self.token_env is not None and self.token_env.strip() != ""
+        if has_token and has_env:
+            raise RuntimeError(
+                "A2ABearer: token and token_env are mutually exclusive — "
+                "supply exactly one."
+            )
+        if not has_token and not has_env:
+            # Distinguish "neither supplied" from "supplied but blank"
+            # so the error message points at the right fix.
+            if self.token is not None or self.token_env is not None:
+                raise RuntimeError(
+                    "A2ABearer: token and token_env must be non-blank "
+                    "(received whitespace-only value)."
+                )
+            raise RuntimeError(
+                "A2ABearer: must specify either token or token_env."
+            )
 
     def header(self) -> dict[str, str]:
         tok = self.token or (os.getenv(self.token_env) if self.token_env else None)
