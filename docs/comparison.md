@@ -1,169 +1,146 @@
-# Feature Comparison
+# What MCP Mesh Does
 
-> **MCP Mesh vs Agent Frameworks and Cloud Platforms**
+> A capability catalog organized by lifecycle phase: develop, build, test, run, observe, secure, deploy.
 
-How does MCP Mesh compare to agent frameworks (LangChain, AutoGen, CrewAI) and managed cloud agent services (AWS Bedrock, Google Vertex AI, Azure AI)? This comparison covers development, deployment, security, observability, and enterprise features.
+This page enumerates what mesh ships with, out of the box. For a side-by-side comparison against managed cloud agent platforms (AWS Bedrock, Vertex AI, Azure AI) where the managed-vs-self-hosted trade-off matters, jump to [Cloud Agent Platforms](#vs-cloud-agent-platforms) below.
 
 ---
 
 ## Develop
 
-| Feature          | LangChain | AutoGen | CrewAI | MCP Mesh                              |
-| ---------------- | --------- | ------- | ------ | ------------------------------------- |
-| Scaffold agents  | :x:       | :x:     | :x:    | :white_check_mark: `meshctl scaffold` |
-| Local dev server | :x:       | :x:     | :x:    | :white_check_mark: `meshctl start`    |
-| List agents      | :x:       | :x:     | :x:    | :white_check_mark: `meshctl list`     |
-| Status check     | :x:       | :x:     | :x:    | :white_check_mark: `meshctl status`   |
-| Built-in docs    | :x:       | :x:     | :x:    | :white_check_mark: `meshctl man`      |
-| Hot reload       | :x:       | :x:     | :x:    | :white_check_mark:                    |
-| Local tracing    | :x:       | :x:     | :x:    | :white_check_mark: `meshctl trace`    |
+- **Scaffold agents** — `meshctl scaffold` creates new agents per runtime (Python / Java / TypeScript) with idiomatic project layouts
+- **Local dev server** — `meshctl start` brings up the registry plus your agents in one command — no Docker required
+- **List agents** — `meshctl list` shows live mesh topology including capabilities and tags
+- **Status check** — `meshctl status` gives instant health view across the mesh
+- **Built-in docs** — `meshctl man` covers every feature offline; works as a primer for AI coding assistants
+- **Hot reload** — code changes pick up without restart
+- **Local tracing** — `meshctl trace <id>` walks the full call tree across languages and agents
 
 ---
 
 ## Build
 
-| Feature                                           | LangChain        | AutoGen          | CrewAI           | MCP Mesh                                      |
-| ------------------------------------------------- | ---------------- | ---------------- | ---------------- | --------------------------------------------- |
-| Zero-config Dependency Injection                  | :x:              | :x:              | :x:              | :white_check_mark:                            |
-| Distributed Dynamic DI ([DDDI](concepts/dddi.md)) | :x:              | :x:              | :x:              | :white_check_mark:                            |
-| Capability-based discovery                        | :x:              | :x:              | :x:              | :white_check_mark:                            |
-| Tag-based filtering                               | :x:              | :x:              | :x:              | :white_check_mark:                            |
-| Cross-language support                            | :x:              | :x:              | :x:              | :white_check_mark: Python + Java + TypeScript |
-| Same code local/Docker/K8s                        | :x:              | :x:              | :x:              | :white_check_mark:                            |
-| Monolith mode (single process)                    | :x:              | :x:              | :x:              | :white_check_mark:                            |
-| Distributed mode                                  | :warning: DIY    | :warning: DIY    | :warning: DIY    | :white_check_mark: Auto                       |
-| Structured output                                 | :warning: Manual | :warning: Manual | :warning: Manual | :white_check_mark: Native (Pydantic/Zod)      |
+- **Zero-config dependency injection** — declare capabilities + dependencies on the function; mesh handles wiring
+- **Distributed Dynamic DI ([DDDI](concepts/dddi.md))** — dependencies resolved at runtime across processes, machines, and clouds
+- **Capability-based discovery** — agents declare capabilities, not URLs; resolution is by intent
+- **Tag-based filtering** — `+claude`, `+gpt`, `+v2`, and arbitrary tags refine selection at runtime
+- **Cross-language support** — Python, Java, and TypeScript agents call each other natively via shared Rust FFI core
+- **Multi-protocol bridging** — MCP, A2A v1.0, and REST — consume external A2A producers or expose mesh tools to A2A / REST clients without rewriting business logic
+- **Same code local / Docker / Kubernetes** — environment differences live in config, not code
+- **Monolith mode** — run all agents in one process for fast local iteration
+- **Distributed mode** — scale to many processes with the same code
+- **Structured output** — Pydantic (Python), Zod (TypeScript), Java records — native typed returns from LLMs
 
 ---
 
 ## Test
 
-| Feature                    | LangChain     | AutoGen       | CrewAI        | MCP Mesh                          |
-| -------------------------- | ------------- | ------------- | ------------- | --------------------------------- |
-| Zero-config mocking        | :x:           | :x:           | :x:           | :white_check_mark: Topology-based |
-| Mock by presence           | :x:           | :x:           | :x:           | :white_check_mark:                |
-| No code change for tests   | :x:           | :x:           | :x:           | :white_check_mark:                |
-| No config change for tests | :x:           | :x:           | :x:           | :white_check_mark:                |
-| Integration test support   | :warning: DIY | :warning: DIY | :warning: DIY | :white_check_mark: Native         |
+- **Zero-config mocking** — start the topology you want to test; mesh resolves what's running
+- **Mock by presence** — bring up a stub agent that declares the dependency capability; consumers find it
+- **No code change for tests** — production code IS the test code
+- **No config change for tests** — test environment differences live in agent-start choices, not config files
+- **Integration test support** — tsuite framework ships with mesh for end-to-end suites
 
 ---
 
 ## Multi-LLM
 
-| Feature                 | LangChain          | AutoGen            | CrewAI             | MCP Mesh                    |
-| ----------------------- | ------------------ | ------------------ | ------------------ | --------------------------- |
-| Multi-LLM support       | :white_check_mark: | :white_check_mark: | :white_check_mark: | :white_check_mark:          |
-| Dynamic LLM discovery   | :x:                | :x:                | :x:                | :white_check_mark:          |
-| LLM auto-failover       | :x:                | :x:                | :x:                | :white_check_mark:          |
-| Dynamic tool calls      | :warning: Manual   | :warning: Manual   | :warning: Manual   | :white_check_mark: Native   |
-| LLM provider hot-swap   | :x:                | :x:                | :x:                | :white_check_mark:          |
-| Zero-code LLM providers | :x:                | :x:                | :x:                | :white_check_mark: Scaffold |
+- **Multi-LLM support** — Claude, GPT, Gemini, plus any provider supported by LiteLLM / Vercel AI SDK / Spring AI
+- **Dynamic LLM discovery** — LLM agents are mesh agents; discovered the same way as any tool
+- **LLM auto-failover** — provider goes down, mesh rewires to a peer (e.g., `+claude` falls back to `+gpt` when tagged)
+- **Dynamic tool calls** — LLM picks a tool, mesh dispatches to the right agent — no agentic loop to write
+- **LLM provider hot-swap** — change the active provider without restart
+- **Zero-code LLM providers** — `meshctl scaffold llm-provider` creates a new provider in seconds
 
 ---
 
 ## Agents
 
-| Feature                   | LangChain        | AutoGen            | CrewAI             | MCP Mesh                               |
-| ------------------------- | ---------------- | ------------------ | ------------------ | -------------------------------------- |
-| Agent-to-agent calls      | :warning: Manual | :white_check_mark: | :white_check_mark: | :white_check_mark:                     |
-| Dynamic agent discovery   | :x:              | :x:                | :x:                | :white_check_mark:                     |
-| Agent hot join            | :x:              | :x:                | :x:                | :white_check_mark:                     |
-| Agent hot leave           | :x:              | :x:                | :x:                | :white_check_mark:                     |
-| Agent health checks       | :x:              | :x:                | :x:                | :white_check_mark:                     |
-| N-way agent communication | :x:              | :x:                | :x:                | :white_check_mark: `filter_mode="all"` |
+- **Agent-to-agent calls** — native, typed, with auto-retry and trace propagation
+- **Dynamic agent discovery** — new agents register and become callable without consumer-side changes
+- **Agent hot join** — new agent starts mid-flight, becomes discoverable on next heartbeat tick
+- **Agent hot leave** — graceful shutdown drains in-flight work; orphan-reset handles unclean kills
+- **Agent health checks** — registry tracks per-agent health and drops unhealthy peers from resolution
+- **N-way agent communication** — `filter_mode="all"` calls every consumer of a capability and aggregates results
 
 ---
 
 ## Deploy
 
-| Feature              | LangChain     | AutoGen       | CrewAI        | MCP Mesh                        |
-| -------------------- | ------------- | ------------- | ------------- | ------------------------------- |
-| Docker images        | :warning: DIY | :warning: DIY | :warning: DIY | :white_check_mark: Built-in     |
-| Helm charts          | :x:           | :x:           | :x:           | :white_check_mark:              |
-| Kubernetes-native    | :x:           | :x:           | :x:           | :white_check_mark:              |
-| Auto-scaling         | :x:           | :x:           | :x:           | :white_check_mark: K8s native   |
-| Service discovery    | :warning: DIY | :warning: DIY | :warning: DIY | :white_check_mark: Native       |
-| Zero-downtime deploy | :x:           | :x:           | :x:           | :white_check_mark:              |
-| Environment parity   | :x:           | :x:           | :x:           | :white_check_mark: Local = Prod |
+- **Docker images** — official runtimes published per release
+- **Helm charts** — umbrella + per-agent charts on OCI registry
+- **Kubernetes-native** — declarative deployment with HPA, health probes, and service discovery
+- **Auto-scaling** — Kubernetes-native horizontal pod autoscaling
+- **Service discovery** — built into the registry; no external coordination needed
+- **Zero-downtime deploy** — rolling updates with heartbeat-driven cutover
+- **Environment parity** — same code runs locally, in Docker, and in Kubernetes
 
 ---
 
 ## Observe
 
-| Feature                | LangChain     | AutoGen       | CrewAI        | MCP Mesh                         |
-| ---------------------- | ------------- | ------------- | ------------- | -------------------------------- |
-| Distributed tracing    | :x:           | :x:           | :x:           | :white_check_mark:               |
-| Cross-language tracing | :x:           | :x:           | :x:           | :white_check_mark:               |
-| Local tracing          | :x:           | :x:           | :x:           | :white_check_mark: CLI           |
-| Production tracing     | :x:           | :x:           | :x:           | :white_check_mark: Grafana/Tempo |
-| OpenTelemetry support  | :warning: DIY | :warning: DIY | :warning: DIY | :white_check_mark: Native        |
-| Trace propagation      | :x:           | :x:           | :x:           | :white_check_mark: Auto          |
-| Span visualization     | :x:           | :x:           | :x:           | :white_check_mark: Grafana       |
+- **Distributed tracing** — every cross-agent call carries a trace context
+- **Cross-language tracing** — Python → Java → TypeScript spans land in the same trace tree
+- **Local tracing** — `meshctl trace <id>` renders the call tree in the terminal
+- **Production tracing** — Grafana + Tempo deployment included in the Helm umbrella chart
+- **OpenTelemetry support** — native, no glue code
+- **Trace propagation** — automatic across mesh calls, no manual context wiring
+- **Span visualization** — Grafana dashboards ship with the platform
 
 ---
 
 ## Resilience
 
-| Feature              | LangChain     | AutoGen       | CrewAI        | MCP Mesh                  |
-| -------------------- | ------------- | ------------- | ------------- | ------------------------- |
-| Auto-failover        | :x:           | :x:           | :x:           | :white_check_mark:        |
-| Graceful degradation | :x:           | :x:           | :x:           | :white_check_mark:        |
-| Circuit breaker      | :x:           | :x:           | :x:           | :white_check_mark:        |
-| Retry logic          | :warning: DIY | :warning: DIY | :warning: DIY | :white_check_mark: Native |
-| Dead agent removal   | :x:           | :x:           | :x:           | :white_check_mark: Auto   |
+- **Auto-failover** — capability+tag mechanism rewires consumers transparently when an agent dies
+- **Graceful degradation** — partial mesh failures don't cascade; degraded calls return useful errors
+- **Circuit breaker** — repeated failures from a downstream agent trip the circuit; recovery is automatic
+- **Retry logic** — built into the resolver with configurable policy
+- **Dead agent removal** — orphan-reset sweep drops agents whose heartbeats stop
 
 ---
 
 ## Security
 
-| Feature                     | LangChain | AutoGen | CrewAI | MCP Mesh                                       |
-| --------------------------- | --------- | ------- | ------ | ---------------------------------------------- |
-| Registration trust          | :x:       | :x:     | :x:    | :white_check_mark: X.509 identity verification |
-| Agent-to-agent mTLS         | :x:       | :x:     | :x:    | :white_check_mark: Every call authenticated    |
-| Fine-grained authorization  | :x:       | :x:     | :x:    | :white_check_mark: Header propagation          |
-| Zero-config TLS (dev)       | :x:       | :x:     | :x:    | :white_check_mark: `--tls-auto`                |
-| Vault integration           | :x:       | :x:     | :x:    | :white_check_mark: PKI provider                |
-| SPIRE / workload identity   | :x:       | :x:     | :x:    | :white_check_mark: X.509-SVID                  |
-| Cert rotation via heartbeat | :x:       | :x:     | :x:    | :white_check_mark: Auto                        |
+- **Registration trust** — X.509 identity verification at agent registration
+- **Agent-to-agent mTLS** — every call authenticated; optional auto-rotation
+- **Fine-grained authorization** — header propagation lets agents enforce caller-context rules
+- **Zero-config TLS (dev)** — `--tls-auto` mints self-signed certs for local dev
+- **Vault integration** — HashiCorp Vault as a PKI provider
+- **SPIRE / workload identity** — X.509-SVID rotation via heartbeat
+- **Cert rotation via heartbeat** — automatic, no restarts
 
 ---
 
 ## Architecture
 
-| Feature                       | LangChain     | AutoGen       | CrewAI        | MCP Mesh                      |
-| ----------------------------- | ------------- | ------------- | ------------- | ----------------------------- |
-| Monolith → Distributed        | :x: Rewrite   | :x: Rewrite   | :x: Rewrite   | :white_check_mark: Same code  |
-| Central orchestrator required | :warning: Yes | :warning: Yes | :warning: Yes | :white_check_mark: Not needed |
-| Topology-based wiring         | :x:           | :x:           | :x:           | :white_check_mark:            |
-| Standard protocol             | :x: Custom    | :x: Custom    | :x: Custom    | :white_check_mark: MCP        |
+- **Monolith → distributed without rewrite** — same decorators, same code, different topology
+- **No central orchestrator required** — peer-to-peer mesh, registry is for discovery only
+- **Topology-based wiring** — what's running IS what's connected
+- **Standard protocol** — MCP (Anthropic's open protocol), not custom RPC
 
 ---
 
-## Developer Experience
+## Developer experience
 
-| Feature                 | LangChain             | AutoGen               | CrewAI                | MCP Mesh                            |
-| ----------------------- | --------------------- | --------------------- | --------------------- | ----------------------------------- |
-| Lines of code for agent | ~50+                  | ~50+                  | ~50+                  | **~10**                             |
-| Framework lock-in       | :x: High              | :x: High              | :x: High              | :white_check_mark: Low (decorators) |
-| Learning curve          | Steep                 | Steep                 | Medium                | **Low**                             |
-| Pure Python/Java/TS     | :x: Framework classes | :x: Framework classes | :x: Framework classes | :white_check_mark: Just decorators  |
+- **Lines of code per agent** — ~10 lines for a typical agent
+- **Low framework lock-in** — your code stays regular Python / Java / TypeScript with two mesh decorators
+- **Low learning curve** — if you know FastAPI / Spring / Express, you know mesh
+- **No framework classes** — `@mesh.tool`, `@mesh.agent`, `@mesh.llm` — plain decorators on plain functions
 
 ---
 
 ## Enterprise
 
-| Feature                  | LangChain    | AutoGen      | CrewAI       | MCP Mesh                                 |
-| ------------------------ | ------------ | ------------ | ------------ | ---------------------------------------- |
-| Mature                   | :warning:    | :warning:    | :warning:    | :white_check_mark:                       |
-| Enterprise observability | :x:          | :x:          | :x:          | :white_check_mark:                       |
-| Team development         | :x: Blocking | :x: Blocking | :x: Blocking | :white_check_mark: Non-blocking          |
-| Multi-team support       | :x:          | :x:          | :x:          | :white_check_mark: Capability boundaries |
+- **Mature** — actively developed, production-ready
+- **Enterprise observability** — Grafana + Tempo + Prometheus stack ships with the platform
+- **Non-blocking team development** — capability boundaries let teams build agents independently
+- **Multi-team support** — capability namespaces + tags let teams ship without coordination
 
 ---
 
 ## vs Cloud Agent Platforms
 
-How MCP Mesh compares to managed cloud agent services — AWS Bedrock Agents, Google Vertex AI Agent Builder, and Azure AI Agent Service.
+How MCP Mesh compares to managed cloud agent services — AWS Bedrock Agents, Google Vertex AI Agent Builder, and Azure AI Agent Service. This is a genuine trade-off (managed vs self-hosted, vendor-tied vs portable) rather than a feature gap, so a side-by-side comparison is useful here.
 
 | Feature                            | Bedrock Agents              | Vertex AI Agent Builder     | Azure AI Agent Service      | MCP Mesh                                        |
 | ---------------------------------- | --------------------------- | --------------------------- | --------------------------- | ----------------------------------------------- |
@@ -190,11 +167,12 @@ Cloud platforms give you a managed environment — but lock you into one vendor'
 
 MCP Mesh is designed for **production AI systems** where you need:
 
-- **Zero infrastructure code** - Just decorators, no boilerplate
-- **Dynamic discovery** - Agents find each other automatically
-- **Enterprise operations** - Tracing, failover, and scaling built-in
-- **Standard protocol** - MCP, not proprietary formats
-- **Low lock-in** - Your code stays clean Python/Java/TypeScript
+- **Zero infrastructure code** — just decorators, no boilerplate
+- **Dynamic discovery** — agents find each other automatically
+- **Multi-protocol** — MCP, A2A, and REST agents in one framework
+- **Multi-language** — Python, Java, TypeScript agents calling each other natively
+- **Enterprise operations** — tracing, failover, and scaling built-in
+- **Low lock-in** — your code stays clean Python / Java / TypeScript
 
 [Get Started](python/getting-started/index.md){ .md-button .md-button--primary }
 [View Architecture](concepts/architecture.md){ .md-button }

@@ -15,7 +15,31 @@ MCP Mesh is a complete platform for **building and deploying AI agents to produc
 
 ---
 
-## :rocket: Quick Start
+## :zap: Getting Started
+
+Start with the CLI — fastest way to explore mesh, scaffold agents, and read documentation offline.
+
+`meshctl` is a fully-featured command-line tool that follows you from your first agent through production and beyond: scaffolding, local dev, registry inspection, tracing, observability, deployment, and operations are all one command away. [Explore the full CLI reference →](cli/index.md)
+
+```bash
+# Install the CLI
+npm install -g @mcpmesh/cli
+
+# Explore commands
+meshctl --help
+
+# Built-in documentation
+meshctl man
+```
+
+!!! tip "Turn your AI coding assistant into a mesh expert"
+    Working with Claude Code, Cursor, Copilot, or any other AI coding assistant? Ask it to run `meshctl man` and read through the topics it surfaces. The built-in man pages cover every feature in depth — within a few minutes your assistant will be fluent in mesh, ready to scaffold agents, debug DDDI wiring, and answer architecture questions without you having to copy-paste docs into the chat.
+
+---
+
+## :rocket: Quick Overview
+
+Build multi-agent systems that are production-ready from day one. Mesh handles the operational surface — scaling, security, observability, and seamless routing across protocols (MCP, A2A, REST), languages (Python, Java, TypeScript), and LLM providers — so the code you write stays focused on business logic, in whatever language fits.
 
 === "Python"
 
@@ -226,12 +250,24 @@ Graceful failure handling, auto-reconnection, RBAC support, and real-time monito
 Write agents in Python, TypeScript, or Java — they discover and call each other natively across the mesh via a shared Rust FFI core.
 </div>
 <div class="feature-card" markdown>
+### :material-swap-horizontal: Multi-Protocol Bridging
+Native support for MCP, Google's A2A v1.0, and REST. Consume external A2A producers as mesh capabilities, or expose mesh agents as A2A producers for non-mesh callers — same code, same `@mesh.tool` shape.
+</div>
+<div class="feature-card" markdown>
 ### :brain: Multi-Provider LLM Support
 First-class support for Claude, GPT, and Gemini with agentic tool execution, structured output, and auto-resolution. Any provider supported by LiteLLM, Vercel AI SDK, or Spring AI works out of the box.
 </div>
 <div class="feature-card" markdown>
 ### :camera: Multimodal Support
 Pass images, PDFs, and files between agents and LLMs. Claude, OpenAI, and Gemini each require different API structures for media — the mesh abstracts that away.
+</div>
+<div class="feature-card" markdown>
+### :material-progress-clock: Long-Running with MeshJob
+Mark a tool `task=True` and mesh handles the rest — job persistence, status polling, cancellation, SSE streaming, and retries on transient failure. No queue infrastructure to provision; the registry IS the job substrate.
+</div>
+<div class="feature-card" markdown>
+### :material-console-line: meshctl CLI
+A `kubectl`-style command-line tool that follows you from first agent to production — scaffold new agents, inspect the registry, view traces, call tools directly, and manage agent lifecycle. Same commands work against local dev, Docker, and Kubernetes.
 </div>
 </div>
 
@@ -245,6 +281,7 @@ Pass images, PDFs, and files between agents and LLMs. Claude, OpenAI, and Gemini
 
     - **Zero Boilerplate**: Simple decorators/functions replace hundreds of lines of networking code
     - **Python, Java & TypeScript**: Write MCP servers as simple functions in your preferred language — no manual client/server setup
+    - **Multi-Protocol**: Build MCP, A2A, and REST agents with the same framework. Bridge between protocols — consume external A2A producers, or expose mesh tools to A2A clients — without rewriting business logic
     - **Web Framework Integration**: Inject MCP agents directly into FastAPI (Python), Spring Boot (Java), or Express (TypeScript) APIs seamlessly
     - **LLM as Dependencies**: Inject LLMs just like MCP agents — dynamic prompts with Jinja2 (Python), FreeMarker (Java), or Handlebars (TypeScript)
     - **Seamless Development Flow**: Code locally, test with Docker Compose, deploy to Kubernetes — same code, zero changes
@@ -291,32 +328,6 @@ Pass images, PDFs, and files between agents and LLMs. Claude, OpenAI, and Gemini
     - **Future-Proof Architecture**: Add new AI capabilities without disrupting existing systems
 
     Turn your AI strategy from "promising experiments" to "competitive advantage in production."
-
----
-
-## :chart_with_upwards_trend: MCP vs MCP Mesh
-
-| Challenge                | Traditional MCP                  | MCP Mesh                       |
-| ------------------------ | -------------------------------- | ------------------------------ |
-| **Connect 5 servers**    | 200+ lines of networking code    | 2 decorators                   |
-| **Handle failures**      | Manual error handling everywhere | Automatic graceful degradation |
-| **Scale to production**  | Custom Kubernetes setup          | `helm install mcp-mesh`        |
-| **Monitor system**       | Build custom dashboards          | Built-in observability stack   |
-| **Add new capabilities** | Restart and reconfigure clients  | Auto-discovery, zero downtime  |
-
----
-
-## :vs: MCP Mesh vs Other Frameworks
-
-| Framework     | K8s Native              | Independent Scaling               | Service Discovery           | Best For              |
-| ------------- | ----------------------- | --------------------------------- | --------------------------- | --------------------- |
-| **MCP Mesh**  | :white_check_mark: Helm | :white_check_mark: Per-agent pods | :white_check_mark: Built-in | Production deployment |
-| LangGraph     | :x: Manual              | :x: Same process                  | :x: DIY                     | Complex workflows     |
-| CrewAI        | :x: Manual              | :x: Limited                       | :x: None                    | Rapid prototyping     |
-| AutoGen       | :x: Manual              | :x: Manual                        | :x: DIY                     | Enterprise/Azure      |
-| OpenAI Agents | :x: Manual              | :x: Manual                        | :x: None                    | OpenAI-centric        |
-
-[:material-arrow-right: Full comparison with code examples](00-why-mcp-mesh/index.md){ .md-button }
 
 ---
 
@@ -411,6 +422,7 @@ Pass images, PDFs, and files between agents and LLMs. Claude, OpenAI, and Gemini
 ## :pray: Acknowledgments
 
 - **[Anthropic](https://anthropic.com)** for creating the MCP protocol
+- **[Google](https://a2a-protocol.org/)** for the A2A protocol
 - **[FastMCP](https://github.com/jlowin/fastmcp)** for excellent MCP server foundations
 - **[Kubernetes](https://kubernetes.io)** community for the infrastructure platform
 - All **contributors** who help make MCP Mesh better

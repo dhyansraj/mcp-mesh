@@ -1,9 +1,9 @@
 <div class="runtime-crossref">
   <span class="runtime-crossref-icon">☕</span>
-  <span>Looking for Java? See <a href="../../java/llm/index/">Java LLM Integration</a></span>
+  <span>Looking for Java? See <a href="../../java/llm/">Java LLM Integration</a></span>
   <span> | </span>
   <span class="runtime-crossref-icon">📘</span>
-  <span>Looking for TypeScript? See <a href="../../typescript/llm/index/">TypeScript LLM Integration</a></span>
+  <span>Looking for TypeScript? See <a href="../../typescript/llm/">TypeScript LLM Integration</a></span>
 </div>
 
 # LLM Integration
@@ -168,8 +168,8 @@ alternative to AI Studio. Same handler, same HINT-mode prompt shaping for
 structured output with tools — only the model prefix and auth env vars change.
 
 The TypeScript and Java runtimes have equivalent support — see
-[TypeScript LLM Integration](../../typescript/llm/index/) and
-[Java LLM Integration](../../java/llm/index/) for the runtime-specific
+[TypeScript LLM Integration](../../typescript/llm/index.md) and
+[Java LLM Integration](../../java/llm/index.md) for the runtime-specific
 auth env vars (each follows its own ecosystem's naming convention).
 
 ### When to use Vertex AI vs AI Studio
