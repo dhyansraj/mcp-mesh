@@ -215,6 +215,31 @@ meshctl scaffold a2a-consumer --offline --lang python --name placeholder
 
 The scaffolder reads `card.authentication.schemes` and wires up the bearer block automatically when bearer is advertised. Default env-var name is `A2A_BEARER_TOKEN` — override with `--auth-env`.
 
+### SSRF protection (issue #928)
+
+`meshctl scaffold a2a-consumer` fetches an arbitrary user-supplied URL, so it
+treats the network as hostile by default:
+
+- The initial `--url` is rejected if its host resolves to a loopback,
+  link-local (`169.254.0.0/16` — including `169.254.169.254` cloud metadata),
+  RFC 1918 private, IPv6 ULA, or the `0.0.0.0/8` "this network" range.
+- HTTP redirects are bounded to 5 hops and each redirect destination is
+  re-checked against the same blocklist.
+- The TCP dialer re-validates the resolved IP at connection time, so a
+  hostname that resolves "public" on the static check can't be re-resolved
+  to a private IP at dial time (DNS rebinding / TOCTOU).
+
+For local development against a producer on `localhost` or an RFC 1918 LAN,
+opt out with `--allow-private-network`:
+
+```bash
+meshctl scaffold a2a-consumer --url http://localhost:9090/agents/date \
+    --lang python --name date-bridge --port 9201 \
+    --allow-private-network
+```
+
+`--offline` skips the fetch entirely and is unaffected by the guard.
+
 ## Working examples
 
 - `examples/a2a/date_a2a_agent.py` — Python A2A producer (sync)
