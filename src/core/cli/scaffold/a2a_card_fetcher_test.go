@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -281,6 +282,14 @@ func TestFetchAgentCard_PrivateInitialURL_Rejected(t *testing.T) {
 				"error must hint at the override flag")
 		})
 	}
+
+	// Sentinel reachability: callers can match the SSRF rejection with
+	// errors.Is(err, errPrivateDestination) regardless of the wrapping
+	// message. One assertion on the simplest path proves the wrap.
+	_, err := FetchAgentCard("http://127.0.0.1:8080", FetchOptions{})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errPrivateDestination),
+		"SSRF rejection must wrap errPrivateDestination so callers can match with errors.Is")
 }
 
 // TestFetchAgentCard_PrivateInitialURL_AllowedWithFlag asserts the override

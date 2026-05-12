@@ -156,7 +156,7 @@ func newCardFetchClient(opts FetchOptions) *http.Client {
 					return nil, fmt.Errorf("dial: cannot parse resolved IP %q for %s", ipStr, host)
 				}
 				if isBlockedAddr(addr) {
-					return nil, fmt.Errorf("refusing to dial %s (resolves to %s, a private/loopback/link-local address); pass --allow-private-network to override", host, addr)
+					return nil, fmt.Errorf("refusing to dial %s (resolves to %s, a private/loopback/link-local address); pass --allow-private-network to override: %w", host, addr, errPrivateDestination)
 				}
 			}
 			// Use the first resolved IP. This guarantees the IP we just
@@ -199,7 +199,7 @@ func checkURLHostPublic(rawURL string) error {
 	// If the host is already a literal IP, check it directly without DNS.
 	if addr, ok := parseIP(host); ok {
 		if isBlockedAddr(addr) {
-			return fmt.Errorf("refusing to fetch %s: %s is a private/loopback/link-local address; pass --allow-private-network to override", rawURL, addr)
+			return fmt.Errorf("refusing to fetch %s: %s is a private/loopback/link-local address; pass --allow-private-network to override: %w", rawURL, addr, errPrivateDestination)
 		}
 		return nil
 	}
