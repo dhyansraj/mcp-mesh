@@ -35,8 +35,9 @@ type MCPResponse struct {
 
 // MCPError represents an MCP JSON-RPC error
 type MCPError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
 }
 
 // MCPCallResult holds the result and trace information from an MCP call
@@ -681,6 +682,9 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 	}
 
 	if mcpResp.Error != nil {
+		if mcpResp.Error.Data != nil {
+			return nil, fmt.Errorf("MCP error %d: %s (data: %v)", mcpResp.Error.Code, mcpResp.Error.Message, mcpResp.Error.Data)
+		}
 		return nil, fmt.Errorf("MCP error %d: %s", mcpResp.Error.Code, mcpResp.Error.Message)
 	}
 
@@ -792,6 +796,9 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 	}
 
 	if mcpResp.Error != nil {
+		if mcpResp.Error.Data != nil {
+			return nil, fmt.Errorf("MCP error %d: %s (data: %v)", mcpResp.Error.Code, mcpResp.Error.Message, mcpResp.Error.Data)
+		}
 		return nil, fmt.Errorf("MCP error %d: %s", mcpResp.Error.Code, mcpResp.Error.Message)
 	}
 

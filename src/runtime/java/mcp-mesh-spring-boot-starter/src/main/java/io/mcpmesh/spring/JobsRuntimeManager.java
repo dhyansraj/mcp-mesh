@@ -117,9 +117,11 @@ public final class JobsRuntimeManager implements SmartLifecycle {
         //    true status from the registry's dependency events).
         wireConsumers(instanceId, registryUrl);
 
-        // Helper tools are registered earlier (in MeshAutoConfiguration's
-        // buildAgentSpec) so the synthetic ToolSpecs make it into the
-        // heartbeat catalog. Don't double-register here.
+        // Helper tools are registered eagerly in MeshAutoConfiguration#meshRuntime
+        // (synchronous bean-construction phase) so the synthetic handlers are
+        // visible to mcpStatelessServer when it snapshots its tool list, and the
+        // synthetic ToolSpecs make it into the heartbeat catalog via toolRegistry.
+        // Don't double-register here.
     }
 
     private void wireProducers(String instanceId, String registryUrl) {

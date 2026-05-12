@@ -384,6 +384,7 @@ public class MeshAutoConfiguration {
     public MeshRuntime meshRuntime(
             MeshProperties properties,
             MeshToolRegistry toolRegistry,
+            MeshToolWrapperRegistry wrapperRegistry,
             MeshLlmRegistry llmRegistry,
             MeshConfigResolver configResolver,
             ObjectMapper objectMapper) {
@@ -396,6 +397,22 @@ public class MeshAutoConfiguration {
         // @Component that autowired MeshRuntime — see issue #937.
         AgentSpec spec = buildBaseAgentSpec(properties, toolRegistry, llmRegistry,
             configResolver);
+
+        // Register MeshJob helper tools (__mesh_job_status / __mesh_job_result /
+        // __mesh_job_cancel) and LLM provider tool handlers EAGERLY into the
+        // wrapper registry. mcpStatelessServer (see MeshMcpServerConfiguration)
+        // snapshots tool handlers at bean-construction time — anything registered
+        // later (in a SmartInitializingSingleton) won't be visible to the MCP SDK
+        // and every call would hit the upstream "Unknown tool" sentinel. Neither
+        // call walks @Component beans, so the bean-cycle that #937 fixed is
+        // preserved by keeping the bean-walking work in finalizeAgentSpec().
+        try {
+            JobsHelperToolsRegistrar.register(toolRegistry, wrapperRegistry, spec.getRegistryUrl());
+        } catch (Exception e) {
+            log.warn("Failed to register MeshJob helper tools at startup", e);
+        }
+        registerLlmProviderHandlers(wrapperRegistry);
+
         log.info("Creating MeshRuntime for agent '{}' (tools/surfaces populated post-init)",
             spec.getName());
 
@@ -432,12 +449,11 @@ public class MeshAutoConfiguration {
     public SmartInitializingSingleton meshAgentSpecFinalizer(
             MeshRuntime runtime,
             MeshToolRegistry toolRegistry,
-            MeshToolWrapperRegistry wrapperRegistry,
             MeshLlmRegistry llmRegistry,
             ObjectMapper objectMapper,
             ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
             ObjectProvider<MeshA2ARegistry> a2aRegistryProvider) {
-        return () -> finalizeAgentSpec(runtime.getAgentSpec(), toolRegistry, wrapperRegistry,
+        return () -> finalizeAgentSpec(runtime.getAgentSpec(), toolRegistry,
             llmRegistry, objectMapper, routeRegistryProvider, a2aRegistryProvider);
     }
 
@@ -664,21 +680,18 @@ public class MeshAutoConfiguration {
     private void finalizeAgentSpec(
             AgentSpec spec,
             MeshToolRegistry toolRegistry,
-            MeshToolWrapperRegistry wrapperRegistry,
             MeshLlmRegistry llmRegistry,
             ObjectMapper objectMapper,
             ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
             ObjectProvider<MeshA2ARegistry> a2aRegistryProvider) {
 
-        // Phase B MeshJob substrate: register the three helper tools as
-        // synthetic specs BEFORE getToolSpecs() is read into the
-        // heartbeat catalog. Skips gracefully when no registry URL is
-        // configured.
-        try {
-            JobsHelperToolsRegistrar.register(toolRegistry, wrapperRegistry, spec.getRegistryUrl());
-        } catch (Exception e) {
-            log.warn("Failed to register MeshJob helper tools at startup", e);
-        }
+        // Helper tools (MeshJob substrate) and LLM provider handlers are
+        // registered eagerly in meshRuntime() — see the comment there. By
+        // the time we reach this finalizer the synthetic helper tool specs
+        // are already in toolRegistry and the LLM provider handlers are
+        // already in wrapperRegistry. We still need to fold the LLM
+        // provider tool SPECS into the heartbeat catalog here (they live
+        // in the spring-ai processor, not in toolRegistry).
 
         // Consumer-only fallback validation: if buildBaseAgentSpec
         // produced a consumer-only spec (agent_type="api") because no
@@ -693,8 +706,9 @@ public class MeshAutoConfiguration {
         // Enrich tools with @MeshLlm provider info for mesh delegation
         enrichToolsWithLlmProvider(allTools, toolRegistry, llmRegistry, objectMapper);
 
-        // Add LLM provider tools if mcp-mesh-spring-ai is on classpath
-        addLlmProviderTools(allTools, wrapperRegistry);
+        // Add LLM provider tool specs to the heartbeat (handlers were
+        // already registered eagerly in meshRuntime()).
+        addLlmProviderToolSpecs(allTools);
 
         // Add @MeshRoute dependencies as a synthetic tool
         addRouteDependencies(allTools, routeRegistryProvider);
@@ -999,60 +1013,78 @@ public class MeshAutoConfiguration {
     }
 
     /**
-     * Add LLM provider tool specs and register handlers if spring-ai module is available.
+     * Register LLM provider tool handlers with the wrapper registry if the
+     * spring-ai module is available. Called eagerly from {@link #meshRuntime}
+     * so the handlers are visible when {@code mcpStatelessServer} snapshots
+     * its tool list at bean-construction time.
      *
-     * <p>This method uses reflection to avoid hard dependency on mcp-mesh-spring-ai.
-     * If the module is present and has registered providers:
-     * <ol>
-     *   <li>Tool specs are added to agent registration (for heartbeat)</li>
-     *   <li>Tool wrappers are registered with wrapper registry (for MCP calls)</li>
-     * </ol>
+     * <p>Uses reflection to avoid a hard dependency on mcp-mesh-spring-ai.
      *
-     * @param tools           List to add LLM provider tools to
      * @param wrapperRegistry Registry to add LLM provider handlers to
      */
     @SuppressWarnings("unchecked")
-    private void addLlmProviderTools(List<AgentSpec.ToolSpec> tools, MeshToolWrapperRegistry wrapperRegistry) {
+    private void registerLlmProviderHandlers(MeshToolWrapperRegistry wrapperRegistry) {
         try {
-            // Check if MeshLlmProviderProcessor class exists (spring-ai module)
             Class<?> processorClass = Class.forName("io.mcpmesh.ai.MeshLlmProviderProcessor");
-
-            // Try to get the bean from application context
             Object processor = applicationContext.getBean(processorClass);
 
-            // Check if it has providers
             java.lang.reflect.Method hasProvidersMethod = processorClass.getMethod("hasProviders");
             Boolean hasProviders = (Boolean) hasProvidersMethod.invoke(processor);
-
-            if (Boolean.TRUE.equals(hasProviders)) {
-                // Get tool specs from the processor (for heartbeat)
-                java.lang.reflect.Method getToolSpecsMethod = processorClass.getMethod("getToolSpecs");
-                List<AgentSpec.ToolSpec> llmTools = (List<AgentSpec.ToolSpec>) getToolSpecsMethod.invoke(processor);
-                tools.addAll(llmTools);
-
-                // Get tool wrappers from the processor (for MCP calls)
-                java.lang.reflect.Method createToolWrappersMethod = processorClass.getMethod("createToolWrappers");
-                List<?> wrappers = (List<?>) createToolWrappersMethod.invoke(processor);
-
-                // Register each wrapper with the registry
-                for (Object wrapper : wrappers) {
-                    // Cast to McpToolHandler (LlmProviderToolWrapper implements it)
-                    if (wrapper instanceof McpToolHandler handler) {
-                        wrapperRegistry.registerHandler(handler);
-                    }
-                }
-
-                log.info("Added {} LLM provider tool(s) to agent registration and MCP server",
-                    llmTools.size());
+            if (!Boolean.TRUE.equals(hasProviders)) {
+                return;
             }
+
+            java.lang.reflect.Method createToolWrappersMethod = processorClass.getMethod("createToolWrappers");
+            List<?> wrappers = (List<?>) createToolWrappersMethod.invoke(processor);
+            int count = 0;
+            for (Object wrapper : wrappers) {
+                if (wrapper instanceof McpToolHandler handler) {
+                    wrapperRegistry.registerHandler(handler);
+                    count++;
+                }
+            }
+            log.info("Registered {} LLM provider tool handler(s) with MCP server", count);
         } catch (ClassNotFoundException e) {
             // mcp-mesh-spring-ai not on classpath - this is fine
             log.debug("MeshLlmProviderProcessor not found - LLM provider support not enabled");
         } catch (org.springframework.beans.factory.NoSuchBeanDefinitionException e) {
-            // Processor class exists but no bean registered
             log.debug("MeshLlmProviderProcessor not registered as bean");
         } catch (Exception e) {
-            log.warn("Failed to check for LLM provider tools: {}", e.getMessage());
+            log.warn("Failed to register LLM provider handlers: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Append LLM provider tool specs to the heartbeat catalog if the
+     * spring-ai module is available. Called from {@link #finalizeAgentSpec}
+     * after every singleton is initialised. Pairs with
+     * {@link #registerLlmProviderHandlers} which performs the eager
+     * MCP-handler registration earlier in the lifecycle.
+     *
+     * @param tools List to add LLM provider tool specs to
+     */
+    @SuppressWarnings("unchecked")
+    private void addLlmProviderToolSpecs(List<AgentSpec.ToolSpec> tools) {
+        try {
+            Class<?> processorClass = Class.forName("io.mcpmesh.ai.MeshLlmProviderProcessor");
+            Object processor = applicationContext.getBean(processorClass);
+
+            java.lang.reflect.Method hasProvidersMethod = processorClass.getMethod("hasProviders");
+            Boolean hasProviders = (Boolean) hasProvidersMethod.invoke(processor);
+            if (!Boolean.TRUE.equals(hasProviders)) {
+                return;
+            }
+
+            java.lang.reflect.Method getToolSpecsMethod = processorClass.getMethod("getToolSpecs");
+            List<AgentSpec.ToolSpec> llmTools = (List<AgentSpec.ToolSpec>) getToolSpecsMethod.invoke(processor);
+            tools.addAll(llmTools);
+            log.info("Added {} LLM provider tool spec(s) to agent registration", llmTools.size());
+        } catch (ClassNotFoundException e) {
+            log.debug("MeshLlmProviderProcessor not found - LLM provider support not enabled");
+        } catch (org.springframework.beans.factory.NoSuchBeanDefinitionException e) {
+            log.debug("MeshLlmProviderProcessor not registered as bean");
+        } catch (Exception e) {
+            log.warn("Failed to collect LLM provider tool specs: {}", e.getMessage());
         }
     }
 

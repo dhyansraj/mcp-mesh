@@ -132,7 +132,7 @@ test:
     handler: shell
     workdir: /workspace
     command: |
-      JOB_ID=$(echo '${captured.commission_response}' | jq -r '.. | objects | select(has("job_id")) | .job_id' | head -1)
+      JOB_ID=$(echo '${captured.commission_response}' | jq -r '.content[0].text | fromjson | .job_id')
       echo "JOB_ID=${JOB_ID}"
       curl -s "http://localhost:8000/jobs/${JOB_ID}" | jq '{status,attempt_count,error}'
     capture: final_status
