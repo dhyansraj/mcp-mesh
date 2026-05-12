@@ -109,6 +109,9 @@ func runScaffoldA2AConsumer(cmd *cobra.Command, _ []string) error {
 		authEnv = defaultA2AAuthEnvVar
 	}
 
+	// Auto-increment port if --port wasn't explicitly set (issue #957 fix 2).
+	port = AutoAssignScaffoldPort(cmd, port, output, name)
+
 	language := NormalizeLanguage(lang)
 	if !IsValidLanguage(language) {
 		return fmt.Errorf("unsupported language: %s (supported: %v)", lang, supportedLanguages)

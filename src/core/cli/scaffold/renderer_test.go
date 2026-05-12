@@ -168,6 +168,72 @@ func TestTemplateRenderer_RenderString_HelperFunctions(t *testing.T) {
 	}
 }
 
+// TestToAgentClassName_NoDoubleSuffix verifies the suffix rule that prevents
+// double-"Agent" class names like "PyClaudeAgentAgent". The rule is a
+// case-insensitive substring check on the PascalCase form of the input:
+// if it already contains "agent", do not append the suffix.
+//
+// Covers issue #957 (fix 3).
+func TestToAgentClassName_NoDoubleSuffix(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		// Input already contains "agent" — must NOT append suffix.
+		{"trailing agent suffix", "py-claude-agent", "PyClaudeAgent"},
+		{"leading agent prefix", "agent-py-claude", "AgentPyClaude"},
+		{"middle agent prefix", "agent-claude-thinking", "AgentClaudeThinking"},
+		{"already PascalCase with Agent", "MyAgent", "MyAgent"},
+		{"uppercase AGENT", "MY-AGENT", "MyAgent"},
+		{"agent only", "agent", "Agent"},
+
+		// Input does NOT contain "agent" — must append suffix.
+		{"plain name", "py-greeter", "PyGreeterAgent"},
+		{"single word", "chatbot", "ChatbotAgent"},
+		{"snake case", "weather_service", "WeatherServiceAgent"},
+		{"PascalCase no agent", "Greeter", "GreeterAgent"},
+
+		// Edge cases.
+		{"empty string", "", "Agent"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := toAgentClassName(tt.input)
+			assert.Equal(t, tt.expected, got,
+				"toAgentClassName(%q) = %q, want %q", tt.input, got, tt.expected)
+		})
+	}
+}
+
+// TestToAgentClassName_TemplateUsage verifies the helper is wired into the
+// template func map under the name `toAgentClassName` so the embedded
+// templates (cmd/meshctl/templates/python/*) can reference it.
+func TestToAgentClassName_TemplateUsage(t *testing.T) {
+	renderer := NewTemplateRenderer()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"contains agent", "py-claude-agent", "PyClaudeAgent"},
+		{"no agent", "py-greeter", "PyGreeterAgent"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := renderer.RenderString(
+				"class {{ toAgentClassName .Name }}:",
+				map[string]interface{}{"Name": tt.input},
+			)
+			require.NoError(t, err)
+			assert.Equal(t, "class "+tt.expected+":", result)
+		})
+	}
+}
+
 func TestTemplateRenderer_RenderFile(t *testing.T) {
 	renderer := NewTemplateRenderer()
 

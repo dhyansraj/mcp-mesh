@@ -184,6 +184,9 @@ func runScaffoldLLMProvider(cmd *cobra.Command, _ []string) error {
 	javaPackage, _ := cmd.Flags().GetString("package")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 
+	// Auto-increment port if --port wasn't explicitly set (issue #957 fix 2).
+	port = AutoAssignScaffoldPort(cmd, port, output, name)
+
 	if !IsValidLLMVendor(vendor) {
 		return fmt.Errorf("unsupported vendor: %s (supported: %v)", vendor, supportedLLMVendors)
 	}
@@ -245,6 +248,9 @@ func runScaffoldLLMConsumer(cmd *cobra.Command, _ []string) error {
 	responseFormat, _ := cmd.Flags().GetString("response-format")
 	javaPackage, _ := cmd.Flags().GetString("package")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+	// Auto-increment port if --port wasn't explicitly set (issue #957 fix 2).
+	port = AutoAssignScaffoldPort(cmd, port, output, name)
 
 	if !IsValidLLMVendor(vendor) {
 		return fmt.Errorf("unsupported vendor: %s (supported: %v)", vendor, supportedLLMVendors)

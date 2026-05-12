@@ -240,7 +240,7 @@ def {{ toSnakeCase .Name }}():
     health_check=health_check,
     health_check_ttl=30,
 )
-class {{ toPascalCase .Name }}Agent:
+class {{ toAgentClassName .Name }}:
     """
     LLM Provider agent that exposes {{ .Model }} via mesh.
 
