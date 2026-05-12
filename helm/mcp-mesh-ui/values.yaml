@@ -3,7 +3,7 @@ replicaCount: 1
 image:
   repository: mcpmesh/ui
   pullPolicy: IfNotPresent
-  tag: "1.4"
+  tag: "2.0"
 
 imagePullSecrets: []
 nameOverride: ""
