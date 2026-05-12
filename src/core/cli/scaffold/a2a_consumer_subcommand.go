@@ -78,6 +78,9 @@ Examples:
 		"Env var name for bearer token (used when the card advertises bearer auth)")
 	cmd.Flags().String("package", "", "Java package name (default: com.example.<agent-name>)")
 	cmd.Flags().Bool("dry-run", false, "Preview generated files without creating them")
+	cmd.Flags().Bool("allow-private-network", false,
+		"Allow card fetch (and any redirect) to resolve to a private/loopback/link-local IP. "+
+			"Default off to block SSRF; enable for local-dev producers on localhost or RFC1918.")
 
 	return cmd
 }
@@ -94,6 +97,7 @@ func runScaffoldA2AConsumer(cmd *cobra.Command, _ []string) error {
 	authEnv, _ := cmd.Flags().GetString("auth-env")
 	javaPackage, _ := cmd.Flags().GetString("package")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	allowPrivate, _ := cmd.Flags().GetBool("allow-private-network")
 
 	if name == "" {
 		return fmt.Errorf("--name is required")
@@ -117,7 +121,7 @@ func runScaffoldA2AConsumer(cmd *cobra.Command, _ []string) error {
 	if offline {
 		baseURL = "TODO-set-producer-url"
 	} else {
-		c, err := FetchAgentCard(urlFlag)
+		c, err := FetchAgentCard(urlFlag, FetchOptions{AllowPrivateNetwork: allowPrivate})
 		if err != nil {
 			return fmt.Errorf("failed to fetch A2A agent card: %w (use --offline to generate placeholder)", err)
 		}
