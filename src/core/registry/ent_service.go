@@ -2206,7 +2206,13 @@ func (s *EntService) markAgentStaleAttempt(ctx context.Context, staleAgent *ent.
 	return nil
 }
 
-// UpdateAgentHeartbeatTimestamp updates only the agent's timestamp for HEAD heartbeat requests
+// UpdateAgentHeartbeatTimestamp updates only the agent's timestamp for HEAD heartbeat requests.
+//
+// Unhealthy→Healthy transitions belong exclusively in RegisterAgent / UpdateHeartbeat
+// (POST paths) where full metadata is reconciled. The HEAD heartbeat handler
+// (FastHeartbeatCheck) short-circuits to 410 Gone for unhealthy agents, so this
+// function only ever sees agents that are already healthy (or about-to-be-unknown,
+// which is treated idempotently below). See #955.
 func (s *EntService) UpdateAgentHeartbeatTimestamp(ctx context.Context, agentID string) error {
 	now := time.Now().UTC()
 
@@ -2220,18 +2226,9 @@ func (s *EntService) UpdateAgentHeartbeatTimestamp(ctx context.Context, agentID 
 		return fmt.Errorf("failed to query agent: %w", err)
 	}
 
-	// Update timestamp and reset to healthy if agent was previously unhealthy
-	// If agent can send HEAD requests, it's clearly responsive and should be marked healthy
-	updateBuilder := existingAgent.Update().SetUpdatedAt(now)
-
-	if existingAgent.Status == agent.StatusUnhealthy {
-		s.logger.Info("Agent %s recovered: marking healthy (was %v)", agentID, existingAgent.Status)
-		updateBuilder = updateBuilder.SetStatus(agent.StatusHealthy)
-
-		// Recovery event will be created automatically by status change hook
-	}
-
-	_, err = updateBuilder.Save(ctx)
+	// Bump the last-heartbeat timestamp. Status is intentionally NOT modified here
+	// (#955): the caller has already verified the agent is healthy.
+	_, err = existingAgent.Update().SetUpdatedAt(now).Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to update agent heartbeat timestamp: %w", err)
 	}
