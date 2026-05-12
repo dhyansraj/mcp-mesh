@@ -13,7 +13,7 @@ from . import (ConfigurationStep, DecoratorCollectionStep,
                FastAPIServerSetupStep, FastMCPServerDiscoveryStep,
                HeartbeatLoopStep, HeartbeatPreparationStep,
                JobsCancelRouteStep, JobsClaimWorkersStep,
-               JobsHelperToolsStep)
+               JobsHelperToolsStep, MediaStoreValidationStep)
 from .server_discovery import ServerDiscoveryStep
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,11 @@ class StartupPipeline(MeshPipeline):
         steps = [
             DecoratorCollectionStep(),
             ConfigurationStep(),
+            # Eagerly initialize the media store so MCP_MESH_MEDIA_STORAGE=s3
+            # misconfiguration (missing boto3, missing bucket, bad creds when
+            # validation is enabled) fails at startup instead of at first LLM
+            # call. Issue #846 (#1, #2).
+            MediaStoreValidationStep(),
             FastMCPServerDiscoveryStep(),  # Discover user's FastMCP instances (MOVED UP for Phase 2)
             # Phase 1 MeshJob: register helper tools on the FastMCP server
             # BEFORE FastAPIServerSetup mounts it (so they appear in /tools/list).

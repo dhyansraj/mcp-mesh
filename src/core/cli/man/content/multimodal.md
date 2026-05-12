@@ -10,6 +10,10 @@ return await llm("Describe this image", media=["file:///tmp/photo.png"])
 return await llm("What is this?", media=[(png_bytes, "image/png")])
 ```
 
+`media=` is a kwarg on `MeshLlmAgent.__call__()`. Items are resolved on the
+**consumer side** into provider-native content blocks before the request is
+serialized — they do not appear on the `MeshLlmRequest` wire schema.
+
 ### Media Item Types
 
 | Type        | Format              | Example                                              |
@@ -43,9 +47,23 @@ async def analyze(
 
 ## Resource Link Resolution
 
-LLM providers auto-resolve `resource_link` URIs — the provider fetches media bytes and converts them to the vendor's native format. No manual fetching needed.
+LLM providers auto-resolve `resource_link` URIs returned from agentic tool calls — the provider fetches media bytes and converts them to the vendor's native format. No manual fetching needed.
 
-Only the **producer** (write) and **provider** (read) need MediaStore access. See `meshctl man media` for setup.
+### Who needs MediaStore access?
+
+The two media flows have different access requirements:
+
+| Flow                                       | Resolved by | Needs MediaStore access |
+| ------------------------------------------ | ----------- | ----------------------- |
+| `media=[uri]` kwarg on `MeshLlmAgent`      | Consumer    | Producer + **consumer** |
+| `resource_link` returned from a tool call  | Provider    | Producer + **provider** |
+
+If your consumer passes `media=["s3://..."]`, the consumer process needs S3
+credentials and `boto3` installed. If you only return `resource_link` from
+agentic tools and let the LLM provider fetch them, only the provider needs
+MediaStore access.
+
+See `meshctl man media` for storage setup.
 
 ## Multi-Agent Media Chain
 

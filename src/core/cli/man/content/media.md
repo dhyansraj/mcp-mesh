@@ -24,15 +24,22 @@ export MCP_MESH_MEDIA_STORAGE_PREFIX=media/
 
 ## Environment Variables
 
-| Variable                          | Default               | Description                |
-| --------------------------------- | --------------------- | -------------------------- |
-| `MCP_MESH_MEDIA_STORAGE`          | `local`               | Backend: `local` or `s3`   |
-| `MCP_MESH_MEDIA_STORAGE_PATH`     | `/tmp/mcp-mesh-media` | Local filesystem base path |
-| `MCP_MESH_MEDIA_STORAGE_BUCKET`   | `mcp-mesh-media`      | S3 bucket name             |
-| `MCP_MESH_MEDIA_STORAGE_ENDPOINT` | (none)                | S3-compatible endpoint URL |
-| `MCP_MESH_MEDIA_STORAGE_PREFIX`   | `media/`              | Key/directory prefix       |
-| `AWS_ACCESS_KEY_ID`               | _(none)_              | S3 access key (or IAM)     |
-| `AWS_SECRET_ACCESS_KEY`           | _(none)_              | S3 secret key (or IAM)     |
+| Variable                          | Default               | Description                                            |
+| --------------------------------- | --------------------- | ------------------------------------------------------ |
+| `MCP_MESH_MEDIA_STORAGE`          | `local`               | Backend: `local` or `s3`                               |
+| `MCP_MESH_MEDIA_STORAGE_PATH`     | `/tmp/mcp-mesh-media` | Local filesystem base path                             |
+| `MCP_MESH_MEDIA_STORAGE_BUCKET`   | _(required for s3)_   | S3 bucket name (must be set when backend is `s3`)      |
+| `MCP_MESH_MEDIA_STORAGE_ENDPOINT` | (none)                | S3-compatible endpoint URL                             |
+| `MCP_MESH_MEDIA_STORAGE_PREFIX`   | `media/`              | Key/directory prefix                                   |
+| `MCP_MESH_MEDIA_STORAGE_VALIDATE` | `false`               | When `true`, run a head_bucket probe at startup        |
+| `AWS_ACCESS_KEY_ID`               | _(none)_              | S3 access key (or IAM)                                 |
+| `AWS_SECRET_ACCESS_KEY`           | _(none)_              | S3 secret key (or IAM)                                 |
+
+When `MCP_MESH_MEDIA_STORAGE=s3` is set, the agent fails fast at startup if
+`boto3` is missing or `MCP_MESH_MEDIA_STORAGE_BUCKET` is unset. Set
+`MCP_MESH_MEDIA_STORAGE_VALIDATE=true` to additionally probe credentials and
+bucket reachability before the agent starts serving traffic (off by default
+so CI/local-dev environments without real AWS creds keep working).
 
 ## Uploading Media
 

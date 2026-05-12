@@ -617,6 +617,13 @@ class MeshLlmRequest:
         context: Optional arbitrary context data for debugging/tracing
         request_id: Optional request ID for tracking
         caller_agent: Optional agent name that initiated the request
+
+    Note:
+        ``media=`` is *not* a field on this dataclass. It is a kwarg on
+        ``MeshLlmAgent.__call__()`` (e.g. ``await llm("describe", media=["s3://..."])``)
+        that the consumer pre-resolves into provider-native content blocks
+        before constructing the request — the resolved blocks land inside
+        ``messages[*].content``. See ``meshctl man multimodal`` for details.
     """
 
     messages: list[dict[str, Any]]  # Changed from Dict[str, str] to allow tool_calls
