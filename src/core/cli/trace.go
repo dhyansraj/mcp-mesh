@@ -136,7 +136,7 @@ func runTraceCommand(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			lastQueryErr = err
 			if attempt < maxAttempts {
-				fmt.Fprintf(os.Stderr, "Error querying trace, retrying (%d/%d)...\n", attempt, retries)
+				fmt.Fprintf(os.Stderr, "Error querying trace: %v, retrying (%d/%d)...\n", err, attempt, retries)
 				time.Sleep(time.Duration(retryDelay) * time.Second)
 				continue
 			}
@@ -379,13 +379,12 @@ func printTreeNode(node *TraceTreeNode, prefix string, isLast bool) {
 // backend is configured, or the trace simply isn't there. See issue #956
 // items #8 + #9.
 //
-// queryErr is the underlying error from the registry call (if any). It's
-// not embedded in the message — the actionable next-steps block matters
-// far more than the raw connection error to the user — but we surface it
-// behind --debug-style verbose if we ever add one. For now we drop it,
-// matching the "one clean line of error" feedback in #956.
-func formatTraceNotFound(traceID string, _ error) error {
-	return fmt.Errorf("trace '%s' not found.\n\n"+
+// queryErr is the underlying error from the registry call (if any). When
+// non-nil it's appended on a final "Underlying error:" line so users can
+// still diagnose the real network failure (e.g. "connection refused") —
+// the actionable next-steps block stays on top for readability.
+func formatTraceNotFound(traceID string, queryErr error) error {
+	msg := fmt.Sprintf("trace '%s' not found.\n\n"+
 		"This usually means one of:\n"+
 		"  - The observability stack is not running. Start it with:\n"+
 		"      meshctl scaffold --observability\n"+
@@ -393,6 +392,10 @@ func formatTraceNotFound(traceID string, _ error) error {
 		"  - The configured tracing backend (TEMPO_URL or equivalent) is unreachable.\n"+
 		"  - The trace ID is older than retention (default: 1h in local dev).\n\n"+
 		"See 'meshctl man tracing' for details.", traceID)
+	if queryErr != nil {
+		msg += fmt.Sprintf("\nUnderlying error: %v", queryErr)
+	}
+	return fmt.Errorf("%s", msg)
 }
 
 // formatTraceDuration formats nanoseconds as human readable duration

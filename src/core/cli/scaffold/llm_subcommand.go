@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -108,13 +109,15 @@ Examples:
 		RunE: runScaffoldLLMProvider,
 	}
 
-	// --vendor is canonical; --provider is a hidden 1.4.1-compat alias (same Go variable).
+	// --provider is a hidden alias for --vendor. The two flags are independent
+	// Go variables; runtime precedence is resolved by resolveAliasedString below.
 	cmd.Flags().String("vendor", "claude",
 		fmt.Sprintf("LLM vendor: %v", supportedLLMVendors))
 	cmd.Flags().String("provider", "claude", "")
 	_ = cmd.Flags().MarkHidden("provider")
 
-	// --lang is canonical; --runtime is a hidden 1.4.1-compat alias (same Go variable).
+	// --runtime is a hidden alias for --lang. The two flags are independent
+	// Go variables; runtime precedence is resolved by resolveAliasedString below.
 	cmd.Flags().StringP("lang", "l", "python",
 		fmt.Sprintf("Language runtime: %v", supportedLLMRuntimes))
 	cmd.Flags().String("runtime", "python", "")
@@ -131,6 +134,15 @@ Examples:
 		"Java package name (default: com.example.<agent-name>)")
 	cmd.Flags().Bool("dry-run", false, "Preview generated files without creating them")
 	cmd.Flags().Bool("no-interactive", false, "Disable interactive prompts (for scripting)")
+
+	// Tool filter / discovery flags (mirrored from parent so the deprecated
+	// `--agent-type llm-provider` form via copyParentFlagsToSub doesn't
+	// silently drop them, and so the canonical subcommand UX accepts them).
+	cmd.Flags().String("filter", "",
+		"Tool filter (JSON format, e.g., '{\"capability\":\"x\"}' or '[{\"tags\":[\"a\"]}]')")
+	cmd.Flags().String("filter-mode", "all", "Filter mode: all, best_match, * (wildcard)")
+	cmd.Flags().String("context-param", "ctx", "Context parameter name")
+	cmd.Flags().StringSlice("tags", nil, "Tags for discovery (comma-separated)")
 
 	return cmd
 }
@@ -162,13 +174,15 @@ Examples:
 		RunE: runScaffoldLLMConsumer,
 	}
 
-	// --vendor is canonical; --provider is a hidden 1.4.1-compat alias (same Go variable).
+	// --provider is a hidden alias for --vendor. The two flags are independent
+	// Go variables; runtime precedence is resolved by resolveAliasedString below.
 	cmd.Flags().String("vendor", "claude",
 		fmt.Sprintf("Pin consumer to a provider tag: %v", supportedLLMVendors))
 	cmd.Flags().String("provider", "claude", "")
 	_ = cmd.Flags().MarkHidden("provider")
 
-	// --lang is canonical; --runtime is a hidden 1.4.1-compat alias (same Go variable).
+	// --runtime is a hidden alias for --lang. The two flags are independent
+	// Go variables; runtime precedence is resolved by resolveAliasedString below.
 	cmd.Flags().StringP("lang", "l", "python",
 		fmt.Sprintf("Language runtime: %v", supportedLLMRuntimes))
 	cmd.Flags().String("runtime", "python", "")
@@ -187,6 +201,15 @@ Examples:
 	cmd.Flags().Bool("dry-run", false, "Preview generated files without creating them")
 	cmd.Flags().Bool("no-interactive", false, "Disable interactive prompts (for scripting)")
 
+	// Tool filter / discovery flags (mirrored from parent so the deprecated
+	// `--agent-type llm-agent` form via copyParentFlagsToSub doesn't
+	// silently drop them, and so the canonical subcommand UX accepts them).
+	cmd.Flags().String("filter", "",
+		"Tool filter (JSON format, e.g., '{\"capability\":\"x\"}' or '[{\"tags\":[\"a\"]}]')")
+	cmd.Flags().String("filter-mode", "all", "Filter mode: all, best_match, * (wildcard)")
+	cmd.Flags().String("context-param", "ctx", "Context parameter name")
+	cmd.Flags().StringSlice("tags", nil, "Tags for discovery (comma-separated)")
+
 	return cmd
 }
 
@@ -203,6 +226,17 @@ func runScaffoldLLMProvider(cmd *cobra.Command, _ []string) error {
 	model, _ := cmd.Flags().GetString("model")
 	javaPackage, _ := cmd.Flags().GetString("package")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
+
+	// Tool filter / discovery flags (mirrored from parent — see issue #958).
+	filterStr, _ := cmd.Flags().GetString("filter")
+	filterMode, _ := cmd.Flags().GetString("filter-mode")
+	contextParam, _ := cmd.Flags().GetString("context-param")
+	tags, _ := cmd.Flags().GetStringSlice("tags")
+
+	toolFilter, err := parseScaffoldToolFilter(filterStr)
+	if err != nil {
+		return fmt.Errorf("invalid filter: %w", err)
+	}
 
 	// Auto-increment port if --port wasn't explicitly set (issue #957 fix 2).
 	port = AutoAssignScaffoldPort(cmd, port, output, name)
@@ -226,19 +260,26 @@ func runScaffoldLLMProvider(cmd *cobra.Command, _ []string) error {
 		description = fmt.Sprintf("LLM provider for %s (%s)", vendor, model)
 	}
 
+	// Vendor-derived discovery tags always apply; user --tags are additive.
+	finalTags := append([]string{}, VendorToProviderTags(vendor)...)
+	finalTags = append(finalTags, tags...)
+
 	ctx := &ScaffoldContext{
-		Name:        name,
-		Description: description,
-		Language:    language,
-		OutputDir:   output,
-		Port:        port,
-		AgentType:   "llm-provider",
-		Template:    "llm-provider",
-		Model:       model,
-		Tags:        VendorToProviderTags(vendor),
-		JavaPackage: javaPackage,
-		Cmd:         cmd,
-		DryRun:      dryRun,
+		Name:         name,
+		Description:  description,
+		Language:     language,
+		OutputDir:    output,
+		Port:         port,
+		AgentType:    "llm-provider",
+		Template:     "llm-provider",
+		Model:        model,
+		Tags:         finalTags,
+		ToolFilter:   toolFilter,
+		FilterMode:   filterMode,
+		ContextParam: contextParam,
+		JavaPackage:  javaPackage,
+		Cmd:          cmd,
+		DryRun:       dryRun,
 	}
 
 	provider := NewStaticProvider()
@@ -271,6 +312,17 @@ func runScaffoldLLMConsumer(cmd *cobra.Command, _ []string) error {
 	javaPackage, _ := cmd.Flags().GetString("package")
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 
+	// Tool filter / discovery flags (mirrored from parent — see issue #958).
+	filterStr, _ := cmd.Flags().GetString("filter")
+	filterMode, _ := cmd.Flags().GetString("filter-mode")
+	contextParam, _ := cmd.Flags().GetString("context-param")
+	tags, _ := cmd.Flags().GetStringSlice("tags")
+
+	toolFilter, err := parseScaffoldToolFilter(filterStr)
+	if err != nil {
+		return fmt.Errorf("invalid filter: %w", err)
+	}
+
 	// Auto-increment port if --port wasn't explicitly set (issue #957 fix 2).
 	port = AutoAssignScaffoldPort(cmd, port, output, name)
 
@@ -302,9 +354,11 @@ func runScaffoldLLMConsumer(cmd *cobra.Command, _ []string) error {
 		ProviderTags:        providerTags,
 		MaxIterations:       maxIter,
 		SystemPrompt:        systemPrompt,
-		ContextParam:        "ctx",
+		ContextParam:        contextParam,
 		ResponseFormat:      responseFormat,
-		FilterMode:          "all",
+		ToolFilter:          toolFilter,
+		FilterMode:          filterMode,
+		Tags:                tags,
 		JavaPackage:         javaPackage,
 		Cmd:                 cmd,
 		DryRun:              dryRun,
@@ -354,6 +408,53 @@ func printLLMConsumerFollowup(cmd *cobra.Command, name, vendor, runtime string) 
 func AttachLLMSubcommands(parent *cobra.Command) {
 	parent.AddCommand(newScaffoldLLMProviderCommand())
 	parent.AddCommand(newScaffoldLLMCommand())
+}
+
+// parseScaffoldToolFilter parses the `--filter` value into the slice-of-maps
+// shape consumed by the template renderer. Mirrors the parent's parseToolFilter
+// in scaffold.go — duplicated rather than exported to avoid an import cycle
+// between cli and cli/scaffold. Supported forms:
+//   - Empty string: nil (no filter)
+//   - Single object: {"capability": "x", "tags": ["a"]}
+//   - Array of objects: [{"capability": "x"}, {"tags": ["y"]}]
+//   - Bareword: treated as a capability name
+func parseScaffoldToolFilter(filterStr string) ([]map[string]interface{}, error) {
+	// Trim ASCII whitespace inline to avoid importing strings just for this.
+	start, end := 0, len(filterStr)
+	for start < end {
+		c := filterStr[start]
+		if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			break
+		}
+		start++
+	}
+	for end > start {
+		c := filterStr[end-1]
+		if c != ' ' && c != '\t' && c != '\n' && c != '\r' {
+			break
+		}
+		end--
+	}
+	filterStr = filterStr[start:end]
+	if filterStr == "" {
+		return nil, nil
+	}
+
+	if filterStr[0] == '[' {
+		var filters []map[string]interface{}
+		if err := json.Unmarshal([]byte(filterStr), &filters); err != nil {
+			return nil, fmt.Errorf("invalid filter array: %w", err)
+		}
+		return filters, nil
+	}
+	if filterStr[0] == '{' {
+		var filter map[string]interface{}
+		if err := json.Unmarshal([]byte(filterStr), &filter); err != nil {
+			return nil, fmt.Errorf("invalid filter object: %w", err)
+		}
+		return []map[string]interface{}{filter}, nil
+	}
+	return []map[string]interface{}{{"capability": filterStr}}, nil
 }
 
 // resolveAliasedString returns the value of a canonical flag, but if the

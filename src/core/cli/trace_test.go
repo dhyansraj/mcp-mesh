@@ -1,31 +1,62 @@
 package cli
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestFormatTraceNotFound(t *testing.T) {
-	err := formatTraceNotFound("abc123", nil)
-	if err == nil {
-		t.Fatal("expected non-nil error")
-	}
-	msg := err.Error()
-
-	wantSubstrings := []string{
-		"trace 'abc123' not found",
-		"meshctl scaffold --observability",
-		"docker compose up -d redis tempo grafana",
-		"TEMPO_URL",
-		"older than retention",
-		"meshctl man tracing",
-	}
-	for _, s := range wantSubstrings {
-		if !strings.Contains(msg, s) {
-			t.Errorf("formatTraceNotFound message missing %q\nfull message:\n%s", s, msg)
+	// Case 1: queryErr is nil — message should be the clean next-steps block
+	// with no "Underlying error" suffix.
+	t.Run("nil queryErr", func(t *testing.T) {
+		err := formatTraceNotFound("abc123", nil)
+		if err == nil {
+			t.Fatal("expected non-nil error")
 		}
-	}
+		msg := err.Error()
+
+		wantSubstrings := []string{
+			"trace 'abc123' not found",
+			"meshctl scaffold --observability",
+			"docker compose up -d redis tempo grafana",
+			"TEMPO_URL",
+			"older than retention",
+			"meshctl man tracing",
+		}
+		for _, s := range wantSubstrings {
+			if !strings.Contains(msg, s) {
+				t.Errorf("formatTraceNotFound message missing %q\nfull message:\n%s", s, msg)
+			}
+		}
+
+		if strings.Contains(msg, "Underlying error") {
+			t.Errorf("formatTraceNotFound(nil) must not include 'Underlying error' line\nfull message:\n%s", msg)
+		}
+	})
+
+	// Case 2: queryErr is non-nil — message should still include the next-steps
+	// block AND surface the underlying error so users can diagnose connect
+	// failures like "connection refused".
+	t.Run("with queryErr", func(t *testing.T) {
+		under := errors.New("dial tcp 127.0.0.1:8000: connect: connection refused")
+		err := formatTraceNotFound("abc123", under)
+		if err == nil {
+			t.Fatal("expected non-nil error")
+		}
+		msg := err.Error()
+
+		if !strings.Contains(msg, "trace 'abc123' not found") {
+			t.Errorf("expected next-steps block, got:\n%s", msg)
+		}
+		if !strings.Contains(msg, "Underlying error:") {
+			t.Errorf("expected 'Underlying error:' line, got:\n%s", msg)
+		}
+		if !strings.Contains(msg, "connection refused") {
+			t.Errorf("expected underlying error text in message, got:\n%s", msg)
+		}
+	})
 }
 
 func TestIsWrapperSpan(t *testing.T) {

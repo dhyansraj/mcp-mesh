@@ -292,9 +292,20 @@ func copyParentFlagsToSub(parent, sub *cobra.Command) {
 	// 1:1 name matches — copy every parent flag that exists on sub by
 	// the same name, when the user changed it.
 	parent.Flags().Visit(func(f *pflag.Flag) {
-		if subFlag := sub.Flags().Lookup(f.Name); subFlag != nil {
-			_ = sub.Flags().Set(f.Name, f.Value.String())
+		subFlag := sub.Flags().Lookup(f.Name)
+		if subFlag == nil {
+			return
 		}
+		// Slice values: f.Value.String() returns the bracketed form
+		// "[a,b]" which Set re-parses as a single literal element. Use
+		// the SliceValue extension to round-trip correctly.
+		if parentSlice, ok := f.Value.(pflag.SliceValue); ok {
+			if subSlice, ok := subFlag.Value.(pflag.SliceValue); ok {
+				_ = subSlice.Replace(parentSlice.GetSlice())
+				return
+			}
+		}
+		_ = sub.Flags().Set(f.Name, f.Value.String())
 	})
 
 	// Renamed alias: parent's --llm-selector corresponds to the

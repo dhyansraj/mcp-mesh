@@ -333,6 +333,53 @@ func TestCopyParentFlagsToSub_LLMSelectorTranslatesToVendor(t *testing.T) {
 	assert.Equal(t, "openai", got)
 }
 
+// TestCopyParentFlagsToSub_FilterPropagatesToLLMSub asserts the parent's
+// `--filter` (and friends) value lands on the `llm` subcommand's same-named
+// flag after copyParentFlagsToSub runs. This is the wiring that backs the
+// deprecated `meshctl scaffold --agent-type llm-agent --filter ...` form —
+// if the sub doesn't register `--filter`, the value silently disappears.
+// See review feedback on PR for issue #956.
+func TestCopyParentFlagsToSub_FilterPropagatesToLLMSub(t *testing.T) {
+	parent := NewScaffoldCommand()
+	require.NoError(t, parent.Flags().Set("filter", `{"capability":"x"}`))
+	require.NoError(t, parent.Flags().Set("filter-mode", "best_match"))
+	require.NoError(t, parent.Flags().Set("context-param", "myctx"))
+	require.NoError(t, parent.Flags().Set("tags", "alpha,beta"))
+
+	for _, subName := range []string{"llm", "llm-provider"} {
+		t.Run(subName, func(t *testing.T) {
+			sub, _, err := parent.Find([]string{subName})
+			require.NoError(t, err)
+			require.NotNil(t, sub)
+
+			// Both flags must exist on the sub for the copy loop to write to them.
+			require.NotNil(t, sub.Flags().Lookup("filter"),
+				"sub '%s' must register --filter so the legacy --agent-type form doesn't drop it", subName)
+			require.NotNil(t, sub.Flags().Lookup("filter-mode"),
+				"sub '%s' must register --filter-mode", subName)
+			require.NotNil(t, sub.Flags().Lookup("context-param"),
+				"sub '%s' must register --context-param", subName)
+			require.NotNil(t, sub.Flags().Lookup("tags"),
+				"sub '%s' must register --tags", subName)
+
+			copyParentFlagsToSub(parent, sub)
+
+			assert.Equal(t, `{"capability":"x"}`,
+				sub.Flags().Lookup("filter").Value.String(),
+				"sub '%s' --filter must mirror parent value", subName)
+			assert.Equal(t, "best_match",
+				sub.Flags().Lookup("filter-mode").Value.String(),
+				"sub '%s' --filter-mode must mirror parent value", subName)
+			assert.Equal(t, "myctx",
+				sub.Flags().Lookup("context-param").Value.String(),
+				"sub '%s' --context-param must mirror parent value", subName)
+			assert.Equal(t, "[alpha,beta]",
+				sub.Flags().Lookup("tags").Value.String(),
+				"sub '%s' --tags must mirror parent value", subName)
+		})
+	}
+}
+
 func TestScaffoldCommand_ShortFlags(t *testing.T) {
 	cmd := NewScaffoldCommand()
 
