@@ -345,6 +345,22 @@ export function mount<D extends A2ADependencies = A2ADependencies>(
   // Tolerant of test fixtures that mock the api-runtime singleton with
   // a partial object — same defensive pattern as the job submitter
   // provider above.
+  //
+  // KNOWN LIMITATION — explicit `MeshExpress` instances:
+  // This push always targets the auto-init `ApiRuntime` singleton via
+  // `getApiRuntime()`. Users who construct an explicit `MeshExpress(app,
+  // config)` get a SEPARATE runtime handle that is NOT subscribed to this
+  // push — mid-flight mounts won't be reflected on those runtimes' next
+  // heartbeat. Workarounds:
+  //   1. Rely on the canonical mount-before-start ordering — the
+  //      startup-time computation in the runtime's `start()` /
+  //      `startHeartbeat()` already snapshots all registered surfaces.
+  //   2. Avoid `MeshExpress` for A2A producer apps; the auto-init
+  //      `ApiRuntime` (the default for `mesh.route()`-style apps) is the
+  //      supported path for `mesh.a2a.mount(...)`.
+  // Tracked: https://github.com/dhyansraj/mcp-mesh/issues/942 — extend the
+  // push to all live runtime handles so explicit `MeshExpress` users also
+  // see deferred mounts on the next heartbeat.
   if (typeof (runtime as { pushSurfacesUpdate?: () => void }).pushSurfacesUpdate === "function") {
     (runtime as { pushSurfacesUpdate: () => void }).pushSurfacesUpdate();
   }

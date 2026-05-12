@@ -104,6 +104,16 @@ class ApiRuntime {
   private starting = false;
   private scheduledStart = false;
   private shutdownRequested = false;
+  /**
+   * PR #938 W2: race-flag for `pushSurfacesUpdate()` calls that arrive
+   * AFTER `start()` has been scheduled but BEFORE `this.handle` is set.
+   * `start()` does async work (TLS prep, tracing init) between
+   * `scheduleStart()` and `this.handle = startAgent(spec)`; a `mesh.a2a.mount(...)`
+   * fired during that gap would otherwise be silently dropped — the
+   * push early-returns on `!this.handle` AND the startup-time spec was
+   * built before the mount landed. We flush once after the handle is set.
+   */
+  private pendingSurfacesPush = false;
 
   private constructor() {}
 
@@ -239,6 +249,19 @@ class ApiRuntime {
 
       // Start the agent via Rust core
       this.handle = startAgent(spec);
+
+      // PR #938 W2: flush any deferred `pushSurfacesUpdate()` call that
+      // arrived during the async window between `scheduleStart()` and
+      // `this.handle` being set. The startup-time spec above already
+      // captured the registry state at the moment we built `tools` /
+      // `surfacesJson`, so a mount fired AFTER that snapshot would be
+      // silently dropped without this flush. Smart-diffed inside the
+      // Rust runtime, so the redundant push (when nothing actually
+      // changed) is a no-op.
+      if (this.pendingSurfacesPush) {
+        this.pendingSurfacesPush = false;
+        this.pushSurfacesUpdate();
+      }
 
       // Count total dependencies
       const totalDeps = routes.reduce((sum, r) => sum + r.dependencies.length, 0);
@@ -490,9 +513,23 @@ class ApiRuntime {
    * generate a redundant heartbeat.
    */
   pushSurfacesUpdate(): void {
-    if (!this.handle) {
-      // Runtime hasn't started yet — startup-time computation in
-      // start() will pick up the current registry state.
+    if (this.handle === null) {
+      // Runtime hasn't been started yet, OR start() is mid-flight (async
+      // gap between `scheduleStart()` and `this.handle = startAgent(spec)`).
+      //
+      // PR #938 W2 — the gap case: a mount fired during start()'s async
+      // work (TLS prep / tracing init) would be silently dropped without
+      // this flag. The startup-time spec was already built; without a
+      // replay, the mount lands in the registry but never reaches the
+      // Rust core. Set a flag so `start()` flushes us right after
+      // `this.handle` is set.
+      //
+      // The pure pre-`scheduleStart()` case (flag stays unread, nothing
+      // started) is still a no-op — `start()` will pick up the current
+      // registry state via `buildAgentSpecContribution()` when it runs.
+      if (this.starting) {
+        this.pendingSurfacesPush = true;
+      }
       return;
     }
     const { agentType, surfacesJson } =

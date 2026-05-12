@@ -309,6 +309,22 @@ impl AgentRuntime {
         // Normalize empty/whitespace-only surfaces JSON to None so the wire
         // stays clean (registry's `surfaces` is omitted via skip_serializing_if).
         let new_surfaces = surfaces.filter(|s| !s.trim().is_empty());
+        // Surface unknown agent_type strings (typos, future variants) before
+        // they're silently coerced to `McpAgent` by `AgentType::from_str`'s
+        // catch-all branch. We preserve the existing behavior (still proceed
+        // with the coerced value) so the wire contract is unchanged — this
+        // is observability-only. Known variants match the catch list in
+        // `AgentType::from_str` (`spec.rs`); keep both in sync.
+        match agent_type.to_lowercase().as_str() {
+            "api" | "a2a" | "mcp_agent" => {}
+            other => {
+                warn!(
+                    "Unknown agent_type '{}' in UpdateSurfaces — coercing to 'mcp_agent'. \
+                     This is likely a typo or a newer SDK pushing a future variant.",
+                    other
+                );
+            }
+        }
         let new_agent_type = AgentType::from_str(&agent_type);
 
         let surfaces_changed = self.spec.surfaces != new_surfaces;
