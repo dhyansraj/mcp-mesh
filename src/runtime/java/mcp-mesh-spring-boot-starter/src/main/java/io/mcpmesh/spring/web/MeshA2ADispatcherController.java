@@ -15,7 +15,9 @@ import org.springframework.web.servlet.function.ServerResponse;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * HTTP entry point for A2A producer surfaces (spec §3 + §4).
@@ -54,6 +56,29 @@ public class MeshA2ADispatcherController {
     private static final Logger log = LoggerFactory.getLogger(MeshA2ADispatcherController.class);
 
     private static final String AGENT_CARD_SUFFIX = "/.well-known/agent.json";
+
+    /**
+     * Empty-registry router: a {@link RouterFunction} that matches no
+     * requests, returned when no {@code @MeshA2A} surfaces are registered.
+     *
+     * <p>{@code RouterFunctions.Builder.build()} throws
+     * {@code IllegalStateException: No routes registered. Register a route
+     * with GET(), POST(), etc.} when called with zero accumulated routes,
+     * which crashed the agent process at context refresh before it could
+     * register with the mesh registry.
+     *
+     * <p>Most Java agents do NOT declare {@code @MeshA2A} surfaces (basic
+     * {@code @MeshTool} agents, registry/lifecycle tests, consumer-only
+     * apps), so the empty-registry case is the common case. Returning a
+     * never-matching {@code RouterFunction} bypasses the builder entirely
+     * — Spring's {@code RouterFunctionMapping} accepts the bean without
+     * complaint, and no fake/internal path appears in the route table.
+     * If anything ever does try to dispatch through it, {@code route()}
+     * returns {@code Optional.empty()} and the request falls through to
+     * the next handler in the chain.
+     */
+    static final RouterFunction<ServerResponse> EMPTY_REGISTRY_ROUTER =
+        request -> Optional.empty();
 
     /**
      * Hard cap on the size of an inbound JSON-RPC body read by {@link #readBody}.
@@ -104,8 +129,21 @@ public class MeshA2ADispatcherController {
      * {@code meshA2ARouterFunction(...)} factory method.
      */
     public RouterFunction<ServerResponse> buildRouterFunction() {
+        List<MeshA2ARegistry.SurfaceMetadata> allSurfaces = registry.getAllSurfaces();
+        if (allSurfaces.isEmpty()) {
+            // Empty-registry guard: RouterFunctions.Builder.build() rejects an
+            // empty route list (IllegalStateException: "No routes registered"),
+            // crashing every Java agent that has no @MeshA2A surfaces — basic
+            // @MeshTool agents, consumer-only apps, registry/lifecycle tests.
+            // Return a never-matching RouterFunction directly so the bean
+            // exists for Spring's RouterFunctionMapping to collect, but no
+            // fake path lands in the route table. See EMPTY_REGISTRY_ROUTER
+            // javadoc for rationale.
+            log.debug("@MeshA2A: no surfaces registered — installing never-matching router");
+            return EMPTY_REGISTRY_ROUTER;
+        }
         RouterFunctions.Builder builder = RouterFunctions.route();
-        for (MeshA2ARegistry.SurfaceMetadata surface : registry.getAllSurfaces()) {
+        for (MeshA2ARegistry.SurfaceMetadata surface : allSurfaces) {
             String path = surface.path();
             String cardPath = path + AGENT_CARD_SUFFIX;
             // SSE branch FIRST so Accept: text/event-stream wins the
