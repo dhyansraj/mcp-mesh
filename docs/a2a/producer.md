@@ -145,6 +145,10 @@ The simplest case — the upstream returns within seconds, so there is no parkin
     app.listen(9090);
     ```
 
+    !!! warning "TypeScript: `MeshExpress` is a known limitation for A2A producers"
+
+        `mesh.a2a.mount(...)` pushes mid-flight surface updates to the auto-initialized `ApiRuntime` singleton — the runtime that backs `mesh.route()`-style apps (the default; what the snippet above uses). Users who construct an explicit `MeshExpress(app, config)` get a separate runtime handle that is **not** subscribed to this push, so deferred mounts (mounts called after the runtime starts) won't be reflected on those runtimes' next heartbeat. **Workaround**: declare all `mesh.a2a.mount(...)` surfaces before any incoming HTTP traffic / before manual `MeshExpress` construction so the startup-time snapshot captures everything. Tracked at [#942](https://github.com/dhyansraj/mcp-mesh/issues/942).
+
 Two routes are now live on port 9090:
 
 | Route                                      | Purpose                                       |

@@ -792,6 +792,32 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_type_unknown_coerces_to_mcp_agent() {
+        // PR #938 W1: pin the catch-all coercion behavior. Unknown strings
+        // (typos, future variants from a newer SDK) silently coerce to
+        // `McpAgent`. The runtime now emits a `warn!` at the call site
+        // (`runtime::handle_update_surfaces`) so operators can spot the
+        // coercion in logs; the contract here is intentionally unchanged
+        // for back-compat. If this test starts failing, the catch-all
+        // branch in `AgentType::from_str` was changed — make sure
+        // `runtime::handle_update_surfaces`'s known-variant guard list is
+        // updated in lockstep, since the warn-log fires only for inputs
+        // that miss that list.
+        assert_eq!(AgentType::from_str("typo"), AgentType::McpAgent);
+        assert_eq!(AgentType::from_str(""), AgentType::McpAgent);
+        assert_eq!(AgentType::from_str("FUTURE_VARIANT"), AgentType::McpAgent);
+        // Known variants (sanity — these must continue to NOT trigger the
+        // catch-all). Mirrors the guard list in
+        // `runtime::handle_update_surfaces`.
+        assert_eq!(AgentType::from_str("mcp_agent"), AgentType::McpAgent);
+        assert_eq!(AgentType::from_str("api"), AgentType::Api);
+        assert_eq!(AgentType::from_str("a2a"), AgentType::A2a);
+        // Case-insensitive match (`from_str` lowercases first).
+        assert_eq!(AgentType::from_str("API"), AgentType::Api);
+        assert_eq!(AgentType::from_str("A2A"), AgentType::A2a);
+    }
+
+    #[test]
     fn test_agent_type_a2a() {
         // Issue #903 Phase 1B: A2A surface adapter agent type. The string
         // form must round-trip via from_str/as_api_str so the registry sees

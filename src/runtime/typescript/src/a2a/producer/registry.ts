@@ -135,6 +135,37 @@ export class A2AProducerRegistry {
   }
 
   /**
+   * Build the `(agentType, surfacesJson)` pair the napi binding expects on
+   * `JsAgentSpec.surfaces` and on `JsAgentHandle.updateSurfaces(...)` (issue
+   * #938). Centralizes the {@link buildHeartbeatSurfaces} → JSON.stringify
+   * → flip-agentType logic so the three callers — `ApiRuntime.start`,
+   * `MeshAgent.startHeartbeat`, and `mesh.a2a.mount` — emit identical
+   * payloads.
+   *
+   * `nonA2aType` is the agent_type to use when no A2A surfaces are
+   * registered ({@code "api"} for consumer-only Express apps, {@code "mcp_agent"}
+   * for full MCP agents). When at least one surface is registered the
+   * agent_type flips to {@code "a2a"} (matches Python's
+   * `heartbeat_preparation.py:371-389`).
+   *
+   * Empty surfaces arrays are encoded as `undefined` so the wire stays
+   * clean — the napi binding's `surfaces?: string` field is omitted by
+   * `skip_serializing_if` in Rust when None.
+   */
+  buildAgentSpecContribution(
+    nonA2aType: "api" | "mcp_agent" = "api",
+  ): { agentType: "a2a" | "api" | "mcp_agent"; surfacesJson: string | undefined } {
+    if (!this.hasSurfaces()) {
+      return { agentType: nonA2aType, surfacesJson: undefined };
+    }
+    const surfaces = this.buildHeartbeatSurfaces();
+    return {
+      agentType: "a2a",
+      surfacesJson: JSON.stringify(surfaces),
+    };
+  }
+
+  /**
    * Build the heartbeat `a2a_surfaces[]` array (spec §2.1).
    *
    * Required fields (`path`, `skill_id`) are always emitted. `name` is
