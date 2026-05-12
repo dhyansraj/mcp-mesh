@@ -25,8 +25,8 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Install maturin for building Rust Python extensions
 RUN pip install --no-cache-dir maturin build wheel
 
-# Install Node.js 20
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+# Install Node.js 22
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
