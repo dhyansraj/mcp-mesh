@@ -116,8 +116,8 @@ Once orphan-reset fires (consumer B dead), any new resolution that previously pi
 
 Capability+tag failover applies at **dispatch time**:
 
-- **Sync calls** (`tools/call`): every call is a fresh resolution, so a dead consumer is detoured cleanly on the next call.
-- **Long-running jobs** (`task=True`): the job is pinned to the consumer that submitted it — the job state lives on the external A2A backend and the consumer holds the open polling / SSE channel. Killing the consumer mid-job surfaces as `JobLost` to the caller; retrying the submission routes to a peer consumer (which submits a fresh A2A task — there is no portable "resume" semantic on A2A v1.0).
+- **Sync calls** (`tools/call`): consumer selection happens per-call against the caller's local registry view, which is kept fresh by background heartbeats (~5s) — the registry is NOT in the request path. When a consumer dies and orphan-reset fires on the registry side, the next heartbeat refresh drops it from the local view, and subsequent calls transparently route to a peer consumer. The A2A wire call itself goes peer-to-peer (caller → consumer → external A2A producer URL); the registry never sees the in-flight traffic.
+- **Long-running jobs** (`task=True`): the job is pinned to the consumer that submitted it because the A2A task state lives on the external A2A producer and only that consumer holds the open polling / SSE channel. Killing the consumer mid-job surfaces as `JobLost` to the caller. Retrying the submission goes through mesh resolution again (same local-view lookup) and routes to a peer consumer, which submits a fresh A2A task — A2A v1.0 has no portable "resume" semantic across consumer instances.
 
 See [Long-Running & SSE](long-running.md) for the bridging primitives and [Architecture & Decisions](architecture.md) for the pinning rationale.
 

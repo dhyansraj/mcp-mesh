@@ -239,28 +239,6 @@ forecast = await weather(destination, dates)
 
 ---
 
-## MCP Mesh vs Other AI Agent Frameworks
-
-| Feature                                      | Other Frameworks  | MCP Mesh                      |
-| -------------------------------------------- | ----------------- | ----------------------------- |
-| **Zero-config Dependency Injection**         | ❌                | ✅                            |
-| **Dynamic Agent Discovery & Hot Join/Leave** | ❌                | ✅                            |
-| **Cross-language Support**                   | ❌                | ✅ Python + Java + TypeScript |
-| **Same Code: Local → Docker → K8s**          | ❌ Rewrite needed | ✅                            |
-| **Developer CLI (scaffold, trace, status)**  | ❌                | ✅ `meshctl`                  |
-| **Kubernetes-native (Helm)**                 | ❌ DIY            | ✅                            |
-| **Distributed Tracing (OpenTelemetry)**      | ❌ DIY            | ✅ Grafana/Tempo              |
-| **Auto-failover & Graceful Degradation**     | ❌                | ✅                            |
-| **LLM as Dependency (Discovery + Failover)** | ❌                | ✅                            |
-| **Zero-config Testing (Topology Mocking)**   | ❌                | ✅                            |
-| **Standard Protocol**                        | ❌ Custom         | ✅ MCP                        |
-| **Framework Lock-in**                        | High (classes)    | Low (decorators)              |
-| **Lines of Code per Agent**                  | ~50+              | ~10                           |
-
-**[See full comparison →](https://mcp-mesh.ai/comparison/)**
-
----
-
 ## Contributing
 
 We welcome contributions from the community! MCP Mesh is designed to be a collaborative effort to advance the state of distributed MCP applications.

@@ -24,7 +24,7 @@ Source: `src/runtime/python/mesh/_a2a_consumer.py` (`A2AJob.bridge`, `A2AStream.
 
 Capability+tag failover applies differently depending on call shape:
 
-- **Sync consumers.** Every `tools/call` is a fresh resolution. A dead consumer is detoured cleanly on the next call. Caller experience: transparent rewire to a peer consumer in seconds (see [Failover & Federation](failover.md)).
+- **Sync consumers.** Each `tools/call` re-resolves the target consumer against the caller's local registry view (kept fresh by background heartbeats; the registry is not in the request path). When a consumer dies, orphan-reset on the registry side drops it from the view at the next heartbeat refresh, and subsequent calls transparently rewire to a peer consumer in seconds. The A2A wire call itself stays peer-to-peer — caller → consumer → external A2A producer URL (see [Failover & Federation](failover.md)).
 
 - **Long-running consumers (`task=True`).** The job is **pinned** to the consumer that submitted it. The state lives on the external A2A backend; the consumer holds the open polling / SSE channel as the only mesh-side handle on it. Killing the consumer mid-job:
     - Surfaces to the caller as a job-lost terminal: the registry's orphan-reset sweep moves the job to a failed/lost terminal state once the consumer's lease expires, and the caller's `proxy.wait()` returns that terminal (no in-process resume).
