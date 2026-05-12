@@ -31,6 +31,7 @@ func NewTemplateRenderer() *TemplateRenderer {
 			"toPascalCase":     toPascalCase,
 			"toKebabCase":      toKebabCase,
 			"toUpperSnakeCase": toUpperSnakeCase,
+			"toAgentClassName": toAgentClassName,
 			"default":          defaultValue,
 			"indent":           indent,
 			"trimSpace":        strings.TrimSpace,
@@ -251,10 +252,11 @@ func TemplateDataFromContext(ctx *ScaffoldContext) map[string]interface{} {
 		"AgentType":   ctx.AgentType,
 
 		// Computed name variants
-		"NameSnake":  toSnakeCase(ctx.Name),
-		"NameCamel":  toCamelCase(ctx.Name),
-		"NamePascal": toPascalCase(ctx.Name),
-		"NameKebab":  toKebabCase(ctx.Name),
+		"NameSnake":      toSnakeCase(ctx.Name),
+		"NameCamel":      toCamelCase(ctx.Name),
+		"NamePascal":     toPascalCase(ctx.Name),
+		"NameKebab":      toKebabCase(ctx.Name),
+		"NameAgentClass": toAgentClassName(ctx.Name),
 
 		// Tool-specific
 		"Capabilities": ctx.Capabilities,
@@ -340,6 +342,31 @@ func toPascalCase(s string) string {
 		result.WriteString(capitalize(word))
 	}
 	return result.String()
+}
+
+// toAgentClassName returns the PascalCase form of s with an "Agent" suffix,
+// but only when s does not already contain the substring "agent"
+// (case-insensitive). This prevents double-suffix class names like
+// "PyClaudeAgentAgent" when the user-supplied --name already includes
+// "agent" (e.g. "py-claude-agent", "agent-py-claude", "MyAgent").
+//
+// Examples:
+//
+//	"py-claude-agent"      -> "PyClaudeAgent"   (has "agent" -> no suffix)
+//	"agent-py-claude"      -> "AgentPyClaude"   (has "agent" -> no suffix)
+//	"agent-claude-thinking"-> "AgentClaudeThinking" (has "agent" -> no suffix)
+//	"py-greeter"           -> "PyGreeterAgent"  (no  "agent" -> append)
+//	"chatbot"              -> "ChatbotAgent"    (no  "agent" -> append)
+//	"MyAgent"              -> "MyAgent"         (case-insensitive match -> no suffix)
+func toAgentClassName(s string) string {
+	pascal := toPascalCase(s)
+	if pascal == "" {
+		return "Agent"
+	}
+	if strings.Contains(strings.ToLower(pascal), "agent") {
+		return pascal
+	}
+	return pascal + "Agent"
 }
 
 // toKebabCase converts a string to kebab-case.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"mcp-mesh/src/core/cli/scaffold"
@@ -17,31 +18,32 @@ func NewScaffoldCommand() *cobra.Command {
 		Short: "Generate new MCP Mesh agent from templates",
 		Long: `Generate a new MCP Mesh agent using templates.
 
-Supports three input modes:
-  1. Interactive: Run without --name to enter interactive wizard
-  2. CLI flags: Specify all options via command line
-  3. Config file: Use --config to load from YAML file
+Subcommands (per agent type):
+  basic         Plain @mesh.agent skeleton (no LLM, no A2A)
+  llm           Consumer agent that uses an LLM via mesh delegation
+  llm-provider  @mesh.llm_provider agent for a specific vendor
+  a2a-consumer  Bridge an external A2A producer onto the mesh
 
-Agent types:
-  - tool: Basic tool agent with @mesh.tool decorator
-  - llm-agent: LLM-powered agent with @mesh.llm decorator
-  - llm-provider: Zero-code LLM provider with @mesh.llm_provider decorator
-  - api: HTTP API gateway that consumes mesh capabilities via @mesh.route
+Run 'meshctl scaffold <subcommand> --help' for per-subcommand flags.
+
+Top-level (no subcommand) modes:
+  Interactive wizard: Run with no flags (and a TTY) to enter the wizard
+  Config file:        meshctl scaffold --config scaffold.yaml
+  Compose generator:  meshctl scaffold --compose [--observability]
+  List modes:         meshctl scaffold --list-modes
 
 Examples:
   # Interactive mode (recommended for first-time users)
   meshctl scaffold
 
   # Generate basic tool agent
-  meshctl scaffold --name my-agent --agent-type tool
+  meshctl scaffold basic --name my-agent
 
-  # Generate LLM-powered agent
-  meshctl scaffold --name emotion-analyzer --agent-type llm-agent \
-    --llm-selector openai --response-format json
+  # Generate LLM-powered agent (consumer)
+  meshctl scaffold llm --name emotion-analyzer --vendor openai --response-format json
 
   # Generate LLM provider
-  meshctl scaffold --name claude-provider --agent-type llm-provider \
-    --model anthropic/claude-sonnet-4-5
+  meshctl scaffold llm-provider --name claude-provider --vendor claude
 
   # Generate from config file
   meshctl scaffold --config scaffold.yaml
@@ -61,11 +63,8 @@ Examples:
   # Generate docker-compose with custom project name
   meshctl scaffold --compose --project-name my-project
 
-  # Generate API gateway agent
-  meshctl scaffold --name my-gateway --agent-type api
-
   # Preview generated code without creating files
-  meshctl scaffold --name my-agent --agent-type tool --dry-run
+  meshctl scaffold basic --name my-agent --dry-run
 
 Documentation:
   For SDK reference and decorator documentation, see:
@@ -98,9 +97,6 @@ Infrastructure:
 	cmd.Flags().Bool("dry-run", false, "Preview generated code without creating files")
 	cmd.Flags().String("package", "", "Java package name (default: com.example.<agent-name>)")
 
-	// Agent type flag
-	cmd.Flags().String("agent-type", "", "Agent type: tool, llm-agent, llm-provider, api")
-
 	// LLM-agent specific flags
 	cmd.Flags().String("llm-selector", "claude", "LLM provider selector: claude, openai")
 	cmd.Flags().Int("max-iterations", 1, "Max agentic loop iterations")
@@ -127,6 +123,29 @@ Infrastructure:
 		provider, _ := scaffold.DefaultRegistry.Get(name)
 		provider.RegisterFlags(cmd)
 	}
+
+	// Custom flag-parse error handler: rewrite the message for the removed
+	// `--agent-type` flag (#957 fix 1) into clear deprecation guidance so
+	// users on the old form see the migration path instead of a generic
+	// "unknown flag" error. For the deprecation case we suppress the usage
+	// dump (the message itself is self-explanatory); other flag-parse
+	// errors fall through to cobra's default which still prints usage.
+	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		msg := err.Error()
+		if strings.Contains(msg, "--agent-type") || strings.Contains(msg, "agent-type") {
+			c.SilenceUsage = true
+			return fmt.Errorf(
+				"--agent-type is no longer supported. " +
+					"Use `meshctl scaffold <subcommand> <flags>` instead. " +
+					"Subcommands: basic, llm, llm-provider, a2a-consumer. " +
+					"Run `meshctl scaffold --help` for the subcommand list")
+		}
+		return err
+	})
+
+	// Attach `basic` subcommand (#957). Explicit replacement for the legacy
+	// `--agent-type tool` form. Generates a plain @mesh.agent skeleton.
+	scaffold.AttachBasicSubcommand(cmd)
 
 	// Attach `llm-provider` and `llm` subcommands (#859).
 	// These wrap the static template machinery with vendor + runtime shortcuts
@@ -267,8 +286,18 @@ func loadFromFlags(cmd *cobra.Command) (*scaffold.ScaffoldContext, error) {
 	port, _ := cmd.Flags().GetInt("port")
 	description, _ := cmd.Flags().GetString("description")
 
-	// Get agent type
-	agentType, _ := cmd.Flags().GetString("agent-type")
+	// Auto-increment port when the user did not pass --port explicitly: scan
+	// the output directory for previously-scaffolded agents and pick
+	// max(detected_ports)+1. This keeps two `meshctl scaffold` calls in the
+	// same directory from colliding on 8080. See issue #957 (fix 2).
+	port = scaffold.AutoAssignScaffoldPort(cmd, port, output, name)
+
+	// agent-type was removed in #957 (fix 1); subcommands (basic, llm,
+	// llm-provider, a2a-consumer) are the canonical way to pick an agent
+	// type now. Top-level scaffold without a subcommand defaults to "tool"
+	// (basic template) for backward compatibility with `meshctl scaffold
+	// --name X --template Y` invocations and interactive mode.
+	agentType := ""
 
 	// Get static provider flags
 	template, _ := cmd.Flags().GetString("template")

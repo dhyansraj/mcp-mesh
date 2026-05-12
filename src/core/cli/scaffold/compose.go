@@ -140,6 +140,38 @@ func ScanForAgents(dir string) ([]DetectedAgent, error) {
 	return agents, nil
 }
 
+// DefaultScaffoldPort is the starting port used when no existing agent is
+// found in the output directory. Subsequent scaffolded agents auto-increment
+// from the highest detected port. See NextAvailablePort.
+const DefaultScaffoldPort = 8080
+
+// NextAvailablePort scans dir for already-scaffolded agents and returns
+// `max(detected_ports) + 1`. If no agent is detected (or the scan fails for
+// any reason) it returns DefaultScaffoldPort. This is used by scaffold
+// commands to auto-increment the port flag when the user did not explicitly
+// pass --port, so that two `meshctl scaffold` calls in the same directory
+// don't collide on 8080.
+//
+// The function never returns an error: a missing/unreadable directory is a
+// normal first-scaffold condition and must fall back to the default port.
+func NextAvailablePort(dir string) int {
+	agents, err := ScanForAgents(dir)
+	if err != nil || len(agents) == 0 {
+		return DefaultScaffoldPort
+	}
+	maxPort := 0
+	for _, a := range agents {
+		if a.Port > maxPort {
+			maxPort = a.Port
+		}
+	}
+	if maxPort < DefaultScaffoldPort {
+		return DefaultScaffoldPort
+	}
+	return maxPort + 1
+}
+
+
 // extractBalancedParen finds a marker (e.g. "@mesh.agent") in content,
 // then returns everything from the marker through the matching closing ')'.
 // It handles nested parentheses inside string literals correctly.

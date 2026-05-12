@@ -87,7 +87,7 @@ def {{ toSnakeCase .Name }}(
     enable_http=True,
     auto_run=True,
 )
-class {{ toPascalCase .Name }}Agent:
+class {{ toAgentClassName .Name }}:
     """
     LLM Agent that uses {{ if eq .LLMProviderSelector "claude" }}Claude{{ else if eq .LLMProviderSelector "openai" }}OpenAI{{ else }}an LLM{{ end }} for processing.
 

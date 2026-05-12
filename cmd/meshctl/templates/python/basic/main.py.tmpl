@@ -106,7 +106,7 @@ async def {{ .ToolName | default "hello" }}() -> str:
     enable_http=True,
     auto_run=True,
 )
-class {{ toPascalCase .Name }}Agent:
+class {{ toAgentClassName .Name }}:
     """
     Agent class that configures how mesh should run the FastMCP server.
 
