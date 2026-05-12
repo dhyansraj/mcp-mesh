@@ -104,14 +104,31 @@ class LocalMediaStore(MediaStore):
 
 
 class S3MediaStore(MediaStore):
-    """S3-compatible media store (requires boto3 at runtime)."""
+    """S3-compatible media store (requires boto3 at runtime).
+
+    Construction is fail-fast: boto3 is imported eagerly, ``MCP_MESH_MEDIA_STORAGE_BUCKET``
+    must be set explicitly (no silent default), and — when
+    ``MCP_MESH_MEDIA_STORAGE_VALIDATE=true`` — an inexpensive ``head_bucket`` probe
+    runs to confirm credentials and bucket reachability before the agent starts
+    serving traffic. The probe is opt-in to keep CI/local-dev workflows that
+    set ``MCP_MESH_MEDIA_STORAGE=s3`` without real AWS creds working.
+    """
 
     def __init__(self) -> None:
-        self._bucket: str = get_config_value(
+        # Bucket must be configured explicitly — silently defaulting to
+        # "mcp-mesh-media" would let typos produce confusing 404s at first use.
+        bucket = get_config_value(
             "MCP_MESH_MEDIA_STORAGE_BUCKET",
-            default="mcp-mesh-media",
+            default=None,
             rule=ValidationRule.STRING_RULE,
         )
+        if not bucket:
+            raise ValueError(
+                "MCP_MESH_MEDIA_STORAGE=s3 requires MCP_MESH_MEDIA_STORAGE_BUCKET to be set. "
+                "Set the bucket name in your environment, e.g. "
+                "MCP_MESH_MEDIA_STORAGE_BUCKET=my-media-bucket."
+            )
+        self._bucket: str = bucket
         endpoint: str | None = get_config_value(
             "MCP_MESH_MEDIA_STORAGE_ENDPOINT",
             default=None,
@@ -127,7 +144,7 @@ class S3MediaStore(MediaStore):
             import boto3  # type: ignore[import-untyped]
         except ImportError as exc:
             raise ImportError(
-                "boto3 is required for S3 media storage. "
+                "boto3 is required for S3 media storage (MCP_MESH_MEDIA_STORAGE=s3). "
                 "Install it with: pip install boto3"
             ) from exc
 
@@ -135,6 +152,38 @@ class S3MediaStore(MediaStore):
         if endpoint:
             kwargs["endpoint_url"] = endpoint
         self._client = boto3.client("s3", **kwargs)
+
+        # Optional eager probe — confirms creds + bucket reachability at startup
+        # rather than at first media call. Off by default so dev/CI environments
+        # that set MCP_MESH_MEDIA_STORAGE=s3 without live creds aren't broken.
+        validate = get_config_value(
+            "MCP_MESH_MEDIA_STORAGE_VALIDATE",
+            default="false",
+            rule=ValidationRule.STRING_RULE,
+        )
+        if str(validate).lower() in ("true", "1", "yes", "on"):
+            self._probe_bucket()
+
+    def _probe_bucket(self) -> None:
+        """Cheap reachability check — head_bucket only needs object-level perms."""
+        from botocore.exceptions import ClientError, NoCredentialsError
+
+        try:
+            self._client.head_bucket(Bucket=self._bucket)
+        except NoCredentialsError as exc:
+            raise RuntimeError(
+                "S3 media store probe failed: AWS credentials not found. "
+                "Set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY (or use an IAM role). "
+                "Set MCP_MESH_MEDIA_STORAGE_VALIDATE=false to defer this check."
+            ) from exc
+        except ClientError as exc:
+            code = exc.response.get("Error", {}).get("Code", "Unknown")
+            raise RuntimeError(
+                f"S3 media store probe failed for bucket '{self._bucket}' "
+                f"(error code: {code}). Verify MCP_MESH_MEDIA_STORAGE_BUCKET, "
+                "MCP_MESH_MEDIA_STORAGE_ENDPOINT, and AWS credentials. "
+                "Set MCP_MESH_MEDIA_STORAGE_VALIDATE=false to defer this check."
+            ) from exc
 
     def _key(self, filename: str) -> str:
         return f"{self._prefix}{filename}"

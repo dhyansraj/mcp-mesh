@@ -14,6 +14,7 @@ from .heartbeat_preparation import HeartbeatPreparationStep
 from .jobs_cancel_route import JobsCancelRouteStep
 from .jobs_claim_workers import JobsClaimWorkersStep
 from .jobs_helper_tools import JobsHelperToolsStep
+from .media_store_validation import MediaStoreValidationStep
 from .startup_orchestrator import (MeshOrchestrator,
                                    clear_debounce_coordinator,
                                    get_debounce_coordinator,
@@ -30,6 +31,7 @@ __all__ = [
     "JobsCancelRouteStep",
     "JobsClaimWorkersStep",
     "JobsHelperToolsStep",
+    "MediaStoreValidationStep",
     "MeshOrchestrator",
     "StartupPipeline",
     "clear_debounce_coordinator",
