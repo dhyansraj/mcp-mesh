@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/registry/generated"
 )
 
@@ -564,8 +565,20 @@ func (h *EntBusinessLogicHandlers) FastHeartbeatCheck(c *gin.Context, agentId st
 		return
 	}
 
-	// Update agent timestamp to indicate recent activity (prevents health monitor eviction)
-	// This also handles recovery from unhealthy status if needed
+	// Issue #955: an agent marked unhealthy by startup cleanup or the
+	// health monitor must re-register via POST /heartbeat before it can
+	// transition back to healthy. Allowing a bare HEAD ping to revive it
+	// bypasses metadata refresh and lets orphans from a prior session
+	// (with stale endpoint / capabilities) silently re-claim a healthy
+	// row forever. The SDK clients (Rust core / Python) already map 410
+	// to AGENT_UNKNOWN → requires_full_heartbeat() → POST re-register.
+	if agentEntity.Status == agent.StatusUnhealthy {
+		c.Status(http.StatusGone) // 410 — please re-register via POST
+		return
+	}
+
+	// Update agent timestamp to indicate recent activity (prevents health monitor eviction).
+	// Unhealthy→Healthy transitions are NOT handled here — see the 410 short-circuit above (#955).
 	err = h.entService.UpdateAgentHeartbeatTimestamp(c.Request.Context(), agentId)
 	if err != nil {
 		// Service error - back off and retry
