@@ -1,5 +1,3 @@
-"""Entry point for {{ .Name }} module."""
+"""Entry point for `python -m {{ .NameSnake }}`."""
 
-
-if __name__ == "__main__":
-    pass  # MCP Mesh handles startup via @mesh.agent
+from . import main  # noqa: F401 — importing `main` triggers the @mesh.agent decorator

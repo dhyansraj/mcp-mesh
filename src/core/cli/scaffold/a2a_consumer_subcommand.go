@@ -78,6 +78,7 @@ Examples:
 		"Env var name for bearer token (used when the card advertises bearer auth)")
 	cmd.Flags().String("package", "", "Java package name (default: com.example.<agent-name>)")
 	cmd.Flags().Bool("dry-run", false, "Preview generated files without creating them")
+	cmd.Flags().Bool("no-interactive", false, "Disable interactive prompts (for scripting)")
 	cmd.Flags().Bool("allow-private-network", false,
 		"Allow card fetch (and any redirect) to resolve to a private/loopback/link-local IP. "+
 			"Default off to block SSRF; enable for local-dev producers on localhost or RFC1918.")

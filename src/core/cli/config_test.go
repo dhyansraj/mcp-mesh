@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v2"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -314,5 +315,57 @@ func TestValidateEnvironmentVariable(t *testing.T) {
 
 	if err := ValidateEnvironmentVariable("MCP_MESH_HEALTH_CHECK_INTERVAL", "0"); err == nil {
 		t.Error("Zero interval should return error")
+	}
+}
+
+// TestConfigYAMLSnakeCase ensures `meshctl config show --format yaml`
+// emits snake_case keys (registry_port, health_check_interval, ...) instead
+// of yaml.v2's default lowercased Go field names (registryport, ...). See
+// issue #956 item #17.
+func TestConfigYAMLSnakeCase(t *testing.T) {
+	config := DefaultConfig()
+	data, err := yaml.Marshal(config)
+	if err != nil {
+		t.Fatalf("yaml.Marshal failed: %v", err)
+	}
+	out := string(data)
+
+	wantKeys := []string{
+		"registry_port:",
+		"registry_host:",
+		"db_path:",
+		"log_level:",
+		"health_check_interval:",
+		"debug_mode:",
+		"startup_timeout:",
+		"shutdown_timeout:",
+		"enable_background:",
+		"pid_file:",
+		"state_dir:",
+		"last_modified:",
+	}
+	for _, k := range wantKeys {
+		if !strings.Contains(out, k) {
+			t.Errorf("yaml output missing snake_case key %q\nfull output:\n%s", k, out)
+		}
+	}
+
+	// The lowercased Go-field forms must NOT appear.
+	dontWantKeys := []string{
+		"registryport:",
+		"registryhost:",
+		"healthcheckinterval:",
+		"debugmode:",
+		"startuptimeout:",
+		"shutdowntimeout:",
+		"enablebackground:",
+		"pidfile:",
+		"statedir:",
+		"lastmodified:",
+	}
+	for _, k := range dontWantKeys {
+		if strings.Contains(out, k) {
+			t.Errorf("yaml output should NOT contain Go-field-cased key %q\nfull output:\n%s", k, out)
+		}
 	}
 }

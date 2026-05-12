@@ -49,6 +49,7 @@ Examples:
 	cmd.Flags().String("package", "",
 		"Java package name (default: com.example.<agent-name>)")
 	cmd.Flags().Bool("dry-run", false, "Preview generated files without creating them")
+	cmd.Flags().Bool("no-interactive", false, "Disable interactive prompts (for scripting)")
 
 	return cmd
 }

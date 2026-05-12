@@ -82,6 +82,7 @@ Schema registry (issue #547):
 	// Tools listing - use --tools to list all, --tools=<name> for specific tool details
 	cmd.Flags().StringP("tools", "t", "", "List tools: use --tools or -t to list all, --tools=<tool> for details")
 	cmd.Flags().Lookup("tools").NoOptDefVal = "all" // "all" means list all tools
+	cmd.Flags().Bool("show-framework", false, "Include framework-internal tools (__mesh_job_*) in --tools output")
 
 	// Schema registry listing (issue #547). When set, --schemas short-circuits
 	// the agent listing and queries GET /schemas instead.
@@ -270,7 +271,8 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 
 	// Handle tools listing mode
 	if toolsFlagChanged {
-		return runToolsListCommand(finalRegistryURL, toolsFlag, jsonOutput, !showAll)
+		showFramework, _ := cmd.Flags().GetBool("show-framework")
+		return runToolsListCommand(finalRegistryURL, toolsFlag, jsonOutput, !showAll, showFramework)
 	}
 
 	// Collect all information
@@ -1885,8 +1887,11 @@ type ToolListItem struct {
 	Endpoint    string `json:"endpoint"`
 }
 
-// runToolsListCommand handles the --tools flag
-func runToolsListCommand(registryURL, toolSpec string, jsonOutput, healthyOnly bool) error {
+// runToolsListCommand handles the --tools flag. When showFramework is false
+// (default), framework-internal tools whose function name starts with
+// "__mesh_job_" are filtered out of both the list view and the per-tool
+// lookup so end users see only application capabilities (issue #956 #15).
+func runToolsListCommand(registryURL, toolSpec string, jsonOutput, healthyOnly, showFramework bool) error {
 	// Get enhanced agents from registry
 	enhancedAgents, err := getEnhancedAgents(registryURL)
 	if err != nil {
@@ -1898,20 +1903,24 @@ func runToolsListCommand(registryURL, toolSpec string, jsonOutput, healthyOnly b
 		enhancedAgents = filterHealthyAgents(enhancedAgents)
 	}
 
-	// Collect all tools
+	// Collect all tools (skip framework-internal tools unless --show-framework).
 	var allTools []ToolListItem
 	for _, agent := range enhancedAgents {
 		for _, tool := range agent.Tools {
+			funcName := tool.FunctionName
+			if funcName == "" {
+				funcName = tool.Name
+			}
+			if !showFramework && isFrameworkInternalTool(funcName) {
+				continue
+			}
 			toolItem := ToolListItem{
-				ToolName:   tool.FunctionName,
+				ToolName:   funcName,
 				AgentName:  agent.Name,
 				AgentID:    agent.ID,
 				Capability: tool.Capability,
 				Version:    tool.Version,
 				Endpoint:   agent.Endpoint,
-			}
-			if tool.FunctionName == "" {
-				toolItem.ToolName = tool.Name
 			}
 			if len(tool.Tags) > 0 {
 				toolItem.Tags = strings.Join(tool.Tags, ",")
@@ -1938,11 +1947,12 @@ func runToolsListCommand(registryURL, toolSpec string, jsonOutput, healthyOnly b
 		targetAgentID = matchResult.Agent.ID
 	}
 
-	// Find the specific tool
-	var matchedTool *ToolListItem
-	var matchedAgent *EnhancedAgent
+	// Collect ALL matching tools across healthy agents. If we hit more than
+	// one match without an agent qualifier, error with disambiguation help
+	// instead of silently picking the first (issue #956 item #13).
+	var matchedTools []ToolListItem
+	var matchedAgents []EnhancedAgent
 	for _, agent := range enhancedAgents {
-		// If agent was resolved via prefix, use that specific agent
 		if targetAgentID != "" && agent.ID != targetAgentID {
 			continue
 		}
@@ -1951,37 +1961,89 @@ func runToolsListCommand(registryURL, toolSpec string, jsonOutput, healthyOnly b
 			if funcName == "" {
 				funcName = tool.Name
 			}
-			if funcName == toolName {
-				toolItem := ToolListItem{
-					ToolName:   funcName,
-					AgentName:  agent.Name,
-					AgentID:    agent.ID,
-					Capability: tool.Capability,
-					Version:    tool.Version,
-					Endpoint:   agent.Endpoint,
-				}
-				if len(tool.Tags) > 0 {
-					toolItem.Tags = strings.Join(tool.Tags, ",")
-				}
-				matchedTool = &toolItem
-				matchedAgent = &agent
-				break
+			if funcName != toolName {
+				continue
 			}
-		}
-		if matchedTool != nil {
-			break
+			// When the user explicitly asks for a framework tool by name
+			// (e.g. `--tools=__mesh_job_status`), surface it even without
+			// --show-framework. Only the bulk-list path filters by default.
+			toolItem := ToolListItem{
+				ToolName:   funcName,
+				AgentName:  agent.Name,
+				AgentID:    agent.ID,
+				Capability: tool.Capability,
+				Version:    tool.Version,
+				Endpoint:   agent.Endpoint,
+			}
+			if len(tool.Tags) > 0 {
+				toolItem.Tags = strings.Join(tool.Tags, ",")
+			}
+			matchedTools = append(matchedTools, toolItem)
+			matchedAgents = append(matchedAgents, agent)
 		}
 	}
 
-	if matchedTool == nil {
+	if len(matchedTools) == 0 {
 		if agentName != "" {
 			return fmt.Errorf("tool '%s' not found on agent '%s'", toolName, agentName)
 		}
 		return fmt.Errorf("tool '%s' not found on any agent", toolName)
 	}
 
-	// Get detailed tool information from agent
-	return outputToolDetails(matchedTool, matchedAgent, registryURL, jsonOutput)
+	if len(matchedTools) > 1 {
+		rows := make([]toolCollisionRow, len(matchedTools))
+		for i := range matchedTools {
+			rows[i] = toolCollisionRow{
+				AgentID:   matchedAgents[i].ID,
+				AgentName: matchedAgents[i].Name,
+				ToolName:  matchedTools[i].ToolName,
+			}
+		}
+		return formatToolCollisionError("list", toolName, rows)
+	}
+
+	// Get detailed tool information from agent (exactly one match).
+	return outputToolDetails(&matchedTools[0], &matchedAgents[0], registryURL, jsonOutput)
+}
+
+// toolCollisionRow is a small view used by formatToolCollisionError so the
+// same disambiguation message can be reused by `list --tools=X` and
+// `call X` (issue #956 #13 + #14).
+type toolCollisionRow struct {
+	AgentID   string
+	AgentName string
+	ToolName  string
+}
+
+// isFrameworkInternalTool reports whether a tool function name is a
+// framework-internal capability (e.g. __mesh_job_status, __mesh_job_result)
+// that the runtime registers automatically on every MeshJob-capable agent.
+// These flood `meshctl list --tools` with noise and are hidden by default.
+// Pass --show-framework to surface them. See issue #956 item #15.
+func isFrameworkInternalTool(funcName string) bool {
+	return strings.HasPrefix(funcName, "__mesh_job_")
+}
+
+// formatToolCollisionError returns the standard ambiguous-tool error message
+// shared by `list --tools=X` and `call X`. Lists the candidate agents and
+// shows the user how to disambiguate via `agent-id:tool`. `cmdName` selects
+// which CLI is shown in the example ("list" or "call").
+func formatToolCollisionError(cmdName, toolName string, rows []toolCollisionRow) error {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("tool '%s' is registered by multiple healthy agents:\n", toolName))
+	for _, r := range rows {
+		sb.WriteString(fmt.Sprintf("  - %s:%s (agent name: %s)\n", r.AgentID, r.ToolName, r.AgentName))
+	}
+	sb.WriteString("Use the fully-qualified form to disambiguate, e.g.:\n")
+	if len(rows) > 0 {
+		switch cmdName {
+		case "call":
+			sb.WriteString(fmt.Sprintf("  meshctl call %s:%s '{...}'", rows[0].AgentID, rows[0].ToolName))
+		default:
+			sb.WriteString(fmt.Sprintf("  meshctl list --tools=%s:%s", rows[0].AgentID, rows[0].ToolName))
+		}
+	}
+	return fmt.Errorf("%s", sb.String())
 }
 
 // parseToolSpec parses "agent:tool" or "tool" format

@@ -13,46 +13,50 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// CLIConfig represents the CLI configuration structure
-// MUST match Python CLI configuration behavior exactly
+// CLIConfig represents the CLI configuration structure.
+// MUST match Python CLI configuration behavior exactly.
+//
+// `yaml:` tags mirror `json:` tags so `meshctl config show --format yaml`
+// emits snake_case keys like `registry_port` instead of yaml.v2's default
+// lowercased Go field names (`registryport`). See issue #956 item #17.
 type CLIConfig struct {
 	// Registry settings
-	RegistryPort int    `json:"registry_port"` // default: 8000
-	RegistryHost string `json:"registry_host"` // default: "localhost"
+	RegistryPort int    `json:"registry_port" yaml:"registry_port"` // default: 8000
+	RegistryHost string `json:"registry_host" yaml:"registry_host"` // default: "localhost"
 
 	// Database settings
-	DBPath string `json:"db_path"` // default: "./dev_registry.db"
+	DBPath string `json:"db_path" yaml:"db_path"` // default: "./dev_registry.db"
 
 	// Logging settings
-	LogLevel string `json:"log_level"` // default: "INFO"
+	LogLevel string `json:"log_level" yaml:"log_level"` // default: "INFO"
 
 	// Health monitoring
-	HealthCheckInterval int `json:"health_check_interval"` // default: 10
+	HealthCheckInterval int `json:"health_check_interval" yaml:"health_check_interval"` // default: 10
 
 	// Development settings
-	DebugMode bool `json:"debug_mode"` // default: false
+	DebugMode bool `json:"debug_mode" yaml:"debug_mode"` // default: false
 
 	// Timeout settings
-	StartupTimeout  int `json:"startup_timeout"`  // default: 30
-	ShutdownTimeout int `json:"shutdown_timeout"` // default: 30
+	StartupTimeout  int `json:"startup_timeout" yaml:"startup_timeout"`   // default: 30
+	ShutdownTimeout int `json:"shutdown_timeout" yaml:"shutdown_timeout"` // default: 30
 
 	// Detached service settings
-	EnableBackground bool   `json:"enable_background"` // default: false (detached mode)
-	PIDFile          string `json:"pid_file"`          // default: "./mcp_mesh_dev.pid"
+	EnableBackground bool   `json:"enable_background" yaml:"enable_background"` // default: false (detached mode)
+	PIDFile          string `json:"pid_file" yaml:"pid_file"`                   // default: "./mcp_mesh_dev.pid"
 
 	// State management
-	StateDir string `json:"state_dir"` // default: "~/.mcp-mesh"
+	StateDir string `json:"state_dir" yaml:"state_dir"` // default: "~/.mcp-mesh"
 
 	// Configuration metadata
-	Version      string    `json:"version"`       // Configuration version for migration
-	LastModified time.Time `json:"last_modified"` // Last modification timestamp
+	Version      string    `json:"version" yaml:"version"`             // Configuration version for migration
+	LastModified time.Time `json:"last_modified" yaml:"last_modified"` // Last modification timestamp
 
 	// TLS auto-generation (not persisted, set at runtime)
-	TLSAuto          bool           `json:"-"`
-	TLSAutoConfigRef *TLSAutoConfig `json:"-"`
+	TLSAuto          bool           `json:"-" yaml:"-"`
+	TLSAutoConfigRef *TLSAutoConfig `json:"-" yaml:"-"`
 
 	// Thread safety
-	mu sync.RWMutex `json:"-"`
+	mu sync.RWMutex `json:"-" yaml:"-"`
 }
 
 // ConfigVersion represents the current configuration schema version

@@ -16,10 +16,10 @@ meshctl scaffold
 meshctl scaffold --name my-tool --agent-type tool
 
 # Generate an LLM-powered consumer (vendor-aware subcommand)
-meshctl scaffold llm --vendor claude --runtime python --name my-agent
+meshctl scaffold llm --vendor claude --lang python --name my-agent
 
 # Generate an LLM provider (vendor-aware subcommand)
-meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+meshctl scaffold llm-provider --vendor claude --lang python --name claude-provider
 ```
 
 ## Recommended: vendor-aware subcommands
@@ -31,27 +31,31 @@ strings.
 
 ```bash
 # LLM consumer (declares provider={...} via @mesh.llm)
-meshctl scaffold llm --vendor claude --runtime python --name my-consumer
-meshctl scaffold llm --vendor openai --runtime python --name my-consumer
-meshctl scaffold llm --vendor gemini --runtime python --name my-consumer
+meshctl scaffold llm --vendor claude --lang python --name my-consumer
+meshctl scaffold llm --vendor openai --lang python --name my-consumer
+meshctl scaffold llm --vendor gemini --lang python --name my-consumer
 
 # LLM provider (one per vendor — holds the API key)
-meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
-meshctl scaffold llm-provider --vendor openai --runtime python --name openai-provider
-meshctl scaffold llm-provider --vendor gemini --runtime python --name gemini-provider
+meshctl scaffold llm-provider --vendor claude --lang python --name claude-provider
+meshctl scaffold llm-provider --vendor openai --lang python --name openai-provider
+meshctl scaffold llm-provider --vendor gemini --lang python --name gemini-provider
 ```
 
 Supported `--vendor` values: `claude`, `openai`, `gemini`,
 `litellm-fallback`. The `litellm-fallback` vendor scaffolds a generic LiteLLM
 provider you can point at any OpenAI-compatible endpoint (Ollama, vLLM,
 LM Studio, etc.) — handy when you don't have an API key for a major vendor or
-want to test against a local model. Supported `--runtime` values: `python`,
+want to test against a local model. Supported `--lang` values: `python`,
 `typescript`, `java`. For Vertex AI, use `--vendor gemini` and rely on the
 Vertex environment variables (`GOOGLE_CLOUD_PROJECT`,
 `GOOGLE_APPLICATION_CREDENTIALS`) on the provider process.
 
 The legacy `--agent-type llm-agent` / `--agent-type llm-provider` flag mode
 documented below still works for backward compatibility.
+
+> **Legacy aliases:** `--runtime` and `--provider` are accepted as aliases
+> for `--lang` and `--vendor` respectively. New code should use the canonical
+> flags.
 
 ## Agent Types
 
@@ -80,7 +84,7 @@ LLM-powered agent using `@mesh.llm` + `@mesh.tool` decorators. Best for AI-drive
 
 ```bash
 meshctl scaffold --name emotion-analyzer --agent-type llm-agent \
-  --llm-selector claude \
+  --vendor claude \
   --response-format json \
   --max-iterations 1
 ```
@@ -144,7 +148,7 @@ Specify all options via command-line flags:
 meshctl scaffold \
   --name my-agent \
   --agent-type llm-agent \
-  --llm-selector openai \
+  --vendor openai \
   --filter '{"tags":["executor","tools"]}' \
   --filter-mode all \
   --max-iterations 3 \
@@ -203,10 +207,10 @@ tags:
 
 ### LLM Agent Options
 
-| Flag                | Default  | Description                             |
-| ------------------- | -------- | --------------------------------------- |
-| `--llm-selector`    | `claude` | LLM provider: `claude`, `openai`        |
-| `--max-iterations`  | `1`      | Max agentic loop iterations             |
+| Flag                | Default  | Description                                                  |
+| ------------------- | -------- | ------------------------------------------------------------ |
+| `--vendor`          | `claude` | LLM vendor: `claude`, `openai`, `gemini`, `litellm-fallback` |
+| `--max-iterations`  | `1`      | Max agentic loop iterations                                  |
 | `--system-prompt`   |          | System prompt (inline or `file://path`) |
 | `--context-param`   | `ctx`    | Context parameter name                  |
 | `--response-format` | `text`   | Response format: `text`, `json`         |
@@ -318,7 +322,7 @@ meshctl scaffold \
   --name sentiment-analyzer \
   --agent-type llm-agent \
   --description "Analyze sentiment of text using Claude" \
-  --llm-selector claude \
+  --vendor claude \
   --response-format json \
   --max-iterations 1 \
   --port 9200
@@ -330,7 +334,7 @@ meshctl scaffold \
 meshctl scaffold \
   --name developer-agent \
   --agent-type llm-agent \
-  --llm-selector claude \
+  --vendor claude \
   --filter '{"tags":["executor","tools"]}' \
   --filter-mode all \
   --max-iterations 10 \

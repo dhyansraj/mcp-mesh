@@ -17,10 +17,10 @@ MCP Mesh treats LLMs as first-class agents in the mesh. LLM calls are routed thr
 
 ```bash
 # Provider — one per vendor (sets API key, exposes capability="llm")
-meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+meshctl scaffold llm-provider --vendor claude --lang python --name claude-provider
 
 # Consumer — declares provider={...} and uses MeshLlmAgent
-meshctl scaffold llm --vendor claude --runtime python --name analysis-agent
+meshctl scaffold llm --vendor claude --lang python --name analysis-agent
 ```
 
 ## Quick Example
@@ -654,7 +654,7 @@ async def chat(msg: str, llm: mesh.MeshLlmAgent = None):
    ```
 3. Bootstrap a provider if you don't have one:
    ```bash
-   meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+   meshctl scaffold llm-provider --vendor claude --lang python --name claude-provider
    ```
 
 ### Template File Not Found

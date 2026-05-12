@@ -390,8 +390,16 @@ func findAgentWithTool(client *http.Client, registryURL, agentName, toolName str
 		return "", "", err
 	}
 
-	// Find agent with matching tool - first by function_name, then by capability name.
-	// Two-pass on same data: no extra registry call.
+	// Collect ALL healthy candidate matches (issue #956 #14) so we can error
+	// with disambiguation help when multiple agents register the same tool
+	// instead of silently routing to whichever sorts first.
+	type callMatch struct {
+		endpoint     string
+		agentID      string
+		agentName    string
+		functionName string
+	}
+	var matches []callMatch
 
 	// Pass 1: Match by function_name (MCP tool name - exact match)
 	for _, agent := range agentsResp.Agents {
@@ -406,34 +414,71 @@ func findAgentWithTool(client *http.Client, registryURL, agentName, toolName str
 				if agent.Endpoint == "" {
 					return "", "", fmt.Errorf("agent '%s' has tool '%s' but no endpoint", agent.ID, toolName)
 				}
-				return agent.Endpoint, cap.FunctionName, nil
+				matches = append(matches, callMatch{
+					endpoint:     agent.Endpoint,
+					agentID:      agent.ID,
+					agentName:    agent.Name,
+					functionName: cap.FunctionName,
+				})
+				break // one match per agent is enough
 			}
 		}
 	}
 
-	// Pass 2: Fallback to capability name (cross-runtime consistency, e.g. Java camelCase methods)
-	for _, agent := range agentsResp.Agents {
-		if agent.Status != "healthy" {
-			continue
-		}
-		if targetAgentID != "" && agent.ID != targetAgentID {
-			continue
-		}
-		for _, cap := range agent.Capabilities {
-			if cap.Name == toolName {
-				if agent.Endpoint == "" {
-					return "", "", fmt.Errorf("agent '%s' has capability '%s' but no endpoint", agent.ID, toolName)
+	// Pass 2: Fallback to capability name (cross-runtime consistency, e.g.
+	// Java camelCase methods). Only consult this pass if Pass 1 found nothing.
+	if len(matches) == 0 {
+		for _, agent := range agentsResp.Agents {
+			if agent.Status != "healthy" {
+				continue
+			}
+			if targetAgentID != "" && agent.ID != targetAgentID {
+				continue
+			}
+			for _, cap := range agent.Capabilities {
+				if cap.Name == toolName {
+					if agent.Endpoint == "" {
+						return "", "", fmt.Errorf("agent '%s' has capability '%s' but no endpoint", agent.ID, toolName)
+					}
+					matches = append(matches, callMatch{
+						endpoint:     agent.Endpoint,
+						agentID:      agent.ID,
+						agentName:    agent.Name,
+						functionName: cap.FunctionName,
+					})
+					break
 				}
-				// Return the actual MCP tool name (FunctionName) for the call
-				return agent.Endpoint, cap.FunctionName, nil
 			}
 		}
 	}
 
-	if agentName != "" {
-		return "", "", fmt.Errorf("tool '%s' not found on agent '%s'", toolName, agentName)
+	if len(matches) == 0 {
+		if agentName != "" {
+			return "", "", fmt.Errorf("tool '%s' not found on agent '%s'", toolName, agentName)
+		}
+		return "", "", fmt.Errorf("no agent found with tool '%s'", toolName)
 	}
-	return "", "", fmt.Errorf("no agent found with tool '%s'", toolName)
+
+	if len(matches) > 1 {
+		// Framework-internal helpers (__mesh_job_*) auto-register on every
+		// MeshJob-capable agent and read/write the same registry-backed state.
+		// Picking any healthy match is semantically correct. Only apply the
+		// ambiguity UX (issue #956 item #14) to capability tools.
+		if agentName == "" && isFrameworkInternalTool(toolName) {
+			return matches[0].endpoint, matches[0].functionName, nil
+		}
+		rows := make([]toolCollisionRow, len(matches))
+		for i, m := range matches {
+			rows[i] = toolCollisionRow{
+				AgentID:   m.agentID,
+				AgentName: m.agentName,
+				ToolName:  m.functionName,
+			}
+		}
+		return "", "", formatToolCollisionError("call", toolName, rows)
+	}
+
+	return matches[0].endpoint, matches[0].functionName, nil
 }
 
 // findAgentWithToolIngress queries the registry via ingress to find an agent with the specified tool.
@@ -486,18 +531,13 @@ func findAgentWithToolIngress(client *http.Client, ingressURL, ingressDomain, ag
 		return "", "", "", err
 	}
 
-	// Helper to build ingress result from matched agent
-	buildIngressResult := func(agent AgentWithCapabilities, resolvedToolName string) (string, string, string, error) {
-		if agent.Endpoint == "" {
-			return "", "", "", fmt.Errorf("agent '%s' has tool '%s' but no endpoint", agent.ID, resolvedToolName)
-		}
-		extractedName := extractAgentNameFromEndpoint(agent.Endpoint)
-		agentHost := extractedName + "." + ingressDomain
-		return extractedName, agentHost, resolvedToolName, nil
+	// Collect ALL healthy candidate matches (issue #956 #14) so we can error
+	// with disambiguation help when multiple agents register the same tool.
+	type ingressMatch struct {
+		agent        AgentWithCapabilities
+		functionName string
 	}
-
-	// Find agent with matching tool - first by function_name, then by capability name.
-	// Two-pass on same data: no extra registry call.
+	var matches []ingressMatch
 
 	// Pass 1: Match by function_name (MCP tool name - exact match)
 	for _, agent := range agentsResp.Agents {
@@ -509,30 +549,69 @@ func findAgentWithToolIngress(client *http.Client, ingressURL, ingressDomain, ag
 		}
 		for _, cap := range agent.Capabilities {
 			if cap.FunctionName == toolName {
-				return buildIngressResult(agent, cap.FunctionName)
+				matches = append(matches, ingressMatch{agent: agent, functionName: cap.FunctionName})
+				break
 			}
 		}
 	}
 
-	// Pass 2: Fallback to capability name (cross-runtime consistency, e.g. Java camelCase methods)
-	for _, agent := range agentsResp.Agents {
-		if agent.Status != "healthy" {
-			continue
-		}
-		if targetAgentID != "" && agent.ID != targetAgentID {
-			continue
-		}
-		for _, cap := range agent.Capabilities {
-			if cap.Name == toolName {
-				return buildIngressResult(agent, cap.FunctionName)
+	// Pass 2: Fallback to capability name (only if Pass 1 found nothing).
+	if len(matches) == 0 {
+		for _, agent := range agentsResp.Agents {
+			if agent.Status != "healthy" {
+				continue
+			}
+			if targetAgentID != "" && agent.ID != targetAgentID {
+				continue
+			}
+			for _, cap := range agent.Capabilities {
+				if cap.Name == toolName {
+					matches = append(matches, ingressMatch{agent: agent, functionName: cap.FunctionName})
+					break
+				}
 			}
 		}
 	}
 
-	if agentName != "" {
-		return "", "", "", fmt.Errorf("tool '%s' not found on agent '%s'", toolName, agentName)
+	if len(matches) == 0 {
+		if agentName != "" {
+			return "", "", "", fmt.Errorf("tool '%s' not found on agent '%s'", toolName, agentName)
+		}
+		return "", "", "", fmt.Errorf("no agent found with tool '%s'", toolName)
 	}
-	return "", "", "", fmt.Errorf("no agent found with tool '%s'", toolName)
+
+	if len(matches) > 1 {
+		// Framework-internal helpers (__mesh_job_*) auto-register on every
+		// MeshJob-capable agent and read/write the same registry-backed state.
+		// Picking any healthy match is semantically correct. Only apply the
+		// ambiguity UX (issue #956 item #14) to capability tools.
+		if agentName == "" && isFrameworkInternalTool(toolName) {
+			m := matches[0]
+			if m.agent.Endpoint == "" {
+				return "", "", "", fmt.Errorf("agent '%s' has tool '%s' but no endpoint", m.agent.ID, m.functionName)
+			}
+			extractedName := extractAgentNameFromEndpoint(m.agent.Endpoint)
+			agentHost := extractedName + "." + ingressDomain
+			return extractedName, agentHost, m.functionName, nil
+		}
+		rows := make([]toolCollisionRow, len(matches))
+		for i, m := range matches {
+			rows[i] = toolCollisionRow{
+				AgentID:   m.agent.ID,
+				AgentName: m.agent.Name,
+				ToolName:  m.functionName,
+			}
+		}
+		return "", "", "", formatToolCollisionError("call", toolName, rows)
+	}
+
+	m := matches[0]
+	if m.agent.Endpoint == "" {
+		return "", "", "", fmt.Errorf("agent '%s' has tool '%s' but no endpoint", m.agent.ID, m.functionName)
+	}
+	extractedName := extractAgentNameFromEndpoint(m.agent.Endpoint)
+	agentHost := extractedName + "." + ingressDomain
+	return extractedName, agentHost, m.functionName, nil
 }
 
 // extractAgentNameFromEndpoint extracts the agent name from a K8s service endpoint
@@ -682,10 +761,7 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 	}
 
 	if mcpResp.Error != nil {
-		if mcpResp.Error.Data != nil {
-			return nil, fmt.Errorf("MCP error %d: %s (data: %v)", mcpResp.Error.Code, mcpResp.Error.Message, mcpResp.Error.Data)
-		}
-		return nil, fmt.Errorf("MCP error %d: %s", mcpResp.Error.Code, mcpResp.Error.Message)
+		return nil, formatMCPError(mcpResp.Error)
 	}
 
 	if mcpResp.Result != nil {
@@ -796,10 +872,7 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 	}
 
 	if mcpResp.Error != nil {
-		if mcpResp.Error.Data != nil {
-			return nil, fmt.Errorf("MCP error %d: %s (data: %v)", mcpResp.Error.Code, mcpResp.Error.Message, mcpResp.Error.Data)
-		}
-		return nil, fmt.Errorf("MCP error %d: %s", mcpResp.Error.Code, mcpResp.Error.Message)
+		return nil, formatMCPError(mcpResp.Error)
 	}
 
 	if mcpResp.Result != nil {
@@ -807,4 +880,129 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 	}
 
 	return &MCPCallResult{Result: body, TraceID: traceID, SpanID: spanID}, nil
+}
+
+// formatMCPError renders an MCP JSON-RPC error as a single clean line for
+// the user. It is the canonical error formatter for tools/call replies and
+// handles two failure modes observed in v2.0.0-beta.1 smoke (issue #956
+// items #10 + #11):
+//
+//  1. Pydantic validation errors arrive in Error.Data as either a list of
+//     validation issues or a stringified error containing
+//     "https://errors.pydantic.dev/..." links. Those URLs are noise to the
+//     CLI user; strip them and keep the human-readable message only.
+//
+//  2. Some agents echo the same string in Error.Message AND inside
+//     Error.Data (e.g., {"message": "..."}). Render it once. If Data
+//     adds genuinely-new information, include it after a single space.
+func formatMCPError(e *MCPError) error {
+	if e == nil {
+		return fmt.Errorf("MCP error: unknown")
+	}
+
+	msg := strings.TrimSpace(e.Message)
+	dataStr := stripPydanticDevURLs(extractMCPErrorData(e.Data))
+	dataStr = strings.TrimSpace(dataStr)
+
+	if dataStr == "" || dataStr == msg {
+		return fmt.Errorf("%s", msg)
+	}
+	// Data adds info beyond the message — append once, no duplication.
+	return fmt.Errorf("%s: %s", msg, dataStr)
+}
+
+// extractMCPErrorData reduces an MCPError.Data payload to a single
+// human-readable string. Handles the common shapes:
+//   - nil -> ""
+//   - string -> the string itself
+//   - map with "message" / "msg" / "detail" -> that field
+//   - map with "errors" or list payload -> joined messages
+//   - anything else -> JSON serialization (no Go-style %v output)
+func extractMCPErrorData(data interface{}) string {
+	if data == nil {
+		return ""
+	}
+	switch v := data.(type) {
+	case string:
+		return v
+	case map[string]interface{}:
+		// Pydantic-shaped or plain {"message": "..."} envelope.
+		for _, key := range []string{"message", "msg", "detail", "error"} {
+			if s, ok := v[key].(string); ok && s != "" {
+				return s
+			}
+		}
+		// Nested validation list under "errors" or "detail".
+		for _, key := range []string{"errors", "detail"} {
+			if lst, ok := v[key].([]interface{}); ok {
+				return joinValidationMessages(lst)
+			}
+		}
+	case []interface{}:
+		return joinValidationMessages(v)
+	}
+	// Fallback: JSON for anything we don't recognize.
+	if b, err := json.Marshal(data); err == nil {
+		return string(b)
+	}
+	return ""
+}
+
+// joinValidationMessages flattens a Pydantic-style validation list into a
+// single human line, using each entry's "msg" / "message" / "loc" hints.
+func joinValidationMessages(items []interface{}) string {
+	parts := make([]string, 0, len(items))
+	for _, it := range items {
+		m, ok := it.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		var msg string
+		for _, key := range []string{"msg", "message", "detail"} {
+			if s, ok := m[key].(string); ok && s != "" {
+				msg = s
+				break
+			}
+		}
+		if msg == "" {
+			continue
+		}
+		if loc, ok := m["loc"].([]interface{}); ok && len(loc) > 0 {
+			parts = append(parts, fmt.Sprintf("%v: %s", loc, msg))
+		} else {
+			parts = append(parts, msg)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// stripPydanticDevURLs removes "For further information visit
+// https://errors.pydantic.dev/..." trailers that Pydantic appends to
+// validation errors. They're noise in CLI output (issue #956 #10).
+func stripPydanticDevURLs(s string) string {
+	if !strings.Contains(s, "pydantic.dev") {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	keep := lines[:0]
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "For further information visit") && strings.Contains(t, "pydantic.dev") {
+			continue
+		}
+		// Strip inline "https://errors.pydantic.dev/..." substrings.
+		for {
+			idx := strings.Index(line, "https://errors.pydantic.dev")
+			if idx < 0 {
+				break
+			}
+			end := idx
+			for end < len(line) && line[end] != ' ' && line[end] != '\n' && line[end] != '"' {
+				end++
+			}
+			line = line[:idx] + line[end:]
+		}
+		keep = append(keep, strings.TrimRight(line, " "))
+	}
+	return strings.TrimSpace(strings.Join(keep, "\n"))
 }

@@ -37,7 +37,7 @@ meshctl scaffold --name hello --agent-type basic --lang java
 
 # LLM-powered agent
 meshctl scaffold --name analyzer --agent-type llm-agent --lang java \
-  --llm-selector openai --response-format json
+  --vendor openai --response-format json
 
 # LLM provider (zero-code)
 meshctl scaffold --name claude-provider --agent-type llm-provider --lang java \

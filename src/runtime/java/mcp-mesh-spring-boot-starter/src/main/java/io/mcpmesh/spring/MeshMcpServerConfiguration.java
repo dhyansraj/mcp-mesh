@@ -81,16 +81,24 @@ public class MeshMcpServerConfiguration {
 
     /**
      * Create the stateless MCP server with all registered tools.
+     *
+     * <p>Resolves the agent name/version from {@link MeshRuntime#getAgentSpec()}
+     * (which has already merged {@code @MeshAgent} annotation values,
+     * {@link MeshProperties} defaults, and environment-variable overrides) so
+     * the boot log and MCP {@code serverInfo} both reflect the actual agent
+     * identity. Reading from {@link MeshProperties} alone would surface
+     * {@code null} whenever the user configured their agent only via the
+     * {@code @MeshAgent} annotation.
      */
     @Bean
     @ConditionalOnMissingBean
     public McpStatelessSyncServer mcpStatelessServer(
             HttpServletStatelessServerTransport transport,
             MeshToolWrapperRegistry wrapperRegistry,
-            MeshProperties properties) {
+            MeshRuntime meshRuntime) {
 
-        String agentName = properties.getAgent().getName();
-        String agentVersion = properties.getAgent().getVersion();
+        String agentName = meshRuntime.getAgentSpec().getName();
+        String agentVersion = meshRuntime.getAgentSpec().getVersion();
 
         McpStatelessSyncServer server = McpServer.sync(transport)
             .serverInfo(agentName != null ? agentName : "mcp-mesh-agent",

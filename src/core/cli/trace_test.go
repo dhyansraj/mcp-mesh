@@ -1,9 +1,32 @@
 package cli
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestFormatTraceNotFound(t *testing.T) {
+	err := formatTraceNotFound("abc123", nil)
+	if err == nil {
+		t.Fatal("expected non-nil error")
+	}
+	msg := err.Error()
+
+	wantSubstrings := []string{
+		"trace 'abc123' not found",
+		"meshctl scaffold --observability",
+		"docker compose up -d redis tempo grafana",
+		"TEMPO_URL",
+		"older than retention",
+		"meshctl man tracing",
+	}
+	for _, s := range wantSubstrings {
+		if !strings.Contains(msg, s) {
+			t.Errorf("formatTraceNotFound message missing %q\nfull message:\n%s", s, msg)
+		}
+	}
+}
 
 func TestIsWrapperSpan(t *testing.T) {
 	tests := []struct {

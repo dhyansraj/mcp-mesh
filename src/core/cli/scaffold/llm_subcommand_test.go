@@ -66,26 +66,81 @@ func TestNewScaffoldLLMProviderCommand_Flags(t *testing.T) {
 	cmd := newScaffoldLLMProviderCommand()
 	assert.Equal(t, "llm-provider", cmd.Use)
 	assert.NotNil(t, cmd.Flags().Lookup("vendor"))
-	assert.NotNil(t, cmd.Flags().Lookup("runtime"))
+	assert.NotNil(t, cmd.Flags().Lookup("provider"), "--provider should exist as a hidden alias")
+	assert.NotNil(t, cmd.Flags().Lookup("lang"))
+	assert.NotNil(t, cmd.Flags().Lookup("runtime"), "--runtime should exist as a hidden alias")
 	assert.NotNil(t, cmd.Flags().Lookup("name"))
 	assert.NotNil(t, cmd.Flags().Lookup("model"))
 	assert.NotNil(t, cmd.Flags().Lookup("dry-run"))
+	assert.NotNil(t, cmd.Flags().Lookup("no-interactive"))
+
+	// Hidden aliases must be marked Hidden (don't show in --help output).
+	assert.True(t, cmd.Flags().Lookup("provider").Hidden, "--provider must be hidden")
+	assert.True(t, cmd.Flags().Lookup("runtime").Hidden, "--runtime must be hidden")
 
 	vendor, _ := cmd.Flags().GetString("vendor")
 	assert.Equal(t, "claude", vendor)
-	runtime, _ := cmd.Flags().GetString("runtime")
-	assert.Equal(t, "python", runtime)
+	lang, _ := cmd.Flags().GetString("lang")
+	assert.Equal(t, "python", lang)
 }
 
 func TestNewScaffoldLLMCommand_Flags(t *testing.T) {
 	cmd := newScaffoldLLMCommand()
 	assert.Equal(t, "llm", cmd.Use)
 	assert.NotNil(t, cmd.Flags().Lookup("vendor"))
-	assert.NotNil(t, cmd.Flags().Lookup("runtime"))
+	assert.NotNil(t, cmd.Flags().Lookup("provider"), "--provider should exist as a hidden alias")
+	assert.NotNil(t, cmd.Flags().Lookup("lang"))
+	assert.NotNil(t, cmd.Flags().Lookup("runtime"), "--runtime should exist as a hidden alias")
 	assert.NotNil(t, cmd.Flags().Lookup("name"))
 	assert.NotNil(t, cmd.Flags().Lookup("max-iterations"))
 	assert.NotNil(t, cmd.Flags().Lookup("response-format"))
 	assert.NotNil(t, cmd.Flags().Lookup("dry-run"))
+	assert.NotNil(t, cmd.Flags().Lookup("no-interactive"))
+
+	assert.True(t, cmd.Flags().Lookup("provider").Hidden, "--provider must be hidden")
+	assert.True(t, cmd.Flags().Lookup("runtime").Hidden, "--runtime must be hidden")
+}
+
+// TestResolveAliasedString covers the 1.4.1-compat alias resolver:
+// - alias-only set -> alias value wins
+// - canonical-only set -> canonical value wins
+// - both set -> canonical wins (explicit caller intent)
+// - neither set -> canonical default
+func TestResolveAliasedString(t *testing.T) {
+	t.Run("alias_only_uses_alias", func(t *testing.T) {
+		cmd := newScaffoldLLMCommand()
+		require.NoError(t, cmd.Flags().Set("runtime", "java"))
+		got := resolveAliasedString(cmd, "lang", "runtime")
+		assert.Equal(t, "java", got)
+	})
+
+	t.Run("canonical_only_uses_canonical", func(t *testing.T) {
+		cmd := newScaffoldLLMCommand()
+		require.NoError(t, cmd.Flags().Set("lang", "typescript"))
+		got := resolveAliasedString(cmd, "lang", "runtime")
+		assert.Equal(t, "typescript", got)
+	})
+
+	t.Run("both_set_canonical_wins", func(t *testing.T) {
+		cmd := newScaffoldLLMCommand()
+		require.NoError(t, cmd.Flags().Set("lang", "typescript"))
+		require.NoError(t, cmd.Flags().Set("runtime", "java"))
+		got := resolveAliasedString(cmd, "lang", "runtime")
+		assert.Equal(t, "typescript", got)
+	})
+
+	t.Run("neither_set_uses_default", func(t *testing.T) {
+		cmd := newScaffoldLLMCommand()
+		got := resolveAliasedString(cmd, "lang", "runtime")
+		assert.Equal(t, "python", got)
+	})
+
+	t.Run("vendor_provider_alias", func(t *testing.T) {
+		cmd := newScaffoldLLMCommand()
+		require.NoError(t, cmd.Flags().Set("provider", "openai"))
+		got := resolveAliasedString(cmd, "vendor", "provider")
+		assert.Equal(t, "openai", got)
+	})
 }
 
 func TestAttachLLMSubcommands(t *testing.T) {

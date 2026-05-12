@@ -6,6 +6,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestNewScaffoldA2AConsumerCommand_NoInteractiveFlag verifies the
+// --no-interactive flag is present so 1.4.1-era scripts that pass it
+// don't fail with "unknown flag" (issue #956 item #7).
+func TestNewScaffoldA2AConsumerCommand_NoInteractiveFlag(t *testing.T) {
+	cmd := newScaffoldA2AConsumerCommand()
+	assert.NotNil(t, cmd.Flags().Lookup("no-interactive"))
+}
+
 func TestSanitizeIdentifier(t *testing.T) {
 	cases := map[string]string{
 		"get-date":    "get_date",     // hyphen -> underscore

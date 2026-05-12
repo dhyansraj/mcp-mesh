@@ -101,17 +101,25 @@ Examples:
   meshctl scaffold llm-provider --vendor claude --name my-claude
 
   # OpenAI provider in TypeScript
-  meshctl scaffold llm-provider --vendor openai --runtime typescript --name gpt-provider
+  meshctl scaffold llm-provider --vendor openai --lang typescript --name gpt-provider
 
   # Gemini provider in Java
-  meshctl scaffold llm-provider --vendor gemini --runtime java --name gemini-provider`,
+  meshctl scaffold llm-provider --vendor gemini --lang java --name gemini-provider`,
 		RunE: runScaffoldLLMProvider,
 	}
 
+	// --vendor is canonical; --provider is a hidden 1.4.1-compat alias (same Go variable).
 	cmd.Flags().String("vendor", "claude",
 		fmt.Sprintf("LLM vendor: %v", supportedLLMVendors))
-	cmd.Flags().String("runtime", "python",
+	cmd.Flags().String("provider", "claude", "")
+	_ = cmd.Flags().MarkHidden("provider")
+
+	// --lang is canonical; --runtime is a hidden 1.4.1-compat alias (same Go variable).
+	cmd.Flags().StringP("lang", "l", "python",
 		fmt.Sprintf("Language runtime: %v", supportedLLMRuntimes))
+	cmd.Flags().String("runtime", "python", "")
+	_ = cmd.Flags().MarkHidden("runtime")
+
 	cmd.Flags().StringP("name", "n", "",
 		"Agent name (default: <vendor>-provider)")
 	cmd.Flags().StringP("output", "o", ".", "Output directory")
@@ -122,6 +130,7 @@ Examples:
 	cmd.Flags().String("package", "",
 		"Java package name (default: com.example.<agent-name>)")
 	cmd.Flags().Bool("dry-run", false, "Preview generated files without creating them")
+	cmd.Flags().Bool("no-interactive", false, "Disable interactive prompts (for scripting)")
 
 	return cmd
 }
@@ -143,20 +152,28 @@ Pair with 'meshctl scaffold llm-provider' to generate the matching provider agen
 
 Examples:
   # Default: pin to a Claude provider
-  meshctl scaffold llm --runtime python --name my-consumer
+  meshctl scaffold llm --lang python --name my-consumer
 
   # Pin to an OpenAI provider
-  meshctl scaffold llm --runtime typescript --vendor openai --name analyzer
+  meshctl scaffold llm --lang typescript --vendor openai --name analyzer
 
   # Pin to a Gemini provider in Java
-  meshctl scaffold llm --runtime java --vendor gemini --name reasoner`,
+  meshctl scaffold llm --lang java --vendor gemini --name reasoner`,
 		RunE: runScaffoldLLMConsumer,
 	}
 
+	// --vendor is canonical; --provider is a hidden 1.4.1-compat alias (same Go variable).
 	cmd.Flags().String("vendor", "claude",
 		fmt.Sprintf("Pin consumer to a provider tag: %v", supportedLLMVendors))
-	cmd.Flags().String("runtime", "python",
+	cmd.Flags().String("provider", "claude", "")
+	_ = cmd.Flags().MarkHidden("provider")
+
+	// --lang is canonical; --runtime is a hidden 1.4.1-compat alias (same Go variable).
+	cmd.Flags().StringP("lang", "l", "python",
 		fmt.Sprintf("Language runtime: %v", supportedLLMRuntimes))
+	cmd.Flags().String("runtime", "python", "")
+	_ = cmd.Flags().MarkHidden("runtime")
+
 	cmd.Flags().StringP("name", "n", "",
 		"Agent name (default: llm-consumer)")
 	cmd.Flags().StringP("output", "o", ".", "Output directory")
@@ -168,14 +185,17 @@ Examples:
 	cmd.Flags().String("package", "",
 		"Java package name (default: com.example.<agent-name>)")
 	cmd.Flags().Bool("dry-run", false, "Preview generated files without creating them")
+	cmd.Flags().Bool("no-interactive", false, "Disable interactive prompts (for scripting)")
 
 	return cmd
 }
 
 // runScaffoldLLMProvider executes the llm-provider subcommand.
 func runScaffoldLLMProvider(cmd *cobra.Command, _ []string) error {
-	vendor, _ := cmd.Flags().GetString("vendor")
-	runtime, _ := cmd.Flags().GetString("runtime")
+	// --vendor is canonical; --provider is a hidden 1.4.1-compat alias.
+	vendor := resolveAliasedString(cmd, "vendor", "provider")
+	// --lang is canonical; --runtime is a hidden 1.4.1-compat alias.
+	runtime := resolveAliasedString(cmd, "lang", "runtime")
 	name, _ := cmd.Flags().GetString("name")
 	output, _ := cmd.Flags().GetString("output")
 	port, _ := cmd.Flags().GetInt("port")
@@ -237,8 +257,10 @@ func runScaffoldLLMProvider(cmd *cobra.Command, _ []string) error {
 
 // runScaffoldLLMConsumer executes the llm subcommand (consumer agent).
 func runScaffoldLLMConsumer(cmd *cobra.Command, _ []string) error {
-	vendor, _ := cmd.Flags().GetString("vendor")
-	runtime, _ := cmd.Flags().GetString("runtime")
+	// --vendor is canonical; --provider is a hidden 1.4.1-compat alias.
+	vendor := resolveAliasedString(cmd, "vendor", "provider")
+	// --lang is canonical; --runtime is a hidden 1.4.1-compat alias.
+	runtime := resolveAliasedString(cmd, "lang", "runtime")
 	name, _ := cmd.Flags().GetString("name")
 	output, _ := cmd.Flags().GetString("output")
 	port, _ := cmd.Flags().GetInt("port")
@@ -332,4 +354,21 @@ func printLLMConsumerFollowup(cmd *cobra.Command, name, vendor, runtime string) 
 func AttachLLMSubcommands(parent *cobra.Command) {
 	parent.AddCommand(newScaffoldLLMProviderCommand())
 	parent.AddCommand(newScaffoldLLMCommand())
+}
+
+// resolveAliasedString returns the value of a canonical flag, but if the
+// caller explicitly set the legacy alias instead (and not the canonical),
+// the alias's value wins. Used to keep 1.4.1-era flag names working as
+// hidden aliases (e.g., --runtime for --lang, --provider for --vendor)
+// without forcing both flags to share a single Go variable. See issue #956
+// (#7 scaffold flag consolidation).
+func resolveAliasedString(cmd *cobra.Command, canonical, alias string) string {
+	canonChanged := cmd.Flags().Changed(canonical)
+	aliasChanged := cmd.Flags().Changed(alias)
+	if aliasChanged && !canonChanged {
+		v, _ := cmd.Flags().GetString(alias)
+		return v
+	}
+	v, _ := cmd.Flags().GetString(canonical)
+	return v
 }
