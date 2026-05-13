@@ -1253,7 +1253,7 @@ way tool agents discover each other. The provider agent is zero-code:
 the <code>@mesh.llm_provider</code> decorator handles the LiteLLM
 integration, request parsing, and response formatting.</p>
 <h3 id="scaffold-the-provider">Scaffold the provider</h3>
-<pre class="shell"><code>$ meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider --port 9106</code></pre>
+<pre class="shell"><code>$ meshctl scaffold llm-provider --vendor claude --lang python --name claude-provider --port 9106</code></pre>
 <p>Replace the generated <code>main.py</code> with:</p>
 <div class="sourceCode" id="cb44"><pre
 class="sourceCode python"><code class="sourceCode python"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;</span> <span class="op">*</span>See the source code <span class="kw">in</span> the day<span class="st">&#39;s example directory.*</span></span></code></pre></div>
@@ -1600,7 +1600,7 @@ export it: <code>export OPENAI_API_KEY=sk-...</code></p>
 provider from Day 3. Same decorator, same zero-code body, different
 model string.</p>
 <h3 id="scaffold-the-provider-1">Scaffold the provider</h3>
-<pre class="shell"><code>$ meshctl scaffold llm-provider --vendor openai --runtime python --name openai-provider --port 9108</code></pre>
+<pre class="shell"><code>$ meshctl scaffold llm-provider --vendor openai --lang python --name openai-provider --port 9108</code></pre>
 <p>Replace the generated <code>main.py</code> with:</p>
 <div class="sourceCode" id="cb63"><pre
 class="sourceCode python"><code class="sourceCode python"><span id="cb63-1"><a href="#cb63-1" aria-hidden="true" tabindex="-1"></a><span class="op">&gt;</span> <span class="op">*</span>See the source code <span class="kw">in</span> the day<span class="st">&#39;s example directory.*</span></span></code></pre></div>
