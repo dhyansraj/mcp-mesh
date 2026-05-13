@@ -342,6 +342,37 @@ func (v *AgentRegistrationValidator) validateSemanticVersion(version string) err
 	return nil
 }
 
+// MaxAgentDescriptionLen is the registry-enforced cap on @mesh.agent
+// description strings (issue #969). Over-long descriptions are silently
+// truncated and a warning is included on the registration response —
+// registration itself never fails over an over-long description.
+const MaxAgentDescriptionLen = 256
+
+// validateAgentDescription canonicalises the agent description value:
+//   - Strips leading/trailing whitespace.
+//   - Truncates to MaxAgentDescriptionLen runes if longer, returning a
+//     warning string describing the truncation.
+//
+// Truncation is rune-based (not byte-based) so multi-byte UTF-8 input
+// (CJK, emoji) cannot land on an invalid byte boundary and corrupt the
+// stored string. The DB column is varchar(256) in both sqlite and
+// postgres, which counts characters not bytes, so 256 runes is a safe
+// upper bound for persistence.
+//
+// Both arguments and returns are plain strings — no error path. The caller
+// surfaces the warning slice on the registration response (issue #969).
+func validateAgentDescription(s string) (cleaned string, warnings []string) {
+	cleaned = strings.TrimSpace(s)
+	runes := []rune(cleaned)
+	if len(runes) > MaxAgentDescriptionLen {
+		original := len(runes)
+		cleaned = string(runes[:MaxAgentDescriptionLen])
+		warnings = append(warnings, fmt.Sprintf(
+			"description truncated from %d to %d chars", original, MaxAgentDescriptionLen))
+	}
+	return cleaned, warnings
+}
+
 // validateHealthConfig validates health monitoring configuration
 // MUST match Python/TypeScript health config validation exactly
 func (v *AgentRegistrationValidator) validateHealthConfig(metadata map[string]interface{}) error {

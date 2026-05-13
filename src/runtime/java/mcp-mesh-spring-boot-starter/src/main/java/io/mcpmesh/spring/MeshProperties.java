@@ -60,6 +60,10 @@ public class MeshProperties {
     public static class Agent {
         private String name;
         private String version = "1.0.0";
+        // Issue #969: free-form description; surfaces in the registry UI.
+        // Capped + whitespace-stripped server-side. Empty string is treated
+        // as "unset" — the @MeshAgent annotation default wins when blank.
+        private String description = "";
         private int port = 0;
         private String host;  // null = auto-detect via Rust core
         private String namespace = "default";
@@ -79,6 +83,14 @@ public class MeshProperties {
 
         public void setVersion(String version) {
             this.version = version;
+        }
+
+        public String getDescription() {
+            return description;
+        }
+
+        public void setDescription(String description) {
+            this.description = description;
         }
 
         public int getPort() {

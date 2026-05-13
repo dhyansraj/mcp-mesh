@@ -621,6 +621,21 @@ public class MeshAutoConfiguration {
         }
         spec.setVersion(version);
 
+        // Resolve description (issue #969). Mirror the version-resolution pattern:
+        // annotation wins when non-blank, otherwise fall back to mesh.agent.description.
+        // We never let it be null (the Rust core's AgentSpec.description is a plain
+        // String — null trips Jackson's NON_NULL filter and the field disappears,
+        // which the registry would interpret as "no description supplied" and keep
+        // a prior value instead of clearing it).
+        String description = agentAnnotation != null ? agentAnnotation.description() : null;
+        if (description == null || description.isBlank()) {
+            String propDescription = properties.getAgent().getDescription();
+            if (propDescription != null && !propDescription.isBlank()) {
+                description = propDescription;
+            }
+        }
+        spec.setDescription(description != null ? description : "");
+
         // Resolve port
         int annotationPort = agentAnnotation != null ? agentAnnotation.port() : 0;
         int propertiesPort = properties.getAgent().getPort();

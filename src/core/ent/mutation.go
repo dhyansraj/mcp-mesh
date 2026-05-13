@@ -51,6 +51,7 @@ type AgentMutation struct {
 	runtime                         *agent.Runtime
 	name                            *string
 	version                         *string
+	description                     *string
 	http_host                       *string
 	http_port                       *int
 	addhttp_port                    *int
@@ -359,6 +360,55 @@ func (m *AgentMutation) VersionCleared() bool {
 func (m *AgentMutation) ResetVersion() {
 	m.version = nil
 	delete(m.clearedFields, agent.FieldVersion)
+}
+
+// SetDescription sets the "description" field.
+func (m *AgentMutation) SetDescription(s string) {
+	m.description = &s
+}
+
+// Description returns the value of the "description" field in the mutation.
+func (m *AgentMutation) Description() (r string, exists bool) {
+	v := m.description
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDescription returns the old "description" field's value of the Agent entity.
+// If the Agent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AgentMutation) OldDescription(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDescription is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDescription requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDescription: %w", err)
+	}
+	return oldValue.Description, nil
+}
+
+// ClearDescription clears the value of the "description" field.
+func (m *AgentMutation) ClearDescription() {
+	m.description = nil
+	m.clearedFields[agent.FieldDescription] = struct{}{}
+}
+
+// DescriptionCleared returns if the "description" field was cleared in this mutation.
+func (m *AgentMutation) DescriptionCleared() bool {
+	_, ok := m.clearedFields[agent.FieldDescription]
+	return ok
+}
+
+// ResetDescription resets all changes to the "description" field.
+func (m *AgentMutation) ResetDescription() {
+	m.description = nil
+	delete(m.clearedFields, agent.FieldDescription)
 }
 
 // SetHTTPHost sets the "http_host" field.
@@ -1190,7 +1240,7 @@ func (m *AgentMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AgentMutation) Fields() []string {
-	fields := make([]string, 0, 15)
+	fields := make([]string, 0, 16)
 	if m.agent_type != nil {
 		fields = append(fields, agent.FieldAgentType)
 	}
@@ -1202,6 +1252,9 @@ func (m *AgentMutation) Fields() []string {
 	}
 	if m.version != nil {
 		fields = append(fields, agent.FieldVersion)
+	}
+	if m.description != nil {
+		fields = append(fields, agent.FieldDescription)
 	}
 	if m.http_host != nil {
 		fields = append(fields, agent.FieldHTTPHost)
@@ -1252,6 +1305,8 @@ func (m *AgentMutation) Field(name string) (ent.Value, bool) {
 		return m.Name()
 	case agent.FieldVersion:
 		return m.Version()
+	case agent.FieldDescription:
+		return m.Description()
 	case agent.FieldHTTPHost:
 		return m.HTTPHost()
 	case agent.FieldHTTPPort:
@@ -1291,6 +1346,8 @@ func (m *AgentMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldName(ctx)
 	case agent.FieldVersion:
 		return m.OldVersion(ctx)
+	case agent.FieldDescription:
+		return m.OldDescription(ctx)
 	case agent.FieldHTTPHost:
 		return m.OldHTTPHost(ctx)
 	case agent.FieldHTTPPort:
@@ -1349,6 +1406,13 @@ func (m *AgentMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetVersion(v)
+		return nil
+	case agent.FieldDescription:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDescription(v)
 		return nil
 	case agent.FieldHTTPHost:
 		v, ok := value.(string)
@@ -1502,6 +1566,9 @@ func (m *AgentMutation) ClearedFields() []string {
 	if m.FieldCleared(agent.FieldVersion) {
 		fields = append(fields, agent.FieldVersion)
 	}
+	if m.FieldCleared(agent.FieldDescription) {
+		fields = append(fields, agent.FieldDescription)
+	}
 	if m.FieldCleared(agent.FieldHTTPHost) {
 		fields = append(fields, agent.FieldHTTPHost)
 	}
@@ -1534,6 +1601,9 @@ func (m *AgentMutation) ClearField(name string) error {
 	case agent.FieldVersion:
 		m.ClearVersion()
 		return nil
+	case agent.FieldDescription:
+		m.ClearDescription()
+		return nil
 	case agent.FieldHTTPHost:
 		m.ClearHTTPHost()
 		return nil
@@ -1565,6 +1635,9 @@ func (m *AgentMutation) ResetField(name string) error {
 		return nil
 	case agent.FieldVersion:
 		m.ResetVersion()
+		return nil
+	case agent.FieldDescription:
+		m.ResetDescription()
 		return nil
 	case agent.FieldHTTPHost:
 		m.ResetHTTPHost()

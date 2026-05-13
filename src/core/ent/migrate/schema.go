@@ -15,6 +15,7 @@ var (
 		{Name: "runtime", Type: field.TypeEnum, Nullable: true, Enums: []string{"python", "typescript", "java"}, Default: "python"},
 		{Name: "name", Type: field.TypeString},
 		{Name: "version", Type: field.TypeString, Nullable: true},
+		{Name: "description", Type: field.TypeString, Nullable: true, Size: 256, Default: ""},
 		{Name: "http_host", Type: field.TypeString, Nullable: true},
 		{Name: "http_port", Type: field.TypeInt, Nullable: true},
 		{Name: "namespace", Type: field.TypeString, Default: "default"},
@@ -36,7 +37,7 @@ var (
 			{
 				Name:    "agent_namespace",
 				Unique:  false,
-				Columns: []*schema.Column{AgentsColumns[7]},
+				Columns: []*schema.Column{AgentsColumns[8]},
 			},
 			{
 				Name:    "agent_agent_type",
@@ -46,17 +47,17 @@ var (
 			{
 				Name:    "agent_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{AgentsColumns[12]},
+				Columns: []*schema.Column{AgentsColumns[13]},
 			},
 			{
 				Name:    "agent_status",
 				Unique:  false,
-				Columns: []*schema.Column{AgentsColumns[8]},
+				Columns: []*schema.Column{AgentsColumns[9]},
 			},
 			{
 				Name:    "agent_status_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{AgentsColumns[8], AgentsColumns[12]},
+				Columns: []*schema.Column{AgentsColumns[9], AgentsColumns[13]},
 			},
 		},
 	}

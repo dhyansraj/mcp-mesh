@@ -296,6 +296,12 @@ pub struct HeartbeatRequest {
     pub name: Option<String>,
     pub agent_type: String,
     pub version: String,
+    /// Free-form agent description (issue #969). Forwarded verbatim to the
+    /// registry, which strips whitespace and truncates at 256 chars before
+    /// persisting. Skipped on the wire when empty/absent so older SDKs that
+    /// never set a description don't add a noisy `"description":""` field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub http_host: String,
     pub http_port: u16,
     pub namespace: String,
@@ -399,6 +405,14 @@ impl HeartbeatRequest {
             name: Some(spec.name.clone()),
             agent_type: spec.agent_type.as_api_str().to_string(),
             version: spec.version.clone(),
+            // Issue #969: forward the optional description. Empty strings
+            // are treated as absent so we don't pollute the wire with a
+            // `"description":""` payload for agents that never set one.
+            description: if spec.description.is_empty() {
+                None
+            } else {
+                Some(spec.description.clone())
+            },
             http_host: spec.http_host.clone(),
             http_port: spec.http_port,
             namespace: spec.namespace.clone(),
@@ -716,6 +730,39 @@ mod tests {
         assert_eq!(request.tools.len(), 1);
         assert_eq!(request.tools[0].function_name, "greet");
         assert_eq!(request.tools[0].capability, "greeting");
+        // Issue #969: description was set on the spec — the request should
+        // forward it as Some(...) (see test_heartbeat_request_description_round_trip
+        // below for the empty-string → None case).
+        assert_eq!(request.description.as_deref(), Some("Test"));
+    }
+
+    #[test]
+    fn test_heartbeat_request_description_round_trip() {
+        // Issue #969: when the spec carries a description, HeartbeatRequest
+        // forwards it as Some(value). Empty string maps to None so we don't
+        // pollute the wire for agents that never set a description.
+        let mut spec = AgentSpec::new(
+            "described-agent".to_string(),
+            "http://localhost:8100".to_string(),
+            "1.0.0".to_string(),
+            "Hello from the mesh".to_string(),
+            9000,
+            "localhost".to_string(),
+            "default".to_string(),
+            None,
+            None,
+            None,
+            None,
+            5,
+            None,
+        );
+        let with_desc = HeartbeatRequest::from_spec(&spec, HealthStatus::Healthy);
+        assert_eq!(with_desc.description.as_deref(), Some("Hello from the mesh"));
+
+        spec.description = String::new();
+        let empty_desc = HeartbeatRequest::from_spec(&spec, HealthStatus::Healthy);
+        assert_eq!(empty_desc.description, None,
+            "empty description should serialize as None (skip_serializing_if)");
     }
 
     #[test]

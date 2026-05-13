@@ -169,3 +169,28 @@ describe("ResolvedAgentConfig", () => {
     expect(resolved.heartbeatInterval).toBeDefined();
   });
 });
+
+// Issue #969: description must flow from AgentConfig through resolveConfig
+// to ResolvedAgentConfig unchanged so the JsAgentSpec mapping can forward it
+// to the Rust core (and onward to the registry/UI).
+describe("Issue #969: agent description plumbing", () => {
+  it("preserves a non-empty description verbatim", () => {
+    const resolved = resolveConfig({
+      name: "described-agent",
+      httpPort: 9001,
+      description: "Hello from the mesh",
+    });
+    expect(resolved.description).toBe("Hello from the mesh");
+  });
+
+  it("defaults to an empty string when description is omitted", () => {
+    const resolved = resolveConfig({
+      name: "no-desc",
+      httpPort: 9001,
+    });
+    // ResolvedAgentConfig.description is required (no optional `?`) — must
+    // always be a string so downstream code doesn't have to null-guard.
+    expect(typeof resolved.description).toBe("string");
+    expect(resolved.description).toBe("");
+  });
+});
