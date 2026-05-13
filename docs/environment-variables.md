@@ -549,6 +549,21 @@ export LITELLM_URL=http://localhost:4000
 export LITELLM_TIMEOUT_MS=300000
 ```
 
+### LLM Provider Behavior (Python)
+
+```bash
+# Cap on synthetic-tool corrective retries when Claude returns malformed
+# tool_use.input against the structured-output schema (issue #961).
+# Default: 1. Set to 0 to disable. Values must be int >= 0; invalid input
+# logs a WARN and falls back to the default. Anthropic native path only
+# in v1; OpenAI / Gemini follow in a future release.
+# Background: PR #960 added a defensive single-key envelope unwrap in
+# ResponseParser; this env var controls the broader provider-side
+# shape-agnostic retry loop that mirrors the LiteLLM HINT->response_format
+# fallback.
+export MCP_MESH_LLM_SYNTHETIC_RETRY_MAX=1
+```
+
 ## CLI & Development
 
 ```bash

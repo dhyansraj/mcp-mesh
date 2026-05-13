@@ -383,9 +383,12 @@ class TestBufferedLoopSyntheticRecognition:
         """
         from mesh.helpers import _provider_agentic_loop
 
+        # Schema-valid args so issue #961's synthetic-tool validation retry
+        # does NOT fire — this test asserts on the FIRST/only call's
+        # ``tool_choice``, not the corrective-retry call's forced choice.
         msg = _message(
             content=None,
-            tool_calls=[_tool_call("t", SYNTHETIC_TOOL_NAME, "{}")],
+            tool_calls=[_tool_call("t", SYNTHETIC_TOOL_NAME, '{"answer":"hi"}')],
         )
 
         with patch("asyncio.to_thread", new=AsyncMock(return_value=_response(msg))) as mock_call:
@@ -419,9 +422,13 @@ class TestBufferedLoopSyntheticRecognition:
         """
         from mesh.helpers import _provider_agentic_loop
 
+        # Schema-valid args so issue #961's synthetic-tool validation retry
+        # does NOT fire — this test asserts the FIRST-call forced-synthetic
+        # ``tool_choice`` set by ``_inject_synthetic_format_tool``, which is
+        # already the same shape the retry would force.
         msg = _message(
             content=None,
-            tool_calls=[_tool_call("t", SYNTHETIC_TOOL_NAME, "{}")],
+            tool_calls=[_tool_call("t", SYNTHETIC_TOOL_NAME, '{"answer":"hi"}')],
         )
 
         with patch("asyncio.to_thread", new=AsyncMock(return_value=_response(msg))) as mock_call:

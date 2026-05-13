@@ -428,6 +428,285 @@ async def _maybe_run_hint_fallback(
     return (fb_content if fb_content else "", fb_message, fallback_response)
 
 
+# Default cap on synthetic-tool corrective retries (issue #961). Set to 0 to
+# disable; values > 1 are accepted but discouraged because the corrective
+# prompt is bounded — additional iterations rarely buy more than the first.
+_DEFAULT_SYNTHETIC_RETRY_MAX = 1
+
+
+def _read_synthetic_retry_max(loop_logger: logging.Logger | None) -> int:
+    """Parse ``MCP_MESH_LLM_SYNTHETIC_RETRY_MAX`` once with safe defaults.
+
+    Negative or non-integer values fall back to the default (1) and emit a
+    single WARN per call so that misconfiguration surfaces in logs without
+    masking the retry feature entirely.
+    """
+    import os
+
+    raw = os.environ.get("MCP_MESH_LLM_SYNTHETIC_RETRY_MAX")
+    if raw is None or raw == "":
+        return _DEFAULT_SYNTHETIC_RETRY_MAX
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        if loop_logger:
+            loop_logger.warning(
+                "Invalid MCP_MESH_LLM_SYNTHETIC_RETRY_MAX=%r (expected int >= 0); "
+                "falling back to default %d",
+                raw,
+                _DEFAULT_SYNTHETIC_RETRY_MAX,
+            )
+        return _DEFAULT_SYNTHETIC_RETRY_MAX
+    if value < 0:
+        if loop_logger:
+            loop_logger.warning(
+                "Invalid MCP_MESH_LLM_SYNTHETIC_RETRY_MAX=%d (must be >= 0); "
+                "falling back to default %d",
+                value,
+                _DEFAULT_SYNTHETIC_RETRY_MAX,
+            )
+        return _DEFAULT_SYNTHETIC_RETRY_MAX
+    return value
+
+
+def _serialize_assistant_message_for_retry(
+    message: Any, synthetic_tool_name: str
+) -> dict[str, Any]:
+    """Serialize the bad-attempt assistant turn into the dict shape that the
+    LLM client accepts as a prior assistant turn.
+
+    Mirrors the conversation-dict shape built when real tool calls iterate
+    (see :func:`_build_assistant_tool_call_dict` and the assistant_msg
+    construction in ``_provider_agentic_loop``). Used by the synthetic-tool
+    corrective-retry path (issue #961) to thread the failed ``tool_use``
+    back to the model so its next turn can reference the same tool_use_id
+    via a ``role:tool`` message.
+    """
+    tool_calls = getattr(message, "tool_calls", None) or []
+    return {
+        "role": getattr(message, "role", "assistant"),
+        "content": getattr(message, "content", "") or "",
+        "tool_calls": [_build_assistant_tool_call_dict(tc) for tc in tool_calls],
+    }
+
+
+async def _maybe_retry_synthetic_on_validation_failure(
+    *,
+    synthetic_args: str,
+    synthetic_tool: dict,
+    synthetic_tool_name: str,
+    bad_tool_use_id: str,
+    assistant_message_dict: dict,
+    current_messages: list[dict],
+    tools: list[dict],
+    completion_args_template: dict,
+    native_handler,
+    litellm_module,
+    effective_model: str,
+    vendor: str | None,
+    loop_logger: logging.Logger | None,
+) -> tuple[str, dict | None]:
+    """Validate synthetic-tool args against the schema; retry once on failure.
+
+    Issue #961 — adds a shape-agnostic, schema-driven corrective retry to the
+    native-path provider agentic loop. The native synthetic-tool path is
+    single-shot: when Claude returns malformed ``tool_use.input`` (for
+    example, the well-known ``{"parameter": {<real fields>}}`` envelope
+    hallucination), Pydantic validation downstream fails with no recovery.
+    This helper runs a provider-side ``jsonschema`` pre-filter on the
+    synthetic-tool arguments and, on failure, asks the model to try again
+    with the schema and the validation error inlined into the prompt.
+    Mirrors the LiteLLM HINT->``response_format`` fallback pattern in
+    :func:`_maybe_run_hint_fallback`.
+
+    Returns ``(final_args_str, usage_to_fold_or_None)``. If validation
+    passes or the retry feature is disabled (``MCP_MESH_LLM_SYNTHETIC_RETRY_MAX=0``),
+    returns the input ``synthetic_args`` unchanged with ``usage=None``. On
+    retry, returns the second attempt's args (whether validated or not —
+    :class:`_mcp_mesh.engine.response_parser.ResponseParser` is the final
+    gate; validation failure on attempt 2 falls through with a WARN so the
+    consumer-side parser can apply its own envelope-unwrap heuristic before
+    Pydantic raises) plus the retry call's usage dict so callers can fold
+    it into their cumulative ``_mesh_usage`` block.
+
+    Tracing: TODO(#961) — when the OpenTelemetry tracer is wired into this
+    module the retry call should be wrapped in a span with attributes
+    ``mesh.llm.synthetic_retry=true``, ``mesh.llm.vendor``,
+    ``mesh.llm.model``, ``mesh.llm.validation_error``. Until then the same
+    information is captured at WARN level.
+    """
+    # Fall back to the module logger when no caller-supplied logger is
+    # threaded through — the buffered loop's ``loop_logger`` parameter is
+    # ``None`` by default, but observability still needs the WARN trail
+    # because the consumer-facing failure mode (Pydantic validation error)
+    # is downstream of this helper.
+    effective_logger = loop_logger if loop_logger is not None else logger
+
+    retry_max = _read_synthetic_retry_max(effective_logger)
+    if retry_max <= 0:
+        return synthetic_args, None
+
+    schema = (synthetic_tool or {}).get("function", {}).get("parameters")
+    if not schema:
+        # No schema to validate against — nothing to retry for.
+        return synthetic_args, None
+
+    try:
+        import jsonschema  # type: ignore
+    except ImportError:
+        effective_logger.warning(
+            "[provider:retry] jsonschema not importable; skipping synthetic-tool "
+            "validation retry (install jsonschema>=4)"
+        )
+        return synthetic_args, None
+
+    try:
+        parsed_args = json.loads(synthetic_args) if synthetic_args else {}
+    except (TypeError, ValueError) as e:
+        # Malformed JSON is not what this retry is for — ResponseParser handles
+        # the salvage path. Don't mask weird bugs; just log and bail.
+        effective_logger.warning(
+            "[provider:retry] synthetic args not JSON-parseable (%s); skipping "
+            "validation retry",
+            e,
+        )
+        return synthetic_args, None
+
+    try:
+        jsonschema.validate(instance=parsed_args, schema=schema)
+        return synthetic_args, None
+    except jsonschema.ValidationError as ve:
+        first_error_msg = str(ve)
+    except Exception as e:  # noqa: BLE001 - guard against jsonschema oddities
+        effective_logger.warning(
+            "[provider:retry] unexpected error during synthetic-tool schema "
+            "validation (%s: %s); skipping retry",
+            type(e).__name__,
+            e,
+        )
+        return synthetic_args, None
+
+    # Build the corrective conversation: prior turn (with the bad tool_use)
+    # + a tool result acknowledging the failure + a user message that inlines
+    # the schema and the validation error.
+    tool_result_dict = {
+        "role": "tool",
+        "tool_call_id": bad_tool_use_id,
+        "content": json.dumps(
+            {"error": "schema validation failed", "is_error": True}
+        ),
+    }
+    corrective_user_dict = {
+        "role": "user",
+        "content": (
+            f"Your previous response to {synthetic_tool_name} failed schema validation:\n"
+            f"<error>{first_error_msg[:2000]}</error>\n"
+            f"\n"
+            f"The required schema is:\n"
+            f"<schema>{json.dumps(schema, indent=2)}</schema>\n"
+            f"\n"
+            f"Call {synthetic_tool_name} again with arguments that exactly match the "
+            f"schema. Do NOT wrap the fields in an envelope (e.g., "
+            f'{{"parameter": {{...}}}} or {{"input": {{...}}}}). Pass the fields '
+            f"directly as the tool arguments."
+        ),
+    }
+    new_messages = list(current_messages) + [
+        assistant_message_dict,
+        tool_result_dict,
+        corrective_user_dict,
+    ]
+
+    retry_args = {
+        **completion_args_template,
+        "messages": new_messages,
+        "tools": tools,
+        # Force the synthetic on retry — the model already chose it once, and
+        # we want a deterministic single-call corrective turn rather than
+        # risking another tool-call detour. OpenAI-shape tool_choice is what
+        # ``_inject_synthetic_format_tool`` and the rest of the loop use; the
+        # vendor-native adapters translate as needed.
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": synthetic_tool_name},
+        },
+    }
+
+    effective_logger.warning(
+        "[provider:retry] synthetic-tool schema validation failed (attempt 1) "
+        "for vendor=%s model=%s tool=%s: %s; retrying once",
+        vendor,
+        effective_model,
+        synthetic_tool_name,
+        first_error_msg[:500],
+    )
+
+    # Mirror the dispatch logic of the outer loop: prefer native handler when
+    # available, otherwise fall back to LiteLLM via asyncio.to_thread.
+    if native_handler is not None and native_handler.has_native():
+        native_args = {
+            k: v
+            for k, v in retry_args.items()
+            if k not in ("model", "api_key", "base_url")
+        }
+        retry_response = await native_handler.complete(
+            native_args,
+            model=effective_model,
+            api_key=retry_args.get("api_key"),
+            base_url=retry_args.get("base_url"),
+        )
+    else:
+        retry_response = await asyncio.to_thread(
+            litellm_module.completion, **retry_args
+        )
+
+    retry_message = retry_response.choices[0].message
+    retry_args_str = _extract_synthetic_format_arguments(
+        retry_message, synthetic_tool_name
+    )
+    if retry_args_str is None:
+        effective_logger.warning(
+            "[provider:retry] retry response did not call synthetic tool '%s' — "
+            "falling back to original (bad) args; ResponseParser will attempt "
+            "envelope-unwrap salvage",
+            synthetic_tool_name,
+        )
+        return synthetic_args, None
+
+    # Log attempt 2's validation outcome too — useful when both attempts fail.
+    try:
+        retry_parsed = json.loads(retry_args_str) if retry_args_str else {}
+        jsonschema.validate(instance=retry_parsed, schema=schema)
+    except jsonschema.ValidationError as ve2:
+        effective_logger.warning(
+            "[provider:retry] synthetic-tool schema validation still failed "
+            "(attempt 2) for vendor=%s model=%s tool=%s: %s; returning "
+            "second-attempt args anyway (ResponseParser is the final gate)",
+            vendor,
+            effective_model,
+            synthetic_tool_name,
+            str(ve2)[:500],
+        )
+    except Exception:  # noqa: BLE001
+        # Non-validation errors on attempt 2 are ignored here — the args are
+        # returned regardless and ResponseParser will surface any real failure.
+        pass
+
+    retry_usage_dict: dict | None = None
+    if hasattr(retry_response, "usage") and retry_response.usage:
+        ru = retry_response.usage
+        retry_usage_dict = {
+            "prompt_tokens": getattr(ru, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(ru, "completion_tokens", 0) or 0,
+        }
+        retry_usage_dict["total_tokens"] = (
+            retry_usage_dict["prompt_tokens"]
+            + retry_usage_dict["completion_tokens"]
+        )
+
+    return retry_args_str, retry_usage_dict
+
+
 def _extract_text_from_message_content(content: Any) -> str:
     """Normalize a LiteLLM message ``content`` field to a plain string.
 
@@ -874,6 +1153,63 @@ async def _provider_agentic_loop(
                         iteration,
                         max_iterations,
                     )
+
+                # Schema-validation retry for the synthetic tool (issue #961).
+                # Gated to anthropic for v1 — the bad-tool_use_id round-trip
+                # follows Anthropic's tool_use/tool_result correlation contract;
+                # OpenAI/Gemini equivalents need per-vendor verification before
+                # opt-in. See the helper docstring for the corrective-prompt
+                # rationale.
+                # TODO(#961): enable retry for openai/gemini after per-vendor
+                # verification of the corrective-prompt round-trip.
+                retry_usage: dict | None = None
+                if vendor == "anthropic" and synthetic_tool is not None:
+                    # Locate the synthetic tool_call to recover its id (the
+                    # bad ``tool_use_id`` that the corrective ``role:tool``
+                    # message must reference).
+                    bad_tc_id: str | None = None
+                    for _tc in message.tool_calls:
+                        _fn = getattr(_tc, "function", None)
+                        if _fn is not None and getattr(_fn, "name", None) == synthetic_tool_name:
+                            bad_tc_id = getattr(_tc, "id", None)
+                            break
+
+                    if bad_tc_id is not None:
+                        # Rebuild a fresh template from the current iteration's
+                        # completion_args (excluding messages/tools/tool_choice
+                        # which the helper sets explicitly, and stream flags
+                        # that don't apply on the buffered retry path).
+                        retry_template = {
+                            k: v
+                            for k, v in completion_args.items()
+                            if k not in (
+                                "messages",
+                                "tools",
+                                "tool_choice",
+                                "stream",
+                                "stream_options",
+                            )
+                        }
+                        synthetic_args, retry_usage = (
+                            await _maybe_retry_synthetic_on_validation_failure(
+                                synthetic_args=synthetic_args,
+                                synthetic_tool=synthetic_tool,
+                                synthetic_tool_name=synthetic_tool_name,
+                                bad_tool_use_id=bad_tc_id,
+                                assistant_message_dict=_serialize_assistant_message_for_retry(
+                                    message, synthetic_tool_name
+                                ),
+                                current_messages=current_messages,
+                                tools=tools,
+                                completion_args_template=retry_template,
+                                native_handler=_native_handler,
+                                litellm_module=litellm,
+                                effective_model=effective_model,
+                                vendor=vendor,
+                                loop_logger=loop_logger,
+                            )
+                        )
+
                 message_dict: dict[str, Any] = {
                     "role": getattr(message, "role", "assistant"),
                     "content": synthetic_args,
@@ -885,6 +1221,24 @@ async def _provider_agentic_loop(
                         "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
                         "model": effective_model,
                     }
+                # Fold retry usage into the cumulative block so observability
+                # captures the corrective call's tokens.
+                if retry_usage:
+                    if "_mesh_usage" not in message_dict:
+                        message_dict["_mesh_usage"] = {
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "model": effective_model,
+                        }
+                    bucket = message_dict["_mesh_usage"]
+                    bucket["prompt_tokens"] = (
+                        bucket.get("prompt_tokens", 0)
+                        + retry_usage.get("prompt_tokens", 0)
+                    )
+                    bucket["completion_tokens"] = (
+                        bucket.get("completion_tokens", 0)
+                        + retry_usage.get("completion_tokens", 0)
+                    )
                 return message_dict
 
         if hasattr(message, "tool_calls") and message.tool_calls:
@@ -1102,6 +1456,14 @@ async def _provider_agentic_loop_stream(
         iterations followed by a final iteration that returns empty
         content).
     """
+    # TODO(#961): synthetic-tool validation retry is not implemented for the
+    # streaming path. The buffered loop performs a one-shot corrective retry
+    # via :func:`_maybe_retry_synthetic_on_validation_failure` when Claude
+    # returns malformed ``tool_use.input`` against the synthetic tool schema;
+    # the streaming path needs an equivalent path that handles mid-stream
+    # tool_use accumulation, abandons the in-flight stream cleanly, and
+    # re-issues the corrective call without breaking partial-text yields.
+    # Tracking issue: https://github.com/dhyanraj/mcp-mesh/issues/961.
     import litellm
 
     # Imported here to avoid a circular import: ``_mcp_mesh.engine`` imports
