@@ -117,6 +117,101 @@ func (h *EntBusinessLogicHandlers) CreateJob(c *gin.Context) {
 	c.JSON(http.StatusCreated, resp)
 }
 
+// ListJobs implements GET /jobs (issue #973). Read-only observability
+// endpoint backing the meshui Jobs page + future `meshctl` listing.
+//
+// Validation rules:
+//   - `status` is a comma-separated list of JobStatus values. Empty / absent
+//     = all statuses. Unknown tokens (e.g. "running") return 400.
+//   - `limit` defaults to 50 and is bounded at [1, 200]. Out-of-range = 400.
+//   - `cursor` is opaque; malformed cursors = 400 (never 500).
+//
+// Filters compose with AND; pagination order is (submitted_at DESC, id DESC).
+func (h *EntBusinessLogicHandlers) ListJobs(c *gin.Context, _ generated.ListJobsParams) {
+	// Bind from the same query string we received. We bind through our own
+	// JobQueryParams (form-tagged) so the status csv -> []string split lives
+	// here, not in oapi-generated code.
+	var q JobQueryParams
+	if err := c.ShouldBindQuery(&q); err != nil {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Invalid query parameters: %v", err),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	// Distinguish "limit absent" (use default 50) from "limit=0" (invalid).
+	// The form-tagged JobQueryParams binding can't tell the two apart on
+	// its own — both decode to int(0). Peek the raw query to disambiguate.
+	limit := q.Limit
+	if _, present := c.Request.URL.Query()["limit"]; !present {
+		limit = 50
+	}
+	if limit < 1 || limit > 200 {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     fmt.Sprintf("limit must be in [1, 200], got %d", limit),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	var statuses []string
+	if s := strings.TrimSpace(q.Status); s != "" {
+		// Split, trim, validate each token against the JobStatus enum.
+		// Reject the whole request on any unknown value rather than
+		// silently dropping it — operators would rather see "you typo'd
+		// running" than an empty result set.
+		raw := strings.Split(s, ",")
+		statuses = make([]string, 0, len(raw))
+		for _, t := range raw {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			switch generated.JobStatus(t) {
+			case generated.Working, generated.InputRequired,
+				generated.Completed, generated.Failed, generated.Cancelled:
+				statuses = append(statuses, t)
+			default:
+				c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+					Error:     fmt.Sprintf("invalid status %q: must be one of working,input_required,completed,failed,cancelled", t),
+					Timestamp: time.Now().UTC(),
+				})
+				return
+			}
+		}
+	}
+
+	resp, err := h.entService.ListJobs(c.Request.Context(), &JobsListInput{
+		Statuses:        statuses,
+		OwnerInstanceID: strings.TrimSpace(q.OwnerInstanceID),
+		Capability:      strings.TrimSpace(q.Capability),
+		SubmittedSince:  q.SubmittedSince,
+		Limit:           limit,
+		Cursor:          strings.TrimSpace(q.Cursor),
+	})
+	if err != nil {
+		// Cursor decode failures surface as 400 — they're caller-induced,
+		// not registry-side faults. Anything else is treated as a backend
+		// problem (503).
+		msg := err.Error()
+		if strings.Contains(msg, "invalid cursor") || strings.Contains(msg, "invalid status") {
+			c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+				Error:     msg,
+				Timestamp: time.Now().UTC(),
+			})
+			return
+		}
+		c.JSON(http.StatusServiceUnavailable, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Failed to list jobs: %v", err),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, resp)
+}
+
 // GetJob implements GET /jobs/{job_id}. All status reads terminate here —
 // no replica-side caching, no owner-bound routing. Possession of the
 // job_id (UUID) is the capability for read access (presigned-URL semantics

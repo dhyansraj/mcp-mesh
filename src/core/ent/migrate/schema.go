@@ -225,6 +225,11 @@ var (
 				Unique:  false,
 				Columns: []*schema.Column{JobsColumns[3]},
 			},
+			{
+				Name:    "job_submitted_at_job_id",
+				Unique:  false,
+				Columns: []*schema.Column{JobsColumns[15], JobsColumns[0]},
+			},
 		},
 	}
 	// LlmProviderResolutionsColumns holds the columns for the "llm_provider_resolutions" table.

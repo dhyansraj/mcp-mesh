@@ -1,6 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
-import { LayoutDashboard, Bot, Network, BarChart3, Radio } from "lucide-react";
+import { LayoutDashboard, Bot, Briefcase, Network, BarChart3, Radio } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getBasePath } from "@/lib/config";
 import { useMesh } from "@/lib/mesh-context";
@@ -8,6 +8,7 @@ import { useMesh } from "@/lib/mesh-context";
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Agents", href: "/agents", icon: Bot },
+  { name: "Jobs", href: "/jobs", icon: Briefcase },
   { name: "Topology", href: "/topology", icon: Network },
   { name: "Traffic", href: "/traffic", icon: BarChart3 },
   { name: "Live", href: "/live", icon: Radio },

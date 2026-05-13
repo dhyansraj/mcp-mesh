@@ -4,6 +4,7 @@ import { Providers } from "../components/layout/Providers";
 import { ErrorBoundary } from "../components/layout/ErrorBoundary";
 import DashboardPage from "../app/page";
 import AgentsPage from "../app/agents/page";
+import JobsPage from "../app/jobs/page";
 import TopologyPage from "../app/topology/page";
 import TrafficPage from "../app/traffic/page";
 import LivePage from "../app/live/page";
@@ -18,6 +19,7 @@ export function App() {
             <Routes>
               <Route path="/" element={<DashboardPage />} />
               <Route path="/agents" element={<AgentsPage />} />
+              <Route path="/jobs" element={<JobsPage />} />
               <Route path="/topology" element={<TopologyPage />} />
               <Route path="/traffic" element={<TrafficPage />} />
               <Route path="/live" element={<LivePage />} />

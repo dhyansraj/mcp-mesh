@@ -78,6 +78,11 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 		api.GET("/health", s.proxyToRegistry)
 		api.GET("/agents", s.proxyToRegistry)
 		api.GET("/agents/*path", s.proxyToRegistry)
+		// Jobs (issue #973) — read-only observability. No mutation surface
+		// is exposed here: cancel is meshctl-only (POST /jobs/{id}/cancel
+		// lives behind a tool call, not the dashboard).
+		api.GET("/jobs", s.proxyToRegistry)
+		api.GET("/jobs/*path", s.proxyToRegistry)
 		api.GET("/events/history", s.GetEventsHistory)
 		api.GET("/events", s.StreamDashboardEvents)
 		api.GET("/trace/recent", s.handleRecentTraces)
