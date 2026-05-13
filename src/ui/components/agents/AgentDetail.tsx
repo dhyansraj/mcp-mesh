@@ -39,6 +39,10 @@ export function AgentDetail({ agent }: AgentDetailProps) {
   const capabilities = agent.capabilities ?? [];
   const agentName = extractAgentName(agent.id);
   const { traceActivity } = useMesh();
+  // Belt-and-suspenders: registry validation trims whitespace at registration
+  // (issue #969), but defend against whitespace-only values that could enter
+  // the DB through manual edits / imports so the placeholder still renders.
+  const description = agent.description?.trim() ?? "";
 
   const defaultTab = capabilities.length > 0
     ? "capabilities"
@@ -53,8 +57,8 @@ export function AgentDetail({ agent }: AgentDetailProps) {
           when none was supplied so an empty description is unambiguous. */}
       <div className="mb-4">
         <h3 className="text-sm font-semibold text-foreground">{agent.name}</h3>
-        {agent.description ? (
-          <p className="mt-1 text-sm text-muted-foreground">{agent.description}</p>
+        {description ? (
+          <p className="mt-1 text-sm text-muted-foreground">{description}</p>
         ) : (
           <p className="mt-1 text-sm italic text-muted-foreground/60">No description provided</p>
         )}

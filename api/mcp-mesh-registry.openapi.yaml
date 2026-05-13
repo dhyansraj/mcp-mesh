@@ -820,7 +820,6 @@ components:
           description: Agent version
         description:
           type: string
-          maxLength: 256
           default: ""
           example: "Greeting service for the mesh demo"
           description: |
@@ -829,6 +828,10 @@ components:
             characters (a `warnings` entry is added to the response when
             truncation occurs — registration never fails over an over-long
             description). Surfaced in the UI agent detail header.
+            NOTE: no `maxLength` constraint is declared on purpose — clients
+            generated from this spec must NOT reject over-long descriptions
+            client-side; the server is authoritative for the truncate +
+            warning flow.
         http_host:
           type: string
           default: "0.0.0.0"

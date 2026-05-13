@@ -353,13 +353,20 @@ const MaxAgentDescriptionLen = 256
 //   - Truncates to MaxAgentDescriptionLen runes if longer, returning a
 //     warning string describing the truncation.
 //
+// Truncation is rune-based (not byte-based) so multi-byte UTF-8 input
+// (CJK, emoji) cannot land on an invalid byte boundary and corrupt the
+// stored string. The DB column is varchar(256) in both sqlite and
+// postgres, which counts characters not bytes, so 256 runes is a safe
+// upper bound for persistence.
+//
 // Both arguments and returns are plain strings — no error path. The caller
 // surfaces the warning slice on the registration response (issue #969).
 func validateAgentDescription(s string) (cleaned string, warnings []string) {
 	cleaned = strings.TrimSpace(s)
-	if len(cleaned) > MaxAgentDescriptionLen {
-		original := len(cleaned)
-		cleaned = cleaned[:MaxAgentDescriptionLen]
+	runes := []rune(cleaned)
+	if len(runes) > MaxAgentDescriptionLen {
+		original := len(runes)
+		cleaned = string(runes[:MaxAgentDescriptionLen])
 		warnings = append(warnings, fmt.Sprintf(
 			"description truncated from %d to %d chars", original, MaxAgentDescriptionLen))
 	}
