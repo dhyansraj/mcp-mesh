@@ -22,6 +22,7 @@ package ui
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -70,13 +71,19 @@ type schemaConsumer struct {
 // schemaListItem is one row in GET /api/schemas. The shape is intentionally
 // flat (no nested providers/consumers) so the list view can render hundreds
 // of rows without paying the join cost for ones the operator never opens.
+//
+// ProviderAgentNames is the deduped+sorted set of provider agent names. Kept
+// on the list row so the SPA's client-side filter can match against agent
+// names without paying the per-row /usage join cost. Always emitted as an
+// array (possibly empty), never null.
 type schemaListItem struct {
-	Hash           string    `json:"hash"`
-	RuntimeOrigin  string    `json:"runtime_origin"`
-	CreatedAt      time.Time `json:"created_at"`
-	ProviderCount  int       `json:"provider_count"`
-	ConsumerCount  int       `json:"consumer_count"`
-	SampleFunction *string   `json:"sample_function"` // first provider's function_name, or null
+	Hash               string    `json:"hash"`
+	RuntimeOrigin      string    `json:"runtime_origin"`
+	CreatedAt          time.Time `json:"created_at"`
+	ProviderCount      int       `json:"provider_count"`
+	ConsumerCount      int       `json:"consumer_count"`
+	SampleFunction     *string   `json:"sample_function"` // first provider's function_name, or null
+	ProviderAgentNames []string  `json:"provider_agent_names"`
 }
 
 type schemasListResponse struct {
@@ -221,18 +228,52 @@ func (s *Server) ListSchemasUsage(c *gin.Context) {
 	for _, e := range entries {
 		provs := idx.providers[e.Hash]
 		cons := idx.consumers[e.Hash]
+
+		// Sort providers deterministically so sample_function and the
+		// agent-name list are stable across polls. Go map iteration (the
+		// source of `provs` via buildInverseIndex) is unordered, and the
+		// upstream Agent.Query() has no explicit Order(...) clause — without
+		// this sort, sample_function flickers between equivalent providers
+		// on every refresh. Tiebreak on AgentID because the same agent can
+		// own multiple capabilities that share a schema.
+		sort.Slice(provs, func(i, j int) bool {
+			if provs[i].FunctionName != provs[j].FunctionName {
+				return provs[i].FunctionName < provs[j].FunctionName
+			}
+			return provs[i].AgentID < provs[j].AgentID
+		})
+
 		var sample *string
 		if len(provs) > 0 {
 			fn := provs[0].FunctionName
 			sample = &fn
 		}
+
+		// Distinct provider agent names, sorted for stable JSON output. The
+		// SPA's client-side filter matches against this list so operators
+		// can search "weather-svc" and find every schema that agent
+		// produces. Always a non-nil slice so the SPA never has to nil-guard.
+		nameSet := make(map[string]struct{}, len(provs))
+		for _, p := range provs {
+			if p.AgentName == "" {
+				continue
+			}
+			nameSet[p.AgentName] = struct{}{}
+		}
+		names := make([]string, 0, len(nameSet))
+		for n := range nameSet {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+
 		items = append(items, schemaListItem{
-			Hash:           e.Hash,
-			RuntimeOrigin:  e.RuntimeOrigin.String(),
-			CreatedAt:      e.CreatedAt,
-			ProviderCount:  len(provs),
-			ConsumerCount:  len(cons),
-			SampleFunction: sample,
+			Hash:               e.Hash,
+			RuntimeOrigin:      e.RuntimeOrigin.String(),
+			CreatedAt:          e.CreatedAt,
+			ProviderCount:      len(provs),
+			ConsumerCount:      len(cons),
+			SampleFunction:     sample,
+			ProviderAgentNames: names,
 		})
 	}
 

@@ -227,8 +227,14 @@ func TestListSchemasUsage_AggregatesCounts(t *testing.T) {
 	assert.Equal(t, 3, w.ProviderCount, "weather: python input + python output + ts output")
 	assert.Equal(t, 1, w.ConsumerCount, "weather: morning_routine depends on weather_report")
 	require.NotNil(t, w.SampleFunction)
-	assert.NotEmpty(t, *w.SampleFunction, "sample_function set when providers exist")
+	// Deterministic sort: provider function_names for weather are
+	// {get_weather, get_weather, fetchWeather} — alphabetical pick is
+	// "fetchWeather". Asserting the exact name guarantees the sort fires.
+	assert.Equal(t, "fetchWeather", *w.SampleFunction,
+		"sample_function is the alphabetically-first provider function_name")
 	assert.Equal(t, "python", w.RuntimeOrigin)
+	assert.Equal(t, []string{"weather-svc", "weather-svc-ts"}, w.ProviderAgentNames,
+		"provider_agent_names is deduped + sorted")
 
 	g := byHash["sha256:greet"]
 	assert.Equal(t, 1, g.ProviderCount, "greet: say_hi output only")
@@ -236,11 +242,84 @@ func TestListSchemasUsage_AggregatesCounts(t *testing.T) {
 	require.NotNil(t, g.SampleFunction)
 	assert.Equal(t, "say_hi", *g.SampleFunction)
 	assert.Equal(t, "typescript", g.RuntimeOrigin)
+	assert.Equal(t, []string{"greeter"}, g.ProviderAgentNames)
 
 	o := byHash["sha256:orphan"]
 	assert.Equal(t, 0, o.ProviderCount, "orphan: zero providers")
 	assert.Equal(t, 0, o.ConsumerCount, "orphan: zero consumers")
 	assert.Nil(t, o.SampleFunction, "sample_function is null with no providers")
+	assert.Equal(t, []string{}, o.ProviderAgentNames,
+		"provider_agent_names is an empty slice (not nil) when there are no providers")
+}
+
+// TestListSchemasUsage_SampleFunctionStable confirms sample_function is
+// deterministic across repeated invocations even when the underlying agent /
+// capability seeds produce providers in a different Go-map iteration order
+// each scan. Regression guard for the non-determinism CodeRabbit flagged on
+// PR #979 — without the sort in ListSchemasUsage, `provs[0]` could flicker
+// between equivalent providers on every refresh.
+func TestListSchemasUsage_SampleFunctionStable(t *testing.T) {
+	client, _, engine, cleanup := newSchemasTestEnv(t)
+	defer cleanup()
+
+	seedSchemaEntry(t, client, "sha256:shared", schemaentry.RuntimeOriginPython)
+
+	// Three agents all provide the same schema hash with distinct function
+	// names. The handler's underlying buildInverseIndex bucket order depends
+	// on Agent.Query() iteration, which is unordered — only the in-handler
+	// sort guarantees a stable pick.
+	seedAgent(t, client, "agent-a", "alpha")
+	seedAgent(t, client, "agent-b", "bravo")
+	seedAgent(t, client, "agent-c", "charlie")
+	seedCapability(t, client, capSeed{
+		agentID:      "agent-a",
+		functionName: "zebra_fn",
+		capability:   "shared_cap",
+		outputHash:   strPtr("sha256:shared"),
+	})
+	seedCapability(t, client, capSeed{
+		agentID:      "agent-b",
+		functionName: "apple_fn",
+		capability:   "shared_cap",
+		outputHash:   strPtr("sha256:shared"),
+	})
+	seedCapability(t, client, capSeed{
+		agentID:      "agent-c",
+		functionName: "mango_fn",
+		capability:   "shared_cap",
+		outputHash:   strPtr("sha256:shared"),
+	})
+
+	hit := func() schemaListItem {
+		req := httptest.NewRequest(http.MethodGet, "/api/schemas", nil)
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, "body=%s", rec.Body.String())
+		var resp struct {
+			Schemas []schemaListItem `json:"schemas"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+		require.Len(t, resp.Schemas, 1)
+		return resp.Schemas[0]
+	}
+
+	first := hit()
+	require.NotNil(t, first.SampleFunction)
+	assert.Equal(t, "apple_fn", *first.SampleFunction,
+		"alphabetically first provider function_name wins")
+	assert.Equal(t, []string{"alpha", "bravo", "charlie"}, first.ProviderAgentNames)
+
+	// Repeat invocations must return the same sample_function value — even
+	// though the underlying scan ordering is non-deterministic, the sort in
+	// the handler nails it down.
+	for i := 0; i < 5; i++ {
+		next := hit()
+		require.NotNil(t, next.SampleFunction)
+		assert.Equal(t, *first.SampleFunction, *next.SampleFunction,
+			"sample_function stable across invocation %d", i)
+		assert.Equal(t, first.ProviderAgentNames, next.ProviderAgentNames,
+			"provider_agent_names stable across invocation %d", i)
+	}
 }
 
 // TestGetSchemaUsage_DetailSplitsRoles asserts /usage returns providers split

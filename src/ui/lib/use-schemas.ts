@@ -107,15 +107,17 @@ export function useSchemas(): UseSchemasResult {
     fetchOnce();
   }, [fetchOnce]);
 
-  // Client-side filter: substring match over hash + sample_function. Case
-  // insensitive — operators paste hash prefixes ("sha256:ab…") from logs and
-  // expect them to match without worrying about case.
+  // Client-side filter: substring match over hash + sample_function (tool
+  // name) + any provider_agent_names entry. Case insensitive — operators
+  // paste hash prefixes ("sha256:ab…") from logs and expect them to match
+  // without worrying about case.
   const schemas = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (q === "") return allSchemas;
     return allSchemas.filter((s) => {
       if (s.hash.toLowerCase().includes(q)) return true;
       if (s.sample_function && s.sample_function.toLowerCase().includes(q)) return true;
+      if (s.provider_agent_names?.some((n) => n.toLowerCase().includes(q))) return true;
       return false;
     });
   }, [allSchemas, search]);

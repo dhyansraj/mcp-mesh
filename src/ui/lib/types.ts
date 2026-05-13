@@ -274,6 +274,11 @@ export interface SchemaListItem {
   consumer_count: number;
   /** First provider's function_name, or null when no providers exist. */
   sample_function: string | null;
+  /**
+   * Distinct provider agent names (sorted, deduped). Always a non-null array
+   * so the client-side filter can include agent-name matches without a guard.
+   */
+  provider_agent_names: string[];
 }
 
 export interface SchemasResponse {
