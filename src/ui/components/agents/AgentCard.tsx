@@ -3,11 +3,13 @@ import { Agent } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import {
   formatRelativeTime,
+  getAgentTypeLabel,
   getRuntimeBadgeColor,
   getRuntimeLabel,
   getStatusBgColor,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { AgentBadges } from "./AgentBadges";
 
 interface AgentCardProps {
   agent: Agent;
@@ -22,16 +24,28 @@ function getDepsColor(resolved: number, total: number): string {
   return "text-orange-400";
 }
 
+// Mirrors AgentBadges' internal gating so we can omit the dedicated badge
+// row entirely when no badges would render (avoids an awkward empty row).
+// Kept in sync with AgentBadges.tsx — if that component grows new badges,
+// extend this check too.
+function hasAnyAgentBadge(agent: Agent): boolean {
+  if (agent.a2a_producer || agent.a2a_consumer) return true;
+  return Boolean(
+    agent.capabilities?.some((c) => c.function_name?.startsWith("__mesh_job_")),
+  );
+}
+
 export function AgentCard({ agent }: AgentCardProps) {
   // Match AgentDetail's whitespace-defensive description handling (issue
   // #969) so an empty header reads the same in both views.
   const description = agent.description?.trim() ?? "";
+  const showBadgeRow = hasAnyAgentBadge(agent);
 
   return (
     <Link
       to={`/agents/${encodeURIComponent(agent.id)}`}
       className={cn(
-        "flex min-h-[160px] flex-col rounded-lg border border-border bg-background/40 p-4",
+        "flex min-h-[180px] flex-col rounded-lg border border-border bg-background/40 p-4",
         "hover:border-primary/40 hover:bg-accent/10 transition-colors",
       )}
     >
@@ -56,7 +70,7 @@ export function AgentCard({ agent }: AgentCardProps) {
         </p>
       )}
 
-      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+      <div className="mb-2 flex flex-wrap items-center gap-1.5">
         {agent.runtime && (
           <Badge
             variant="outline"
@@ -65,28 +79,21 @@ export function AgentCard({ agent }: AgentCardProps) {
             {getRuntimeLabel(agent.runtime)}
           </Badge>
         )}
+        <Badge variant="outline" className="text-xs text-muted-foreground">
+          {getAgentTypeLabel(agent.agent_type)}
+        </Badge>
         {agent.version && (
           <span className="font-mono text-[10px] text-muted-foreground">
             v{agent.version}
           </span>
         )}
-        {agent.a2a_producer && (
-          <Badge
-            variant="outline"
-            className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30 px-1.5 py-0 text-[10px]"
-          >
-            A2A producer
-          </Badge>
-        )}
-        {agent.a2a_consumer && (
-          <Badge
-            variant="outline"
-            className="bg-violet-500/20 text-violet-300 border-violet-500/30 px-1.5 py-0 text-[10px]"
-          >
-            A2A consumer
-          </Badge>
-        )}
       </div>
+
+      {showBadgeRow && (
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
+          <AgentBadges agent={agent} />
+        </div>
+      )}
 
       <div className="mt-auto flex items-center justify-between text-xs">
         <span

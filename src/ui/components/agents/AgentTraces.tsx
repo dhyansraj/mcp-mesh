@@ -264,6 +264,20 @@ export function AgentTraces({ agentName, refreshKey }: AgentTracesProps) {
   }
 
   if (traces.length === 0) {
+    // Issue #974: when the agent's trace-activity counter is non-zero we know
+    // there's been recent traffic but no completed trace lands in the recent
+    // window (badge is incremented mid-trace, completed traces decay). Spell
+    // that out so the empty state stops contradicting the live badge.
+    // Deeper accumulator semantics tracked in #981 (backend).
+    if (refreshKey && refreshKey > 0) {
+      return (
+        <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
+          <Activity className="mb-2 h-8 w-8 opacity-40" />
+          <p className="text-sm">Trace activity recorded, but no completed traces in recent window.</p>
+          <p className="text-xs mt-1">Traces appear here after they finalize.</p>
+        </div>
+      );
+    }
     return (
       <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
         <Activity className="mb-2 h-8 w-8 opacity-40" />

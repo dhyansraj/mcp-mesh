@@ -1,9 +1,11 @@
-import { Agent } from "@/lib/types";
+import { Agent, Capability } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { getDepStatusColor, extractAgentName } from "@/lib/api";
+import { getAgentTypeLabel, getDepStatusColor, extractAgentName } from "@/lib/api";
 import { useMesh } from "@/lib/mesh-context";
 import { AgentTraces } from "./AgentTraces";
+import { AgentBadges } from "./AgentBadges";
+import { useState } from "react";
 
 interface AgentDetailProps {
   agent: Agent;
@@ -31,12 +33,74 @@ function EmptyState({ message }: { message: string }) {
   );
 }
 
+// Issue #970: shared row renderer so the visible + framework capability lists
+// can share styling. The `framework` flag adds a muted badge so users can tell
+// __mesh_job_* tools apart at a glance when they're shown.
+function renderCapabilityRow(cap: Capability, key: string, framework: boolean) {
+  return (
+    <div
+      key={key}
+      className="rounded-lg border border-border/50 px-4 py-3"
+    >
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-sm font-medium text-foreground font-mono">
+          {cap.function_name}
+        </span>
+        <Badge variant="outline" className="text-xs">
+          {cap.name} v{cap.version}
+        </Badge>
+        {framework && (
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground border-muted-foreground/30">
+            framework
+          </Badge>
+        )}
+        {cap.tags?.map((tag) => (
+          <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
+            {tag}
+          </Badge>
+        ))}
+      </div>
+      {cap.description && (
+        <p className="mt-1 text-xs text-muted-foreground">{cap.description}</p>
+      )}
+      {cap.llm_filter && (
+        <div className="mt-2 text-xs text-muted-foreground">
+          <span className="text-cyan-400">LLM Filter:</span>{" "}
+          {cap.llm_filter.capability || "any"}
+          {cap.llm_filter.mode && ` (${cap.llm_filter.mode})`}
+          {cap.llm_filter.tags && cap.llm_filter.tags.length > 0 && (
+            <span> tags: {cap.llm_filter.tags.join(", ")}</span>
+          )}
+        </div>
+      )}
+      {cap.llm_provider && (
+        <div className="mt-2 text-xs text-muted-foreground">
+          <span className="text-orange-400">LLM Provider:</span>{" "}
+          {cap.llm_provider.capability || "any"}
+          {cap.llm_provider.version && ` v${cap.llm_provider.version}`}
+          {cap.llm_provider.namespace && ` ns:${cap.llm_provider.namespace}`}
+          {cap.llm_provider.tags && cap.llm_provider.tags.length > 0 && (
+            <span> tags: {cap.llm_provider.tags.join(", ")}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AgentDetail({ agent }: AgentDetailProps) {
   const hasLLM =
     (agent.llm_tool_resolutions && agent.llm_tool_resolutions.length > 0) ||
     (agent.llm_provider_resolutions && agent.llm_provider_resolutions.length > 0);
 
   const capabilities = agent.capabilities ?? [];
+  // Issue #970: framework-internal MeshJob tools (__mesh_job_*) are noise in
+  // the UI by default — partition them out and show user-visible capabilities,
+  // with a toggle to reveal the framework set. Mirrors the CLI's --tools view
+  // which hides them unless --show-framework is passed (cli/list.go:85).
+  const fw = capabilities.filter((c) => c.function_name?.startsWith("__mesh_job_"));
+  const visible = capabilities.filter((c) => !c.function_name?.startsWith("__mesh_job_"));
+  const [showFw, setShowFw] = useState(false);
   const agentName = extractAgentName(agent.id);
   const { traceActivity } = useMesh();
   // Belt-and-suspenders: registry validation trims whitespace at registration
@@ -44,7 +108,7 @@ export function AgentDetail({ agent }: AgentDetailProps) {
   // the DB through manual edits / imports so the placeholder still renders.
   const description = agent.description?.trim() ?? "";
 
-  const defaultTab = capabilities.length > 0
+  const defaultTab = visible.length > 0
     ? "capabilities"
     : agent.dependency_resolutions && agent.dependency_resolutions.length > 0
       ? "dependencies"
@@ -56,7 +120,13 @@ export function AgentDetail({ agent }: AgentDetailProps) {
           @mesh.agent(description=...) value, with an explicit placeholder
           when none was supplied so an empty description is unambiguous. */}
       <div className="mb-4">
-        <h3 className="text-sm font-semibold text-foreground">{agent.name}</h3>
+        <div className="flex items-center gap-2 flex-wrap">
+          <h3 className="text-sm font-semibold text-foreground">{agent.name}</h3>
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">
+            {getAgentTypeLabel(agent.agent_type)}
+          </Badge>
+          <AgentBadges agent={agent} />
+        </div>
         {description ? (
           <p className="mt-1 text-sm text-muted-foreground">{description}</p>
         ) : (
@@ -66,7 +136,7 @@ export function AgentDetail({ agent }: AgentDetailProps) {
       <Tabs defaultValue={defaultTab}>
         <TabsList>
           <TabsTrigger value="capabilities">
-            Capabilities ({capabilities.length})
+            Capabilities ({visible.length})
           </TabsTrigger>
           <TabsTrigger value="dependencies">
             Dependencies ({agent.dependency_resolutions?.length || 0})
@@ -85,50 +155,22 @@ export function AgentDetail({ agent }: AgentDetailProps) {
             <EmptyState message="No capabilities" />
           ) : (
             <div className="space-y-2">
-              {capabilities.map((cap, idx) => (
-                <div
-                  key={`${cap.function_name}-${idx}`}
-                  className="rounded-lg border border-border/50 px-4 py-3"
+              {visible.length === 0 && fw.length > 0 && !showFw && (
+                <p className="py-3 text-center text-xs text-muted-foreground">
+                  Only framework-internal capabilities are registered.
+                </p>
+              )}
+              {visible.map((cap, idx) => renderCapabilityRow(cap, `visible-${idx}`, false))}
+              {showFw && fw.map((cap, idx) => renderCapabilityRow(cap, `fw-${idx}`, true))}
+              {fw.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowFw((v) => !v)}
+                  className="mt-1 text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
                 >
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium text-foreground font-mono">
-                      {cap.function_name}
-                    </span>
-                    <Badge variant="outline" className="text-xs">
-                      {cap.name} v{cap.version}
-                    </Badge>
-                    {cap.tags?.map((tag) => (
-                      <Badge key={tag} variant="secondary" className="text-[10px] px-1.5 py-0">
-                        {tag}
-                      </Badge>
-                    ))}
-                  </div>
-                  {cap.description && (
-                    <p className="mt-1 text-xs text-muted-foreground">{cap.description}</p>
-                  )}
-                  {cap.llm_filter && (
-                    <div className="mt-2 text-xs text-muted-foreground">
-                      <span className="text-cyan-400">LLM Filter:</span>{" "}
-                      {cap.llm_filter.capability || "any"}
-                      {cap.llm_filter.mode && ` (${cap.llm_filter.mode})`}
-                      {cap.llm_filter.tags && cap.llm_filter.tags.length > 0 && (
-                        <span> tags: {cap.llm_filter.tags.join(", ")}</span>
-                      )}
-                    </div>
-                  )}
-                  {cap.llm_provider && (
-                    <div className="mt-2 text-xs text-muted-foreground">
-                      <span className="text-orange-400">LLM Provider:</span>{" "}
-                      {cap.llm_provider.capability || "any"}
-                      {cap.llm_provider.version && ` v${cap.llm_provider.version}`}
-                      {cap.llm_provider.namespace && ` ns:${cap.llm_provider.namespace}`}
-                      {cap.llm_provider.tags && cap.llm_provider.tags.length > 0 && (
-                        <span> tags: {cap.llm_provider.tags.join(", ")}</span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
+                  {showFw ? "Hide framework tools" : `Show framework tools (${fw.length})`}
+                </button>
+              )}
             </div>
           )}
         </TabsContent>

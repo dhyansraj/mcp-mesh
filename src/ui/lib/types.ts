@@ -1,7 +1,7 @@
 export interface Agent {
   id: string;
   name: string;
-  agent_type: "mcp_agent" | "mesh_tool" | "decorator_agent" | "api";
+  agent_type: "mcp_agent" | "mesh_tool" | "decorator_agent" | "api" | "a2a";
   runtime?: "python" | "typescript" | "java";
   version?: string;
   /**
@@ -99,7 +99,15 @@ export interface AgentsResponse {
 }
 
 export interface RegistryEventInfo {
-  event_type: "register" | "unregister" | "unhealthy" | "update" | "expire" | "rotate";
+  event_type:
+    | "register"
+    | "unregister"
+    | "unhealthy"
+    | "update"
+    | "expire"
+    | "rotate"
+    | "dependency_resolved"
+    | "dependency_unresolved";
   agent_id: string;
   agent_name?: string;
   function_name?: string;
