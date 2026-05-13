@@ -50,6 +50,7 @@ export default function AgentsPage() {
               onClick={() => setView("list")}
               className="h-7 px-2 text-xs"
               title="List view"
+              aria-label="List view"
               aria-pressed={view === "list"}
             >
               <List className="h-3.5 w-3.5" />
@@ -60,6 +61,7 @@ export default function AgentsPage() {
               onClick={() => setView("grid")}
               className="h-7 px-2 text-xs"
               title="Grid view"
+              aria-label="Grid view"
               aria-pressed={view === "grid"}
             >
               <LayoutGrid className="h-3.5 w-3.5" />
