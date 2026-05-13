@@ -103,7 +103,7 @@ function ProvidersTable({ providers }: { providers: SchemaProvider[] }) {
             <TableCell>
               <div className="flex flex-col">
                 <Link
-                  to={`/agents?id=${encodeURIComponent(p.agent_id)}`}
+                  to={`/agents/${encodeURIComponent(p.agent_id)}`}
                   className="text-xs font-medium text-primary hover:underline"
                 >
                   {p.agent_name}
@@ -153,7 +153,7 @@ function ConsumersTable({ consumers }: { consumers: SchemaConsumer[] }) {
             <TableCell>
               <div className="flex flex-col">
                 <Link
-                  to={`/agents?id=${encodeURIComponent(c.agent_id)}`}
+                  to={`/agents/${encodeURIComponent(c.agent_id)}`}
                   className="text-xs font-medium text-primary hover:underline"
                 >
                   {c.agent_name}

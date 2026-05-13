@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { Link } from "react-router-dom";
 import { Header } from "@/components/layout/Header";
 import { StatsCards } from "@/components/dashboard/StatsCards";
 import { EventFeed } from "@/components/dashboard/EventFeed";
@@ -84,9 +85,10 @@ export default function DashboardPage() {
               ) : (
                 <div className="space-y-3">
                   {agents.slice(0, 10).map((agent) => (
-                    <div
+                    <Link
                       key={agent.id}
-                      className="flex items-center justify-between rounded-lg border border-border/50 px-4 py-3 transition-colors hover:bg-muted/20"
+                      to={`/agents/${encodeURIComponent(agent.id)}`}
+                      className="block flex items-center justify-between rounded-lg border border-border/50 px-4 py-3 transition-colors hover:bg-muted/20 hover:border-primary/40"
                     >
                       <div className="flex items-center gap-3 min-w-0">
                         <span
@@ -132,7 +134,7 @@ export default function DashboardPage() {
                           );
                         })()}
                       </div>
-                    </div>
+                    </Link>
                   ))}
                   {agents.length > 10 && (
                     <p className="text-xs text-center text-muted-foreground pt-2">

@@ -4,6 +4,7 @@ import { Providers } from "../components/layout/Providers";
 import { ErrorBoundary } from "../components/layout/ErrorBoundary";
 import DashboardPage from "../app/page";
 import AgentsPage from "../app/agents/page";
+import AgentDetailPage from "../app/agents/[id]/page";
 import JobsPage from "../app/jobs/page";
 import SchemasPage from "../app/schemas/page";
 import SchemaDetailPage from "../app/schemas/[hash]/page";
@@ -21,6 +22,7 @@ export function App() {
             <Routes>
               <Route path="/" element={<DashboardPage />} />
               <Route path="/agents" element={<AgentsPage />} />
+              <Route path="/agents/:id" element={<AgentDetailPage />} />
               <Route path="/jobs" element={<JobsPage />} />
               <Route path="/schemas" element={<SchemasPage />} />
               <Route path="/schemas/:hash" element={<SchemaDetailPage />} />
