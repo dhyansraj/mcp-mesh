@@ -93,7 +93,7 @@ function ProvidersTable({ providers }: { providers: SchemaProvider[] }) {
         <TableRow className="hover:bg-transparent">
           <TableHead>Agent</TableHead>
           <TableHead>Runtime</TableHead>
-          <TableHead>Function / capability</TableHead>
+          <TableHead>Tool / capability</TableHead>
           <TableHead>Role</TableHead>
         </TableRow>
       </TableHeader>
@@ -143,7 +143,7 @@ function ConsumersTable({ consumers }: { consumers: SchemaConsumer[] }) {
         <TableRow className="hover:bg-transparent">
           <TableHead>Agent</TableHead>
           <TableHead>Runtime</TableHead>
-          <TableHead>Function / capability</TableHead>
+          <TableHead>Tool / capability</TableHead>
           <TableHead>Depends on capability</TableHead>
         </TableRow>
       </TableHeader>

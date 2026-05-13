@@ -166,7 +166,7 @@ export default function SchemasPage() {
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="hash prefix or function name"
+                placeholder="hash prefix or tool name"
                 className="h-7 w-72 rounded-md border border-border bg-background px-2 pr-6 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none"
               />
               {search !== "" && (
@@ -211,7 +211,7 @@ export default function SchemasPage() {
                 <TableHead>Origin</TableHead>
                 <TableHead>Providers</TableHead>
                 <TableHead>Consumers</TableHead>
-                <TableHead>Sample function</TableHead>
+                <TableHead>Sample tool</TableHead>
                 <TableHead>First seen</TableHead>
               </TableRow>
             </TableHeader>
