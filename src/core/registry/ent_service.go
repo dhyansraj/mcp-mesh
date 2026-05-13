@@ -396,6 +396,40 @@ func extractAgentMetadata(agentID string, metadata map[string]interface{}) agent
 	return m
 }
 
+// coerceDependencies normalizes the per-capability `dependencies` blob into
+// the []map[string]interface{} shape the capability JSON column expects.
+//
+// The handler (ent_handlers.go) hands us []map[string]interface{} directly,
+// but tests and JSON-round-tripped paths may yield []interface{} where each
+// element is a map[string]interface{}. Anything else (nil, wrong type,
+// non-map elements) is dropped. Returns nil when there's nothing usable to
+// persist — callers should skip SetDependencies in that case so we don't
+// clobber the column with [] when the wire payload was absent.
+func coerceDependencies(raw interface{}) []map[string]interface{} {
+	if raw == nil {
+		return nil
+	}
+	if typed, ok := raw.([]map[string]interface{}); ok {
+		if len(typed) == 0 {
+			return nil
+		}
+		return typed
+	}
+	if arr, ok := raw.([]interface{}); ok {
+		out := make([]map[string]interface{}, 0, len(arr))
+		for _, item := range arr {
+			if m, ok := item.(map[string]interface{}); ok {
+				out = append(out, m)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	}
+	return nil
+}
+
 // upsertSchemaEntry inserts a canonical schema row keyed by content hash, or
 // no-ops if a row with the same hash already exists. Schemas are content-
 // addressed: identical canonical content => identical hash => same row.
@@ -723,6 +757,16 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 								}
 							}
 
+							// Persist dependencies onto the capability row (issue #971
+							// schema browser). The handler already normalizes wire-side
+							// camelCase keys (expectedSchemaHash, matchMode, ...) to
+							// snake_case here; this just plumbs them into the JSON
+							// column so the meshui schemas handler can build the
+							// inverse index of consumers.
+							if depsList := coerceDependencies(toolMap["dependencies"]); len(depsList) > 0 {
+								capCreate = capCreate.SetDependencies(depsList)
+							}
+
 							_, err := capCreate.Save(ctx)
 							if err != nil {
 								return fmt.Errorf("failed to create capability %s: %w", functionName, err)
@@ -732,6 +776,9 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 						// Count dependencies
 						if deps, ok := toolMap["dependencies"]; ok {
 							if depsArray, ok := deps.([]interface{}); ok {
+								s.logger.Debug("Function %s has %d dependencies", functionName, len(depsArray))
+								totalDeps += len(depsArray)
+							} else if depsArray, ok := deps.([]map[string]interface{}); ok {
 								s.logger.Debug("Function %s has %d dependencies", functionName, len(depsArray))
 								totalDeps += len(depsArray)
 							}
@@ -1527,6 +1574,14 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 										if kwargs, ok := kwargsInterface.(map[string]interface{}); ok {
 											capCreate = capCreate.SetKwargs(kwargs)
 										}
+									}
+
+									// Persist dependencies onto the capability row (issue
+									// #971 schema browser). Mirrors the register path; the
+									// handler already converted wire camelCase to the
+									// snake_case keys this column stores.
+									if depsList := coerceDependencies(toolMap["dependencies"]); len(depsList) > 0 {
+										capCreate = capCreate.SetDependencies(depsList)
 									}
 
 									_, err := capCreate.Save(ctx)
