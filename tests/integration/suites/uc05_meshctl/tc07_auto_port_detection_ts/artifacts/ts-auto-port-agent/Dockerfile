@@ -1,5 +1,5 @@
 # Dockerfile for ts-auto-port-agent MCP Mesh agent
-FROM mcpmesh/typescript-runtime:2.0.0-beta.1
+FROM mcpmesh/typescript-runtime:2.0.0-beta.2
 
 WORKDIR /app
 
