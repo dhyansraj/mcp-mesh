@@ -748,7 +748,11 @@ func (tm *TracingManager) GetTotalErrors() int {
 	return 0
 }
 
-// GetAgentActivity returns per-agent span counts from the accumulator.
+// GetAgentActivity returns the per-agent count of finalized traces currently in
+// the accumulator's recent-traces ring buffer that involve each agent. This
+// matches the set of traces returned by /trace/recent when filtered by agent,
+// so the dashboard "activity" badge can never exceed the number of recent
+// traces a user can actually drill into.
 func (tm *TracingManager) GetAgentActivity() map[string]int {
 	if tm.accumulator != nil {
 		return tm.accumulator.GetAgentActivity()

@@ -57,9 +57,6 @@ type TraceAccumulator struct {
 	// Per-edge stats keyed by "source -> target"
 	edgeStats map[string]*edgeAccum
 
-	// Per-agent activity count (spans seen per agent)
-	agentActivity map[string]int
-
 	// Total number of finalized traces (never resets)
 	totalFinalized int
 
@@ -110,15 +107,14 @@ func NewTraceAccumulator(ringSize int, logger *log.Logger) *TraceAccumulator {
 		ringSize = 200
 	}
 	return &TraceAccumulator{
-		recentTraces:  make([]RecentTraceSummary, ringSize),
-		ringSize:      ringSize,
-		activeTraces:  make(map[string]*activeTrace),
-		edgeStats:     make(map[string]*edgeAccum),
-		agentActivity: make(map[string]int),
-		liveClients:   make(map[chan *LiveTraceEvent]struct{}),
-		dirtyTraces:   make(map[string]bool),
-		logger:        logger,
-		cancel:        make(chan struct{}),
+		recentTraces: make([]RecentTraceSummary, ringSize),
+		ringSize:     ringSize,
+		activeTraces: make(map[string]*activeTrace),
+		edgeStats:    make(map[string]*edgeAccum),
+		liveClients:  make(map[chan *LiveTraceEvent]struct{}),
+		dirtyTraces:  make(map[string]bool),
+		logger:       logger,
+		cancel:       make(chan struct{}),
 	}
 }
 
@@ -127,12 +123,10 @@ func (ta *TraceAccumulator) ProcessTraceEvent(event *TraceEvent) error {
 	ta.mu.Lock()
 	defer ta.mu.Unlock()
 
-	// 1. Update agent activity count
-	if event.AgentName != "" {
-		ta.agentActivity[event.AgentName]++
-	}
+	// Note: agent activity counts are derived from the recent-traces ring buffer
+	// in GetAgentActivity(); they are no longer incremented per span event.
 
-	// 2. Add to active trace (create if first span for this trace)
+	// Add to active trace (create if first span for this trace)
 	at, exists := ta.activeTraces[event.TraceID]
 	if !exists {
 		at = &activeTrace{
@@ -163,7 +157,7 @@ func (ta *TraceAccumulator) ProcessTraceEvent(event *TraceEvent) error {
 		at.RootOp = event.Operation
 	}
 
-	// 3. Publish live events based on trace state
+	// Publish live events based on trace state
 	if !exists {
 		// New trace — publish trace_started
 		ta.publishLive(&LiveTraceEvent{
@@ -172,7 +166,7 @@ func (ta *TraceAccumulator) ProcessTraceEvent(event *TraceEvent) error {
 		})
 	}
 
-	// 4. On root span completion (span_end with no parent), mark for deferred finalization.
+	// On root span completion (span_end with no parent), mark for deferred finalization.
 	// Don't finalize immediately — wait a short grace period for remaining in-flight
 	// spans from other processes to arrive via Redis consumer.
 	if event.DurationMS != nil && event.ParentSpan == nil {
@@ -454,13 +448,25 @@ func (ta *TraceAccumulator) GetTotalErrors() int {
 	return ta.totalErrors
 }
 
-// GetAgentActivity returns a copy of the agent activity map.
+// GetAgentActivity returns the per-agent count of finalized traces currently in
+// the recent-traces ring buffer that involve each agent. By construction this
+// matches what /trace/recent would return when filtered by an agent: the badge
+// count never exceeds the number of recent traces visible to the user.
+//
+// The map is computed on read by walking the ring buffer (size O(ringSize)
+// with small per-trace agent lists, so the cost is negligible at the ring
+// sizes we care about).
 func (ta *TraceAccumulator) GetAgentActivity() map[string]int {
 	ta.mu.RLock()
 	defer ta.mu.RUnlock()
-	result := make(map[string]int, len(ta.agentActivity))
-	for k, v := range ta.agentActivity {
-		result[k] = v
+	result := make(map[string]int)
+	for i := 0; i < ta.ringCount; i++ {
+		idx := (ta.ringHead - 1 - i + ta.ringSize) % ta.ringSize
+		for _, agent := range ta.recentTraces[idx].Agents {
+			if agent != "" {
+				result[agent]++
+			}
+		}
 	}
 	return result
 }
