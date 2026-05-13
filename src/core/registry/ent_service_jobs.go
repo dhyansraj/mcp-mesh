@@ -740,12 +740,16 @@ func (s *EntService) CountPendingJobsForAgent(ctx context.Context, agentID strin
 // claim time, so a crashed first attempt has attempt_count=1, and a job
 // with max_retries=1 still has retry budget (1 <= 1).
 //
-// Detection signal: owner_instance_id NOT IN (SELECT id FROM agents).
-// We match the existing sweep behaviour, which deletes the agent row
-// outright in purgeStaleAgents. A job whose owner agent has been swept
-// (or never registered, in pathological cases) is by definition orphaned;
-// using the agent table as the source of truth lines up with how
-// purgeStaleAgents already treats "agent gone" — there's no half-state.
+// Detection signal: owner_instance_id is either not in the agents table
+// OR points to an agent whose status is not `healthy`. An
+// unhealthy/unknown owner is treated as effectively gone — its pinned
+// jobs are released so capability-matching agents can pick them up.
+// This shortcuts the previous two-stage path (wait for retention →
+// purge agent → release jobs) which left pinned jobs stalled for the
+// retention period (default 1h) after a deliberate `meshctl stop`.
+// Payload-based MeshJob semantics make this safe: `submitted_payload`
+// is self-contained, so any healthy agent with the matching capability
+// can resume work once `owner_instance_id` is cleared.
 func (s *EntService) ResetOrphanedJobs(ctx context.Context) (reset, exhausted int, err error) {
 	// Collect candidate orphan jobs: working + has an owner.
 	candidates, err := s.entDB.Client.Job.Query().
@@ -778,7 +782,10 @@ func (s *EntService) ResetOrphanedJobs(ctx context.Context) (reset, exhausted in
 	if len(ownerIDs) > 0 {
 		var liveRows []string
 		if err := s.entDB.Client.Agent.Query().
-			Where(agent.IDIn(ownerIDs...)).
+			Where(
+				agent.IDIn(ownerIDs...),
+				agent.StatusEQ(agent.StatusHealthy),
+			).
 			Select(agent.FieldID).
 			Scan(ctx, &liveRows); err != nil {
 			return 0, 0, fmt.Errorf("query live owners: %w", err)
