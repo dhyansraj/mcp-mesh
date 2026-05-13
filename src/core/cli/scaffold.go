@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"mcp-mesh/src/core/cli/scaffold"
 )
 
@@ -85,6 +85,14 @@ Infrastructure:
 		RunE: runScaffoldCommand,
 	}
 
+	// Deprecated alias: `--agent-type <X>` auto-routes to the equivalent
+	// subcommand. Restored after PR #958 removed it outright — tsuite
+	// integration tests still depend on the legacy form. Hidden so --help
+	// only shows the canonical subcommand-based UX.
+	cmd.Flags().String("agent-type", "",
+		"DEPRECATED: use 'meshctl scaffold <subcommand>' instead (tool|llm-agent|llm-provider)")
+	_ = cmd.Flags().MarkHidden("agent-type")
+
 	// Common flags
 	cmd.Flags().String("mode", "static", "Generation mode: static, llm")
 	cmd.Flags().StringP("name", "n", "", "Agent name (required unless interactive or config)")
@@ -124,25 +132,6 @@ Infrastructure:
 		provider.RegisterFlags(cmd)
 	}
 
-	// Custom flag-parse error handler: rewrite the message for the removed
-	// `--agent-type` flag (#957 fix 1) into clear deprecation guidance so
-	// users on the old form see the migration path instead of a generic
-	// "unknown flag" error. For the deprecation case we suppress the usage
-	// dump (the message itself is self-explanatory); other flag-parse
-	// errors fall through to cobra's default which still prints usage.
-	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
-		msg := err.Error()
-		if strings.Contains(msg, "--agent-type") || strings.Contains(msg, "agent-type") {
-			c.SilenceUsage = true
-			return fmt.Errorf(
-				"--agent-type is no longer supported. " +
-					"Use `meshctl scaffold <subcommand> <flags>` instead. " +
-					"Subcommands: basic, llm, llm-provider, a2a-consumer. " +
-					"Run `meshctl scaffold --help` for the subcommand list")
-		}
-		return err
-	})
-
 	// Attach `basic` subcommand (#957). Explicit replacement for the legacy
 	// `--agent-type tool` form. Generates a plain @mesh.agent skeleton.
 	scaffold.AttachBasicSubcommand(cmd)
@@ -161,6 +150,14 @@ Infrastructure:
 }
 
 func runScaffoldCommand(cmd *cobra.Command, args []string) error {
+	// Deprecated --agent-type routing: if the legacy alias is set, dispatch
+	// to the equivalent subcommand. The flag is registered as hidden so the
+	// canonical UX is `meshctl scaffold <subcommand>`; this branch only
+	// exists for back-compat with scripts and the tsuite integration suite.
+	if agentType, _ := cmd.Flags().GetString("agent-type"); agentType != "" {
+		return routeDeprecatedAgentType(cmd, agentType, args)
+	}
+
 	// Check if listing modes
 	listModes, _ := cmd.Flags().GetBool("list-modes")
 	if listModes {
@@ -224,6 +221,101 @@ func runScaffoldCommand(cmd *cobra.Command, args []string) error {
 
 	// Execute
 	return provider.Execute(ctx)
+}
+
+// agentTypeToSubcommand maps the legacy --agent-type value to the
+// canonical subcommand name introduced by PR #958.
+var agentTypeToSubcommand = map[string]string{
+	"tool":         "basic",
+	"llm-agent":    "llm",
+	"llm-provider": "llm-provider",
+}
+
+// routeDeprecatedAgentType dispatches a `meshctl scaffold --agent-type X`
+// invocation to the equivalent subcommand. Prints a stderr deprecation
+// warning, rebuilds args without --agent-type, then invokes the
+// subcommand's full Execute path (so its own flag parsing + RunE fire
+// exactly as if the user had typed `meshctl scaffold <sub>` directly).
+func routeDeprecatedAgentType(cmd *cobra.Command, agentType string, _ []string) error {
+	// `api` was removed from the supported set in PR #958. There is no
+	// drop-in replacement subcommand — HTTP gateway scaffolding is now
+	// covered by deployment docs, not a scaffold template.
+	if agentType == "api" {
+		cmd.SilenceUsage = true
+		return fmt.Errorf(
+			"the 'api' agent type was removed; HTTP gateways are now built differently. " +
+				"See `meshctl man deployment`")
+	}
+
+	subName, ok := agentTypeToSubcommand[agentType]
+	if !ok {
+		cmd.SilenceUsage = true
+		return fmt.Errorf(
+			"unknown --agent-type value '%s'; use one of: tool, llm-agent, llm-provider, "+
+				"or use 'meshctl scaffold <subcommand>'", agentType)
+	}
+
+	fmt.Fprintf(cmd.ErrOrStderr(),
+		"Warning: --agent-type is deprecated; use 'meshctl scaffold %s' instead "+
+			"(mapping --agent-type=%s to 'scaffold %s'). "+
+			"See 'meshctl scaffold --help'.\n",
+		subName, agentType, subName)
+
+	sub, _, err := cmd.Find([]string{subName})
+	if err != nil || sub == nil || sub == cmd {
+		return fmt.Errorf("internal error: subcommand %q not found", subName)
+	}
+
+	// The user invoked the parent cmd, so all flag values live on the
+	// parent's FlagSet. Subcommands have a narrower (and sometimes
+	// renamed) FlagSet of their own. Copy values across so the subcommand
+	// RunE sees what it expects. Then dispatch the subcommand RunE
+	// directly — calling sub.Execute() would walk back through the root
+	// and re-enter this parent RunE, recursing infinitely.
+	copyParentFlagsToSub(cmd, sub)
+	if sub.RunE != nil {
+		return sub.RunE(sub, nil)
+	}
+	if sub.Run != nil {
+		sub.Run(sub, nil)
+		return nil
+	}
+	return fmt.Errorf("internal error: subcommand %q has no Run function", subName)
+}
+
+// copyParentFlagsToSub copies values from the parent scaffold cmd to the
+// equivalent flags on the subcommand. Handles direct-name matches plus
+// the historical rename `--llm-selector` (parent) → `--vendor` (sub).
+// Only copies flags the user actually set (via Changed), so subcommand
+// defaults remain in place for unspecified flags.
+func copyParentFlagsToSub(parent, sub *cobra.Command) {
+	// 1:1 name matches — copy every parent flag that exists on sub by
+	// the same name, when the user changed it.
+	parent.Flags().Visit(func(f *pflag.Flag) {
+		subFlag := sub.Flags().Lookup(f.Name)
+		if subFlag == nil {
+			return
+		}
+		// Slice values: f.Value.String() returns the bracketed form
+		// "[a,b]" which Set re-parses as a single literal element. Use
+		// the SliceValue extension to round-trip correctly.
+		if parentSlice, ok := f.Value.(pflag.SliceValue); ok {
+			if subSlice, ok := subFlag.Value.(pflag.SliceValue); ok {
+				_ = subSlice.Replace(parentSlice.GetSlice())
+				return
+			}
+		}
+		_ = sub.Flags().Set(f.Name, f.Value.String())
+	})
+
+	// Renamed alias: parent's --llm-selector corresponds to the
+	// subcommand's --vendor flag on both `llm` and `llm-provider`.
+	if parent.Flags().Changed("llm-selector") {
+		if subFlag := sub.Flags().Lookup("vendor"); subFlag != nil {
+			val, _ := parent.Flags().GetString("llm-selector")
+			_ = sub.Flags().Set("vendor", val)
+		}
+	}
 }
 
 // loadScaffoldFromConfigFile loads scaffold configuration from a YAML file

@@ -119,12 +119,24 @@ test:
     workdir: /workspace
     capture: py_call
 
-  - name: "Call greeter capability over mTLS (TS or Java - both expose 'greet' tool)"
+  # Both greeter-ts and greeter-java register the 'greet' tool, so a bare
+  # `meshctl call greet` now errors with an ambiguity message (issue #956 #14).
+  # Disambiguate via the <agent-name>:<tool> form — ResolveAgentByPrefix
+  # exact-matches on Name, so the static agent names resolve to the dynamic
+  # IDs deterministically across runs.
+  - name: "Call greeter-ts capability over mTLS"
     handler: shell
     command: |
-      meshctl call greet '{"name":"MultiLangTest"}' 2>&1
+      meshctl call greeter-ts:greet '{"name":"MultiLangTest"}' 2>&1
     workdir: /workspace
-    capture: greeter_call
+    capture: greeter_ts_call
+
+  - name: "Call greeter-java capability over mTLS"
+    handler: shell
+    command: |
+      meshctl call greeter-java:greet '{"name":"MultiLangTest"}' 2>&1
+    workdir: /workspace
+    capture: greeter_java_call
 
   - name: "Stop all"
     handler: shell
@@ -157,8 +169,23 @@ assertions:
   - expr: "${captured.py_call} not contains 'error'"
     message: "Python tool call should succeed over mTLS"
 
-  - expr: "${captured.greeter_call} contains 'Hello'"
-    message: "Greeter tool call should succeed over mTLS"
+  - expr: "${captured.greeter_ts_call} contains 'MultiLangTest'"
+    message: "TypeScript greeter tool call should echo the name over mTLS"
+
+  - expr: "${captured.greeter_ts_call} contains 'Hello'"
+    message: "TypeScript greeter tool call should succeed over mTLS"
+
+  - expr: "${captured.greeter_ts_call} not contains 'Error:'"
+    message: "TypeScript greeter call should not error (e.g. on ambiguity)"
+
+  - expr: "${captured.greeter_java_call} contains 'MultiLangTest'"
+    message: "Java greeter tool call should echo the name over mTLS"
+
+  - expr: "${captured.greeter_java_call} contains 'Hello'"
+    message: "Java greeter tool call should succeed over mTLS"
+
+  - expr: "${captured.greeter_java_call} not contains 'Error:'"
+    message: "Java greeter call should not error (e.g. on ambiguity)"
 
 post_run:
   - handler: shell

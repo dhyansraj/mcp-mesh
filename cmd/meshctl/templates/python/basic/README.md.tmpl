@@ -38,20 +38,22 @@ To override the port, modify the `http_port` parameter in the `@mesh.agent` deco
 
 ## Available Tools
 
-| Tool | Capability | Description |
-|------|------------|-------------|
-| `hello` | `hello` | Say hello to someone |
-| `echo` | `echo` | Echo a message back |
+| Tool | Description |
+|------|-------------|
+| `{{ .ToolName | default "hello" }}` | {{ .ToolDescription | default "A tool" }} |
 
 ## Project Structure
 
 ```
 {{ .Name }}/
-├── __init__.py       # Package init
-├── __main__.py       # Module entry point
-├── main.py           # Agent implementation
-├── README.md         # This file
-└── requirements.txt  # Python dependencies
+├── __init__.py        # Package init
+├── __main__.py        # Module entry point
+├── main.py            # Agent implementation
+├── requirements.txt   # Python dependencies
+├── Dockerfile         # Container image definition for local docker compose / k8s
+├── .dockerignore      # Files to exclude from docker build context
+├── helm-values.yaml   # Values for the mcp-mesh-agent Helm chart deployment
+└── README.md          # This file
 ```
 
 ## Docker

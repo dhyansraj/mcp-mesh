@@ -10,7 +10,7 @@
 
 ```bash
 # Generate a new agent from template
-meshctl scaffold llm --vendor claude --runtime python --name my-agent
+meshctl scaffold llm --vendor claude --lang python --name my-agent
 
 # Start registry + agent in one command
 meshctl start examples/hello_world.py
@@ -36,10 +36,10 @@ meshctl scaffold
 meshctl scaffold --name my-tool --agent-type tool
 
 # Generate an LLM-powered consumer (vendor-aware subcommand)
-meshctl scaffold llm --vendor claude --runtime python --name my-llm-agent
+meshctl scaffold llm --vendor claude --lang python --name my-llm-agent
 
 # Generate an LLM provider (one per vendor)
-meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+meshctl scaffold llm-provider --vendor claude --lang python --name claude-provider
 ```
 
 📖 **See [Scaffold Command Reference](./meshctl-scaffold.md) for complete options and examples.**

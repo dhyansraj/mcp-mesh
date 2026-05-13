@@ -194,6 +194,39 @@ class ResponseParser:
                         f"Response is a list but {output_type.__name__} has no list field to wrap into"
                     )
 
+            # Defensive unwrap for LLM-side envelope hallucinations.
+            # Claude in tool_use mode (and other LLMs in structured-output mode)
+            # occasionally wraps the response in a single-key envelope like
+            # {"parameter": {<real fields>}} or {"input": {...}} or {"response": {...}}.
+            # Detect that shape and unwrap before Pydantic validation.
+            # Reference: issue #961 covers a fuller retry-on-validation-failure fix.
+            if isinstance(response_data, dict) and len(response_data) == 1:
+                sole_key = next(iter(response_data))
+                sole_value = response_data[sole_key]
+                if (
+                    sole_key not in output_type.model_fields
+                    and isinstance(sole_value, dict)
+                ):
+                    # The sole value's keys should plausibly match the output_type.
+                    # Don't unwrap if they don't — preserves error fidelity for
+                    # genuine schema mismatches.
+                    model_field_names = set(output_type.model_fields.keys())
+                    required_field_names = {
+                        name
+                        for name, field in output_type.model_fields.items()
+                        if field.is_required()
+                    }
+                    inner_keys = set(sole_value.keys())
+                    if (
+                        required_field_names.issubset(inner_keys)
+                        or inner_keys.issubset(model_field_names)
+                    ):
+                        logger.debug(
+                            f"📦 Unwrapping single-key envelope '{sole_key}' "
+                            f"for {output_type.__name__}"
+                        )
+                        response_data = sole_value
+
             parsed = output_type(**response_data)
             logger.debug(f"✅ Response parsed successfully: {parsed}")
             return parsed

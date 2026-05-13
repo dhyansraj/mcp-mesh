@@ -148,7 +148,7 @@ test:
       echo "=== Calling POST /plan via gateway ==="
       RESPONSE=$(curl -s -X POST http://localhost:8080/plan \
         -H "Content-Type: application/json" \
-        -d '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' 2>&1)
+        -d '{"destination":"Kyoto from San Francisco","dates":"June 1-5, 2026","budget":"$2000"}' 2>&1)
       echo "$RESPONSE"
       if echo "$RESPONSE" | grep -qi 'result\|Kyoto\|itinerary\|day'; then
         echo "PASS: gateway returned trip plan"
@@ -165,7 +165,7 @@ test:
     handler: shell
     command: |
       echo "=== Calling plan_trip via meshctl ==="
-      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' --trace --timeout 90 2>&1)
+      RESULT=$(meshctl call plan_trip '{"destination":"Kyoto from San Francisco","dates":"June 1-5, 2026","budget":"$2000"}' --trace --timeout 90 2>&1)
       echo "$RESULT"
       if echo "$RESULT" | grep -qi 'Kyoto\|itinerary\|day' && \
          echo "$RESULT" | grep -q 'Trace ID'; then

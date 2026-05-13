@@ -157,7 +157,7 @@ test:
       RESPONSE=$(curl -s --max-time 300 -X POST http://localhost:8080/plan \
         -H "Content-Type: application/json" \
         -H "X-Session-Id: test-session-day7" \
-        -d '{"destination":"Kyoto","dates":"June 1-5, 2026","budget":"$2000"}' 2>&1)
+        -d '{"destination":"Kyoto from San Francisco","dates":"June 1-5, 2026","budget":"$2000"}' 2>&1)
       echo "$RESPONSE"
       if echo "$RESPONSE" | grep -qi 'specialist\|budget.*analysis\|adventure\|logistics\|savings_tips\|unique_experiences\|daily_schedule'; then
         echo "PASS: Response includes specialist insights"

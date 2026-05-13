@@ -123,18 +123,24 @@ func runTraceCommand(cmd *cobra.Command, args []string) error {
 		retryDelay = 0
 	}
 
-	// Query trace from registry with retries
+	// Query trace from registry with retries. Both unreachable-backend and
+	// not-found cases collapse to the same actionable error message at the
+	// end (issue #956 / items #8 + #9): users don't care whether the trace
+	// is unreachable or expired, they need to know how to bring the stack
+	// up and where to look.
 	var trace *CompletedTraceResponse
+	var lastQueryErr error
 	maxAttempts := 1 + retries
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		trace, err = queryTrace(httpClient, finalRegistryURL, traceID)
 		if err != nil {
+			lastQueryErr = err
 			if attempt < maxAttempts {
 				fmt.Fprintf(os.Stderr, "Error querying trace: %v, retrying (%d/%d)...\n", err, attempt, retries)
 				time.Sleep(time.Duration(retryDelay) * time.Second)
 				continue
 			}
-			return fmt.Errorf("failed to query trace: %w", err)
+			return formatTraceNotFound(traceID, lastQueryErr)
 		}
 		if trace == nil {
 			if attempt < maxAttempts {
@@ -142,18 +148,7 @@ func runTraceCommand(cmd *cobra.Command, args []string) error {
 				time.Sleep(time.Duration(retryDelay) * time.Second)
 				continue
 			}
-			return fmt.Errorf("trace '%s' not found\n\n"+
-				"Possible reasons:\n"+
-				"  - Distributed tracing is not enabled. Either:\n"+
-				"      export MCP_MESH_DISTRIBUTED_TRACING_ENABLED=true\n"+
-				"    or use the --dte flag with meshctl start:\n"+
-				"      meshctl start --dte -d -w <agents...>\n"+
-				"  - Observability stack (Redis + Tempo) is not running.\n"+
-				"    Start it with:\n"+
-				"      meshctl scaffold --observability\n"+
-				"      docker compose -f docker-compose.observability.yml up -d\n"+
-				"  - The trace may have expired or the ID may be incorrect\n\n"+
-				"Run 'meshctl man observability' for setup instructions.", traceID)
+			return formatTraceNotFound(traceID, nil)
 		}
 		break
 	}
@@ -169,16 +164,19 @@ func runTraceCommand(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// queryTrace queries the registry for a trace by ID
+// queryTrace queries the registry for a trace by ID.
+//
+// Network/connection failures, 5xx, and 404 are all surfaced as either an
+// error or a nil *CompletedTraceResponse; the caller (runTraceCommand)
+// collapses them into a single consolidated user-facing message via
+// formatTraceNotFound. Don't add inline hints here — the consolidated
+// message is the one users see.
 func queryTrace(client *http.Client, registryURL, traceID string) (*CompletedTraceResponse, error) {
 	url := fmt.Sprintf("%s/trace/%s", registryURL, traceID)
 
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to registry: %w\n\n"+
-			"Hint: Ensure the registry and observability stack are running.\n"+
-			"      Run 'meshctl scaffold --compose --observability' to generate docker-compose with Tempo.\n"+
-			"      See 'meshctl man observability' for details.", err)
+		return nil, fmt.Errorf("failed to connect to registry: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -374,6 +372,30 @@ func printTreeNode(node *TraceTreeNode, prefix string, isLast bool) {
 		childIsLast := i == len(node.Children)-1
 		printTreeNode(child, childPrefix, childIsLast)
 	}
+}
+
+// formatTraceNotFound returns the single consolidated error users see when
+// a trace ID can't be resolved — whether the backend is unreachable, no
+// backend is configured, or the trace simply isn't there. See issue #956
+// items #8 + #9.
+//
+// queryErr is the underlying error from the registry call (if any). When
+// non-nil it's appended on a final "Underlying error:" line so users can
+// still diagnose the real network failure (e.g. "connection refused") —
+// the actionable next-steps block stays on top for readability.
+func formatTraceNotFound(traceID string, queryErr error) error {
+	msg := fmt.Sprintf("trace '%s' not found.\n\n"+
+		"This usually means one of:\n"+
+		"  - The observability stack is not running. Start it with:\n"+
+		"      meshctl scaffold --observability\n"+
+		"      docker compose up -d redis tempo grafana\n"+
+		"  - The configured tracing backend (TEMPO_URL or equivalent) is unreachable.\n"+
+		"  - The trace ID is older than retention (default: 1h in local dev).\n\n"+
+		"See 'meshctl man tracing' for details.", traceID)
+	if queryErr != nil {
+		msg += fmt.Sprintf("\nUnderlying error: %v", queryErr)
+	}
+	return fmt.Errorf("%s", msg)
 }
 
 // formatTraceDuration formats nanoseconds as human readable duration

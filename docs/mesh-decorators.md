@@ -919,7 +919,7 @@ async def process_pipeline(
 
 The `@mesh.llm` decorator enables LLM integration as first-class mesh capabilities. LLM calls are routed through a mesh-registered LLM provider agent (`@mesh.llm_provider`) — the consumer never holds the API key, and providers can be swapped, tagged, and load-balanced like any other capability.
 
-> **Tip**: Use `meshctl scaffold llm --vendor claude --runtime python` to bootstrap a consumer and `meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider` to bootstrap a one-per-vendor provider.
+> **Tip**: Use `meshctl scaffold llm --vendor claude --lang python` to bootstrap a consumer and `meshctl scaffold llm-provider --vendor claude --lang python --name claude-provider` to bootstrap a one-per-vendor provider.
 
 ### Parameters
 
@@ -1061,7 +1061,7 @@ class ClaudeProviderAgent:
 Run one provider per vendor (`claude-provider`, `openai-provider`, etc.) and tag them so consumers can express preferences (`"+claude"`, `"-experimental"`, …). Bootstrap with:
 
 ```bash
-meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
+meshctl scaffold llm-provider --vendor claude --lang python --name claude-provider
 ```
 
 **Template file** (`prompts/analyst.jinja2`):

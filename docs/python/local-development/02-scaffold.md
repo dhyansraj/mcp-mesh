@@ -36,7 +36,7 @@ meshctl scaffold --name my-agent --agent-type tool
 
 # LLM-powered agent
 meshctl scaffold --name emotion-analyzer --agent-type llm-agent \
-  --llm-selector openai --response-format json
+  --vendor openai --response-format json
 
 # LLM provider (zero-code)
 meshctl scaffold --name claude-provider --agent-type llm-provider \

@@ -36,7 +36,7 @@ meshctl scaffold --name my-agent --agent-type tool --lang typescript
 
 # LLM-powered agent
 meshctl scaffold --name emotion-analyzer --agent-type llm-agent \
-  --llm-selector openai --lang typescript
+  --vendor openai --lang typescript
 
 # LLM provider (zero-code)
 meshctl scaffold --name claude-provider --agent-type llm-provider \

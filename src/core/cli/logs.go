@@ -38,7 +38,8 @@ Examples:
   meshctl logs my-agent -f           # Follow log output
   meshctl logs my-agent -p           # Previous log (before last restart)
   meshctl logs my-agent -p 2         # Log from 2 restarts ago
-  meshctl logs my-agent --tail 50    # Last 50 lines
+  meshctl logs my-agent --tail 50    # Last 50 lines (long form)
+  meshctl logs my-agent -n 50        # Last 50 lines (short form)
   meshctl logs my-agent --tail 0 -f  # No history, only new lines
   meshctl logs my-agent --since 10m  # Last 10 minutes
   meshctl logs my-agent --since 1h   # Last 1 hour
@@ -49,7 +50,7 @@ Examples:
 
 	cmd.Flags().BoolP("follow", "f", false, "Follow log output (like tail -f)")
 	cmd.Flags().IntP("previous", "p", 0, "Show previous log (1 = last restart, 2 = 2 restarts ago)")
-	cmd.Flags().Int("tail", 100, "Number of lines to show from end of log (0 = no limit)")
+	cmd.Flags().IntP("tail", "n", 100, "Number of lines to show from end of log (0 = no limit)")
 	cmd.Flags().String("since", "", "Show logs since duration (e.g., 5m, 1h, 2h30m) or timestamp")
 	cmd.Flags().String("until", "", "Show logs until duration ago (e.g., 5m) or timestamp")
 	cmd.Flags().Bool("list", false, "List available agent logs")

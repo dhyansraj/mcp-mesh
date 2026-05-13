@@ -80,7 +80,7 @@ type auditTraceChosen struct {
 func NewAuditCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "audit <agent-id-or-prefix>",
-		Short: "Inspect dependency-resolution audit events for a consumer agent",
+		Short: "Show why a tool call was routed to a particular agent (or failed to route)",
 		Long: `Inspect persisted dependency-resolution events for a given consumer agent.
 
 Each event records the stage-by-stage outcome of resolving one dependency,
