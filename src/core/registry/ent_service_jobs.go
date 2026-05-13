@@ -5,7 +5,9 @@ package registry
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/job"
+	"mcp-mesh/src/core/registry/generated"
 )
 
 // pendingJobsHeaderCap mirrors the OpenAPI X-Mesh-Pending-Jobs schema
@@ -88,6 +91,137 @@ func (s *EntService) GetJob(ctx context.Context, jobID string) (*ent.Job, error)
 	return s.entDB.Job.Query().
 		Where(job.IDEQ(jobID)).
 		Only(ctx)
+}
+
+// jobsListDefaultLimit / jobsListMaxLimit mirror the OpenAPI bounds for
+// GET /jobs (issue #973). Kept here rather than the handler so the service
+// is self-consistent when called from non-HTTP code paths (e.g. tests).
+const (
+	jobsListDefaultLimit = 50
+	jobsListMaxLimit     = 200
+)
+
+// ListJobs implements GET /jobs (issue #973). Read-only listing with
+// keyset pagination on (submitted_at DESC, id DESC). Cursor is an opaque
+// base64-encoded "<unix>:<id>" string identifying the last row of the
+// previous page; the next page is "everything strictly after that key in
+// descending order".
+//
+// Pagination strategy: SELECT limit+1 rows and, if we got more than `limit`,
+// drop the extra row and emit a cursor pointing at the LAST row we kept.
+// That last row IS the next cursor — its (submitted_at, id) becomes the
+// "strictly less than" boundary for the next call. We don't peek past it.
+//
+// Filters compose with AND. An empty `Statuses` slice means "all statuses".
+// `OwnerInstanceID` / `Capability` are exact matches when non-empty.
+// `SubmittedSince` (Unix epoch seconds) is GTE.
+//
+// jobToAPI (in ent_handlers_jobs.go, same package) handles the Ent → OpenAPI
+// row mapping. We keep that helper where it is so the existing /jobs/{id}
+// handler doesn't churn — Go package visibility lets us call it directly
+// from the service file.
+func (s *EntService) ListJobs(ctx context.Context, in *JobsListInput) (*generated.JobsListResponse, error) {
+	if in == nil {
+		return nil, fmt.Errorf("ListJobs: input is nil")
+	}
+
+	limit := in.Limit
+	if limit <= 0 {
+		limit = jobsListDefaultLimit
+	}
+	if limit > jobsListMaxLimit {
+		return nil, fmt.Errorf("ListJobs: limit %d exceeds max %d", limit, jobsListMaxLimit)
+	}
+
+	q := s.entDB.Job.Query()
+
+	if len(in.Statuses) > 0 {
+		statuses := make([]job.Status, 0, len(in.Statuses))
+		for _, raw := range in.Statuses {
+			st := job.Status(raw)
+			if err := job.StatusValidator(st); err != nil {
+				return nil, fmt.Errorf("ListJobs: invalid status %q: %w", raw, err)
+			}
+			statuses = append(statuses, st)
+		}
+		q = q.Where(job.StatusIn(statuses...))
+	}
+	if in.OwnerInstanceID != "" {
+		q = q.Where(job.OwnerInstanceIDEQ(in.OwnerInstanceID))
+	}
+	if in.Capability != "" {
+		q = q.Where(job.CapabilityEQ(in.Capability))
+	}
+	if in.SubmittedSince > 0 {
+		q = q.Where(job.SubmittedAtGTE(time.Unix(in.SubmittedSince, 0).UTC()))
+	}
+
+	// Cursor: rows STRICTLY AFTER the previous page's last row, in
+	// descending order. (submitted_at, id) keyset:
+	//   submitted_at < cur.submitted_at
+	//   OR (submitted_at = cur.submitted_at AND id < cur.id)
+	if in.Cursor != "" {
+		cursorTime, cursorID, err := decodeJobsCursor(in.Cursor)
+		if err != nil {
+			return nil, fmt.Errorf("ListJobs: invalid cursor: %w", err)
+		}
+		q = q.Where(
+			job.Or(
+				job.SubmittedAtLT(cursorTime),
+				job.And(job.SubmittedAtEQ(cursorTime), job.IDLT(cursorID)),
+			),
+		)
+	}
+
+	rows, err := q.
+		Order(job.BySubmittedAt(entsql.OrderDesc()), job.ByID(entsql.OrderDesc())).
+		Limit(limit + 1).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ListJobs: query failed: %w", err)
+	}
+
+	resp := &generated.JobsListResponse{Jobs: []generated.Job{}}
+	if len(rows) > limit {
+		// More pages available; the row at index `limit-1` becomes the
+		// next cursor. We drop the peek row (`rows[limit]`) — it stays
+		// for the next page to pick up.
+		rows = rows[:limit]
+		last := rows[limit-1]
+		cursor := encodeJobsCursor(last.SubmittedAt, last.ID)
+		resp.NextCursor = &cursor
+	}
+	for _, r := range rows {
+		resp.Jobs = append(resp.Jobs, jobToAPI(r))
+	}
+	return resp, nil
+}
+
+// encodeJobsCursor packs the keyset (submitted_at, id) into the opaque
+// base64 string returned in JobsListResponse.next_cursor. Format is
+// "<unix>:<id>" before encoding — versionless because the cursor is
+// short-lived (browser-page-scoped) and the registry is the only producer.
+func encodeJobsCursor(submittedAt time.Time, id string) string {
+	raw := fmt.Sprintf("%d:%s", submittedAt.UnixNano(), id)
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// decodeJobsCursor reverses encodeJobsCursor. Returns a descriptive error
+// the handler surfaces as 400 — bad cursors never bubble up as 500.
+func decodeJobsCursor(cursor string) (time.Time, string, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("decode base64: %w", err)
+	}
+	parts := strings.SplitN(string(raw), ":", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return time.Time{}, "", fmt.Errorf("malformed cursor payload")
+	}
+	nano, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("parse timestamp: %w", err)
+	}
+	return time.Unix(0, nano).UTC(), parts[1], nil
 }
 
 // JobDeltaInput is the service-layer view of a single per-job delta. Mirrors
@@ -606,12 +740,16 @@ func (s *EntService) CountPendingJobsForAgent(ctx context.Context, agentID strin
 // claim time, so a crashed first attempt has attempt_count=1, and a job
 // with max_retries=1 still has retry budget (1 <= 1).
 //
-// Detection signal: owner_instance_id NOT IN (SELECT id FROM agents).
-// We match the existing sweep behaviour, which deletes the agent row
-// outright in purgeStaleAgents. A job whose owner agent has been swept
-// (or never registered, in pathological cases) is by definition orphaned;
-// using the agent table as the source of truth lines up with how
-// purgeStaleAgents already treats "agent gone" — there's no half-state.
+// Detection signal: owner_instance_id is either not in the agents table
+// OR points to an agent whose status is not `healthy`. An
+// unhealthy/unknown owner is treated as effectively gone — its pinned
+// jobs are released so capability-matching agents can pick them up.
+// This shortcuts the previous two-stage path (wait for retention →
+// purge agent → release jobs) which left pinned jobs stalled for the
+// retention period (default 1h) after a deliberate `meshctl stop`.
+// Payload-based MeshJob semantics make this safe: `submitted_payload`
+// is self-contained, so any healthy agent with the matching capability
+// can resume work once `owner_instance_id` is cleared.
 func (s *EntService) ResetOrphanedJobs(ctx context.Context) (reset, exhausted int, err error) {
 	// Collect candidate orphan jobs: working + has an owner.
 	candidates, err := s.entDB.Client.Job.Query().
@@ -644,7 +782,10 @@ func (s *EntService) ResetOrphanedJobs(ctx context.Context) (reset, exhausted in
 	if len(ownerIDs) > 0 {
 		var liveRows []string
 		if err := s.entDB.Client.Agent.Query().
-			Where(agent.IDIn(ownerIDs...)).
+			Where(
+				agent.IDIn(ownerIDs...),
+				agent.StatusEQ(agent.StatusHealthy),
+			).
 			Select(agent.FieldID).
 			Scan(ctx, &liveRows); err != nil {
 			return 0, 0, fmt.Errorf("query live owners: %w", err)

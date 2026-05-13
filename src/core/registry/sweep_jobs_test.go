@@ -179,6 +179,109 @@ func TestSweep_ResetOrphanedJobs_LeavesLiveOwnersAlone(t *testing.T) {
 	}
 }
 
+// TestSweep_ResetOrphanedJobs_ReleasesUnhealthyOwnerPinnedJob verifies
+// that a working job pinned to an agent whose status has flipped to
+// `unhealthy` is released on the next sweep tick — without waiting for
+// the retention timer to purge the agent row. Payload-based MeshJob
+// semantics make this safe: the job's submitted_payload is
+// self-contained, so any healthy agent with the matching capability
+// can pick the orphan up via POST /jobs/claim once owner is cleared.
+func TestSweep_ResetOrphanedJobs_ReleasesUnhealthyOwnerPinnedJob(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	// Retention well in the future relative to the seeded agent so
+	// purgeStaleAgents would NOT touch the agent row on this tick;
+	// the only path that can release the job is the new
+	// status-gated liveness check.
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Recent updated_at → outside the retention window → agent row
+	// survives this tick. Status=unhealthy is the only orphan signal.
+	seedAgent(t, client, "unhealthy-owner", agent.StatusUnhealthy, now.Add(-1*time.Minute))
+	owner := "unhealthy-owner"
+	j := seedJobRow(t, client, "job-orphan-unhealthy", "render", &owner, job.StatusWorking, 1, 3, now.Add(-10*time.Minute))
+
+	// Pre-set a lease so we can assert it was cleared.
+	if _, err := client.Job.UpdateOneID(j.ID).
+		SetLeaseExpiresAt(now.Add(5 * time.Minute)).
+		SetLastHeartbeatAt(now.Add(-30 * time.Second)).
+		Save(ctx); err != nil {
+		t.Fatalf("seed lease: %v", err)
+	}
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.agentsPurged != 0 {
+		t.Fatalf("setup: expected 0 agents purged (retention not elapsed), got %d", res.agentsPurged)
+	}
+	if res.jobsReset != 1 {
+		t.Errorf("expected 1 job reset on unhealthy owner, got %d", res.jobsReset)
+	}
+	if res.jobsExhausted != 0 {
+		t.Errorf("expected 0 jobs exhausted, got %d", res.jobsExhausted)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusWorking {
+		t.Errorf("expected status=working (claimable) after release, got %s", got.Status)
+	}
+	if got.OwnerInstanceID != nil {
+		t.Errorf("expected owner cleared, got %v", *got.OwnerInstanceID)
+	}
+	if got.LeaseExpiresAt != nil {
+		t.Errorf("expected lease cleared, got %v", got.LeaseExpiresAt)
+	}
+	if got.AttemptCount != 1 {
+		t.Errorf("expected attempt_count unchanged at 1 (claim increments, not orphan reset), got %d", got.AttemptCount)
+	}
+
+	// The agent row itself must still exist — the retention timer
+	// owns purge, not the orphan-release path.
+	if _, err := client.Agent.Get(ctx, owner); err != nil {
+		t.Errorf("expected unhealthy agent row preserved on this tick, got %v", err)
+	}
+}
+
+// TestSweep_ResetOrphanedJobs_ReleasesUnknownOwnerPinnedJob verifies
+// that the `unknown` agent status is also treated as not-live for the
+// purposes of orphan release. Only `healthy` keeps a pinned job.
+func TestSweep_ResetOrphanedJobs_ReleasesUnknownOwnerPinnedJob(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "unknown-owner", agent.StatusUnknown, now.Add(-1*time.Minute))
+	owner := "unknown-owner"
+	j := seedJobRow(t, client, "job-orphan-unknown", "render", &owner, job.StatusWorking, 1, 3, now.Add(-10*time.Minute))
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsReset != 1 {
+		t.Errorf("expected 1 job reset on unknown-status owner, got %d", res.jobsReset)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.OwnerInstanceID != nil {
+		t.Errorf("expected owner cleared, got %v", *got.OwnerInstanceID)
+	}
+}
+
 // TestSweep_ExpireDeadlinedJobs_PastDeadlineFails verifies that a non-
 // terminal job whose total_deadline has passed is moved to failed with
 // reason "deadline_exceeded" and has its lease/owner cleared.

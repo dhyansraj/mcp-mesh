@@ -332,6 +332,10 @@ func (h *TestHandlers) ReleaseJob(c *gin.Context, jobId string) {
 	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
 }
 
+func (h *TestHandlers) ListJobs(c *gin.Context, _ generated.ListJobsParams) {
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
+}
+
 func (h *TestHandlers) ListA2AAgents(c *gin.Context) {
 	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
 }

@@ -216,3 +216,61 @@ export interface EdgeStatsResponse {
   count: number;
   edge_count: number;
 }
+
+/**
+ * Issue #973: MeshJob observability types. Mirrors the Job + JobsListResponse
+ * schemas in api/mcp-mesh-registry.openapi.yaml — time fields are UNIX-epoch
+ * seconds (integers), not ISO strings.
+ *
+ * NOTE: status values must come from the registry's `job.Status` enum.
+ * "unclaimed" is NOT a real status — it's derived in the UI by checking
+ * `owner_instance_id === null` on `status === "working"` rows.
+ */
+export type JobStatus =
+  | "working"
+  | "input_required"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface Job {
+  id: string;
+  capability: string;
+  owner_instance_id: string | null;
+  status: JobStatus;
+  progress: number | null;
+  progress_message: string | null;
+  result: Record<string, unknown> | null;
+  error: string | null;
+  submitted_payload: Record<string, unknown>;
+  attempt_count: number;
+  max_retries: number;
+  max_duration: number | null;
+  total_deadline: number | null;
+  lease_expires_at: number | null;
+  last_heartbeat_at: number | null;
+  submitted_at: number;
+  submitted_by: string;
+}
+
+export interface JobsResponse {
+  jobs: Job[];
+  next_cursor: string | null;
+}
+
+export interface JobsQuery {
+  /**
+   * Comma-separated JobStatus values. Empty / undefined ⇒ all statuses.
+   * The API layer wires this directly into the `status` query param so
+   * callers can pass either "working" or "working,input_required".
+   */
+  status?: string;
+  owner_instance_id?: string;
+  capability?: string;
+  /** Unix epoch seconds; inclusive lower bound on submitted_at. */
+  submitted_since?: number;
+  /** Bounded server-side at [1, 200]; default 50. */
+  limit?: number;
+  /** Opaque cursor from a previous response's next_cursor. */
+  cursor?: string;
+}

@@ -191,6 +191,91 @@ paths:
           description: Registry error, back off
 
   /jobs:
+    get:
+      tags: [jobs]
+      summary: List jobs (paginated, filterable)
+      description: |
+        Generic read-only listing of jobs for observability dashboards
+        (issue #973). Supports keyset pagination on `(submitted_at DESC,
+        id DESC)` plus the common filters operators need: status,
+        owner, capability, submission window.
+
+        🤖 AI NOTE: This is a generic registry primitive. It is NOT
+        consumed by the mesh runtime — the producer flow uses POST
+        /jobs/claim and GET /jobs/{job_id}. UI / `meshctl` listing
+        terminates here. No mutation surface — to cancel a job call
+        POST /jobs/{job_id}/cancel.
+      operationId: listJobs
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: |
+            Comma-separated list of job statuses to include. Values must come
+            from JobStatus (working, input_required, completed, failed,
+            cancelled). Empty / absent ⇒ all statuses.
+          schema:
+            type: string
+            example: "working,input_required"
+        - name: owner_instance_id
+          in: query
+          required: false
+          description: Filter to jobs whose owner_instance_id matches exactly.
+          schema:
+            type: string
+        - name: capability
+          in: query
+          required: false
+          description: Filter to jobs targeting this capability name.
+          schema:
+            type: string
+        - name: submitted_since
+          in: query
+          required: false
+          description: |
+            Inclusive lower bound on submitted_at, expressed as Unix epoch
+            seconds. Useful for "jobs in the last N seconds" panels.
+          schema:
+            type: integer
+            example: 1730000000
+        - name: limit
+          in: query
+          required: false
+          description: |
+            Maximum rows to return per page. Bounded so a single call
+            cannot scan the table unboundedly.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: cursor
+          in: query
+          required: false
+          description: |
+            Opaque pagination cursor returned by a previous call's
+            `next_cursor`. First call should omit this parameter.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Page of jobs in (submitted_at DESC, id DESC) order
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobsListResponse"
+        "400":
+          description: Invalid query parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     post:
       tags: [jobs]
       summary: Register a new job
@@ -2682,6 +2767,28 @@ components:
           type: string
           example: "orchestrate-replica-1"
           description: Instance ID of the submitting agent.
+
+    JobsListResponse:
+      type: object
+      required: [jobs]
+      description: |
+        Paginated listing of jobs (issue #973). Page size is bounded by the
+        request `limit` (default 50, max 200). When `next_cursor` is non-null
+        another page is available — feed it back in the `cursor` query
+        parameter to fetch the next slice. Order is always
+        `submitted_at DESC, id DESC`.
+      properties:
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+          description: Page of job rows in descending submission order.
+        next_cursor:
+          type: string
+          nullable: true
+          description: |
+            Opaque cursor for the next page; null when this page is the
+            final one.
 
     CreateJobRequest:
       type: object

@@ -149,5 +149,12 @@ func (Job) Indexes() []ent.Index {
 		index.Fields("owner_instance_id"),
 		// Status-only scans (cron sweeps over working/input_required).
 		index.Fields("status"),
+		// GET /jobs keyset pagination (issue #973). Ordered by
+		// submitted_at DESC then id DESC; ent doesn't surface DESC
+		// ordering on the index itself but the b-tree is bidirectional
+		// so an ascending index serves the descending scan just as well.
+		// `id` is included so the SELECT limit+1 walk stays index-backed
+		// when ties on submitted_at force a secondary ordering.
+		index.Fields("submitted_at", "id"),
 	}
 }

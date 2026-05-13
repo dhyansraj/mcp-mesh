@@ -1,4 +1,4 @@
-import { AgentsResponse, DashboardEvent, EdgeStatsResponse, EventsHistoryResponse, HealthResponse, RecentTracesResponse, RegistryEventInfo, TraceDetail } from "./types";
+import { AgentsResponse, DashboardEvent, EdgeStatsResponse, EventsHistoryResponse, HealthResponse, JobsQuery, JobsResponse, RecentTracesResponse, RegistryEventInfo, TraceDetail } from "./types";
 import { getApiBase } from "./config";
 
 const API_BASE = getApiBase();
@@ -17,6 +17,29 @@ export async function getAgents(status?: string): Promise<AgentsResponse> {
   }
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch agents: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Issue #973: list jobs from the registry through the meshui proxy.
+ *
+ * The endpoint is read-only — there is no companion mutation API on the
+ * UI surface. To cancel a job, operators call `meshctl call __mesh_job_cancel
+ * job_id=<id>` which lands on POST /jobs/{id}/cancel directly.
+ */
+export async function getJobs(params: JobsQuery = {}): Promise<JobsResponse> {
+  const search = new URLSearchParams();
+  if (params.status) search.set("status", params.status);
+  if (params.owner_instance_id) search.set("owner_instance_id", params.owner_instance_id);
+  if (params.capability) search.set("capability", params.capability);
+  if (params.submitted_since !== undefined) search.set("submitted_since", String(params.submitted_since));
+  if (params.limit !== undefined) search.set("limit", String(params.limit));
+  if (params.cursor) search.set("cursor", params.cursor);
+
+  const qs = search.toString();
+  const url = qs ? `${API_BASE}/jobs?${qs}` : `${API_BASE}/jobs`;
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to fetch jobs: ${res.status}`);
   return res.json();
 }
 
