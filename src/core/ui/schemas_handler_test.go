@@ -100,6 +100,22 @@ func seedAgentWithRuntime(t *testing.T, client *ent.Client, id, name string, rt 
 	require.NoError(t, err, "seed agent %s", id)
 }
 
+// seedAgentWithStatus seeds an agent with an explicit status. Used by the
+// healthy-only filter test to drop a stale agent into the DB and confirm it
+// stays out of the providers/consumers buckets.
+func seedAgentWithStatus(t *testing.T, client *ent.Client, id, name string, status agent.Status) {
+	t.Helper()
+	_, err := client.Agent.Create().
+		SetID(id).
+		SetName(name).
+		SetAgentType(agent.AgentTypeMcpAgent).
+		SetRuntime(agent.RuntimePython).
+		SetStatus(status).
+		SetUpdatedAt(time.Now().UTC()).
+		Save(context.Background())
+	require.NoError(t, err, "seed agent %s", id)
+}
+
 type capSeed struct {
 	agentID      string
 	functionName string
@@ -302,6 +318,66 @@ func TestGetSchemaUsage_404(t *testing.T) {
 	rec := httptest.NewRecorder()
 	engine.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// TestSchemas_FiltersUnhealthyAgents — agents whose status is not "healthy"
+// must not surface in the providers / consumers buckets. The schema browser
+// follows the "healthy only" convention used elsewhere in the dashboard:
+// stale or unknown-status agents are effectively offline and shouldn't be
+// shown as live producers/consumers of a canonical schema. Cascades into
+// provider_count / consumer_count on the list view as well.
+func TestSchemas_FiltersUnhealthyAgents(t *testing.T) {
+	client, _, engine, cleanup := newSchemasTestEnv(t)
+	defer cleanup()
+
+	seedSchemaEntry(t, client, "sha256:weather", schemaentry.RuntimeOriginPython)
+
+	// Two agents provide the same schema hash; one is healthy, the other has
+	// gone unhealthy (e.g. failed heartbeat). Only the healthy one should be
+	// counted / surfaced.
+	seedAgentWithStatus(t, client, "weather-healthy", "weather-healthy", agent.StatusHealthy)
+	seedAgentWithStatus(t, client, "weather-stale", "weather-stale", agent.StatusUnhealthy)
+
+	seedCapability(t, client, capSeed{
+		agentID:      "weather-healthy",
+		functionName: "get_weather",
+		capability:   "weather_report",
+		outputHash:   strPtr("sha256:weather"),
+	})
+	seedCapability(t, client, capSeed{
+		agentID:      "weather-stale",
+		functionName: "get_weather_stale",
+		capability:   "weather_report",
+		outputHash:   strPtr("sha256:weather"),
+	})
+
+	// List endpoint: provider_count reflects only healthy providers.
+	listReq := httptest.NewRequest(http.MethodGet, "/api/schemas", nil)
+	listRec := httptest.NewRecorder()
+	engine.ServeHTTP(listRec, listReq)
+	require.Equal(t, http.StatusOK, listRec.Code, "body=%s", listRec.Body.String())
+
+	var listResp struct {
+		Schemas []schemaListItem `json:"schemas"`
+		Count   int              `json:"count"`
+	}
+	require.NoError(t, json.Unmarshal(listRec.Body.Bytes(), &listResp))
+	require.Len(t, listResp.Schemas, 1)
+	assert.Equal(t, 1, listResp.Schemas[0].ProviderCount,
+		"provider_count excludes unhealthy agents")
+
+	// Detail endpoint: providers slice contains only the healthy agent.
+	detailReq := httptest.NewRequest(http.MethodGet, "/api/schemas/sha256:weather/usage", nil)
+	detailRec := httptest.NewRecorder()
+	engine.ServeHTTP(detailRec, detailReq)
+	require.Equal(t, http.StatusOK, detailRec.Code, "body=%s", detailRec.Body.String())
+
+	var detailResp schemaUsageResponse
+	require.NoError(t, json.Unmarshal(detailRec.Body.Bytes(), &detailResp))
+	require.Len(t, detailResp.Providers, 1, "providers slice excludes unhealthy agents")
+	assert.Equal(t, "weather-healthy", detailResp.Providers[0].AgentID,
+		"only the healthy provider is returned")
+	assert.Len(t, detailResp.Consumers, 0, "no declared consumers in this fixture")
 }
 
 // TestGetSchemaUsage_EmptyArraysNotNull — a freshly-seeded schema with zero

@@ -27,6 +27,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"mcp-mesh/src/core/ent"
+	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/schemaentry"
 )
 
@@ -197,7 +198,13 @@ func (s *Server) ListSchemasUsage(c *gin.Context) {
 		return
 	}
 
+	// Filter to healthy agents only — providers/consumers from unhealthy or
+	// unknown-status agents are effectively offline and should not surface in
+	// the schema browser. Matches the "healthy only" convention used by the
+	// rest of the dashboard. Cascades naturally into provider_count /
+	// consumer_count on the list view.
 	agents, err := entDB.Agent.Query().
+		Where(agent.StatusEQ(agent.StatusHealthy)).
 		WithCapabilities().
 		All(ctx)
 	if err != nil {
@@ -262,7 +269,13 @@ func (s *Server) GetSchemaUsage(c *gin.Context) {
 		return
 	}
 
+	// Filter to healthy agents only — providers/consumers from unhealthy or
+	// unknown-status agents are effectively offline and should not surface in
+	// the schema browser. Matches the "healthy only" convention used by the
+	// rest of the dashboard. Cascades naturally into provider_count /
+	// consumer_count on the list view.
 	agents, err := entDB.Agent.Query().
+		Where(agent.StatusEQ(agent.StatusHealthy)).
 		WithCapabilities().
 		All(ctx)
 	if err != nil {
