@@ -1,5 +1,5 @@
 # Dockerfile for chat-history-agent MCP Mesh agent
-FROM mcpmesh/python-runtime:2.0.0-beta.1
+FROM mcpmesh/python-runtime:2.0.0-beta.2
 
 WORKDIR /app
 
