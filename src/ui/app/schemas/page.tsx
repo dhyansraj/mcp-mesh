@@ -211,7 +211,7 @@ export default function SchemasPage() {
                 <TableHead>Origin</TableHead>
                 <TableHead>Providers</TableHead>
                 <TableHead>Consumers</TableHead>
-                <TableHead>Sample tool</TableHead>
+                <TableHead>Tool</TableHead>
                 <TableHead>First seen</TableHead>
               </TableRow>
             </TableHeader>
