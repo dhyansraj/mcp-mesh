@@ -83,6 +83,12 @@ func NewServer(config *UIConfig, entService *registry.EntService, tracingManager
 		// lives behind a tool call, not the dashboard).
 		api.GET("/jobs", s.proxyToRegistry)
 		api.GET("/jobs/*path", s.proxyToRegistry)
+		// Schemas (issue #971) — Schema Registry Browser. The registry's
+		// /schemas endpoint stays untouched; this handler joins it with
+		// the live capability set in-memory to surface providers/consumers
+		// per hash (see schemas_handler.go for the inverse-index rationale).
+		api.GET("/schemas", s.ListSchemasUsage)
+		api.GET("/schemas/:hash/usage", s.GetSchemaUsage)
 		api.GET("/events/history", s.GetEventsHistory)
 		api.GET("/events", s.StreamDashboardEvents)
 		api.GET("/trace/recent", s.handleRecentTraces)

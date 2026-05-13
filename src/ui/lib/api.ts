@@ -1,4 +1,4 @@
-import { AgentsResponse, DashboardEvent, EdgeStatsResponse, EventsHistoryResponse, HealthResponse, JobsQuery, JobsResponse, RecentTracesResponse, RegistryEventInfo, TraceDetail } from "./types";
+import { AgentsResponse, DashboardEvent, EdgeStatsResponse, EventsHistoryResponse, HealthResponse, JobsQuery, JobsResponse, RecentTracesResponse, RegistryEventInfo, SchemasResponse, SchemaUsage, TraceDetail } from "./types";
 import { getApiBase } from "./config";
 
 const API_BASE = getApiBase();
@@ -40,6 +40,27 @@ export async function getJobs(params: JobsQuery = {}): Promise<JobsResponse> {
   const url = qs ? `${API_BASE}/jobs?${qs}` : `${API_BASE}/jobs`;
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to fetch jobs: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * Issue #971: Schema Registry Browser. Hits the meshui server's joined
+ * endpoint, not the registry's raw /schemas. The meshui layer adds the
+ * provider/consumer counts by walking the live capability set in memory.
+ */
+export async function getSchemas(): Promise<SchemasResponse> {
+  const res = await fetch(`${API_BASE}/schemas`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Failed to fetch schemas: ${res.status}`);
+  return res.json();
+}
+
+export async function getSchemaUsage(hash: string): Promise<SchemaUsage> {
+  // Hashes look like "sha256:abc..." — the colon is fine in a path segment
+  // per RFC 3986, but we encode defensively in case a future hash algorithm
+  // uses a reserved character.
+  const res = await fetch(`${API_BASE}/schemas/${encodeURIComponent(hash)}/usage`, { cache: "no-store" });
+  if (res.status === 404) throw new Error(`Schema not found: ${hash}`);
+  if (!res.ok) throw new Error(`Failed to fetch schema usage: ${res.status}`);
   return res.json();
 }
 
