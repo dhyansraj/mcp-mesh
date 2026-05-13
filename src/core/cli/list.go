@@ -1049,7 +1049,9 @@ func showRegistryStatus(registry RegistryStatus) {
 	fmt.Println()
 }
 
-// formatAgentTypeDisplay converts agent type to friendly display name
+// formatAgentTypeDisplay converts agent type to friendly display name.
+// Issue #984: keep this enum aligned with the SPA's getAgentTypeLabel
+// (src/ui/lib/api.ts) so `meshctl list` and the dashboard agree on names.
 func formatAgentTypeDisplay(agentType string) string {
 	switch agentType {
 	case "mcp_agent":
@@ -1060,6 +1062,8 @@ func formatAgentTypeDisplay(agentType string) string {
 		return "Tool"
 	case "decorator_agent":
 		return "Agent"
+	case "a2a":
+		return "A2A"
 	default:
 		return "Unknown"
 	}

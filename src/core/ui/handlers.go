@@ -147,6 +147,13 @@ func writeSSEEvent(c *gin.Context, eventType string, data interface{}) {
 
 // mapRegistryEventToSSEType converts a registry event_type to a dashboard SSE
 // event name. Returns "" for event types that are noise for the dashboard.
+//
+// Issue #982 Part A: "rotate" events (TriggerRotation in ent_service.go) used
+// to fall through the default case and never reached the dashboard SSE
+// stream, so cert-rotation activity was invisible in the live event feed
+// even though it was persisted to the registry events table and shown
+// correctly on history backfill via the unhealthy event written by the
+// graceful-shutdown path. Surface it explicitly as "agent_rotated".
 func mapRegistryEventToSSEType(eventType string, data map[string]interface{}) string {
 	switch eventType {
 	case "register":
@@ -155,6 +162,8 @@ func mapRegistryEventToSSEType(eventType string, data map[string]interface{}) st
 		return "agent_deregistered"
 	case "unhealthy":
 		return "agent_unhealthy"
+	case "rotate":
+		return "agent_rotated"
 	case "update":
 		if ns, ok := data["new_status"]; ok {
 			if ns == "healthy" {

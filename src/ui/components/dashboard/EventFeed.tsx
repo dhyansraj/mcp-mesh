@@ -35,6 +35,8 @@ function getEventLabel(event: DashboardEvent): string {
       if (reason === "graceful_shutdown") return "Agent Stopped";
       if (reason === "stale_on_startup") return "Expired (stale)";
       return "Agent Unhealthy";
+    case "agent_rotated":
+      return "Cert Rotation";
     case "dependency_resolved":
       return "Dependency Resolved";
     case "dependency_lost":
@@ -62,6 +64,8 @@ function getEventDotColor(event: DashboardEvent): string {
       if (reason === "stale_on_startup") return "bg-slate-400";
       if (reason === "graceful_shutdown") return "bg-slate-400";
       return "bg-red-500";
+    case "agent_rotated":
+      return "bg-blue-500";
     case "dependency_resolved":
       return "bg-blue-500";
     case "dependency_lost":
