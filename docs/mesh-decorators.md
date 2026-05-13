@@ -1179,6 +1179,19 @@ chat(
 )
 ```
 
+#### Structured-Output Schema Retry (Anthropic native path)
+
+When using `output_type=SomePydanticModel` with a Claude provider on the
+native SDK path, the provider performs JSON-schema validation on the
+structured-output tool call before returning. If validation fails (e.g., the
+model wraps fields in an envelope like `{"parameter": {...}}`), the provider
+retries the call once with a corrective prompt that includes the schema and
+validation error. This restores parity with the legacy LiteLLM
+HINT→`response_format` fallback. Configure with
+`MCP_MESH_LLM_SYNTHETIC_RETRY_MAX` (default `1`, set to `0` to disable).
+Currently active on Anthropic path only; OpenAI / Gemini support follows in
+a future release.
+
 ### Enhanced Schemas for LLM Chains
 
 When orchestrator LLMs call specialist LLMs, Field descriptions are automatically extracted into tool schemas:
