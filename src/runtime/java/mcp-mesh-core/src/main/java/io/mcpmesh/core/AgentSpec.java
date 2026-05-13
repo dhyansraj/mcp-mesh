@@ -68,6 +68,26 @@ public class AgentSpec {
     @JsonInclude(JsonInclude.Include.NON_EMPTY)
     private String surfaces;
 
+    /**
+     * Issue #972: true if this agent registers at least one A2A producer surface
+     * ({@code @MeshA2A} / {@code mesh.a2a.mount}). Stamped by
+     * {@code MeshAutoConfiguration.applyA2ASurfaces} when {@code a2aRegistry.hasSurfaces()}
+     * is true. Defaults to {@code false}. Always serialized (booleans are
+     * self-validating; explicit {@code false} is semantically meaningful on
+     * the wire).
+     */
+    @JsonProperty("a2a_producer")
+    private boolean a2aProducer = false;
+
+    /**
+     * Issue #972: true if this agent registers at least one A2A consumer surface
+     * ({@code @A2AConsumer}). Stamped by {@code MeshAutoConfiguration.finalizeAgentSpec}
+     * from {@code a2aConsumerBeanPostProcessor.bindings().isEmpty()}.
+     * Defaults to {@code false}. Always serialized.
+     */
+    @JsonProperty("a2a_consumer")
+    private boolean a2aConsumer = false;
+
     public AgentSpec() {
     }
 
@@ -212,6 +232,16 @@ public class AgentSpec {
         return surfaces;
     }
 
+    /** Issue #972: see field doc. */
+    public boolean isA2aProducer() {
+        return a2aProducer;
+    }
+
+    /** Issue #972: see field doc. */
+    public boolean isA2aConsumer() {
+        return a2aConsumer;
+    }
+
     // Standard setters
 
     public void setName(String name) {
@@ -268,6 +298,16 @@ public class AgentSpec {
 
     public void setSurfaces(String surfaces) {
         this.surfaces = surfaces;
+    }
+
+    /** Issue #972: see field doc. */
+    public void setA2aProducer(boolean a2aProducer) {
+        this.a2aProducer = a2aProducer;
+    }
+
+    /** Issue #972: see field doc. */
+    public void setA2aConsumer(boolean a2aConsumer) {
+        this.a2aConsumer = a2aConsumer;
     }
 
     /**

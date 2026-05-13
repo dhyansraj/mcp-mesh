@@ -422,6 +422,15 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 	if reg.Description != nil {
 		result["description"] = *reg.Description
 	}
+	// Issue #972: forward A2A producer/consumer flags. These pointers may be
+	// nil from old-SDK clients that don't set them — the downstream
+	// extractAgentMetadata uses the `hasA2a*` guards so absence is a no-op.
+	if reg.A2aProducer != nil {
+		result["a2a_producer"] = *reg.A2aProducer
+	}
+	if reg.A2aConsumer != nil {
+		result["a2a_consumer"] = *reg.A2aConsumer
+	}
 	if reg.Runtime != nil {
 		result["runtime"] = string(*reg.Runtime)
 	}

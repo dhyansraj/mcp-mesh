@@ -122,6 +122,46 @@ func (au *AgentUpdate) ClearDescription() *AgentUpdate {
 	return au
 }
 
+// SetA2aProducer sets the "a2a_producer" field.
+func (au *AgentUpdate) SetA2aProducer(b bool) *AgentUpdate {
+	au.mutation.SetA2aProducer(b)
+	return au
+}
+
+// SetNillableA2aProducer sets the "a2a_producer" field if the given value is not nil.
+func (au *AgentUpdate) SetNillableA2aProducer(b *bool) *AgentUpdate {
+	if b != nil {
+		au.SetA2aProducer(*b)
+	}
+	return au
+}
+
+// ClearA2aProducer clears the value of the "a2a_producer" field.
+func (au *AgentUpdate) ClearA2aProducer() *AgentUpdate {
+	au.mutation.ClearA2aProducer()
+	return au
+}
+
+// SetA2aConsumer sets the "a2a_consumer" field.
+func (au *AgentUpdate) SetA2aConsumer(b bool) *AgentUpdate {
+	au.mutation.SetA2aConsumer(b)
+	return au
+}
+
+// SetNillableA2aConsumer sets the "a2a_consumer" field if the given value is not nil.
+func (au *AgentUpdate) SetNillableA2aConsumer(b *bool) *AgentUpdate {
+	if b != nil {
+		au.SetA2aConsumer(*b)
+	}
+	return au
+}
+
+// ClearA2aConsumer clears the value of the "a2a_consumer" field.
+func (au *AgentUpdate) ClearA2aConsumer() *AgentUpdate {
+	au.mutation.ClearA2aConsumer()
+	return au
+}
+
 // SetHTTPHost sets the "http_host" field.
 func (au *AgentUpdate) SetHTTPHost(s string) *AgentUpdate {
 	au.mutation.SetHTTPHost(s)
@@ -578,6 +618,18 @@ func (au *AgentUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	if au.mutation.DescriptionCleared() {
 		_spec.ClearField(agent.FieldDescription, field.TypeString)
 	}
+	if value, ok := au.mutation.A2aProducer(); ok {
+		_spec.SetField(agent.FieldA2aProducer, field.TypeBool, value)
+	}
+	if au.mutation.A2aProducerCleared() {
+		_spec.ClearField(agent.FieldA2aProducer, field.TypeBool)
+	}
+	if value, ok := au.mutation.A2aConsumer(); ok {
+		_spec.SetField(agent.FieldA2aConsumer, field.TypeBool, value)
+	}
+	if au.mutation.A2aConsumerCleared() {
+		_spec.ClearField(agent.FieldA2aConsumer, field.TypeBool)
+	}
 	if value, ok := au.mutation.HTTPHost(); ok {
 		_spec.SetField(agent.FieldHTTPHost, field.TypeString, value)
 	}
@@ -964,6 +1016,46 @@ func (auo *AgentUpdateOne) SetNillableDescription(s *string) *AgentUpdateOne {
 // ClearDescription clears the value of the "description" field.
 func (auo *AgentUpdateOne) ClearDescription() *AgentUpdateOne {
 	auo.mutation.ClearDescription()
+	return auo
+}
+
+// SetA2aProducer sets the "a2a_producer" field.
+func (auo *AgentUpdateOne) SetA2aProducer(b bool) *AgentUpdateOne {
+	auo.mutation.SetA2aProducer(b)
+	return auo
+}
+
+// SetNillableA2aProducer sets the "a2a_producer" field if the given value is not nil.
+func (auo *AgentUpdateOne) SetNillableA2aProducer(b *bool) *AgentUpdateOne {
+	if b != nil {
+		auo.SetA2aProducer(*b)
+	}
+	return auo
+}
+
+// ClearA2aProducer clears the value of the "a2a_producer" field.
+func (auo *AgentUpdateOne) ClearA2aProducer() *AgentUpdateOne {
+	auo.mutation.ClearA2aProducer()
+	return auo
+}
+
+// SetA2aConsumer sets the "a2a_consumer" field.
+func (auo *AgentUpdateOne) SetA2aConsumer(b bool) *AgentUpdateOne {
+	auo.mutation.SetA2aConsumer(b)
+	return auo
+}
+
+// SetNillableA2aConsumer sets the "a2a_consumer" field if the given value is not nil.
+func (auo *AgentUpdateOne) SetNillableA2aConsumer(b *bool) *AgentUpdateOne {
+	if b != nil {
+		auo.SetA2aConsumer(*b)
+	}
+	return auo
+}
+
+// ClearA2aConsumer clears the value of the "a2a_consumer" field.
+func (auo *AgentUpdateOne) ClearA2aConsumer() *AgentUpdateOne {
+	auo.mutation.ClearA2aConsumer()
 	return auo
 }
 
@@ -1452,6 +1544,18 @@ func (auo *AgentUpdateOne) sqlSave(ctx context.Context) (_node *Agent, err error
 	}
 	if auo.mutation.DescriptionCleared() {
 		_spec.ClearField(agent.FieldDescription, field.TypeString)
+	}
+	if value, ok := auo.mutation.A2aProducer(); ok {
+		_spec.SetField(agent.FieldA2aProducer, field.TypeBool, value)
+	}
+	if auo.mutation.A2aProducerCleared() {
+		_spec.ClearField(agent.FieldA2aProducer, field.TypeBool)
+	}
+	if value, ok := auo.mutation.A2aConsumer(); ok {
+		_spec.SetField(agent.FieldA2aConsumer, field.TypeBool, value)
+	}
+	if auo.mutation.A2aConsumerCleared() {
+		_spec.ClearField(agent.FieldA2aConsumer, field.TypeBool)
 	}
 	if value, ok := auo.mutation.HTTPHost(); ok {
 		_spec.SetField(agent.FieldHTTPHost, field.TypeString, value)

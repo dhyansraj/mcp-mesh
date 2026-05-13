@@ -357,3 +357,151 @@ func TestAgentDescriptionPersistence(t *testing.T) {
 		assert.Equal(t, "", *list.Agents[0].Description)
 	})
 }
+
+// TestA2aFlagsPersistence covers issue #972: the SDK-stamped a2a_producer and
+// a2a_consumer booleans round-trip from register through to GET /agents.
+// Booleans are self-validating (no truncation/warning path), so the test
+// surface is structural: four combinations × persistence + heartbeat-guard.
+func TestA2aFlagsPersistence(t *testing.T) {
+	t.Run("PersistsBothFlagsVerbatim", func(t *testing.T) {
+		service := setupTestService(t)
+
+		req := &AgentRegistrationRequest{
+			AgentID: "producer-only-agent",
+			Metadata: map[string]interface{}{
+				"agent_type":   "a2a",
+				"name":         "producer-only-agent",
+				"a2a_producer": true,
+				"a2a_consumer": false,
+				"tools": []interface{}{
+					map[string]interface{}{
+						"function_name": "noop",
+						"capability":    "noop_cap",
+					},
+				},
+			},
+		}
+		_, err := service.RegisterAgent(req)
+		require.NoError(t, err)
+
+		list, err := service.ListAgents(&AgentQueryParams{})
+		require.NoError(t, err)
+		require.Len(t, list.Agents, 1)
+		require.NotNil(t, list.Agents[0].A2aProducer)
+		require.NotNil(t, list.Agents[0].A2aConsumer)
+		assert.True(t, *list.Agents[0].A2aProducer)
+		assert.False(t, *list.Agents[0].A2aConsumer)
+	})
+
+	t.Run("OmittedFlagsDefaultToFalse", func(t *testing.T) {
+		service := setupTestService(t)
+
+		req := &AgentRegistrationRequest{
+			AgentID: "plain-agent",
+			Metadata: map[string]interface{}{
+				"agent_type": "mcp_agent",
+				"name":       "plain-agent",
+				"tools": []interface{}{
+					map[string]interface{}{
+						"function_name": "noop",
+						"capability":    "noop_cap",
+					},
+				},
+			},
+		}
+		_, err := service.RegisterAgent(req)
+		require.NoError(t, err)
+
+		list, err := service.ListAgents(&AgentQueryParams{})
+		require.NoError(t, err)
+		require.Len(t, list.Agents, 1)
+		// Both flags must default to false on absence (Ent schema default,
+		// surfaced explicitly so the wire shape stays stable for clients).
+		require.NotNil(t, list.Agents[0].A2aProducer)
+		require.NotNil(t, list.Agents[0].A2aConsumer)
+		assert.False(t, *list.Agents[0].A2aProducer)
+		assert.False(t, *list.Agents[0].A2aConsumer)
+	})
+
+	t.Run("HeartbeatOmittingFlagsDoesNotClobberTrue", func(t *testing.T) {
+		// Issue #972: the agentMetadata.hasA2a* guards prevent a heartbeat
+		// that omits the keys from clobbering a previously-stored true with
+		// the boolean zero value. Mirrors the description-guard pattern.
+		service := setupTestService(t)
+
+		regReq := &AgentRegistrationRequest{
+			AgentID: "consumer-agent",
+			Metadata: map[string]interface{}{
+				"agent_type":   "mcp_agent",
+				"name":         "consumer-agent",
+				"a2a_producer": true,
+				"a2a_consumer": false,
+				"tools": []interface{}{
+					map[string]interface{}{
+						"function_name": "noop",
+						"capability":    "noop_cap",
+					},
+				},
+			},
+		}
+		_, err := service.RegisterAgent(regReq)
+		require.NoError(t, err)
+
+		// Heartbeat WITHOUT a2a_* keys — must not flip producer back to false.
+		hbReq := &HeartbeatRequest{
+			AgentID: "consumer-agent",
+			Status:  "healthy",
+			Metadata: map[string]interface{}{
+				"agent_type": "mcp_agent",
+				"name":       "consumer-agent",
+				"tools": []interface{}{
+					map[string]interface{}{
+						"function_name": "noop",
+						"capability":    "noop_cap",
+					},
+				},
+			},
+		}
+		_, err = service.UpdateHeartbeat(hbReq)
+		require.NoError(t, err)
+
+		list, err := service.ListAgents(&AgentQueryParams{})
+		require.NoError(t, err)
+		require.Len(t, list.Agents, 1)
+		require.NotNil(t, list.Agents[0].A2aProducer)
+		require.NotNil(t, list.Agents[0].A2aConsumer)
+		assert.True(t, *list.Agents[0].A2aProducer,
+			"heartbeat without a2a_producer key must NOT clobber a previously-stored true")
+		assert.False(t, *list.Agents[0].A2aConsumer)
+	})
+
+	t.Run("BridgeAgentBothFlagsTrue", func(t *testing.T) {
+		service := setupTestService(t)
+
+		req := &AgentRegistrationRequest{
+			AgentID: "bridge-agent",
+			Metadata: map[string]interface{}{
+				"agent_type":   "a2a",
+				"name":         "bridge-agent",
+				"a2a_producer": true,
+				"a2a_consumer": true,
+				"tools": []interface{}{
+					map[string]interface{}{
+						"function_name": "noop",
+						"capability":    "noop_cap",
+					},
+				},
+			},
+		}
+		_, err := service.RegisterAgent(req)
+		require.NoError(t, err)
+
+		list, err := service.ListAgents(&AgentQueryParams{})
+		require.NoError(t, err)
+		require.Len(t, list.Agents, 1)
+		require.NotNil(t, list.Agents[0].A2aProducer)
+		require.NotNil(t, list.Agents[0].A2aConsumer)
+		assert.True(t, *list.Agents[0].A2aProducer)
+		assert.True(t, *list.Agents[0].A2aConsumer)
+	})
+}

@@ -452,9 +452,11 @@ public class MeshAutoConfiguration {
             MeshLlmRegistry llmRegistry,
             ObjectMapper objectMapper,
             ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
-            ObjectProvider<MeshA2ARegistry> a2aRegistryProvider) {
+            ObjectProvider<MeshA2ARegistry> a2aRegistryProvider,
+            A2AConsumerBeanPostProcessor a2aConsumerBeanPostProcessor) {
         return () -> finalizeAgentSpec(runtime.getAgentSpec(), toolRegistry,
-            llmRegistry, objectMapper, routeRegistryProvider, a2aRegistryProvider);
+            llmRegistry, objectMapper, routeRegistryProvider, a2aRegistryProvider,
+            a2aConsumerBeanPostProcessor);
     }
 
     @Bean
@@ -698,7 +700,8 @@ public class MeshAutoConfiguration {
             MeshLlmRegistry llmRegistry,
             ObjectMapper objectMapper,
             ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
-            ObjectProvider<MeshA2ARegistry> a2aRegistryProvider) {
+            ObjectProvider<MeshA2ARegistry> a2aRegistryProvider,
+            A2AConsumerBeanPostProcessor a2aConsumerBeanPostProcessor) {
 
         // Helper tools (MeshJob substrate) and LLM provider handlers are
         // registered eagerly in meshRuntime() — see the comment there. By
@@ -755,6 +758,11 @@ public class MeshAutoConfiguration {
         // capabilities.
         applyA2ASurfaces(spec, a2aRegistryProvider, objectMapper);
 
+        // Issue #972: stamp the A2A consumer flag from the bean-post-processor's
+        // collected bindings. Non-empty means at least one @A2AConsumer method
+        // was registered. Producer flag is set inside applyA2ASurfaces above.
+        spec.setA2aConsumer(!a2aConsumerBeanPostProcessor.bindings().isEmpty());
+
         log.info("Agent spec finalized for '{}' with {} tool(s)",
             spec.getName(), spec.getTools().size());
     }
@@ -806,6 +814,10 @@ public class MeshAutoConfiguration {
             String surfacesJson = objectMapper.writeValueAsString(heartbeatSurfaces);
             spec.setSurfaces(surfacesJson);
             spec.setAgentType("a2a");
+            // Issue #972: this is the producer-side detection point — same
+            // branch that flips agent_type to "a2a" also stamps the
+            // self-declared producer flag. Default remains false on the spec.
+            spec.setA2aProducer(true);
             log.info("@MeshA2A: {} surface(s) registered — agent_type=a2a, surfaces={}",
                 heartbeatSurfaces.size(), surfacesJson);
         } catch (Exception e) {

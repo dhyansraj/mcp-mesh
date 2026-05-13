@@ -247,6 +247,12 @@ pub struct JsAgentSpec {
     /// shape on `AgentSpec`; the Rust core re-parses before forwarding
     /// verbatim to the registry's `MeshAgentRegistration.surfaces` field.
     pub surfaces: Option<String>,
+    /// Issue #972: true if at least one A2A producer surface is declared.
+    /// Stamped by the TS layer (see `agent.ts` JsAgentSpec construction).
+    pub a2a_producer: bool,
+    /// Issue #972: true if at least one A2A consumer surface is declared.
+    /// Stamped by the TS layer.
+    pub a2a_consumer: bool,
 }
 
 impl From<JsAgentSpec> for RustAgentSpec {
@@ -270,6 +276,9 @@ impl From<JsAgentSpec> for RustAgentSpec {
         // Forward `surfaces` JSON passthrough (empty string treated as absent
         // so the wire stays clean — matches Python's `py_new` behavior).
         spec.surfaces = js.surfaces.filter(|s| !s.trim().is_empty());
+        // Issue #972: pass the SDK-detected A2A flags through to the core spec.
+        spec.a2a_producer = js.a2a_producer;
+        spec.a2a_consumer = js.a2a_consumer;
         spec
     }
 }
@@ -1027,6 +1036,8 @@ mod tests {
             llm_agents: None,
             heartbeat_interval: 5,
             surfaces: None,
+            a2a_producer: false,
+            a2a_consumer: false,
         };
 
         let rust_spec: RustAgentSpec = js_spec.into();
@@ -1054,6 +1065,8 @@ mod tests {
             llm_agents: None,
             heartbeat_interval: 5,
             surfaces: None,
+            a2a_producer: false,
+            a2a_consumer: false,
         };
 
         let rust_spec: RustAgentSpec = js_spec.into();
@@ -1078,6 +1091,8 @@ mod tests {
             llm_agents: None,
             heartbeat_interval: 5,
             surfaces: None,
+            a2a_producer: false,
+            a2a_consumer: false,
         };
 
         let rust_spec: RustAgentSpec = js_spec.into();
@@ -1140,6 +1155,8 @@ mod tests {
             }]),
             heartbeat_interval: 5,
             surfaces: None,
+            a2a_producer: false,
+            a2a_consumer: false,
         };
 
         let rust_spec: RustAgentSpec = js_spec.into();

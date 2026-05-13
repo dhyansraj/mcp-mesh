@@ -154,14 +154,22 @@ export class A2AProducerRegistry {
    */
   buildAgentSpecContribution(
     nonA2aType: "api" | "mcp_agent" = "api",
-  ): { agentType: "a2a" | "api" | "mcp_agent"; surfacesJson: string | undefined } {
+  ): {
+    agentType: "a2a" | "api" | "mcp_agent";
+    surfacesJson: string | undefined;
+    a2aProducer: boolean;
+  } {
     if (!this.hasSurfaces()) {
-      return { agentType: nonA2aType, surfacesJson: undefined };
+      // Issue #972: producer flag mirrors `hasSurfaces()` — callers (Express
+      // ApiRuntime, mesh.a2a.mount path) read this directly to stamp the
+      // self-declared flag on JsAgentSpec.
+      return { agentType: nonA2aType, surfacesJson: undefined, a2aProducer: false };
     }
     const surfaces = this.buildHeartbeatSurfaces();
     return {
       agentType: "a2a",
       surfacesJson: JSON.stringify(surfaces),
+      a2aProducer: true,
     };
   }
 

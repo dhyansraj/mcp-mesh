@@ -832,6 +832,20 @@ components:
             generated from this spec must NOT reject over-long descriptions
             client-side; the server is authoritative for the truncate +
             warning flow.
+        a2a_producer:
+          type: boolean
+          default: false
+          description: |
+            True if this agent registers at least one A2A producer surface
+            (@mesh.a2a / @MeshA2A / mesh.a2a.mount). Default false. Server
+            reads as false if absent.
+        a2a_consumer:
+          type: boolean
+          default: false
+          description: |
+            True if this agent registers at least one A2A consumer surface
+            (@mesh.a2a_consumer / @A2AConsumer / a2aConfig). Default false.
+            Server reads as false if absent.
         http_host:
           type: string
           default: "0.0.0.0"
@@ -1818,6 +1832,18 @@ components:
             (`@mesh.agent(description=...)` in Python, `@MeshAgent(description=...)`
             in Java, `mesh({ description: ... })` in TypeScript). Surfaced in
             the UI agent detail header.
+        a2a_producer:
+          type: boolean
+          default: false
+          description: |
+            True if this agent registers at least one A2A producer surface
+            (@mesh.a2a / @MeshA2A / mesh.a2a.mount). Default false.
+        a2a_consumer:
+          type: boolean
+          default: false
+          description: |
+            True if this agent registers at least one A2A consumer surface
+            (@mesh.a2a_consumer / @A2AConsumer / a2aConfig). Default false.
         status:
           type: string
           enum: [healthy, degraded, unhealthy, offline]

@@ -40,6 +40,14 @@ func (Agent) Fields() []ent.Field {
 			Default("").
 			MaxLen(256).
 			Comment("Free-form agent description (≤256 chars, plain text)"),
+		field.Bool("a2a_producer").
+			Optional().
+			Default(false).
+			Comment("True if this agent has at least one A2A producer surface declared"),
+		field.Bool("a2a_consumer").
+			Optional().
+			Default(false).
+			Comment("True if this agent has at least one A2A consumer surface declared"),
 		field.String("http_host").
 			Optional().
 			Comment("HTTP host for the agent"),

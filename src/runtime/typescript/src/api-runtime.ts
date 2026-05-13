@@ -227,7 +227,7 @@ class ApiRuntime {
       // (matches Python's heartbeat_preparation.py:371-389). Centralized in
       // A2AProducerRegistry.buildAgentSpecContribution so the startup-time
       // value matches the post-mount push path (#938 fix).
-      const { agentType, surfacesJson } =
+      const { agentType, surfacesJson, a2aProducer } =
         A2AProducerRegistry.getInstance().buildAgentSpecContribution("api");
 
       // Create AgentSpec
@@ -245,6 +245,11 @@ class ApiRuntime {
         tools,
         heartbeatInterval,
         surfaces: surfacesJson,
+        // Issue #972: API runtime uses `mesh.route(...)` only; no consumer
+        // marker on this code path, so consumer flag stays false in v1.
+        // Field names are NAPI-camelCase (a2_ -> a2A).
+        a2AProducer: a2aProducer,
+        a2AConsumer: false,
       };
 
       // Start the agent via Rust core

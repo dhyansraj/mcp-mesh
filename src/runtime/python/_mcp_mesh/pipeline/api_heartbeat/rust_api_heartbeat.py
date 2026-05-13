@@ -169,6 +169,12 @@ def _build_api_agent_spec(context: dict[str, Any], service_id: str = None) -> An
         llm_agents=None,  # API services don't have LLM agents
         heartbeat_interval=heartbeat_interval,
         agent_id=service_id,
+        # Issue #972: API services use `mesh.route` (not @mesh.a2a or
+        # @mesh.a2a_consumer), so neither flag fires in v1. Leaving route-level
+        # consumer introspection (e.g. detecting an A2AClient passed into a
+        # FastAPI route) for a follow-up — out of scope for #972.
+        a2a_producer=False,
+        a2a_consumer=False,
     )
 
     logger.info(

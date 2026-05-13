@@ -52,6 +52,8 @@ type AgentMutation struct {
 	name                            *string
 	version                         *string
 	description                     *string
+	a2a_producer                    *bool
+	a2a_consumer                    *bool
 	http_host                       *string
 	http_port                       *int
 	addhttp_port                    *int
@@ -409,6 +411,104 @@ func (m *AgentMutation) DescriptionCleared() bool {
 func (m *AgentMutation) ResetDescription() {
 	m.description = nil
 	delete(m.clearedFields, agent.FieldDescription)
+}
+
+// SetA2aProducer sets the "a2a_producer" field.
+func (m *AgentMutation) SetA2aProducer(b bool) {
+	m.a2a_producer = &b
+}
+
+// A2aProducer returns the value of the "a2a_producer" field in the mutation.
+func (m *AgentMutation) A2aProducer() (r bool, exists bool) {
+	v := m.a2a_producer
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldA2aProducer returns the old "a2a_producer" field's value of the Agent entity.
+// If the Agent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AgentMutation) OldA2aProducer(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldA2aProducer is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldA2aProducer requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldA2aProducer: %w", err)
+	}
+	return oldValue.A2aProducer, nil
+}
+
+// ClearA2aProducer clears the value of the "a2a_producer" field.
+func (m *AgentMutation) ClearA2aProducer() {
+	m.a2a_producer = nil
+	m.clearedFields[agent.FieldA2aProducer] = struct{}{}
+}
+
+// A2aProducerCleared returns if the "a2a_producer" field was cleared in this mutation.
+func (m *AgentMutation) A2aProducerCleared() bool {
+	_, ok := m.clearedFields[agent.FieldA2aProducer]
+	return ok
+}
+
+// ResetA2aProducer resets all changes to the "a2a_producer" field.
+func (m *AgentMutation) ResetA2aProducer() {
+	m.a2a_producer = nil
+	delete(m.clearedFields, agent.FieldA2aProducer)
+}
+
+// SetA2aConsumer sets the "a2a_consumer" field.
+func (m *AgentMutation) SetA2aConsumer(b bool) {
+	m.a2a_consumer = &b
+}
+
+// A2aConsumer returns the value of the "a2a_consumer" field in the mutation.
+func (m *AgentMutation) A2aConsumer() (r bool, exists bool) {
+	v := m.a2a_consumer
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldA2aConsumer returns the old "a2a_consumer" field's value of the Agent entity.
+// If the Agent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AgentMutation) OldA2aConsumer(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldA2aConsumer is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldA2aConsumer requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldA2aConsumer: %w", err)
+	}
+	return oldValue.A2aConsumer, nil
+}
+
+// ClearA2aConsumer clears the value of the "a2a_consumer" field.
+func (m *AgentMutation) ClearA2aConsumer() {
+	m.a2a_consumer = nil
+	m.clearedFields[agent.FieldA2aConsumer] = struct{}{}
+}
+
+// A2aConsumerCleared returns if the "a2a_consumer" field was cleared in this mutation.
+func (m *AgentMutation) A2aConsumerCleared() bool {
+	_, ok := m.clearedFields[agent.FieldA2aConsumer]
+	return ok
+}
+
+// ResetA2aConsumer resets all changes to the "a2a_consumer" field.
+func (m *AgentMutation) ResetA2aConsumer() {
+	m.a2a_consumer = nil
+	delete(m.clearedFields, agent.FieldA2aConsumer)
 }
 
 // SetHTTPHost sets the "http_host" field.
@@ -1240,7 +1340,7 @@ func (m *AgentMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AgentMutation) Fields() []string {
-	fields := make([]string, 0, 16)
+	fields := make([]string, 0, 18)
 	if m.agent_type != nil {
 		fields = append(fields, agent.FieldAgentType)
 	}
@@ -1255,6 +1355,12 @@ func (m *AgentMutation) Fields() []string {
 	}
 	if m.description != nil {
 		fields = append(fields, agent.FieldDescription)
+	}
+	if m.a2a_producer != nil {
+		fields = append(fields, agent.FieldA2aProducer)
+	}
+	if m.a2a_consumer != nil {
+		fields = append(fields, agent.FieldA2aConsumer)
 	}
 	if m.http_host != nil {
 		fields = append(fields, agent.FieldHTTPHost)
@@ -1307,6 +1413,10 @@ func (m *AgentMutation) Field(name string) (ent.Value, bool) {
 		return m.Version()
 	case agent.FieldDescription:
 		return m.Description()
+	case agent.FieldA2aProducer:
+		return m.A2aProducer()
+	case agent.FieldA2aConsumer:
+		return m.A2aConsumer()
 	case agent.FieldHTTPHost:
 		return m.HTTPHost()
 	case agent.FieldHTTPPort:
@@ -1348,6 +1458,10 @@ func (m *AgentMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldVersion(ctx)
 	case agent.FieldDescription:
 		return m.OldDescription(ctx)
+	case agent.FieldA2aProducer:
+		return m.OldA2aProducer(ctx)
+	case agent.FieldA2aConsumer:
+		return m.OldA2aConsumer(ctx)
 	case agent.FieldHTTPHost:
 		return m.OldHTTPHost(ctx)
 	case agent.FieldHTTPPort:
@@ -1413,6 +1527,20 @@ func (m *AgentMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetDescription(v)
+		return nil
+	case agent.FieldA2aProducer:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetA2aProducer(v)
+		return nil
+	case agent.FieldA2aConsumer:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetA2aConsumer(v)
 		return nil
 	case agent.FieldHTTPHost:
 		v, ok := value.(string)
@@ -1569,6 +1697,12 @@ func (m *AgentMutation) ClearedFields() []string {
 	if m.FieldCleared(agent.FieldDescription) {
 		fields = append(fields, agent.FieldDescription)
 	}
+	if m.FieldCleared(agent.FieldA2aProducer) {
+		fields = append(fields, agent.FieldA2aProducer)
+	}
+	if m.FieldCleared(agent.FieldA2aConsumer) {
+		fields = append(fields, agent.FieldA2aConsumer)
+	}
 	if m.FieldCleared(agent.FieldHTTPHost) {
 		fields = append(fields, agent.FieldHTTPHost)
 	}
@@ -1604,6 +1738,12 @@ func (m *AgentMutation) ClearField(name string) error {
 	case agent.FieldDescription:
 		m.ClearDescription()
 		return nil
+	case agent.FieldA2aProducer:
+		m.ClearA2aProducer()
+		return nil
+	case agent.FieldA2aConsumer:
+		m.ClearA2aConsumer()
+		return nil
 	case agent.FieldHTTPHost:
 		m.ClearHTTPHost()
 		return nil
@@ -1638,6 +1778,12 @@ func (m *AgentMutation) ResetField(name string) error {
 		return nil
 	case agent.FieldDescription:
 		m.ResetDescription()
+		return nil
+	case agent.FieldA2aProducer:
+		m.ResetA2aProducer()
+		return nil
+	case agent.FieldA2aConsumer:
+		m.ResetA2aConsumer()
 		return nil
 	case agent.FieldHTTPHost:
 		m.ResetHTTPHost()
