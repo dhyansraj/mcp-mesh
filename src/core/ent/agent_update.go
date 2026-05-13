@@ -102,6 +102,26 @@ func (au *AgentUpdate) ClearVersion() *AgentUpdate {
 	return au
 }
 
+// SetDescription sets the "description" field.
+func (au *AgentUpdate) SetDescription(s string) *AgentUpdate {
+	au.mutation.SetDescription(s)
+	return au
+}
+
+// SetNillableDescription sets the "description" field if the given value is not nil.
+func (au *AgentUpdate) SetNillableDescription(s *string) *AgentUpdate {
+	if s != nil {
+		au.SetDescription(*s)
+	}
+	return au
+}
+
+// ClearDescription clears the value of the "description" field.
+func (au *AgentUpdate) ClearDescription() *AgentUpdate {
+	au.mutation.ClearDescription()
+	return au
+}
+
 // SetHTTPHost sets the "http_host" field.
 func (au *AgentUpdate) SetHTTPHost(s string) *AgentUpdate {
 	au.mutation.SetHTTPHost(s)
@@ -509,6 +529,11 @@ func (au *AgentUpdate) check() error {
 			return &ValidationError{Name: "runtime", err: fmt.Errorf(`ent: validator failed for field "Agent.runtime": %w`, err)}
 		}
 	}
+	if v, ok := au.mutation.Description(); ok {
+		if err := agent.DescriptionValidator(v); err != nil {
+			return &ValidationError{Name: "description", err: fmt.Errorf(`ent: validator failed for field "Agent.description": %w`, err)}
+		}
+	}
 	if v, ok := au.mutation.Status(); ok {
 		if err := agent.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Agent.status": %w`, err)}
@@ -546,6 +571,12 @@ func (au *AgentUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	}
 	if au.mutation.VersionCleared() {
 		_spec.ClearField(agent.FieldVersion, field.TypeString)
+	}
+	if value, ok := au.mutation.Description(); ok {
+		_spec.SetField(agent.FieldDescription, field.TypeString, value)
+	}
+	if au.mutation.DescriptionCleared() {
+		_spec.ClearField(agent.FieldDescription, field.TypeString)
 	}
 	if value, ok := au.mutation.HTTPHost(); ok {
 		_spec.SetField(agent.FieldHTTPHost, field.TypeString, value)
@@ -913,6 +944,26 @@ func (auo *AgentUpdateOne) SetNillableVersion(s *string) *AgentUpdateOne {
 // ClearVersion clears the value of the "version" field.
 func (auo *AgentUpdateOne) ClearVersion() *AgentUpdateOne {
 	auo.mutation.ClearVersion()
+	return auo
+}
+
+// SetDescription sets the "description" field.
+func (auo *AgentUpdateOne) SetDescription(s string) *AgentUpdateOne {
+	auo.mutation.SetDescription(s)
+	return auo
+}
+
+// SetNillableDescription sets the "description" field if the given value is not nil.
+func (auo *AgentUpdateOne) SetNillableDescription(s *string) *AgentUpdateOne {
+	if s != nil {
+		auo.SetDescription(*s)
+	}
+	return auo
+}
+
+// ClearDescription clears the value of the "description" field.
+func (auo *AgentUpdateOne) ClearDescription() *AgentUpdateOne {
+	auo.mutation.ClearDescription()
 	return auo
 }
 
@@ -1336,6 +1387,11 @@ func (auo *AgentUpdateOne) check() error {
 			return &ValidationError{Name: "runtime", err: fmt.Errorf(`ent: validator failed for field "Agent.runtime": %w`, err)}
 		}
 	}
+	if v, ok := auo.mutation.Description(); ok {
+		if err := agent.DescriptionValidator(v); err != nil {
+			return &ValidationError{Name: "description", err: fmt.Errorf(`ent: validator failed for field "Agent.description": %w`, err)}
+		}
+	}
 	if v, ok := auo.mutation.Status(); ok {
 		if err := agent.StatusValidator(v); err != nil {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "Agent.status": %w`, err)}
@@ -1390,6 +1446,12 @@ func (auo *AgentUpdateOne) sqlSave(ctx context.Context) (_node *Agent, err error
 	}
 	if auo.mutation.VersionCleared() {
 		_spec.ClearField(agent.FieldVersion, field.TypeString)
+	}
+	if value, ok := auo.mutation.Description(); ok {
+		_spec.SetField(agent.FieldDescription, field.TypeString, value)
+	}
+	if auo.mutation.DescriptionCleared() {
+		_spec.ClearField(agent.FieldDescription, field.TypeString)
 	}
 	if value, ok := auo.mutation.HTTPHost(); ok {
 		_spec.SetField(agent.FieldHTTPHost, field.TypeString, value)

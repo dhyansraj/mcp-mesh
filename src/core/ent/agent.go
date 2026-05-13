@@ -27,6 +27,8 @@ type Agent struct {
 	Name string `json:"name,omitempty"`
 	// Version of the agent
 	Version string `json:"version,omitempty"`
+	// Free-form agent description (≤256 chars, plain text)
+	Description string `json:"description,omitempty"`
 	// HTTP host for the agent
 	HTTPHost string `json:"http_host,omitempty"`
 	// HTTP port for the agent
@@ -126,7 +128,7 @@ func (*Agent) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case agent.FieldHTTPPort, agent.FieldTotalDependencies, agent.FieldDependenciesResolved:
 			values[i] = new(sql.NullInt64)
-		case agent.FieldID, agent.FieldAgentType, agent.FieldRuntime, agent.FieldName, agent.FieldVersion, agent.FieldHTTPHost, agent.FieldNamespace, agent.FieldStatus, agent.FieldEntityID:
+		case agent.FieldID, agent.FieldAgentType, agent.FieldRuntime, agent.FieldName, agent.FieldVersion, agent.FieldDescription, agent.FieldHTTPHost, agent.FieldNamespace, agent.FieldStatus, agent.FieldEntityID:
 			values[i] = new(sql.NullString)
 		case agent.FieldCreatedAt, agent.FieldUpdatedAt, agent.FieldLastFullRefresh:
 			values[i] = new(sql.NullTime)
@@ -174,6 +176,12 @@ func (a *Agent) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field version", values[i])
 			} else if value.Valid {
 				a.Version = value.String
+			}
+		case agent.FieldDescription:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field description", values[i])
+			} else if value.Valid {
+				a.Description = value.String
 			}
 		case agent.FieldHTTPHost:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -316,6 +324,9 @@ func (a *Agent) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("version=")
 	builder.WriteString(a.Version)
+	builder.WriteString(", ")
+	builder.WriteString("description=")
+	builder.WriteString(a.Description)
 	builder.WriteString(", ")
 	builder.WriteString("http_host=")
 	builder.WriteString(a.HTTPHost)

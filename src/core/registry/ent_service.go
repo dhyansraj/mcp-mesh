@@ -95,6 +95,10 @@ type AgentRegistrationResponse struct {
 	Message              string                             `json:"message"`
 	DependenciesResolved map[string][]*DependencyResolution `json:"dependencies_resolved,omitempty"`
 	Metadata             map[string]interface{}             `json:"metadata,omitempty"`
+	// Warnings are non-fatal advisories from the registry (issue #969):
+	// currently used for description-truncation notifications. The HTTP
+	// handler forwards these to the `warnings` field on the wire response.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // DependencyResolution represents a resolved dependency in the new format.
@@ -233,6 +237,12 @@ type HeartbeatResponse struct {
 	// nil otherwise so the JSON `surfaces` field stays omitted from the
 	// response payload for non-a2a flows.
 	A2ASurfaces []map[string]interface{} `json:"-"`
+
+	// Warnings are non-fatal advisories from the registry (issue #969):
+	// currently used to surface description-truncation warnings back to the
+	// SDK. The handler forwards these to the wire `warnings` field. JSON tag
+	// is "-" because the response is hand-marshalled (see SendHeartbeat).
+	Warnings []string `json:"-"`
 }
 
 // EntService provides registry operations using Ent ORM instead of raw SQL
@@ -294,10 +304,17 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 
 // agentMetadata holds extracted metadata fields from a registration or heartbeat request.
 type agentMetadata struct {
-	agentType string
-	runtime   string
-	name      string
-	version   string
+	agentType      string
+	runtime        string
+	name           string
+	version        string
+	description    string   // Free-form agent description (issue #969). Already
+	                       // whitespace-stripped + 256-char-capped by validateAgentDescription.
+	descWarnings   []string // Non-fatal advisories from description sanitisation.
+	hasDescription bool     // True if the request supplied a description key at all.
+	                       // Heartbeats without `description` set must not clobber
+	                       // a previously-stored description (mirrors the
+	                       // namespace/http_host guard logic).
 	namespace string
 	httpHost  string
 	httpPort  int
@@ -323,6 +340,15 @@ func extractAgentMetadata(agentID string, metadata map[string]interface{}) agent
 	}
 	if v, ok := metadata["version"].(string); ok {
 		m.version = v
+	}
+	if v, ok := metadata["description"].(string); ok {
+		// Issue #969: canonicalise + cap before persistence. Warnings get
+		// surfaced on the registration response by the caller (validation
+		// never fails — over-long descriptions are truncated, never rejected).
+		cleaned, warnings := validateAgentDescription(v)
+		m.description = cleaned
+		m.descWarnings = warnings
+		m.hasDescription = true
 	}
 	if v, ok := metadata["namespace"].(string); ok {
 		m.namespace = v
@@ -447,6 +473,14 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		if meta.version != "" {
 			agentCreate = agentCreate.SetVersion(meta.version)
 		}
+		// Issue #969: persist agent description when supplied. meta.description
+		// is already trim+truncated by extractAgentMetadata. We only call
+		// SetDescription when the request explicitly carried a description key
+		// — omitting otherwise keeps the column at its default ("") on first
+		// create and avoids forcing a value on schema-driven defaults.
+		if meta.hasDescription {
+			agentCreate = agentCreate.SetDescription(meta.description)
+		}
 		if meta.httpHost != "" {
 			agentCreate = agentCreate.SetHTTPHost(meta.httpHost)
 		}
@@ -495,6 +529,12 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 
 			if meta.version != "" {
 				updateBuilder = updateBuilder.SetVersion(meta.version)
+			}
+			// Issue #969: only overwrite description when the request actually
+			// carried one. Same logic as create — protects an existing value
+			// from being clobbered by a re-register without `description`.
+			if meta.hasDescription {
+				updateBuilder = updateBuilder.SetDescription(meta.description)
 			}
 			if meta.httpHost != "" {
 				updateBuilder = updateBuilder.SetHTTPHost(meta.httpHost)
@@ -756,6 +796,9 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		AgentID:              req.AgentID,
 		Timestamp:            now.Format(time.RFC3339),
 		DependenciesResolved: dependenciesResolved,
+		// Issue #969: surface description-sanitisation advisories. Empty
+		// slice (omitempty) when nothing to report.
+		Warnings: meta.descWarnings,
 	}, nil
 }
 
@@ -1219,6 +1262,9 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 					LLMTools:             llmTools,
 					LLMProviders:         llmProviders,
 					A2ASurfaces:          a2aSurfaces,
+					// Issue #969: propagate description warnings from
+					// the register call (e.g. "description truncated …").
+					Warnings: regResp.Warnings,
 				}, nil
 			}
 
@@ -1244,6 +1290,10 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 
 	// If metadata is provided and contains tools, handle metadata updates directly
 	var dependenciesResolved map[string][]*DependencyResolution
+	// Description-sanitisation advisories from this heartbeat (issue #969).
+	// Hoisted out of the transaction closure so we can return it on the
+	// HeartbeatResponse below.
+	var descWarnings []string
 	if req.Metadata != nil {
 		_, hasTools := req.Metadata["tools"]
 		if hasTools {
@@ -1251,6 +1301,7 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 			err := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
 				// Extract agent metadata for updates
 				meta := extractAgentMetadata(req.AgentID, req.Metadata)
+				descWarnings = meta.descWarnings
 
 				// Update status and timestamp unconditionally
 				updateBuilder := tx.Agent.UpdateOneID(existingAgent.ID).
@@ -1275,6 +1326,12 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 
 				if meta.version != "" {
 					updateBuilder = updateBuilder.SetVersion(meta.version)
+				}
+				// Issue #969: persist description on heartbeat too. Only when
+				// supplied — guards an existing value against a heartbeat that
+				// happens to omit the key (the field is optional on the wire).
+				if meta.hasDescription {
+					updateBuilder = updateBuilder.SetDescription(meta.description)
 				}
 				if meta.httpHost != "" {
 					updateBuilder = updateBuilder.SetHTTPHost(meta.httpHost)
@@ -1517,6 +1574,8 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				LLMTools:             llmTools,
 				LLMProviders:         llmProviders,
 				A2ASurfaces:          existingAgent.A2aSurfaces,
+				// Issue #969: forward description-truncation advisories.
+				Warnings: descWarnings,
 			}, nil
 		}
 	}
@@ -1632,6 +1691,12 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 			LastSeen:  &a.UpdatedAt,
 		}
 		agentInfo.EntityId = a.EntityID
+		// Issue #969: surface the persisted agent description so the UI's
+		// agent detail header can render it. Always copy the value (an empty
+		// string is meaningful — the UI renders an explicit "No description
+		// provided" placeholder in that case).
+		desc := a.Description
+		agentInfo.Description = &desc
 
 		// Add capabilities
 		var capabilities []generated.CapabilityInfo

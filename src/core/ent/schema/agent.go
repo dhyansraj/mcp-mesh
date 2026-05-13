@@ -35,6 +35,11 @@ func (Agent) Fields() []ent.Field {
 		field.String("version").
 			Optional().
 			Comment("Version of the agent"),
+		field.String("description").
+			Optional().
+			Default("").
+			MaxLen(256).
+			Comment("Free-form agent description (≤256 chars, plain text)"),
 		field.String("http_host").
 			Optional().
 			Comment("HTTP host for the agent"),

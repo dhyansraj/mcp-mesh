@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"strings"
 	"testing"
 
 	"mcp-mesh/src/core/registry/generated"
@@ -258,5 +259,101 @@ func TestAgentsEndpoint(t *testing.T) {
 		assert.Equal(t, 1, consumerAgent.TotalDependencies)
 
 		t.Logf("✅ Dependency tracking in agents list verified")
+	})
+}
+
+// TestAgentDescriptionPersistence covers issue #969: agent descriptions
+// supplied via @mesh.agent(description=...) round-trip from register through
+// to GET /agents, with the registry trim+truncate sanitisation in between.
+func TestAgentDescriptionPersistence(t *testing.T) {
+	t.Run("PersistsDescriptionVerbatim", func(t *testing.T) {
+		service := setupTestService(t)
+
+		req := &AgentRegistrationRequest{
+			AgentID: "described-agent",
+			Metadata: map[string]interface{}{
+				"agent_type":  "mcp_agent",
+				"name":        "described-agent",
+				"description": "abc",
+				"tools": []interface{}{
+					map[string]interface{}{
+						"function_name": "noop",
+						"capability":    "noop_cap",
+					},
+				},
+			},
+		}
+		resp, err := service.RegisterAgent(req)
+		require.NoError(t, err)
+		assert.Empty(t, resp.Warnings, "short description should not emit warnings")
+
+		list, err := service.ListAgents(&AgentQueryParams{})
+		require.NoError(t, err)
+		require.Len(t, list.Agents, 1)
+		require.NotNil(t, list.Agents[0].Description, "description should be present on AgentInfo")
+		assert.Equal(t, "abc", *list.Agents[0].Description)
+	})
+
+	t.Run("TruncatesOverLongDescriptionAndWarns", func(t *testing.T) {
+		service := setupTestService(t)
+
+		over := strings.Repeat("x", 300)
+		req := &AgentRegistrationRequest{
+			AgentID: "long-desc-agent",
+			Metadata: map[string]interface{}{
+				"agent_type":  "mcp_agent",
+				"name":        "long-desc-agent",
+				"description": over,
+				"tools": []interface{}{
+					map[string]interface{}{
+						"function_name": "noop",
+						"capability":    "noop_cap",
+					},
+				},
+			},
+		}
+		resp, err := service.RegisterAgent(req)
+		require.NoError(t, err, "over-long description must NOT cause registration to fail")
+		// Warning is non-empty and reports the original (300) and the cap (256).
+		require.Len(t, resp.Warnings, 1)
+		assert.Contains(t, resp.Warnings[0], "300")
+		assert.Contains(t, resp.Warnings[0], "256")
+
+		list, err := service.ListAgents(&AgentQueryParams{})
+		require.NoError(t, err)
+		require.Len(t, list.Agents, 1)
+		require.NotNil(t, list.Agents[0].Description)
+		assert.Len(t, *list.Agents[0].Description, MaxAgentDescriptionLen,
+			"persisted description should be capped at 256 chars")
+	})
+
+	t.Run("MissingDescriptionStoresEmptyString", func(t *testing.T) {
+		service := setupTestService(t)
+
+		req := &AgentRegistrationRequest{
+			AgentID: "no-desc-agent",
+			Metadata: map[string]interface{}{
+				"agent_type": "mcp_agent",
+				"name":       "no-desc-agent",
+				"tools": []interface{}{
+					map[string]interface{}{
+						"function_name": "noop",
+						"capability":    "noop_cap",
+					},
+				},
+			},
+		}
+		resp, err := service.RegisterAgent(req)
+		require.NoError(t, err)
+		assert.Empty(t, resp.Warnings)
+
+		list, err := service.ListAgents(&AgentQueryParams{})
+		require.NoError(t, err)
+		require.Len(t, list.Agents, 1)
+		// The description pointer is always non-nil for the UI to be able to
+		// distinguish "absent" (placeholder) from "supplied but empty" — we
+		// store an empty string when the request omitted the field.
+		require.NotNil(t, list.Agents[0].Description)
+		assert.Equal(t, "", *list.Agents[0].Description)
 	})
 }

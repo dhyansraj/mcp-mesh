@@ -73,6 +73,20 @@ func (ac *AgentCreate) SetNillableVersion(s *string) *AgentCreate {
 	return ac
 }
 
+// SetDescription sets the "description" field.
+func (ac *AgentCreate) SetDescription(s string) *AgentCreate {
+	ac.mutation.SetDescription(s)
+	return ac
+}
+
+// SetNillableDescription sets the "description" field if the given value is not nil.
+func (ac *AgentCreate) SetNillableDescription(s *string) *AgentCreate {
+	if s != nil {
+		ac.SetDescription(*s)
+	}
+	return ac
+}
+
 // SetHTTPHost sets the "http_host" field.
 func (ac *AgentCreate) SetHTTPHost(s string) *AgentCreate {
 	ac.mutation.SetHTTPHost(s)
@@ -343,6 +357,10 @@ func (ac *AgentCreate) defaults() {
 		v := agent.DefaultRuntime
 		ac.mutation.SetRuntime(v)
 	}
+	if _, ok := ac.mutation.Description(); !ok {
+		v := agent.DefaultDescription
+		ac.mutation.SetDescription(v)
+	}
 	if _, ok := ac.mutation.Namespace(); !ok {
 		v := agent.DefaultNamespace
 		ac.mutation.SetNamespace(v)
@@ -390,6 +408,11 @@ func (ac *AgentCreate) check() error {
 	}
 	if _, ok := ac.mutation.Name(); !ok {
 		return &ValidationError{Name: "name", err: errors.New(`ent: missing required field "Agent.name"`)}
+	}
+	if v, ok := ac.mutation.Description(); ok {
+		if err := agent.DescriptionValidator(v); err != nil {
+			return &ValidationError{Name: "description", err: fmt.Errorf(`ent: validator failed for field "Agent.description": %w`, err)}
+		}
 	}
 	if _, ok := ac.mutation.Namespace(); !ok {
 		return &ValidationError{Name: "namespace", err: errors.New(`ent: missing required field "Agent.namespace"`)}
@@ -467,6 +490,10 @@ func (ac *AgentCreate) createSpec() (*Agent, *sqlgraph.CreateSpec) {
 	if value, ok := ac.mutation.Version(); ok {
 		_spec.SetField(agent.FieldVersion, field.TypeString, value)
 		_node.Version = value
+	}
+	if value, ok := ac.mutation.Description(); ok {
+		_spec.SetField(agent.FieldDescription, field.TypeString, value)
+		_node.Description = value
 	}
 	if value, ok := ac.mutation.HTTPHost(); ok {
 		_spec.SetField(agent.FieldHTTPHost, field.TypeString, value)

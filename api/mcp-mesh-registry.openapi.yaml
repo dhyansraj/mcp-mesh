@@ -818,6 +818,17 @@ components:
           default: "1.0.0"
           example: "1.0.0"
           description: Agent version
+        description:
+          type: string
+          maxLength: 256
+          default: ""
+          example: "Greeting service for the mesh demo"
+          description: |
+            Free-form, plain-text agent description. The registry strips
+            leading/trailing whitespace and silently truncates to 256
+            characters (a `warnings` entry is added to the response when
+            truncation occurs — registration never fails over an over-long
+            description). Surfaced in the UI agent detail header.
         http_host:
           type: string
           default: "0.0.0.0"
@@ -1416,6 +1427,17 @@ components:
             MCP_MESH_PUBLIC_URL_PREFIX with each surface's path to produce
             the publicly addressable URL — so the agent never needs to know
             its own external hostname.
+        warnings:
+          type: array
+          items:
+            type: string
+          description: |
+            Non-fatal advisories from the registry. Populated when the
+            registry accepted the request but had to coerce a field — for
+            example: "description truncated from 312 to 256 chars". Absent
+            (or empty) when there is nothing to surface.
+          example:
+            - "description truncated from 312 to 256 chars"
 
     A2ASurfaceResponse:
       type: object
@@ -1785,6 +1807,14 @@ components:
           enum: [python, typescript, java]
           example: "python"
           description: SDK runtime language (python, typescript, or java)
+        description:
+          type: string
+          example: "Greeting service for the mesh demo"
+          description: |
+            Free-form, plain-text agent description. Set via the SDK
+            (`@mesh.agent(description=...)` in Python, `@MeshAgent(description=...)`
+            in Java, `mesh({ description: ... })` in TypeScript). Surfaced in
+            the UI agent detail header.
         status:
           type: string
           enum: [healthy, degraded, unhealthy, offline]

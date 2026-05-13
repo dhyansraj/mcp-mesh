@@ -4,6 +4,12 @@ export interface Agent {
   agent_type: "mcp_agent" | "mesh_tool" | "decorator_agent" | "api";
   runtime?: "python" | "typescript" | "java";
   version?: string;
+  /**
+   * Free-form agent description (issue #969). Optional + may be empty when
+   * the agent never set `@mesh.agent(description=...)` (or equivalent in
+   * Java/TypeScript). The detail header renders a placeholder in that case.
+   */
+  description?: string;
   status: "healthy" | "unhealthy" | "unknown";
   endpoint: string;
   entity_id?: string;

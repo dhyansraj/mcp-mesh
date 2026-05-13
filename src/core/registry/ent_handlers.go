@@ -350,6 +350,13 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 		}
 	}
 
+	// Surface non-fatal advisories from the registry (issue #969). Currently
+	// only used for description-truncation warnings; the slice stays absent
+	// from the wire when empty (omitempty semantics via field skip).
+	if len(serviceResp.Warnings) > 0 {
+		response["warnings"] = serviceResp.Warnings
+	}
+
 	c.JSON(http.StatusOK, response)
 }
 
@@ -411,6 +418,9 @@ func ConvertMeshAgentRegistrationToMap(reg generated.MeshAgentRegistration) map[
 	}
 	if reg.Version != nil {
 		result["version"] = *reg.Version
+	}
+	if reg.Description != nil {
+		result["description"] = *reg.Description
 	}
 	if reg.Runtime != nil {
 		result["runtime"] = string(*reg.Runtime)

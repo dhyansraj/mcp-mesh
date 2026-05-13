@@ -643,7 +643,7 @@ The `@mesh.agent` decorator configures the entire agent with server settings and
 | ------------------- | ------------- | ------------ | ---------------------------------- |
 | `name`              | `str`         | **Required** | Agent name (mandatory!)            |
 | `version`           | `str`         | `"1.0.0"`    | Agent version                      |
-| `description`       | `str \| None` | `None`       | Agent description                  |
+| `description`       | `str \| None` | `None`       | Agent description. Persisted to the registry and surfaced in the UI agent detail view (≤256 chars, plain text). |
 | `http_host`         | `str \| None` | `None`       | HTTP server host (auto-resolved)   |
 | `http_port`         | `int`         | `0`          | HTTP server port (0 = auto-assign) |
 | `enable_http`       | `bool`        | `True`       | Enable HTTP endpoints              |

@@ -23,6 +23,8 @@ const (
 	FieldName = "name"
 	// FieldVersion holds the string denoting the version field in the database.
 	FieldVersion = "version"
+	// FieldDescription holds the string denoting the description field in the database.
+	FieldDescription = "description"
 	// FieldHTTPHost holds the string denoting the http_host field in the database.
 	FieldHTTPHost = "http_host"
 	// FieldHTTPPort holds the string denoting the http_port field in the database.
@@ -111,6 +113,7 @@ var Columns = []string{
 	FieldRuntime,
 	FieldName,
 	FieldVersion,
+	FieldDescription,
 	FieldHTTPHost,
 	FieldHTTPPort,
 	FieldNamespace,
@@ -135,6 +138,10 @@ func ValidColumn(column string) bool {
 }
 
 var (
+	// DefaultDescription holds the default value on creation for the "description" field.
+	DefaultDescription string
+	// DescriptionValidator is a validator for the "description" field. It is called by the builders before save.
+	DescriptionValidator func(string) error
 	// DefaultNamespace holds the default value on creation for the "namespace" field.
 	DefaultNamespace string
 	// DefaultTotalDependencies holds the default value on creation for the "total_dependencies" field.
@@ -258,6 +265,11 @@ func ByName(opts ...sql.OrderTermOption) OrderOption {
 // ByVersion orders the results by the version field.
 func ByVersion(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldVersion, opts...).ToFunc()
+}
+
+// ByDescription orders the results by the description field.
+func ByDescription(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDescription, opts...).ToFunc()
 }
 
 // ByHTTPHost orders the results by the http_host field.
