@@ -670,3 +670,77 @@ class TestProviderAgenticLoopSyntheticRetry:
         assert any(
             "did not call synthetic tool" in m for m in warn_msgs
         ), f"Expected missing-synthetic-tool WARN; got: {warn_msgs}"
+
+
+# ---------------------------------------------------------------------------
+# _serialize_assistant_message_for_retry — Anthropic 1:1 invariant
+# ---------------------------------------------------------------------------
+
+
+class TestSerializeAssistantMessageForRetry:
+    """Pin down the ``bad_tool_use_id`` filter that preserves Anthropic's
+    1:1 ``tool_use``/``tool_result`` correlation invariant on the
+    corrective-retry payload (issue #961). Per
+    ``_extract_synthetic_format_arguments``'s docstring, the model may emit
+    real tool calls AND the synthetic in the same turn — the retry only
+    sends one ``tool_result`` (for the bad synthetic call_id), so any
+    parallel real ``tool_use`` blocks must be filtered out of the prior
+    assistant turn or Anthropic rejects the request.
+    """
+
+    def test_serialize_filters_tool_calls_to_bad_id_when_message_has_multiple(self):
+        """Assistant turn carries 2 tool_calls (a real one and the synthetic);
+        only the entry whose id matches ``bad_tool_use_id`` is retained.
+        """
+        from mesh.helpers import _serialize_assistant_message_for_retry
+
+        msg = _message(
+            content=None,
+            tool_calls=[
+                _tool_call("toolu_real", "real_tool", '{"x": 1}'),
+                _tool_call("toolu_bad", SYNTHETIC_TOOL_NAME, '{"parameter": {}}'),
+            ],
+        )
+
+        out = _serialize_assistant_message_for_retry(msg, bad_tool_use_id="toolu_bad")
+
+        assert out["role"] == "assistant"
+        assert len(out["tool_calls"]) == 1
+        assert out["tool_calls"][0]["id"] == "toolu_bad"
+        assert out["tool_calls"][0]["function"]["name"] == SYNTHETIC_TOOL_NAME
+
+    def test_serialize_passes_through_all_tool_calls_when_no_bad_id(self):
+        """Backward-compat: no ``bad_tool_use_id`` → all tool_calls survive."""
+        from mesh.helpers import _serialize_assistant_message_for_retry
+
+        msg = _message(
+            content=None,
+            tool_calls=[
+                _tool_call("toolu_a", "a", "{}"),
+                _tool_call("toolu_b", "b", "{}"),
+            ],
+        )
+
+        out = _serialize_assistant_message_for_retry(msg)
+
+        assert len(out["tool_calls"]) == 2
+        assert {tc["id"] for tc in out["tool_calls"]} == {"toolu_a", "toolu_b"}
+
+    def test_serialize_with_bad_id_not_in_tool_calls_yields_empty_list(self):
+        """Defensive: if the supplied ``bad_tool_use_id`` doesn't match any
+        tool_call (shouldn't happen in practice — the id was extracted from
+        the same message), the filter yields an empty list rather than
+        falling back silently to all calls.
+        """
+        from mesh.helpers import _serialize_assistant_message_for_retry
+
+        msg = _message(
+            content=None,
+            tool_calls=[_tool_call("toolu_real", "real_tool", "{}")],
+        )
+
+        out = _serialize_assistant_message_for_retry(
+            msg, bad_tool_use_id="toolu_missing"
+        )
+
+        assert out["tool_calls"] == []

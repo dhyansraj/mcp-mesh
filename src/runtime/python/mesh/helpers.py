@@ -479,6 +479,7 @@ def _read_synthetic_retry_max(loop_logger: logging.Logger | None) -> int:
 
 def _serialize_assistant_message_for_retry(
     message: Any,
+    bad_tool_use_id: str | None = None,
 ) -> dict[str, Any]:
     """Serialize the bad-attempt assistant turn into the dict shape that the
     LLM client accepts as a prior assistant turn.
@@ -489,12 +490,26 @@ def _serialize_assistant_message_for_retry(
     corrective-retry path (issue #961) to thread the failed ``tool_use``
     back to the model so its next turn can reference the same tool_use_id
     via a ``role:tool`` message.
+
+    When ``bad_tool_use_id`` is supplied, the ``tool_calls`` list is filtered
+    to the single entry whose ``id`` matches. This preserves Anthropic's 1:1
+    ``tool_use``/``tool_result`` correlation invariant: the corrective retry
+    only emits one ``tool_result`` (for ``bad_tool_use_id``), so any other
+    parallel ``tool_use`` blocks from the same assistant turn would be
+    orphaned and rejected by the API. Per
+    :func:`_extract_synthetic_format_arguments`, the model may return real
+    tool calls AND the synthetic in the same turn; this filter ensures the
+    retry payload is protocol-conformant in that case.
     """
-    tool_calls = getattr(message, "tool_calls", None) or []
+    raw_tool_calls = getattr(message, "tool_calls", None) or []
+    if bad_tool_use_id:
+        raw_tool_calls = [
+            tc for tc in raw_tool_calls if getattr(tc, "id", None) == bad_tool_use_id
+        ]
     return {
         "role": getattr(message, "role", "assistant"),
         "content": getattr(message, "content", "") or "",
-        "tool_calls": [_build_assistant_tool_call_dict(tc) for tc in tool_calls],
+        "tool_calls": [_build_assistant_tool_call_dict(tc) for tc in raw_tool_calls],
     }
 
 
@@ -1214,7 +1229,7 @@ async def _provider_agentic_loop(
                                 synthetic_tool_name=synthetic_tool_name,
                                 bad_tool_use_id=bad_tc_id,
                                 assistant_message_dict=_serialize_assistant_message_for_retry(
-                                    message
+                                    message, bad_tool_use_id=bad_tc_id
                                 ),
                                 current_messages=current_messages,
                                 tools=tools,
