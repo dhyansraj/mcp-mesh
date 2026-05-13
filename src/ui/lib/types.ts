@@ -134,6 +134,7 @@ export interface DashboardEvent {
     | "agent_deregistered"
     | "agent_healthy"
     | "agent_unhealthy"
+    | "agent_rotated"
     | "dependency_resolved"
     | "dependency_lost"
     | "connected"

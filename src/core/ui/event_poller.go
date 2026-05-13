@@ -106,8 +106,62 @@ func (p *EventPoller) poll(lastSnap map[string]agentSnapshot) {
 
 	events := diffAgents(lastSnap, resp.Agents)
 	for _, ev := range events {
+		// Issue #982 Part B: the snapshot diff doesn't carry the
+		// human-readable transition reason, so live "agent_unhealthy"
+		// events used to ship without `data.reason` while the
+		// history-backfill path (which reads the persisted registry
+		// event) had it. Look up the latest matching registry event
+		// for the agent and copy its `reason` across so the live
+		// stream matches what F5/backfill renders.
+		enrichEventReason(p.service, &ev)
 		p.hub.Publish(ev)
 	}
+}
+
+// enrichEventReason fills in ev.Data["reason"] from the most recent matching
+// registry event when the snapshot diff produced a status-transition event
+// that should carry a reason (agent_unhealthy / agent_deregistered). Failures
+// to look up are non-fatal — the event still ships, just without a reason
+// (matching the prior behaviour).
+//
+// The status-change hook (status_hooks.go) and the explicit unregister /
+// stale-on-startup paths in ent_service.go all write the registry event in
+// the same DB transaction as the status flip, so by the time the next poller
+// tick observes the diff the row is already committed and queryable.
+func enrichEventReason(svc *registry.EntService, ev *DashboardEvent) {
+	if ev == nil {
+		return
+	}
+	var registryEventType string
+	switch ev.Type {
+	case "agent_unhealthy":
+		registryEventType = "unhealthy"
+	case "agent_deregistered":
+		registryEventType = "unregister"
+	default:
+		return
+	}
+	if ev.AgentID == "" {
+		return
+	}
+	if ev.Data != nil {
+		if _, alreadySet := ev.Data["reason"]; alreadySet {
+			return
+		}
+	}
+
+	rows, err := svc.ListRecentEventsFiltered(1, registryEventType, ev.AgentID, "")
+	if err != nil || len(rows) == 0 {
+		return
+	}
+	reason, ok := rows[0].Data["reason"].(string)
+	if !ok || reason == "" {
+		return
+	}
+	if ev.Data == nil {
+		ev.Data = map[string]interface{}{}
+	}
+	ev.Data["reason"] = reason
 }
 
 // diffAgents compares current agents against the last snapshot, emits events,

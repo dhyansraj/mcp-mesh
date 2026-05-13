@@ -25,3 +25,30 @@ func TestListCommand_ShowFrameworkFlag(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, val, "--show-framework=true must parse as bool true")
 }
+
+// TestFormatAgentTypeDisplay covers every agent_type string the registry can
+// stamp on an AgentInfo, plus the unknown-fallback path. Issue #984: the
+// switch was missing the "a2a" case, which made `meshctl list` print
+// "Unknown" for any A2A-typed agent. Keep this in lockstep with the SPA's
+// getAgentTypeLabel (src/ui/lib/api.ts) — a divergence here is exactly the
+// bug we're guarding against.
+func TestFormatAgentTypeDisplay(t *testing.T) {
+	cases := []struct {
+		agentType string
+		want      string
+	}{
+		{"mcp_agent", "Agent"},
+		{"api", "API"},
+		{"mesh_tool", "Tool"},
+		{"decorator_agent", "Agent"},
+		{"a2a", "A2A"},
+		{"", "Unknown"},
+		{"future_unknown_kind", "Unknown"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.agentType, func(t *testing.T) {
+			assert.Equal(t, tc.want, formatAgentTypeDisplay(tc.agentType),
+				"display label for agent_type=%q", tc.agentType)
+		})
+	}
+}
