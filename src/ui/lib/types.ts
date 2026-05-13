@@ -10,6 +10,20 @@ export interface Agent {
    * Java/TypeScript). The detail header renders a placeholder in that case.
    */
   description?: string;
+  /**
+   * Issue #972: true if this agent registers at least one A2A producer
+   * surface (@mesh.a2a / @MeshA2A / mesh.a2a.mount). Defaults to false on
+   * the registry when absent. Type-only addition here — UI rendering /
+   * badges land in #970.
+   */
+  a2a_producer?: boolean;
+  /**
+   * Issue #972: true if this agent registers at least one A2A consumer
+   * surface (@mesh.a2a_consumer / @A2AConsumer / a2aConfig). Defaults to
+   * false on the registry when absent. Type-only addition here — UI
+   * rendering / badges land in #970.
+   */
+  a2a_consumer?: boolean;
   status: "healthy" | "unhealthy" | "unknown";
   endpoint: string;
   entity_id?: string;

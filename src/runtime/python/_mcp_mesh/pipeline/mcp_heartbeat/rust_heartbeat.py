@@ -492,6 +492,17 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
     agent_type = "a2a" if a2a_surfaces else None
     surfaces_json = json.dumps(a2a_surfaces) if a2a_surfaces else None
 
+    # Issue #972: derive the A2A producer/consumer self-declared flags. Reuse
+    # the already-computed `a2a_surfaces` list for the producer signal (any
+    # @mesh.a2a / mount(...) surface flips the flag). For the consumer signal
+    # walk `mesh_tools` and check the marker stamped by @mesh.a2a_consumer's
+    # bridge (see `mesh/decorators.py::a2a_consumer`).
+    a2a_producer = bool(a2a_surfaces)
+    a2a_consumer = any(
+        hasattr(decorated.function, "_mesh_a2a_consumer_metadata")
+        for decorated in mesh_tools.values()
+    )
+
     # Create AgentSpec
     spec = core.AgentSpec(
         name=base_name,
@@ -507,6 +518,8 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
         heartbeat_interval=heartbeat_interval,
         agent_id=agent_id,
         surfaces=surfaces_json,
+        a2a_producer=a2a_producer,
+        a2a_consumer=a2a_consumer,
     )
 
     logger.info(

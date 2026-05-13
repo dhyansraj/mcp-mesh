@@ -315,6 +315,10 @@ type agentMetadata struct {
 	                       // Heartbeats without `description` set must not clobber
 	                       // a previously-stored description (mirrors the
 	                       // namespace/http_host guard logic).
+	a2aProducer    bool // Issue #972: true if at least one A2A producer surface declared.
+	a2aConsumer    bool // Issue #972: true if at least one A2A consumer surface declared.
+	hasA2aProducer bool // Heartbeat guard: prevents non-supplying request from clobbering true.
+	hasA2aConsumer bool // Heartbeat guard: prevents non-supplying request from clobbering true.
 	namespace string
 	httpHost  string
 	httpPort  int
@@ -349,6 +353,18 @@ func extractAgentMetadata(agentID string, metadata map[string]interface{}) agent
 		m.description = cleaned
 		m.descWarnings = warnings
 		m.hasDescription = true
+	}
+	// Issue #972: A2A producer/consumer self-declared flags. No validation —
+	// booleans are self-validating. `hasA2a*` guards prevent heartbeats that
+	// omit the key from clobbering a previously-stored true (mirrors
+	// hasDescription pattern).
+	if v, ok := metadata["a2a_producer"].(bool); ok {
+		m.a2aProducer = v
+		m.hasA2aProducer = true
+	}
+	if v, ok := metadata["a2a_consumer"].(bool); ok {
+		m.a2aConsumer = v
+		m.hasA2aConsumer = true
 	}
 	if v, ok := metadata["namespace"].(string); ok {
 		m.namespace = v
@@ -481,6 +497,15 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		if meta.hasDescription {
 			agentCreate = agentCreate.SetDescription(meta.description)
 		}
+		// Issue #972: persist a2a producer/consumer flags only when the request
+		// supplied them. Mirrors the description guard — heartbeats omitting
+		// either key must not clobber a previously-stored true.
+		if meta.hasA2aProducer {
+			agentCreate = agentCreate.SetA2aProducer(meta.a2aProducer)
+		}
+		if meta.hasA2aConsumer {
+			agentCreate = agentCreate.SetA2aConsumer(meta.a2aConsumer)
+		}
 		if meta.httpHost != "" {
 			agentCreate = agentCreate.SetHTTPHost(meta.httpHost)
 		}
@@ -535,6 +560,14 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 			// from being clobbered by a re-register without `description`.
 			if meta.hasDescription {
 				updateBuilder = updateBuilder.SetDescription(meta.description)
+			}
+			// Issue #972: same guard as create path — only flip the flag when
+			// the request explicitly supplied it.
+			if meta.hasA2aProducer {
+				updateBuilder = updateBuilder.SetA2aProducer(meta.a2aProducer)
+			}
+			if meta.hasA2aConsumer {
+				updateBuilder = updateBuilder.SetA2aConsumer(meta.a2aConsumer)
 			}
 			if meta.httpHost != "" {
 				updateBuilder = updateBuilder.SetHTTPHost(meta.httpHost)
@@ -1333,6 +1366,14 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 				if meta.hasDescription {
 					updateBuilder = updateBuilder.SetDescription(meta.description)
 				}
+				// Issue #972: heartbeat-path guard. Same rule as register —
+				// omitting the key must never clobber a previously-stored true.
+				if meta.hasA2aProducer {
+					updateBuilder = updateBuilder.SetA2aProducer(meta.a2aProducer)
+				}
+				if meta.hasA2aConsumer {
+					updateBuilder = updateBuilder.SetA2aConsumer(meta.a2aConsumer)
+				}
 				if meta.httpHost != "" {
 					updateBuilder = updateBuilder.SetHTTPHost(meta.httpHost)
 				}
@@ -1697,6 +1738,13 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 		// provided" placeholder in that case).
 		desc := a.Description
 		agentInfo.Description = &desc
+		// Issue #972: surface the A2A producer/consumer flags. Always copy
+		// (an explicit false is semantically meaningful — agent has been
+		// observed to register without surfaces).
+		producer := a.A2aProducer
+		consumer := a.A2aConsumer
+		agentInfo.A2aProducer = &producer
+		agentInfo.A2aConsumer = &consumer
 
 		// Add capabilities
 		var capabilities []generated.CapabilityInfo

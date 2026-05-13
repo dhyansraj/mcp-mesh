@@ -87,6 +87,34 @@ func (ac *AgentCreate) SetNillableDescription(s *string) *AgentCreate {
 	return ac
 }
 
+// SetA2aProducer sets the "a2a_producer" field.
+func (ac *AgentCreate) SetA2aProducer(b bool) *AgentCreate {
+	ac.mutation.SetA2aProducer(b)
+	return ac
+}
+
+// SetNillableA2aProducer sets the "a2a_producer" field if the given value is not nil.
+func (ac *AgentCreate) SetNillableA2aProducer(b *bool) *AgentCreate {
+	if b != nil {
+		ac.SetA2aProducer(*b)
+	}
+	return ac
+}
+
+// SetA2aConsumer sets the "a2a_consumer" field.
+func (ac *AgentCreate) SetA2aConsumer(b bool) *AgentCreate {
+	ac.mutation.SetA2aConsumer(b)
+	return ac
+}
+
+// SetNillableA2aConsumer sets the "a2a_consumer" field if the given value is not nil.
+func (ac *AgentCreate) SetNillableA2aConsumer(b *bool) *AgentCreate {
+	if b != nil {
+		ac.SetA2aConsumer(*b)
+	}
+	return ac
+}
+
 // SetHTTPHost sets the "http_host" field.
 func (ac *AgentCreate) SetHTTPHost(s string) *AgentCreate {
 	ac.mutation.SetHTTPHost(s)
@@ -361,6 +389,14 @@ func (ac *AgentCreate) defaults() {
 		v := agent.DefaultDescription
 		ac.mutation.SetDescription(v)
 	}
+	if _, ok := ac.mutation.A2aProducer(); !ok {
+		v := agent.DefaultA2aProducer
+		ac.mutation.SetA2aProducer(v)
+	}
+	if _, ok := ac.mutation.A2aConsumer(); !ok {
+		v := agent.DefaultA2aConsumer
+		ac.mutation.SetA2aConsumer(v)
+	}
 	if _, ok := ac.mutation.Namespace(); !ok {
 		v := agent.DefaultNamespace
 		ac.mutation.SetNamespace(v)
@@ -494,6 +530,14 @@ func (ac *AgentCreate) createSpec() (*Agent, *sqlgraph.CreateSpec) {
 	if value, ok := ac.mutation.Description(); ok {
 		_spec.SetField(agent.FieldDescription, field.TypeString, value)
 		_node.Description = value
+	}
+	if value, ok := ac.mutation.A2aProducer(); ok {
+		_spec.SetField(agent.FieldA2aProducer, field.TypeBool, value)
+		_node.A2aProducer = value
+	}
+	if value, ok := ac.mutation.A2aConsumer(); ok {
+		_spec.SetField(agent.FieldA2aConsumer, field.TypeBool, value)
+		_node.A2aConsumer = value
 	}
 	if value, ok := ac.mutation.HTTPHost(); ok {
 		_spec.SetField(agent.FieldHTTPHost, field.TypeString, value)

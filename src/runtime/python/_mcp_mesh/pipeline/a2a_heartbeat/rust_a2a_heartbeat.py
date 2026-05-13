@@ -181,6 +181,13 @@ def _build_a2a_agent_spec(context: dict[str, Any], service_id: Optional[str] = N
         llm_agents=None,
         heartbeat_interval=heartbeat_interval,
         agent_id=service_id,
+        # Issue #972: this pipeline only fires for agents bootstrapped via
+        # the A2A surface path (no @mesh.agent / @mesh.tool decorators), so
+        # producer is true iff we have at least one surface to publish.
+        # Consumer is always false here — consumer-side bridges live on
+        # @mesh.tool wrappers that ship through the mcp_heartbeat path.
+        a2a_producer=bool(a2a_surfaces),
+        a2a_consumer=False,
     )
     if surfaces_json is not None:
         spec_kwargs["surfaces"] = surfaces_json

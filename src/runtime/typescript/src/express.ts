@@ -280,7 +280,7 @@ export class MeshExpress {
     // heartbeat_preparation.py:371-389). Centralized in
     // A2AProducerRegistry.buildAgentSpecContribution so the startup-time
     // value matches the post-mount push path (#938 fix).
-    const { agentType, surfacesJson } =
+    const { agentType, surfacesJson, a2aProducer } =
       A2AProducerRegistry.getInstance().buildAgentSpecContribution("api");
 
     const spec: JsAgentSpec = {
@@ -297,6 +297,13 @@ export class MeshExpress {
       tools,
       heartbeatInterval: this.config.heartbeatInterval,
       surfaces: surfacesJson,
+      // Issue #972: producer flag is supplied by the registry contribution
+      // helper (true iff at least one mesh.a2a.mount(...) surface). Express
+      // path uses `mesh.route(...)` for capability resolution — there's no
+      // a2aConfig-style consumer marker in this code path, so the consumer
+      // flag stays false in v1. Field names are NAPI-camelCase (a2_ -> a2A).
+      a2AProducer: a2aProducer,
+      a2AConsumer: false,
     };
 
     // Start the agent via Rust core

@@ -29,6 +29,10 @@ type Agent struct {
 	Version string `json:"version,omitempty"`
 	// Free-form agent description (≤256 chars, plain text)
 	Description string `json:"description,omitempty"`
+	// True if this agent has at least one A2A producer surface declared
+	A2aProducer bool `json:"a2a_producer,omitempty"`
+	// True if this agent has at least one A2A consumer surface declared
+	A2aConsumer bool `json:"a2a_consumer,omitempty"`
 	// HTTP host for the agent
 	HTTPHost string `json:"http_host,omitempty"`
 	// HTTP port for the agent
@@ -126,6 +130,8 @@ func (*Agent) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case agent.FieldA2aSurfaces:
 			values[i] = new([]byte)
+		case agent.FieldA2aProducer, agent.FieldA2aConsumer:
+			values[i] = new(sql.NullBool)
 		case agent.FieldHTTPPort, agent.FieldTotalDependencies, agent.FieldDependenciesResolved:
 			values[i] = new(sql.NullInt64)
 		case agent.FieldID, agent.FieldAgentType, agent.FieldRuntime, agent.FieldName, agent.FieldVersion, agent.FieldDescription, agent.FieldHTTPHost, agent.FieldNamespace, agent.FieldStatus, agent.FieldEntityID:
@@ -182,6 +188,18 @@ func (a *Agent) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field description", values[i])
 			} else if value.Valid {
 				a.Description = value.String
+			}
+		case agent.FieldA2aProducer:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field a2a_producer", values[i])
+			} else if value.Valid {
+				a.A2aProducer = value.Bool
+			}
+		case agent.FieldA2aConsumer:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field a2a_consumer", values[i])
+			} else if value.Valid {
+				a.A2aConsumer = value.Bool
 			}
 		case agent.FieldHTTPHost:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -327,6 +345,12 @@ func (a *Agent) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("description=")
 	builder.WriteString(a.Description)
+	builder.WriteString(", ")
+	builder.WriteString("a2a_producer=")
+	builder.WriteString(fmt.Sprintf("%v", a.A2aProducer))
+	builder.WriteString(", ")
+	builder.WriteString("a2a_consumer=")
+	builder.WriteString(fmt.Sprintf("%v", a.A2aConsumer))
 	builder.WriteString(", ")
 	builder.WriteString("http_host=")
 	builder.WriteString(a.HTTPHost)

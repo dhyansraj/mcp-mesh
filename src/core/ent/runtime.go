@@ -27,28 +27,36 @@ func init() {
 	agent.DefaultDescription = agentDescDescription.Default.(string)
 	// agent.DescriptionValidator is a validator for the "description" field. It is called by the builders before save.
 	agent.DescriptionValidator = agentDescDescription.Validators[0].(func(string) error)
+	// agentDescA2aProducer is the schema descriptor for a2a_producer field.
+	agentDescA2aProducer := agentFields[6].Descriptor()
+	// agent.DefaultA2aProducer holds the default value on creation for the a2a_producer field.
+	agent.DefaultA2aProducer = agentDescA2aProducer.Default.(bool)
+	// agentDescA2aConsumer is the schema descriptor for a2a_consumer field.
+	agentDescA2aConsumer := agentFields[7].Descriptor()
+	// agent.DefaultA2aConsumer holds the default value on creation for the a2a_consumer field.
+	agent.DefaultA2aConsumer = agentDescA2aConsumer.Default.(bool)
 	// agentDescNamespace is the schema descriptor for namespace field.
-	agentDescNamespace := agentFields[8].Descriptor()
+	agentDescNamespace := agentFields[10].Descriptor()
 	// agent.DefaultNamespace holds the default value on creation for the namespace field.
 	agent.DefaultNamespace = agentDescNamespace.Default.(string)
 	// agentDescTotalDependencies is the schema descriptor for total_dependencies field.
-	agentDescTotalDependencies := agentFields[10].Descriptor()
+	agentDescTotalDependencies := agentFields[12].Descriptor()
 	// agent.DefaultTotalDependencies holds the default value on creation for the total_dependencies field.
 	agent.DefaultTotalDependencies = agentDescTotalDependencies.Default.(int)
 	// agentDescDependenciesResolved is the schema descriptor for dependencies_resolved field.
-	agentDescDependenciesResolved := agentFields[11].Descriptor()
+	agentDescDependenciesResolved := agentFields[13].Descriptor()
 	// agent.DefaultDependenciesResolved holds the default value on creation for the dependencies_resolved field.
 	agent.DefaultDependenciesResolved = agentDescDependenciesResolved.Default.(int)
 	// agentDescCreatedAt is the schema descriptor for created_at field.
-	agentDescCreatedAt := agentFields[12].Descriptor()
+	agentDescCreatedAt := agentFields[14].Descriptor()
 	// agent.DefaultCreatedAt holds the default value on creation for the created_at field.
 	agent.DefaultCreatedAt = agentDescCreatedAt.Default.(func() time.Time)
 	// agentDescUpdatedAt is the schema descriptor for updated_at field.
-	agentDescUpdatedAt := agentFields[13].Descriptor()
+	agentDescUpdatedAt := agentFields[15].Descriptor()
 	// agent.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	agent.DefaultUpdatedAt = agentDescUpdatedAt.Default.(func() time.Time)
 	// agentDescLastFullRefresh is the schema descriptor for last_full_refresh field.
-	agentDescLastFullRefresh := agentFields[14].Descriptor()
+	agentDescLastFullRefresh := agentFields[16].Descriptor()
 	// agent.DefaultLastFullRefresh holds the default value on creation for the last_full_refresh field.
 	agent.DefaultLastFullRefresh = agentDescLastFullRefresh.Default.(func() time.Time)
 	capabilityFields := schema.Capability{}.Fields()

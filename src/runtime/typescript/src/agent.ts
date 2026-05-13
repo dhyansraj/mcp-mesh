@@ -1451,6 +1451,23 @@ export class MeshAgent {
           }))
         : undefined;
 
+    // Issue #972: derive A2A self-declared flags. The MCP-agent path doesn't
+    // call mesh.a2a.mount today (out of scope: producer detection from
+    // surface-side surface mounting on this code path — flagged as follow-up),
+    // so `a2a_producer` stays false here. Consumer flag walks the tool list
+    // because @MeshA2A's bridge marker is stamped onto the tool def via
+    // `a2aConsumer = def.a2aConfig !== undefined` at registration time
+    // (see agent.ts:~875). Field names are NAPI-generated camelCase (digit
+    // + letter renders as a2A...) — the napi binding owns the contract.
+    const a2AProducer = false;
+    let a2AConsumer = false;
+    for (const t of this.tools.values()) {
+      if (t.a2aConsumer === true) {
+        a2AConsumer = true;
+        break;
+      }
+    }
+
     const spec: JsAgentSpec = {
       // Base name (shared across replicas, e.g., "fortuna"), unique ID via agentId.
       name: this.config.name,
@@ -1464,6 +1481,8 @@ export class MeshAgent {
       tools,
       llmAgents,
       heartbeatInterval: this.config.heartbeatInterval,
+      a2AProducer,
+      a2AConsumer,
     };
 
     // Start the agent via Rust core

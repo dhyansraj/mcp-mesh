@@ -30,6 +30,8 @@ Once a foreign A2A backend is bridged into the mesh as a capability, every mesh 
 | SSE               | `tasks/sendSubscribe` handler returns `JobProxy`                                          | `A2AClient.subscribe(...)` + `stream.bridge(JobController)` |
 | Auth              | Bearer enforcement on the JSON-RPC route                                                  | `A2ABearer` / `authBearerEnv` / `tokenEnv`                  |
 
+Issue #972: every agent payload also carries two self-declared booleans — `a2a_producer` and `a2a_consumer` — flipped to `true` by the SDK when any producer surface or consumer binding is registered. They surface on `AgentInfo` for downstream tooling (badge rendering tracked separately in #970). Both default to `false`; old-SDK clients keep working because the registry treats the keys as optional.
+
 ## A one-liner consumer
 
 This is the simplest possible bridge — re-publish an external A2A `get-date` skill as a regular mesh `current-date` capability:

@@ -318,6 +318,13 @@ pub struct HeartbeatRequest {
     /// reshapes this into typed `A2ASurface` entries.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surfaces: Option<serde_json::Value>,
+    /// Issue #972: true if this agent declares at least one A2A producer
+    /// surface. Always serialized (explicit `false` is semantically meaningful
+    /// — distinguishes "no surfaces" from "field absent" on the registry side).
+    pub a2a_producer: bool,
+    /// Issue #972: true if this agent declares at least one A2A consumer
+    /// surface. Always serialized — same rationale as `a2a_producer`.
+    pub a2a_consumer: bool,
 }
 
 impl HeartbeatRequest {
@@ -430,6 +437,11 @@ impl HeartbeatRequest {
                 .surfaces
                 .as_ref()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
+            // Issue #972: copy the SDK-stamped flags verbatim. The Python /
+            // Java / TS layers detect their own producer/consumer state and
+            // set these on `AgentSpec`; this is a pure passthrough.
+            a2a_producer: spec.a2a_producer,
+            a2a_consumer: spec.a2a_consumer,
         }
     }
 }
@@ -763,6 +775,64 @@ mod tests {
         let empty_desc = HeartbeatRequest::from_spec(&spec, HealthStatus::Healthy);
         assert_eq!(empty_desc.description, None,
             "empty description should serialize as None (skip_serializing_if)");
+    }
+
+    #[test]
+    fn test_heartbeat_request_a2a_flags_round_trip() {
+        // Issue #972: HeartbeatRequest must forward the SDK-stamped flags
+        // verbatim. Booleans are always serialized (no skip_serializing_if)
+        // because `false` is semantically meaningful — the registry uses the
+        // presence/absence of the key to decide whether to clobber a stored
+        // true; once present, the value must be authoritative.
+        let make_spec = || {
+            AgentSpec::new(
+                "a2a-flag-agent".to_string(),
+                "http://localhost:8100".to_string(),
+                "1.0.0".to_string(),
+                "".to_string(),
+                9000,
+                "localhost".to_string(),
+                "default".to_string(),
+                None,
+                None,
+                None,
+                None,
+                5,
+                None,
+            )
+        };
+
+        // Case 1: neither flag set (default-constructed). Wire JSON must
+        // still include both keys as `false`.
+        let spec = make_spec();
+        let req = HeartbeatRequest::from_spec(&spec, HealthStatus::Healthy);
+        assert!(!req.a2a_producer);
+        assert!(!req.a2a_consumer);
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["a2a_producer"], serde_json::json!(false));
+        assert_eq!(json["a2a_consumer"], serde_json::json!(false));
+
+        // Case 2: producer-only.
+        let mut spec = make_spec();
+        spec.a2a_producer = true;
+        let req = HeartbeatRequest::from_spec(&spec, HealthStatus::Healthy);
+        assert!(req.a2a_producer);
+        assert!(!req.a2a_consumer);
+
+        // Case 3: consumer-only.
+        let mut spec = make_spec();
+        spec.a2a_consumer = true;
+        let req = HeartbeatRequest::from_spec(&spec, HealthStatus::Healthy);
+        assert!(!req.a2a_producer);
+        assert!(req.a2a_consumer);
+
+        // Case 4: bridge — both true.
+        let mut spec = make_spec();
+        spec.a2a_producer = true;
+        spec.a2a_consumer = true;
+        let req = HeartbeatRequest::from_spec(&spec, HealthStatus::Healthy);
+        assert!(req.a2a_producer);
+        assert!(req.a2a_consumer);
     }
 
     #[test]

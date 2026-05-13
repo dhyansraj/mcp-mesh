@@ -467,6 +467,16 @@ pub struct AgentSpec {
     /// before forwarding to the registry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surfaces: Option<String>,
+
+    /// Issue #972: true if this agent registers at least one A2A producer
+    /// surface (@mesh.a2a / @MeshA2A / mesh.a2a.mount). Default false.
+    #[serde(default)]
+    pub a2a_producer: bool,
+
+    /// Issue #972: true if this agent registers at least one A2A consumer
+    /// surface (@mesh.a2a_consumer / @A2AConsumer / a2aConfig). Default false.
+    #[serde(default)]
+    pub a2a_consumer: bool,
 }
 
 #[cfg(feature = "python")]
@@ -487,7 +497,9 @@ impl AgentSpec {
         llm_agents=None,
         heartbeat_interval=5,
         agent_id=None,
-        surfaces=None
+        surfaces=None,
+        a2a_producer=false,
+        a2a_consumer=false
     ))]
     #[allow(clippy::too_many_arguments)]
     pub fn py_new(
@@ -509,6 +521,11 @@ impl AgentSpec {
         // to model `A2ASurface` as a pyclass on the Rust side — the registry
         // is the only consumer of the shape.
         surfaces: Option<String>,
+        // Issue #972: A2A producer/consumer self-declared flags. Booleans so
+        // the Python SDK can stamp them directly; the wire JSON ships them
+        // verbatim — see `HeartbeatRequest::from_spec`.
+        a2a_producer: bool,
+        a2a_consumer: bool,
     ) -> Self {
         let mut spec = Self::new(
             name,
@@ -528,6 +545,8 @@ impl AgentSpec {
         // Empty string is treated as absent so the wire stays clean
         // (registry's `surfaces` is omitted via `skip_serializing_if`).
         spec.surfaces = surfaces.filter(|s| !s.trim().is_empty());
+        spec.a2a_producer = a2a_producer;
+        spec.a2a_consumer = a2a_consumer;
         spec
     }
 
@@ -581,6 +600,11 @@ impl AgentSpec {
             llm_agents: llm_agents.unwrap_or_default(),
             heartbeat_interval,
             surfaces: None,
+            // Issue #972: callers using the language-agnostic constructor default
+            // to false; the Python `py_new` and TS/Java bridges set these
+            // explicitly when their detection layer has resolved the flag.
+            a2a_producer: false,
+            a2a_consumer: false,
         }
     }
 

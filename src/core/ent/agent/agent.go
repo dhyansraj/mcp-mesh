@@ -25,6 +25,10 @@ const (
 	FieldVersion = "version"
 	// FieldDescription holds the string denoting the description field in the database.
 	FieldDescription = "description"
+	// FieldA2aProducer holds the string denoting the a2a_producer field in the database.
+	FieldA2aProducer = "a2a_producer"
+	// FieldA2aConsumer holds the string denoting the a2a_consumer field in the database.
+	FieldA2aConsumer = "a2a_consumer"
 	// FieldHTTPHost holds the string denoting the http_host field in the database.
 	FieldHTTPHost = "http_host"
 	// FieldHTTPPort holds the string denoting the http_port field in the database.
@@ -114,6 +118,8 @@ var Columns = []string{
 	FieldName,
 	FieldVersion,
 	FieldDescription,
+	FieldA2aProducer,
+	FieldA2aConsumer,
 	FieldHTTPHost,
 	FieldHTTPPort,
 	FieldNamespace,
@@ -142,6 +148,10 @@ var (
 	DefaultDescription string
 	// DescriptionValidator is a validator for the "description" field. It is called by the builders before save.
 	DescriptionValidator func(string) error
+	// DefaultA2aProducer holds the default value on creation for the "a2a_producer" field.
+	DefaultA2aProducer bool
+	// DefaultA2aConsumer holds the default value on creation for the "a2a_consumer" field.
+	DefaultA2aConsumer bool
 	// DefaultNamespace holds the default value on creation for the "namespace" field.
 	DefaultNamespace string
 	// DefaultTotalDependencies holds the default value on creation for the "total_dependencies" field.
@@ -270,6 +280,16 @@ func ByVersion(opts ...sql.OrderTermOption) OrderOption {
 // ByDescription orders the results by the description field.
 func ByDescription(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldDescription, opts...).ToFunc()
+}
+
+// ByA2aProducer orders the results by the a2a_producer field.
+func ByA2aProducer(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldA2aProducer, opts...).ToFunc()
+}
+
+// ByA2aConsumer orders the results by the a2a_consumer field.
+func ByA2aConsumer(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldA2aConsumer, opts...).ToFunc()
 }
 
 // ByHTTPHost orders the results by the http_host field.

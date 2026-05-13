@@ -80,6 +80,16 @@ func Description(v string) predicate.Agent {
 	return predicate.Agent(sql.FieldEQ(FieldDescription, v))
 }
 
+// A2aProducer applies equality check predicate on the "a2a_producer" field. It's identical to A2aProducerEQ.
+func A2aProducer(v bool) predicate.Agent {
+	return predicate.Agent(sql.FieldEQ(FieldA2aProducer, v))
+}
+
+// A2aConsumer applies equality check predicate on the "a2a_consumer" field. It's identical to A2aConsumerEQ.
+func A2aConsumer(v bool) predicate.Agent {
+	return predicate.Agent(sql.FieldEQ(FieldA2aConsumer, v))
+}
+
 // HTTPHost applies equality check predicate on the "http_host" field. It's identical to HTTPHostEQ.
 func HTTPHost(v string) predicate.Agent {
 	return predicate.Agent(sql.FieldEQ(FieldHTTPHost, v))
@@ -388,6 +398,46 @@ func DescriptionEqualFold(v string) predicate.Agent {
 // DescriptionContainsFold applies the ContainsFold predicate on the "description" field.
 func DescriptionContainsFold(v string) predicate.Agent {
 	return predicate.Agent(sql.FieldContainsFold(FieldDescription, v))
+}
+
+// A2aProducerEQ applies the EQ predicate on the "a2a_producer" field.
+func A2aProducerEQ(v bool) predicate.Agent {
+	return predicate.Agent(sql.FieldEQ(FieldA2aProducer, v))
+}
+
+// A2aProducerNEQ applies the NEQ predicate on the "a2a_producer" field.
+func A2aProducerNEQ(v bool) predicate.Agent {
+	return predicate.Agent(sql.FieldNEQ(FieldA2aProducer, v))
+}
+
+// A2aProducerIsNil applies the IsNil predicate on the "a2a_producer" field.
+func A2aProducerIsNil() predicate.Agent {
+	return predicate.Agent(sql.FieldIsNull(FieldA2aProducer))
+}
+
+// A2aProducerNotNil applies the NotNil predicate on the "a2a_producer" field.
+func A2aProducerNotNil() predicate.Agent {
+	return predicate.Agent(sql.FieldNotNull(FieldA2aProducer))
+}
+
+// A2aConsumerEQ applies the EQ predicate on the "a2a_consumer" field.
+func A2aConsumerEQ(v bool) predicate.Agent {
+	return predicate.Agent(sql.FieldEQ(FieldA2aConsumer, v))
+}
+
+// A2aConsumerNEQ applies the NEQ predicate on the "a2a_consumer" field.
+func A2aConsumerNEQ(v bool) predicate.Agent {
+	return predicate.Agent(sql.FieldNEQ(FieldA2aConsumer, v))
+}
+
+// A2aConsumerIsNil applies the IsNil predicate on the "a2a_consumer" field.
+func A2aConsumerIsNil() predicate.Agent {
+	return predicate.Agent(sql.FieldIsNull(FieldA2aConsumer))
+}
+
+// A2aConsumerNotNil applies the NotNil predicate on the "a2a_consumer" field.
+func A2aConsumerNotNil() predicate.Agent {
+	return predicate.Agent(sql.FieldNotNull(FieldA2aConsumer))
 }
 
 // HTTPHostEQ applies the EQ predicate on the "http_host" field.

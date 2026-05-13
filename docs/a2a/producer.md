@@ -9,6 +9,8 @@ Expose mesh tools to external A2A clients via the A2A v1.0 protocol surface.
 
 A producer agent's handler is decorated/mounted via a runtime-native entry point that simultaneously **stamps metadata** (skill id, name, description, tags, dependencies) and **attaches routes** (the JSON-RPC entry at `path` AND `/.well-known/agent.json` at `path/.well-known/agent.json`). The two-piece pattern is intentionally the same shape as `@mesh.route` / `@MeshRoute` for HTTP routes — same hosting framework, same lifecycle ownership, same DDDI for declared dependencies. The difference is that the producer entry registers the agent with the registry as `agent_type=a2a` (with the surfaces array populated), so other mesh agents and external scaffolding tools can discover the agent's A2A skills.
 
+Issue #972: the same code path also flips `a2a_producer=true` on the agent payload so downstream tooling can identify producer agents without inspecting the `surfaces[]` array.
+
 === "Python"
 
     `@mesh.a2a.mount(app, path="/agents/<skill>", ...)` on a user-owned FastAPI app. The user owns the uvicorn lifecycle (no `@mesh.agent` decorator on the producer file).
