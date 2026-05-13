@@ -202,7 +202,7 @@ func (s *EntService) ListJobs(ctx context.Context, in *JobsListInput) (*generate
 // "<unix>:<id>" before encoding — versionless because the cursor is
 // short-lived (browser-page-scoped) and the registry is the only producer.
 func encodeJobsCursor(submittedAt time.Time, id string) string {
-	raw := fmt.Sprintf("%d:%s", submittedAt.Unix(), id)
+	raw := fmt.Sprintf("%d:%s", submittedAt.UnixNano(), id)
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
 }
 
@@ -217,11 +217,11 @@ func decodeJobsCursor(cursor string) (time.Time, string, error) {
 	if len(parts) != 2 || parts[1] == "" {
 		return time.Time{}, "", fmt.Errorf("malformed cursor payload")
 	}
-	unix, err := strconv.ParseInt(parts[0], 10, 64)
+	nano, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
 		return time.Time{}, "", fmt.Errorf("parse timestamp: %w", err)
 	}
-	return time.Unix(unix, 0).UTC(), parts[1], nil
+	return time.Unix(0, nano).UTC(), parts[1], nil
 }
 
 // JobDeltaInput is the service-layer view of a single per-job delta. Mirrors
