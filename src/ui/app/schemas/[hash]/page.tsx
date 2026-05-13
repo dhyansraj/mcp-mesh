@@ -101,12 +101,20 @@ function ProvidersTable({ providers }: { providers: SchemaProvider[] }) {
         {providers.map((p, i) => (
           <TableRow key={`${p.agent_id}-${p.function_name}-${p.role}-${i}`}>
             <TableCell>
-              <Link
-                to={`/agents?id=${encodeURIComponent(p.agent_id)}`}
-                className="text-xs font-medium text-primary hover:underline"
-              >
-                {p.agent_name}
-              </Link>
+              <div className="flex flex-col">
+                <Link
+                  to={`/agents?id=${encodeURIComponent(p.agent_id)}`}
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  {p.agent_name}
+                </Link>
+                <span
+                  className="text-[10px] font-mono text-muted-foreground"
+                  title={p.agent_id}
+                >
+                  {p.agent_id.replace(`${p.agent_name}-`, "")}
+                </span>
+              </div>
             </TableCell>
             <TableCell><RuntimeBadge runtime={p.runtime} /></TableCell>
             <TableCell>
@@ -143,12 +151,20 @@ function ConsumersTable({ consumers }: { consumers: SchemaConsumer[] }) {
         {consumers.map((c, i) => (
           <TableRow key={`${c.agent_id}-${c.function_name}-${i}`}>
             <TableCell>
-              <Link
-                to={`/agents?id=${encodeURIComponent(c.agent_id)}`}
-                className="text-xs font-medium text-primary hover:underline"
-              >
-                {c.agent_name}
-              </Link>
+              <div className="flex flex-col">
+                <Link
+                  to={`/agents?id=${encodeURIComponent(c.agent_id)}`}
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  {c.agent_name}
+                </Link>
+                <span
+                  className="text-[10px] font-mono text-muted-foreground"
+                  title={c.agent_id}
+                >
+                  {c.agent_id.replace(`${c.agent_name}-`, "")}
+                </span>
+              </div>
             </TableCell>
             <TableCell><RuntimeBadge runtime={c.runtime} /></TableCell>
             <TableCell>
