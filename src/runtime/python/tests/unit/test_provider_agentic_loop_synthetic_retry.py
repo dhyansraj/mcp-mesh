@@ -409,3 +409,264 @@ class TestProviderAgenticLoopSyntheticRetry:
         # 4 (original completion) + 8 (retry completion) = 12
         assert usage["completion_tokens"] == 12
         assert usage["model"] == "anthropic/claude-sonnet-4-5"
+
+    @pytest.mark.asyncio
+    async def test_retry_short_circuits_for_non_anthropic_vendor(self):
+        """v1 vendor gate: when ``vendor != "anthropic"`` the retry helper is
+        not invoked even if validation would have failed. Original (bad) args
+        propagate unchanged for the consumer-side ResponseParser to handle.
+        Verifies the wiring-site vendor gate so future per-vendor opt-in can
+        be added without accidentally regressing the v1 scope.
+        """
+        from mesh.helpers import _provider_agentic_loop
+
+        bad_args = json.dumps({"parameter": {"answer": "x"}})
+        bad_msg = _message(
+            content=None,
+            tool_calls=[_tool_call("toolu_bad", SYNTHETIC_TOOL_NAME, bad_args)],
+        )
+
+        with patch(
+            "asyncio.to_thread", new=AsyncMock(return_value=_response(bad_msg))
+        ) as mock_call:
+            result = await _provider_agentic_loop(
+                effective_model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "Q?"}],
+                tools=[],
+                tool_endpoints={},
+                model_params={
+                    "_mesh_synthetic_format_tool_name": SYNTHETIC_TOOL_NAME,
+                    "_mesh_synthetic_format_tool": _synthetic_tool(),
+                },
+                litellm_kwargs={},
+                vendor="openai",
+            )
+
+        # Exactly one LLM call — the retry helper is gated out for openai.
+        assert mock_call.await_count == 1
+        # Bad args propagate unchanged.
+        assert result["content"] == bad_args
+
+    @pytest.mark.asyncio
+    async def test_retry_invalid_env_var_falls_back_to_default(self, monkeypatch, caplog):
+        """When ``MCP_MESH_LLM_SYNTHETIC_RETRY_MAX`` is non-integer (e.g.,
+        ``"abc"``), the helper logs a WARN and falls back to the default
+        (1) — the retry STILL fires.
+        """
+        from mesh.helpers import _provider_agentic_loop
+
+        monkeypatch.setenv("MCP_MESH_LLM_SYNTHETIC_RETRY_MAX", "abc")
+
+        bad_args = json.dumps({"parameter": {"answer": "x"}})
+        good_args = json.dumps({"answer": "x"})
+        bad_msg = _message(
+            content=None,
+            tool_calls=[_tool_call("t1", SYNTHETIC_TOOL_NAME, bad_args)],
+        )
+        good_msg = _message(
+            content=None,
+            tool_calls=[_tool_call("t2", SYNTHETIC_TOOL_NAME, good_args)],
+        )
+
+        with patch(
+            "asyncio.to_thread",
+            new=AsyncMock(side_effect=[_response(bad_msg), _response(good_msg)]),
+        ) as mock_call, caplog.at_level("WARNING", logger="mesh.helpers"):
+            result = await _provider_agentic_loop(
+                effective_model="anthropic/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "Q?"}],
+                tools=[],
+                tool_endpoints={},
+                model_params={
+                    "_mesh_synthetic_format_tool_name": SYNTHETIC_TOOL_NAME,
+                    "_mesh_synthetic_format_tool": _synthetic_tool(),
+                },
+                litellm_kwargs={},
+                vendor="anthropic",
+            )
+
+        # Retry STILL fires under the default — two LLM calls.
+        assert mock_call.await_count == 2
+        assert result["content"] == good_args
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any(
+            "MCP_MESH_LLM_SYNTHETIC_RETRY_MAX" in m and "abc" in m for m in warn_msgs
+        ), f"Expected invalid-env-var WARN; got: {warn_msgs}"
+
+    @pytest.mark.asyncio
+    async def test_retry_negative_env_var_falls_back_to_default(self, monkeypatch, caplog):
+        """``MCP_MESH_LLM_SYNTHETIC_RETRY_MAX="-1"`` is rejected the same way:
+        WARN logged, retry still fires under the default (1).
+        """
+        from mesh.helpers import _provider_agentic_loop
+
+        monkeypatch.setenv("MCP_MESH_LLM_SYNTHETIC_RETRY_MAX", "-1")
+
+        bad_args = json.dumps({"parameter": {"answer": "x"}})
+        good_args = json.dumps({"answer": "x"})
+        bad_msg = _message(
+            content=None,
+            tool_calls=[_tool_call("t1", SYNTHETIC_TOOL_NAME, bad_args)],
+        )
+        good_msg = _message(
+            content=None,
+            tool_calls=[_tool_call("t2", SYNTHETIC_TOOL_NAME, good_args)],
+        )
+
+        with patch(
+            "asyncio.to_thread",
+            new=AsyncMock(side_effect=[_response(bad_msg), _response(good_msg)]),
+        ) as mock_call, caplog.at_level("WARNING", logger="mesh.helpers"):
+            result = await _provider_agentic_loop(
+                effective_model="anthropic/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "Q?"}],
+                tools=[],
+                tool_endpoints={},
+                model_params={
+                    "_mesh_synthetic_format_tool_name": SYNTHETIC_TOOL_NAME,
+                    "_mesh_synthetic_format_tool": _synthetic_tool(),
+                },
+                litellm_kwargs={},
+                vendor="anthropic",
+            )
+
+        assert mock_call.await_count == 2
+        assert result["content"] == good_args
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any(
+            "MCP_MESH_LLM_SYNTHETIC_RETRY_MAX" in m and "-1" in m for m in warn_msgs
+        ), f"Expected negative-env-var WARN; got: {warn_msgs}"
+
+    @pytest.mark.asyncio
+    async def test_retry_missing_schema_skips_retry(self):
+        """When the synthetic tool has no ``parameters`` schema (None or {}),
+        the retry helper has nothing to validate against — it bails early
+        with no retry, returning the original args unchanged.
+        """
+        from mesh.helpers import _provider_agentic_loop
+
+        synthetic_tool_no_schema = {
+            "type": "function",
+            "function": {
+                "name": SYNTHETIC_TOOL_NAME,
+                "description": "synthetic format tool (no schema)",
+                "parameters": None,
+            },
+        }
+
+        bad_args = json.dumps({"parameter": {"answer": "x"}})
+        bad_msg = _message(
+            content=None,
+            tool_calls=[_tool_call("toolu_bad", SYNTHETIC_TOOL_NAME, bad_args)],
+        )
+
+        with patch(
+            "asyncio.to_thread", new=AsyncMock(return_value=_response(bad_msg))
+        ) as mock_call:
+            result = await _provider_agentic_loop(
+                effective_model="anthropic/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "Q?"}],
+                tools=[],
+                tool_endpoints={},
+                model_params={
+                    "_mesh_synthetic_format_tool_name": SYNTHETIC_TOOL_NAME,
+                    "_mesh_synthetic_format_tool": synthetic_tool_no_schema,
+                },
+                litellm_kwargs={},
+                vendor="anthropic",
+            )
+
+        # No retry — single call only.
+        assert mock_call.await_count == 1
+        assert result["content"] == bad_args
+
+    @pytest.mark.asyncio
+    async def test_retry_dispatch_raises_returns_original_args(self, caplog):
+        """When the corrective-retry dispatch raises (rate limit, timeout,
+        anthropic outage, network error), the helper catches, logs WARN,
+        and returns the original (bad) args so the consumer-side
+        ResponseParser still has a chance to salvage. Validates the W1 fix.
+        """
+        from mesh.helpers import _provider_agentic_loop
+
+        bad_args = json.dumps({"parameter": {"answer": "x"}})
+        bad_msg = _message(
+            content=None,
+            tool_calls=[_tool_call("toolu_bad", SYNTHETIC_TOOL_NAME, bad_args)],
+        )
+
+        # First call returns bad args; second call raises (transient failure).
+        with patch(
+            "asyncio.to_thread",
+            new=AsyncMock(
+                side_effect=[
+                    _response(bad_msg),
+                    RuntimeError("network error"),
+                ]
+            ),
+        ) as mock_call, caplog.at_level("WARNING", logger="mesh.helpers"):
+            result = await _provider_agentic_loop(
+                effective_model="anthropic/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "Q?"}],
+                tools=[],
+                tool_endpoints={},
+                model_params={
+                    "_mesh_synthetic_format_tool_name": SYNTHETIC_TOOL_NAME,
+                    "_mesh_synthetic_format_tool": _synthetic_tool(),
+                },
+                litellm_kwargs={},
+                vendor="anthropic",
+            )
+
+        # Two calls were attempted (original + retry).
+        assert mock_call.await_count == 2
+        # Original (bad) args returned for downstream salvage.
+        assert result["content"] == bad_args
+        # WARN about the retry exception was logged.
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any(
+            "retry call raised" in m and "RuntimeError" in m and "network error" in m
+            for m in warn_msgs
+        ), f"Expected retry-exception WARN; got: {warn_msgs}"
+
+    @pytest.mark.asyncio
+    async def test_retry_response_has_no_synthetic_tool_call_returns_original(self, caplog):
+        """When the corrective-retry response doesn't include a call to the
+        synthetic tool (model returned plain text or called a different tool),
+        the helper logs WARN and returns the original args so ResponseParser
+        can attempt envelope-unwrap salvage.
+        """
+        from mesh.helpers import _provider_agentic_loop
+
+        bad_args = json.dumps({"parameter": {"answer": "x"}})
+        bad_msg = _message(
+            content=None,
+            tool_calls=[_tool_call("toolu_bad", SYNTHETIC_TOOL_NAME, bad_args)],
+        )
+        # Second response has plain text content, no tool_calls.
+        retry_msg = _message(content="I don't understand the request.", tool_calls=None)
+
+        with patch(
+            "asyncio.to_thread",
+            new=AsyncMock(side_effect=[_response(bad_msg), _response(retry_msg)]),
+        ) as mock_call, caplog.at_level("WARNING", logger="mesh.helpers"):
+            result = await _provider_agentic_loop(
+                effective_model="anthropic/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "Q?"}],
+                tools=[],
+                tool_endpoints={},
+                model_params={
+                    "_mesh_synthetic_format_tool_name": SYNTHETIC_TOOL_NAME,
+                    "_mesh_synthetic_format_tool": _synthetic_tool(),
+                },
+                litellm_kwargs={},
+                vendor="anthropic",
+            )
+
+        assert mock_call.await_count == 2
+        # Original (bad) args returned.
+        assert result["content"] == bad_args
+        warn_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any(
+            "did not call synthetic tool" in m for m in warn_msgs
+        ), f"Expected missing-synthetic-tool WARN; got: {warn_msgs}"
