@@ -3,11 +3,13 @@ import { Agent } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import {
   formatRelativeTime,
+  getAgentTypeLabel,
   getRuntimeBadgeColor,
   getRuntimeLabel,
   getStatusBgColor,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { AgentBadges } from "./AgentBadges";
 
 interface AgentCardProps {
   agent: Agent;
@@ -65,27 +67,15 @@ export function AgentCard({ agent }: AgentCardProps) {
             {getRuntimeLabel(agent.runtime)}
           </Badge>
         )}
+        <Badge variant="outline" className="text-xs text-muted-foreground">
+          {getAgentTypeLabel(agent.agent_type)}
+        </Badge>
         {agent.version && (
           <span className="font-mono text-[10px] text-muted-foreground">
             v{agent.version}
           </span>
         )}
-        {agent.a2a_producer && (
-          <Badge
-            variant="outline"
-            className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30 px-1.5 py-0 text-[10px]"
-          >
-            A2A producer
-          </Badge>
-        )}
-        {agent.a2a_consumer && (
-          <Badge
-            variant="outline"
-            className="bg-violet-500/20 text-violet-300 border-violet-500/30 px-1.5 py-0 text-[10px]"
-          >
-            A2A consumer
-          </Badge>
-        )}
+        <AgentBadges agent={agent} />
       </div>
 
       <div className="mt-auto flex items-center justify-between text-xs">

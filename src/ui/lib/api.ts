@@ -75,6 +75,11 @@ export function mapRegistryEventToDashboardEvent(event: RegistryEventInfo): Dash
     register: "agent_registered",
     unregister: "agent_deregistered",
     unhealthy: "agent_unhealthy",
+    // Issue #967: dependency_resolved/unresolved are persisted by the registry
+    // but were dropped here, so they vanished after F5. SDK aliases
+    // unresolved → lost (event_poller.go:171-173) for naming consistency.
+    dependency_resolved: "dependency_resolved",
+    dependency_unresolved: "dependency_lost",
   };
 
   // For "update" events, check if it's a recovery to healthy
@@ -174,6 +179,7 @@ export function getAgentTypeLabel(type: string): string {
     case "mesh_tool": return "Mesh Tool";
     case "decorator_agent": return "Decorator";
     case "api": return "API";
+    case "a2a": return "A2A";
     default: return type;
   }
 }

@@ -1,9 +1,10 @@
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { Agent } from "@/lib/types";
-import { getRuntimeLabel } from "@/lib/api";
+import { getAgentTypeLabel, getRuntimeLabel } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Bot, Puzzle, GitBranch, Activity, Layers } from "lucide-react";
+import { AgentBadges } from "@/components/agents/AgentBadges";
 
 function getRuntimeColor(runtime?: string): string {
   switch (runtime) {
@@ -97,6 +98,10 @@ function AgentNodeComponent({ data }: NodeProps) {
               {getRuntimeLabel(first.runtime)}
             </span>
 
+            <span className="inline-flex items-center rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              {getAgentTypeLabel(first.agent_type)}
+            </span>
+
             {depsTotal > 0 && (
               <span className={cn(
                 "inline-flex items-center gap-1 text-[10px]",
@@ -120,6 +125,8 @@ function AgentNodeComponent({ data }: NodeProps) {
                 {traceCount}
               </span>
             )}
+
+            <AgentBadges agent={first} dense />
           </div>
         </div>
         <Handle type="source" position={Position.Bottom} className="!bg-primary !border-primary !w-2 !h-2" />
@@ -167,6 +174,10 @@ function AgentNodeComponent({ data }: NodeProps) {
             {getRuntimeLabel(agent.runtime)}
           </span>
 
+          <span className="inline-flex items-center rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            {getAgentTypeLabel(agent.agent_type)}
+          </span>
+
           {depsTotal > 0 && (
             <span className={cn(
               "inline-flex items-center gap-1 text-[10px]",
@@ -190,6 +201,8 @@ function AgentNodeComponent({ data }: NodeProps) {
               {traceCount}
             </span>
           )}
+
+          <AgentBadges agent={agent} dense />
         </div>
       </div>
       <Handle type="source" position={Position.Bottom} className="!bg-primary !border-primary !w-2 !h-2" />

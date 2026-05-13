@@ -21,6 +21,7 @@ import { useMesh } from "@/lib/mesh-context";
 import { ChevronDown, ChevronRight, Bot, Activity, ArrowUp, ArrowDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AgentDetail } from "./AgentDetail";
+import { AgentBadges } from "./AgentBadges";
 
 interface AgentTableProps {
   agents: Agent[];
@@ -181,7 +182,7 @@ function AgentRow({ agent, isExpanded, onToggle, traceCount }: AgentRowProps) {
           />
         </TableCell>
         <TableCell className="font-medium text-foreground">
-          <span className="inline-flex items-center gap-1.5">
+          <span className="inline-flex items-center gap-1.5 flex-wrap">
             {agent.name}
             {traceCount > 0 && (
               <span className="inline-flex items-center gap-0.5 text-cyan-400" title={`${traceCount} recent trace(s)`}>
@@ -189,6 +190,7 @@ function AgentRow({ agent, isExpanded, onToggle, traceCount }: AgentRowProps) {
                 <span className="text-[10px] font-mono">{traceCount}</span>
               </span>
             )}
+            <AgentBadges agent={agent} dense />
           </span>
         </TableCell>
         <TableCell className="text-muted-foreground">
