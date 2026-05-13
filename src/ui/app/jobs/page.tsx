@@ -3,7 +3,7 @@ import { ConnectionError } from "@/components/layout/ConnectionError";
 import { JobTable } from "@/components/jobs/JobTable";
 import { useJobs } from "@/lib/use-jobs";
 import { JobStatus } from "@/lib/types";
-import { Info, Loader2 } from "lucide-react";
+import { Info, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const STATUS_CHIPS: { value: JobStatus; label: string }[] = [
@@ -13,6 +13,20 @@ const STATUS_CHIPS: { value: JobStatus; label: string }[] = [
   { value: "failed", label: "Failed" },
   { value: "cancelled", label: "Cancelled" },
 ];
+
+// Convert a Unix epoch-second to a "YYYY-MM-DDTHH:mm" string suitable for
+// <input type="datetime-local">. The input control is timezone-naive (local
+// time); we render local-time digits so what the operator typed comes back
+// unchanged across re-renders.
+function epochToLocalInput(epoch: number | undefined): string {
+  if (epoch === undefined) return "";
+  const d = new Date(epoch * 1000);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` +
+    `T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  );
+}
 
 export default function JobsPage() {
   const { jobs, filters, setFilters, loading, error, refresh } = useJobs();
@@ -95,6 +109,69 @@ export default function JobsPage() {
           {error && (
             <span className="ml-auto text-xs text-red-400">{error}</span>
           )}
+        </div>
+
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Owner:</span>
+            <div className="relative">
+              <input
+                type="text"
+                value={filters.ownerInstanceId}
+                onChange={(e) =>
+                  setFilters({ ...filters, ownerInstanceId: e.target.value })
+                }
+                placeholder="instance id"
+                className="h-7 w-48 rounded-md border border-border bg-background px-2 pr-6 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none"
+              />
+              {filters.ownerInstanceId !== "" && (
+                <button
+                  type="button"
+                  onClick={() => setFilters({ ...filters, ownerInstanceId: "" })}
+                  aria-label="Clear owner filter"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          </label>
+
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Submitted since:</span>
+            <div className="relative">
+              <input
+                type="datetime-local"
+                value={epochToLocalInput(filters.submittedSince)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "") {
+                    const { submittedSince: _drop, ...rest } = filters;
+                    setFilters({ ...rest });
+                  } else {
+                    const epoch = Math.floor(new Date(v).getTime() / 1000);
+                    if (!Number.isNaN(epoch)) {
+                      setFilters({ ...filters, submittedSince: epoch });
+                    }
+                  }
+                }}
+                className="h-7 rounded-md border border-border bg-background px-2 pr-6 text-xs text-foreground focus:border-primary focus:outline-none"
+              />
+              {filters.submittedSince !== undefined && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const { submittedSince: _drop, ...rest } = filters;
+                    setFilters({ ...rest });
+                  }}
+                  aria-label="Clear submitted-since filter"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          </label>
         </div>
 
         <JobTable jobs={jobs} />

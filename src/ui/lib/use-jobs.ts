@@ -22,6 +22,12 @@ export interface JobsFilters {
   statuses: JobStatus[];
   ownerInstanceId: string;
   capability: string;
+  /**
+   * Unix epoch seconds; inclusive lower bound. Undefined ⇒ no lower bound.
+   * Wired to the backend's `submitted_since` query param (single value, not
+   * a range — backend doesn't support an upper bound).
+   */
+  submittedSince?: number;
 }
 
 const DEFAULT_FILTERS: JobsFilters = {
@@ -65,6 +71,7 @@ export function useJobs(): UseJobsResult {
       if (cur.statuses.length > 0) params.status = cur.statuses.join(",");
       if (cur.ownerInstanceId.trim() !== "") params.owner_instance_id = cur.ownerInstanceId.trim();
       if (cur.capability.trim() !== "") params.capability = cur.capability.trim();
+      if (cur.submittedSince !== undefined) params.submitted_since = cur.submittedSince;
 
       const resp = await getJobs(params);
       if (gen !== genRef.current) return; // stale response, ignore

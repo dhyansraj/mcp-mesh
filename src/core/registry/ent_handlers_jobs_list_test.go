@@ -282,3 +282,57 @@ func TestListJobs_PaginationRoundTrip(t *testing.T) {
 	assert.Equal(t, "job-1", page3.Jobs[0].Id)
 	assert.Nil(t, page3.NextCursor, "final page should have null cursor")
 }
+
+// TestListJobs_PaginationTieBreakBySubmittedAt pins the (submitted_at DESC,
+// id DESC) tie-break ordering. Three jobs share an identical submitted_at
+// (t0); two share an earlier identical submitted_at (t1 = t0 - 1s). Walking
+// pages of size 2 should yield a strict, gap-free DESC sort that orders
+// same-timestamp rows by id DESC and crosses the timestamp boundary on
+// page 2 without skipping or duplicating rows. Regression-guard for the
+// cursor sub-second-precision fix (cursor uses UnixNano so encoding +
+// decoding never collapses ties).
+func TestListJobs_PaginationTieBreakBySubmittedAt(t *testing.T) {
+	env, cleanup := newJobsListEnv(t)
+	defer cleanup()
+
+	t0 := time.Now().UTC()
+	t1 := t0.Add(-1 * time.Second)
+	// IDs deliberately chosen so id DESC order is id-5 > id-4 > id-3 > id-2 > id-1.
+	env.seed(t, []listSeedRow{
+		{id: "id-3", capability: "cap", status: "working", submittedAt: t0, submittedBy: "sub"},
+		{id: "id-2", capability: "cap", status: "working", submittedAt: t0, submittedBy: "sub"},
+		{id: "id-1", capability: "cap", status: "working", submittedAt: t0, submittedBy: "sub"},
+		{id: "id-5", capability: "cap", status: "working", submittedAt: t1, submittedBy: "sub"},
+		{id: "id-4", capability: "cap", status: "working", submittedAt: t1, submittedBy: "sub"},
+	})
+
+	collect := func(cursor string) *generated.JobsListResponse {
+		q := url.Values{"limit": []string{"2"}}
+		if cursor != "" {
+			q.Set("cursor", cursor)
+		}
+		code, body := env.get(t, q)
+		require.Equal(t, http.StatusOK, code)
+		return body
+	}
+
+	// Page 1: top of t0 bucket, id DESC.
+	page1 := collect("")
+	require.Len(t, page1.Jobs, 2)
+	assert.Equal(t, "id-3", page1.Jobs[0].Id)
+	assert.Equal(t, "id-2", page1.Jobs[1].Id)
+	require.NotNil(t, page1.NextCursor)
+
+	// Page 2 crosses the timestamp boundary: last of t0, then top of t1.
+	page2 := collect(*page1.NextCursor)
+	require.Len(t, page2.Jobs, 2)
+	assert.Equal(t, "id-1", page2.Jobs[0].Id)
+	assert.Equal(t, "id-5", page2.Jobs[1].Id)
+	require.NotNil(t, page2.NextCursor)
+
+	// Page 3: remaining t1 row; cursor exhausted.
+	page3 := collect(*page2.NextCursor)
+	require.Len(t, page3.Jobs, 1)
+	assert.Equal(t, "id-4", page3.Jobs[0].Id)
+	assert.Nil(t, page3.NextCursor, "final page should have null cursor")
+}

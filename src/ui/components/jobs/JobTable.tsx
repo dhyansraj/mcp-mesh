@@ -10,7 +10,6 @@ import {
 import { Job } from "@/lib/types";
 import { formatRelativeTime } from "@/lib/api";
 import { ArrowDown, ArrowUp, Briefcase, ChevronDown, ChevronRight } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { JobDetail } from "./JobDetail";
 import { JobStatusBadge } from "./JobStatusBadge";
 
@@ -65,19 +64,25 @@ function SortableHead({
   className?: string;
 }) {
   const active = currentKey === sortKey;
+  const ariaSort: "ascending" | "descending" | "none" = active
+    ? currentDir === "asc"
+      ? "ascending"
+      : "descending"
+    : "none";
   return (
-    <TableHead
-      className={cn("cursor-pointer select-none hover:text-foreground", className)}
-      onClick={() => onSort(sortKey)}
-    >
-      <span className="inline-flex items-center gap-1">
+    <TableHead aria-sort={ariaSort} className={className}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className="inline-flex cursor-pointer select-none items-center gap-1 hover:text-foreground"
+      >
         {label}
         {active && (currentDir === "asc" ? (
           <ArrowUp className="h-3 w-3" />
         ) : (
           <ArrowDown className="h-3 w-3" />
         ))}
-      </span>
+      </button>
     </TableHead>
   );
 }
@@ -152,9 +157,26 @@ interface JobRowProps {
 
 function JobRow({ job, isExpanded, onToggle }: JobRowProps) {
   const progressPct = job.progress != null ? `${Math.round(job.progress * 100)}%` : "—";
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTableRowElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      onToggle();
+    } else if (e.key === " ") {
+      // preventDefault on Space so the page doesn't scroll.
+      e.preventDefault();
+      onToggle();
+    }
+  };
   return (
     <>
-      <TableRow className="cursor-pointer" onClick={onToggle}>
+      <TableRow
+        className="cursor-pointer"
+        onClick={onToggle}
+        onKeyDown={onKeyDown}
+        tabIndex={0}
+        role="button"
+        aria-expanded={isExpanded}
+      >
         <TableCell>
           {isExpanded ? (
             <ChevronDown className="h-4 w-4 text-muted-foreground" />
