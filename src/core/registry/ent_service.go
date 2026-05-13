@@ -302,6 +302,18 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 	return service
 }
 
+// EntDB returns the underlying Ent database wrapper. Exposed so out-of-package
+// consumers (currently the meshui Go server in src/core/ui) can run ad-hoc
+// queries that aggregate across multiple entities — the canonical example is
+// the schema-usage inverse index built per request in schemas_handler.go.
+//
+// This is read-side only by convention; mutations must continue to flow through
+// the dedicated EntService methods so cache invalidation and status hooks stay
+// in one place.
+func (s *EntService) EntDB() *database.EntDatabase {
+	return s.entDB
+}
+
 // agentMetadata holds extracted metadata fields from a registration or heartbeat request.
 type agentMetadata struct {
 	agentType      string

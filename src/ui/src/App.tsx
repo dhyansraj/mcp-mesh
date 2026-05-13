@@ -5,6 +5,8 @@ import { ErrorBoundary } from "../components/layout/ErrorBoundary";
 import DashboardPage from "../app/page";
 import AgentsPage from "../app/agents/page";
 import JobsPage from "../app/jobs/page";
+import SchemasPage from "../app/schemas/page";
+import SchemaDetailPage from "../app/schemas/[hash]/page";
 import TopologyPage from "../app/topology/page";
 import TrafficPage from "../app/traffic/page";
 import LivePage from "../app/live/page";
@@ -20,6 +22,8 @@ export function App() {
               <Route path="/" element={<DashboardPage />} />
               <Route path="/agents" element={<AgentsPage />} />
               <Route path="/jobs" element={<JobsPage />} />
+              <Route path="/schemas" element={<SchemasPage />} />
+              <Route path="/schemas/:hash" element={<SchemaDetailPage />} />
               <Route path="/topology" element={<TopologyPage />} />
               <Route path="/traffic" element={<TrafficPage />} />
               <Route path="/live" element={<LivePage />} />

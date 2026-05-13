@@ -258,6 +258,69 @@ export interface JobsResponse {
   next_cursor: string | null;
 }
 
+/**
+ * Issue #971: Schema Registry Browser types. Backed by the meshui server's
+ * /api/schemas and /api/schemas/{hash}/usage endpoints. The shape mirrors
+ * src/core/ui/schemas_handler.go — keep them in sync.
+ *
+ * Note: providers/consumers are always arrays (never null) even when empty,
+ * so the SPA can render empty-state rows without nil guards.
+ */
+export interface SchemaListItem {
+  hash: string;
+  runtime_origin: string;
+  created_at: string;
+  provider_count: number;
+  consumer_count: number;
+  /** First provider's function_name, or null when no providers exist. */
+  sample_function: string | null;
+}
+
+export interface SchemasResponse {
+  schemas: SchemaListItem[];
+  count: number;
+}
+
+export interface SchemaProvider {
+  agent_id: string;
+  agent_name: string;
+  /**
+   * Owning agent's SDK runtime (python/typescript/java, or "" for older rows
+   * predating the field). Denormalized server-side so the cross-runtime
+   * banner on the schema detail page can compute distinct runtimes without
+   * a second round-trip.
+   */
+  runtime: string;
+  function_name: string;
+  capability: string;
+  /** Whether this capability declares the hash on its input or output side. */
+  role: "input" | "output";
+}
+
+export interface SchemaConsumer {
+  agent_id: string;
+  agent_name: string;
+  /** Owning agent's SDK runtime — see SchemaProvider.runtime. */
+  runtime: string;
+  function_name: string;
+  capability: string;
+  /** Always "dependency" in v1 — declarative consumers only. */
+  via: "dependency";
+  /** The dependency entry's `capability` value (what the consumer asked for). */
+  depends_on_capability: string;
+}
+
+export interface SchemaUsage {
+  schema: {
+    hash: string;
+    canonical: unknown;
+    runtime_origin: string;
+    created_at: string;
+  };
+  providers: SchemaProvider[];
+  consumers: SchemaConsumer[];
+}
+
 export interface JobsQuery {
   /**
    * Comma-separated JobStatus values. Empty / undefined ⇒ all statuses.
