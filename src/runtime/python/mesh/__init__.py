@@ -199,6 +199,10 @@ def __getattr__(name):
         from .web import MediaUpload
 
         return MediaUpload
+    elif name == "TraceContext":
+        from _mcp_mesh.tracing.context import TraceContext
+
+        return TraceContext
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 

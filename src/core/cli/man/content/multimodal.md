@@ -65,13 +65,10 @@ MediaStore access.
 
 See `meshctl man media` for storage setup.
 
-## Multi-Agent Media Chain
+## Further reading
 
-For multi-agent media chain examples, see https://mcp-mesh.ai/multimodal/getting-started/
-
-## Passing Media from External Sources
-
-For web upload integration and external media handling, see https://mcp-mesh.ai/multimodal/media-store/
+- Multi-agent media chain examples: https://mcp-mesh.ai/multimodal/getting-started/
+- Web upload integration and external media handling: https://mcp-mesh.ai/multimodal/media-store/
 
 ## See Also
 

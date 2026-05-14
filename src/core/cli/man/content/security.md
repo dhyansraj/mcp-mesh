@@ -155,6 +155,8 @@ The registry validates agent certificates against trust backends:
 
 Backends can be chained: `MCP_MESH_TRUST_BACKEND=spire,k8s-secrets` (first match wins).
 
+If a configured backend fails to initialize at startup, the registry refuses to start rather than silently dropping that backend (issue #989).
+
 ## Environment Variables
 
 ### Agent TLS

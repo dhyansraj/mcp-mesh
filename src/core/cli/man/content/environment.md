@@ -16,6 +16,16 @@ Configuration sources in order of precedence (highest wins):
 
 **Key point**: Environment variables override decorator parameters. This enables the same code to run locally (using decorator defaults) and in Kubernetes (using Helm-injected env vars) without modification.
 
+## A note on env var prefixing
+
+mcp-mesh's own env vars use the `MCP_MESH_*` prefix (`MCP_MESH_AGENT_NAME`, `MCP_MESH_HTTP_PORT`, `MCP_MESH_REGISTRY_URL`, ...). Several env vars in this reference appear WITHOUT the prefix:
+
+- **Vendor SDK conventions** — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `VAULT_TOKEN` are consumed directly by the underlying SDKs (LiteLLM, Vercel AI SDK, Spring AI, Google ADC, HashiCorp Vault). Renaming would break those wrappers.
+- **Registry-server boot vars** — `HOST`, `PORT`, `DATABASE_URL` configure the registry binary's listener and storage; they're consumed at boot before mesh-prefix logic runs.
+- **Observability stack** — `REDIS_URL`, `TEMPO_URL`, `TELEMETRY_*`, `TRACE_*` follow OpenTelemetry / observability-tooling conventions.
+
+When in doubt: agent-runtime env vars use `MCP_MESH_*`; everything else follows the upstream tool's convention.
+
 ## Agent Configuration
 
 ### Core Settings
@@ -582,6 +592,16 @@ meshctl list
 For the complete list of all environment variables (50+ additional vars for database tuning, Kubernetes, internal settings, and more), see the full documentation:
 
 > https://mcp-mesh.ai/environment-variables
+
+## Discovering all env vars
+
+For the complete list of `MCP_MESH_*` env vars consumed by the Python SDK, grep the source:
+
+```bash
+grep -rhoE 'MCP_MESH_[A-Z_]+' .venv/lib/python*/site-packages/_mcp_mesh/ .venv/lib/python*/site-packages/mesh/ | sort -u
+```
+
+This reference covers the public, user-facing vars. Internal-debug vars (e.g., `MCP_MESH_RELOAD_*`) are deliberately omitted.
 
 ## See Also
 

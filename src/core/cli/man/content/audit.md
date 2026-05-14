@@ -59,7 +59,7 @@ meshctl audit hello-world --json | jq '.events[] | select(.data.chosen.agent_id 
 meshctl audit hello-world --registry-url https://registry.prod.example.com
 ```
 
-> Note: The agent identifier is matched as a prefix, so `meshctl audit hello-world` resolves any unique agent whose ID starts with `hello-world` (typical scaffolded form is `hello-world-<8-char-uid>`).
+> Note: The agent identifier is matched as a prefix, so `meshctl audit hello-world` resolves any unique agent whose ID starts with `hello-world` (typical scaffolded form is `hello-world-<8-char-uid>`). If the prefix matches multiple agents, `meshctl audit` errors with a list of matching IDs — choose the full ID to disambiguate.
 
 ## The audit envelope
 

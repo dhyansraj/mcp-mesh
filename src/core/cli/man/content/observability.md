@@ -121,4 +121,4 @@ Possible reasons:
 
 - `meshctl man deployment` - Setup Docker/Kubernetes
 - `meshctl man scaffold` - Generate observability stack
-- `meshctl trace --help` - Trace command options
+- `meshctl man cli` - meshctl command surface (including the trace command)

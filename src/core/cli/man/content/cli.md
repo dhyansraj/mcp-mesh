@@ -62,7 +62,13 @@ meshctl stop my-agent           # Stop only my-agent
 meshctl stop agent1 agent2      # Stop multiple
 meshctl stop --agents           # Stop all agents, keep registry/UI alive
 meshctl stop --keep-registry    # Stop everything except the registry
+meshctl stop --keep-ui          # Stop everything except the UI server
+meshctl stop --registry         # Stop ONLY the registry (force-kill, warns if dependents exist)
+meshctl stop --ui               # Stop ONLY the UI server (force-kill, warns if dependents exist)
 meshctl stop --clean            # Stop all + delete db, logs, pids
+meshctl stop --force            # Force-kill processes (no graceful shutdown)
+meshctl stop --quiet            # Suppress output messages
+meshctl stop --timeout 30       # Per-process shutdown timeout in seconds (default 10)
 ```
 
 ### `meshctl logs`

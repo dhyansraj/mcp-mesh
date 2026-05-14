@@ -160,7 +160,7 @@ Agents communicate directly - no proxy server:
 - Registry provides endpoint information
 - Agents call each other via HTTP
 - Minimal latency (no intermediary)
-- Continues working if registry is down
+- Already-resolved dependency proxies cache their endpoint and continue functioning during registry outages — but topology changes (new agents joining, dependencies re-resolving, deregistrations) and new client→agent proxy calls all require the registry to be back up.
 
 ## See Also
 

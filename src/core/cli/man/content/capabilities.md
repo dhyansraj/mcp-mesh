@@ -67,7 +67,7 @@ dependencies=[
 | `tags: [["a"], ["b"]]`         | a OR b (full OR)                         |
 | `[{tags:["a"]}, {tags:["b"]}]` | a OR b (multiple selectors - LLM filter) |
 
-**Tag-Level OR** (v0.9.1+):
+**Tag-Level OR**:
 
 Use nested arrays in tags for OR alternatives with fallback behavior:
 
@@ -184,11 +184,13 @@ Capabilities support semantic versioning:
 def api_v2(): ...
 ```
 
-Consumers can specify version constraints (coming soon):
+Consumers can specify version constraints:
 
 ```python
 dependencies=[{"capability": "api_client", "version": ">=2.0.0"}]
 ```
+
+Beyond name + tags + version, dependencies can opt into schema-based resolution via `expected_type` (Python) / `expectedSchema` (TypeScript) / `expectedType` (Java). The registry then matches producers by the canonical shape of their `outputSchema`, evicting candidates whose response shape doesn't satisfy the consumer's expectation. See `meshctl man schema-matching` for the full opt-in mechanism, modes (`subset` vs `strict`), and verdict tiers.
 
 ## See Also
 

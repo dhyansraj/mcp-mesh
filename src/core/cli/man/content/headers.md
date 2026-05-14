@@ -107,7 +107,7 @@ Headers are captured and forwarded automatically. You can also read them
 explicitly in your tool code:
 
 ```python
-from _mcp_mesh.tracing.context import TraceContext
+from mesh import TraceContext
 
 @mesh.tool(capability="my_tool")
 async def my_tool(name: str) -> dict:
@@ -123,7 +123,7 @@ like audit correlation where an orchestrating agent stamps metadata on
 downstream calls.
 
 ```python
-from _mcp_mesh.tracing.context import TraceContext
+from mesh import TraceContext
 from mesh.types import McpMeshTool
 
 @mesh.tool(capability="relay", dependencies=["echo_headers"])
@@ -185,7 +185,7 @@ Each agent can enforce auth using FastAPI dependencies:
 
 ```python
 from fastapi import Depends, HTTPException
-from _mcp_mesh.tracing.context import TraceContext
+from mesh import TraceContext
 
 def require_auth():
     headers = TraceContext.get_propagated_headers()
