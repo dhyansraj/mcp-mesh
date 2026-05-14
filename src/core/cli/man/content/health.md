@@ -45,11 +45,11 @@ Background process that:
 ### Agent Settings
 
 ```bash
-# Heartbeat interval (seconds)
-export MCP_MESH_AUTO_RUN_INTERVAL=30
+# Heartbeat cadence to registry (overrides @mesh.agent heartbeat_interval, default 5)
+export MCP_MESH_HEALTH_INTERVAL=5
 
-# Health check interval (seconds)
-export MCP_MESH_HEALTH_INTERVAL=30
+# Auto-run loop interval (overrides @mesh.agent auto_run_interval, default 10)
+export MCP_MESH_AUTO_RUN_INTERVAL=10
 ```
 
 ### Registry Settings
