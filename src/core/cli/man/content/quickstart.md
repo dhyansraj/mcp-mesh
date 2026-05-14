@@ -33,26 +33,40 @@ meshctl scaffold --name greeter --agent-type tool
 This creates `greeter/main.py`:
 
 ```python
+#!/usr/bin/env python3
+"""greeter - MCP Mesh Agent."""
+
 import mesh
+from fastmcp import FastMCP
 
-app = mesh.get_app()
+app = FastMCP("Greeter Service")
 
-@app.tool()        # Register with FastMCP protocol
-@mesh.tool(        # Register with mesh for discovery + dependency injection
-    capability="greeting",
-    description="Greet a user by name",
+
+@app.tool()
+@mesh.tool(
+    capability="hello",
+    description="A tool",
+    tags=["tools"],
 )
-def greet(name: str) -> str:
-    return f"Hello, {name}!"
+async def hello() -> str:
+    """A tool."""
+    # TODO: Implement tool logic
+    return "Not implemented"
+
 
 @mesh.agent(
     name="greeter",
     version="1.0.0",
+    description="MCP Mesh agent for greeter",
     http_port=8080,
+    enable_http=True,
+    auto_run=True,
 )
 class GreeterAgent:
     pass
 ```
+
+The scaffolded `hello()` tool is a working stub that returns `"Not implemented"`. You can run it as-is and call it to verify the mesh end-to-end, then edit `greeter/main.py` to give the tool real behavior (e.g., change the return value or add parameters as needed).
 
 ## 3. Run the Agent
 
@@ -65,8 +79,8 @@ meshctl start greeter/main.py --debug
 
 ```bash
 # Terminal 3: Call the agent
-meshctl call greeter greeting --params '{"name": "World"}'
-# Output: Hello, World!
+meshctl call greeter:hello '{}'
+# Output: Not implemented
 
 # Or list running agents
 meshctl list
@@ -80,32 +94,42 @@ Create a second agent that depends on the greeter:
 meshctl scaffold --name assistant --agent-type tool
 ```
 
-Edit `assistant/main.py`:
+Edit `assistant/main.py` to add a `dependencies=` clause on the tool and accept the injected proxy as a keyword parameter:
 
 ```python
+#!/usr/bin/env python3
+"""assistant - MCP Mesh Agent demonstrating dependency injection."""
+
 import mesh
+from fastmcp import FastMCP
 
-app = mesh.get_app()
+app = FastMCP("Assistant Service")
 
-@app.tool()        # Register with FastMCP protocol
-@mesh.tool(        # Register with mesh for discovery + dependency injection
+
+@app.tool()
+@mesh.tool(
     capability="smart_greeting",
-    description="Enhanced greeting with time",
-    dependencies=["greeting"],  # Depend on greeter
+    description="Enhanced greeting that calls the greeter",
+    tags=["tools"],
+    dependencies=["hello"],   # depend on greeter's "hello" capability
 )
 async def smart_greet(
     name: str,
-    greeting_svc: mesh.McpMeshTool = None,  # Injected!
+    hello: mesh.McpMeshTool = None,    # injected by mesh
 ) -> str:
-    if greeting_svc:
-        base_greeting = await greeting_svc(name=name)
-        return f"{base_greeting} Welcome to MCP Mesh!"
-    return f"Hello, {name}! (greeter unavailable)"
+    if hello is None:
+        return f"Hello, {name}! (greeter unavailable)"
+    base = await hello()                # call the greeter
+    return f"{base} Welcome to MCP Mesh, {name}!"
+
 
 @mesh.agent(
     name="assistant",
     version="1.0.0",
+    description="MCP Mesh agent for assistant",
     http_port=9001,
+    enable_http=True,
+    auto_run=True,
 )
 class AssistantAgent:
     pass
@@ -116,8 +140,8 @@ class AssistantAgent:
 meshctl start assistant/main.py --debug
 
 # Call the smart greeting
-meshctl call assistant smart_greeting --params '{"name": "Developer"}'
-# Output: Hello, Developer! Welcome to MCP Mesh!
+meshctl call assistant:smart_greet '{"name":"Developer"}'
+# Output: Not implemented Welcome to MCP Mesh, Developer!
 ```
 
 ## Next Steps
