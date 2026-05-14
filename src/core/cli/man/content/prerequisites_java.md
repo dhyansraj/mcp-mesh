@@ -52,7 +52,7 @@ Add the Spring Boot starter to your `pom.xml`:
     <dependency>
         <groupId>io.mcp-mesh</groupId>
         <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-        <version>2.0.0-beta.3</version>
+        <version>2.0.0</version>
     </dependency>
     <dependency>
         <groupId>org.springframework.boot</groupId>
@@ -100,10 +100,10 @@ docker compose version
 
 | Image                              | Description                 |
 | ---------------------------------- | --------------------------- |
-| `mcpmesh/registry:2.0.0-beta.3`           | Registry service            |
-| `mcpmesh/python-runtime:2.0.0-beta.3`     | Python runtime with SDK     |
-| `mcpmesh/java-runtime:2.0.0-beta.3`       | Java runtime with SDK       |
-| `mcpmesh/typescript-runtime:2.0.0-beta.3` | TypeScript runtime with SDK |
+| `mcpmesh/registry:2.0.0`           | Registry service            |
+| `mcpmesh/python-runtime:2.0.0`     | Python runtime with SDK     |
+| `mcpmesh/java-runtime:2.0.0`       | Java runtime with SDK       |
+| `mcpmesh/typescript-runtime:2.0.0` | TypeScript runtime with SDK |
 
 Java agents use standard Maven-based Docker builds (see Docker Deployment guide).
 
