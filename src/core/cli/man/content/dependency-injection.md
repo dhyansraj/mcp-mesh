@@ -54,6 +54,8 @@ async def greet(name: str, date_service: mesh.McpMeshTool = None) -> str:
 
 **Important**: Functions with dependencies must be `async def` and calls must use `await`.
 
+**Note**: `@mesh.tool` injects dependencies by parameter NAME (param `date_service` matches dependency capability `date_service`). `@mesh.route` injects POSITIONALLY — the first `McpMeshTool` parameter receives the first declared dependency, the second receives the second, etc. Parameter names on `@mesh.route` handlers are reader-friendly only.
+
 ### Dependencies with Filters
 
 Use the capability selector syntax (see `meshctl man capabilities`) to filter by tags or version:
@@ -105,30 +107,9 @@ async def hr_report(employee_lookup: mesh.McpMeshTool = None): ...
 
 ### OR Alternatives (Tag-Level)
 
-Use nested arrays in tags to specify fallback providers:
-
-```python
-@app.tool()
-@mesh.tool(
-    capability="calculator",
-    dependencies=[
-        # Prefer python provider, fallback to typescript
-        {"capability": "math", "tags": ["addition", ["python", "typescript"]]},
-    ],
-)
-async def calculate(a: int, b: int, math: mesh.McpMeshTool = None):
-    result = await math(a=a, b=b)
-    return result
-```
-
-Resolution order:
-
-1. Try to find provider with `addition` AND `python` tags
-2. If not found, try provider with `addition` AND `typescript` tags
-3. If neither found, dependency is unresolved (injected as `None`)
-
-This is useful when you have multiple implementations of the same capability
-and want to prefer one but fallback to another if unavailable.
+Tags also support nested-array OR alternatives for fallback semantics
+(e.g., prefer `python`, fallback `typescript`). See the **Tag-Level OR**
+section in `meshctl man capabilities` for the full pattern.
 
 ## Injection Types
 
@@ -174,18 +155,13 @@ async def get_time(date_service: mesh.McpMeshTool = None):
 
 ## Proxy Configuration
 
-Configure proxy behavior via `dependency_kwargs`:
+Per-dependency proxy options (timeout, retry, streaming, session affinity, auth, custom headers, etc.) are configured via `dependency_kwargs`. See `meshctl man proxies` for the full options table.
 
 ```python
 @mesh.tool(
     dependencies=["slow_service"],
     dependency_kwargs={
-        "slow_service": {
-            "timeout": 60,           # Request timeout (seconds)
-            "retry_count": 3,        # Retry attempts
-            "streaming": True,       # Enable streaming
-            "session_required": True, # Require session affinity
-        }
+        "slow_service": {"timeout": 60, "retry_count": 3},
     },
 )
 async def my_tool(slow_service: mesh.McpMeshTool = None):

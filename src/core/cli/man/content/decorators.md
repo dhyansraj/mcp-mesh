@@ -116,14 +116,7 @@ def lookup_employee(id: int) -> Employee:
 async def hr_report(employee_lookup: mesh.McpMeshTool = None): ...
 ```
 
-**Per-tool strict knob** — set `output_schema_strict=False` on a producer tool to demote a BLOCK schema verdict to a WARN for that one tool. Wins even when the cluster-wide `MCP_MESH_SCHEMA_STRICT=true` env var promotes WARN→BLOCK.
-
-```python
-@mesh.tool(capability="experimental_thing", output_schema_strict=False)
-def experimental(...) -> SomeRecursiveType: ...
-```
-
-See `meshctl man schema-matching` for modes, the cross-language convention table, and verdict tiers. See `meshctl man dependency-injection` for the full filter pipeline.
+Producer tools can opt out of strict schema verdicts via `output_schema_strict=False`. See `meshctl man schema-matching` for verdict tiers and policy. See `meshctl man dependency-injection` for the full filter pipeline.
 
 ## @mesh.llm
 
@@ -195,6 +188,8 @@ async def chat_endpoint(
 ```
 
 **Note**: `@mesh.route` is for FastAPI backends that _consume_ mesh capabilities. Use `@mesh.tool` for MCP agents that _provide_ capabilities.
+
+**Note**: `@mesh.tool` injects dependencies by parameter NAME (param `date_service` matches dependency capability `date_service`). `@mesh.route` injects POSITIONALLY — the first `McpMeshTool` parameter receives the first declared dependency, the second receives the second, etc. Parameter names on `@mesh.route` handlers are reader-friendly only.
 
 See `meshctl man fastapi` for complete FastAPI integration guide.
 
