@@ -114,6 +114,12 @@ test:
       echo "=== meshctl logs greeter-ts (last 100 lines) ==="
       meshctl logs greeter-ts --tail 100 2>&1 || cat ~/.mcp-mesh/logs/greeter-ts.log 2>&1 | tail -100
       echo ""
+      echo "=== meshctl logs registry (last 100 lines) ==="
+      meshctl logs registry --tail 100 2>&1 || cat ~/.mcp-mesh/logs/registry.log 2>&1 | tail -100
+      echo ""
+      echo "=== /tmp/vault-trust contents (CA files for filestore backend) ==="
+      ls -la /tmp/vault-trust/ 2>&1 || true
+      echo ""
       echo "=== meshctl status (all agents) ==="
       meshctl list 2>&1 || true
       exit 1
