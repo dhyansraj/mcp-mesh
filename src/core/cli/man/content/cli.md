@@ -198,21 +198,21 @@ Generates new agents from templates. Three input modes: interactive wizard, CLI 
 meshctl scaffold
 
 # CLI flags - basic tool agent
-meshctl scaffold --name my-agent --agent-type tool
+meshctl scaffold basic --name my-agent
 
 # Other languages
-meshctl scaffold --name my-agent --agent-type tool --lang typescript
-meshctl scaffold --name my-agent --agent-type tool --lang java
+meshctl scaffold basic --name my-agent --lang typescript
+meshctl scaffold basic --name my-agent --lang java
 
 # LLM-powered agent + zero-code provider
-meshctl scaffold --name analyzer --agent-type llm-agent --llm-selector claude
-meshctl scaffold --name claude-provider --agent-type llm-provider --model anthropic/claude-sonnet-4-5
+meshctl scaffold llm --name analyzer --vendor claude
+meshctl scaffold llm-provider --name claude-provider --vendor claude
 
 # Generate docker-compose.yml + observability stack
 meshctl scaffold --compose --observability
 
 # Preview only
-meshctl scaffold --name my-agent --agent-type tool --dry-run
+meshctl scaffold basic --name my-agent --dry-run
 ```
 
 ### `meshctl config`

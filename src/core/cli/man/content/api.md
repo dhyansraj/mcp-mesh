@@ -2,6 +2,8 @@
 
 > Add mesh capabilities to your FastAPI routes with @mesh.route
 
+> Use `meshctl scaffold api --name X --lang python|typescript|java` to generate a runnable starter that already wires `@mesh.route` (or the language equivalent).
+
 ## Why Use This
 
 - You have a FastAPI app (or are building one) and want your routes to call mesh agent capabilities (LLMs, data services, etc.)

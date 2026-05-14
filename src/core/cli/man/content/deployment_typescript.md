@@ -19,7 +19,7 @@ MCP Mesh supports multiple deployment patterns for TypeScript agents. Use `meshc
 
 ```bash
 # Create project
-meshctl scaffold --name my-agent --agent-type tool --lang typescript
+meshctl scaffold basic --name my-agent --lang typescript
 cd my-agent
 
 # Install dependencies
@@ -188,7 +188,7 @@ resources:
 
 ```bash
 # 1. Scaffold TypeScript agent
-meshctl scaffold --name my-agent --agent-type tool --lang typescript
+meshctl scaffold basic --name my-agent --lang typescript
 
 # 2. Build and push Docker image
 cd my-agent

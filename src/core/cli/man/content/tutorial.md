@@ -208,11 +208,11 @@ flight data. That's the complete Day 1 mesh.
 ## Step 1: Scaffold the agent
 
 `meshctl scaffold` generates a ready-to-run agent from a built-in template. For
-a basic Python tool agent, the flags you need are `--name`, `--agent-type tool`,
-and `--lang python` (which is the default, so you can omit it).
+a basic Python tool agent, you use the `basic` subcommand with `--name` and
+optionally `--lang python` (which is the default, so you can omit it).
 
 ```shell
-$ meshctl scaffold --name flight-agent --agent-type tool --port 9101
+$ meshctl scaffold basic --name flight-agent --port 9101
 
 Created agent 'flight-agent' in flight-agent/
 
@@ -483,10 +483,10 @@ outdoor activities. The other three -- `hotel-agent`, `weather-agent`, and
 You know `meshctl scaffold` from Day 1. Scaffold four new agents:
 
 ```shell
-$ meshctl scaffold --name hotel-agent --agent-type tool --port 9102
-$ meshctl scaffold --name weather-agent --agent-type tool --port 9103
-$ meshctl scaffold --name poi-agent --agent-type tool --port 9104
-$ meshctl scaffold --name user-prefs-agent --agent-type tool --port 9105
+$ meshctl scaffold basic --name hotel-agent --port 9102
+$ meshctl scaffold basic --name weather-agent --port 9103
+$ meshctl scaffold basic --name poi-agent --port 9104
+$ meshctl scaffold basic --name user-prefs-agent --port 9105
 ```
 
 Each command creates the same set of files you saw on Day 1: `main.py`,
@@ -722,7 +722,7 @@ handles the LiteLLM integration, request parsing, and response formatting.
 ### Scaffold the provider
 
 ```shell
-$ meshctl scaffold --name claude-provider --agent-type llm-provider --model anthropic/claude-sonnet-4-5 --port 9106
+$ meshctl scaffold llm-provider --name claude-provider --vendor claude --port 9106
 ```
 
 [Note: See the tutorial source files in examples/tutorial/trip-planner/day-03/ for full code listings]
@@ -759,7 +759,7 @@ model at call time.
 ### The planner code
 
 ```shell
-$ meshctl scaffold --name planner-agent --agent-type llm-agent --port 9107
+$ meshctl scaffold llm --name planner-agent --port 9107
 ```
 
 Three things to note:
@@ -873,7 +873,7 @@ Today has six parts:
 > `OPENAI_API_KEY` set in your environment.
 
 ```shell
-$ meshctl scaffold --name openai-provider --agent-type llm-provider --model openai/gpt-4o-mini --port 9108
+$ meshctl scaffold llm-provider --name openai-provider --vendor openai --port 9108
 ```
 
 [Note: See the tutorial source files in examples/tutorial/trip-planner/day-04/ for full code listings]
@@ -1059,7 +1059,7 @@ Today has four parts:
 ### Scaffold the gateway
 
 ```shell
-$ meshctl scaffold --name gateway --agent-type api --lang python --port 8080
+$ meshctl scaffold api --name gateway --lang python --port 8080
 ```
 
 [Note: See the tutorial source files in examples/tutorial/trip-planner/day-05/ for full code listings]
@@ -1203,7 +1203,7 @@ primitive for state -- you write an agent that wraps a data store, and other
 agents call it like any other tool.
 
 ```shell
-$ meshctl scaffold --name chat-history-agent --agent-type tool --port 9109
+$ meshctl scaffold basic --name chat-history-agent --port 9109
 ```
 
 [Note: See the tutorial source files in examples/tutorial/trip-planner/day-06/ for full code listings]
@@ -1360,7 +1360,7 @@ to produce JSON matching the schema and validates the response automatically.
 ### Budget analyst
 
 ```shell
-$ meshctl scaffold --name budget-analyst --agent-type llm-agent --port 9110
+$ meshctl scaffold llm --name budget-analyst --port 9110
 ```
 
 [Note: See the tutorial source files in examples/tutorial/trip-planner/day-07/ for full code listings]
@@ -1372,7 +1372,7 @@ JSON.
 ### Adventure advisor
 
 ```shell
-$ meshctl scaffold --name adventure-advisor --agent-type llm-agent --port 9111
+$ meshctl scaffold llm --name adventure-advisor --port 9111
 ```
 
 Returns `AdventureAdvice` with `unique_experiences`, `local_gems`, and
@@ -1381,7 +1381,7 @@ Returns `AdventureAdvice` with `unique_experiences`, `local_gems`, and
 ### Logistics planner
 
 ```shell
-$ meshctl scaffold --name logistics-planner --agent-type llm-agent --port 9112
+$ meshctl scaffold llm --name logistics-planner --port 9112
 ```
 
 Returns `LogisticsPlan` with `daily_schedule`, `transit_tips`, and

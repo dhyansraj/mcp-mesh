@@ -23,6 +23,7 @@ Subcommands (per agent type):
   llm           Consumer agent that uses an LLM via mesh delegation
   llm-provider  @mesh.llm_provider agent for a specific vendor
   a2a-consumer  Bridge an external A2A producer onto the mesh
+  api           HTTP gateway (FastAPI / Express / Spring Boot) that consumes mesh capabilities
 
 Run 'meshctl scaffold <subcommand> --help' for per-subcommand flags.
 
@@ -141,6 +142,12 @@ Infrastructure:
 	// agent skeleton with one mesh capability per skill in the card.
 	scaffold.AttachA2AConsumerSubcommand(cmd)
 
+	// Attach `api` subcommand (#1005). Generates an HTTP gateway agent
+	// (FastAPI / Express / Spring Boot) that consumes mesh capabilities
+	// via @mesh.route or the language-equivalent middleware. Restores
+	// the capability dropped in #958 alongside the --agent-type removal.
+	scaffold.AttachAPISubcommand(cmd)
+
 	return cmd
 }
 
@@ -223,14 +230,16 @@ var agentTypeToSubcommand = map[string]string{
 // subcommand's full Execute path (so its own flag parsing + RunE fire
 // exactly as if the user had typed `meshctl scaffold <sub>` directly).
 func routeDeprecatedAgentType(cmd *cobra.Command, agentType string, _ []string) error {
-	// `api` was removed from the supported set in PR #958. There is no
-	// drop-in replacement subcommand — HTTP gateway scaffolding is now
-	// covered by deployment docs, not a scaffold template.
+	// The legacy `--agent-type api` form is intentionally not shimmed
+	// even though `meshctl scaffold api` was reintroduced in #1005.
+	// The whole `--agent-type` flag is being retired holistically; we
+	// don't want to encourage continued use of it for any value, so the
+	// `api` form errors out and points the user at the subcommand UX.
 	if agentType == "api" {
 		cmd.SilenceUsage = true
 		return fmt.Errorf(
-			"the 'api' agent type was removed; HTTP gateways are now built differently. " +
-				"See `meshctl man deployment`")
+			"the '--agent-type api' form was removed; use 'meshctl scaffold api' instead " +
+				"(see 'meshctl scaffold api --help')")
 	}
 
 	subName, ok := agentTypeToSubcommand[agentType]
