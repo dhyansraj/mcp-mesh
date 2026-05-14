@@ -87,6 +87,7 @@ curl -s -X POST http://localhost:PORT/mcp \
 MCP responses use Server-Sent Events (SSE) format:
 
 ```
+event: message
 data: {"jsonrpc":"2.0","id":1,"result":{"tools":[...]}}
 ```
 

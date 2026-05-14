@@ -143,7 +143,7 @@ Returns: `MediaUpload(uri, name, mime_type, size)`.
 }
 ```
 
-## Distributed Deployment
+## Further reading
 
 > For distributed deployment and S3 configuration, see https://mcp-mesh.ai/multimodal/media-store/
 

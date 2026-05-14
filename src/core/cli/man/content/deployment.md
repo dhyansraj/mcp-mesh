@@ -441,12 +441,12 @@ No rebuild needed — the base path is injected at serve-time.
 
 ### Beta Releases
 
-For prerelease versions, override the image tag (the `1.1` floating tag only exists for stable releases):
+For prerelease versions, override the image tag (floating major-minor tags only exist for stable releases):
 
 ```bash
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
   --set ui.enabled=true \
-  --set mcp-mesh-ui.image.tag=1.1.0-beta.6
+  --set mcp-mesh-ui.image.tag=2.0.0-beta.3
 ```
 
 ## See Also

@@ -191,7 +191,7 @@ async def chat_endpoint(
 
 **Note**: `@mesh.tool` injects dependencies by parameter NAME (param `date_service` matches dependency capability `date_service`). `@mesh.route` injects POSITIONALLY — the first `McpMeshTool` parameter receives the first declared dependency, the second receives the second, etc. Parameter names on `@mesh.route` handlers are reader-friendly only.
 
-See `meshctl man fastapi` for complete FastAPI integration guide.
+See `meshctl man api` for complete FastAPI integration guide.
 
 ## @mesh.a2a (Producer — Python only)
 
@@ -284,4 +284,4 @@ export MCP_MESH_AUTO_RUN=false
 - `meshctl man llm` - LLM integration guide
 - `meshctl man tags` - Tag matching system
 - `meshctl man capabilities` - Capabilities system
-- `meshctl man fastapi` - FastAPI integration with @mesh.route
+- `meshctl man api` - FastAPI integration with @mesh.route
