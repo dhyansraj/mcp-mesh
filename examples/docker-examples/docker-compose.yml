@@ -2,12 +2,12 @@
 # Demonstrates Go registry + Python agents architecture using published Docker images
 #
 # Services:
-# - registry: Go-based registry with SQLite storage (mcpmesh/registry:2.0.0-beta.3)
-# - hello-world-agent: Python agent with greeting capabilities (mcpmesh/python-runtime:2.0.0-beta.3)
-# - system-agent: Python agent with system monitoring capabilities (mcpmesh/python-runtime:2.0.0-beta.3)
-# - fastmcp-agent: FastMCP service with mesh integration (mcpmesh/python-runtime:2.0.0-beta.3)
-# - dependent-agent: Service that depends on fastmcp-agent (mcpmesh/python-runtime:2.0.0-beta.3)
-# - fastapi-app: FastAPI application with mesh integration (mcpmesh/python-runtime:2.0.0-beta.3)
+# - registry: Go-based registry with SQLite storage (mcpmesh/registry:2.0.0)
+# - hello-world-agent: Python agent with greeting capabilities (mcpmesh/python-runtime:2.0.0)
+# - system-agent: Python agent with system monitoring capabilities (mcpmesh/python-runtime:2.0.0)
+# - fastmcp-agent: FastMCP service with mesh integration (mcpmesh/python-runtime:2.0.0)
+# - dependent-agent: Service that depends on fastmcp-agent (mcpmesh/python-runtime:2.0.0)
+# - fastapi-app: FastAPI application with mesh integration (mcpmesh/python-runtime:2.0.0)
 #
 # Usage:
 #   docker-compose up

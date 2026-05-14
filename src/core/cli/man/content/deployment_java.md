@@ -16,7 +16,7 @@ MCP Mesh supports multiple deployment patterns for Java/Spring Boot agents. The 
 <dependency>
     <groupId>io.mcp-mesh</groupId>
     <artifactId>mcp-mesh-spring-boot-starter</artifactId>
-    <version>2.0.0-beta.3</version>
+    <version>2.0.0</version>
 </dependency>
 ```
 
@@ -152,7 +152,7 @@ services:
       retries: 5
 
   registry:
-    image: mcpmesh/registry:2.0.0-beta.3
+    image: mcpmesh/registry:2.0.0
     ports:
       - "8000:8000"
     environment:
@@ -204,12 +204,12 @@ For production Kubernetes deployment:
 ```bash
 # Install core infrastructure
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 2.0.0-beta.3 \
+  --version 2.0.0 \
   -n mcp-mesh --create-namespace
 
 # Deploy Java agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 2.0.0-beta.3 \
+  --version 2.0.0 \
   -n mcp-mesh \
   -f my-agent/helm-values.yaml
 ```
@@ -242,15 +242,15 @@ resources:
 ```bash
 # 1. Build and push Docker image
 cd my-agent
-docker buildx build --platform linux/amd64 -t your-registry/my-agent:v2.0.0-beta.3 --push .
+docker buildx build --platform linux/amd64 -t your-registry/my-agent:v2.0.0 --push .
 
 # 2. Deploy with Helm
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 2.0.0-beta.3 \
+  --version 2.0.0 \
   -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
-  --set image.tag=v2.0.0-beta.3
+  --set image.tag=v2.0.0
 ```
 
 ## Port Strategy

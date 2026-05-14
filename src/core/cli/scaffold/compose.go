@@ -1087,7 +1087,7 @@ const agentServicesTemplate = `{{- range .Agents }}
 # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
 #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
 {{ .Name }}:
-  image: mcpmesh/python-runtime:2.0.0-beta.3
+  image: mcpmesh/python-runtime:2.0.0
   container_name: {{ $.ProjectName }}-{{ .Name }}
   hostname: {{ .Name }}
   user: root
@@ -1132,7 +1132,7 @@ const agentServicesTemplate = `{{- range .Agents }}
 # NOTE: In dev mode, npm install runs on startup and source is mounted.
 #       In production (Dockerfile), dependencies are pre-installed in the image.
 {{ .Name }}:
-  image: mcpmesh/typescript-runtime:2.0.0-beta.3
+  image: mcpmesh/typescript-runtime:2.0.0
   container_name: {{ $.ProjectName }}-{{ .Name }}
   hostname: {{ .Name }}
   user: root
@@ -1175,7 +1175,7 @@ const agentServicesTemplate = `{{- range .Agents }}
 # Agent: {{ .Name }} (Java/Spring Boot)
 # NOTE: In dev mode, maven builds on startup. In production, use the Dockerfile.
 {{ .Name }}:
-  image: mcpmesh/java-runtime:2.0.0-beta.3
+  image: mcpmesh/java-runtime:2.0.0
   container_name: {{ $.ProjectName }}-{{ .Name }}
   hostname: {{ .Name }}
   user: root
@@ -1856,7 +1856,7 @@ services:
       - {{ .NetworkName }}
 
   registry:
-    image: mcpmesh/registry:2.0.0-beta.3
+    image: mcpmesh/registry:2.0.0
     container_name: {{ .ProjectName }}-registry
     hostname: registry
     ports:
@@ -1965,7 +1965,7 @@ services:
   # NOTE: In dev mode, entrypoint is overridden to install requirements on startup.
   #       In production (Dockerfile), base image ENTRYPOINT ["python"] is used with CMD ["main.py"]
   {{ .Name }}:
-    image: mcpmesh/python-runtime:2.0.0-beta.3
+    image: mcpmesh/python-runtime:2.0.0
     container_name: {{ $.ProjectName }}-{{ .Name }}
     hostname: {{ .Name }}
     user: root
@@ -2011,7 +2011,7 @@ services:
   # NOTE: In dev mode, npm install runs on startup and source is mounted.
   #       In production (Dockerfile), dependencies are pre-installed in the image.
   {{ .Name }}:
-    image: mcpmesh/typescript-runtime:2.0.0-beta.3
+    image: mcpmesh/typescript-runtime:2.0.0
     container_name: {{ $.ProjectName }}-{{ .Name }}
     hostname: {{ .Name }}
     user: root
@@ -2055,7 +2055,7 @@ services:
   # Java Agent: {{ .Name }}
   # NOTE: In dev mode, maven builds on startup. In production, use the Dockerfile.
   {{ .Name }}:
-    image: mcpmesh/java-runtime:2.0.0-beta.3
+    image: mcpmesh/java-runtime:2.0.0
     container_name: {{ $.ProjectName }}-{{ .Name }}
     hostname: {{ .Name }}
     user: root

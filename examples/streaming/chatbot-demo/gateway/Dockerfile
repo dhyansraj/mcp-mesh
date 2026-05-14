@@ -1,5 +1,5 @@
 # Dockerfile for gateway MCP Mesh API gateway
-FROM mcpmesh/python-runtime:2.0.0-beta.3
+FROM mcpmesh/python-runtime:2.0.0
 
 WORKDIR /app
 

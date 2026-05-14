@@ -2,63 +2,98 @@
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.4.1...v2.0.0)
 
-## v2.0.0 (unreleased)
+## v2.0.0 (2026-05-14)
 
-Single-mode LLM architecture (#859). All `@mesh.llm` / `mesh.llm()` /
-`@MeshLlm` consumers now route through a mesh-registered LLM provider agent
-(`@mesh.llm_provider` / `addLlmProvider` / `@MeshLlmProvider`). API keys live
-on the provider, never on consumers, and providers can be tagged, swapped,
-and load-balanced like any other capability.
+The 2.x major release. Two new flagship surfaces — **MeshJob** (a registry-backed substrate for long-running tasks across the mesh) and **A2A v1.0** (cross-runtime Agent-to-Agent protocol bridge, both producer and consumer sides) — plus a **schema registry** that makes capability matching type-safe across Python, TypeScript, and Java with cross-runtime hash equality. The LLM provider stack moves from direct-mode SDK calls to mesh-delegated providers backed by native vendor SDKs (Anthropic, OpenAI, Gemini AI Studio + Vertex AI). The dashboard UI gains Jobs, Schemas, A2A signals, and an agent grid. The `meshctl scaffold` surface migrates from `--agent-type X` flags to subcommands (`basic`, `llm`, `llm-provider`, `a2a-consumer`, `api`). The 28-topic meshctl audit (PRs #1001-#1008) drove a comprehensive doc cleanup pass.
 
-### Migration (one-shot)
+**Breaking changes**: direct LLM provider mode retired (mesh-delegated only — see #859); `meshctl scaffold --agent-type` deprecated in favor of subcommand form (back-compat shim with runtime warning until 3.x).
 
-1. Run one provider agent per vendor:
-   ```bash
-   meshctl scaffold llm-provider --vendor claude --runtime python --name claude-provider
-   meshctl scaffold llm-provider --vendor openai --runtime python --name openai-provider
-   ```
-2. Update consumers to use the provider selector:
-   ```python
-   @mesh.llm(provider={"capability": "llm", "tags": ["+claude"]})
-   ```
-   ```typescript
-   mesh.llm({ provider: { capability: "llm", tags: ["+claude"] } })
-   ```
-   ```java
-   @MeshLlm(providerSelector = @Selector(capability = "llm", tags = {"+claude"}))
-   ```
-3. Move `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GOOGLE_*` env vars from
-   consumer agent processes onto the matching provider agent process.
+### 🧱 MeshJob — long-running task substrate (cross-runtime)
 
-### Removed
+- **Registry-backed claim/lease substrate** (#878): new `@mesh.tool(task=True)` opts a tool into MeshJob — runs under a registry-managed lease with progress updates and explicit `complete()`/`fail()` terminal states. Consumer types a dependency parameter as `MeshJob`; DDDI swaps the usual `McpMeshTool` proxy for a `MeshJobSubmitter`. Submit via `proxy.submit(...)` returns a `JobProxy` bound to the new job ID; `proxy.wait(...)` polls until terminal.
+- **Cross-runtime parity**: TypeScript implementation (#885), Java implementation (#891), polyglot integration suites (#883, #888, #892) covering Python ↔ TS ↔ Java combinations end-to-end.
+- **`retry_on` per-tool exception whitelist** (#896, #897, #898): producers declare which exception classes are transient. Matching exceptions trigger `release_lease()` instead of `fail()` — the registry hands the job to a peer replica within ~5s. Anything not in `retry_on` surfaces to the consumer immediately as `JobFailedError`.
+- **Cancel propagation** (#899, #901): consumer `proxy.cancel(reason)` fires the cancel token in the producer's running handler. Java cancel-registry binding + outbound HTTP cancel propagation (#899); Python handler observes `/jobs/:id/cancel` (#901); TS bundle for retry_on + outbound cancel + structuredContent (#897).
+- **User-facing documentation** (#902, #241): `meshctl man jobs` covers the producer + consumer surface, MeshJobSubmitter / JobProxy / JobController, retry_on semantics, and the cheat sheet table that aligns producer + consumer surfaces side-by-side.
 
-- `@mesh.llm(provider="claude" | "openai", model=...)` (Python) — use
-  `provider={"capability": "llm", "tags": [...]}`
-- `@MeshLlm(provider = "claude" | "openai" | "vertex_ai")` (Java) — use
-  `providerSelector = @Selector(...)`
-- `MESH_LLM_PROVIDER` and `MESH_LLM_MODEL` env vars (consumer-side overrides
-  no longer apply; route to a different provider instead)
-- `examples/java/llm-direct-agent/` and other direct-mode example folders
+### 🔗 A2A v1.0 — cross-runtime Agent-to-Agent protocol bridge
 
-### Changed
+- **Python A2A — producer + consumer**:
+  - Producer (#904, #905): expose mesh tools as A2A v1.0 skills via `mesh.a2a.mount(app, ...)` on a Starlette/FastAPI app — auto-generates `/.well-known/agent.json` and the JSON-RPC entry route. Long-running A2A tasks bridge into the MeshJob substrate (Phase 3, #905) with SSE streaming for progress. Test coverage: 7 deferred integration tests bringing uc24_a2a_python to 12/12 (#907).
+  - Consumer (#908, #913): `@mesh.a2a_consumer` + injected `mesh.A2AClient` bridge an external A2A skill into the mesh as a regular mesh capability. Long-running submit/subscribe bridges to MeshJob (#910, #914). Hardening pass for loop binding, lifecycle, multi-agent diagnostics (#912, #915).
+- **TypeScript A2A — producer + consumer**:
+  - Producer (#935): `mesh.a2a.mount()` on Express apps. Per-heartbeat surfaces parity with Python via napi push (#943).
+  - Consumer (#917, #927): `addTool({ a2aConfig })` with `A2AClient` injection in the execute callback. structuredContent fix in #927.
+- **Java A2A — producer + consumer**:
+  - Producer (#934): `@MeshA2A` annotation for Spring Boot apps. Empty-`@MeshA2A`-registry hotfix (#947); synthetic-tools registration ordering hotfix (#949).
+  - Consumer (#919, #922): `@A2AConsumer` annotation + `A2AClient` parameter injection on a `@MeshTool` method. Phase 3 long-running submit/subscribe bridge (#922). Framework-injection refactor (#923, #924). MeshJobSubmitter auto-injection + user-`@Component` cycle fix (#941).
+- **`meshctl scaffold a2a-consumer`** (#909, #929): fetches an external A2A producer's card from `--url` and generates a runnable bridge consumer (Python / TS / Java). `--offline` mode for placeholder generation. SSRF/redirect bounding (#944).
+- **Bearer authentication** (#931): wired automatically when the upstream card declares it. Per-runtime env-var conventions: Python `A2A_BEARER_TOKEN`, TS `a2aConfig.auth = { tokenEnv: ... }`, Java `@A2AConsumer(authBearerEnv = ...)`.
+- **Documentation suite** (#931): full A2A guide at `meshctl man a2a` covering producer + consumer + bearer auth + cross-runtime convention; A2A decorator family added to the decorators reference page in all three languages (#1007).
 
-- **`@MeshLlm` `maxIterations` default lowered from 5 to 1** (Java). After v2,
-  the agentic loop is opt-in: a single LLM round-trip is the safe default for
-  consumers that don't actually need tool calling. Consumers that rely on
-  multi-turn tool use must set `maxIterations` explicitly (e.g.
-  `@MeshLlm(providerSelector = ..., maxIterations = 5)`).
+### 🧬 Schema registry + DDDI maturity
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.4.0...v1.4.1)
+- **Type-safe capability matching** (#547, #841): the registry stores canonical, content-addressed JSON Schemas for every tool's input and output, plus consumer "expected" schemas. The Rust canonical normalizer (embedded in every SDK) collapses Python Pydantic models, TypeScript Zod schemas, and Java POJOs to the same byte-equal canonical form by sha256 — making cross-language matching meaningful. Opt-in per dependency via `expected_type` (Python) / `expectedSchema` (TS) / `expectedType` (Java). Two modes: `subset` (consumer's required fields exist on producer) or `strict` (byte-equal hashes for cross-language pinning). Cluster-wide `MCP_MESH_SCHEMA_STRICT=true` promotes WARN→BLOCK; per-tool `output_schema_strict=False` demotes BLOCK→WARN.
+- **Dependency resolution audit trail** (#839): `meshctl audit <agent>` reads back the registry's per-dependency resolution log. `--explain` renders a stage tree showing which candidates entered each filter stage (`health → capability_match → tags → version → schema → tiebreaker`), which were dropped (and why, with typed reasons), and the chosen producer. Emission is gated to multi-candidate decisions and producer flips so the audit table stays noise-free. Plus prefix-resolver fix.
+- **Schema diff + canonical schema browser**: `meshctl schema diff <hashA> <hashB>` for content-addressed schema comparison; `meshctl list --schemas` for the registry inventory.
+- **Sweep job** (#837, #842, #843): purges stale agents and old registry events on a configurable interval. Orphan `schema_entries` GC under SERIALIZABLE isolation.
+
+### 🌊 Streaming
+
+- **`mesh.Stream[str]` author API** (#645, #849): annotate a tool's return type as `mesh.Stream[str]` and `yield` chunks — the framework picks the streaming code path automatically. Rides standard MCP `notifications/progress` — no protocol extensions, no global config knob. Vanilla MCP clients (Cursor, Claude Desktop, Cline, `fastmcp.Client`) can subscribe via `progressToken` in `_meta`.
+- **`proxy.stream()` consumer API** (#849): when a mesh agent depends on a streaming tool, calling `proxy.stream(...)` returns an async iterator of chunks. Multi-hop streaming composes by re-yielding chunks at each layer.
+- **Browser via `@mesh.route` auto-SSE** (#849): a FastAPI route handler that returns `mesh.Stream[str]` is auto-wrapped as Server-Sent Events; chunks become `data: <chunk>\n\n` lines, terminating with `data: [DONE]\n\n`.
+- **Cross-runtime streaming consumer parity** (#854, #855): TypeScript and Java consumers can also subscribe to streaming producers (per-chunk `proxy.stream()` parity is Python today; wire-level streaming works for all runtimes).
+- **Mesh-delegate streaming + tutorial** (#853): bonus tutorial chapter walking through token-by-token streaming end-to-end.
+
+### 🤖 LLM provider stack — native SDKs + delegated mode only
+
+- **Native vendor SDKs for `@mesh.llm_provider`** (#834, partial #862, #864, #865): Anthropic SDK (#862), OpenAI SDK (#864), Gemini SDK with both AI Studio (`gemini/*`) and Vertex AI (`vertex_ai/*`) backends (#865). Replaces the LiteLLM-only path with provider-native SDKs that get vendor-specific features (e.g., Anthropic's HINT mode, OpenAI's structured outputs) without LiteLLM as a translation layer.
+- **Direct mode retired — mesh-delegated only** (#859, #870): v2.0 breaking change. `@mesh.llm` no longer accepts an embedded API key or vendor SDK; consumers always go through a mesh-resolved `@mesh.llm_provider`. Cleaner separation: providers own the API keys + SDK; consumers declare the capability + tag selector.
+- **Synthetic-tool retry on schema-validation failure** (#961, #962): `mesh.llm`'s synthetic tool calls (`__mesh_job_*`, framework-injected) retry on Pydantic shape mismatches in the LLM's reply — LiteLLM-parity safety net for the native Anthropic path.
+- **LLM stack cleanups** (#860, #863, #866): kwarg collision fixes, per-loop httpx pool to avoid cross-loop binding errors, vendor-aware emitter.
+
+### 📊 UI dashboard
+
+- **Jobs page** (#978): read-only MeshJob observability — surfaces submitted/running/completed jobs with their progress, owner, and terminal state. Drives off the `/jobs` registry endpoint.
+- **Schema registry browser** (#979): inspect canonical schemas in the registry, see which agents produce/consume each hash.
+- **Agents grid view + `/agents/:id` detail route** (#980): card-based agent overview with detail drill-down for capabilities, dependencies, last-seen timing.
+- **A2A producer/consumer signals on agent metadata** (#977): sidenav + agent detail surface A2A flags for cross-language A2A topology.
+- **Agent description persistence + UI surfacing** (#975): `@mesh.agent(description=...)` now persists to the registry and surfaces in the UI detail view.
+- **Trace activity counter from recent ring buffer** (#985): dashboard activity indicator now reflects recent (last-N-minute) trace events instead of cumulative counts.
+- **UI polish bundle** (#965 #966 #967 #970 #974, in #983): cumulative quality-of-life improvements + agents-page alphabetical sort to stop card reshuffling on refresh.
+- **Forward rotate events + poller reason enrichment** (#982 #984, in #986).
+
+### 🛠️ meshctl + scaffold
+
+- **Subcommand-based scaffold surface** (#960, #1004): `meshctl scaffold` migrates from the deprecated `--agent-type X` flag to subcommands — `basic`, `llm`, `llm-provider`, `a2a-consumer`, `api`. Each subcommand has a focused flag surface (e.g., `scaffold llm --vendor claude --response-format json`); the deprecated `--agent-type` form is retained behind a runtime deprecation warning for back-compat.
+- **`meshctl scaffold api`** (#1005, in #1004): HTTP gateway scaffold for FastAPI / Express / Spring Boot agents that consume mesh capabilities via `@mesh.route` (Python), Express middleware (TypeScript), or the Spring Boot starter (Java). Templates existed since 1.x but the command path was severed during the subcommand migration; this restores a runnable starter.
+- **Auto port-bumping on scaffold** (#958): `meshctl scaffold` detects existing agents in the workdir and increments `http_port` so multi-agent projects don't collide on 8080.
+- **Drop unimplemented `mode llm` scaffold engine** (#1002): `--list-modes` advertised an LLM-driven generation mode that was never implemented. Cleaned up entirely (−497 lines).
+- **Audit-driven doc cleanup** (#1001 #1003 #1006 #1007 #1008): 28-topic walk through every `meshctl man` page surfaced ~50 doc fixes — scaffold-example rewrites across 11 pages, registry endpoint table fix (`/capabilities` removed, `/schemas` added), heartbeat env var label corrections, content polish bundle (~20 small items).
+
+### 🔒 Registry + trust hardening
+
+- **Trust chain fail-fast on backend init failure** (#988, originally #989): registry refuses to start if a configured trust backend (filestore, k8s-secrets, SPIRE) fails to initialize — eliminates a class of silent-degradation bugs where the registry would come up healthy but reject every cert with "no backends configured." Surfaced via tc13_vault_typescript on K8s nodes with restrictive pod sandboxes (newer containerd).
+- **filestore fsnotify watcher non-fatal**: filestore backend now degrades to "trust without hot reload" instead of failing the backend if `fsnotify.NewWatcher()` is rejected by a restrictive sandbox.
+- **uc12 test suite hardening** (#988): replaces fragile `handler: wait, seconds: N` blocks with poll-until-healthy shell loops across 8 registration-trust tests. Closes the registration-race flake class.
+- **Registry sweep job** (#837): purges stale agents and old registry events on a configurable interval. Tunable via `MCP_MESH_SWEEP_INTERVAL`.
+- **Unhealthy agents must re-register via POST** (#955, #959): heartbeat `HEAD` now returns `410 Gone` for previously-evicted agents, forcing a clean POST registration instead of a stale-state silent re-add.
+
+### 🎬 Media storage
+
+- **Fail-fast S3 startup validation** (#945, 4 of 5 from #846): agent fails to start if `MCP_MESH_MEDIA_STORAGE=s3` is set without `boto3` installed or `MCP_MESH_MEDIA_STORAGE_BUCKET` configured. Optional `MCP_MESH_MEDIA_STORAGE_VALIDATE=true` adds a bucket-reachability probe before serving traffic.
+
+### 📚 Documentation
+
+- **A2A documentation suite** (#931): full guide at `meshctl man a2a` with cross-language convention table; A2A decorators added to `meshctl man decorators` in all three languages (#1007).
+- **MeshJob user docs** (#902): `meshctl man jobs` covers producer + consumer surfaces.
+- **Homepage / README / comparison cleanup** (#951): A2A coverage, positioning reframe, failover accuracy.
+- **Doc convention added** (`.claude/CLAUDE.md` and project memory): user-facing docs show only canonical command forms; deprecated forms remain functional with runtime warnings but are not teach-documented. Drove the audit-cleanup pass.
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.3.4...v1.4.1)
 
 ## v1.4.1 (2026-04-28)
-
-Re-release of v1.4.0. The original v1.4.0 publish pipeline failed at `publish-typescript-sdk` because the lockfile's `@mcpmesh/core` file-link entry caused npm install to bypass the registry and copy from the (CI-empty) source dir. PyPI `mcp-mesh` / `mcp-mesh-core`, npm `@mcpmesh/core`, and Maven Central Java SDK at 1.4.0 shipped successfully, but `@mcpmesh/sdk@1.4.0` and the v1.4.0 Docker images never published. The lockfile-bypass fix landed in #831; cutting v1.4.1 sidesteps the duplicate-publish deadlock and ships every artifact at the new version.
-
-**Same code as v1.4.0 — no functional changes.** See [v1.4.0 release notes](#v140-2026-04-28) below for the actual feature/fix highlights.
-
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.3.4...v1.4.0)
-
-## v1.4.0 (2026-04-28)
 
 Reliability + provider expansion. The marquee item is a clean-cutover redesign of meshctl's process lifecycle that eliminates a class of bugs around orphaned registry/UI servers, same-name agent re-starts, and watch-mode races. Vertex AI joins the LLM provider lineup across all three runtimes with IAM-based auth instead of API keys. Python and TypeScript agents no longer have their health endpoints blocked by long-running tool calls (k8s pod-restart fix). Claude structured output goes HINT-first to eliminate silent hangs.
 
