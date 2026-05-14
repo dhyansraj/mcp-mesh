@@ -10,8 +10,8 @@ import (
 	"mcp-mesh/src/core/cli/scaffold"
 )
 
-// NewScaffoldCommand creates the scaffold command for generating MCP Mesh agents.
-// It supports multiple modes (providers) for generation: static templates and LLM-based.
+// NewScaffoldCommand creates the scaffold command for generating MCP Mesh agents
+// from gomplate-rendered templates.
 func NewScaffoldCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "scaffold",
@@ -30,7 +30,6 @@ Top-level (no subcommand) modes:
   Interactive wizard: Run with no flags (and a TTY) to enter the wizard
   Config file:        meshctl scaffold --config scaffold.yaml
   Compose generator:  meshctl scaffold --compose [--observability]
-  List modes:         meshctl scaffold --list-modes
 
 Examples:
   # Interactive mode (recommended for first-time users)
@@ -47,9 +46,6 @@ Examples:
 
   # Generate from config file
   meshctl scaffold --config scaffold.yaml
-
-  # List available modes
-  meshctl scaffold --list-modes
 
   # Generate docker-compose.yml for all agents in directory
   meshctl scaffold --compose
@@ -94,19 +90,18 @@ Infrastructure:
 	_ = cmd.Flags().MarkHidden("agent-type")
 
 	// Common flags
-	cmd.Flags().String("mode", "static", "Generation mode: static, llm")
 	cmd.Flags().StringP("name", "n", "", "Agent name (required unless interactive or config)")
 	cmd.Flags().StringP("lang", "l", "python", "Language: python, typescript, java (or py, ts, jv)")
 	cmd.Flags().StringP("output", "o", ".", "Output directory")
 	cmd.Flags().IntP("port", "p", 8080, "HTTP port for the agent")
 	cmd.Flags().String("description", "", "Agent description")
-	cmd.Flags().Bool("list-modes", false, "List available scaffold modes")
 	cmd.Flags().Bool("no-interactive", false, "Disable interactive mode (for scripting)")
 	cmd.Flags().Bool("dry-run", false, "Preview generated code without creating files")
 	cmd.Flags().String("package", "", "Java package name (default: com.example.<agent-name>)")
 
 	// LLM-agent specific flags
 	cmd.Flags().String("llm-selector", "claude", "LLM provider selector: claude, openai")
+	cmd.Flags().String("provider", "claude", "LLM provider: claude, openai, gemini")
 	cmd.Flags().Int("max-iterations", 1, "Max agentic loop iterations")
 	cmd.Flags().String("system-prompt", "", "System prompt (inline or file:// path)")
 	cmd.Flags().String("context-param", "ctx", "Context parameter name")
@@ -158,12 +153,6 @@ func runScaffoldCommand(cmd *cobra.Command, args []string) error {
 		return routeDeprecatedAgentType(cmd, agentType, args)
 	}
 
-	// Check if listing modes
-	listModes, _ := cmd.Flags().GetBool("list-modes")
-	if listModes {
-		return listScaffoldModes(cmd)
-	}
-
 	// Check if generating docker-compose
 	compose, _ := cmd.Flags().GetBool("compose")
 	observability, _ := cmd.Flags().GetBool("observability")
@@ -205,13 +194,10 @@ func runScaffoldCommand(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Get the provider mode
-	mode, _ := cmd.Flags().GetString("mode")
-
-	// Get the provider
-	provider, err := scaffold.DefaultRegistry.Get(mode)
+	// Static template generation is the only supported mode.
+	provider, err := scaffold.DefaultRegistry.Get("static")
 	if err != nil {
-		return fmt.Errorf("unknown mode %q: %w", mode, err)
+		return fmt.Errorf("static scaffold provider unavailable: %w", err)
 	}
 
 	// Validate
@@ -396,12 +382,6 @@ func loadFromFlags(cmd *cobra.Command) (*scaffold.ScaffoldContext, error) {
 	templateDir, _ := cmd.Flags().GetString("template-dir")
 	configFile, _ := cmd.Flags().GetString("config")
 
-	// Get LLM scaffold mode flags
-	fromDoc, _ := cmd.Flags().GetString("from-doc")
-	prompt, _ := cmd.Flags().GetString("prompt")
-	llmProvider, _ := cmd.Flags().GetString("provider")
-	validateCode, _ := cmd.Flags().GetBool("validate")
-
 	// Get LLM-agent specific flags
 	llmSelector, _ := cmd.Flags().GetString("llm-selector")
 	maxIterations, _ := cmd.Flags().GetInt("max-iterations")
@@ -462,10 +442,6 @@ func loadFromFlags(cmd *cobra.Command) (*scaffold.ScaffoldContext, error) {
 		ToolFilter:          toolFilter,
 		FilterMode:          filterMode,
 		Model:               model,
-		FromDoc:             fromDoc,
-		Prompt:              prompt,
-		LLMProvider:         llmProvider,
-		ValidateCode:        validateCode,
 		ToolName:            toolName,
 		ToolDescription:     toolDescription,
 		Cmd:                 cmd,
@@ -532,18 +508,6 @@ func isInteractiveTerminal() bool {
 		return false
 	}
 	return (fi.Mode() & os.ModeCharDevice) != 0
-}
-
-func listScaffoldModes(cmd *cobra.Command) error {
-	cmd.Println("Available scaffold modes:")
-	cmd.Println()
-
-	for _, name := range scaffold.DefaultRegistry.List() {
-		provider, _ := scaffold.DefaultRegistry.Get(name)
-		cmd.Printf("  %-10s %s\n", name, provider.Description())
-	}
-
-	return nil
 }
 
 // runComposeGeneration handles the --compose flag to generate docker-compose.yml
