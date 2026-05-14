@@ -66,7 +66,7 @@ class GreeterAgent:
     pass
 ```
 
-The scaffolded `hello()` tool is a working stub that returns `"Not implemented"`. You can run it as-is and call it to verify the mesh end-to-end, then edit `greeter/main.py` to give the tool real behavior (e.g., return `f"Hello, {name}!"` and add a `name: str` parameter).
+The scaffolded `hello()` tool is a working stub that returns `"Not implemented"`. You can run it as-is and call it to verify the mesh end-to-end, then edit `greeter/main.py` to give the tool real behavior (e.g., change the return value or add parameters as needed).
 
 ## 3. Run the Agent
 
