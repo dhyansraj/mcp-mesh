@@ -6,43 +6,43 @@ Scaffold supports **Python**, **TypeScript**, and **Java** agents. Use `--lang t
 
 ## Input Modes
 
-| Mode        | Usage                                                | Best For         |
-| ----------- | ---------------------------------------------------- | ---------------- |
-| Interactive | `meshctl scaffold`                                   | First-time users |
-| CLI flags   | `meshctl scaffold --name my-agent --agent-type tool` | Scripting        |
-| Config file | `meshctl scaffold --config scaffold.yaml`            | Complex agents   |
+| Mode        | Usage                                       | Best For         |
+| ----------- | ------------------------------------------- | ---------------- |
+| Interactive | `meshctl scaffold`                          | First-time users |
+| CLI flags   | `meshctl scaffold basic --name my-agent`    | Scripting        |
+| Config file | `meshctl scaffold --config scaffold.yaml`   | Complex agents   |
 
 ## Agent Types
 
-| Type           | Decorator            | Description                               |
+| Subcommand     | Decorator            | Description                               |
 | -------------- | -------------------- | ----------------------------------------- |
-| `tool`         | `@mesh.tool`         | Basic capability agent                    |
-| `llm-agent`    | `@mesh.llm`          | LLM-powered agent that consumes providers |
+| `basic`        | `@mesh.tool`         | Basic capability agent                    |
+| `llm`          | `@mesh.llm`          | LLM-powered agent that consumes providers |
 | `llm-provider` | `@mesh.llm_provider` | Zero-code LLM provider                    |
 
 ## Quick Examples
 
 ```bash
 # Basic tool agent (Python - default)
-meshctl scaffold --name my-agent --agent-type tool
+meshctl scaffold basic --name my-agent
 
 # Basic tool agent (TypeScript)
-meshctl scaffold --name my-agent --agent-type tool --lang typescript
+meshctl scaffold basic --name my-agent --lang typescript
 
 # Basic tool agent (Java/Spring Boot)
-meshctl scaffold --name my-agent --agent-type tool --lang java
+meshctl scaffold basic --name my-agent --lang java
 
 # LLM agent using Claude
-meshctl scaffold --name analyzer --agent-type llm-agent --llm-selector claude
+meshctl scaffold llm --name analyzer --vendor claude
 
-# LLM provider exposing GPT-4
-meshctl scaffold --name gpt-provider --agent-type llm-provider --model openai/gpt-4
+# LLM provider exposing OpenAI
+meshctl scaffold llm-provider --name gpt-provider --vendor openai
 
 # Preview without creating files
-meshctl scaffold --name my-agent --agent-type tool --dry-run
+meshctl scaffold basic --name my-agent --dry-run
 
 # Non-interactive mode (for CI/scripts)
-meshctl scaffold --name my-agent --agent-type tool --no-interactive
+meshctl scaffold basic --name my-agent --no-interactive
 ```
 
 ## Docker Compose Generation
@@ -63,7 +63,6 @@ meshctl scaffold --compose --project-name my-project
 | Flag               | Description                                           |
 | ------------------ | ----------------------------------------------------- |
 | `--name`           | Agent name (required for non-interactive)             |
-| `--agent-type`     | `tool`, `llm-agent`, or `llm-provider`                |
 | `--lang`           | Language: `python` (default), `typescript`, or `java` |
 | `--dry-run`        | Preview generated code                                |
 | `--no-interactive` | Disable prompts (for scripting)                       |
@@ -79,10 +78,10 @@ The `--filter` flag uses capability selector syntax. See `meshctl man capabiliti
 
 ```bash
 # Filter tools by capability
-meshctl scaffold --name analyzer --agent-type llm-agent --filter '[{"capability": "calculator"}]'
+meshctl scaffold llm --name analyzer --filter '[{"capability": "calculator"}]'
 
 # Filter tools by tags
-meshctl scaffold --name analyzer --agent-type llm-agent --filter '[{"tags": ["tools"]}]'
+meshctl scaffold llm --name analyzer --filter '[{"tags": ["tools"]}]'
 ```
 
 ## Hybrid Development Workflow

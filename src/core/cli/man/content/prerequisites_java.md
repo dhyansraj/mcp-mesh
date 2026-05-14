@@ -74,7 +74,7 @@ meshctl --version
 
 ```bash
 # 1. Scaffold a Java agent
-meshctl scaffold --name hello --agent-type basic --lang java
+meshctl scaffold basic --name hello --lang java
 
 # 2. Run with meshctl (detects pom.xml, supports --debug/--watch)
 meshctl start hello/ --debug

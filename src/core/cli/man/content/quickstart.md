@@ -27,7 +27,7 @@ meshctl start --registry-only --debug
 
 ```bash
 # Terminal 2: Scaffold a basic agent
-meshctl scaffold --name greeter --agent-type tool
+meshctl scaffold basic --name greeter
 ```
 
 This creates `greeter/main.py`:
@@ -91,7 +91,7 @@ meshctl list
 Create a second agent that depends on the greeter:
 
 ```bash
-meshctl scaffold --name assistant --agent-type tool
+meshctl scaffold basic --name assistant
 ```
 
 Edit `assistant/main.py` to add a `dependencies=` clause on the tool and accept the injected proxy as a keyword parameter:

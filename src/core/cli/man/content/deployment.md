@@ -25,7 +25,7 @@ Create a virtual environment in your project root. `meshctl start` automatically
 
 ```bash
 # Create project and virtual environment
-meshctl scaffold --name my-agent --agent-type tool
+meshctl scaffold basic --name my-agent
 cd my-agent
 
 # Create .venv (meshctl looks for this first)
@@ -90,7 +90,7 @@ See `meshctl start --help` and `meshctl stop --help` for options.
 
 ```bash
 # Create agent with Dockerfile
-meshctl scaffold --name my-agent --agent-type tool
+meshctl scaffold basic --name my-agent
 
 # Files created:
 # my-agent/
@@ -252,7 +252,7 @@ resources:
 
 ```bash
 # 1. Scaffold your agent (creates Dockerfile + helm-values.yaml)
-meshctl scaffold --name my-agent --agent-type tool
+meshctl scaffold basic --name my-agent
 
 # 2. Build and push Docker image (works on all platforms)
 cd my-agent
