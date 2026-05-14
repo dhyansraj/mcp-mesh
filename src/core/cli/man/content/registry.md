@@ -70,14 +70,16 @@ export MCP_MESH_DEBUG_MODE=false
 
 ## API Endpoints
 
-| Endpoint        | Method    | Description            |
-| --------------- | --------- | ---------------------- |
-| `/health`       | GET       | Registry health check  |
-| `/agents`       | GET       | List registered agents |
-| `/agents/{id}`  | GET       | Get agent details      |
-| `/capabilities` | GET       | List all capabilities  |
-| `/register`     | POST      | Register/update agent  |
-| `/heartbeat`    | HEAD/POST | Agent heartbeat        |
+| Endpoint       | Method    | Description                                |
+| -------------- | --------- | ------------------------------------------ |
+| `/health`      | GET       | Registry health check                      |
+| `/agents`      | GET       | List registered agents (capabilities embedded per agent) |
+| `/agents/{id}` | GET       | Get agent details                          |
+| `/schemas`     | GET       | List canonical schemas (issue #547)        |
+| `/register`    | POST      | Register/update agent                      |
+| `/heartbeat`   | HEAD/POST | Agent heartbeat                            |
+
+> Capability data is surfaced per-agent inside `/agents` responses; there is no dedicated `/capabilities` endpoint.
 
 ## Dependency Resolution
 
