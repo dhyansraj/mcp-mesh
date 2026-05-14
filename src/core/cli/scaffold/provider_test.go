@@ -40,7 +40,6 @@ func TestNewScaffoldContext(t *testing.T) {
 	assert.Equal(t, ".", ctx.OutputDir)
 	assert.Equal(t, 8080, ctx.Port)
 	assert.Equal(t, "basic", ctx.Template)
-	assert.Equal(t, "claude", ctx.LLMProvider)
 }
 
 func TestScaffoldContext_Validate(t *testing.T) {

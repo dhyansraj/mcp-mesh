@@ -1,6 +1,6 @@
 // Package scaffold provides the scaffolding functionality for meshctl.
-// It implements a plugin-style architecture where different providers
-// (static templates, LLM-based) can generate MCP Mesh agents.
+// It implements a plugin-style architecture so generation providers can be
+// added in the future; today the only provider is `static` (gomplate templates).
 package scaffold
 
 import (
@@ -21,9 +21,9 @@ var supportedAgentTypes = []string{"tool", "llm-agent", "llm-provider", "api", "
 var validNamePattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
 
 // ScaffoldProvider defines the interface for scaffold generation providers.
-// Implementations handle different generation strategies (static templates, LLM, etc.)
+// The only built-in provider today is `static` (gomplate templates).
 type ScaffoldProvider interface {
-	// Name returns the provider's unique identifier (e.g., "static", "llm")
+	// Name returns the provider's unique identifier (e.g., "static")
 	Name() string
 
 	// Description returns a human-readable description of the provider
@@ -87,13 +87,6 @@ type ScaffoldContext struct {
 	ToolName        string // Name of the tool
 	ToolDescription string // Description of the tool
 
-	// Provider-specific (llm scaffold mode)
-	FromDoc      string // Requirements document path
-	Prompt       string // Natural language prompt
-	APIKey       string // LLM API key
-	LLMProvider  string // LLM provider (claude, openai)
-	ValidateCode bool   // Validate generated code
-
 	// Runtime
 	Cmd           *cobra.Command // Reference to command for flag access
 	IsInteractive bool           // True if running in interactive mode
@@ -112,7 +105,6 @@ func NewScaffoldContext() *ScaffoldContext {
 		ContextParam:        "ctx",
 		ResponseFormat:      "text",
 		LLMProviderSelector: "claude",
-		LLMProvider:         "claude",
 		FilterMode:          "all",
 	}
 }
