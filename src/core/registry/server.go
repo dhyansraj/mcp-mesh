@@ -109,6 +109,7 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 		var err error
 		trustChain, err = initTrustChain(config, logger)
 		if err != nil {
+			shutdownCancel()
 			return nil, fmt.Errorf("trust chain init: %w", err)
 		}
 		logger.Info("🔒 TLS mode: %s | trust backend: %s", config.TlsMode, config.TrustBackend)
