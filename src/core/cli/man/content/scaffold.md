@@ -19,6 +19,7 @@ Scaffold supports **Python**, **TypeScript**, and **Java** agents. Use `--lang t
 | `basic`        | `@mesh.tool`         | Basic capability agent                    |
 | `llm`          | `@mesh.llm`          | LLM-powered agent that consumes providers |
 | `llm-provider` | `@mesh.llm_provider` | Zero-code LLM provider                    |
+| `a2a-consumer` | (A2A bridge)         | Bridge external A2A producer skills       |
 
 ## Quick Examples
 
@@ -58,23 +59,60 @@ meshctl scaffold --compose --observability
 meshctl scaffold --compose --project-name my-project
 ```
 
+### Generate observability stack alone
+
+If you only want the observability infra (Redis + Tempo + Grafana) without bundling it into your main `docker-compose.yml`, use the standalone `--observability` mode:
+
+```bash
+meshctl scaffold --observability
+```
+
+This emits a separate `docker-compose.observability.yml` file. Start it with:
+
+```bash
+docker compose -f docker-compose.observability.yml up -d
+```
+
+Combine with `--compose --observability` if you want a single merged file instead.
+
 ## Key Flags
 
-| Flag               | Description                                           |
-| ------------------ | ----------------------------------------------------- |
-| `--name`           | Agent name (required for non-interactive)             |
-| `--lang`           | Language: `python` (default), `typescript`, or `java` |
-| `--dry-run`        | Preview generated code                                |
-| `--no-interactive` | Disable prompts (for scripting)                       |
-| `--output`         | Output directory (default: `.`)                       |
-| `--port`           | HTTP port (default: 8080)                             |
-| `--model`          | LiteLLM model for llm-provider                        |
-| `--llm-selector`   | LLM provider for llm-agent: `claude`, `openai`        |
-| `--filter`         | Tool filter for llm-agent (capability selector JSON)  |
-| `--compose`        | Generate docker-compose.yml                           |
-| `--observability`  | Add Redis/Tempo/Grafana to compose                    |
+Common flags (apply to all subcommands):
 
-The `--filter` flag uses capability selector syntax. See `meshctl man capabilities` for details.
+| Flag               | Description                                            |
+| ------------------ | ------------------------------------------------------ |
+| `--name`           | Agent name (required for non-interactive)              |
+| `--lang`           | Language: `python` (default), `typescript`, or `java`  |
+| `--output`         | Output directory (default: `.`)                        |
+| `--port`           | HTTP port (default: 8080)                              |
+| `--description`    | Agent description                                      |
+| `--package`        | Java package name (default `com.example.<agent-name>`) |
+| `--dry-run`        | Preview generated code                                 |
+| `--no-interactive` | Disable prompts (for scripting)                        |
+
+LLM agent flags (`llm` and `llm-provider` subcommands):
+
+| Flag                | Description                                                                          |
+| ------------------- | ------------------------------------------------------------------------------------ |
+| `--vendor`          | Provider tag: `claude` (default), `openai`, `gemini`, `litellm-fallback`             |
+| `--model`           | Override LiteLLM model string (default derived from `--vendor`)                      |
+| `--response-format` | LLM response format: `text` (default), `json` (`llm` subcommand)                     |
+| `--max-iterations`  | Max agentic loop iterations (default 1) (`llm` subcommand)                           |
+| `--system-prompt`   | System prompt (inline or `file://path` for Jinja2 template) (`llm` subcommand)       |
+| `--context-param`   | Context parameter name (default `ctx`)                                               |
+| `--tags`            | Tags for discovery (comma-separated)                                                 |
+| `--filter`          | Tool filter for `llm` agents (capability selector JSON)                              |
+| `--filter-mode`     | Filter mode: `all` (default), `best_match`, `*` (wildcard) — companion to `--filter` |
+
+Docker compose flags (top-level scaffold, no subcommand):
+
+| Flag              | Description                                           |
+| ----------------- | ----------------------------------------------------- |
+| `--compose`       | Generate docker-compose.yml                           |
+| `--observability` | Add Redis/Tempo/Grafana (compose or standalone)       |
+| `--project-name`  | Docker compose project name (default: directory name) |
+
+The `--filter` flag uses capability selector syntax. See `meshctl man capabilities` for details. Pair it with `--filter-mode` to control how multiple filter clauses combine.
 
 ```bash
 # Filter tools by capability
@@ -82,7 +120,35 @@ meshctl scaffold llm --name analyzer --filter '[{"capability": "calculator"}]'
 
 # Filter tools by tags
 meshctl scaffold llm --name analyzer --filter '[{"tags": ["tools"]}]'
+
+# Best-match mode (pick the single best-scoring provider)
+meshctl scaffold llm --name analyzer --filter '[{"tags": ["math"]}]' --filter-mode best_match
 ```
+
+## A2A Consumer Scaffold
+
+Bridge an external A2A v1.0 producer's skills into the mesh as ordinary capabilities. Fetches the producer's `/.well-known/agent.json` at scaffold time; each skill in the card becomes a mesh capability in the generated agent.
+
+```bash
+# Python consumer bridging an external A2A producer
+meshctl scaffold a2a-consumer --url http://localhost:9090/agents/date \
+  --lang python --name date-bridge --port 9201
+
+# TypeScript variant
+meshctl scaffold a2a-consumer --url https://weather.com/agents/forecast \
+  --lang typescript --name weather-bridge
+
+# Java variant
+meshctl scaffold a2a-consumer --url https://weather.com/agents/forecast \
+  --lang java --name weather-bridge
+
+# Offline placeholder (no fetch — user fills in URL, skill, auth later)
+meshctl scaffold a2a-consumer --offline --lang python --name placeholder
+```
+
+If the producer's card declares bearer authentication, the generated code wires up an env-var-based bearer token placeholder (default `A2A_BEARER_TOKEN`).
+
+See `meshctl man a2a` for the full A2A protocol bridge guide.
 
 ## Hybrid Development Workflow
 
