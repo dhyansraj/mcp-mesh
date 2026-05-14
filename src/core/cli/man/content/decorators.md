@@ -35,13 +35,15 @@ Configures the agent server settings. Applied to a class.
     name="my-service",           # Required: unique agent identifier
     version="1.0.0",             # Semantic version
     description="Service desc",  # Human-readable description
-    http_port=8080,              # HTTP server port (0 = auto-assign)
     http_host="localhost",       # Host announced to registry
+    http_port=8080,              # HTTP server port (0 = auto-assign)
+    enable_http=True,            # Bind HTTP server (default True)
     namespace="default",         # Namespace for isolation
-    auto_run=True,               # Start automatically (no main() needed)
-    auto_run_interval=10,        # Heartbeat interval in seconds
+    heartbeat_interval=5,        # Heartbeat cadence in seconds (env: MCP_MESH_HEALTH_INTERVAL)
     health_check=health_fn,      # Optional health check function
-    health_check_ttl=30,         # Health check cache TTL
+    health_check_ttl=15,         # Health check cache TTL (seconds)
+    auto_run=True,               # Start automatically (no main() needed)
+    auto_run_interval=10,        # Auto-run loop interval (env: MCP_MESH_AUTO_RUN_INTERVAL)
 )
 class MyAgent:
     pass

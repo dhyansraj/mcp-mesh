@@ -32,10 +32,10 @@ export MCP_MESH_HTTP_HOST=my-service  # Announced hostname
 
 # Auto-run behavior
 export MCP_MESH_AUTO_RUN=true
-export MCP_MESH_AUTO_RUN_INTERVAL=30  # Heartbeat interval (seconds)
+export MCP_MESH_AUTO_RUN_INTERVAL=10  # Auto-run loop interval (seconds, default 10)
 
-# Health monitoring
-export MCP_MESH_HEALTH_INTERVAL=30
+# Heartbeat cadence — overrides @mesh.agent(heartbeat_interval=...)
+export MCP_MESH_HEALTH_INTERVAL=5     # Heartbeat interval to registry (seconds, default 5)
 
 # Global toggle
 export MCP_MESH_ENABLED=true
