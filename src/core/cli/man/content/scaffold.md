@@ -14,12 +14,13 @@ Scaffold supports **Python**, **TypeScript**, and **Java** agents. Use `--lang t
 
 ## Agent Types
 
-| Subcommand     | Decorator            | Description                               |
-| -------------- | -------------------- | ----------------------------------------- |
-| `basic`        | `@mesh.tool`         | Basic capability agent                    |
-| `llm`          | `@mesh.llm`          | LLM-powered agent that consumes providers |
-| `llm-provider` | `@mesh.llm_provider` | Zero-code LLM provider                    |
-| `a2a-consumer` | (A2A bridge)         | Bridge external A2A producer skills       |
+| Subcommand     | Decorator                               | Description                                  |
+| -------------- | --------------------------------------- | -------------------------------------------- |
+| `basic`        | `@mesh.tool`                            | Basic capability agent                       |
+| `llm`          | `@mesh.llm`                             | LLM-powered agent that consumes providers    |
+| `llm-provider` | `@mesh.llm_provider`                    | Zero-code LLM provider                       |
+| `a2a-consumer` | (A2A bridge)                            | Bridge external A2A producer skills          |
+| `api`          | (`@mesh.route` / Express / Spring Boot) | HTTP API gateway consuming mesh capabilities |
 
 ## Quick Examples
 
@@ -38,6 +39,15 @@ meshctl scaffold llm --name analyzer --vendor claude
 
 # LLM provider exposing OpenAI
 meshctl scaffold llm-provider --name gpt-provider --vendor openai
+
+# Python FastAPI gateway with @mesh.route
+meshctl scaffold api --name gateway --lang python
+
+# TypeScript Express gateway
+meshctl scaffold api --name gateway --lang typescript
+
+# Java Spring Boot gateway
+meshctl scaffold api --name gateway --lang java
 
 # Preview without creating files
 meshctl scaffold basic --name my-agent --dry-run

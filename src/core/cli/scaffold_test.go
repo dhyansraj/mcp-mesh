@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -47,6 +46,26 @@ func TestScaffoldCommand_HasStaticFlags(t *testing.T) {
 	assert.NotNil(t, cmd.Flags().Lookup("template"))
 	assert.NotNil(t, cmd.Flags().Lookup("template-dir"))
 	assert.NotNil(t, cmd.Flags().Lookup("config"))
+}
+
+// TestScaffoldCommand_HasAPISubcommand verifies the `api` subcommand
+// is wired alongside basic, llm, llm-provider, a2a-consumer (issue
+// #1005). Reintroduced after the --agent-type api removal in #958
+// orphaned the python/typescript/java/api template trees.
+func TestScaffoldCommand_HasAPISubcommand(t *testing.T) {
+	cmd := NewScaffoldCommand()
+
+	sub, _, err := cmd.Find([]string{"api"})
+	require.NoError(t, err)
+	require.NotNil(t, sub)
+	assert.Equal(t, "api", sub.Name(),
+		"`meshctl scaffold api` must be registered as a subcommand")
+
+	// Same flag surface as basic + tags.
+	for _, name := range []string{"name", "lang", "output", "port", "description", "package", "tags", "dry-run", "no-interactive"} {
+		assert.NotNil(t, sub.Flags().Lookup(name),
+			"`scaffold api` must register --%s", name)
+	}
 }
 
 // TestScaffoldCommand_HasKeepListFlags asserts the flags that back the
@@ -206,8 +225,11 @@ func TestScaffoldCommand_AgentTypeLLMAgentRoutesToLLM(t *testing.T) {
 		"expected llm-agent to map to 'scaffold llm', got stderr:\n%s", stderr)
 }
 
-// TestScaffoldCommand_AgentTypeAPIErrors verifies the removed `api`
-// value produces a clear error referencing the deployment man page.
+// TestScaffoldCommand_AgentTypeAPIErrors verifies the legacy
+// `--agent-type api` form errors with a pointer to the new
+// `meshctl scaffold api` subcommand. The subcommand was reintroduced
+// in #1005 but the legacy --agent-type flag is being retired
+// holistically, so api is intentionally not shimmed.
 func TestScaffoldCommand_AgentTypeAPIErrors(t *testing.T) {
 	cmd := NewScaffoldCommand()
 	cmd.SetOut(bytes.NewBufferString(""))
@@ -221,12 +243,10 @@ func TestScaffoldCommand_AgentTypeAPIErrors(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	msg := err.Error()
-	assert.Contains(t, msg, "'api' agent type was removed",
+	assert.Contains(t, msg, "'--agent-type api' form was removed",
 		"expected explicit removal message, got: %s", msg)
-	assert.True(t,
-		strings.Contains(msg, "meshctl man deployment") ||
-			strings.Contains(msg, "man deployment"),
-		"expected pointer to deployment docs, got: %s", msg)
+	assert.Contains(t, msg, "meshctl scaffold api",
+		"expected pointer to the new subcommand, got: %s", msg)
 }
 
 // TestScaffoldCommand_AgentTypeUnknownErrors verifies that an unknown

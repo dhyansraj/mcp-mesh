@@ -1059,7 +1059,7 @@ Today has four parts:
 ### Scaffold the gateway
 
 ```shell
-$ meshctl scaffold basic --name gateway --lang python --port 8080
+$ meshctl scaffold api --name gateway --lang python --port 8080
 ```
 
 [Note: See the tutorial source files in examples/tutorial/trip-planner/day-05/ for full code listings]
