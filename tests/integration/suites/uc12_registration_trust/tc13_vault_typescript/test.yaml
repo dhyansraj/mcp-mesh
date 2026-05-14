@@ -110,6 +110,12 @@ test:
       done
       echo "TIMEOUT: agent '$expected' did not become healthy within 60s"
       echo "$out"
+      echo ""
+      echo "=== meshctl logs greeter-ts (last 100 lines) ==="
+      meshctl logs greeter-ts --tail 100 2>&1 || cat ~/.mcp-mesh/logs/greeter-ts.log 2>&1 | tail -100
+      echo ""
+      echo "=== meshctl status (all agents) ==="
+      meshctl list 2>&1 || true
       exit 1
 
   - name: "Check agent registered"
