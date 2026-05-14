@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Header } from "@/components/layout/Header";
 import { AgentTable } from "@/components/agents/AgentTable";
 import { AgentGrid } from "@/components/agents/AgentGrid";
@@ -16,6 +17,14 @@ export default function AgentsPage() {
     "mesh.ui.agents.view",
     "list",
     (v): v is "list" | "grid" => v === "list" || v === "grid",
+  );
+
+  // Issue #990: server payload order isn't stable, so cards reshuffle on
+  // every 30s refresh / SSE event. Sort once at the page level so both
+  // grid and table views consume the same ordered list.
+  const sortedAgents = useMemo(
+    () => [...agents].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })),
+    [agents],
   );
 
   if (loading) {
@@ -80,7 +89,7 @@ export default function AgentsPage() {
             )}
           </Button>
         </div>
-        {view === "grid" ? <AgentGrid agents={agents} /> : <AgentTable agents={agents} />}
+        {view === "grid" ? <AgentGrid agents={sortedAgents} /> : <AgentTable agents={sortedAgents} />}
       </div>
     </div>
   );

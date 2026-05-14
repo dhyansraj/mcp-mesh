@@ -135,8 +135,14 @@ func main() {
 		}
 	}
 
-	// Create and configure server using Ent
-	server := registry.NewServer(db, registryConfig, appLogger)
+	// Create and configure server using Ent. A trust-backend init failure
+	// (issue #989) returns an error here so we exit fatally rather than
+	// booting healthy and silently rejecting every heartbeat.
+	server, err := registry.NewServer(db, registryConfig, appLogger)
+	if err != nil {
+		appLogger.Error("❌ Failed to create registry server: %v", err)
+		os.Exit(1)
+	}
 
 	// Setup graceful shutdown
 	go func() {

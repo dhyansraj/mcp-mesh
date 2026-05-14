@@ -90,9 +90,21 @@ test:
     workdir: /workspace
     capture: system_start
 
-  - name: "Wait for system-agent registration"
-    handler: wait
-    seconds: 10
+  - name: "Wait for system-agent to be healthy"
+    handler: shell
+    command: |
+      expected="system-agent"
+      for i in $(seq 1 60); do
+        out=$(curl -sk https://localhost:8000/agents 2>/dev/null)
+        if echo "$out" | grep -q "\"name\":\"$expected\".*\"status\":\"healthy\""; then
+          echo "agent '$expected' healthy after ${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "TIMEOUT: agent '$expected' did not become healthy within 60s"
+      echo "$out"
+      exit 1
 
   - name: "Start hello-world with Vault provider"
     handler: shell
@@ -109,9 +121,21 @@ test:
     workdir: /workspace
     capture: hello_start
 
-  - name: "Wait for hello-world registration and dep resolution"
-    handler: wait
-    seconds: 15
+  - name: "Wait for hello-world and system-agent to be healthy"
+    handler: shell
+    command: |
+      for i in $(seq 1 60); do
+        out=$(curl -sk https://localhost:8000/agents 2>/dev/null)
+        if echo "$out" | grep -q "\"name\":\"hello-world\".*\"status\":\"healthy\"" \
+           && echo "$out" | grep -q "\"name\":\"system-agent\".*\"status\":\"healthy\""; then
+          echo "both agents healthy after ${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "TIMEOUT: hello-world + system-agent did not become healthy within 60s"
+      echo "$out"
+      exit 1
 
   - name: "Verify both agents registered"
     handler: shell

@@ -58,8 +58,13 @@ type Server struct {
 	shutdownWG     *sync.WaitGroup
 }
 
-// NewServer creates a new registry server using Ent database
-func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logger.Logger) *Server {
+// NewServer creates a new registry server using Ent database.
+//
+// Returns an error if a configured trust backend fails to initialize. This
+// ensures the registry refuses to start in a state that would silently reject
+// every agent heartbeat with "no backends configured" (issue #989), rather
+// than booting healthy and only failing at the heartbeat path.
+func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logger.Logger) (*Server, error) {
 	// Create Ent-based service
 	entService := NewEntService(entDB, config, logger)
 
@@ -95,10 +100,18 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 		}
 	}
 
-	// Initialize trust chain if TLS is not "off"
+	// Initialize trust chain if TLS is not "off". A failure here is fatal:
+	// see initTrustChain doc and issue #989 — silently dropping a backend
+	// would leave the registry running but rejecting every heartbeat with
+	// "no backends configured", which is exactly the bug we're closing.
 	var trustChain *trust.TrustChain
 	if config.TlsMode != "" && config.TlsMode != "off" {
-		trustChain = initTrustChain(config, logger)
+		var err error
+		trustChain, err = initTrustChain(config, logger)
+		if err != nil {
+			shutdownCancel()
+			return nil, fmt.Errorf("trust chain init: %w", err)
+		}
 		logger.Info("🔒 TLS mode: %s | trust backend: %s", config.TlsMode, config.TrustBackend)
 		if trustChain != nil {
 			entities, _ := trustChain.ListTrustedEntities()
@@ -145,7 +158,7 @@ func NewServer(entDB *database.EntDatabase, config *RegistryConfig, logger *logg
 	// Setup routes using generated interface
 	server.SetupGeneratedRoutes()
 
-	return server
+	return server, nil
 }
 
 // Run starts the HTTP server and health monitor
@@ -416,7 +429,20 @@ func (s *Server) runWithTLS(addr string) error {
 
 // initTrustChain parses the TrustBackend config and builds a TrustChain
 // from the configured backends.
-func initTrustChain(config *RegistryConfig, l *logger.Logger) *trust.TrustChain {
+//
+// Error policy (issue #989):
+//   - "User configured a backend but a prerequisite is missing" (e.g. filestore
+//     listed but MCP_MESH_TRUST_DIR unset) is a non-fatal warn-and-skip: the
+//     operator clearly didn't intend to enable that backend.
+//   - "User configured a backend AND the prerequisite is set, but init failed"
+//     (e.g. fsnotify denied, k8s API unreachable, SPIRE socket missing) is a
+//     fatal startup error. Returning a chain without the requested backend
+//     would silently produce a 0-backend chain that rejects every cert with
+//     "no backends configured" — exactly the original #989 symptom we're
+//     fixing. Better to refuse to start so the operator sees the real cause.
+//   - An unknown backend name is fatal: that's a typo in operator config and
+//     limping along masks the bug.
+func initTrustChain(config *RegistryConfig, l *logger.Logger) (*trust.TrustChain, error) {
 	names := trust.ParseBackendConfig(config.TrustBackend)
 	chain := trust.NewTrustChain()
 
@@ -429,8 +455,7 @@ func initTrustChain(config *RegistryConfig, l *logger.Logger) *trust.TrustChain 
 			}
 			fs, err := trust.NewFileStore(config.TrustDir, true)
 			if err != nil {
-				l.Warning("Failed to initialize filestore backend: %v", err)
-				continue
+				return nil, fmt.Errorf("initializing filestore backend (MCP_MESH_TRUST_DIR=%s): %w", config.TrustDir, err)
 			}
 			chain.Add(fs)
 			l.Info("🔒 Trust backend '%s' initialized", name)
@@ -442,8 +467,7 @@ func initTrustChain(config *RegistryConfig, l *logger.Logger) *trust.TrustChain 
 			}
 			lca, err := trust.NewLocalCA(config.TrustDir)
 			if err != nil {
-				l.Warning("Failed to initialize localca backend: %v", err)
-				continue
+				return nil, fmt.Errorf("initializing localca backend (MCP_MESH_TRUST_DIR=%s): %w", config.TrustDir, err)
 			}
 			chain.Add(lca)
 			l.Info("🔒 Trust backend '%s' initialized", name)
@@ -456,8 +480,7 @@ func initTrustChain(config *RegistryConfig, l *logger.Logger) *trust.TrustChain 
 			labelSelector := os.Getenv("MCP_MESH_K8S_LABEL_SELECTOR")
 			ks, err := trust.NewK8sSecretsFromConfig(namespace, labelSelector)
 			if err != nil {
-				l.Warning("Failed to initialize k8s-secrets backend: %v", err)
-				continue
+				return nil, fmt.Errorf("initializing k8s-secrets backend (namespace=%s, selector=%q): %w", namespace, labelSelector, err)
 			}
 			chain.Add(ks)
 			l.Info("🔒 Trust backend '%s' initialized", name)
@@ -469,17 +492,16 @@ func initTrustChain(config *RegistryConfig, l *logger.Logger) *trust.TrustChain 
 			}
 			sb, err := trust.NewSPIRE(context.Background(), socketPath)
 			if err != nil {
-				l.Warning("Failed to initialize spire backend: %v", err)
-				continue
+				return nil, fmt.Errorf("initializing spire backend (socket=%s): %w", socketPath, err)
 			}
 			chain.Add(sb)
 			l.Info("🔒 Trust backend '%s' initialized (socket: %s)", name, socketPath)
 		default:
-			l.Warning("Unknown trust backend: %s", name)
+			return nil, fmt.Errorf("unknown trust backend %q (configured via MCP_MESH_TRUST_BACKEND)", name)
 		}
 	}
 
-	return chain
+	return chain, nil
 }
 
 // startAdminServer starts a secondary Gin engine on the admin port with

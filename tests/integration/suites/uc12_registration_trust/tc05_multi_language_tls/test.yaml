@@ -42,9 +42,21 @@ test:
     workdir: /workspace
     capture: py_start
 
-  - name: "Wait for Python agent to register"
-    handler: wait
-    seconds: 10
+  - name: "Wait for Python agent to be healthy"
+    handler: shell
+    command: |
+      expected="system-agent"
+      for i in $(seq 1 60); do
+        out=$(curl -sk https://localhost:8000/agents 2>/dev/null)
+        if echo "$out" | grep -q "\"name\":\"$expected\".*\"status\":\"healthy\""; then
+          echo "agent '$expected' healthy after ${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "TIMEOUT: agent '$expected' did not become healthy within 60s"
+      echo "$out"
+      exit 1
 
   - name: "Start TypeScript agent with TLS auto"
     handler: shell
@@ -52,9 +64,21 @@ test:
     workdir: /workspace
     capture: ts_start
 
-  - name: "Wait for TypeScript agent to register"
-    handler: wait
-    seconds: 10
+  - name: "Wait for TypeScript agent to be healthy"
+    handler: shell
+    command: |
+      expected="greeter-ts"
+      for i in $(seq 1 60); do
+        out=$(curl -sk https://localhost:8000/agents 2>/dev/null)
+        if echo "$out" | grep -q "\"name\":\"$expected\".*\"status\":\"healthy\""; then
+          echo "agent '$expected' healthy after ${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "TIMEOUT: agent '$expected' did not become healthy within 60s"
+      echo "$out"
+      exit 1
 
   - name: "Start Java agent with TLS auto"
     handler: shell
