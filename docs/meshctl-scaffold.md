@@ -433,8 +433,8 @@ meshctl scaffold --name my-agent --agent-type llm-agent \
 **Template not found**
 
 ```bash
-# Check template directory
-meshctl scaffold --list-modes  # Shows available modes and templates
+# See available templates and flags
+meshctl scaffold --help
 ```
 
 ## See Also

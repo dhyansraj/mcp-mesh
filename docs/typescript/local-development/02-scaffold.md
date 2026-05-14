@@ -94,9 +94,6 @@ meshctl scaffold --name my-agent --agent-type tool --lang typescript --dry-run
 ```bash
 # See all scaffold options
 meshctl scaffold --help
-
-# See available agent templates
-meshctl scaffold --list-modes
 ```
 
 ## Next Steps

@@ -95,9 +95,6 @@ meshctl scaffold --name hello --agent-type basic --lang java --dry-run
 ```bash
 # See all scaffold options
 meshctl scaffold --help
-
-# See available agent templates
-meshctl scaffold --list-modes
 ```
 
 ## Next Steps
