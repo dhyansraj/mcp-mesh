@@ -13,6 +13,7 @@ MCP Mesh provides core functions that transform regular TypeScript functions int
 | `mesh.llm()`       | Enable LLM-powered tools           |
 | `mesh.llmProvider()` | Create LLM provider (zero-code)  |
 | `mesh.route()`     | Express route with mesh DI         |
+| `addTool({ a2aConfig })` | Bridge an external A2A skill as a mesh capability |
 
 ## mesh() Function
 
@@ -218,6 +219,42 @@ app.listen(3000);
 **Note**: `mesh.route()` is for Express backends that _consume_ mesh capabilities. Use `agent.addTool()` for MCP agents that _provide_ capabilities.
 
 See `meshctl man express` for complete Express integration guide.
+
+## A2A Consumer (`a2aConfig` on `addTool`)
+
+Bridge an external A2A v1.0 skill into the mesh as a regular mesh capability. The framework injects an `A2AClient` into the tool's execute callback.
+
+```typescript
+import { FastMCP, mesh, type A2AClient } from "@mcpmesh/sdk";
+import { z } from "zod";
+
+const server = new FastMCP({ name: "Date Consumer Bridge", version: "1.0.0" });
+const agent = mesh(server, { name: "date-consumer-ts", httpPort: 9201 });
+
+agent.addTool({
+  name: "current_date",
+  capability: "current-date",
+  parameters: z.object({}),
+  a2aConfig: {
+    url: "http://localhost:9090/agents/date",
+    skillId: "get-date",
+  },
+  execute: async (_args, ..._injected) => {
+    const a2a = _injected[0] as A2AClient;
+    const r = await a2a.send({
+      role: "user",
+      parts: [{ type: "text", text: "now" }],
+    });
+    return r.artifactText ? JSON.parse(r.artifactText) : "";
+  },
+});
+```
+
+Bearer auth is wired via `a2aConfig.auth = { tokenEnv: "UPSTREAM_TOKEN" }` when the upstream card requires it.
+
+A2A producer support in TypeScript is future work — only consumer is available today.
+
+See `meshctl man a2a` for the full A2A protocol bridge guide.
 
 ## Environment Variable Overrides
 

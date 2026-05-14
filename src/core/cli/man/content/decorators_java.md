@@ -15,6 +15,7 @@ MCP Mesh provides annotations that transform regular Spring Boot methods into me
 | `@MeshLlm`         | Enable LLM-powered tools                  |
 | `@MeshLlmProvider` | Create zero-code LLM provider             |
 | `@MeshRoute`       | REST endpoint with mesh DI                |
+| `@A2AConsumer`     | Bridge an external A2A skill as a mesh capability |
 
 ## @MeshAgent
 
@@ -326,6 +327,39 @@ public ResponseEntity<ChatResponse> chat(
     return ResponseEntity.ok(new ChatResponse(result));
 }
 ```
+
+## @A2AConsumer
+
+Bridge an external A2A v1.0 skill into the mesh as a regular mesh capability. The framework injects an `A2AClient` parameter slot into a `@MeshTool`-annotated method.
+
+```java
+@MeshAgent(name = "date-consumer", port = 9201)
+@SpringBootApplication
+public class DateConsumerAgentApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(DateConsumerAgentApplication.class, args);
+    }
+
+    @MeshTool(capability = "current-date")
+    @A2AConsumer(
+        url = "http://localhost:9090/agents/date",
+        skillId = "get-date"
+    )
+    public Map<String, Object> currentDate(A2AClient a2a) throws Exception {
+        A2AResponse r = a2a.send(Map.of(
+            "role", "user",
+            "parts", List.of(Map.of("type", "text", "text", "now"))
+        ));
+        return new ObjectMapper().readValue(r.artifactText(), Map.class);
+    }
+}
+```
+
+Bearer auth is wired via `@A2AConsumer(authBearerEnv = "UPSTREAM_TOKEN")` when the upstream card requires it.
+
+A2A producer support in Java is future work — only consumer is available today.
+
+See `meshctl man a2a` for the full A2A protocol bridge guide.
 
 ## Environment Variable Overrides
 
