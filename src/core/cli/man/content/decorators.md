@@ -13,15 +13,18 @@ MCP Mesh provides decorators (Python), annotations (Java), and function wrappers
 | `@mesh.llm`          | Enable LLM-powered tools        |
 | `@mesh.llm_provider` | Create LLM provider (zero-code) |
 | `@mesh.route`        | FastAPI route with mesh DI      |
+| `@mesh.a2a`          | Expose mesh tools as A2A v1.0 skills (producer, Python only) |
+| `@mesh.a2a_consumer` | Bridge an external A2A skill into the mesh as a capability   |
 
 ## Decorator Order (Critical!)
 
 When using multiple decorators, order matters:
 
 ```python
-@app.tool()           # 1. FastMCP protocol handler (outermost)
-@mesh.llm(...)        # 2. LLM integration (if using)
-@mesh.tool(...)       # 3. Mesh capability registration (innermost)
+@app.tool()                  # 1. FastMCP protocol handler (outermost)
+@mesh.llm(...)               # 2. LLM integration (if using)
+@mesh.a2a_consumer(...)      # 2. OR A2A bridge (mutually exclusive with @mesh.llm)
+@mesh.tool(...)              # 3. Mesh capability registration (innermost)
 def my_function():
     pass
 ```
@@ -194,6 +197,80 @@ async def chat_endpoint(
 **Note**: `@mesh.route` is for FastAPI backends that _consume_ mesh capabilities. Use `@mesh.tool` for MCP agents that _provide_ capabilities.
 
 See `meshctl man fastapi` for complete FastAPI integration guide.
+
+## @mesh.a2a (Producer — Python only)
+
+Expose mesh tools as A2A v1.0 skills via the `mesh.a2a.mount(...)` style. The user owns the FastAPI app AND the uvicorn lifecycle — no `@mesh.agent` decorator. The mount auto-generates the `/.well-known/agent.json` card and the JSON-RPC entry route.
+
+```python
+import mesh
+from fastapi import FastAPI
+from mesh.types import McpMeshTool
+
+app = FastAPI(title="Date A2A Agent")
+
+
+@mesh.a2a.mount(
+    app,
+    path="/agents/date",
+    dependencies=["date_service"],
+    skill_id="get-date",
+    skill_name="Get Date",
+)
+async def date_a2a(payload: dict, date_service: McpMeshTool = None):
+    if date_service is None:
+        return {"error": "date_service not yet resolved"}
+    return {"date": await date_service()}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=9090)
+```
+
+The mount attaches both:
+- `GET  /agents/date/.well-known/agent.json` — auto-generated card
+- `POST /agents/date` — JSON-RPC entry for `tasks/*` methods
+
+**Note**: A single Python process may NOT host both `@mesh.tool` capabilities and a `mesh.a2a.mount(...)` surface — the framework rejects mixed-mode at boot. Split into two agents (one provider, one A2A surface that depends on it).
+
+Java and TypeScript producer support is future work.
+
+See `meshctl man a2a` for the full producer + bearer auth + skill-card guide.
+
+## @mesh.a2a_consumer
+
+Bridge an external A2A v1.0 skill into the mesh as an ordinary mesh capability. Downstream callers consume it with no awareness of A2A.
+
+```python
+import json
+import mesh
+from fastmcp import FastMCP
+
+app = FastMCP("Date Consumer Bridge")
+
+
+@app.tool()
+@mesh.a2a_consumer(
+    capability="current-date",
+    a2a_url="http://localhost:9090/agents/date",
+    a2a_skill_id="get-date",
+)
+async def current_date(_a2a: mesh.A2AClient = None) -> dict:
+    response = await _a2a.send(
+        message={"role": "user", "parts": [{"type": "text", "text": "now"}]},
+    )
+    return json.loads(response.artifact_text)
+
+
+@mesh.agent(name="date-consumer", http_port=9201)
+class DateConsumer:
+    pass
+```
+
+The injected `_a2a: mesh.A2AClient` parameter exposes `.send(...)`. Bearer auth (`A2A_BEARER_TOKEN` env var by default) is wired automatically when the upstream card declares it.
+
+See `meshctl man a2a` for cross-language consumer parity (Python/TypeScript/Java) and offline-card scaffolding via `meshctl scaffold a2a-consumer`.
 
 ## Environment Variable Overrides
 
