@@ -601,7 +601,7 @@ For the complete list of `MCP_MESH_*` env vars consumed by the Python SDK, grep 
 grep -rhoE 'MCP_MESH_[A-Z_]+' .venv/lib/python*/site-packages/_mcp_mesh/ .venv/lib/python*/site-packages/mesh/ | sort -u
 ```
 
-This reference covers the user-facing public-facing vars. Internal-debug vars (e.g., `MCP_MESH_DEBOUNCE_DELAY`, `MCP_MESH_RELOAD_*`) are deliberately omitted.
+This reference covers the public, user-facing vars. Internal-debug vars (e.g., `MCP_MESH_RELOAD_*`) are deliberately omitted.
 
 ## See Also
 
