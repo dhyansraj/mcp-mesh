@@ -32,7 +32,7 @@ The central coordination service that:
 - Stores capability metadata in database (SQLite or PostgreSQL)
 - Resolves dependencies when agents request them
 - Monitors agent health and marks unhealthy agents
-- Never calls agents directly - agents always initiate communication
+- Never INITIATES outbound calls to agents on its own; agent-to-agent communication is always direct. The registry can OPTIONALLY proxy client→agent calls (`--use-proxy=true`, the default for `meshctl call`) for environments without direct network reachability — e.g., Kubernetes services without ingress.
 
 ### 2. Agents
 

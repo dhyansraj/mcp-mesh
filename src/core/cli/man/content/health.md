@@ -142,7 +142,7 @@ class MyAgent:
 
 The mesh handles failures gracefully:
 
-- **Registry down**: Existing agent-to-agent communication continues
+- **Registry down**: Already-resolved dependency proxies cache their endpoint and continue functioning — but topology changes (new agents joining, dependencies re-resolving, deregistrations) and new client→agent proxy calls all require the registry to be back up.
 - **Agent down**: Dependencies return `None`, code handles gracefully
 - **Network partition**: Agents continue with cached topology
 - **Recovery**: Automatic reconnection and topology refresh

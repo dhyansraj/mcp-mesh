@@ -4,7 +4,7 @@
 
 ## Overview
 
-The registry is the central coordination service in MCP Mesh. It facilitates agent discovery and dependency resolution but never proxies communication - agents communicate directly with each other.
+The registry is the central coordination service in MCP Mesh. It facilitates agent discovery and dependency resolution; agent-to-agent communication is always direct. The registry can OPTIONALLY proxy client→agent calls (`--use-proxy=true`, the default for `meshctl call`) for environments without direct network reachability — e.g., Kubernetes services without ingress.
 
 ## Registry Role
 
@@ -14,7 +14,7 @@ The registry is a **facilitator, not a controller**:
 - Stores capability metadata in database
 - Resolves dependencies on request
 - Monitors health and marks unhealthy agents
-- Never calls agents - agents always initiate
+- Never INITIATES outbound calls to agents on its own; agent-to-agent communication is always direct. The registry can OPTIONALLY proxy client→agent calls (`--use-proxy=true`, the default for `meshctl call`) for environments without direct network reachability — e.g., Kubernetes services without ingress.
 
 ## Starting the Registry
 
