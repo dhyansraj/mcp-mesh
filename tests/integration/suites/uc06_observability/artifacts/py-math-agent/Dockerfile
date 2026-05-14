@@ -1,5 +1,5 @@
 # Dockerfile for py-math-agent MCP Mesh agent
-FROM mcpmesh/python-runtime:2.0.0-beta.2
+FROM mcpmesh/python-runtime:2.0.0-beta.3
 
 WORKDIR /app
 

@@ -1683,7 +1683,7 @@ $ kubectl -n trip-planner create secret generic llm-keys \
 
 ```shell
 $ helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-    --version 2.0.0-beta.2 \
+    --version 2.0.0-beta.3 \
     -n trip-planner \
     -f helm/values-core.yaml \
     --wait --timeout 5m
@@ -1702,7 +1702,7 @@ $ for agent in "${AGENTS[@]}"; do
     echo "Installing $agent..."
     helm install "$agent" \
       oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-      --version 2.0.0-beta.2 \
+      --version 2.0.0-beta.3 \
       -n trip-planner \
       -f "helm/values-${agent}.yaml"
   done
