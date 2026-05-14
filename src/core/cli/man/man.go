@@ -122,7 +122,7 @@ func runManCommand(cmd *cobra.Command, args []string) error {
 
 	// Handle --day flag for tutorial topic
 	day, _ := cmd.Flags().GetInt("day")
-	if day > 0 {
+	if cmd.Flags().Changed("day") {
 		if guide.Name != "tutorial" {
 			return fmt.Errorf("--day flag is only valid with the 'tutorial' topic")
 		}
