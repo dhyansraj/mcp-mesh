@@ -92,12 +92,25 @@ test:
     workdir: /workspace
     capture: agent_start
 
-  - name: "Wait for agent registration"
-    # 15s was too tight on loaded test boxes — TS agent startup +
-    # Vault credential fetch + register call exceeded the budget on
-    # run 7c9009ac (test 51431, "no healthy agent found").
-    handler: wait
-    seconds: 30
+  - name: "Wait for agent to be healthy"
+    # Poll-until-healthy replaces the prior fixed 30s wait + weak curl
+    # check (which exited 0 even when agents were missing). The TS agent
+    # startup + Vault credential fetch + register call can exceed any
+    # fixed budget on loaded test boxes.
+    handler: shell
+    command: |
+      expected="greeter-ts"
+      for i in $(seq 1 60); do
+        out=$(curl -sk https://localhost:8000/agents 2>/dev/null)
+        if echo "$out" | grep -q "\"name\":\"$expected\".*\"status\":\"healthy\""; then
+          echo "agent '$expected' healthy after ${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "TIMEOUT: agent '$expected' did not become healthy within 60s"
+      echo "$out"
+      exit 1
 
   - name: "Check agent registered"
     handler: shell

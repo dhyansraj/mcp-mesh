@@ -29,9 +29,21 @@ test:
     workdir: /workspace
     capture: legit_start
 
-  - name: "Wait for legitimate agent to register"
-    handler: wait
-    seconds: 10
+  - name: "Wait for legitimate agent to be healthy"
+    handler: shell
+    command: |
+      expected="system-agent"
+      for i in $(seq 1 60); do
+        out=$(curl -sk https://localhost:8000/agents 2>/dev/null)
+        if echo "$out" | grep -q "\"name\":\"$expected\".*\"status\":\"healthy\""; then
+          echo "agent '$expected' healthy after ${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "TIMEOUT: agent '$expected' did not become healthy within 60s"
+      echo "$out"
+      exit 1
 
   - name: "Capture legitimate agent id and entity_id from registry"
     handler: shell

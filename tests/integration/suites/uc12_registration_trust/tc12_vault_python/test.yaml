@@ -93,9 +93,21 @@ test:
     workdir: /workspace
     capture: agent_start
 
-  - name: "Wait for agent registration"
-    handler: wait
-    seconds: 15
+  - name: "Wait for agent to be healthy"
+    handler: shell
+    command: |
+      expected="system-agent"
+      for i in $(seq 1 60); do
+        out=$(curl -sk https://localhost:8000/agents 2>/dev/null)
+        if echo "$out" | grep -q "\"name\":\"$expected\".*\"status\":\"healthy\""; then
+          echo "agent '$expected' healthy after ${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "TIMEOUT: agent '$expected' did not become healthy within 60s"
+      echo "$out"
+      exit 1
 
   - name: "Check agent registered with Vault cert"
     handler: shell
