@@ -331,6 +331,74 @@ func TestFileStore_InvalidDirectory(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestFileStore_VerifyWorksWithoutWatcher reproduces the production property
+// that motivated issue #989: even if the fsnotify watcher cannot attach (e.g.
+// inotify exhausted, or sandboxed container runtime denying inotify_init1),
+// FileStore.Verify() must still validate certs against the CAs loaded at boot.
+//
+// The hot-reload-disabled construction (watch=false) leaves fs.watcher == nil,
+// which is the same in-memory state the watcher-init failure path produces
+// after the issue #989 fix. This pins the behavior so a future change that
+// makes Verify depend on the watcher would surface here.
+func TestFileStore_VerifyWorksWithoutWatcher(t *testing.T) {
+	dir := t.TempDir()
+
+	ca, caKey := generateCA(t, "no-watcher-org")
+	writePEM(t, dir, "no-watcher.pem", ca)
+
+	leaf, _ := generateLeaf(t, ca, caKey, "agent-no-watcher")
+
+	fs, err := NewFileStore(dir, false)
+	require.NoError(t, err)
+	defer fs.Close()
+
+	require.Nil(t, fs.watcher, "watcher must be nil when watch=false")
+
+	result, err := fs.Verify([]*x509.Certificate{leaf})
+	require.NoError(t, err, "Verify must succeed even without an active watcher")
+	assert.Equal(t, "no-watcher-org", result.EntityID)
+	assert.Equal(t, "filestore", result.BackendName)
+}
+
+// TestFileStore_StartWatcherTolerantOfMissingDir asserts that startWatcher
+// degrades gracefully when the directory it tries to watch has been removed
+// between loadAll() succeeding and watcher.Add() running. This simulates the
+// inotify-denied path from issue #989 without requiring OS-level injection:
+// fsnotify.Watcher.Add() on a non-existent path returns ENOENT, exercising
+// the same warn-and-return-nil branch.
+//
+// The contract under test: startWatcher must return nil and leave fs.watcher
+// nil (not partially set) so the backend keeps serving Verify() requests off
+// the entities loaded at boot.
+func TestFileStore_StartWatcherTolerantOfMissingDir(t *testing.T) {
+	dir := t.TempDir()
+
+	ca, _ := generateCA(t, "doomed-dir-org")
+	writePEM(t, dir, "doomed.pem", ca)
+
+	fs := &FileStore{
+		dir:  dir,
+		done: make(chan struct{}),
+	}
+	require.NoError(t, fs.loadAll())
+
+	// Yank the dir between loadAll() and startWatcher() to force
+	// watcher.Add() to fail with ENOENT.
+	require.NoError(t, os.RemoveAll(dir))
+
+	err := fs.startWatcher()
+	require.NoError(t, err, "startWatcher must not propagate watcher.Add() failure")
+	assert.Nil(t, fs.watcher, "watcher must be nil after failed Add so Close() stays safe")
+
+	// The entities loaded at boot are still verifiable.
+	entities, err := fs.ListTrustedEntities()
+	require.NoError(t, err)
+	assert.Len(t, entities, 1)
+
+	// Close must be safe even with no watcher attached.
+	require.NoError(t, fs.Close())
+}
+
 func TestFileStore_SkipsNonPEMFiles(t *testing.T) {
 	dir := t.TempDir()
 

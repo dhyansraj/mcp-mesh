@@ -53,9 +53,13 @@ func NewFileStore(dir string, watch bool) (*FileStore, error) {
 	}
 
 	if watch {
-		if err := fs.startWatcher(); err != nil {
-			return nil, fmt.Errorf("starting directory watcher: %w", err)
-		}
+		// startWatcher never returns an error: hot-reload is best-effort
+		// and a watcher init failure (e.g. inotify exhausted, sandboxed
+		// containerd preventing inotify_init1, see issue #989) must not
+		// take the registry's whole trust chain offline. The backend can
+		// still verify certs against whatever loadAll() picked up; the
+		// only loss is hot-reloading new CA files added at runtime.
+		_ = fs.startWatcher()
 	}
 
 	return fs, nil
@@ -253,15 +257,28 @@ func extractEntityID(cert *x509.Certificate, path string) string {
 }
 
 // startWatcher starts an fsnotify watcher on the directory and reloads on changes.
+//
+// Hot-reload is best-effort: if the OS denies the watcher (inotify exhausted,
+// sandboxed container runtime such as restricted containerd refusing
+// inotify_init1, see issue #989) or the directory cannot be added, this
+// function logs a warning and returns nil with fs.watcher left unset. The
+// backend's Verify() path is unaffected — it serves whatever loadAll() loaded
+// at boot. The only behavioral loss is that CA files added to the directory
+// after startup will not be picked up until the registry restarts.
+//
+// Always returns nil; the error type is kept on the signature so future
+// fatal-init failures can be surfaced without another caller-side change.
 func (fs *FileStore) startWatcher() error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return fmt.Errorf("creating watcher: %w", err)
+		log.Printf("[trust/filestore] warning: cannot create fsnotify watcher (hot-reload disabled): %v", err)
+		return nil
 	}
 
 	if err := watcher.Add(fs.dir); err != nil {
-		watcher.Close()
-		return fmt.Errorf("watching directory: %w", err)
+		log.Printf("[trust/filestore] warning: cannot watch directory %s (hot-reload disabled): %v", fs.dir, err)
+		_ = watcher.Close()
+		return nil
 	}
 
 	entitiesDir := filepath.Join(fs.dir, "entities")
