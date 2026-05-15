@@ -340,8 +340,10 @@ class TestApplyStructuredOutputNative:
         new_system = params["messages"][0]["content"]
         assert new_system.startswith(original)
         assert "__mesh_format_response" in new_system
-        # Spot-check the key directive — "must call this tool".
-        assert "MUST call" in new_system
+        # Spot-check the key directive — advisory framing that softens the
+        # earlier "MUST / Do NOT" priming. Anthropic models comply more
+        # reliably with advisory instructions than constraint-violation framing.
+        assert "call the `__mesh_format_response` tool" in new_system
 
     def test_preserves_cache_control_on_system_content_blocks(self, _native_on):
         """When the system message has already been decorated with prompt-cache

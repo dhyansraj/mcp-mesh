@@ -339,6 +339,7 @@ async def _maybe_run_hint_fallback(
     hint_fallback_timeout: int,
     hint_output_type_name: str,
     fallback_logger: logging.Logger | None = None,
+    vendor: str | None = None,
 ) -> tuple[str, Any, Any]:
     """If HINT mode is active and ``final_content`` fails to parse against the
     schema, retry once with native ``response_format`` and a bounded
@@ -357,6 +358,11 @@ async def _maybe_run_hint_fallback(
     matters because the fallback only fires AFTER the model returned final
     content with no tool_calls, and re-introducing the ``response_format +
     tools`` combo would re-create the silent-hang vector from issue #820.
+
+    ``vendor`` is forwarded to :func:`_run_response_format_retry` so the
+    retry can route directly through the vendor-native handler when the
+    caller has the vendor in scope, avoiding brittle string-prefix
+    extraction from ``base_completion_args["model"]``.
     """
     if not (hint_mode and hint_schema and final_content):
         return final_content, message, response
@@ -371,32 +377,77 @@ async def _maybe_run_hint_fallback(
             hint_fallback_timeout,
         )
 
+    fb_content, fb_message, fallback_response = await _run_response_format_retry(
+        base_completion_args=base_completion_args,
+        schema=hint_schema,
+        output_type_name=hint_output_type_name,
+        fallback_timeout=hint_fallback_timeout,
+        vendor=vendor,
+    )
+
+    if fallback_logger:
+        fallback_logger.info("Claude HINT fallback to response_format succeeded")
+
+    return (fb_content if fb_content else "", fb_message, fallback_response)
+
+
+async def _run_response_format_retry(
+    *,
+    base_completion_args: dict[str, Any],
+    schema: dict[str, Any],
+    output_type_name: str,
+    fallback_timeout: int,
+    vendor: str | None = None,
+) -> tuple[str, Any, Any]:
+    """Single shared LLM retry that injects ``response_format`` + a bounded
+    timeout. Used by BOTH the HINT-mode fallback and the native synthetic-tool
+    fallback — the recovery shape is identical (rebuild args, strict-ify
+    schema, dispatch through native handler or LiteLLM, return content).
+
+    Caller MUST have already stripped ``tools``, ``tool_choice``, and any
+    streaming flags from ``base_completion_args``. The helper only adds
+    ``response_format`` and ``request_timeout``; it neither pops nor rewrites
+    the rest.
+
+    When ``vendor`` is supplied, native-handler resolution uses it directly;
+    otherwise the helper falls back to extracting the vendor from
+    ``base_completion_args["model"]`` (preserved for legacy callers).
+    Explicit vendor plumbing avoids the brittle prefix-extraction path that
+    skips native dispatch on bare model strings like ``"claude-haiku-4-5"``.
+
+    Returns ``(content, message, response)``.
+    """
     # Anthropic's structured output requires additionalProperties: false on every
     # object type in the schema. Pydantic-generated schemas don't include that by
     # default. The base apply_structured_output path already strict-ifies via
-    # make_schema_strict; the HINT fallback was missing the same step, causing
-    # Anthropic's "output_format.schema: ... must be explicitly set to false"
-    # rejection on complex schemas (nested BaseModels). add_all_required=False
-    # because Claude — unlike OpenAI/Gemini — does not require every property
-    # to be in 'required'.
+    # make_schema_strict; the legacy HINT fallback was missing the same step,
+    # causing Anthropic's "output_format.schema: ... must be explicitly set to
+    # false" rejection on complex schemas (nested BaseModels). add_all_required
+    # =False because Claude — unlike OpenAI/Gemini — does not require every
+    # property to be in 'required'.
     from _mcp_mesh.engine.provider_handlers.base_provider_handler import (
         make_schema_strict,
     )
 
-    strict_hint_schema = make_schema_strict(hint_schema, add_all_required=False)
+    strict_schema = make_schema_strict(schema, add_all_required=False)
 
+    # Strip caller's timeout/request_timeout so the fallback's bounded retry
+    # timeout actually wins downstream (the native adapter prefers caller's
+    # ``timeout`` over ``request_timeout``).
     fallback_args = {
-        **base_completion_args,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": {
-                "name": hint_output_type_name,
-                "schema": strict_hint_schema,
-                "strict": True,
-            },
-        },
-        "request_timeout": hint_fallback_timeout,
+        k: v
+        for k, v in base_completion_args.items()
+        if k not in ("timeout", "request_timeout")
     }
+    fallback_args["response_format"] = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": output_type_name,
+            "schema": strict_schema,
+            "strict": True,
+        },
+    }
+    fallback_args["request_timeout"] = fallback_timeout
     # Lazy import keeps this module importable in environments without
     # litellm (e.g., during static analysis); both call sites already
     # import litellm before invoking this helper.
@@ -404,12 +455,15 @@ async def _maybe_run_hint_fallback(
 
     # Native dispatch (issue #834, PR 1): if the vendor handler ships a
     # native SDK adapter and the feature flag is on, route through it.
-    # Otherwise, fall back to LiteLLM (current default behavior). The
-    # fallback args still target the same model so handler resolution
-    # uses ``base_completion_args["model"]``. (``ProviderHandlerRegistry``
-    # is imported at module top.)
+    # Otherwise, fall back to LiteLLM (current default behavior).
+    # ``vendor`` is preferred when the caller plumbed it in — prefix
+    # extraction from ``model`` returns None for bare names like
+    # ``claude-haiku-4-5`` and silently skips the native path.
+    # (``ProviderHandlerRegistry`` is imported at module top.)
     fb_model = fallback_args.get("model")
-    fb_vendor = _extract_vendor_from_model(fb_model) if fb_model else None
+    fb_vendor = vendor if vendor else (
+        _extract_vendor_from_model(fb_model) if fb_model else None
+    )
     fb_handler = (
         ProviderHandlerRegistry.get_handler(fb_vendor) if fb_vendor else None
     )
@@ -430,10 +484,108 @@ async def _maybe_run_hint_fallback(
             litellm.completion, **fallback_args
         )
     fb_message = fallback_response.choices[0].message
-    fb_content = _extract_text_from_message_content(fb_message.content)
+    # Native handlers return synthetic-tool args as tool_calls; LiteLLM unpacks
+    # them to content. Lift here so callers see structured output regardless of
+    # dispatch path. Falls through to text extraction for the LiteLLM shape and
+    # the no-tool-call edge case.
+    from _mcp_mesh.engine._structured_output_helpers import (
+        SYNTHETIC_FORMAT_TOOL_NAME,
+    )
+
+    synthetic_args, _ = _extract_synthetic_format_arguments(
+        fb_message, SYNTHETIC_FORMAT_TOOL_NAME
+    )
+    if synthetic_args is not None:
+        fb_content = synthetic_args
+    else:
+        fb_content = _extract_text_from_message_content(fb_message.content)
+
+    return (fb_content if fb_content else "", fb_message, fallback_response)
+
+
+async def _maybe_run_synthetic_fallback(
+    *,
+    final_content: str,
+    message: Any,
+    response: Any,
+    base_completion_args: dict[str, Any],
+    synthetic_tool_name: str | None,
+    synthetic_tool: dict[str, Any] | None,
+    fallback_timeout: int,
+    fallback_logger: logging.Logger | None = None,
+    vendor: str | None = None,
+) -> tuple[str, Any, Any]:
+    """Recovery for the native synthetic-tool path when the model declines
+    to call the synthetic tool and emits plain text instead.
+
+    Mirrors :func:`_maybe_run_hint_fallback`. The native synthetic-tool path
+    (issue #834) injects ``__mesh_format_response`` with the Pydantic schema
+    as ``input_schema`` and lets the model choose between real tools and the
+    synthetic with ``tool_choice="auto"``. On borderline content (long
+    character roleplay, conversational turns near alignment ceilings) Haiku
+    occasionally refuses the synthetic tool call entirely:
+    ``stop_reason="end_turn"``, response is plain text, no ``tool_use``
+    block. Without this fallback, the agentic loop would surface the
+    model's hedge/refusal text raw to the caller as if it were the
+    structured answer — the v2.0.0 Maya regression.
+
+    Returns ``(possibly-replaced final_content, message, response)``.
+
+    If the retry's response ALSO fails to parse against the schema, the
+    retry's content is returned anyway — we don't loop. Single-shot
+    recovery; further escalation is the caller's problem.
+
+    IMPORTANT: ``base_completion_args`` MUST already be stripped of the
+    synthetic-format keys, the ``tools`` key, AND the ``tool_choice`` key.
+    The helper does not strip them itself. The retry uses
+    ``response_format`` only; re-introducing tools or tool_choice would
+    defeat the recovery (we WANT a forced-schema buffered call).
+    """
+    if not (synthetic_tool_name and synthetic_tool and final_content):
+        return final_content, message, response
+
+    # The synthetic tool stores the sanitized Pydantic schema as its
+    # ``parameters`` field (OpenAI tool shape — see
+    # ClaudeHandler._apply_native_synthetic_format).
+    synthetic_schema = synthetic_tool.get("function", {}).get("parameters")
+    if not synthetic_schema:
+        return final_content, message, response
+
+    if _hint_response_parses(final_content, synthetic_schema):
+        if fallback_logger:
+            fallback_logger.info(
+                "Native synthetic-tool path: text response parses against "
+                "schema; skipping fallback"
+            )
+        return final_content, message, response
+
+    # The retry's output_type_name is best-effort: handlers stash the real
+    # one via ``_mesh_synthetic_format_output_type_name``, but the caller
+    # has already popped it and we don't strictly need it for behavior —
+    # it's only the json_schema "name" field. Default mirrors the handler.
+    output_type_name = "Response"
 
     if fallback_logger:
-        fallback_logger.info("Claude HINT fallback to response_format succeeded")
+        fallback_logger.warning(
+            "Native synthetic-tool path: model returned plain text without "
+            "calling '%s'; retrying with native response_format (bounded "
+            "request_timeout=%ss)",
+            synthetic_tool_name,
+            fallback_timeout,
+        )
+
+    fb_content, fb_message, fallback_response = await _run_response_format_retry(
+        base_completion_args=base_completion_args,
+        schema=synthetic_schema,
+        output_type_name=output_type_name,
+        fallback_timeout=fallback_timeout,
+        vendor=vendor,
+    )
+
+    if fallback_logger:
+        fallback_logger.info(
+            "Native synthetic-tool fallback to response_format succeeded"
+        )
 
     return (fb_content if fb_content else "", fb_message, fallback_response)
 
@@ -1343,15 +1495,19 @@ async def _provider_agentic_loop(
             # This recovers from HINT compliance failures without re-introducing
             # the silent 600s+ hang of the unbounded response_format path.
             #
-            # Build base args for the fallback — strip ``tools`` since the
-            # fallback only fires AFTER the model gave a final answer with no
-            # tool_calls. Keeping ``tools`` would re-introduce the
-            # ``response_format + tools`` combo that caused the original
-            # silent hang (issue #820). Bounded timeout is still there as
-            # defense-in-depth, but stripping tools removes the deadlock
-            # vector entirely.
+            # Build base args for the fallback — strip ``tools`` AND
+            # ``tool_choice`` since the fallback only fires AFTER the model
+            # gave a final answer with no tool_calls. Keeping ``tools`` would
+            # re-introduce the ``response_format + tools`` combo that caused
+            # the original silent hang (issue #820). ``tool_choice`` is
+            # stripped because the synthetic-tool path leaves it set to
+            # "auto" / forced-synthetic, which has no meaning once tools are
+            # gone and would be rejected by some vendors. Bounded timeout is
+            # still there as defense-in-depth.
             fallback_base_args = {
-                k: v for k, v in completion_args.items() if k != "tools"
+                k: v
+                for k, v in completion_args.items()
+                if k not in ("tools", "tool_choice")
             }
             try:
                 final_content, message, response = await _maybe_run_hint_fallback(
@@ -1364,11 +1520,40 @@ async def _provider_agentic_loop(
                     hint_fallback_timeout=hint_fallback_timeout,
                     hint_output_type_name=hint_output_type_name,
                     fallback_logger=loop_logger,
+                    vendor=vendor,
                 )
             except Exception as e:
                 if loop_logger:
                     loop_logger.error(
                         "Claude HINT fallback to response_format failed: %s",
+                        e,
+                    )
+                raise
+
+            # Native synthetic-tool fallback (Maya regression, v2.0.0). When
+            # the native synthetic-tool path is active and the model
+            # declined to call ``__mesh_format_response`` (returning plain
+            # text instead), recover by retrying once with native
+            # response_format. The two fallbacks are mutually exclusive in
+            # practice — HINT mode and synthetic-tool mode are alternative
+            # dispatch shapes — so the early-returns gate each correctly.
+            try:
+                final_content, message, response = await _maybe_run_synthetic_fallback(
+                    final_content=final_content,
+                    message=message,
+                    response=response,
+                    base_completion_args=fallback_base_args,
+                    synthetic_tool_name=synthetic_tool_name,
+                    synthetic_tool=synthetic_tool,
+                    fallback_timeout=hint_fallback_timeout,
+                    fallback_logger=loop_logger,
+                    vendor=vendor,
+                )
+            except Exception as e:
+                if loop_logger:
+                    loop_logger.error(
+                        "Native synthetic-tool fallback to response_format "
+                        "failed: %s",
                         e,
                     )
                 raise
@@ -1772,6 +1957,7 @@ async def _provider_agentic_loop_stream(
                         hint_fallback_timeout=hint_fallback_timeout,
                         hint_output_type_name=hint_output_type_name,
                         fallback_logger=loop_logger,
+                        vendor=vendor,
                     )
                 except Exception as e:
                     if loop_logger:
@@ -2316,6 +2502,7 @@ def llm_provider(
                             hint_fallback_timeout=hint_fallback_timeout,
                             hint_output_type_name=hint_output_type_name,
                             fallback_logger=logger,
+                            vendor=vendor,
                         )
                     except Exception as fallback_err:
                         logger.error(

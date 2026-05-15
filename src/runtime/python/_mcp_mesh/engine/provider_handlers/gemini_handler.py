@@ -38,6 +38,7 @@ from .base_provider_handler import (
     BaseProviderHandler,
     has_media_params,
     make_schema_strict,
+    resolve_hint_fallback_timeout,
     sanitize_schema_for_structured_output,
 )
 
@@ -318,6 +319,19 @@ class GeminiHandler(BaseProviderHandler):
             "large_context": True,
         }
 
+    def _build_hint_text(self, sanitized_schema: dict[str, Any]) -> str:
+        """Build the OUTPUT FORMAT hint block appended to the system message."""
+        properties = sanitized_schema.get("properties", {})
+        return (
+            "\n\nOUTPUT FORMAT:\n"
+            "Your FINAL response must be ONLY valid JSON (no markdown, "
+            "no code blocks) with this exact structure:\n"
+            + self.build_json_example(properties)
+            + "\n\n"
+            "Return ONLY the JSON object with actual values. Do not include "
+            "the schema definition, markdown formatting, or code blocks."
+        )
+
     def apply_structured_output(
         self,
         output_schema: dict[str, Any],
@@ -327,8 +341,13 @@ class GeminiHandler(BaseProviderHandler):
         """
         Apply Gemini-specific structured output for mesh delegation.
 
-        Uses HINT mode (prompt injection) because mesh delegation always involves
-        tools, and Gemini 3 + response_format + tools causes infinite tool loops.
+        Uses HINT mode (prompt injection) — mesh delegation always involves
+        tools, and Gemini 3 + response_format + tools causes infinite tool
+        loops, so we cannot use server-side schema enforcement. The agentic
+        loop in mesh.helpers validates the final response against the schema
+        on every iteration; if it fails to parse, the loop falls back to a
+        bounded-timeout response_format retry (with tools stripped — the
+        fallback path is safe vs. the infinite-loop constraint).
         """
         sanitized_schema = sanitize_schema_for_structured_output(output_schema)
 
@@ -336,24 +355,45 @@ class GeminiHandler(BaseProviderHandler):
         # across concurrent requests sharing this singleton handler).
         set_pending_output_schema(sanitized_schema, output_type_name)
 
-        # Inject HINT instructions into system messages
-        # (mesh delegation always has tools, so we can't use response_format)
+        # Inject HINT instructions into the first system message; synthesize
+        # one if none exists. Without this, the _mesh_hint_* flags below
+        # would be set but the model would never see the schema, every
+        # response would fail validation, and the fallback timeout would
+        # fire on every request.
         messages = model_params.get("messages", [])
+        hint_text = self._build_hint_text(sanitized_schema)
+        hint_block_inserted = False
         for msg in messages:
             if msg.get("role") == "system":
                 base_content = msg.get("content", "")
-                # Build hint instructions
-                hint_text = "\n\nOUTPUT FORMAT:\n"
-                hint_text += "Your FINAL response must be ONLY valid JSON (no markdown, no code blocks) with this exact structure:\n"
-                properties = sanitized_schema.get("properties", {})
-                hint_text += self.build_json_example(properties) + "\n\n"
-                hint_text += "Return ONLY the JSON object with actual values. Do not include the schema definition, markdown formatting, or code blocks."
-
                 msg["content"] = base_content + hint_text
+                hint_block_inserted = True
                 break
 
+        if not hint_block_inserted:
+            messages.insert(0, {"role": "system", "content": hint_text.strip()})
+            logger.debug(
+                "Gemini HINT mode for '%s': no system message found, "
+                "synthesized one with HINT block",
+                output_type_name or "Response",
+            )
+            model_params["messages"] = messages
+
+        fallback_timeout = resolve_hint_fallback_timeout()
+
+        model_params["_mesh_hint_mode"] = True
+        model_params["_mesh_hint_schema"] = sanitized_schema
+        model_params["_mesh_hint_fallback_timeout"] = fallback_timeout
+        model_params["_mesh_hint_output_type_name"] = output_type_name or "Response"
+
+        # Defense-in-depth: never set response_format on the HINT path
+        # (would re-trigger the Gemini 3 + response_format + tools infinite
+        # tool-loop bug).
+        model_params.pop("response_format", None)
+
         logger.info(
-            "Gemini hint mode for '%s' (mesh delegation, schema in prompt)",
+            "Gemini HINT mode for '%s' (mesh delegation, schema in prompt; "
+            "loop will fall back to response_format if parse fails)",
             output_type_name or "Response",
         )
         return model_params

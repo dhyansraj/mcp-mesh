@@ -1078,8 +1078,17 @@ _GEMINI_PASSTHROUGH_KWARGS = frozenset({
     "seed",
     "response_format",
     "response_mime_type",
+    "response_schema",
     "presence_penalty",
     "frequency_penalty",
+    # Escape-hatch / transport kwargs translated to a per-call HttpOptions
+    # override below (HttpOptions.timeout / .headers / .extra_body). They're
+    # consumed — not forwarded as-is — so they belong in the passthrough set
+    # so the WARN filter doesn't flag them as "dropped".
+    "timeout",
+    "request_timeout",
+    "extra_headers",
+    "extra_body",
     # NOTABLY ABSENT: ``candidate_count``. Mesh's contract is single-completion
     # (anthropic_native + openai_native both implicitly assume n=1) and the
     # Gemini response/stream adapters here only consume ``candidates[0]``.
@@ -1087,6 +1096,12 @@ _GEMINI_PASSTHROUGH_KWARGS = frozenset({
     # candidates. Letting the kwarg fall through to the WARN path gives
     # callers a loud signal that mesh doesn't support multi-candidate output
     # instead of silently returning 1 of N.
+    #
+    # ALSO ABSENT: ``extra_query``. ``HttpOptions`` has no per-call query-
+    # string override field; URL-level query forwarding would need to be set
+    # on the underlying httpx client (which we share process-wide). Letting
+    # the kwarg WARN through gives diagnostic surface for callers debugging
+    # cross-vendor passthrough.
 })
 
 # Keys explicitly handled (consumed or routed) inside this adapter — the
@@ -1180,6 +1195,17 @@ def _build_create_kwargs(
     if rmt is not None and "response_mime_type" not in config:
         config["response_mime_type"] = rmt
 
+    # Bare ``response_schema`` direct passthrough — Gemini-native callers that
+    # bypass the LiteLLM-shape ``response_format`` wrapper. ``response_format``
+    # takes precedence when both are set (the structured-output shape derived
+    # from the mesh contract wins over a caller's direct knob).
+    rs_direct = request_params.get("response_schema")
+    if rs_direct is not None and "response_schema" not in config:
+        if isinstance(rs_direct, dict):
+            config["response_schema"] = _sanitize_gemini_parameters_schema(rs_direct)
+        else:
+            config["response_schema"] = rs_direct
+
     # max_tokens / max_completion_tokens → max_output_tokens.
     # Explicit max_tokens=None must be DROPPED (don't forward as None which
     # Gemini would reject) — same lesson as openai_native.
@@ -1208,6 +1234,50 @@ def _build_create_kwargs(
         if value is None:
             continue
         config[dst] = value
+
+    # Translate LiteLLM-shape escape hatches → per-call HttpOptions override.
+    # The client-construction HttpOptions (with httpx_async_client + base_url)
+    # lives on the client object and is NOT touched here — those settings
+    # carry across all calls and preserve the shared httpx pool. The per-call
+    # HttpOptions override only sets fields we explicitly populate; everything
+    # else falls back to the client-level defaults.
+    #
+    # Precedence: caller's ``timeout`` wins over ``request_timeout``
+    # (helpers._run_response_format_retry sets request_timeout on the
+    # bounded HINT-fallback retry; a caller-supplied timeout takes priority).
+    per_call_http: dict[str, Any] = {}
+
+    timeout_value = request_params.get("timeout")
+    if timeout_value is None:
+        timeout_value = request_params.get("request_timeout")
+    if timeout_value is not None:
+        try:
+            # Google SDK's HttpOptions.timeout is milliseconds (not seconds,
+            # mesh's convention). Convert here so the wire-level deadline
+            # matches the user-facing kwarg's units.
+            per_call_http["timeout"] = int(float(timeout_value) * 1000)
+        except (TypeError, ValueError):
+            logger.warning(
+                "Native Gemini adapter: cannot coerce timeout=%r to int; "
+                "skipping per-call timeout override (HttpOptions.timeout "
+                "requires Optional[int])",
+                timeout_value,
+            )
+
+    extra_headers = request_params.get("extra_headers")
+    if isinstance(extra_headers, dict) and extra_headers:
+        per_call_http["headers"] = {
+            str(k): str(v) for k, v in extra_headers.items()
+        }
+
+    extra_body = request_params.get("extra_body")
+    if isinstance(extra_body, dict) and extra_body:
+        per_call_http["extra_body"] = dict(extra_body)
+
+    if per_call_http:
+        from google.genai.types import HttpOptions
+
+        config["http_options"] = HttpOptions(**per_call_http)
 
     # WARN-log any kwargs the adapter is silently dropping. Internal mesh
     # markers (``_mesh_*``) are not forwarded but should also not warn —
@@ -1252,6 +1322,21 @@ _FINISH_REASON_MAP = {
 }
 
 
+# Finish-reason values that signal a Gemini safety / policy refusal. When any
+# of these fires, the candidate's ``content.parts`` is typically empty (full
+# block); the adapter raises ``LLMRefusedError`` so the model's articulated
+# reason reaches the @mesh.llm consumer instead of collapsing into an empty
+# ``_Message.content`` shape (which then trips Pydantic with an opaque
+# validation error — the Maya-class UX bug).
+_SAFETY_BLOCK_FINISH_REASONS = frozenset({
+    "SAFETY",
+    "RECITATION",
+    "BLOCKLIST",
+    "PROHIBITED_CONTENT",
+    "SPII",
+})
+
+
 def _normalize_finish_reason(raw: Any, has_tool_calls: bool) -> str:
     """Translate Gemini's FinishReason enum → litellm-style string.
 
@@ -1290,6 +1375,51 @@ def _adapt_response(raw: Any, *, model: str) -> _Response:
     """
     candidates = getattr(raw, "candidates", None) or []
     first_candidate = candidates[0] if candidates else None
+
+    # Detect safety / policy block. Gemini propagates blocks via
+    # finish_reason ∈ {SAFETY, RECITATION, BLOCKLIST, PROHIBITED_CONTENT,
+    # SPII} on the first candidate — content.parts is typically empty (full
+    # block) but may carry partial content (rare partial block). Both cases
+    # lose information when surfaced as empty _Message.content; raise so the
+    # model's articulated reason reaches the consumer. Imported lazily to
+    # avoid circular dependency with the engine errors package.
+    if first_candidate is not None:
+        raw_finish = getattr(first_candidate, "finish_reason", None)
+        finish_name = getattr(raw_finish, "name", None) or str(raw_finish or "")
+        if "." in finish_name:
+            finish_name = finish_name.rsplit(".", 1)[-1]
+        if finish_name in _SAFETY_BLOCK_FINISH_REASONS:
+            from _mcp_mesh.engine.llm_errors import LLMRefusedError
+
+            finish_message = (
+                getattr(first_candidate, "finish_message", None) or ""
+            )
+            ratings = getattr(first_candidate, "safety_ratings", None) or []
+            blocking = [
+                r for r in ratings
+                if getattr(r, "blocked", False)
+                or getattr(r, "probability_score", 0) >= 0.7
+            ]
+            if not finish_message and blocking:
+                cats = ", ".join(
+                    str(getattr(r, "category", "?")) for r in blocking
+                )
+                finish_message = f"blocked by safety filter ({cats})"
+            if not finish_message:
+                finish_message = f"blocked by Gemini policy ({finish_name})"
+
+            response_model = getattr(raw, "model_version", None) or model
+            logger.info(
+                "Native Gemini adapter: response blocked "
+                "(model=%s, finish_reason=%s, message=%r)",
+                response_model, finish_name, finish_message,
+            )
+            raise LLMRefusedError(
+                finish_message,
+                vendor="gemini",
+                model=response_model,
+                category=finish_name,
+            )
 
     text_parts: list[str] = []
     tool_calls: list[_ToolCall] = []
@@ -1630,3 +1760,10 @@ def _warn_unsupported_kwarg_once(key: str) -> None:
         "(LiteLLM-only — not forwarded to google.genai.Client.aio.models.generate_content)",
         key,
     )
+
+
+def _reset_unsupported_kwargs_dedupe() -> None:
+    """For tests — drop the WARN-once dedupe set so each test sees a fresh
+    WARN trail. NOT for production use.
+    """
+    _logged_unsupported_kwargs.clear()

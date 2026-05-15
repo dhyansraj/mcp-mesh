@@ -1084,9 +1084,10 @@ class TestUnsupportedKwargWarn:
                 await openai_native.complete(
                     {
                         "messages": [{"role": "user", "content": "Hi."}],
-                        # request_timeout is a litellm-only knob (OpenAI
-                        # uses ``timeout``); should warn.
-                        "request_timeout": 30,
+                        # ``aws_region`` is a LiteLLM-only routing knob
+                        # (bedrock-flavored) that has no OpenAI SDK kwarg
+                        # equivalent — must warn.
+                        "aws_region": "us-east-1",
                     },
                     model="openai/gpt-4o-mini",
                     api_key="sk-test",
@@ -1096,9 +1097,9 @@ class TestUnsupportedKwargWarn:
             r.getMessage() for r in caplog.records if r.levelname == "WARNING"
         ]
         assert any(
-            "request_timeout" in m and "dropping unsupported kwarg" in m
+            "aws_region" in m and "dropping unsupported kwarg" in m
             for m in warn_msgs
-        ), f"Expected WARN about request_timeout; got: {warn_msgs}"
+        ), f"Expected WARN about aws_region; got: {warn_msgs}"
 
     @pytest.mark.asyncio
     async def test_no_warn_for_known_kwargs(self, caplog):

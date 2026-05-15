@@ -36,6 +36,13 @@ from typing import Any
 
 import httpx
 
+from .._structured_output_helpers import (
+    append_synthetic_system_instruction,
+    build_synthetic_tool_choice,
+    is_synthetic_tool_in_list,
+    schema_to_synthetic_tool,
+)
+
 logger = logging.getLogger(__name__)
 
 # Matches: data:<mime>;base64,<data>
@@ -742,6 +749,30 @@ _ANTHROPIC_HANDLED_KWARGS = frozenset(
 )
 
 
+def _extract_schema_from_response_format(
+    response_format: Any,
+) -> dict[str, Any] | None:
+    """Extract the inner schema from a LiteLLM-shape ``response_format`` dict
+    of the form ``{"type": "json_schema", "json_schema": {"schema": {...}}}``.
+
+    Returns ``None`` for ``json_object``, for malformed input, or for any
+    other shape. The caller's ``json_schema.name`` is intentionally dropped
+    (mirrors LiteLLM's Anthropic adapter — the synthetic-tool name is a
+    constant; caller-supplied names are not surfaced on the wire).
+    """
+    if not isinstance(response_format, dict):
+        return None
+    if response_format.get("type") != "json_schema":
+        return None
+    json_schema = response_format.get("json_schema")
+    if not isinstance(json_schema, dict):
+        return None
+    schema = json_schema.get("schema")
+    if not isinstance(schema, dict):
+        return None
+    return schema
+
+
 def _build_create_kwargs(
     request_params: dict[str, Any],
     *,
@@ -750,14 +781,117 @@ def _build_create_kwargs(
 ) -> dict[str, Any]:
     """Translate litellm-shape request_params → anthropic.messages.create kwargs.
 
-    Tools (real and synthetic) are forwarded verbatim through ``_convert_tools``
-    — this adapter no longer special-cases the synthetic format tool. The
-    upstream ``ClaudeHandler`` injects it at handler time and the agentic loop
-    in ``mesh.helpers`` recognizes the synthetic tool_call after the response
-    arrives.
+    Tools (real and synthetic) are forwarded verbatim through ``_convert_tools``.
+    The upstream ``ClaudeHandler`` typically injects the synthetic format tool
+    at handler time, but adapter-side translation is the fallback for callers
+    that bypass the handler — most notably ``helpers._run_response_format_retry``
+    which rebuilds ``completion_args`` from scratch with ``response_format``
+    set after a synthetic-tool refusal.
+
+    Adapter-side translation of LiteLLM-shape kwargs:
+      * ``response_format`` (json_schema) → synthetic-tool injection (when
+        the handler has not already injected). Caller's ``tool_choice``
+        wins; ``response_format`` is always popped so it never reaches
+        ``messages.create`` (the SDK would reject it).
+      * ``request_timeout`` → ``timeout`` rename for the Anthropic SDK.
+
+    The schema in ``response_format.json_schema.schema`` is assumed to be
+    already strict-ready. Callers that emit ``response_format`` directly
+    (e.g. ``helpers._run_response_format_retry``) must run
+    ``make_schema_strict`` before invoking the adapter.
     """
+    # Shallow-copy so the caller's dict is not mutated by our pops.
+    request_params = dict(request_params)
+
     raw_messages = request_params.get("messages") or []
     system_value, non_system = _split_system_messages(raw_messages)
+
+    # --- response_format → synthetic-tool translation -----------------------
+    # Mirrors LiteLLM's map_response_format_to_anthropic_tool but uses
+    # mcp-mesh's __mesh_format_response tool name + softened system
+    # instruction. The synthetic tool name and the system addendum live in
+    # _structured_output_helpers so the handler-injected path and this
+    # adapter-injected path stay byte-identical on the wire.
+    raw_tools = request_params.get("tools")
+    response_format = request_params.pop("response_format", None)
+
+    if response_format is not None:
+        if is_synthetic_tool_in_list(raw_tools):
+            # Handler already injected the synthetic tool — adapter is a
+            # no-op. Pop response_format only (the SDK would reject it).
+            logger.debug(
+                "Native Anthropic adapter: response_format present but "
+                "synthetic tool already in tools (handler-injected); "
+                "popping response_format (redundant)"
+            )
+        else:
+            schema = _extract_schema_from_response_format(response_format)
+            if schema is not None:
+                synthetic_tool = schema_to_synthetic_tool(schema)
+                request_params["tools"] = list(raw_tools or []) + [synthetic_tool]
+                caller_tool_choice = request_params.get("tool_choice")
+                if caller_tool_choice is None:
+                    request_params["tool_choice"] = build_synthetic_tool_choice(
+                        real_tools_present=bool(raw_tools),
+                    )
+                elif caller_tool_choice == "none":
+                    # Caller signaled "no tools this turn"; honor it. The
+                    # tool_choice handler below will drop tools entirely
+                    # (including the synthetic). WARN so the inconsistency
+                    # is visible — structured output won't be enforced.
+                    logger.warning(
+                        "Native Anthropic adapter: response_format "
+                        "translation requires the synthetic tool to be "
+                        "callable, but caller set tool_choice='none' — "
+                        "honoring caller's tool_choice. Structured output "
+                        "not enforced."
+                    )
+                # else: caller's tool_choice wins (e.g. forced to a real
+                # tool mid-agentic-loop). Synthetic is still appended so the
+                # model has the option on the next iteration.
+
+                # System instruction (bare-string only — the handler covers
+                # the content-block-list / prompt-cache shape upstream).
+                if isinstance(system_value, str) or system_value is None:
+                    system_value = append_synthetic_system_instruction(
+                        system_value
+                    )
+                else:
+                    logger.debug(
+                        "Native Anthropic adapter: skipped system-"
+                        "instruction augmentation (system is content-block "
+                        "list; handler-side path should have augmented)"
+                    )
+            else:
+                logger.debug(
+                    "Native Anthropic adapter: response_format present but "
+                    "schema could not be extracted; popping without "
+                    "translation"
+                )
+
+    # --- request_timeout → timeout rename -----------------------------------
+    # helpers._run_response_format_retry sets request_timeout=<fallback> on
+    # the fallback retry to bound a slow API. Caller-supplied timeout=
+    # wins if both are present — but log either way so the actual decision
+    # is visible to --debug runs (otherwise the silently-dropped case looks
+    # identical to "translation never ran" and is impossible to diagnose).
+    request_timeout = request_params.pop("request_timeout", None)
+    if request_timeout is not None:
+        if "timeout" not in request_params:
+            request_params["timeout"] = request_timeout
+            logger.debug(
+                "Native Anthropic adapter: translated request_timeout=%ss "
+                "→ anthropic SDK timeout",
+                request_timeout,
+            )
+        else:
+            logger.debug(
+                "Native Anthropic adapter: dropped request_timeout=%ss "
+                "(caller-supplied timeout=%ss wins)",
+                request_timeout,
+                request_params["timeout"],
+            )
+
     converted_messages = _convert_messages_to_anthropic(non_system)
     converted_tools = _convert_tools(request_params.get("tools")) or []
 
@@ -1123,8 +1257,8 @@ def _warn_unsupported_kwarg_once(key: str) -> None:
     """WARN once per unique unsupported kwarg name.
 
     Used by ``_build_create_kwargs`` to surface litellm-only knobs the
-    adapter is silently dropping (parallel_tool_calls, stream_options,
-    request_timeout, etc.) without logging on every single request.
+    adapter is silently dropping (parallel_tool_calls, stream_options, etc.)
+    without logging on every single request.
     """
     if key in _logged_unsupported_kwargs:
         return
@@ -1134,3 +1268,10 @@ def _warn_unsupported_kwarg_once(key: str) -> None:
         "(LiteLLM-only — not forwarded to anthropic.messages.create)",
         key,
     )
+
+
+def _reset_unsupported_kwargs_dedupe() -> None:
+    """For tests — drop the WARN-once dedupe set so each test sees a fresh
+    WARN trail. NOT for production use.
+    """
+    _logged_unsupported_kwargs.clear()

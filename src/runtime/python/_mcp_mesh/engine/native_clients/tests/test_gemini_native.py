@@ -1149,7 +1149,7 @@ class TestUnsupportedKwargWarn:
             gemini_native._build_create_kwargs(
                 {
                     "messages": [{"role": "user", "content": "Hi"}],
-                    "request_timeout": 30,
+                    "some_litellm_only_knob": 30,
                 },
                 model="gemini/gemini-2.0-flash",
             )
@@ -1157,9 +1157,9 @@ class TestUnsupportedKwargWarn:
             r.getMessage() for r in caplog.records if r.levelname == "WARNING"
         ]
         assert any(
-            "request_timeout" in m and "dropping unsupported kwarg" in m
+            "some_litellm_only_knob" in m and "dropping unsupported kwarg" in m
             for m in warn_msgs
-        ), f"Expected WARN about request_timeout; got: {warn_msgs}"
+        ), f"Expected WARN about some_litellm_only_knob; got: {warn_msgs}"
 
     def test_warn_emits_only_once_per_key(self, caplog):
         with caplog.at_level("WARNING", logger=gemini_native.logger.name):
