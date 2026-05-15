@@ -620,6 +620,48 @@ class TestApplyStructuredOutputStreamingRouting:
         # — that's the buffered native path's signature.
         assert "__mesh_format_response" not in system_content
 
+    def test_streaming_hint_handles_list_content_blocks(self, _native_on):
+        """When prompt caching is in use, the system message ``content`` is a
+        LIST of content blocks (with ``cache_control`` on some). Concatenating
+        a string via ``+`` to that list would raise TypeError. The HINT
+        injection must APPEND a new text block instead, preserving the
+        original blocks (and their cache_control) untouched."""
+        handler = ClaudeHandler()
+        original_block = {
+            "type": "text",
+            "text": "You are Levi, a travel planner.",
+            "cache_control": {"type": "ephemeral"},
+        }
+        second_block = {"type": "text", "text": "Be concise."}
+        params: dict = {
+            "messages": [
+                {"role": "system", "content": [original_block, second_block]},
+                {"role": "user", "content": "Hi"},
+            ]
+        }
+        # Must not raise TypeError on the list-content path.
+        handler.apply_structured_output(
+            _trip_schema(), "Trip", params, streaming=True
+        )
+
+        blocks = params["messages"][0]["content"]
+        assert isinstance(blocks, list)
+        # Original blocks pass through by reference — cache_control intact.
+        assert blocks[0] == original_block
+        assert blocks[1] == second_block
+        # HINT text appended as a NEW text block at the end.
+        hint_blocks = [
+            b
+            for b in blocks[2:]
+            if b.get("type") == "text" and "OUTPUT FORMAT" in b.get("text", "")
+        ]
+        assert len(hint_blocks) == 1, (
+            f"expected exactly 1 appended HINT block; got {len(hint_blocks)} "
+            f"(blocks={blocks})"
+        )
+        # HINT sentinels still stamped for the fallback machinery.
+        assert params.get("_mesh_hint_mode") is True
+
 
 class TestApplyStructuredOutputLiteLLMUnchanged:
     """The LiteLLM path MUST keep the existing HINT-mode behavior."""

@@ -489,7 +489,27 @@ class ClaudeHandler(BaseProviderHandler):
         for msg in messages:
             if msg.get("role") == "system":
                 base_content = msg.get("content", "")
-                msg["content"] = base_content + self._build_hint_text(sanitized_schema)
+                hint_text = self._build_hint_text(sanitized_schema)
+                # Tolerate string OR content-block list (post-prompt-cache).
+                # Mirrors the synthetic-tool injection site below: a string
+                # concatenates; a list gets a NEW text block appended so the
+                # original blocks' cache_control is preserved.
+                if isinstance(base_content, str):
+                    msg["content"] = base_content + hint_text
+                elif isinstance(base_content, list):
+                    msg["content"] = list(base_content) + [
+                        {"type": "text", "text": hint_text}
+                    ]
+                else:
+                    # Unknown content shape — defensive coerce to string so
+                    # the model still sees the schema. Log so the unexpected
+                    # shape surfaces in debugging.
+                    logger.debug(
+                        "Claude HINT injection: unexpected system content "
+                        "type %s; coercing to string",
+                        type(base_content).__name__,
+                    )
+                    msg["content"] = str(base_content) + hint_text
                 hint_block_inserted = True
                 break
 

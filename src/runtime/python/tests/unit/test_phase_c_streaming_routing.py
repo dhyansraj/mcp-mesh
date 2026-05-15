@@ -362,12 +362,16 @@ class TestStreamingNoToolsPathSyntheticBugRemoved:
         import mesh.helpers as helpers_module
 
         source = inspect.getsource(helpers_module)
-        # The strip helper is called in the streaming no-tools path. The
-        # specific call site is non-trivial to extract by AST in a unit
-        # test; we instead assert it's still referenced (the legacy path
-        # was the only place that called it directly outside the agentic
-        # loops, and we kept it).
-        assert "_pop_mesh_synthetic_format_flags" in source
+        # Anchor on the exact call expression in the streaming no-tools path.
+        # A bare-symbol search would pass even if every call site were removed,
+        # because `_pop_mesh_synthetic_format_flags` is DEFINED in this module.
+        # The arg name `completion_args` pins us to the streaming/agentic-loop
+        # call sites (the strip-on-streaming defense-in-depth lives there).
+        assert "_pop_mesh_synthetic_format_flags(completion_args)" in source, (
+            "process_chat_stream no-tools path must still strip the "
+            "synthetic-format sentinels defensively — Phase C routes "
+            "streaming to HINT mode, but the strip remains as defense-in-depth"
+        )
 
 
 # ---------------------------------------------------------------------------
