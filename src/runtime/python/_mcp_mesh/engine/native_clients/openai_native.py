@@ -477,6 +477,33 @@ def _build_create_kwargs(
     is the newer field for o1/o3 reasoning models — both are accepted by
     the OpenAI SDK; the adapter forwards whichever the caller supplied.
     """
+    # Shallow-copy so we don't mutate the caller's dict (we ``pop`` below).
+    request_params = dict(request_params)
+
+    # --- request_timeout → timeout rename -----------------------------------
+    # helpers._run_response_format_retry sets request_timeout=<fallback> on
+    # the fallback retry to bound a slow API. The OpenAI SDK uses ``timeout=``.
+    # Caller-supplied ``timeout=`` wins if both are present — but log either
+    # way so the actual decision is visible to --debug runs (otherwise the
+    # silently-dropped case looks identical to "translation never ran" and is
+    # impossible to diagnose).
+    request_timeout = request_params.pop("request_timeout", None)
+    if request_timeout is not None:
+        if "timeout" not in request_params:
+            request_params["timeout"] = request_timeout
+            logger.debug(
+                "Native OpenAI adapter: translated request_timeout=%ss "
+                "→ openai SDK timeout",
+                request_timeout,
+            )
+        else:
+            logger.debug(
+                "Native OpenAI adapter: dropped request_timeout=%ss "
+                "(caller-supplied timeout=%ss wins)",
+                request_timeout,
+                request_params["timeout"],
+            )
+
     create_kwargs: dict[str, Any] = {"model": _strip_prefix(model)}
 
     for key in _OPENAI_PASSTHROUGH_KWARGS:
@@ -488,6 +515,16 @@ def _build_create_kwargs(
         if value is None:
             continue
         create_kwargs[key] = value
+
+    # WARN once when ``n>1`` is observed. OpenAI's SDK accepts ``n=k>1`` and
+    # returns k candidates in ``choices[0..k-1]``, but ``_adapt_response``
+    # only reads ``choices[0]`` — caller is billed for k completions and
+    # silently gets just one back. WARN flags the narrowing rather than
+    # hard-rejecting (callers may pass ``n>1`` intentionally as a server-
+    # side optimization the adapter can't see).
+    n_value = create_kwargs.get("n")
+    if isinstance(n_value, int) and n_value > 1:
+        _warn_unsupported_kwarg_once("n_greater_than_1")
 
     # WARN-log any kwargs the adapter is silently dropping. This catches the
     # next litellm-only knob we forget to allow-list. Internal mesh markers
@@ -524,6 +561,36 @@ def _adapt_response(raw: Any) -> _Response:
     """
     choices = getattr(raw, "choices", None) or []
     first_choice = choices[0] if choices else None
+
+    # OpenAI's Structured Outputs spec (late 2024) returns refusals via
+    # ``message.refusal`` (non-null) with ``content=None`` / ``tool_calls=None``.
+    # The refusal text is the model's articulated reason in natural prose,
+    # structurally distinct from ``content``. Surface as a typed exception so
+    # the reason reaches the @mesh.llm consumer rather than collapsing into a
+    # generic empty-response shape (which then trips Pydantic with an opaque
+    # validation error — Maya-class UX bug). Imported lazily to avoid a hard
+    # dependency from this module on the engine errors package (helpers.py
+    # imports adapter modules, so the engine→adapter direction is circular-
+    # prone).
+    if first_choice is not None:
+        msg = getattr(first_choice, "message", None)
+        if msg is not None:
+            refusal = getattr(msg, "refusal", None)
+            if refusal:
+                from _mcp_mesh.engine.llm_errors import LLMRefusedError
+
+                model_name = getattr(raw, "model", None)
+                logger.info(
+                    "Native OpenAI adapter: model refused structured output "
+                    "(model=%s, refusal=%r)",
+                    model_name,
+                    refusal,
+                )
+                raise LLMRefusedError(
+                    refusal,
+                    vendor="openai",
+                    model=model_name,
+                )
 
     text: str | None = None
     tool_calls: list[_ToolCall] = []
@@ -792,3 +859,10 @@ def _warn_unsupported_kwarg_once(key: str) -> None:
         "(LiteLLM-only — not forwarded to openai.chat.completions.create)",
         key,
     )
+
+
+def _reset_unsupported_kwargs_dedupe() -> None:
+    """For tests — drop the WARN-once dedupe set so each test sees a fresh
+    WARN trail. NOT for production use.
+    """
+    _logged_unsupported_kwargs.clear()

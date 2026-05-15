@@ -17,7 +17,7 @@ takes the HINT branch. Without the flag, it would route through
 """
 
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -28,6 +28,7 @@ from mesh.helpers import (
     _hint_response_parses,
     _maybe_run_hint_fallback,
     _pop_mesh_hint_flags,
+    _run_response_format_retry,
 )
 
 
@@ -654,3 +655,296 @@ class TestMaybeRunHintFallback:
                     hint_fallback_timeout=30,
                     hint_output_type_name="X",
                 )
+
+
+# ---------------------------------------------------------------------------
+# _run_response_format_retry — explicit vendor routing
+# ---------------------------------------------------------------------------
+
+
+class TestRunResponseFormatRetryVendorRouting:
+    """Verify that when ``vendor`` is plumbed explicitly, the retry routes
+    through the vendor-native handler instead of falling through to LiteLLM
+    via the brittle ``_extract_vendor_from_model`` prefix path."""
+
+    @pytest.mark.asyncio
+    async def test_explicit_vendor_routes_through_native_handler(self):
+        """Bare model strings like ``claude-haiku-4-5`` carry no ``anthropic/``
+        prefix, so ``_extract_vendor_from_model`` returns None and the retry
+        would fall through to ``litellm.completion``. Passing ``vendor`` is
+        the documented escape hatch: native handler is selected directly and
+        ``fb_handler.complete`` is awaited (not LiteLLM)."""
+        fake_msg = MagicMock()
+        fake_msg.content = '{"foo": "ok"}'
+        fake_response = MagicMock()
+        fake_response.choices = [MagicMock(message=fake_msg)]
+
+        fake_handler = MagicMock()
+        fake_handler.has_native.return_value = True
+        fake_handler.complete = AsyncMock(return_value=fake_response)
+
+        schema = {
+            "type": "object",
+            "properties": {"foo": {"type": "string"}},
+            "required": ["foo"],
+        }
+        # Bare model (no ``anthropic/`` prefix) — string-prefix extraction
+        # would return None and silently skip native dispatch.
+        base_args = {
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "x"}],
+            "api_key": "sk-test",
+        }
+
+        litellm_called = False
+
+        async def fake_to_thread(fn, **kwargs):
+            nonlocal litellm_called
+            litellm_called = True
+            return fake_response
+
+        with patch(
+            "mesh.helpers.ProviderHandlerRegistry.get_handler",
+            return_value=fake_handler,
+        ), patch("mesh.helpers.asyncio.to_thread", side_effect=fake_to_thread):
+            final_content, _msg, _resp = await _run_response_format_retry(
+                base_completion_args=base_args,
+                schema=schema,
+                output_type_name="MyType",
+                fallback_timeout=30,
+                vendor="anthropic",
+            )
+
+        assert final_content == '{"foo": "ok"}'
+        # Native handler path engaged — complete was awaited.
+        fake_handler.complete.assert_awaited_once()
+        # LiteLLM fallback path must NOT have fired.
+        assert not litellm_called, (
+            "litellm.completion (via asyncio.to_thread) was invoked even "
+            "though vendor='anthropic' should have routed through "
+            "fb_handler.complete"
+        )
+        # complete() receives the model + creds explicitly.
+        call_kwargs = fake_handler.complete.await_args.kwargs
+        assert call_kwargs["model"] == "claude-haiku-4-5"
+        assert call_kwargs["api_key"] == "sk-test"
+        # response_format and request_timeout are in the native args.
+        native_args = fake_handler.complete.await_args.args[0]
+        assert native_args["response_format"]["json_schema"]["name"] == "MyType"
+        assert native_args["request_timeout"] == 30
+
+    @pytest.mark.asyncio
+    async def test_native_synthetic_tool_call_lifted_to_content(self):
+        """Native Anthropic adapter returns synthetic-tool args as tool_calls
+        with content=None. Without the lift, the result dict has content=''
+        and the caller misclassifies as a hedge/refusal. The fix mirrors
+        LiteLLM's behavior: lift synthetic args to content."""
+        from _mcp_mesh.engine._structured_output_helpers import (
+            SYNTHETIC_FORMAT_TOOL_NAME,
+        )
+
+        fake_fn = MagicMock()
+        fake_fn.name = SYNTHETIC_FORMAT_TOOL_NAME
+        fake_fn.arguments = '{"message":"hello"}'
+        fake_tc = MagicMock()
+        fake_tc.function = fake_fn
+        fake_tc.id = "toolu_synth_1"
+
+        fake_msg = MagicMock()
+        fake_msg.content = None
+        fake_msg.tool_calls = [fake_tc]
+        fake_response = MagicMock()
+        fake_response.choices = [MagicMock(message=fake_msg)]
+
+        fake_handler = MagicMock()
+        fake_handler.has_native.return_value = True
+        fake_handler.complete = AsyncMock(return_value=fake_response)
+
+        schema = {
+            "type": "object",
+            "properties": {"message": {"type": "string"}},
+            "required": ["message"],
+        }
+        base_args = {
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "x"}],
+            "api_key": "sk-test",
+        }
+
+        with patch(
+            "mesh.helpers.ProviderHandlerRegistry.get_handler",
+            return_value=fake_handler,
+        ):
+            final_content, _msg, _resp = await _run_response_format_retry(
+                base_completion_args=base_args,
+                schema=schema,
+                output_type_name="MyType",
+                fallback_timeout=30,
+                vendor="anthropic",
+            )
+
+        assert final_content == '{"message":"hello"}'
+
+    @pytest.mark.asyncio
+    async def test_litellm_text_content_path_still_works(self):
+        """LiteLLM compat: when the handler returns plain text content (no
+        synthetic tool_call), the existing text-extraction path is used so
+        structured JSON in ``message.content`` is preserved."""
+        fake_msg = MagicMock()
+        fake_msg.content = '{"message":"hello"}'
+        fake_msg.tool_calls = None
+        fake_response = MagicMock()
+        fake_response.choices = [MagicMock(message=fake_msg)]
+
+        fake_handler = MagicMock()
+        fake_handler.has_native.return_value = True
+        fake_handler.complete = AsyncMock(return_value=fake_response)
+
+        schema = {
+            "type": "object",
+            "properties": {"message": {"type": "string"}},
+            "required": ["message"],
+        }
+        base_args = {
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "x"}],
+            "api_key": "sk-test",
+        }
+
+        with patch(
+            "mesh.helpers.ProviderHandlerRegistry.get_handler",
+            return_value=fake_handler,
+        ):
+            final_content, _msg, _resp = await _run_response_format_retry(
+                base_completion_args=base_args,
+                schema=schema,
+                output_type_name="MyType",
+                fallback_timeout=30,
+                vendor="anthropic",
+            )
+
+        assert final_content == '{"message":"hello"}'
+
+    @pytest.mark.asyncio
+    async def test_caller_timeout_stripped_so_fallback_bound_wins(self):
+        """The fallback retry passes a bounded ``request_timeout`` (e.g. 90s)
+        to prevent hangs during recovery. If the caller's
+        ``base_completion_args`` already contains ``timeout=300``, the native
+        Anthropic adapter's precedence rule (caller-supplied ``timeout`` wins
+        over ``request_timeout``) silently drops the 90s bound. The fix
+        strips ``timeout`` and ``request_timeout`` from base args before
+        adding the fallback's own bounded timeout so the bound actually
+        wins downstream."""
+        fake_msg = MagicMock()
+        fake_msg.content = '{"foo":"ok"}'
+        fake_msg.tool_calls = None
+        fake_response = MagicMock()
+        fake_response.choices = [MagicMock(message=fake_msg)]
+
+        fake_handler = MagicMock()
+        fake_handler.has_native.return_value = True
+        fake_handler.complete = AsyncMock(return_value=fake_response)
+
+        schema = {
+            "type": "object",
+            "properties": {"foo": {"type": "string"}},
+            "required": ["foo"],
+        }
+        # Caller supplies BOTH timeout=300 and request_timeout=600 in base args.
+        base_args = {
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "x"}],
+            "timeout": 300,
+            "request_timeout": 600,
+        }
+
+        with patch(
+            "mesh.helpers.ProviderHandlerRegistry.get_handler",
+            return_value=fake_handler,
+        ):
+            await _run_response_format_retry(
+                base_completion_args=base_args,
+                schema=schema,
+                output_type_name="MyType",
+                fallback_timeout=90,
+                vendor="anthropic",
+            )
+
+        # Inspect the fallback_args actually passed to fb_handler.complete.
+        native_args = fake_handler.complete.await_args.args[0]
+        assert native_args["request_timeout"] == 90, (
+            "fallback's bounded request_timeout (90s) must win"
+        )
+        assert "timeout" not in native_args, (
+            "caller's timeout=300 must be stripped so it cannot override "
+            "the fallback's bounded request_timeout downstream"
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "vendor,expected_add_all_required",
+        [
+            ("anthropic", False),
+            ("openai", True),
+            ("gemini", True),
+            (None, False),
+        ],
+    )
+    async def test_add_all_required_is_vendor_aware(
+        self, vendor, expected_add_all_required
+    ):
+        """Strict-schema synthesis must branch on the caller's ``vendor``:
+        OpenAI and Gemini reject schemas where any property is missing from
+        ``required``; Claude (and unknown/legacy callers) do not. The fix
+        replaces the hardcoded ``add_all_required=False`` with a
+        per-vendor value derived from the plumbed-through ``vendor`` kwarg."""
+        fake_msg = MagicMock()
+        fake_msg.content = '{"foo":"ok"}'
+        fake_msg.tool_calls = None
+        fake_response = MagicMock()
+        fake_response.choices = [MagicMock(message=fake_msg)]
+
+        fake_handler = MagicMock()
+        fake_handler.has_native.return_value = False  # force LiteLLM path
+        fake_handler.complete = AsyncMock(return_value=fake_response)
+
+        schema = {
+            "type": "object",
+            "properties": {"foo": {"type": "string"}},
+            "required": ["foo"],
+        }
+        base_args = {
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "x"}],
+        }
+
+        captured_call = {}
+
+        def fake_make_schema_strict(s, *, add_all_required):
+            captured_call["schema"] = s
+            captured_call["add_all_required"] = add_all_required
+            return s
+
+        async def fake_to_thread(fn, **kwargs):
+            return fake_response
+
+        with patch(
+            "_mcp_mesh.engine.provider_handlers.base_provider_handler.make_schema_strict",
+            side_effect=fake_make_schema_strict,
+        ), patch(
+            "mesh.helpers.ProviderHandlerRegistry.get_handler",
+            return_value=fake_handler,
+        ), patch("mesh.helpers.asyncio.to_thread", side_effect=fake_to_thread):
+            await _run_response_format_retry(
+                base_completion_args=base_args,
+                schema=schema,
+                output_type_name="MyType",
+                fallback_timeout=30,
+                vendor=vendor,
+            )
+
+        assert captured_call["add_all_required"] is expected_add_all_required, (
+            f"vendor={vendor!r} should yield "
+            f"add_all_required={expected_add_all_required!r}, got "
+            f"{captured_call['add_all_required']!r}"
+        )

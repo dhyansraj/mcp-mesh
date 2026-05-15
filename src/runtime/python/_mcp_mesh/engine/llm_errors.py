@@ -113,3 +113,46 @@ class ResponseParseError(Exception):
         if validation_errors:
             message += f": {validation_errors}"
         super().__init__(message)
+
+
+class LLMRefusedError(Exception):
+    """The model emitted an explicit structured-output refusal.
+
+    Raised by native adapters when the vendor SDK signals a refusal via a
+    dedicated channel (e.g. OpenAI's ``message.refusal`` field added in the
+    Structured Outputs spec, late 2024; or Gemini's ``finish_reason`` ∈
+    {SAFETY, RECITATION, BLOCKLIST, PROHIBITED_CONTENT, SPII} safety-block
+    set). Distinct from generic LLM errors so the agentic loop can branch
+    on it and the model's articulated reason surfaces to the @mesh.llm
+    consumer rather than collapsing into a generic empty-response shape.
+
+    Attributes:
+        refusal_text: The model's articulated refusal reason (natural prose).
+        vendor: Vendor name that emitted the refusal (e.g. ``"openai"``).
+        model: Model name if known.
+        category: Optional vendor-specific subtype (e.g. Gemini's
+            ``"SAFETY"`` / ``"RECITATION"`` / ``"BLOCKLIST"`` /
+            ``"PROHIBITED_CONTENT"`` / ``"SPII"``). ``None`` for vendors that
+            do not articulate a refusal subtype (e.g. OpenAI's
+            ``message.refusal`` channel).
+    """
+
+    def __init__(
+        self,
+        refusal_text: str,
+        *,
+        vendor: str,
+        model: Optional[str] = None,
+        category: Optional[str] = None,
+    ):
+        self.refusal_text = refusal_text
+        self.vendor = vendor
+        self.model = model
+        self.category = category
+
+        suffix = f"/{model}" if model else ""
+        cat_suffix = f", category={category}" if category else ""
+        super().__init__(
+            f"Model refused structured output ({vendor}{suffix}"
+            f"{cat_suffix}): {refusal_text}"
+        )

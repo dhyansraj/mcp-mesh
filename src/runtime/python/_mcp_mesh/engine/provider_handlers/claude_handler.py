@@ -40,6 +40,7 @@ from pydantic import BaseModel
 from .base_provider_handler import (
     BaseProviderHandler,
     has_media_params,
+    resolve_hint_fallback_timeout,
     sanitize_schema_for_structured_output,
 )
 
@@ -52,26 +53,17 @@ OUTPUT_MODE_STRICT = (
 OUTPUT_MODE_HINT = "hint"
 OUTPUT_MODE_TEXT = "text"
 
-# Stable name for the synthetic tool that backs structured output on the
-# native Anthropic SDK path (issue #834). Double-underscore prefix marks it
-# as internal — agents must not register a tool with this name. The agentic
-# loop in ``mesh.helpers`` recognizes a call to this name as the model's
-# "I'm done — here's the structured answer" signal and terminates.
-SYNTHETIC_FORMAT_TOOL_NAME = "__mesh_format_response"
-SYNTHETIC_FORMAT_TOOL_DESCRIPTION = (
-    "Use this tool to return your final structured answer matching the "
-    "schema. Call this tool only after gathering all needed data via other "
-    "available tools."
-)
-# System prompt augmentation that goes into the system message when the
-# synthetic tool is in play. Keeps Claude from emitting plain text as the
-# final answer (which would skip the synthetic tool entirely and break
-# downstream Pydantic parsing).
-SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION = (
-    "\n\nIMPORTANT: When you have all the information needed to answer, "
-    "you MUST call the `__mesh_format_response` tool to return your final "
-    "answer in the required structured format. Do NOT respond with plain "
-    "text — always use this tool to format your final answer."
+# Re-exported from .._structured_output_helpers for backwards compatibility
+# with any external imports (e.g. tests/test_claude_handler_native.py). The
+# single source of truth lives in the shared module so adapter-side
+# response_format translation (anthropic_native._build_create_kwargs) and
+# this handler stay byte-identical on the wire.
+from .._structured_output_helpers import (  # noqa: F401
+    SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION,
+    SYNTHETIC_FORMAT_TOOL_DESCRIPTION,
+    SYNTHETIC_FORMAT_TOOL_NAME,
+    append_synthetic_system_instruction,
+    schema_to_synthetic_tool,
 )
 
 # One-time guard so the dispatch-status DEBUG log fires exactly once per
@@ -481,30 +473,10 @@ class ClaudeHandler(BaseProviderHandler):
         # are NOT API params).
         # Fallback timeout: 30s was too tight for complex nested schemas
         # (e.g. list[NestedModel] where Claude generates multi-day itineraries).
-        # Configurable via MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT (seconds).
-        # Fail-open on a malformed env value so a typo can't break the
-        # provider mid-request — log a warning and use the default.
-        _raw_timeout = os.environ.get("MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT")
-        if _raw_timeout is None:
-            fallback_timeout = 90
-        else:
-            try:
-                fallback_timeout = int(_raw_timeout)
-            except ValueError:
-                logger.warning(
-                    "MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT=%r is not an integer; "
-                    "using default 90s",
-                    _raw_timeout,
-                )
-                fallback_timeout = 90
-            else:
-                if fallback_timeout <= 0:
-                    logger.warning(
-                        "MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT=%r must be positive; "
-                        "using default 90s",
-                        _raw_timeout,
-                    )
-                    fallback_timeout = 90
+        # Configurable via MCP_MESH_HINT_FALLBACK_TIMEOUT (seconds); the
+        # legacy MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT remains as a
+        # back-compat alias with a deprecation warning.
+        fallback_timeout = resolve_hint_fallback_timeout()
         model_params["_mesh_hint_mode"] = True
         model_params["_mesh_hint_schema"] = sanitized_schema
         model_params["_mesh_hint_fallback_timeout"] = fallback_timeout
@@ -568,8 +540,8 @@ class ClaudeHandler(BaseProviderHandler):
                 new_msg: dict[str, Any] = {**msg}
                 # Tolerate string OR content-block list (post-prompt-cache).
                 if isinstance(base_content, str):
-                    new_msg["content"] = (
-                        base_content + SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION
+                    new_msg["content"] = append_synthetic_system_instruction(
+                        base_content
                     )
                 elif isinstance(base_content, list):
                     # Build a NEW list (don't mutate the caller's). Original
@@ -608,14 +580,7 @@ class ClaudeHandler(BaseProviderHandler):
         # Build the synthetic tool. Stored as the OpenAI/litellm tool shape
         # so the upstream `_convert_tools` translator in anthropic_native
         # picks it up uniformly with user tools — no special-casing.
-        synthetic_tool = {
-            "type": "function",
-            "function": {
-                "name": SYNTHETIC_FORMAT_TOOL_NAME,
-                "description": SYNTHETIC_FORMAT_TOOL_DESCRIPTION,
-                "parameters": sanitized_schema,
-            },
-        }
+        synthetic_tool = schema_to_synthetic_tool(sanitized_schema)
 
         # Stash sentinels for the agentic loop. Prefixed ``_mesh_`` so the
         # adapter's WARN-filter and ``_pop_mesh_*`` helpers know to strip

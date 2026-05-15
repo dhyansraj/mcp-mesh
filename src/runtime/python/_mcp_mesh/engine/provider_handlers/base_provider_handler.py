@@ -7,6 +7,8 @@ that customize how different LLM vendors (Claude, OpenAI, Gemini, etc.) are call
 
 import json
 import logging
+import os
+import threading
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
@@ -14,6 +16,91 @@ import mcp_mesh_core
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Shared HINT-fallback timeout resolution
+# ============================================================================
+#
+# All HINT-mode handlers (Claude, Gemini, future vendors) read the same
+# operator-tunable knob for the bounded response_format-retry timeout. The
+# canonical env var is ``MCP_MESH_HINT_FALLBACK_TIMEOUT`` (vendor-agnostic).
+# ``MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT`` is preserved as a back-compat
+# alias with a one-time runtime deprecation warning, so existing operator
+# configs keep working but new docs only teach the canonical form.
+#
+# Precedence: canonical wins over alias if both set. Alias-only fires the
+# deprecation warning once per process.
+
+_DEFAULT_HINT_FALLBACK_TIMEOUT = 90
+
+_NEW_HINT_TIMEOUT_ENV = "MCP_MESH_HINT_FALLBACK_TIMEOUT"
+_LEGACY_HINT_TIMEOUT_ENV = "MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT"
+
+_legacy_hint_timeout_deprecation_logged = False
+_legacy_hint_timeout_lock = threading.Lock()
+
+
+def _warn_legacy_hint_timeout_once() -> None:
+    """Emit the legacy-env-var deprecation warning exactly once per process."""
+    global _legacy_hint_timeout_deprecation_logged
+    with _legacy_hint_timeout_lock:
+        if _legacy_hint_timeout_deprecation_logged:
+            return
+        _legacy_hint_timeout_deprecation_logged = True
+    logger.warning(
+        "%s is deprecated; use %s instead "
+        "(vendor-agnostic — applies to all HINT-mode handlers).",
+        _LEGACY_HINT_TIMEOUT_ENV,
+        _NEW_HINT_TIMEOUT_ENV,
+    )
+
+
+def resolve_hint_fallback_timeout(default: int = _DEFAULT_HINT_FALLBACK_TIMEOUT) -> int:
+    """Resolve the HINT-mode → response_format bounded-retry timeout (seconds).
+
+    Reads ``MCP_MESH_HINT_FALLBACK_TIMEOUT`` first; falls back to the legacy
+    ``MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT`` (with a one-time deprecation
+    warning) if the canonical var is unset; falls back to ``default`` if
+    neither is set. Fails open on malformed values (logs WARN, returns default).
+    """
+    raw = os.environ.get(_NEW_HINT_TIMEOUT_ENV)
+    legacy_raw = os.environ.get(_LEGACY_HINT_TIMEOUT_ENV)
+    if raw is None and legacy_raw is not None:
+        _warn_legacy_hint_timeout_once()
+        raw = legacy_raw
+        source = _LEGACY_HINT_TIMEOUT_ENV
+    else:
+        if legacy_raw is not None:
+            # Both set — canonical wins; still warn about the legacy var so
+            # operators know it's now ignored on this host.
+            _warn_legacy_hint_timeout_once()
+        source = _NEW_HINT_TIMEOUT_ENV
+
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "%s=%r is not an integer; using default %ss",
+            source, raw, default,
+        )
+        return default
+    if value <= 0:
+        logger.warning(
+            "%s=%r must be positive; using default %ss",
+            source, raw, default,
+        )
+        return default
+    return value
+
+
+def _reset_legacy_hint_timeout_dedupe() -> None:
+    """For tests — drop the once-per-process deprecation-warning latch."""
+    global _legacy_hint_timeout_deprecation_logged
+    with _legacy_hint_timeout_lock:
+        _legacy_hint_timeout_deprecation_logged = False
 
 # ============================================================================
 # Shared Media Detection
