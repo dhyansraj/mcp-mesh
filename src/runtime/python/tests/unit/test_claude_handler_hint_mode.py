@@ -879,3 +879,72 @@ class TestRunResponseFormatRetryVendorRouting:
             "caller's timeout=300 must be stripped so it cannot override "
             "the fallback's bounded request_timeout downstream"
         )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "vendor,expected_add_all_required",
+        [
+            ("anthropic", False),
+            ("openai", True),
+            ("gemini", True),
+            (None, False),
+        ],
+    )
+    async def test_add_all_required_is_vendor_aware(
+        self, vendor, expected_add_all_required
+    ):
+        """Strict-schema synthesis must branch on the caller's ``vendor``:
+        OpenAI and Gemini reject schemas where any property is missing from
+        ``required``; Claude (and unknown/legacy callers) do not. The fix
+        replaces the hardcoded ``add_all_required=False`` with a
+        per-vendor value derived from the plumbed-through ``vendor`` kwarg."""
+        fake_msg = MagicMock()
+        fake_msg.content = '{"foo":"ok"}'
+        fake_msg.tool_calls = None
+        fake_response = MagicMock()
+        fake_response.choices = [MagicMock(message=fake_msg)]
+
+        fake_handler = MagicMock()
+        fake_handler.has_native.return_value = False  # force LiteLLM path
+        fake_handler.complete = AsyncMock(return_value=fake_response)
+
+        schema = {
+            "type": "object",
+            "properties": {"foo": {"type": "string"}},
+            "required": ["foo"],
+        }
+        base_args = {
+            "model": "claude-haiku-4-5",
+            "messages": [{"role": "user", "content": "x"}],
+        }
+
+        captured_call = {}
+
+        def fake_make_schema_strict(s, *, add_all_required):
+            captured_call["schema"] = s
+            captured_call["add_all_required"] = add_all_required
+            return s
+
+        async def fake_to_thread(fn, **kwargs):
+            return fake_response
+
+        with patch(
+            "_mcp_mesh.engine.provider_handlers.base_provider_handler.make_schema_strict",
+            side_effect=fake_make_schema_strict,
+        ), patch(
+            "mesh.helpers.ProviderHandlerRegistry.get_handler",
+            return_value=fake_handler,
+        ), patch("mesh.helpers.asyncio.to_thread", side_effect=fake_to_thread):
+            await _run_response_format_retry(
+                base_completion_args=base_args,
+                schema=schema,
+                output_type_name="MyType",
+                fallback_timeout=30,
+                vendor=vendor,
+            )
+
+        assert captured_call["add_all_required"] is expected_add_all_required, (
+            f"vendor={vendor!r} should yield "
+            f"add_all_required={expected_add_all_required!r}, got "
+            f"{captured_call['add_all_required']!r}"
+        )

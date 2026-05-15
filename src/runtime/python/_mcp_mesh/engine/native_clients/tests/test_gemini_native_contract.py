@@ -180,6 +180,26 @@ class TestTimeoutTranslation:
             if r.levelname == "WARNING"
         )
 
+    def test_timeout_infinity_logs_warning_and_skips(self, caplog):
+        """``int(float('inf') * 1000)`` raises ``OverflowError`` — the
+        except clause must catch it so the adapter falls through to the
+        WARN-log + skip path instead of crashing the request."""
+        with caplog.at_level("WARNING", logger=gemini_native.logger.name):
+            out = gemini_native._build_create_kwargs(
+                {
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "timeout": float("inf"),
+                },
+                model="gemini/gemini-2.0-flash",
+            )
+        # No HttpOptions attached when timeout can't be coerced.
+        assert "http_options" not in out["config"]
+        assert any(
+            "cannot coerce timeout" in r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING"
+        )
+
     def test_timeout_seconds_to_milliseconds_conversion(self):
         """Explicit unit-conversion guard: mesh's timeout/request_timeout are
         seconds (mesh convention), but ``HttpOptions.timeout`` expects
@@ -442,6 +462,32 @@ class TestSafetyBlockDetection:
             gemini_native._adapt_response(raw, model="gemini-2.0-flash")
         assert "HARM_CATEGORY_DANGEROUS" in exc_info.value.refusal_text
         assert "safety filter" in exc_info.value.refusal_text
+
+    def test_adapt_response_handles_none_probability_score_without_typeerror(self):
+        """Guard against ``None >= 0.7`` TypeError mid-block: if a rating has
+        ``probability_score=None`` (or any non-numeric value), the classifier
+        must treat it as non-blocking rather than crashing. The candidate
+        still raises ``LLMRefusedError`` via the SAFETY finish_reason path,
+        but with the synthesized "no ratings" message — proving the rating
+        was classified as non-blocking."""
+        rating = SimpleNamespace(
+            category="HARM_CATEGORY_DANGEROUS",
+            probability_score=None,
+            blocked=False,
+        )
+        raw = _make_gemini_response(
+            text=None,
+            finish_reason="SAFETY",
+            finish_message=None,
+            safety_ratings=[rating],
+        )
+        # Must NOT raise TypeError; raises LLMRefusedError via SAFETY path.
+        with pytest.raises(LLMRefusedError) as exc_info:
+            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        # Non-blocking rating → falls through to "blocked by Gemini policy"
+        # synthesis (the "blocked by safety filter (...)" branch requires
+        # at least one blocking rating).
+        assert "blocked by Gemini policy" in exc_info.value.refusal_text
 
     def test_adapt_response_synthesizes_message_when_no_ratings(self):
         raw = _make_gemini_response(

@@ -422,14 +422,17 @@ async def _run_response_format_retry(
     # default. The base apply_structured_output path already strict-ifies via
     # make_schema_strict; the legacy HINT fallback was missing the same step,
     # causing Anthropic's "output_format.schema: ... must be explicitly set to
-    # false" rejection on complex schemas (nested BaseModels). add_all_required
-    # =False because Claude — unlike OpenAI/Gemini — does not require every
-    # property to be in 'required'.
+    # false" rejection on complex schemas (nested BaseModels).
+    #
+    # add_all_required is per-vendor: OpenAI and Gemini require every property
+    # in 'required'; Claude does not. Default to False for unknown/legacy
+    # callers to preserve prior behavior.
     from _mcp_mesh.engine.provider_handlers.base_provider_handler import (
         make_schema_strict,
     )
 
-    strict_schema = make_schema_strict(schema, add_all_required=False)
+    add_all_required = vendor in ("openai", "gemini")
+    strict_schema = make_schema_strict(schema, add_all_required=add_all_required)
 
     # Strip caller's timeout/request_timeout so the fallback's bounded retry
     # timeout actually wins downstream (the native adapter prefers caller's

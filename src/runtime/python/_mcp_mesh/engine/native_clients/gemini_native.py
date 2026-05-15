@@ -1256,7 +1256,7 @@ def _build_create_kwargs(
             # mesh's convention). Convert here so the wire-level deadline
             # matches the user-facing kwarg's units.
             per_call_http["timeout"] = int(float(timeout_value) * 1000)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             logger.warning(
                 "Native Gemini adapter: cannot coerce timeout=%r to int; "
                 "skipping per-call timeout override (HttpOptions.timeout "
@@ -1395,11 +1395,12 @@ def _adapt_response(raw: Any, *, model: str) -> _Response:
                 getattr(first_candidate, "finish_message", None) or ""
             )
             ratings = getattr(first_candidate, "safety_ratings", None) or []
-            blocking = [
-                r for r in ratings
-                if getattr(r, "blocked", False)
-                or getattr(r, "probability_score", 0) >= 0.7
-            ]
+            def _is_blocking(r: Any) -> bool:
+                if getattr(r, "blocked", False):
+                    return True
+                p = getattr(r, "probability_score", None)
+                return isinstance(p, (int, float)) and p >= 0.7
+            blocking = [r for r in ratings if _is_blocking(r)]
             if not finish_message and blocking:
                 cats = ", ".join(
                     str(getattr(r, "category", "?")) for r in blocking
