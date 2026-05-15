@@ -31,8 +31,9 @@ SYNTHETIC_FORMAT_TOOL_DESCRIPTION = (
 )
 
 #: Advisory addendum. The earlier "MUST / Do NOT" framing raised Haiku's
-#: refusal rate on conversational/borderline content (Maya regression
-#: v2.0.0). The softened advisory wording reads more reliably across models.
+#: refusal rate on conversational/borderline content (v2.0.0 synthetic-tool
+#: decline regression). The softened advisory wording reads more reliably
+#: across models.
 SYNTHETIC_FORMAT_SYSTEM_INSTRUCTION = (
     "\n\nWhen you are ready to respond, call the `__mesh_format_response` "
     "tool with your final answer in the required structured format."
@@ -114,6 +115,10 @@ def is_synthetic_tool_in_list(
 
     Recognizes BOTH the OpenAI shape (``function.name``) AND the
     pre-translated Anthropic shape (``name`` + ``input_schema``).
+    The current caller (``anthropic_native._build_create_kwargs``)
+    inspects ``raw_tools`` BEFORE ``_convert_tools`` runs, so the
+    handler-injected tool is still in OpenAI shape; the Anthropic-shape
+    branch is forward-looking for callers that inspect post-translation.
     Tolerates ``None`` / empty; skips non-dict entries.
     """
     if not tools:
@@ -127,3 +132,56 @@ def is_synthetic_tool_in_list(
         if t.get("name") == tool_name and "input_schema" in t:
             return True
     return False
+
+
+# JSON-Schema fields native ``output_config`` rejects but the synthetic-tool
+# path accepts silently. LiteLLM strips these in
+# ``filter_anthropic_output_schema`` (transformation.py:204-263) per Anthropic
+# issue #19444. Without stripping, schemas that work on Haiku 400 on Sonnet.
+#
+# Defined here (not in ``anthropic_native``) so both the handler and the
+# adapter can apply the same filter without crossing the handler→adapter
+# import boundary. The handler stamps the post-filter schema as
+# ``_mesh_output_config_schema`` so the loop's defense-in-depth parse check
+# sees the exact shape that went on the wire.
+_ANTHROPIC_OUTPUT_SCHEMA_REJECTED_KEYS = frozenset({"maxItems", "minItems"})
+
+
+def filter_anthropic_output_schema(schema: Any) -> Any:
+    """Recursively strip JSON-Schema fields Anthropic's native
+    ``output_config.format`` rejects (``maxItems`` / ``minItems``).
+
+    Walks ``properties``, ``items``, ``$defs`` / ``definitions``, and the
+    ``anyOf`` / ``allOf`` / ``oneOf`` combinators. Preserves all other keys
+    verbatim. Non-dict / non-list input is returned unchanged (defensive).
+
+    Conservative — only the two keys LiteLLM hit in production are removed.
+    If future Anthropic releases reject more fields, extend
+    ``_ANTHROPIC_OUTPUT_SCHEMA_REJECTED_KEYS``.
+
+    Idempotent: running on an already-filtered schema is a no-op.
+    """
+    if isinstance(schema, dict):
+        out: dict[str, Any] = {}
+        for key, value in schema.items():
+            if key in _ANTHROPIC_OUTPUT_SCHEMA_REJECTED_KEYS:
+                continue
+            if key == "properties" and isinstance(value, dict):
+                # Property names are arbitrary identifiers — keep them
+                # verbatim, recurse on each property's sub-schema.
+                out[key] = {
+                    prop_name: filter_anthropic_output_schema(prop_schema)
+                    for prop_name, prop_schema in value.items()
+                }
+                continue
+            if key in ("$defs", "definitions") and isinstance(value, dict):
+                out[key] = {
+                    def_name: filter_anthropic_output_schema(def_schema)
+                    for def_name, def_schema in value.items()
+                }
+                continue
+            out[key] = filter_anthropic_output_schema(value)
+        return out
+    if isinstance(schema, list):
+        return [filter_anthropic_output_schema(item) for item in schema]
+    return schema

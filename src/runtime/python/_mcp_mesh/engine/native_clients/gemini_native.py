@@ -57,6 +57,8 @@ from typing import Any
 
 import httpx
 
+from ._native_client_helpers import resolve_request_timeout
+
 logger = logging.getLogger(__name__)
 
 # Matches: data:<mime>;base64,<data>
@@ -1242,27 +1244,21 @@ def _build_create_kwargs(
     # HttpOptions override only sets fields we explicitly populate; everything
     # else falls back to the client-level defaults.
     #
-    # Precedence: caller's ``timeout`` wins over ``request_timeout``
-    # (helpers._run_response_format_retry sets request_timeout on the
-    # bounded HINT-fallback retry; a caller-supplied timeout takes priority).
+    # Shared helper resolves caller's ``timeout`` / ``request_timeout`` and
+    # converts seconds → milliseconds (Google SDK's HttpOptions.timeout is
+    # milliseconds, not seconds — mesh's convention is seconds, so we
+    # convert here so the wire-level deadline matches the user-facing
+    # kwarg's units).
     per_call_http: dict[str, Any] = {}
 
-    timeout_value = request_params.get("timeout")
-    if timeout_value is None:
-        timeout_value = request_params.get("request_timeout")
-    if timeout_value is not None:
-        try:
-            # Google SDK's HttpOptions.timeout is milliseconds (not seconds,
-            # mesh's convention). Convert here so the wire-level deadline
-            # matches the user-facing kwarg's units.
-            per_call_http["timeout"] = int(float(timeout_value) * 1000)
-        except (TypeError, ValueError, OverflowError):
-            logger.warning(
-                "Native Gemini adapter: cannot coerce timeout=%r to int; "
-                "skipping per-call timeout override (HttpOptions.timeout "
-                "requires Optional[int])",
-                timeout_value,
-            )
+    timeout_ms = resolve_request_timeout(
+        request_params,
+        adapter_label="Native Gemini adapter",
+        logger=logger,
+        seconds_to_ms=True,
+    )
+    if timeout_ms is not None:
+        per_call_http["timeout"] = timeout_ms
 
     extra_headers = request_params.get("extra_headers")
     if isinstance(extra_headers, dict) and extra_headers:
@@ -1327,7 +1323,7 @@ _FINISH_REASON_MAP = {
 # block); the adapter raises ``LLMRefusedError`` so the model's articulated
 # reason reaches the @mesh.llm consumer instead of collapsing into an empty
 # ``_Message.content`` shape (which then trips Pydantic with an opaque
-# validation error — the Maya-class UX bug).
+# validation error — the refusal-text-leak class).
 _SAFETY_BLOCK_FINISH_REASONS = frozenset({
     "SAFETY",
     "RECITATION",
@@ -1376,7 +1372,50 @@ def _adapt_response(raw: Any, *, model: str) -> _Response:
     candidates = getattr(raw, "candidates", None) or []
     first_candidate = candidates[0] if candidates else None
 
-    # Detect safety / policy block. Gemini propagates blocks via
+    # Detect prompt-level safety block. Gemini's second safety surface:
+    # when the *prompt* (not the completion) trips a filter, the SDK returns
+    # ``response.prompt_feedback.block_reason`` set (enum: SAFETY, OTHER,
+    # BLOCKLIST, PROHIBITED_CONTENT, IMAGE_SAFETY, MODEL_ARMOR, JAILBREAK)
+    # with zero or empty candidates — the candidate-level finish_reason path
+    # never fires. Check this BEFORE reading candidates so prompt-level blocks
+    # raise a distinguishable LLMRefusedError (category="PROMPT_BLOCK") rather
+    # than collapsing into an empty _Message.content shape. Prompt-level wins
+    # over candidate-level when both are set (prompt-level fires first in the
+    # response causality order — prompt is screened before generation).
+    prompt_feedback = getattr(raw, "prompt_feedback", None)
+    if prompt_feedback is not None:
+        raw_block_reason = getattr(prompt_feedback, "block_reason", None)
+        block_name = (
+            getattr(raw_block_reason, "name", None)
+            or str(raw_block_reason or "")
+        )
+        if "." in block_name:
+            block_name = block_name.rsplit(".", 1)[-1]
+        # ``BLOCKED_REASON_UNSPECIFIED`` is the enum sentinel for "not set" —
+        # ignore it. Empty/None block_reason → no prompt-level block.
+        if block_name and block_name != "BLOCKED_REASON_UNSPECIFIED":
+            from _mcp_mesh.engine.llm_errors import LLMRefusedError
+
+            block_message = (
+                getattr(prompt_feedback, "block_reason_message", None) or ""
+            )
+            if not block_message:
+                block_message = f"prompt blocked by Gemini policy ({block_name})"
+
+            response_model = getattr(raw, "model_version", None) or model
+            logger.info(
+                "Native Gemini adapter: prompt blocked "
+                "(model=%s, block_reason=%s, message=%r)",
+                response_model, block_name, block_message,
+            )
+            raise LLMRefusedError(
+                block_message,
+                vendor="gemini",
+                model=response_model,
+                category="PROMPT_BLOCK",
+            )
+
+    # Detect candidate-level safety / policy block. Gemini propagates blocks via
     # finish_reason ∈ {SAFETY, RECITATION, BLOCKLIST, PROHIBITED_CONTENT,
     # SPII} on the first candidate — content.parts is typically empty (full
     # block) but may carry partial content (rare partial block). Both cases
@@ -1743,6 +1782,10 @@ def is_fallback_logged() -> bool:
 # providers receiving the same litellm-only kwarg every request would
 # otherwise flood the log with identical messages (unbounded growth
 # pre-fix).
+#
+# Test reset hook is the module-level _reset_unsupported_kwargs_dedupe()
+# function below — DRY-up candidate (mirror functions live in
+# anthropic_native + openai_native) when a 4th adapter shows up.
 _logged_unsupported_kwargs: set[str] = set()
 
 

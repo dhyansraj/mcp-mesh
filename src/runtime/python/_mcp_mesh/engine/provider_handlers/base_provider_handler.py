@@ -314,6 +314,9 @@ class BaseProviderHandler(ABC):
         output_schema: dict[str, Any],
         output_type_name: Optional[str],
         model_params: dict[str, Any],
+        *,
+        streaming: bool = False,
+        model: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         Apply vendor-specific structured output handling to model params.
@@ -328,6 +331,18 @@ class BaseProviderHandler(ABC):
             output_schema: JSON schema dict from consumer
             output_type_name: Name of the output type (e.g., "AnalysisResult")
             model_params: Current model parameters dict (will be modified)
+            streaming: When True, the call site is the streaming dispatch path.
+                Vendors that have a synthetic-tool injection mode (e.g. Claude)
+                use this to fall back to HINT mode for streaming — a single
+                forced tool call doesn't actually stream as text chunks, while
+                HINT (schema-in-prompt) flows naturally through the stream.
+                Default False preserves the buffered behavior for all existing
+                callers.
+            model: Effective LiteLLM-style model id (e.g.
+                ``anthropic/claude-sonnet-4-6``). Used by handlers that
+                model-gate their structured-output strategy (e.g. Claude's
+                ``output_config`` branch). Default None preserves backward
+                compatibility — handlers that ignore the model are unaffected.
 
         Returns:
             Modified model_params with structured output settings applied

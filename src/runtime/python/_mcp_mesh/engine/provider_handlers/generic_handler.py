@@ -155,6 +155,9 @@ class GenericHandler(BaseProviderHandler):
         output_schema: dict[str, Any],
         output_type_name: Optional[str],
         model_params: dict[str, Any],
+        *,
+        streaming: bool = False,
+        model: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         Apply structured output for generic vendors.
@@ -166,6 +169,7 @@ class GenericHandler(BaseProviderHandler):
             output_schema: JSON schema dict from consumer
             output_type_name: Name of the output type
             model_params: Current model parameters dict
+            streaming: Accepted for API symmetry; no-op for the generic handler.
 
         Returns:
             Unmodified model_params (no response_format added)

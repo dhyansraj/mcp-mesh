@@ -167,6 +167,43 @@ def _pop_mesh_synthetic_format_flags(
     return name, tool, type_name
 
 
+# ---------------------------------------------------------------------------
+# Native output_config flags (Anthropic Sonnet 4.5+ / Opus 4.1+)
+# ---------------------------------------------------------------------------
+# Set by ClaudeHandler.apply_structured_output when on the native ``output_config``
+# path. Sentinel for "the model is going to return the structured answer as a
+# plain TextBlock — do NOT run synthetic-fallback recovery on the no-tool-calls
+# branch; the text content IS the answer". Like the other mesh keys above,
+# they MUST be stripped before any LLM call so they don't leak into the wire
+# request.
+
+_MESH_OUTPUT_CONFIG_KEYS = (
+    "_mesh_output_config_mode",
+    "_mesh_output_config_schema",
+    "_mesh_output_config_output_type_name",
+)
+
+
+def _pop_mesh_output_config_flags(
+    completion_args: dict[str, Any],
+    defaults: tuple[bool, dict | None, str] = (False, None, "Response"),
+) -> tuple[bool, dict | None, str]:
+    """Strip ``_mesh_output_config_*`` flags from ``completion_args`` in place.
+
+    Returns ``(output_config_mode, output_config_schema, output_type_name)``.
+    The schema is captured for an optional defense-in-depth parse check on
+    the returned text (logged WARN-only — no retry, mirroring the framework
+    principle of not forcing the model after it has answered).
+    """
+    mode_default, schema_default, type_name_default = defaults
+    mode = bool(completion_args.pop("_mesh_output_config_mode", mode_default))
+    schema = completion_args.pop("_mesh_output_config_schema", schema_default)
+    type_name = completion_args.pop(
+        "_mesh_output_config_output_type_name", type_name_default
+    )
+    return mode, schema, type_name
+
+
 def _inject_synthetic_format_tool(
     tools: list[dict[str, Any]] | None,
     synthetic_tool: dict[str, Any],
@@ -530,7 +567,7 @@ async def _maybe_run_synthetic_fallback(
     ``stop_reason="end_turn"``, response is plain text, no ``tool_use``
     block. Without this fallback, the agentic loop would surface the
     model's hedge/refusal text raw to the caller as if it were the
-    structured answer — the v2.0.0 Maya regression.
+    structured answer — the v2.0.0 native-dispatch refusal regression.
 
     Returns ``(possibly-replaced final_content, message, response)``.
 
@@ -1272,6 +1309,18 @@ async def _provider_agentic_loop(
         synthetic_output_type_name,
     ) = _pop_mesh_synthetic_format_flags(model_params)
 
+    # Native ``output_config`` state (Anthropic Sonnet 4.5+ / Opus 4.1+, set
+    # by ClaudeHandler.apply_structured_output's output_config branch). When
+    # ``output_config_mode`` is True, the model returns the structured JSON
+    # answer as a plain TextBlock (Anthropic enforces the schema server-side
+    # via output_config.format) and the "no tool calls" branch below skips
+    # the synthetic-fallback recovery — the text content IS the answer.
+    (
+        output_config_mode,
+        output_config_schema,
+        output_config_output_type_name,
+    ) = _pop_mesh_output_config_flags(model_params)
+
     while iteration < max_iterations:
         iteration += 1
 
@@ -1491,6 +1540,53 @@ async def _provider_agentic_loop(
             # No tool calls - final response
             final_content = _extract_text_from_message_content(message.content)
 
+            # Native ``output_config`` short-circuit (Anthropic Sonnet 4.5+ /
+            # Opus 4.1+). Anthropic enforces the schema server-side via
+            # ``output_config.format`` and returns the structured JSON answer
+            # as a plain TextBlock — there is no synthetic-tool unwrap, and
+            # synthetic-fallback recovery would be both wrong (no synthetic
+            # tool was injected) and wasteful. The HINT fallback is also
+            # skipped because HINT mode is mutually exclusive with
+            # ``output_config`` mode. Defense-in-depth: optionally log a
+            # WARN if the returned text doesn't parse against the captured
+            # schema — but do NOT retry (the framework principle is "don't
+            # force the model after it has answered").
+            if output_config_mode:
+                if (
+                    output_config_schema is not None
+                    and final_content
+                    and not _hint_response_parses(final_content, output_config_schema)
+                ):
+                    if loop_logger:
+                        loop_logger.warning(
+                            "Native output_config mode for '%s': returned text "
+                            "did not parse against the schema (Anthropic's "
+                            "output_config.format normally enforces this) — "
+                            "surfacing the raw text to the caller without retry",
+                            output_config_output_type_name,
+                        )
+
+                message_dict: dict[str, Any] = {
+                    "role": message.role,
+                    "content": final_content if final_content else "",
+                }
+                if hasattr(response, "usage") and response.usage:
+                    usage = response.usage
+                    message_dict["_mesh_usage"] = {
+                        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                        "completion_tokens": getattr(usage, "completion_tokens", 0)
+                        or 0,
+                        "model": effective_model,
+                    }
+
+                if loop_logger:
+                    loop_logger.info(
+                        f"Provider-managed loop completed in {iteration} "
+                        f"iterations (output_config mode)"
+                    )
+
+                return message_dict
+
             # HINT-mode validation + bounded-timeout fallback (issue #820).
             # If a handler (currently only ClaudeHandler) signaled HINT mode,
             # validate the final response against the schema. If it fails to
@@ -1533,7 +1629,7 @@ async def _provider_agentic_loop(
                     )
                 raise
 
-            # Native synthetic-tool fallback (Maya regression, v2.0.0). When
+            # Native synthetic-tool fallback (synthetic-tool decline regression, v2.0.0). When
             # the native synthetic-tool path is active and the model
             # declined to call ``__mesh_format_response`` (returning plain
             # text instead), recover by retrying once with native
@@ -1717,6 +1813,13 @@ async def _provider_agentic_loop_stream(
         synthetic_tool,
         synthetic_output_type_name,
     ) = _pop_mesh_synthetic_format_flags(model_params)
+
+    # Native ``output_config`` state — defense-in-depth strip. Streaming +
+    # structured output intentionally routes away from ``output_config``
+    # (Phase C), so these sentinels should never be set on this path. Pop
+    # them anyway so a future misconfiguration can't leak the sentinel keys
+    # into the wire request.
+    _pop_mesh_output_config_flags(model_params)
 
     total_input_tokens = 0
     total_output_tokens = 0
@@ -1947,7 +2050,7 @@ async def _provider_agentic_loop_stream(
                 fallback_base_args = {
                     k: v
                     for k, v in completion_args.items()
-                    if k not in ("tools", "stream", "stream_options")
+                    if k not in ("tools", "tool_choice", "stream", "stream_options")
                 }
                 try:
                     final_content, _msg, _resp = await _maybe_run_hint_fallback(
@@ -2183,6 +2286,8 @@ def llm_provider(
 
         def _prepare_provider_request(
             request: MeshLlmRequest,
+            *,
+            streaming: bool = False,
         ) -> tuple[
             str,
             list[dict[str, Any]],
@@ -2201,6 +2306,12 @@ def llm_provider(
             format the system prompt via the vendor handler when tools are
             present. Centralizing keeps both paths in lock-step so a future
             change to one cannot drift from the other.
+
+            The ``streaming`` flag is plumbed through to
+            ``handler.apply_structured_output`` so vendors that have
+            synthetic-tool injection (Claude native) route to HINT mode for
+            streaming — synthetic-tool produces a single discrete tool call
+            that doesn't actually stream as chunks.
 
             Returns a 5-tuple:
                 ``(effective_model, messages, clean_tools, tool_endpoints,
@@ -2259,7 +2370,11 @@ def llm_provider(
                 # Include messages so handler can modify system prompt (e.g., HINT mode injection)
                 model_params_copy["messages"] = request.messages
                 handler.apply_structured_output(
-                    output_schema, output_type_name, model_params_copy
+                    output_schema,
+                    output_type_name,
+                    model_params_copy,
+                    streaming=streaming,
+                    model=effective_model,
                 )
                 # Pull back the (possibly-replaced) messages list before
                 # popping the key off the model_params dict — the native
@@ -2340,7 +2455,7 @@ def llm_provider(
                 clean_tools,
                 tool_endpoints,
                 model_params_copy,
-            ) = _prepare_provider_request(request)
+            ) = _prepare_provider_request(request, streaming=False)
             effective_tools = clean_tools if clean_tools is not None else request.tools
 
             if tool_endpoints:
@@ -2399,6 +2514,15 @@ def llm_provider(
                 synthetic_tool,
                 synthetic_output_type_name,
             ) = _pop_mesh_synthetic_format_flags(completion_args)
+
+            # Native ``output_config`` state (mirrors the agentic loop).
+            # Pop the sentinels so they never leak into the wire request;
+            # ``output_config_mode`` gates the synthetic-fallback skip below.
+            (
+                output_config_mode,
+                output_config_schema,
+                output_config_output_type_name,
+            ) = _pop_mesh_output_config_flags(completion_args)
 
             # Inject synthetic format tool when handler signaled it. Same
             # logic as the agentic loop. Mirrors the no-tools→one-iteration
@@ -2483,36 +2607,95 @@ def llm_provider(
                 no_tool_calls = not (
                     hasattr(message, "tool_calls") and message.tool_calls
                 )
-                if hint_mode and no_tool_calls:
-                    # Build base args for the fallback — strip ``tools`` since
-                    # the fallback only fires AFTER the model gave a final
-                    # answer with no tool_calls. Keeping ``tools`` would
-                    # re-introduce the ``response_format + tools`` combo that
-                    # caused the original silent hang (issue #820). Bounded
-                    # timeout is still there as defense-in-depth, but stripping
-                    # tools removes the deadlock vector entirely.
-                    fallback_base_args = {
-                        k: v for k, v in completion_args.items() if k != "tools"
-                    }
-                    try:
-                        final_content, message, response = await _maybe_run_hint_fallback(
-                            final_content=final_content,
-                            message=message,
-                            response=response,
-                            base_completion_args=fallback_base_args,
-                            hint_mode=hint_mode,
-                            hint_schema=hint_schema,
-                            hint_fallback_timeout=hint_fallback_timeout,
-                            hint_output_type_name=hint_output_type_name,
-                            fallback_logger=logger,
-                            vendor=vendor,
-                        )
-                    except Exception as fallback_err:
-                        logger.error(
-                            "Claude HINT fallback to response_format failed: %s",
-                            fallback_err,
-                        )
-                        raise
+                if no_tool_calls:
+                    # Native ``output_config`` short-circuit (Anthropic Sonnet
+                    # 4.5+ / Opus 4.1+). Anthropic enforces the schema via
+                    # ``output_config.format`` and returns the structured JSON
+                    # answer as a plain TextBlock — synthetic-fallback would
+                    # be wrong (no synthetic tool injected) and HINT-fallback
+                    # is mutually exclusive with output_config mode. Defense-
+                    # in-depth: WARN if the text doesn't parse against the
+                    # schema, but don't retry.
+                    if output_config_mode:
+                        if (
+                            output_config_schema is not None
+                            and final_content
+                            and not _hint_response_parses(
+                                final_content, output_config_schema
+                            )
+                        ):
+                            logger.warning(
+                                "Native output_config mode for '%s': returned "
+                                "text did not parse against the schema "
+                                "(Anthropic's output_config.format normally "
+                                "enforces this) — surfacing the raw text to "
+                                "the caller without retry",
+                                output_config_output_type_name,
+                            )
+                        # Fall through to the message_dict construction below
+                        # (skip both HINT and synthetic fallbacks).
+                    else:
+                        # Build base args for the fallback — strip ``tools`` AND
+                        # ``tool_choice`` since the fallback only fires AFTER the
+                        # model gave a final answer with no tool_calls. Keeping
+                        # ``tools`` would re-introduce the ``response_format +
+                        # tools`` combo that caused the original silent hang
+                        # (issue #820); ``tool_choice`` has no meaning once tools
+                        # are gone and would be rejected by some vendors. Mirrors
+                        # the agentic-loop fallback site.
+                        fallback_base_args = {
+                            k: v
+                            for k, v in completion_args.items()
+                            if k not in ("tools", "tool_choice")
+                        }
+                        if hint_mode:
+                            try:
+                                final_content, message, response = await _maybe_run_hint_fallback(
+                                    final_content=final_content,
+                                    message=message,
+                                    response=response,
+                                    base_completion_args=fallback_base_args,
+                                    hint_mode=hint_mode,
+                                    hint_schema=hint_schema,
+                                    hint_fallback_timeout=hint_fallback_timeout,
+                                    hint_output_type_name=hint_output_type_name,
+                                    fallback_logger=logger,
+                                    vendor=vendor,
+                                )
+                            except Exception as fallback_err:
+                                logger.error(
+                                    "Claude HINT fallback to response_format failed: %s",
+                                    fallback_err,
+                                )
+                                raise
+
+                        # Native synthetic-tool fallback (mirrors the agentic loop
+                        # post-HINT block). Fires when the native synthetic-tool
+                        # path is active and the model declined to call
+                        # ``__mesh_format_response`` (returning plain text). The
+                        # two fallbacks are mutually exclusive in practice — HINT
+                        # mode and synthetic-tool mode are alternative dispatch
+                        # shapes — so the early-returns in each helper gate this
+                        # correctly.
+                        try:
+                            final_content, message, response = await _maybe_run_synthetic_fallback(
+                                final_content=final_content,
+                                message=message,
+                                response=response,
+                                base_completion_args=fallback_base_args,
+                                synthetic_tool_name=synthetic_tool_name,
+                                synthetic_tool=synthetic_tool,
+                                fallback_timeout=hint_fallback_timeout,
+                                fallback_logger=logger,
+                                vendor=vendor,
+                            )
+                        except Exception as fallback_err:
+                            logger.error(
+                                "Native synthetic-tool fallback to response_format "
+                                "failed: %s",
+                                fallback_err,
+                            )
+                            raise
 
                 message_dict: dict[str, Any] = {
                     "role": message.role,
@@ -2583,7 +2766,7 @@ def llm_provider(
                 clean_tools,
                 tool_endpoints,
                 model_params_copy,
-            ) = _prepare_provider_request(request)
+            ) = _prepare_provider_request(request, streaming=True)
             effective_tools = (
                 clean_tools if clean_tools is not None else request.tools
             )
@@ -2633,21 +2816,14 @@ def llm_provider(
             # Strip internal mesh control flags before they reach LiteLLM
             # (mirrors the buffered legacy path). Captured values are not
             # used here for HINT mode — HINT validation cannot be applied
-            # to a live stream without buffering. The synthetic-format-tool
-            # path DOES need buffering: we recognize the synthetic call
-            # AFTER merging tool_call deltas and emit one final content
-            # chunk.
+            # to a live stream without buffering. Synthetic-format flags are
+            # also stripped: per Phase C, streaming + structured output
+            # routes to HINT mode in ClaudeHandler (synthetic-tool injection
+            # is buffered-only), so these flags should not be set on this
+            # path; the strip is defense-in-depth against misconfiguration.
             _pop_mesh_hint_flags(completion_args)
-            (
-                synthetic_tool_name,
-                synthetic_tool,
-                _synthetic_output_type_name,
-            ) = _pop_mesh_synthetic_format_flags(completion_args)
-
-            if synthetic_tool_name and synthetic_tool:
-                completion_args["tools"] = _inject_synthetic_format_tool(
-                    completion_args.get("tools"), synthetic_tool, completion_args
-                )
+            _pop_mesh_synthetic_format_flags(completion_args)
+            _pop_mesh_output_config_flags(completion_args)
 
             existing_stream_opts = completion_args.get("stream_options") or {}
             completion_args["stream"] = True
@@ -2689,7 +2865,6 @@ def llm_provider(
             chunks: list[Any] = []
             stream_completed = False
             saw_tool_call = False
-            buffer_for_synthetic = bool(synthetic_tool_name)
             try:
                 async for chunk in stream_iter:
                     chunks.append(chunk)
@@ -2700,10 +2875,6 @@ def llm_provider(
                         # Tool-call deltas continue arriving; suppress text
                         # to avoid interleaving partial text with the JSON
                         # we'll emit at end-of-stream.
-                        continue
-                    if buffer_for_synthetic:
-                        # Synthetic-format mode: buffer everything; emit one
-                        # JSON chunk after merge.
                         continue
                     text = MeshLlmAgent._extract_text_from_chunk(chunk)
                     if text:
@@ -2719,59 +2890,6 @@ def llm_provider(
                             logger.debug(
                                 f"provider stream (no-tools): aclose() failed: {e}"
                             )
-
-            # Synthetic-format-tool emission: merge tool calls, find synthetic,
-            # emit its arguments as one chunk. Best-effort fallback: if the
-            # synthetic tool was missing or merge failed, emit any buffered
-            # text instead so the consumer always sees something.
-            if buffer_for_synthetic and synthetic_tool_name:
-                merged = MeshLlmAgent._merge_streamed_tool_calls(chunks)
-                synthetic_args: str | None = None
-                non_synthetic_calls: list[str] = []
-                for tc in merged:
-                    name = tc["function"]["name"]
-                    if name == synthetic_tool_name:
-                        synthetic_args = tc["function"]["arguments"] or "{}"
-                        break
-                    non_synthetic_calls.append(name)
-                if synthetic_args is not None:
-                    yield synthetic_args
-                else:
-                    # Two miss shapes:
-                    #  (a) the model emitted a non-synthetic tool_call (no-tools
-                    #      path can't execute it — surface that explicitly)
-                    #  (b) the model didn't call any tool — fall back to text
-                    if non_synthetic_calls:
-                        if logger:
-                            logger.warning(
-                                "LLM provider %s_stream: synthetic format injection — "
-                                "model emitted real tool_call(s) %r instead of '%s' "
-                                "on no-tools path; tool execution unavailable on "
-                                "this branch — falling back to text content",
-                                func.__name__,
-                                non_synthetic_calls,
-                                synthetic_tool_name,
-                            )
-                    else:
-                        if logger:
-                            logger.warning(
-                                "LLM provider %s_stream: synthetic format tool '%s' "
-                                "expected but not present in stream — emitting "
-                                "buffered text as best-effort fallback",
-                                func.__name__,
-                                synthetic_tool_name,
-                            )
-                    fallback_text = MeshLlmAgent._join_text_from_chunks(chunks)
-                    if fallback_text:
-                        yield fallback_text
-                    elif non_synthetic_calls:
-                        # Empty buffer + we know real tool_calls happened. Emit
-                        # an explanatory chunk so the consumer sees SOMETHING
-                        # rather than a silent empty stream.
-                        yield (
-                            "(model did not produce structured output; received "
-                            "tool_call but no-tools path can't execute it)"
-                        )
 
             usage = MeshLlmAgent._extract_usage_from_chunks(chunks)
             iter_model = MeshLlmAgent._extract_model_from_chunks(chunks)

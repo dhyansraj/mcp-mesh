@@ -40,6 +40,8 @@ from typing import Any
 
 import httpx
 
+from ._native_client_helpers import resolve_request_timeout
+
 logger = logging.getLogger(__name__)
 
 # Model prefixes that route through this adapter.
@@ -481,28 +483,16 @@ def _build_create_kwargs(
     request_params = dict(request_params)
 
     # --- request_timeout → timeout rename -----------------------------------
-    # helpers._run_response_format_retry sets request_timeout=<fallback> on
-    # the fallback retry to bound a slow API. The OpenAI SDK uses ``timeout=``.
-    # Caller-supplied ``timeout=`` wins if both are present — but log either
-    # way so the actual decision is visible to --debug runs (otherwise the
-    # silently-dropped case looks identical to "translation never ran" and is
-    # impossible to diagnose).
-    request_timeout = request_params.pop("request_timeout", None)
-    if request_timeout is not None:
-        if "timeout" not in request_params:
-            request_params["timeout"] = request_timeout
-            logger.debug(
-                "Native OpenAI adapter: translated request_timeout=%ss "
-                "→ openai SDK timeout",
-                request_timeout,
-            )
-        else:
-            logger.debug(
-                "Native OpenAI adapter: dropped request_timeout=%ss "
-                "(caller-supplied timeout=%ss wins)",
-                request_timeout,
-                request_params["timeout"],
-            )
+    # Shared helper resolves caller's ``timeout`` / ``request_timeout`` into
+    # a single value the OpenAI SDK accepts under ``timeout=`` (seconds, no
+    # unit conversion).
+    resolved_timeout = resolve_request_timeout(
+        request_params,
+        adapter_label="Native OpenAI adapter",
+        logger=logger,
+    )
+    if resolved_timeout is not None:
+        request_params["timeout"] = resolved_timeout
 
     create_kwargs: dict[str, Any] = {"model": _strip_prefix(model)}
 
@@ -568,7 +558,7 @@ def _adapt_response(raw: Any) -> _Response:
     # structurally distinct from ``content``. Surface as a typed exception so
     # the reason reaches the @mesh.llm consumer rather than collapsing into a
     # generic empty-response shape (which then trips Pydantic with an opaque
-    # validation error — Maya-class UX bug). Imported lazily to avoid a hard
+    # validation error — the refusal-text-leak class). Imported lazily to avoid a hard
     # dependency from this module on the engine errors package (helpers.py
     # imports adapter modules, so the engine→adapter direction is circular-
     # prone).
@@ -841,6 +831,10 @@ def is_fallback_logged() -> bool:
 # providers receiving the same litellm-only kwarg every request would
 # otherwise flood the log with identical messages (unbounded growth
 # pre-fix).
+#
+# Test reset hook is the module-level _reset_unsupported_kwargs_dedupe()
+# function below — DRY-up candidate (mirror functions live in
+# anthropic_native + gemini_native) when a 4th adapter shows up.
 _logged_unsupported_kwargs: set[str] = set()
 
 
