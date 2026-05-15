@@ -37,11 +37,14 @@ from typing import Any
 import httpx
 
 from .._structured_output_helpers import (
+    _ANTHROPIC_OUTPUT_SCHEMA_REJECTED_KEYS,
     append_synthetic_system_instruction,
     build_synthetic_tool_choice,
+    filter_anthropic_output_schema as _filter_anthropic_output_schema,
     is_synthetic_tool_in_list,
     schema_to_synthetic_tool,
 )
+from ._native_client_helpers import resolve_request_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -723,8 +726,71 @@ _ANTHROPIC_PASSTHROUGH_KWARGS = frozenset(
         "extra_query",
         "extra_body",
         "timeout",
+        # Native structured-output primitive on Sonnet 4.5+ / Opus 4.1+. The
+        # adapter sets this itself (translated from ``response_format``); the
+        # passthrough entry exists so future callers can forward an explicit
+        # ``output_config`` (e.g. with ``effort`` for Opus reasoning) without
+        # tripping the WARN-loop.
+        "output_config",
     ]
 )
+
+
+# ---------------------------------------------------------------------------
+# Native ``output_config`` (structured output) — model gating + schema filter
+# ---------------------------------------------------------------------------
+# Sonnet 4.5+ / Opus 4.1+ accept Anthropic's first-class
+# ``output_config.format`` primitive. The wire shape is one transform shallower
+# than LiteLLM's ``response_format``:
+#
+#   output_config = {"format": {"type": "json_schema", "schema": {...}}}
+#
+# Older models (Haiku, Sonnet 3.x / 4.0, Opus 3.x) reject the field, so we
+# fall through to the existing synthetic-tool injection path for those.
+# LiteLLM uses a substring allow-list at transformation.py:822-830; we mirror
+# it plus the Sonnet 4.6 / Opus 4.5 / 4.7 releases. Both dash and dot version
+# forms are accepted (callers pass both in the wild); substring (not prefix)
+# match so Bedrock model ids (``anthropic.claude-sonnet-4-6-20260301-v1:0``)
+# and date-pinned variants are covered.
+_NATIVE_OUTPUT_FORMAT_MODEL_SUBSTRINGS = frozenset(
+    {
+        "sonnet-4-5",
+        "sonnet-4.5",
+        "sonnet-4-6",
+        "sonnet-4.6",
+        "opus-4-1",
+        "opus-4.1",
+        "opus-4-5",
+        "opus-4.5",
+        "opus-4-7",
+        "opus-4.7",
+    }
+)
+
+
+def _supports_native_output_format(model: str | None) -> bool:
+    """True when ``model`` accepts the native ``output_config.format`` field.
+
+    Substring match (not prefix) because model ids are date-pinned
+    (``claude-sonnet-4-6-20260301``) and Bedrock prefixes the SDK id with
+    ``anthropic.``. Both dash (``-``) and dot (``.``) versions are accepted
+    because callers pass both forms in the wild.
+
+    Haiku and pre-4.5 Sonnet / pre-4.1 Opus models are intentionally NOT in
+    this set — they route through the existing synthetic-tool path.
+    """
+    if not model:
+        return False
+    model_lower = model.lower()
+    return any(s in model_lower for s in _NATIVE_OUTPUT_FORMAT_MODEL_SUBSTRINGS)
+
+
+# ``_filter_anthropic_output_schema`` (which strips ``maxItems`` / ``minItems``
+# — the JSON-Schema fields Anthropic's native ``output_config.format`` rejects
+# but the synthetic-tool path accepts silently) is now imported from
+# ``_structured_output_helpers`` so both this adapter AND ``ClaudeHandler``
+# stamp the same post-filter schema. Local name preserved for the existing
+# test imports (``anthropic_native._filter_anthropic_output_schema``).
 
 # Keys explicitly handled (translated, consumed, or routed) inside this adapter
 # — the WARN filter must not flag these as "dropped". Everything in
@@ -826,19 +892,45 @@ def _build_create_kwargs(
             )
         else:
             schema = _extract_schema_from_response_format(response_format)
-            if schema is not None:
-                synthetic_tool = schema_to_synthetic_tool(schema)
-                request_params["tools"] = list(raw_tools or []) + [synthetic_tool]
+            if schema is not None and _supports_native_output_format(model) and not stream:
+                # Native output_config branch — Sonnet 4.5+ / Opus 4.1+
+                # accept ``output_config.format`` as a first-class
+                # structured-output primitive. Cheaper than the synthetic-
+                # tool path (no extra tool slot, no system-instruction
+                # addendum, no agentic-loop tool_use→JSON unwrap) and
+                # enforced by the API rather than by a prompt hint.
+                # Streaming is intentionally NOT routed here —
+                # ``client.messages.stream`` requires separate wire-up
+                # (deferred to a follow-up PR); the handler at
+                # claude_handler.py:426 should have already forced HINT
+                # mode for stream=True, but the guard above is a safety
+                # net. ``maxItems`` / ``minItems`` are stripped because
+                # native output_config rejects them
+                # (Anthropic-cookbook issue #19444); the synthetic-tool
+                # path accepts them silently, so the strip is scoped to
+                # this branch.
+                filtered_schema = _filter_anthropic_output_schema(schema)
+                request_params["output_config"] = {
+                    "format": {
+                        "type": "json_schema",
+                        "schema": filtered_schema,
+                    }
+                }
+                logger.debug(
+                    "Native Anthropic adapter: model %r → "
+                    "output_config.format (native structured output)",
+                    model,
+                )
+            elif schema is not None:
                 caller_tool_choice = request_params.get("tool_choice")
-                if caller_tool_choice is None:
-                    request_params["tool_choice"] = build_synthetic_tool_choice(
-                        real_tools_present=bool(raw_tools),
-                    )
-                elif caller_tool_choice == "none":
-                    # Caller signaled "no tools this turn"; honor it. The
-                    # tool_choice handler below will drop tools entirely
-                    # (including the synthetic). WARN so the inconsistency
-                    # is visible — structured output won't be enforced.
+                if caller_tool_choice == "none":
+                    # Caller signaled "no tools this turn"; structured output
+                    # cannot be enforced (the tool_choice handler below will
+                    # drop tools entirely). Skip synthetic-tool append AND
+                    # system-instruction augmentation — they would be wasted
+                    # work (synthetic tool dropped downstream, system
+                    # instruction references an unreachable tool). WARN so
+                    # the inconsistency is visible.
                     logger.warning(
                         "Native Anthropic adapter: response_format "
                         "translation requires the synthetic tool to be "
@@ -846,22 +938,30 @@ def _build_create_kwargs(
                         "honoring caller's tool_choice. Structured output "
                         "not enforced."
                     )
-                # else: caller's tool_choice wins (e.g. forced to a real
-                # tool mid-agentic-loop). Synthetic is still appended so the
-                # model has the option on the next iteration.
-
-                # System instruction (bare-string only — the handler covers
-                # the content-block-list / prompt-cache shape upstream).
-                if isinstance(system_value, str) or system_value is None:
-                    system_value = append_synthetic_system_instruction(
-                        system_value
-                    )
                 else:
-                    logger.debug(
-                        "Native Anthropic adapter: skipped system-"
-                        "instruction augmentation (system is content-block "
-                        "list; handler-side path should have augmented)"
-                    )
+                    synthetic_tool = schema_to_synthetic_tool(schema)
+                    request_params["tools"] = list(raw_tools or []) + [synthetic_tool]
+                    if caller_tool_choice is None:
+                        request_params["tool_choice"] = build_synthetic_tool_choice(
+                            real_tools_present=bool(raw_tools),
+                        )
+                    # else: caller's tool_choice wins (e.g. forced to a real
+                    # tool mid-agentic-loop). Synthetic is still appended so
+                    # the model has the option on the next iteration.
+
+                    # System instruction (bare-string only — the handler
+                    # covers the content-block-list / prompt-cache shape
+                    # upstream).
+                    if isinstance(system_value, str) or system_value is None:
+                        system_value = append_synthetic_system_instruction(
+                            system_value
+                        )
+                    else:
+                        logger.debug(
+                            "Native Anthropic adapter: skipped system-"
+                            "instruction augmentation (system is content-block "
+                            "list; handler-side path should have augmented)"
+                        )
             else:
                 logger.debug(
                     "Native Anthropic adapter: response_format present but "
@@ -870,27 +970,16 @@ def _build_create_kwargs(
                 )
 
     # --- request_timeout → timeout rename -----------------------------------
-    # helpers._run_response_format_retry sets request_timeout=<fallback> on
-    # the fallback retry to bound a slow API. Caller-supplied timeout=
-    # wins if both are present — but log either way so the actual decision
-    # is visible to --debug runs (otherwise the silently-dropped case looks
-    # identical to "translation never ran" and is impossible to diagnose).
-    request_timeout = request_params.pop("request_timeout", None)
-    if request_timeout is not None:
-        if "timeout" not in request_params:
-            request_params["timeout"] = request_timeout
-            logger.debug(
-                "Native Anthropic adapter: translated request_timeout=%ss "
-                "→ anthropic SDK timeout",
-                request_timeout,
-            )
-        else:
-            logger.debug(
-                "Native Anthropic adapter: dropped request_timeout=%ss "
-                "(caller-supplied timeout=%ss wins)",
-                request_timeout,
-                request_params["timeout"],
-            )
+    # Shared helper resolves caller's ``timeout`` / ``request_timeout`` into
+    # a single value the Anthropic SDK accepts under ``timeout=`` (seconds,
+    # no unit conversion).
+    resolved_timeout = resolve_request_timeout(
+        request_params,
+        adapter_label="Native Anthropic adapter",
+        logger=logger,
+    )
+    if resolved_timeout is not None:
+        request_params["timeout"] = resolved_timeout
 
     converted_messages = _convert_messages_to_anthropic(non_system)
     converted_tools = _convert_tools(request_params.get("tools")) or []
@@ -1250,6 +1339,10 @@ def is_fallback_logged() -> bool:
 # unique kwarg name across the lifetime of the process — high-volume
 # providers receiving the same litellm-only kwarg every request would
 # otherwise flood the log with identical messages (unbounded growth).
+#
+# Test reset hook is the module-level _reset_unsupported_kwargs_dedupe()
+# function below — DRY-up candidate (mirror functions live in
+# openai_native + gemini_native) when a 4th adapter shows up.
 _logged_unsupported_kwargs: set[str] = set()
 
 

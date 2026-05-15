@@ -40,6 +40,7 @@ from pydantic import BaseModel
 from .base_provider_handler import (
     BaseProviderHandler,
     has_media_params,
+    make_schema_strict,
     resolve_hint_fallback_timeout,
     sanitize_schema_for_structured_output,
 )
@@ -63,6 +64,7 @@ from .._structured_output_helpers import (  # noqa: F401
     SYNTHETIC_FORMAT_TOOL_DESCRIPTION,
     SYNTHETIC_FORMAT_TOOL_NAME,
     append_synthetic_system_instruction,
+    filter_anthropic_output_schema,
     schema_to_synthetic_tool,
 )
 
@@ -374,38 +376,57 @@ class ClaudeHandler(BaseProviderHandler):
         output_schema: dict[str, Any],
         output_type_name: str | None,
         model_params: dict[str, Any],
+        *,
+        streaming: bool = False,
+        model: str | None = None,
     ) -> dict[str, Any]:
         """
         Apply Claude-specific structured output for mesh delegation.
 
-        Two paths, selected by ``has_native()``:
+        Three paths, selected by model + ``has_native()`` + ``streaming``:
 
-        - Native Anthropic SDK path (issue #834, default when the
-          ``anthropic`` SDK is importable): Append a synthetic
-          ``__mesh_format_response`` tool with the schema as
-          ``input_schema`` and let Claude pick between real tools and the
-          synthetic tool with ``tool_choice="auto"``. The agentic loop
-          terminates when the synthetic tool is called. Mirrors the TS
-          (Vercel AI SDK) and Java (Spring AI) runtimes.
+        - Native ``output_config`` path (Sonnet 4.5+ / Opus 4.1+, buffered,
+          ``has_native()``): Set ``response_format`` directly in
+          ``model_params``; the native adapter's
+          ``_build_create_kwargs`` translates it to Anthropic's first-class
+          ``output_config.format`` primitive. No synthetic-tool injection,
+          no extra tool slot, no system-prompt addendum — the API enforces
+          the schema directly. Stamps ``_mesh_output_config_mode = True``
+          so the agentic loop knows to skip synthetic-fallback recovery
+          (the returned TextBlock IS the structured JSON).
+
+        - Native synthetic-tool path (issue #834, older Claude models
+          buffered, or any model when ``output_config`` is unavailable):
+          Append a synthetic ``__mesh_format_response`` tool with the
+          schema as ``input_schema`` and let Claude pick between real
+          tools and the synthetic tool with ``tool_choice="auto"``. The
+          agentic loop terminates when the synthetic tool is called.
+          Mirrors the TS (Vercel AI SDK) and Java (Spring AI) runtimes.
 
         - LiteLLM path (set ``MCP_MESH_NATIVE_LLM=0`` to force, or used
-          automatically when the SDK is missing): HINT mode (prompt
-          injection). Claude's native ``response_format`` path silently
-          hangs (600s+) on certain content + tools combinations (issue
-          #820), so we inject schema instructions into the system prompt
-          and let the agentic loop validate the final response. If
-          validation fails, the loop falls back to a bounded-timeout
-          ``response_format`` call.
+          automatically when the SDK is missing, OR for streaming on any
+          model): HINT mode (prompt injection). Claude's native
+          ``response_format`` path silently hangs (600s+) on certain
+          content + tools combinations (issue #820), so we inject schema
+          instructions into the system prompt and let the agentic loop
+          validate the final response. If validation fails, the loop
+          falls back to a bounded-timeout ``response_format`` call.
 
         Set ``MCP_MESH_CLAUDE_FORCE_RESPONSE_FORMAT=true`` to revert the
         LiteLLM path to native response_format-first (delegates to base
-        impl). The flag is a no-op on the native path — synthetic-tool
-        mode is always used there.
+        impl). The flag is a no-op on the native paths — synthetic-tool
+        and ``output_config`` modes are the canonical native behavior.
 
         Args:
             output_schema: JSON schema dict from consumer
             output_type_name: Name of the output type (e.g., "TripPlan")
             model_params: Current model parameters dict (will be modified)
+            streaming: When True, force HINT mode even when the native SDK is
+                available. See note below.
+            model: Effective LiteLLM-style model id (e.g.
+                ``anthropic/claude-sonnet-4-6``). Used to gate the native
+                ``output_config`` branch — Sonnet 4.5+ / Opus 4.1+ accept the
+                primitive; older models route to synthetic-tool injection.
 
         Returns:
             Modified model_params with mode-specific flags + injected
@@ -413,10 +434,31 @@ class ClaudeHandler(BaseProviderHandler):
         """
         sanitized_schema = sanitize_schema_for_structured_output(output_schema)
 
-        # Native path: use synthetic-tool injection (matches TS/Java).
-        # Decided here so the loop doesn't have to re-check the env flag
-        # on every iteration; one resolution at request-prep time.
-        if self.has_native():
+        # Streaming + structured output prefers HINT mode regardless of native
+        # SDK availability. Synthetic-tool injection produces a single forced
+        # tool call that arrives discrete (not chunked) — it doesn't actually
+        # stream. HINT mode emits JSON as plain text which flows naturally
+        # through stream chunks; the existing HINT-fallback machinery handles
+        # parse failures.
+        if self.has_native() and not streaming:
+            # Sonnet 4.5+ / Opus 4.1+ accept Anthropic's first-class
+            # ``output_config.format`` primitive. Cheaper than the synthetic-
+            # tool path (no extra tool slot, no system-prompt addendum, no
+            # agentic-loop tool_use→JSON unwrap) and enforced by the API
+            # rather than by a tool/prompt hint. The native adapter's
+            # ``_build_create_kwargs`` translates ``response_format`` →
+            # ``output_config`` for allow-listed models; we stamp
+            # ``_mesh_output_config_mode`` so the agentic loop knows the
+            # returned TextBlock IS the structured JSON answer (no
+            # synthetic-tool unwrap, no synthetic-fallback recovery).
+            from _mcp_mesh.engine.native_clients.anthropic_native import (
+                _supports_native_output_format,
+            )
+
+            if _supports_native_output_format(model):
+                return self._apply_native_output_config(
+                    sanitized_schema, output_type_name, model_params
+                )
             return self._apply_native_synthetic_format(
                 sanitized_schema, output_type_name, model_params
             )
@@ -435,7 +477,7 @@ class ClaudeHandler(BaseProviderHandler):
                 "native response_format (base behavior)"
             )
             return super().apply_structured_output(
-                output_schema, output_type_name, model_params
+                output_schema, output_type_name, model_params, streaming=streaming
             )
 
         # Inject HINT instructions into the first system message.
@@ -447,7 +489,27 @@ class ClaudeHandler(BaseProviderHandler):
         for msg in messages:
             if msg.get("role") == "system":
                 base_content = msg.get("content", "")
-                msg["content"] = base_content + self._build_hint_text(sanitized_schema)
+                hint_text = self._build_hint_text(sanitized_schema)
+                # Tolerate string OR content-block list (post-prompt-cache).
+                # Mirrors the synthetic-tool injection site below: a string
+                # concatenates; a list gets a NEW text block appended so the
+                # original blocks' cache_control is preserved.
+                if isinstance(base_content, str):
+                    msg["content"] = base_content + hint_text
+                elif isinstance(base_content, list):
+                    msg["content"] = list(base_content) + [
+                        {"type": "text", "text": hint_text}
+                    ]
+                else:
+                    # Unknown content shape — defensive coerce to string so
+                    # the model still sees the schema. Log so the unexpected
+                    # shape surfaces in debugging.
+                    logger.debug(
+                        "Claude HINT injection: unexpected system content "
+                        "type %s; coercing to string",
+                        type(base_content).__name__,
+                    )
+                    msg["content"] = str(base_content) + hint_text
                 hint_block_inserted = True
                 break
 
@@ -606,6 +668,82 @@ class ClaudeHandler(BaseProviderHandler):
         logger.info(
             "Claude native synthetic-tool mode for '%s' (mesh delegation; "
             "tool_choice=auto when real tools present, forced otherwise)",
+            output_type_name or "Response",
+        )
+        return model_params
+
+    def _apply_native_output_config(
+        self,
+        sanitized_schema: dict[str, Any],
+        output_type_name: str | None,
+        model_params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Apply structured output via Anthropic's native ``output_config``.
+
+        Sonnet 4.5+ / Opus 4.1+ accept ``output_config.format`` as a first-
+        class structured-output primitive. We forward the schema by setting
+        ``response_format`` (LiteLLM shape); the native Anthropic adapter's
+        ``_build_create_kwargs`` translates it to the ``output_config`` wire
+        shape for allow-listed models. No synthetic tool is injected, no
+        ``__mesh_format_response`` system addendum is added, and no extra
+        tool slot is consumed. The API enforces the schema directly and
+        returns the structured answer as a plain ``TextBlock``.
+
+        Stamps ``_mesh_output_config_mode = True`` (and the schema) as
+        sentinels so ``_provider_agentic_loop``:
+          1. Pops them before reaching ``messages.create``.
+          2. Skips synthetic-fallback recovery on the "no tool calls"
+             branch — the text content IS the structured answer.
+
+        Schema must be strict-ified: Anthropic's ``output_config`` endpoint
+        requires ``additionalProperties: false`` on every object-typed schema
+        node (unlike the synthetic-tool path, where tool ``input_schema`` is
+        more lenient). ``add_all_required=False`` matches Anthropic's
+        looser ``required`` semantics — only the ``additionalProperties``
+        injection is needed.
+
+        ``maxItems`` / ``minItems`` are then stripped via
+        ``filter_anthropic_output_schema`` — Anthropic's native
+        ``output_config.format`` rejects those keys (issue #19444). The
+        adapter applies the same filter before placing the schema on the
+        wire; running it here too means ``_mesh_output_config_schema``
+        matches the on-wire shape exactly, so the loop's defense-in-depth
+        parse check doesn't WARN about responses that violate maxItems /
+        minItems constraints Anthropic never enforced.
+        """
+        strict_schema = make_schema_strict(sanitized_schema, add_all_required=False)
+        wire_schema = filter_anthropic_output_schema(strict_schema)
+        model_params["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": output_type_name or "Response",
+                "schema": wire_schema,
+                "strict": True,
+            },
+        }
+        model_params["_mesh_output_config_mode"] = True
+        model_params["_mesh_output_config_schema"] = wire_schema
+        model_params["_mesh_output_config_output_type_name"] = (
+            output_type_name or "Response"
+        )
+
+        # Defense-in-depth: ``output_config`` mode is mutually exclusive with
+        # HINT and synthetic-tool modes. Clear any leftover sentinels from a
+        # prior code path so the loop's recognition logic stays deterministic.
+        for stale_key in (
+            "_mesh_hint_mode",
+            "_mesh_hint_schema",
+            "_mesh_hint_fallback_timeout",
+            "_mesh_hint_output_type_name",
+            "_mesh_synthetic_format_tool_name",
+            "_mesh_synthetic_format_tool",
+            "_mesh_synthetic_format_output_type_name",
+        ):
+            model_params.pop(stale_key, None)
+
+        logger.info(
+            "Claude native output_config mode for '%s' (mesh delegation; "
+            "Anthropic enforces schema via output_config.format)",
             output_type_name or "Response",
         )
         return model_params

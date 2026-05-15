@@ -505,3 +505,71 @@ class TestHintMode:
             assert forbidden not in call_kwargs, (
                 f"{forbidden} must be stripped from completion_args"
             )
+
+    @pytest.mark.asyncio
+    async def test_hint_fallback_strips_tool_choice_from_base_args(self):
+        """Regression guard for PR #1013 review WARNING 2.
+
+        The streaming HINT fallback's ``fallback_base_args`` strip set must
+        include ``tool_choice`` (mirroring the buffered path at ~helpers.py:1609
+        and the legacy ``process_chat`` path at ~2649). Without this, the
+        fallback to ``response_format`` carries a stale ``tool_choice`` from
+        the synthetic-tool path, which has no meaning once ``tools`` is gone
+        and which some vendors reject.
+        """
+        from mesh.helpers import _provider_agentic_loop_stream
+
+        # JSON that does NOT parse against the schema so the fallback fires.
+        content_chunks = [
+            _chunk(content='not json at all'),
+            _chunk(usage={"prompt_tokens": 1, "completion_tokens": 1}),
+        ]
+        model_params = {
+            "_mesh_hint_mode": True,
+            "_mesh_hint_schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+            },
+            "_mesh_hint_fallback_timeout": 30,
+            "_mesh_hint_output_type_name": "Answer",
+            # Pre-existing tool_choice that the synthetic-tool path would
+            # have set — must NOT survive into the fallback args.
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "__mesh_format_response"},
+            },
+        }
+
+        captured: dict = {}
+
+        async def _capture_fallback(*, base_completion_args, **kwargs):
+            captured["base_completion_args"] = base_completion_args
+            # Return a passable answer so the loop doesn't blow up.
+            return '{"answer":"42"}', None, None
+
+        with patch("litellm.acompletion", new=AsyncMock()) as mock_ac, patch(
+            "mesh.helpers._maybe_run_hint_fallback",
+            new=AsyncMock(side_effect=_capture_fallback),
+        ) as mock_fb:
+            mock_ac.return_value = _FakeStream(content_chunks)
+
+            async for _ in _provider_agentic_loop_stream(
+                effective_model="anthropic/claude-3-5-haiku",
+                messages=[{"role": "user", "content": "answer"}],
+                tools=[],
+                tool_endpoints={},
+                model_params=model_params,
+                litellm_kwargs={},
+                vendor="anthropic",
+            ):
+                pass
+
+        assert mock_fb.await_count == 1
+        fb_args = captured["base_completion_args"]
+        # The critical assertions — all four keys must be stripped, matching
+        # the buffered-path strip set.
+        assert "tools" not in fb_args
+        assert "tool_choice" not in fb_args
+        assert "stream" not in fb_args
+        assert "stream_options" not in fb_args

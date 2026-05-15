@@ -54,8 +54,17 @@ def _make_gemini_response(
     model_version: str | None = "gemini-2.0-flash",
     prompt_tokens: int = 5,
     completion_tokens: int = 3,
+    prompt_block_reason: str | None = None,
+    prompt_block_reason_message: str | None = None,
+    empty_candidates: bool = False,
 ):
-    """Build a fake genai.GenerateContentResponse-like object."""
+    """Build a fake genai.GenerateContentResponse-like object.
+
+    ``prompt_block_reason`` / ``prompt_block_reason_message`` model the
+    prompt-level safety surface (``response.prompt_feedback.block_reason``).
+    ``empty_candidates`` simulates the typical prompt-block shape: zero
+    candidates emitted by the SDK.
+    """
     parts = []
     if text is not None:
         parts.append(SimpleNamespace(text=text, function_call=None))
@@ -82,10 +91,18 @@ def _make_gemini_response(
         candidates_token_count=completion_tokens,
         total_token_count=prompt_tokens + completion_tokens,
     )
+    prompt_feedback = None
+    if prompt_block_reason is not None:
+        prompt_feedback = SimpleNamespace(
+            block_reason=SimpleNamespace(name=prompt_block_reason),
+            block_reason_message=prompt_block_reason_message,
+            safety_ratings=[],
+        )
     return SimpleNamespace(
-        candidates=[candidate],
+        candidates=[] if empty_candidates else [candidate],
         usage_metadata=usage,
         model_version=model_version,
+        prompt_feedback=prompt_feedback,
     )
 
 
@@ -551,6 +568,126 @@ class TestSafetyBlockDetection:
             )
         assert exc_info.value.vendor == "gemini"
         assert exc_info.value.category == "SAFETY"
+
+
+# ---------------------------------------------------------------------------
+# Prompt-level safety-block detection (FOLLOW_UPS item 10)
+#
+# Gemini's second safety surface: ``response.prompt_feedback.block_reason``
+# fires when the *prompt* is filtered, with zero/empty candidates. The
+# candidate-level finish_reason path never executes — must be detected
+# independently and raised with ``category="PROMPT_BLOCK"``.
+# ---------------------------------------------------------------------------
+
+
+class TestPromptLevelSafetyBlockDetection:
+    @pytest.mark.parametrize(
+        "block_reason",
+        ["SAFETY", "OTHER", "BLOCKLIST", "PROHIBITED_CONTENT", "JAILBREAK"],
+    )
+    def test_adapt_response_raises_on_prompt_block_reason(self, block_reason):
+        """Empty candidates + ``prompt_feedback.block_reason`` set →
+        ``LLMRefusedError(category='PROMPT_BLOCK')``."""
+        raw = _make_gemini_response(
+            empty_candidates=True,
+            prompt_block_reason=block_reason,
+            prompt_block_reason_message=None,
+        )
+        with pytest.raises(LLMRefusedError) as exc_info:
+            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        err = exc_info.value
+        assert err.vendor == "gemini"
+        assert err.category == "PROMPT_BLOCK"
+        assert err.model == "gemini-2.0-flash"
+        # Synthesized refusal text carries the reason enum name.
+        assert block_reason in err.refusal_text
+
+    def test_adapt_response_uses_block_reason_message_when_present(self):
+        """Prefer the SDK-provided ``block_reason_message`` over synthesized text."""
+        raw = _make_gemini_response(
+            empty_candidates=True,
+            prompt_block_reason="OTHER",
+            prompt_block_reason_message="Prompt contained disallowed content.",
+        )
+        with pytest.raises(LLMRefusedError) as exc_info:
+            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        assert (
+            exc_info.value.refusal_text
+            == "Prompt contained disallowed content."
+        )
+        assert exc_info.value.category == "PROMPT_BLOCK"
+
+    def test_adapt_response_prompt_block_wins_over_candidate_block(self):
+        """If both surfaces fire, prompt-level wins (it's checked first,
+        matching the response causality order: prompt screening precedes
+        generation). The error carries ``category='PROMPT_BLOCK'``, not
+        the candidate-level finish_reason name."""
+        raw = _make_gemini_response(
+            text=None,
+            finish_reason="SAFETY",
+            finish_message="candidate-level block message",
+            prompt_block_reason="SAFETY",
+            prompt_block_reason_message="prompt-level block message",
+        )
+        with pytest.raises(LLMRefusedError) as exc_info:
+            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        err = exc_info.value
+        assert err.category == "PROMPT_BLOCK"
+        assert err.refusal_text == "prompt-level block message"
+
+    def test_adapt_response_unspecified_block_reason_does_not_raise(self):
+        """``BLOCKED_REASON_UNSPECIFIED`` is the enum sentinel for "not set" —
+        adapter must NOT treat it as a real block. Normal candidate flow wins."""
+        raw = _make_gemini_response(
+            text="hello",
+            finish_reason="STOP",
+            prompt_block_reason="BLOCKED_REASON_UNSPECIFIED",
+        )
+        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        assert out.choices[0].message.content == "hello"
+        assert out.choices[0].finish_reason == "stop"
+
+    def test_adapt_response_no_prompt_feedback_unchanged(self):
+        """Happy path: ``prompt_feedback=None`` → unchanged candidate flow."""
+        raw = _make_gemini_response(text="hello", finish_reason="STOP")
+        # _make_gemini_response leaves prompt_feedback=None by default.
+        assert raw.prompt_feedback is None
+        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        assert out.choices[0].message.content == "hello"
+        assert out.choices[0].finish_reason == "stop"
+
+    def test_adapt_response_prompt_block_carries_model_version(self):
+        raw = _make_gemini_response(
+            empty_candidates=True,
+            prompt_block_reason="SAFETY",
+            prompt_block_reason_message="blocked",
+            model_version="gemini-3-pro-preview",
+        )
+        with pytest.raises(LLMRefusedError) as exc_info:
+            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        # Resolved model from raw.model_version wins.
+        assert exc_info.value.model == "gemini-3-pro-preview"
+
+    @pytest.mark.asyncio
+    async def test_complete_propagates_prompt_block_LLMRefusedError(
+        self, monkeypatch
+    ):
+        """End-to-end: ``complete()`` MUST surface PROMPT_BLOCK refusal."""
+        monkeypatch.setenv("GOOGLE_API_KEY", "GAK-test")
+        api_resp = _make_gemini_response(
+            empty_candidates=True,
+            prompt_block_reason="SAFETY",
+            prompt_block_reason_message="prompt refused",
+        )
+        _patched_genai_client(api_resp, monkeypatch=monkeypatch)
+        with pytest.raises(LLMRefusedError) as exc_info:
+            await gemini_native.complete(
+                {"messages": [{"role": "user", "content": "Hi"}]},
+                model="gemini/gemini-2.0-flash",
+            )
+        assert exc_info.value.vendor == "gemini"
+        assert exc_info.value.category == "PROMPT_BLOCK"
+        assert exc_info.value.refusal_text == "prompt refused"
 
 
 # ---------------------------------------------------------------------------

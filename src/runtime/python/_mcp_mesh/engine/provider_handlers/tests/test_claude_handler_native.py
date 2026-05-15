@@ -533,6 +533,136 @@ class TestApplyStructuredOutputNative:
         assert new_messages[1] is original_user
 
 
+class TestApplyStructuredOutputStreamingRouting:
+    """Phase C: streaming + structured output prefers HINT mode regardless of
+    native SDK availability. Synthetic-tool injection is a single forced tool
+    call that doesn't actually stream — HINT mode is the natural fit for
+    streaming (schema in prompt → JSON text → flows through chunks).
+    """
+
+    def test_streaming_true_routes_to_hint_even_when_native_available(
+        self, _native_on
+    ):
+        """``streaming=True`` MUST take the HINT path on the native handler.
+
+        Without this routing, synthetic-tool injection would fire and emit a
+        single discrete tool_use block — defeating the point of streaming.
+        """
+        handler = ClaudeHandler()
+        params: dict = {
+            "messages": [{"role": "system", "content": "You are helpful."}]
+        }
+        result = handler.apply_structured_output(
+            _trip_schema(), "Trip", params, streaming=True
+        )
+
+        # HINT sentinels stamped (so the streaming HINT fallback can fire).
+        assert result["_mesh_hint_mode"] is True
+        assert result["_mesh_hint_schema"] is not None
+        assert result["_mesh_hint_output_type_name"] == "Trip"
+        # Synthetic-tool sentinels MUST NOT be present.
+        assert "_mesh_synthetic_format_tool" not in result
+        assert "_mesh_synthetic_format_tool_name" not in result
+        # response_format MUST NOT leak through (issue #820 silent hang).
+        assert "response_format" not in result
+
+    def test_streaming_false_default_uses_synthetic_on_native(self, _native_on):
+        """Default ``streaming=False`` keeps the existing native behavior:
+        synthetic-tool injection. This guards against the routing accidentally
+        flipping the buffered path."""
+        handler = ClaudeHandler()
+        params: dict = {
+            "messages": [{"role": "system", "content": "You are helpful."}]
+        }
+        result = handler.apply_structured_output(_trip_schema(), "Trip", params)
+
+        assert (
+            result["_mesh_synthetic_format_tool_name"]
+            == SYNTHETIC_FORMAT_TOOL_NAME
+        )
+        assert "_mesh_synthetic_format_tool" in result
+        # HINT flags MUST NOT be present (those are streaming/LiteLLM-only).
+        assert "_mesh_hint_mode" not in result
+
+    def test_streaming_true_explicit_buffered_call_is_unchanged(self, _native_on):
+        """Calling with explicit ``streaming=False`` is identical to omitting
+        the kwarg — the default preserves backwards compatibility."""
+        handler = ClaudeHandler()
+        params: dict = {
+            "messages": [{"role": "system", "content": "You are helpful."}]
+        }
+        result = handler.apply_structured_output(
+            _trip_schema(), "Trip", params, streaming=False
+        )
+
+        assert (
+            result["_mesh_synthetic_format_tool_name"]
+            == SYNTHETIC_FORMAT_TOOL_NAME
+        )
+
+    def test_streaming_hint_injects_schema_into_system_message(self, _native_on):
+        """The streaming HINT path must inject the OUTPUT FORMAT block into
+        the system message — without this, the fallback machinery would fire
+        on every request because the model never saw the schema."""
+        handler = ClaudeHandler()
+        original = "You are a travel planner."
+        params: dict = {
+            "messages": [{"role": "system", "content": original}]
+        }
+        handler.apply_structured_output(
+            _trip_schema(), "Trip", params, streaming=True
+        )
+
+        system_content = params["messages"][0]["content"]
+        assert system_content.startswith(original)
+        assert "OUTPUT FORMAT" in system_content
+        # The synthetic "must call this tool" instruction MUST NOT be present
+        # — that's the buffered native path's signature.
+        assert "__mesh_format_response" not in system_content
+
+    def test_streaming_hint_handles_list_content_blocks(self, _native_on):
+        """When prompt caching is in use, the system message ``content`` is a
+        LIST of content blocks (with ``cache_control`` on some). Concatenating
+        a string via ``+`` to that list would raise TypeError. The HINT
+        injection must APPEND a new text block instead, preserving the
+        original blocks (and their cache_control) untouched."""
+        handler = ClaudeHandler()
+        original_block = {
+            "type": "text",
+            "text": "You are Levi, a travel planner.",
+            "cache_control": {"type": "ephemeral"},
+        }
+        second_block = {"type": "text", "text": "Be concise."}
+        params: dict = {
+            "messages": [
+                {"role": "system", "content": [original_block, second_block]},
+                {"role": "user", "content": "Hi"},
+            ]
+        }
+        # Must not raise TypeError on the list-content path.
+        handler.apply_structured_output(
+            _trip_schema(), "Trip", params, streaming=True
+        )
+
+        blocks = params["messages"][0]["content"]
+        assert isinstance(blocks, list)
+        # Original blocks pass through by reference — cache_control intact.
+        assert blocks[0] == original_block
+        assert blocks[1] == second_block
+        # HINT text appended as a NEW text block at the end.
+        hint_blocks = [
+            b
+            for b in blocks[2:]
+            if b.get("type") == "text" and "OUTPUT FORMAT" in b.get("text", "")
+        ]
+        assert len(hint_blocks) == 1, (
+            f"expected exactly 1 appended HINT block; got {len(hint_blocks)} "
+            f"(blocks={blocks})"
+        )
+        # HINT sentinels still stamped for the fallback machinery.
+        assert params.get("_mesh_hint_mode") is True
+
+
 class TestApplyStructuredOutputLiteLLMUnchanged:
     """The LiteLLM path MUST keep the existing HINT-mode behavior."""
 

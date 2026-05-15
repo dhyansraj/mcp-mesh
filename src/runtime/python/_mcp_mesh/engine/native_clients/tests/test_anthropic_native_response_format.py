@@ -1,5 +1,5 @@
 """Adapter-level integration tests for ``response_format`` translation
-(Phase A.3).
+(Phase A.3 — synthetic-tool path).
 
 The adapter translates ``response_format`` (LiteLLM-shape) into a
 synthetic-tool injection inside ``_build_create_kwargs``. These tests
@@ -13,6 +13,12 @@ Two injection paths exist:
   * Adapter-injected — when a caller (notably
     ``helpers._run_response_format_retry``) bypasses the handler and emits
     ``response_format`` directly.
+
+All tests target a model NOT in
+``_NATIVE_OUTPUT_FORMAT_MODEL_SUBSTRINGS`` (Haiku 4.5) so the
+adapter routes through the synthetic-tool path. Native
+``output_config`` behaviour for Sonnet 4.5+ / Opus 4.1+ is covered by
+``test_anthropic_native_output_format.py``.
 
 Real network calls are mocked.
 """
@@ -105,7 +111,7 @@ class TestResponseFormatTranslation:
                     "messages": [{"role": "user", "content": "Hi."}],
                     "response_format": _RESPONSE_FORMAT,
                 },
-                model="anthropic/claude-sonnet-4-5",
+                model="anthropic/claude-haiku-4-5",
                 api_key="sk-test",
             )
 
@@ -132,7 +138,7 @@ class TestResponseFormatTranslation:
                     "tools": [handler_injected_tool],
                     "response_format": _RESPONSE_FORMAT,
                 },
-                model="anthropic/claude-sonnet-4-5",
+                model="anthropic/claude-haiku-4-5",
                 api_key="sk-test",
             )
 
@@ -157,7 +163,7 @@ class TestResponseFormatTranslation:
                     "messages": [{"role": "user", "content": "Hi."}],
                     "response_format": _RESPONSE_FORMAT,
                 },
-                model="anthropic/claude-sonnet-4-5",
+                model="anthropic/claude-haiku-4-5",
                 api_key="sk-test",
             )
 
@@ -190,7 +196,7 @@ class TestResponseFormatTranslation:
                     "tools": [real_tool],
                     "response_format": _RESPONSE_FORMAT,
                 },
-                model="anthropic/claude-sonnet-4-5",
+                model="anthropic/claude-haiku-4-5",
                 api_key="sk-test",
             )
 
@@ -216,7 +222,7 @@ class TestResponseFormatTranslation:
                         "response_format": _RESPONSE_FORMAT,
                         "tool_choice": "none",
                     },
-                    model="anthropic/claude-sonnet-4-5",
+                    model="anthropic/claude-haiku-4-5",
                     api_key="sk-test",
                 )
 
@@ -253,7 +259,7 @@ class TestResponseFormatTranslation:
                     "response_format": _RESPONSE_FORMAT,
                     "tool_choice": forced_choice,
                 },
-                model="anthropic/claude-sonnet-4-5",
+                model="anthropic/claude-haiku-4-5",
                 api_key="sk-test",
             )
 
@@ -278,7 +284,7 @@ class TestResponseFormatTranslation:
                     ],
                     "response_format": _RESPONSE_FORMAT,
                 },
-                model="anthropic/claude-sonnet-4-5",
+                model="anthropic/claude-haiku-4-5",
                 api_key="sk-test",
             )
 
@@ -299,7 +305,7 @@ class TestResponseFormatTranslation:
                     "messages": [{"role": "user", "content": "Hi."}],
                     "response_format": _RESPONSE_FORMAT,
                 },
-                model="anthropic/claude-sonnet-4-5",
+                model="anthropic/claude-haiku-4-5",
                 api_key="sk-test",
             )
 
@@ -319,7 +325,7 @@ class TestResponseFormatTranslation:
                     "messages": [{"role": "user", "content": "Hi."}],
                     "response_format": {"type": "json_object"},  # not json_schema
                 },
-                model="anthropic/claude-sonnet-4-5",
+                model="anthropic/claude-haiku-4-5",
                 api_key="sk-test",
             )
 
@@ -346,7 +352,7 @@ class TestRequestTimeoutRename:
                     "messages": [{"role": "user", "content": "Hi."}],
                     "request_timeout": 42,
                 },
-                model="anthropic/claude-sonnet-4-5",
+                model="anthropic/claude-haiku-4-5",
                 api_key="sk-test",
             )
 
@@ -366,7 +372,7 @@ class TestRequestTimeoutRename:
                     "timeout": 10,
                     "request_timeout": 99,
                 },
-                model="anthropic/claude-sonnet-4-5",
+                model="anthropic/claude-haiku-4-5",
                 api_key="sk-test",
             )
 
@@ -386,7 +392,7 @@ class TestRequestTimeoutRename:
                         "messages": [{"role": "user", "content": "Hi."}],
                         "request_timeout": 90,
                     },
-                    model="anthropic/claude-sonnet-4-5",
+                    model="anthropic/claude-haiku-4-5",
                     api_key="sk-test",
                 )
 
@@ -420,7 +426,7 @@ class TestResponseFormatNoLongerWarns:
                         "messages": [{"role": "user", "content": "Hi."}],
                         "response_format": _RESPONSE_FORMAT,
                     },
-                    model="anthropic/claude-sonnet-4-5",
+                    model="anthropic/claude-haiku-4-5",
                     api_key="sk-test",
                 )
 

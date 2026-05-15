@@ -337,6 +337,9 @@ class GeminiHandler(BaseProviderHandler):
         output_schema: dict[str, Any],
         output_type_name: str | None,
         model_params: dict[str, Any],
+        *,
+        streaming: bool = False,
+        model: str | None = None,
     ) -> dict[str, Any]:
         """
         Apply Gemini-specific structured output for mesh delegation.
@@ -348,6 +351,10 @@ class GeminiHandler(BaseProviderHandler):
         on every iteration; if it fails to parse, the loop falls back to a
         bounded-timeout response_format retry (with tools stripped — the
         fallback path is safe vs. the infinite-loop constraint).
+
+        The ``streaming`` kwarg is accepted for API symmetry with the other
+        vendor handlers; Gemini is HINT-only here regardless, so the flag is
+        a no-op.
         """
         sanitized_schema = sanitize_schema_for_structured_output(output_schema)
 
