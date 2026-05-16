@@ -117,7 +117,7 @@ class TestSupportsNativeOutputFormat:
             "ANTHROPIC/CLAUDE-SONNET-4-6",
             # Dot separator with trailing suffix.
             "anthropic/claude-sonnet-4.6.preview",
-            # Underscore separator after version (anthropic.claude-sonnet-4-6_test).
+            # Underscore separator after version (anthropic/claude-sonnet-4-6_internal).
             "anthropic/claude-sonnet-4-6_internal",
         ],
     )

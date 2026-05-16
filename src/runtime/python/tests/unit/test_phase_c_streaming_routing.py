@@ -364,8 +364,12 @@ def _call_target_name(call: ast.Call) -> str | None:
 
 def _keyword_constant(call: ast.Call, name: str):
     """Return the constant value of keyword ``name`` on ``call`` if present
-    and a ``Constant``; ``Ellipsis`` (sentinel) if absent; ``MISSING`` if
-    present but not constant.
+    and an ``ast.Constant``.
+
+    Returns ``_NOT_PRESENT`` (sentinel) if the keyword is absent.
+    Returns ``_NON_CONSTANT`` (sentinel) if the keyword is present but
+    its value is not an ``ast.Constant`` (e.g. a Name reference like
+    ``streaming=streaming`` rather than a literal ``streaming=True``).
     """
     for kw in call.keywords:
         if kw.arg == name:
