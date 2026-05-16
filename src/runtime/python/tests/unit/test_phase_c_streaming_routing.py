@@ -32,6 +32,8 @@ helpers.py wiring + fallback semantics.
 
 from __future__ import annotations
 
+import ast
+import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -319,6 +321,64 @@ class TestMaybeRunSyntheticFallbackRetry:
 # ---------------------------------------------------------------------------
 
 
+def _find_function_defs(
+    node: ast.AST, name: str
+) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Walk ``node`` recursively and return EVERY FunctionDef /
+    AsyncFunctionDef whose ``name`` matches.
+
+    Returns a list (not a first-match scalar) because ``mesh.helpers``
+    intentionally defines ``process_chat`` twice — once as a sync legacy
+    factory and once as an async provider-managed factory. A regression
+    that diverges only the second closure (e.g., drops ``streaming=False``
+    on its ``_prepare_provider_request`` call) must still fail the audit;
+    a first-match-only helper would silently pass.
+    """
+    return [
+        child
+        for child in ast.walk(node)
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and child.name == name
+    ]
+
+
+def _iter_calls(node: ast.AST):
+    """Yield every ``ast.Call`` inside ``node`` (descends into nested defs)."""
+    for child in ast.walk(node):
+        if isinstance(child, ast.Call):
+            yield child
+
+
+def _call_target_name(call: ast.Call) -> str | None:
+    """Return the bare callee name for a ``Call`` whose target is either a
+    simple ``Name`` (``foo(...)``) or a single-level ``Attribute``
+    (``obj.foo(...)``). Returns ``None`` for deeper chains.
+    """
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _keyword_constant(call: ast.Call, name: str):
+    """Return the constant value of keyword ``name`` on ``call`` if present
+    and a ``Constant``; ``Ellipsis`` (sentinel) if absent; ``MISSING`` if
+    present but not constant.
+    """
+    for kw in call.keywords:
+        if kw.arg == name:
+            if isinstance(kw.value, ast.Constant):
+                return kw.value.value
+            return _NON_CONSTANT
+    return _NOT_PRESENT
+
+
+_NON_CONSTANT = object()
+_NOT_PRESENT = object()
+
+
 class TestStreamingNoToolsPathSyntheticBugRemoved:
     """The legacy ``process_chat_stream`` no-tools path used to set up
     ``buffer_for_synthetic`` when synthetic flags were present, drain the
@@ -331,47 +391,82 @@ class TestStreamingNoToolsPathSyntheticBugRemoved:
     sentinels should never reach this path. The strip is kept defensively;
     the buffer-for-synthetic logic is removed. These tests confirm the
     streaming-side code no longer references the removed names.
+
+    AST-based (not substring): a refactor that renamed
+    ``_pop_mesh_synthetic_format_flags`` would fail SPECIFICALLY because the
+    renamed call doesn't appear in ``process_chat_stream``'s call sites, not
+    because the literal substring no longer matches. Same goes for any
+    whitespace / line-break / argument-spread change to the call.
     """
 
+    @staticmethod
+    def _helpers_module_ast() -> ast.Module:
+        import mesh.helpers as helpers_module
+
+        return ast.parse(inspect.getsource(helpers_module))
+
     def test_helpers_module_streaming_branch_does_not_buffer_for_synthetic(self):
-        """Source-level check: the legacy streaming path must no longer
-        contain the ``buffer_for_synthetic`` bug branch. This is a
-        belt-and-suspenders assertion against accidental reintroduction.
+        """The removed branch was identified by a local ``buffer_for_synthetic``
+        flag. Walk the streaming closure's AST and confirm no ``Name`` or
+        ``arg`` carries that identifier. Catches reintroduction regardless
+        of whitespace / line-wrap.
+
+        Iterates over EVERY ``process_chat_stream`` definition — today
+        there's one, but if a second factory ever defines another, a
+        regression in the new closure must still fail this audit.
         """
-        import inspect
-
-        import mesh.helpers as helpers_module
-
-        source = inspect.getsource(helpers_module)
-        # The flag name was specific to the removed branch — its presence
-        # would mean someone reintroduced the buffer-then-fallback path.
-        assert "buffer_for_synthetic" not in source, (
-            "process_chat_stream no-tools path must not buffer for "
-            "synthetic-tool emission — Phase C routes streaming to HINT "
-            "mode in ClaudeHandler instead"
+        tree = self._helpers_module_ast()
+        streams = _find_function_defs(tree, "process_chat_stream")
+        assert streams, (
+            "process_chat_stream closure not found inside mesh.helpers — "
+            "this test (and the streaming wiring it guards) is out of date"
         )
 
-    def test_helpers_module_still_strips_synthetic_flags_defensively(self):
-        """Even though the synthetic-format flags should never reach the
-        streaming path, the strip via ``_pop_mesh_synthetic_format_flags``
-        must remain — defense-in-depth against misconfiguration where a
+        for idx, process_chat_stream in enumerate(streams):
+            offending: list[str] = []
+            for child in ast.walk(process_chat_stream):
+                if isinstance(child, ast.Name) and child.id == "buffer_for_synthetic":
+                    offending.append(f"Name@line {child.lineno}")
+                elif isinstance(child, ast.arg) and child.arg == "buffer_for_synthetic":
+                    offending.append(f"arg@line {child.lineno}")
+
+            assert not offending, (
+                f"process_chat_stream #{idx} (defined at line "
+                f"{process_chat_stream.lineno}) must not reference "
+                "`buffer_for_synthetic` (removed Phase C bug branch). "
+                "Found: " + ", ".join(offending)
+            )
+
+    def test_streaming_no_tools_path_calls_pop_synthetic_format_flags(self):
+        """``process_chat_stream`` must call ``_pop_mesh_synthetic_format_flags``
+        at least once — defense-in-depth against misconfiguration where a
         custom handler stamps the sentinels on a streaming request.
+
+        AST check: a refactor that renamed the function (e.g. to
+        ``_pop_synthetic_flags``) would break this test because the renamed
+        ``Call.func.id`` no longer matches, NOT because a substring stopped
+        appearing.
+
+        Iterates over every ``process_chat_stream`` definition so a future
+        second factory cannot silently skip the defense-in-depth strip.
         """
-        import inspect
+        tree = self._helpers_module_ast()
+        streams = _find_function_defs(tree, "process_chat_stream")
+        assert streams, "process_chat_stream closure not found"
 
-        import mesh.helpers as helpers_module
-
-        source = inspect.getsource(helpers_module)
-        # Anchor on the exact call expression in the streaming no-tools path.
-        # A bare-symbol search would pass even if every call site were removed,
-        # because `_pop_mesh_synthetic_format_flags` is DEFINED in this module.
-        # The arg name `completion_args` pins us to the streaming/agentic-loop
-        # call sites (the strip-on-streaming defense-in-depth lives there).
-        assert "_pop_mesh_synthetic_format_flags(completion_args)" in source, (
-            "process_chat_stream no-tools path must still strip the "
-            "synthetic-format sentinels defensively — Phase C routes "
-            "streaming to HINT mode, but the strip remains as defense-in-depth"
-        )
+        for idx, process_chat_stream in enumerate(streams):
+            target_calls = [
+                call
+                for call in _iter_calls(process_chat_stream)
+                if _call_target_name(call) == "_pop_mesh_synthetic_format_flags"
+            ]
+            assert target_calls, (
+                f"process_chat_stream #{idx} (defined at line "
+                f"{process_chat_stream.lineno}) must call "
+                "_pop_mesh_synthetic_format_flags (defense-in-depth strip "
+                "of the synthetic-format sentinels). If you renamed the "
+                "function, update this AST check too."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -383,30 +478,139 @@ class TestStreamingNoToolsPathSyntheticBugRemoved:
 class TestPrepareProviderRequestStreamingFlag:
     """``_prepare_provider_request`` is a local closure inside the
     ``llm_provider`` decorator factory, so we can't import and call it
-    directly. Source-level inspection is the pragmatic guard: the two call
-    sites must pass ``streaming=True`` (process_chat_stream) and
-    ``streaming=False`` (process_chat), and the handler call must forward
-    the flag.
+    directly. AST inspection covers the contract: the two outer call sites
+    must pass ``streaming=True`` (process_chat_stream) and ``streaming=False``
+    (process_chat); the inner handler call must forward ``streaming=streaming``.
+
+    AST (not substring) so a refactor that renamed ``_prepare_provider_request``
+    or ``apply_structured_output`` would fail the test SPECIFICALLY because
+    the renamed call site isn't found, not because the literal string no
+    longer appears.
     """
 
-    def test_streaming_flag_is_plumbed_through_to_handler(self):
-        import inspect
-
+    @staticmethod
+    def _helpers_module_ast() -> ast.Module:
         import mesh.helpers as helpers_module
 
-        source = inspect.getsource(helpers_module)
-        # The buffered path passes streaming=False explicitly (or omits to
-        # default). The streaming path MUST pass streaming=True.
-        assert "_prepare_provider_request(request, streaming=True)" in source, (
-            "process_chat_stream must call _prepare_provider_request with "
-            "streaming=True so ClaudeHandler routes to HINT mode"
-        )
-        assert "_prepare_provider_request(request, streaming=False)" in source, (
-            "process_chat must call _prepare_provider_request with "
-            "streaming=False to preserve buffered synthetic-tool behavior"
-        )
-        # And the apply_structured_output call must forward streaming.
-        assert "streaming=streaming" in source, (
-            "_prepare_provider_request must forward its streaming kwarg to "
-            "handler.apply_structured_output"
-        )
+        return ast.parse(inspect.getsource(helpers_module))
+
+    def _streaming_kw_in_call_to(
+        self, parent: ast.AST, callee_name: str
+    ) -> list[object]:
+        """Walk ``parent`` for every ``Call`` to ``callee_name`` and return
+        the ``streaming`` keyword value (constant) of each.
+        """
+        return [
+            _keyword_constant(call, "streaming")
+            for call in _iter_calls(parent)
+            if _call_target_name(call) == callee_name
+        ]
+
+    def test_process_chat_calls_prepare_with_streaming_false(self):
+        """``mesh.helpers`` defines ``process_chat`` in BOTH the legacy and
+        provider-managed factories. Iterate over every occurrence so a
+        regression in either closure (e.g., dropping the explicit
+        ``streaming=False``) fails the audit.
+        """
+        tree = self._helpers_module_ast()
+        process_chats = _find_function_defs(tree, "process_chat")
+        assert process_chats, "process_chat closure not found"
+
+        for idx, process_chat in enumerate(process_chats):
+            streaming_kws = self._streaming_kw_in_call_to(
+                process_chat, "_prepare_provider_request"
+            )
+            # process_chat may call _prepare_provider_request at least once;
+            # every such call must pass streaming=False explicitly (no
+            # implicit default — explicit is the design contract).
+            assert streaming_kws, (
+                f"process_chat #{idx} (defined at line {process_chat.lineno}) "
+                "must call _prepare_provider_request (none found)"
+            )
+            assert all(v is False for v in streaming_kws), (
+                f"process_chat #{idx} (defined at line {process_chat.lineno}) "
+                "must pass streaming=False to _prepare_provider_request "
+                f"(observed: {streaming_kws}) to preserve buffered "
+                "synthetic-tool behavior"
+            )
+
+    def test_process_chat_stream_calls_prepare_with_streaming_true(self):
+        """Iterates over every ``process_chat_stream`` definition — today
+        there's only one, but the helper returns ALL matches so a future
+        second factory cannot silently skip the ``streaming=True`` contract.
+        """
+        tree = self._helpers_module_ast()
+        streams = _find_function_defs(tree, "process_chat_stream")
+        assert streams, "process_chat_stream closure not found"
+
+        for idx, process_chat_stream in enumerate(streams):
+            streaming_kws = self._streaming_kw_in_call_to(
+                process_chat_stream, "_prepare_provider_request"
+            )
+            assert streaming_kws, (
+                f"process_chat_stream #{idx} (defined at line "
+                f"{process_chat_stream.lineno}) must call "
+                "_prepare_provider_request (none found)"
+            )
+            assert all(v is True for v in streaming_kws), (
+                f"process_chat_stream #{idx} (defined at line "
+                f"{process_chat_stream.lineno}) must pass streaming=True "
+                f"to _prepare_provider_request (observed: {streaming_kws}) "
+                "so ClaudeHandler routes to HINT mode"
+            )
+
+    def test_prepare_provider_request_forwards_streaming_to_handler(self):
+        """Inside ``_prepare_provider_request``, the call to
+        ``handler.apply_structured_output`` must forward ``streaming=streaming``
+        (pass-through of the outer parameter, not a literal True/False).
+
+        Iterates over every ``_prepare_provider_request`` definition so any
+        future second copy must also forward the parameter.
+        """
+        tree = self._helpers_module_ast()
+        prepares = _find_function_defs(tree, "_prepare_provider_request")
+        assert prepares, "_prepare_provider_request closure not found"
+
+        for idx, prepare in enumerate(prepares):
+            # First, the function must declare a ``streaming`` parameter —
+            # that's the source of the value we forward.
+            all_args = (
+                prepare.args.args
+                + prepare.args.kwonlyargs
+                + ([prepare.args.vararg] if prepare.args.vararg else [])
+            )
+            param_names = [a.arg for a in all_args if a is not None]
+            assert "streaming" in param_names, (
+                f"_prepare_provider_request #{idx} (defined at line "
+                f"{prepare.lineno}) must declare a `streaming` parameter "
+                f"(found: {param_names})"
+            )
+
+            # Find every call to apply_structured_output inside the closure
+            # and verify each forwards streaming=<the parameter>.
+            forwarding_calls = []
+            for call in _iter_calls(prepare):
+                if _call_target_name(call) != "apply_structured_output":
+                    continue
+                for kw in call.keywords:
+                    if kw.arg == "streaming":
+                        # The forwarded value should be a Name node
+                        # referencing the closure's `streaming` parameter —
+                        # NOT a constant.
+                        is_forward = (
+                            isinstance(kw.value, ast.Name)
+                            and kw.value.id == "streaming"
+                        )
+                        forwarding_calls.append((call.lineno, is_forward))
+
+            assert forwarding_calls, (
+                f"_prepare_provider_request #{idx} (defined at line "
+                f"{prepare.lineno}) must call handler.apply_structured_output "
+                "with a streaming= kwarg"
+            )
+            assert all(is_forward for _, is_forward in forwarding_calls), (
+                f"_prepare_provider_request #{idx} (defined at line "
+                f"{prepare.lineno}) must forward its own `streaming` "
+                "parameter (Name node) to apply_structured_output, not a "
+                f"literal — observed: {forwarding_calls}"
+            )

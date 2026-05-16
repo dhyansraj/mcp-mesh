@@ -115,6 +115,10 @@ class TestSupportsNativeOutputFormat:
             "databricks/anthropic.claude-sonnet-4-6",
             # Case-insensitive (defensive).
             "ANTHROPIC/CLAUDE-SONNET-4-6",
+            # Dot separator with trailing suffix.
+            "anthropic/claude-sonnet-4.6.preview",
+            # Underscore separator after version (anthropic.claude-sonnet-4-6_test).
+            "anthropic/claude-sonnet-4-6_internal",
         ],
     )
     def test_allow_list_positive(self, model):
@@ -139,6 +143,38 @@ class TestSupportsNativeOutputFormat:
         ],
     )
     def test_allow_list_negative(self, model):
+        assert anthropic_native._supports_native_output_format(model) is False
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            # Trailing-digit overmatch guard: hypothetical future versions
+            # whose minor digit follows the current allow-listed one with
+            # NO separator. The pre-regex substring allow-list would have
+            # silently accepted these because "opus-4-1" is a substring of
+            # "opus-4-10". The negative lookahead must reject them.
+            "anthropic/claude-opus-4-10",
+            "anthropic/claude-opus-4-11",
+            "anthropic/claude-opus-4-15",
+            "anthropic/claude-sonnet-4-50",
+            "anthropic/claude-sonnet-4-60",
+            "anthropic/claude-sonnet-4-55",
+            # Dot-form overmatch — same problem, dot separator.
+            "anthropic/claude-opus-4.10",
+            "anthropic/claude-sonnet-4.55",
+            # Date-pinned variants of the hypothetical future minor (must
+            # also be rejected — the date doesn't rescue the unknown
+            # output_config support).
+            "anthropic/claude-opus-4-10-20270101",
+            "bedrock/anthropic.claude-opus-4-10-20270101-v1:0",
+        ],
+    )
+    def test_allow_list_overmatch_rejected(self, model):
+        """Regression guard: regex boundary must reject future minor
+        versions whose digit suffix extends a current allow-listed
+        version (opus-4-1 → opus-4-10) — output_config support for those
+        is unknown until explicitly added to the allow-list.
+        """
         assert anthropic_native._supports_native_output_format(model) is False
 
     def test_none_input(self):
