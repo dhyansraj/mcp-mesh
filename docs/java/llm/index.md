@@ -245,8 +245,8 @@ Uses LiteLLM model format in `@MeshLlmProvider`:
 | ----------------------- | ------------------------------ |
 | Anthropic               | `anthropic/claude-sonnet-4-5`  |
 | OpenAI                  | `openai/gpt-4o`                |
-| Google AI Studio        | `gemini/gemini-2.0-flash`      |
-| Google Vertex AI (IAM)  | `vertex_ai/gemini-2.0-flash`   |
+| Google AI Studio        | `gemini/gemini-2.5-flash`      |
+| Google Vertex AI (IAM)  | `vertex_ai/gemini-2.5-flash`   |
 | Mistral                 | `mistral/mistral-large-latest` |
 
 ## Vertex AI (Gemini via IAM)
@@ -260,8 +260,8 @@ provider value, dependency, and auth config change.
 
 | Use case                                              | Pick                                                                                  |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Quickstart / dev / lowest setup                       | AI Studio provider (`model = "gemini/gemini-2.0-flash"`, `GOOGLE_AI_GEMINI_API_KEY`)  |
-| Production with IAM auth, GCP audit logs, VPC-SC      | Vertex AI provider (`model = "vertex_ai/gemini-2.0-flash"`, ADC)                      |
+| Quickstart / dev / lowest setup                       | AI Studio provider (`model = "gemini/gemini-2.5-flash"`, `GOOGLE_AI_GEMINI_API_KEY`)  |
+| Production with IAM auth, GCP audit logs, VPC-SC      | Vertex AI provider (`model = "vertex_ai/gemini-2.5-flash"`, ADC)                      |
 | Need Provisioned Throughput (no capacity 429s)        | Vertex AI provider                                                                    |
 | Multi-tenant org-controlled billing                   | Vertex AI provider                                                                    |
 
@@ -292,7 +292,7 @@ provider value, dependency, and auth config change.
              location:   ${SPRING_AI_VERTEX_AI_GEMINI_LOCATION:us-central1}
              chat:
                options:
-                 model: gemini-2.0-flash
+                 model: gemini-2.5-flash
    ```
 
 3. Configure GCP Application Default Credentials:
@@ -310,7 +310,7 @@ provider value, dependency, and auth config change.
    @MeshLlmProvider(
        capability = "llm",
        tags = {"llm", "gemini", "vertex"},
-       model = "vertex_ai/gemini-2.0-flash"
+       model = "vertex_ai/gemini-2.5-flash"
    )
    @SpringBootApplication
    public class GeminiProviderApplication {
@@ -332,9 +332,9 @@ string and swapping the Spring AI starter dependency:
 
 ```java
 // Provider — before:
-@MeshLlmProvider(model = "gemini/gemini-2.0-flash", capability = "llm", tags = {"llm","gemini"})
+@MeshLlmProvider(model = "gemini/gemini-2.5-flash", capability = "llm", tags = {"llm","gemini"})
 // Provider — after:
-@MeshLlmProvider(model = "vertex_ai/gemini-2.0-flash", capability = "llm", tags = {"llm","gemini","vertex"})
+@MeshLlmProvider(model = "vertex_ai/gemini-2.5-flash", capability = "llm", tags = {"llm","gemini","vertex"})
 ```
 
 Swap the dependency in `pom.xml`

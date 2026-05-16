@@ -27,7 +27,7 @@ class CapitalInfo(BaseModel):
 
 
 @mesh.llm_provider(
-    model="vertex_ai/gemini-2.0-flash",
+    model="vertex_ai/gemini-2.5-flash",
     capability="llm",
     tags=["gemini", "vertex"],
     version="1.0.0",

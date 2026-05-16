@@ -157,8 +157,8 @@ anthropic/claude-opus-4
 openai/gpt-4o
 openai/gpt-4-turbo
 openai/gpt-3.5-turbo
-gemini/gemini-2.0-flash          # Google AI Studio (API key)
-vertex_ai/gemini-2.0-flash       # Google Vertex AI (IAM)
+gemini/gemini-2.5-flash          # Google AI Studio (API key)
+vertex_ai/gemini-2.5-flash       # Google Vertex AI (IAM)
 ```
 
 ## Vertex AI (Gemini via IAM)
@@ -226,7 +226,7 @@ auth env vars (each follows its own ecosystem's naming convention).
    @mesh.llm_provider(
        capability="llm",
        tags=["gemini", "vertex"],
-       model="vertex_ai/gemini-2.0-flash",
+       model="vertex_ai/gemini-2.5-flash",
    )
    def my_provider(): pass
    ```
@@ -241,7 +241,7 @@ To migrate an existing agent from AI Studio to Vertex AI:
 
 ```python
 # Change one line in the decorator:
-model="vertex_ai/gemini-2.0-flash"   # was: "gemini/gemini-2.0-flash"
+model="vertex_ai/gemini-2.5-flash"   # was: "gemini/gemini-2.5-flash"
 ```
 
 ```bash

@@ -414,8 +414,8 @@ def supports_model(model: str) -> bool:
 def _strip_prefix(model: str) -> str:
     """Return the bare Gemini model id for the SDK call.
 
-    ``gemini/gemini-2.0-flash`` → ``gemini-2.0-flash``
-    ``vertex_ai/gemini-2.0-flash`` → ``gemini-2.0-flash``
+    ``gemini/gemini-2.5-flash`` → ``gemini-2.5-flash``
+    ``vertex_ai/gemini-2.5-flash`` → ``gemini-2.5-flash``
     """
     if model.startswith(_GEMINI_PREFIX):
         return model[len(_GEMINI_PREFIX):]

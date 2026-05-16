@@ -32,7 +32,7 @@ const agent = mesh(server, {
 // Zero-code Vertex AI provider — selected via the vertex_ai/* model prefix.
 agent.addLlmProvider({
   name: "vertex_chat",
-  model: "vertex_ai/gemini-2.0-flash",
+  model: "vertex_ai/gemini-2.5-flash",
   capability: "llm",
   tags: ["llm", "gemini", "vertex", "provider"],
   version: "1.0.0",

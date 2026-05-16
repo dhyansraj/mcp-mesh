@@ -17,7 +17,7 @@ app = FastMCP("Media LLM Provider Gemini")
 
 
 @mesh.llm_provider(
-    model="gemini/gemini-2.0-flash",
+    model="gemini/gemini-2.5-flash",
     capability="llm",
     tags=["gemini", "flash", "media"],
     version="1.0.0",

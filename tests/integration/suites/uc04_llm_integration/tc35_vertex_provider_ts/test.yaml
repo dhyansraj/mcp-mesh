@@ -149,7 +149,7 @@ assertions:
     message: "Response should contain Paris as the capital"
   # Routing — confirm we actually went through the Vertex path, not AI Studio.
   # The TS Vercel AI SDK emits a startup line like:
-  #   AI SDK Warning (google.vertex.chat / gemini-2.0-flash): ...
+  #   AI SDK Warning (google.vertex.chat / gemini-2.5-flash): ...
   # which is the smoking gun for @ai-sdk/google-vertex (vs @ai-sdk/google AI Studio)..
   # The TS provider is registered as "vertex_chat" and the runtime selects
   # GeminiHandler for vendor "vertex_ai".

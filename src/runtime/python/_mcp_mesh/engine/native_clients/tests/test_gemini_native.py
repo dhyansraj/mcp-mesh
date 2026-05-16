@@ -101,10 +101,10 @@ class TestSupportsModel:
     @pytest.mark.parametrize(
         "model",
         [
-            "gemini/gemini-2.0-flash",
+            "gemini/gemini-2.5-flash",
             "gemini/gemini-1.5-pro",
             "gemini/gemini-3-pro-preview",
-            "vertex_ai/gemini-2.0-flash",
+            "vertex_ai/gemini-2.5-flash",
             "vertex_ai/gemini-1.5-pro",
         ],
     )
@@ -118,7 +118,7 @@ class TestSupportsModel:
             "openai/gpt-4o",
             "bedrock/anthropic.claude-3-5-sonnet",
             "azure/gpt-4o",
-            "gemini-2.0-flash",  # bare, no prefix
+            "gemini-2.5-flash",  # bare, no prefix
             "",
         ],
     )
@@ -137,11 +137,11 @@ class TestStripPrefix:
     @pytest.mark.parametrize(
         ("model", "expected"),
         [
-            ("gemini/gemini-2.0-flash", "gemini-2.0-flash"),
+            ("gemini/gemini-2.5-flash", "gemini-2.5-flash"),
             ("gemini/gemini-1.5-pro", "gemini-1.5-pro"),
-            ("vertex_ai/gemini-2.0-flash", "gemini-2.0-flash"),
+            ("vertex_ai/gemini-2.5-flash", "gemini-2.5-flash"),
             ("vertex_ai/gemini-3-pro-preview", "gemini-3-pro-preview"),
-            ("gemini-2.0-flash", "gemini-2.0-flash"),  # bare passthrough
+            ("gemini-2.5-flash", "gemini-2.5-flash"),  # bare passthrough
         ],
     )
     def test_strip_prefix(self, model, expected):
@@ -165,7 +165,7 @@ class TestBuildClient:
     def test_ai_studio_with_explicit_api_key(self, monkeypatch):
         cls_mock = MagicMock(return_value=MagicMock())
         monkeypatch.setattr("google.genai.Client", cls_mock)
-        gemini_native._build_client("gemini/gemini-2.0-flash", "GAK-test", None)
+        gemini_native._build_client("gemini/gemini-2.5-flash", "GAK-test", None)
         kwargs = cls_mock.call_args.kwargs
         assert kwargs["api_key"] == "GAK-test"
         # AI Studio backend must NOT pass vertexai/project/location.
@@ -176,14 +176,14 @@ class TestBuildClient:
         monkeypatch.setenv("GOOGLE_API_KEY", "GAK-from-env")
         cls_mock = MagicMock(return_value=MagicMock())
         monkeypatch.setattr("google.genai.Client", cls_mock)
-        gemini_native._build_client("gemini/gemini-2.0-flash", None, None)
+        gemini_native._build_client("gemini/gemini-2.5-flash", None, None)
         # api_key flows from env into the resolved kwarg.
         kwargs = cls_mock.call_args.kwargs
         assert kwargs["api_key"] == "GAK-from-env"
 
     def test_ai_studio_raises_when_no_api_key(self, monkeypatch):
         with pytest.raises(ValueError) as exc_info:
-            gemini_native._build_client("gemini/gemini-2.0-flash", None, None)
+            gemini_native._build_client("gemini/gemini-2.5-flash", None, None)
         msg = str(exc_info.value)
         assert "GOOGLE_API_KEY" in msg
         assert "MCP_MESH_NATIVE_LLM=0" in msg
@@ -192,7 +192,7 @@ class TestBuildClient:
         monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "my-gcp-project")
         cls_mock = MagicMock(return_value=MagicMock())
         monkeypatch.setattr("google.genai.Client", cls_mock)
-        gemini_native._build_client("vertex_ai/gemini-2.0-flash", None, None)
+        gemini_native._build_client("vertex_ai/gemini-2.5-flash", None, None)
         kwargs = cls_mock.call_args.kwargs
         assert kwargs["vertexai"] is True
         assert kwargs["project"] == "my-gcp-project"
@@ -204,7 +204,7 @@ class TestBuildClient:
         monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "europe-west4")
         cls_mock = MagicMock(return_value=MagicMock())
         monkeypatch.setattr("google.genai.Client", cls_mock)
-        gemini_native._build_client("vertex_ai/gemini-2.0-flash", None, None)
+        gemini_native._build_client("vertex_ai/gemini-2.5-flash", None, None)
         kwargs = cls_mock.call_args.kwargs
         assert kwargs["location"] == "europe-west4"
 
@@ -217,7 +217,7 @@ class TestBuildClient:
             gemini_native, "_derive_vertex_project_from_adc", lambda: None
         )
         with pytest.raises(ValueError) as exc_info:
-            gemini_native._build_client("vertex_ai/gemini-2.0-flash", None, None)
+            gemini_native._build_client("vertex_ai/gemini-2.5-flash", None, None)
         msg = str(exc_info.value)
         assert "GOOGLE_CLOUD_PROJECT" in msg
         assert "MCP_MESH_NATIVE_LLM=0" in msg
@@ -233,7 +233,7 @@ class TestBuildClient:
         )
         cls_mock = MagicMock(return_value=MagicMock())
         monkeypatch.setattr("google.genai.Client", cls_mock)
-        gemini_native._build_client("vertex_ai/gemini-2.0-flash", None, None)
+        gemini_native._build_client("vertex_ai/gemini-2.5-flash", None, None)
         kwargs = cls_mock.call_args.kwargs
         assert kwargs["project"] == "adc-derived-project"
         assert kwargs["vertexai"] is True
@@ -253,7 +253,7 @@ class TestBuildClient:
         )
         cls_mock = MagicMock(return_value=MagicMock())
         monkeypatch.setattr("google.genai.Client", cls_mock)
-        gemini_native._build_client("vertex_ai/gemini-2.0-flash", None, None)
+        gemini_native._build_client("vertex_ai/gemini-2.5-flash", None, None)
         assert cls_mock.call_args.kwargs["project"] == "explicit-env-project"
 
     def test_derive_vertex_project_calls_google_auth_default(
@@ -310,7 +310,7 @@ class TestBuildClient:
         gemini_native._logged_unsupported_kwargs.clear()
         with caplog.at_level("WARNING", logger=gemini_native.logger.name):
             gemini_native._build_client(
-                "vertex_ai/gemini-2.0-flash", "GAK-ignored", None
+                "vertex_ai/gemini-2.5-flash", "GAK-ignored", None
             )
         # api_key MUST NOT be forwarded on the Vertex backend.
         kwargs = cls_mock.call_args.kwargs
@@ -329,7 +329,7 @@ class TestBuildClient:
         monkeypatch.setattr("google.genai.Client", cls_mock)
 
         gemini_native._build_client(
-            "gemini/gemini-2.0-flash",
+            "gemini/gemini-2.5-flash",
             "GAK-test",
             "https://custom-proxy.example.com",
         )
@@ -929,9 +929,9 @@ class TestBuildCreateKwargs:
                 "temperature": 0.3,
                 "max_tokens": 512,
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
-        assert out["model"] == "gemini-2.0-flash"
+        assert out["model"] == "gemini-2.5-flash"
         # System message NOT in contents.
         assert all(
             m.get("role") != "system" for m in out["contents"]
@@ -957,7 +957,7 @@ class TestBuildCreateKwargs:
                     {"role": "user", "content": "Hi"},
                 ]
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         assert out["config"]["system_instruction"] == "Be brief."
         # Contents has only the user message.
@@ -971,7 +971,7 @@ class TestBuildCreateKwargs:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "max_tokens": None,
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         # Don't forward None to the SDK (Gemini rejects it).
         assert "max_output_tokens" not in out["config"]
@@ -982,7 +982,7 @@ class TestBuildCreateKwargs:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "max_completion_tokens": 200,
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         assert out["config"]["max_output_tokens"] == 200
 
@@ -996,7 +996,7 @@ class TestBuildCreateKwargs:
                 "stop": ["END"],
                 "seed": 42,
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         cfg = out["config"]
         assert cfg["temperature"] == 0.5
@@ -1018,7 +1018,7 @@ class TestBuildCreateKwargs:
                     },
                 },
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         assert out["config"]["response_mime_type"] == "application/json"
         assert out["config"]["response_schema"] == {"type": "object"}
@@ -1044,7 +1044,7 @@ class TestBuildCreateKwargs:
                     },
                 },
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         rs = out["config"]["response_schema"]
         assert "additionalProperties" not in rs
@@ -1073,7 +1073,7 @@ class TestBuildCreateKwargs:
                     },
                 },
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         rs = out["config"]["response_schema"]
         # Both casings dropped (only camelCase whitelist members survive).
@@ -1104,7 +1104,7 @@ class TestBuildCreateKwargs:
                     },
                 },
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         rs = out["config"]["response_schema"]
         assert "title" not in rs
@@ -1123,7 +1123,7 @@ class TestBuildCreateKwargs:
                 "_mesh_hint_mode": True,
                 "_mesh_hint_schema": {"type": "object"},
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         # No WARN logged for the _mesh_ keys.
         assert all(
@@ -1151,7 +1151,7 @@ class TestUnsupportedKwargWarn:
                     "messages": [{"role": "user", "content": "Hi"}],
                     "some_litellm_only_knob": 30,
                 },
-                model="gemini/gemini-2.0-flash",
+                model="gemini/gemini-2.5-flash",
             )
         warn_msgs = [
             r.getMessage() for r in caplog.records if r.levelname == "WARNING"
@@ -1199,7 +1199,7 @@ class TestUnsupportedKwargWarn:
                     "messages": [{"role": "user", "content": "Hi"}],
                     "candidate_count": 3,
                 },
-                model="gemini/gemini-2.0-flash",
+                model="gemini/gemini-2.5-flash",
             )
         # Not forwarded into the SDK config.
         assert "candidate_count" not in out["config"]
@@ -1225,7 +1225,7 @@ def _make_gemini_response(
     prompt_tokens: int = 12,
     completion_tokens: int = 7,
     finish_reason: str = "STOP",
-    model_version: str | None = "gemini-2.0-flash",
+    model_version: str | None = "gemini-2.5-flash",
 ):
     """Build a fake genai.GenerateContentResponse-like object."""
     parts = []
@@ -1258,14 +1258,14 @@ def _make_gemini_response(
 class TestAdaptResponse:
     def test_text_only_response(self):
         raw = _make_gemini_response(text="Hello world", finish_reason="STOP")
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         assert out.choices[0].message.content == "Hello world"
         assert out.choices[0].message.role == "assistant"
         assert out.choices[0].message.tool_calls is None
         assert out.choices[0].finish_reason == "stop"
         assert out.usage.prompt_tokens == 12
         assert out.usage.completion_tokens == 7
-        assert out.model == "gemini-2.0-flash"
+        assert out.model == "gemini-2.5-flash"
 
     def test_function_call_response_synthesizes_ids(self):
         raw = _make_gemini_response(
@@ -1275,7 +1275,7 @@ class TestAdaptResponse:
             ],
             finish_reason="STOP",
         )
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         tcs = out.choices[0].message.tool_calls
         assert len(tcs) == 2
         # Synthesized ids are sequential gemini_call_<index>.
@@ -1292,7 +1292,7 @@ class TestAdaptResponse:
             text="Calling weather...",
             function_calls=[{"name": "get_weather", "args": {"city": "NYC"}}],
         )
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         assert out.choices[0].message.content == "Calling weather..."
         assert len(out.choices[0].message.tool_calls) == 1
 
@@ -1302,7 +1302,7 @@ class TestAdaptResponse:
             prompt_tokens=100,
             completion_tokens=50,
         )
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         # promptTokenCount → prompt_tokens; candidatesTokenCount → completion_tokens.
         assert out.usage.prompt_tokens == 100
         assert out.usage.completion_tokens == 50
@@ -1319,9 +1319,9 @@ class TestAdaptResponse:
                 )
             ],
             usage_metadata=None,
-            model_version="gemini-2.0-flash",
+            model_version="gemini-2.5-flash",
         )
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         assert out.usage is None
         assert out.choices[0].message.content == "hi"
 
@@ -1334,7 +1334,7 @@ class TestAdaptResponse:
             text="garbled tool call",
             finish_reason="MALFORMED_FUNCTION_CALL",
         )
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         assert out.choices[0].finish_reason == "tool_calls"
 
 
@@ -1373,10 +1373,10 @@ class TestComplete:
         )
         await gemini_native.complete(
             {"messages": [{"role": "user", "content": "Hi"}]},
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         kwargs = generate_mock.call_args.kwargs
-        assert kwargs["model"] == "gemini-2.0-flash"
+        assert kwargs["model"] == "gemini-2.5-flash"
 
     @pytest.mark.asyncio
     async def test_complete_returns_adapted_response(self, monkeypatch):
@@ -1386,7 +1386,7 @@ class TestComplete:
         _patched_genai_client(api_resp, monkeypatch=monkeypatch)
         out = await gemini_native.complete(
             {"messages": [{"role": "user", "content": "Hi"}]},
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         assert out.choices[0].message.content == "Hello!"
         assert out.usage.prompt_tokens == 10
@@ -1482,7 +1482,7 @@ class TestCompleteStream:
     @pytest.mark.asyncio
     async def test_text_stream_yields_litellm_chunks(self, monkeypatch):
         chunks_in = [
-            _make_stream_chunk(text="Hello ", model_version="gemini-2.0-flash"),
+            _make_stream_chunk(text="Hello ", model_version="gemini-2.5-flash"),
             _make_stream_chunk(text="world"),
             _make_stream_chunk(
                 finish_reason="STOP",
@@ -1493,7 +1493,7 @@ class TestCompleteStream:
 
         stream = gemini_native.complete_stream(
             {"messages": [{"role": "user", "content": "Hi"}]},
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         chunks = []
         async for c in stream:
@@ -1523,7 +1523,7 @@ class TestCompleteStream:
                     "name": "get_weather",
                     "args": {"city": "NYC"},
                 },
-                model_version="gemini-2.0-flash",
+                model_version="gemini-2.5-flash",
             ),
             _make_stream_chunk(
                 finish_reason="STOP",
@@ -1534,7 +1534,7 @@ class TestCompleteStream:
 
         stream = gemini_native.complete_stream(
             {"messages": [{"role": "user", "content": "weather?"}]},
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         chunks = []
         async for c in stream:
@@ -1559,14 +1559,14 @@ class TestCompleteStream:
         finally block has nothing to fall back on (counters are 0) and
         must NOT emit a misleading 0-token usage chunk."""
         chunks_in = [
-            _make_stream_chunk(text="Hello", model_version="gemini-2.0-flash"),
+            _make_stream_chunk(text="Hello", model_version="gemini-2.5-flash"),
             _make_stream_chunk(finish_reason="STOP"),
         ]
         _patched_streaming_genai(chunks_in, monkeypatch=monkeypatch)
 
         stream = gemini_native.complete_stream(
             {"messages": [{"role": "user", "content": "Hi"}]},
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         chunks = []
         async for c in stream:
@@ -1600,7 +1600,7 @@ class TestCompleteStream:
             _make_stream_chunk(
                 text="partial",
                 usage={"prompt_tokens": 5, "completion_tokens": 1},
-                model_version="gemini-2.0-flash",
+                model_version="gemini-2.5-flash",
             ),
             "RAISE",
         ]
@@ -1615,7 +1615,7 @@ class TestCompleteStream:
 
         stream = gemini_native.complete_stream(
             {"messages": [{"role": "user", "content": "Hi"}]},
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         chunks = []
         raised = None
@@ -1648,7 +1648,7 @@ class TestCompleteStream:
                     "name": "get_weather",
                     "args": {"city": "NYC"},
                 },
-                model_version="gemini-2.0-flash",
+                model_version="gemini-2.5-flash",
             ),
             _make_stream_chunk(
                 finish_reason="STOP",
@@ -1659,7 +1659,7 @@ class TestCompleteStream:
 
         stream = gemini_native.complete_stream(
             {"messages": [{"role": "user", "content": "weather?"}]},
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         chunks = []
         async for c in stream:
@@ -1701,8 +1701,8 @@ class TestSharedHttpxClient:
         # Run inside an async context so _get_shared_httpx_client() picks
         # up the running loop and caches against it.
         async def _do_two_builds():
-            gemini_native._build_client("gemini/gemini-2.0-flash", "GAK-A", None)
-            gemini_native._build_client("gemini/gemini-2.0-flash", "GAK-B", None)
+            gemini_native._build_client("gemini/gemini-2.5-flash", "GAK-A", None)
+            gemini_native._build_client("gemini/gemini-2.5-flash", "GAK-B", None)
 
         await _do_two_builds()
 
@@ -1770,7 +1770,7 @@ class TestSharedHttpxClient:
         async def _one_call():
             await gemini_native.complete(
                 {"messages": [{"role": "user", "content": "hi"}]},
-                model="gemini/gemini-2.0-flash",
+                model="gemini/gemini-2.5-flash",
             )
 
         loop_a = asyncio.new_event_loop()
@@ -1812,8 +1812,8 @@ class TestSharedHttpxClient:
         monkeypatch.setenv("GOOGLE_API_KEY", "GAK-test")
         cls_mock = MagicMock(return_value=MagicMock())
         monkeypatch.setattr("google.genai.Client", cls_mock)
-        gemini_native._build_client("gemini/gemini-2.0-flash", "GAK-A", None)
-        gemini_native._build_client("gemini/gemini-2.0-flash", "GAK-B", None)
+        gemini_native._build_client("gemini/gemini-2.5-flash", "GAK-A", None)
+        gemini_native._build_client("gemini/gemini-2.5-flash", "GAK-B", None)
         assert cls_mock.call_count == 2
         # Second call has the rotated key.
         second_kwargs = cls_mock.call_args_list[1].kwargs
@@ -1896,7 +1896,7 @@ class TestThoughtSignatureExtraction:
                 ({"name": "get_weather", "args": {"city": "NYC"}}, sig_bytes),
             ],
         )
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         tcs = out.choices[0].message.tool_calls
         assert len(tcs) == 1
         # Signature stashed on the _ToolCall as raw bytes (not yet encoded).
@@ -1909,7 +1909,7 @@ class TestThoughtSignatureExtraction:
         raw = _make_gemini_response(
             function_calls=[{"name": "get_weather", "args": {"city": "NYC"}}],
         )
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         tcs = out.choices[0].message.tool_calls
         assert len(tcs) == 1
         assert tcs[0]._thought_signature is None
@@ -1923,7 +1923,7 @@ class TestThoughtSignatureExtraction:
                 ({"name": "get_weather", "args": {}}, None),
             ],
         )
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         assert out.choices[0].message.tool_calls[0]._thought_signature is None
 
     def test_empty_bytes_signature_treated_as_absent(self):
@@ -1935,7 +1935,7 @@ class TestThoughtSignatureExtraction:
                 ({"name": "get_weather", "args": {}}, b""),
             ],
         )
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         assert out.choices[0].message.tool_calls[0]._thought_signature is None
 
     def test_multiple_function_calls_each_carry_own_signature(self):
@@ -1951,7 +1951,7 @@ class TestThoughtSignatureExtraction:
                 ({"name": "call_B", "args": {}}, sig_b),
             ],
         )
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         tcs = out.choices[0].message.tool_calls
         assert len(tcs) == 2
         assert tcs[0]._thought_signature == sig_a
@@ -1986,7 +1986,7 @@ class TestThoughtSignatureStreamingExtraction:
             model_version="gemini-2.0-flash-thinking",
         )
         adapted = gemini_native._adapt_stream_chunk(
-            chunk, model="gemini-2.0-flash", tool_call_index_state=[0]
+            chunk, model="gemini-2.5-flash", tool_call_index_state=[0]
         )
         deltas = adapted.choices[0].delta.tool_calls
         assert deltas is not None and len(deltas) == 1
@@ -2002,7 +2002,7 @@ class TestThoughtSignatureStreamingExtraction:
             function_call={"name": "get_weather", "args": {}},
         )
         adapted = gemini_native._adapt_stream_chunk(
-            chunk, model="gemini-2.0-flash", tool_call_index_state=[0]
+            chunk, model="gemini-2.5-flash", tool_call_index_state=[0]
         )
         deltas = adapted.choices[0].delta.tool_calls
         assert deltas is not None and len(deltas) == 1
@@ -2124,7 +2124,7 @@ class TestThoughtSignatureRoundTrip:
                 ({"name": "get_weather", "args": {"city": "NYC"}}, original_sig),
             ],
         )
-        adapted = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        adapted = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         tc = adapted.choices[0].message.tool_calls[0]
 
         # 2. Simulate helpers.py serializer (mesh.helpers

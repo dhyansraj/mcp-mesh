@@ -175,7 +175,7 @@ class TestComplete:
         ) as mock_complete:
             result = await handler.complete(
                 {"messages": [{"role": "user", "content": "Hi"}]},
-                model="gemini/gemini-2.0-flash",
+                model="gemini/gemini-2.5-flash",
                 api_key="GAK-test",
                 base_url=None,
             )
@@ -183,7 +183,7 @@ class TestComplete:
         assert result is sentinel
         mock_complete.assert_awaited_once()
         kwargs = mock_complete.await_args.kwargs
-        assert kwargs["model"] == "gemini/gemini-2.0-flash"
+        assert kwargs["model"] == "gemini/gemini-2.5-flash"
         assert kwargs["api_key"] == "GAK-test"
 
     @pytest.mark.asyncio
@@ -200,7 +200,7 @@ class TestComplete:
         ) as mock_stream:
             stream = await handler.complete_stream(
                 {"messages": [{"role": "user", "content": "Hi"}]},
-                model="gemini/gemini-2.0-flash",
+                model="gemini/gemini-2.5-flash",
                 api_key="GAK-test",
             )
             chunks = [c async for c in stream]
@@ -208,7 +208,7 @@ class TestComplete:
         assert chunks == ["chunk1", "chunk2"]
         mock_stream.assert_called_once()
         kwargs = mock_stream.call_args.kwargs
-        assert kwargs["model"] == "gemini/gemini-2.0-flash"
+        assert kwargs["model"] == "gemini/gemini-2.5-flash"
         assert kwargs["api_key"] == "GAK-test"
 
     @pytest.mark.asyncio
@@ -224,11 +224,11 @@ class TestComplete:
         ) as mock_complete:
             result = await handler.complete(
                 {"messages": [{"role": "user", "content": "Hi"}]},
-                model="vertex_ai/gemini-2.0-flash",
+                model="vertex_ai/gemini-2.5-flash",
             )
         assert result is sentinel
         assert mock_complete.await_args.kwargs["model"] == (
-            "vertex_ai/gemini-2.0-flash"
+            "vertex_ai/gemini-2.5-flash"
         )
 
 

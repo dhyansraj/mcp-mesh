@@ -9,7 +9,7 @@
  * - Metadata tracking (tokens, latency, tool calls)
  *
  * Configuration Hierarchy (ENV > Config):
- * - MESH_LLM_MODEL: Override model (e.g., "gpt-4o", "gemini-2.0-flash")
+ * - MESH_LLM_MODEL: Override model (e.g., "gpt-4o", "gemini-2.5-flash")
  * - MESH_LLM_MAX_ITERATIONS: Override max agentic loop iterations
  *
  * @example

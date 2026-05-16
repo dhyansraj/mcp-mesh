@@ -283,8 +283,8 @@ Uses LiteLLM model format in `@MeshLlmProvider`:
 | ----------------------- | ------------------------------ |
 | Anthropic               | `anthropic/claude-sonnet-4-5`  |
 | OpenAI                  | `openai/gpt-4o`                |
-| Google AI Studio        | `gemini/gemini-2.0-flash`      |
-| Google Vertex AI (IAM)  | `vertex_ai/gemini-2.0-flash`   |
+| Google AI Studio        | `gemini/gemini-2.5-flash`      |
+| Google Vertex AI (IAM)  | `vertex_ai/gemini-2.5-flash`   |
 | Mistral                 | `mistral/mistral-large-latest` |
 
 ## Vertex AI (Gemini via IAM)
@@ -330,7 +330,7 @@ provider's `model` string, dependency, and auth config change.
              location:   ${SPRING_AI_VERTEX_AI_GEMINI_LOCATION:us-central1}
              chat:
                options:
-                 model: gemini-2.0-flash
+                 model: gemini-2.5-flash
    ```
 
 3. Configure GCP Application Default Credentials:
@@ -346,7 +346,7 @@ provider's `model` string, dependency, and auth config change.
    ```java
    @MeshAgent(name = "gemini-vertex-provider", port = 9111)
    @MeshLlmProvider(
-       model = "vertex_ai/gemini-2.0-flash",
+       model = "vertex_ai/gemini-2.5-flash",
        capability = "llm",
        tags = {"llm", "gemini", "vertex"}
    )
@@ -374,9 +374,9 @@ Migrate from AI Studio to Vertex AI by updating only the provider agent:
 
 ```java
 // before:
-@MeshLlmProvider(model = "gemini/gemini-2.0-flash", …)
+@MeshLlmProvider(model = "gemini/gemini-2.5-flash", …)
 // after:
-@MeshLlmProvider(model = "vertex_ai/gemini-2.0-flash", …)
+@MeshLlmProvider(model = "vertex_ai/gemini-2.5-flash", …)
 ```
 
 Swap the dependency in `pom.xml`
