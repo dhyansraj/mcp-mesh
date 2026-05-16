@@ -208,7 +208,7 @@ Admin endpoints (`/admin/rotate`, `/admin/entities`) are served only on the admi
 ```yaml
 services:
   registry:
-    image: mcpmesh/registry:2.0.0
+    image: mcpmesh/registry:2.0.1
     command: ["--tls-auto"]
     ports: ["8000:8000"]
     volumes:

@@ -1,5 +1,17 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.0.0...v2.0.1)
+
+## v2.0.1 (2026-05-16)
+
+Native LLM dispatch follow-ups to v2.0.0. Adapter contract honoring across Anthropic / OpenAI / Gemini, Sonnet 4.5+/Opus 4.1+ routed through Anthropic's first-class `output_config` primitive, Gemini prompt-level safety detection, plus pre-emptive migration off Gemini 2.0 Flash ahead of its June 2026 deprecation.
+
+- **Native adapter contract** (#1012): `response_format` / `request_timeout` no longer silently dropped on native retry paths; per-vendor translations (Anthropic `timeout`, Gemini `HttpOptions.timeout` ms); synthetic tool_call args lifted to `content` on native retry; vendor plumbed explicitly through recovery helpers so unprefixed model strings don't fall through to LiteLLM. Typed `LLMRefusedError` exception for vendor-level refusal signals (OpenAI `message.refusal`, Anthropic synthetic-tool absence, Gemini safety-blocks).
+- **Anthropic `output_config` for newer Claude** (#1014): Sonnet 4.5+/Opus 4.1+ route through `output_config` (per-model allow-list + schema filter) instead of synthetic-tool injection. Streaming + structured output now routes to HINT mode (synthetic-tool was a poor fit for streams). Gemini prompt-level safety-block detection raises `LLMRefusedError(category="PROMPT_BLOCK")`.
+- **Polish + Gemini 2.5 Flash migration** (#1016): DRY shared helpers across adapters (`warn_unsupported_kwarg_once`, `resolve_request_timeout`, `filter_anthropic_output_schema`); regex-anchored model allow-list (no more substring overmatch on hypothetical future versions); AST-based test assertions; pre-emptive `gemini-2.0-flash` → `gemini-2.5-flash` across docs/examples/tests.
+
+**Env-var unification**: `MCP_MESH_HINT_FALLBACK_TIMEOUT` is the canonical name; `MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT` remains as a deprecated back-compat alias with a runtime warning.
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v1.4.1...v2.0.0)
 
 ## v2.0.0 (2026-05-14)

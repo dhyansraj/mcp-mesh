@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-mesh-core"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "async-trait",
  "base64",
