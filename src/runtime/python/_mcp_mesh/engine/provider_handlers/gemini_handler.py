@@ -128,7 +128,7 @@ class GeminiHandler(BaseProviderHandler):
     Supported Models (via LiteLLM):
     - gemini/gemini-3-flash-preview (reasoning support)
     - gemini/gemini-3-pro-preview (advanced reasoning)
-    - gemini/gemini-2.0-flash (fast, efficient)
+    - gemini/gemini-2.5-flash (fast, efficient)
     - gemini/gemini-2.0-flash-lite (fastest, most efficient)
     - gemini/gemini-1.5-pro (high capability)
     - gemini/gemini-1.5-flash (balanced)

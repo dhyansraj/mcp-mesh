@@ -51,7 +51,7 @@ def _make_gemini_response(
     finish_reason: str = "STOP",
     finish_message: str | None = None,
     safety_ratings: list | None = None,
-    model_version: str | None = "gemini-2.0-flash",
+    model_version: str | None = "gemini-2.5-flash",
     prompt_tokens: int = 5,
     completion_tokens: int = 3,
     prompt_block_reason: str | None = None,
@@ -138,7 +138,7 @@ class TestTimeoutTranslation:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "request_timeout": 42,
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         http_opts = out["config"].get("http_options")
         assert http_opts is not None, "expected HttpOptions on config"
@@ -151,7 +151,7 @@ class TestTimeoutTranslation:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "timeout": 30,
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         http_opts = out["config"].get("http_options")
         assert http_opts is not None
@@ -165,7 +165,7 @@ class TestTimeoutTranslation:
                 "timeout": 10,
                 "request_timeout": 99,
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         assert out["config"]["http_options"].timeout == 10_000
 
@@ -175,7 +175,7 @@ class TestTimeoutTranslation:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "timeout": 42.7,
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         # 42.7 seconds → 42700 ms (int-coerced).
         assert out["config"]["http_options"].timeout == 42_700
@@ -187,7 +187,7 @@ class TestTimeoutTranslation:
                     "messages": [{"role": "user", "content": "Hi"}],
                     "timeout": "not-an-int",
                 },
-                model="gemini/gemini-2.0-flash",
+                model="gemini/gemini-2.5-flash",
             )
         # No HttpOptions attached when timeout can't be coerced.
         assert "http_options" not in out["config"]
@@ -207,7 +207,7 @@ class TestTimeoutTranslation:
                     "messages": [{"role": "user", "content": "Hi"}],
                     "timeout": float("inf"),
                 },
-                model="gemini/gemini-2.0-flash",
+                model="gemini/gemini-2.5-flash",
             )
         # No HttpOptions attached when timeout can't be coerced.
         assert "http_options" not in out["config"]
@@ -229,7 +229,7 @@ class TestTimeoutTranslation:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "timeout": 300,
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         assert out["config"]["http_options"].timeout == 300_000
 
@@ -239,7 +239,7 @@ class TestTimeoutTranslation:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "request_timeout": 90,
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         assert out["config"]["http_options"].timeout == 90_000
 
@@ -249,7 +249,7 @@ class TestTimeoutTranslation:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "timeout": 0.5,
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         assert out["config"]["http_options"].timeout == 500
 
@@ -260,7 +260,7 @@ class TestTimeoutTranslation:
                     "messages": [{"role": "user", "content": "Hi"}],
                     "request_timeout": 90,
                 },
-                model="gemini/gemini-2.0-flash",
+                model="gemini/gemini-2.5-flash",
             )
         warns = [
             r.getMessage()
@@ -284,7 +284,7 @@ class TestExtraEscapeHatches:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "extra_headers": {"X-Test": "1"},
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         http_opts = out["config"]["http_options"]
         assert http_opts.headers == {"X-Test": "1"}
@@ -295,7 +295,7 @@ class TestExtraEscapeHatches:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "extra_headers": {"X-Num": 42},
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         assert out["config"]["http_options"].headers == {"X-Num": "42"}
 
@@ -305,7 +305,7 @@ class TestExtraEscapeHatches:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "extra_headers": {},
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         assert "http_options" not in out["config"]
 
@@ -315,7 +315,7 @@ class TestExtraEscapeHatches:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "extra_body": {"foo": "bar"},
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         assert out["config"]["http_options"].extra_body == {"foo": "bar"}
 
@@ -326,7 +326,7 @@ class TestExtraEscapeHatches:
                     "messages": [{"role": "user", "content": "Hi"}],
                     "extra_query": {"q": "1"},
                 },
-                model="gemini/gemini-2.0-flash",
+                model="gemini/gemini-2.5-flash",
             )
         warns = [
             r.getMessage()
@@ -347,7 +347,7 @@ class TestExtraEscapeHatches:
                 "extra_headers": {"X-A": "1"},
                 "extra_body": {"b": 2},
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         http_opts = out["config"]["http_options"]
         # mesh's timeout convention is seconds; HttpOptions.timeout is ms.
@@ -372,7 +372,7 @@ class TestBareResponseSchema:
                     "additionalProperties": False,
                 },
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         rs = out["config"].get("response_schema")
         assert rs is not None
@@ -403,7 +403,7 @@ class TestBareResponseSchema:
                     "properties": {"from_direct": {"type": "string"}},
                 },
             },
-            model="gemini/gemini-2.0-flash",
+            model="gemini/gemini-2.5-flash",
         )
         rs = out["config"]["response_schema"]
         # The response_format path's schema wins.
@@ -417,7 +417,7 @@ class TestBareResponseSchema:
                     "messages": [{"role": "user", "content": "Hi"}],
                     "response_schema": {"type": "object"},
                 },
-                model="gemini/gemini-2.0-flash",
+                model="gemini/gemini-2.5-flash",
             )
         warns = [
             r.getMessage()
@@ -444,14 +444,14 @@ class TestSafetyBlockDetection:
             text=None,
             finish_reason=finish_reason,
             finish_message="blocked by policy",
-            model_version="gemini-2.0-flash",
+            model_version="gemini-2.5-flash",
         )
         with pytest.raises(LLMRefusedError) as exc_info:
-            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+            gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         err = exc_info.value
         assert err.vendor == "gemini"
         assert err.category == finish_reason
-        assert err.model == "gemini-2.0-flash"
+        assert err.model == "gemini-2.5-flash"
 
     def test_adapt_response_uses_finish_message_when_present(self):
         raw = _make_gemini_response(
@@ -460,7 +460,7 @@ class TestSafetyBlockDetection:
             finish_message="No can do",
         )
         with pytest.raises(LLMRefusedError) as exc_info:
-            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+            gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         assert exc_info.value.refusal_text == "No can do"
 
     def test_adapt_response_synthesizes_message_from_blocking_ratings(self):
@@ -476,7 +476,7 @@ class TestSafetyBlockDetection:
             safety_ratings=[rating],
         )
         with pytest.raises(LLMRefusedError) as exc_info:
-            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+            gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         assert "HARM_CATEGORY_DANGEROUS" in exc_info.value.refusal_text
         assert "safety filter" in exc_info.value.refusal_text
 
@@ -500,7 +500,7 @@ class TestSafetyBlockDetection:
         )
         # Must NOT raise TypeError; raises LLMRefusedError via SAFETY path.
         with pytest.raises(LLMRefusedError) as exc_info:
-            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+            gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         # Non-blocking rating → falls through to "blocked by Gemini policy"
         # synthesis (the "blocked by safety filter (...)" branch requires
         # at least one blocking rating).
@@ -514,7 +514,7 @@ class TestSafetyBlockDetection:
             safety_ratings=[],
         )
         with pytest.raises(LLMRefusedError) as exc_info:
-            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+            gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         assert "blocked by Gemini policy" in exc_info.value.refusal_text
         assert "SAFETY" in exc_info.value.refusal_text
 
@@ -527,14 +527,14 @@ class TestSafetyBlockDetection:
             finish_message="partial",
         )
         with pytest.raises(LLMRefusedError):
-            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+            gemini_native._adapt_response(raw, model="gemini-2.5-flash")
 
     def test_adapt_response_normal_finish_reason_unchanged(self):
         raw = _make_gemini_response(
             text="hello",
             finish_reason="STOP",
         )
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         assert out.choices[0].message.content == "hello"
         assert out.choices[0].finish_reason == "stop"
 
@@ -546,7 +546,7 @@ class TestSafetyBlockDetection:
             model_version="gemini-3-pro-preview",
         )
         with pytest.raises(LLMRefusedError) as exc_info:
-            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+            gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         # Resolved model from raw.model_version wins.
         assert exc_info.value.model == "gemini-3-pro-preview"
 
@@ -564,7 +564,7 @@ class TestSafetyBlockDetection:
         with pytest.raises(LLMRefusedError) as exc_info:
             await gemini_native.complete(
                 {"messages": [{"role": "user", "content": "Hi"}]},
-                model="gemini/gemini-2.0-flash",
+                model="gemini/gemini-2.5-flash",
             )
         assert exc_info.value.vendor == "gemini"
         assert exc_info.value.category == "SAFETY"
@@ -594,11 +594,11 @@ class TestPromptLevelSafetyBlockDetection:
             prompt_block_reason_message=None,
         )
         with pytest.raises(LLMRefusedError) as exc_info:
-            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+            gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         err = exc_info.value
         assert err.vendor == "gemini"
         assert err.category == "PROMPT_BLOCK"
-        assert err.model == "gemini-2.0-flash"
+        assert err.model == "gemini-2.5-flash"
         # Synthesized refusal text carries the reason enum name.
         assert block_reason in err.refusal_text
 
@@ -610,7 +610,7 @@ class TestPromptLevelSafetyBlockDetection:
             prompt_block_reason_message="Prompt contained disallowed content.",
         )
         with pytest.raises(LLMRefusedError) as exc_info:
-            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+            gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         assert (
             exc_info.value.refusal_text
             == "Prompt contained disallowed content."
@@ -630,7 +630,7 @@ class TestPromptLevelSafetyBlockDetection:
             prompt_block_reason_message="prompt-level block message",
         )
         with pytest.raises(LLMRefusedError) as exc_info:
-            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+            gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         err = exc_info.value
         assert err.category == "PROMPT_BLOCK"
         assert err.refusal_text == "prompt-level block message"
@@ -643,7 +643,7 @@ class TestPromptLevelSafetyBlockDetection:
             finish_reason="STOP",
             prompt_block_reason="BLOCKED_REASON_UNSPECIFIED",
         )
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         assert out.choices[0].message.content == "hello"
         assert out.choices[0].finish_reason == "stop"
 
@@ -652,7 +652,7 @@ class TestPromptLevelSafetyBlockDetection:
         raw = _make_gemini_response(text="hello", finish_reason="STOP")
         # _make_gemini_response leaves prompt_feedback=None by default.
         assert raw.prompt_feedback is None
-        out = gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+        out = gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         assert out.choices[0].message.content == "hello"
         assert out.choices[0].finish_reason == "stop"
 
@@ -664,7 +664,7 @@ class TestPromptLevelSafetyBlockDetection:
             model_version="gemini-3-pro-preview",
         )
         with pytest.raises(LLMRefusedError) as exc_info:
-            gemini_native._adapt_response(raw, model="gemini-2.0-flash")
+            gemini_native._adapt_response(raw, model="gemini-2.5-flash")
         # Resolved model from raw.model_version wins.
         assert exc_info.value.model == "gemini-3-pro-preview"
 
@@ -683,7 +683,7 @@ class TestPromptLevelSafetyBlockDetection:
         with pytest.raises(LLMRefusedError) as exc_info:
             await gemini_native.complete(
                 {"messages": [{"role": "user", "content": "Hi"}]},
-                model="gemini/gemini-2.0-flash",
+                model="gemini/gemini-2.5-flash",
             )
         assert exc_info.value.vendor == "gemini"
         assert exc_info.value.category == "PROMPT_BLOCK"
@@ -715,7 +715,7 @@ class TestLLMRefusedErrorBackwardsCompat:
         err = LLMRefusedError(
             "blocked",
             vendor="gemini",
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             category="SAFETY",
         )
         assert err.category == "SAFETY"
@@ -775,7 +775,7 @@ class TestLiveSafetyBlockIntegration:
         try:
             response = await gemini_native.complete(
                 request_params,
-                model="gemini/gemini-2.0-flash",
+                model="gemini/gemini-2.5-flash",
             )
         except LLMRefusedError as exc:
             assert exc.vendor == "gemini"

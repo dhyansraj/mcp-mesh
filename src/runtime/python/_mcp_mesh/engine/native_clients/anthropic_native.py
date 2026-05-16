@@ -44,7 +44,11 @@ from .._structured_output_helpers import (
     is_synthetic_tool_in_list,
     schema_to_synthetic_tool,
 )
-from ._native_client_helpers import resolve_request_timeout
+from ._native_client_helpers import (
+    reset_unsupported_kwargs_dedupe,
+    resolve_request_timeout,
+    warn_unsupported_kwarg_once,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -748,41 +752,45 @@ _ANTHROPIC_PASSTHROUGH_KWARGS = frozenset(
 # Older models (Haiku, Sonnet 3.x / 4.0, Opus 3.x) reject the field, so we
 # fall through to the existing synthetic-tool injection path for those.
 # LiteLLM uses a substring allow-list at transformation.py:822-830; we mirror
-# it plus the Sonnet 4.6 / Opus 4.5 / 4.7 releases. Both dash and dot version
-# forms are accepted (callers pass both in the wild); substring (not prefix)
-# match so Bedrock model ids (``anthropic.claude-sonnet-4-6-20260301-v1:0``)
-# and date-pinned variants are covered.
-_NATIVE_OUTPUT_FORMAT_MODEL_SUBSTRINGS = frozenset(
-    {
-        "sonnet-4-5",
-        "sonnet-4.5",
-        "sonnet-4-6",
-        "sonnet-4.6",
-        "opus-4-1",
-        "opus-4.1",
-        "opus-4-5",
-        "opus-4.5",
-        "opus-4-7",
-        "opus-4.7",
-    }
+# it plus the Sonnet 4.6 / Opus 4.5 / 4.7 releases.
+#
+# Patterns (not raw substrings) so the trailing minor-version digit is
+# boundary-anchored: ``opus-4-1`` must NOT match a hypothetical future
+# ``opus-4-10``. Each pattern accepts both dash and dot separators (callers
+# pass both forms in the wild) and uses a negative-lookahead to forbid an
+# additional digit immediately after the minor version. Bedrock model ids
+# (``anthropic.claude-sonnet-4-6-20260301-v1:0``) and date-pinned variants
+# still match because the patterns use ``re.search`` (not anchored to start)
+# and tolerate ``-`` / ``.`` / end-of-string after the version.
+_NATIVE_OUTPUT_FORMAT_MODEL_PATTERNS = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"(?<!\d)sonnet-4[-.]5(?!\d)",
+        r"(?<!\d)sonnet-4[-.]6(?!\d)",
+        r"(?<!\d)opus-4[-.]1(?!\d)",
+        r"(?<!\d)opus-4[-.]5(?!\d)",
+        r"(?<!\d)opus-4[-.]7(?!\d)",
+    )
 )
 
 
 def _supports_native_output_format(model: str | None) -> bool:
     """True when ``model`` accepts the native ``output_config.format`` field.
 
-    Substring match (not prefix) because model ids are date-pinned
-    (``claude-sonnet-4-6-20260301``) and Bedrock prefixes the SDK id with
-    ``anthropic.``. Both dash (``-``) and dot (``.``) versions are accepted
-    because callers pass both forms in the wild.
+    Substring-style match via ``re.search`` (not prefix-anchored) because
+    model ids are date-pinned (``claude-sonnet-4-6-20260301``) and Bedrock
+    prefixes the SDK id with ``anthropic.``. Both dash (``-``) and dot
+    (``.``) versions are accepted because callers pass both forms in the
+    wild. The trailing-digit guard (``(?!\\d)``) prevents a future
+    ``opus-4-10`` from being silently accepted on the ``opus-4-1`` pattern.
 
-    Haiku and pre-4.5 Sonnet / pre-4.1 Opus models are intentionally NOT in
-    this set — they route through the existing synthetic-tool path.
+    Haiku and pre-4.5 Sonnet / pre-4.1 Opus models are intentionally NOT
+    matched by any pattern — they route through the existing synthetic-tool
+    path.
     """
     if not model:
         return False
-    model_lower = model.lower()
-    return any(s in model_lower for s in _NATIVE_OUTPUT_FORMAT_MODEL_SUBSTRINGS)
+    return any(p.search(model) for p in _NATIVE_OUTPUT_FORMAT_MODEL_PATTERNS)
 
 
 # ``_filter_anthropic_output_schema`` (which strips ``maxItems`` / ``minItems``
@@ -1340,26 +1348,29 @@ def is_fallback_logged() -> bool:
 # providers receiving the same litellm-only kwarg every request would
 # otherwise flood the log with identical messages (unbounded growth).
 #
-# Test reset hook is the module-level _reset_unsupported_kwargs_dedupe()
-# function below — DRY-up candidate (mirror functions live in
-# openai_native + gemini_native) when a 4th adapter shows up.
+# The dedupe set is per-vendor: a LiteLLM-only kwarg dropped on the
+# Anthropic path won't suppress the WARN if it later shows up on the
+# OpenAI path. The actual WARN-emit + dedupe machinery lives in
+# ``_native_client_helpers.warn_unsupported_kwarg_once``; this module
+# owns only the per-vendor state.
 _logged_unsupported_kwargs: set[str] = set()
 
 
 def _warn_unsupported_kwarg_once(key: str) -> None:
     """WARN once per unique unsupported kwarg name.
 
-    Used by ``_build_create_kwargs`` to surface litellm-only knobs the
-    adapter is silently dropping (parallel_tool_calls, stream_options, etc.)
-    without logging on every single request.
+    Thin wrapper over the shared helper so call sites stay terse
+    (single-arg) and the per-vendor dedupe state stays local to this
+    module. Used by ``_build_create_kwargs`` to surface litellm-only
+    knobs the adapter is silently dropping (parallel_tool_calls,
+    stream_options, etc.) without logging on every single request.
     """
-    if key in _logged_unsupported_kwargs:
-        return
-    _logged_unsupported_kwargs.add(key)
-    logger.warning(
-        "Native Anthropic adapter dropping unsupported kwarg: '%s' "
-        "(LiteLLM-only — not forwarded to anthropic.messages.create)",
-        key,
+    warn_unsupported_kwarg_once(
+        _logged_unsupported_kwargs,
+        kwarg=key,
+        adapter_label="Anthropic",
+        sdk_call_label="anthropic.messages.create",
+        logger=logger,
     )
 
 
@@ -1367,4 +1378,4 @@ def _reset_unsupported_kwargs_dedupe() -> None:
     """For tests — drop the WARN-once dedupe set so each test sees a fresh
     WARN trail. NOT for production use.
     """
-    _logged_unsupported_kwargs.clear()
+    reset_unsupported_kwargs_dedupe(_logged_unsupported_kwargs)

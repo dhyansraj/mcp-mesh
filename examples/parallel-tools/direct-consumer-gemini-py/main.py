@@ -36,7 +36,7 @@ class StockAnalysis(BaseModel):
 @app.tool()
 @mesh.llm(
     filter=[{"tags": ["financial", "slow-tool"]}],
-    provider="gemini/gemini-2.0-flash",
+    provider="gemini/gemini-2.5-flash",
     max_iterations=5,
     parallel_tool_calls=True,
     system_prompt="file://prompts/system.jinja2",

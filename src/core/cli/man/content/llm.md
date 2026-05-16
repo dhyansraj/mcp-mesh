@@ -166,8 +166,8 @@ anthropic/claude-opus-4
 openai/gpt-4o
 openai/gpt-4-turbo
 openai/gpt-3.5-turbo
-gemini/gemini-2.0-flash          # Google AI Studio (API key)
-vertex_ai/gemini-2.0-flash       # Google Vertex AI (IAM)
+gemini/gemini-2.5-flash          # Google AI Studio (API key)
+vertex_ai/gemini-2.5-flash       # Google Vertex AI (IAM)
 ```
 
 ## Gemini Backend Selection
@@ -176,8 +176,8 @@ Mesh routes Gemini calls via the model prefix:
 
 | Backend                    | Model prefix                 | Auth                                            |
 | -------------------------- | ---------------------------- | ----------------------------------------------- |
-| Google AI Studio (API key) | `gemini/gemini-2.0-flash`    | `GOOGLE_API_KEY` env                            |
-| Google Vertex AI (IAM)     | `vertex_ai/gemini-2.0-flash` | ADC + `VERTEXAI_PROJECT` + `VERTEXAI_LOCATION`  |
+| Google AI Studio (API key) | `gemini/gemini-2.5-flash`    | `GOOGLE_API_KEY` env                            |
+| Google Vertex AI (IAM)     | `vertex_ai/gemini-2.5-flash` | ADC + `VERTEXAI_PROJECT` + `VERTEXAI_LOCATION`  |
 
 Same `GeminiHandler` runs for both — identical HINT-mode prompt shaping for
 structured output with tools. Switch backends by changing only the model

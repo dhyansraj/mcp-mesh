@@ -421,7 +421,7 @@ Run a `@mesh.llm_provider` agent with the `vertex_ai/*` model string:
 @mesh.llm_provider(
     capability="llm",
     tags=["llm", "gemini", "vertex"],
-    model="vertex_ai/gemini-2.0-flash",
+    model="vertex_ai/gemini-2.5-flash",
 )
 def gemini_provider(): pass
 ```
@@ -454,7 +454,7 @@ LiteLLM auth resolution order:
 
 ```typescript
 agent.addLlmProvider({
-  model: "vertex_ai/gemini-2.0-flash",
+  model: "vertex_ai/gemini-2.5-flash",
   capability: "llm",
   tags: ["gemini", "vertex"],
 });
@@ -477,7 +477,7 @@ when present:
 @MeshLlmProvider(
     capability = "llm",
     tags = {"llm", "gemini", "vertex"},
-    model = "vertex_ai/gemini-2.0-flash"
+    model = "vertex_ai/gemini-2.5-flash"
 )
 @SpringBootApplication
 public class GeminiProviderApplication { … }
@@ -512,9 +512,9 @@ that changes between AI Studio and Vertex AI. Consumer agents keep the same
 
 |                | AI Studio                                  | Vertex AI                                                          |
 | -------------- | ------------------------------------------ | ------------------------------------------------------------------ |
-| Python provider | `model="gemini/gemini-2.0-flash"`          | `model="vertex_ai/gemini-2.0-flash"`                               |
-| TypeScript provider | `model: "gemini/gemini-2.0-flash"`     | `model: "vertex_ai/gemini-2.0-flash"`                              |
-| Java provider   | `model = "gemini/gemini-2.0-flash"`        | `model = "vertex_ai/gemini-2.0-flash"`                             |
+| Python provider | `model="gemini/gemini-2.5-flash"`          | `model="vertex_ai/gemini-2.5-flash"`                               |
+| TypeScript provider | `model: "gemini/gemini-2.5-flash"`     | `model: "vertex_ai/gemini-2.5-flash"`                              |
+| Java provider   | `model = "gemini/gemini-2.5-flash"`        | `model = "vertex_ai/gemini-2.5-flash"`                             |
 | Auth env       | `GOOGLE_API_KEY` / `GOOGLE_GENERATIVE_AI_API_KEY` / `GOOGLE_AI_GEMINI_API_KEY` | `GOOGLE_APPLICATION_CREDENTIALS` (ADC)        |
 
 #### Provisioned Throughput

@@ -134,7 +134,7 @@ transport and env var names differ.
 @mesh.llm_provider(
     capability="llm",
     tags=["gemini", "vertex"],
-    model="vertex_ai/gemini-2.0-flash",  # vs "gemini/gemini-2.0-flash" for AI Studio
+    model="vertex_ai/gemini-2.5-flash",  # vs "gemini/gemini-2.5-flash" for AI Studio
 )
 def my_provider(): pass
 ```
@@ -155,7 +155,7 @@ pip install 'mcp-mesh[vertex]'
 
 ```typescript
 agent.addLlmProvider({
-  model: "vertex_ai/gemini-2.0-flash",
+  model: "vertex_ai/gemini-2.5-flash",
   capability: "llm",
   tags: ["gemini", "vertex"],
 });

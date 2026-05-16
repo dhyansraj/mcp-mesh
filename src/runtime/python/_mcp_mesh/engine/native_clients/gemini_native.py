@@ -57,7 +57,11 @@ from typing import Any
 
 import httpx
 
-from ._native_client_helpers import resolve_request_timeout
+from ._native_client_helpers import (
+    reset_unsupported_kwargs_dedupe,
+    resolve_request_timeout,
+    warn_unsupported_kwarg_once,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -410,8 +414,8 @@ def supports_model(model: str) -> bool:
 def _strip_prefix(model: str) -> str:
     """Return the bare Gemini model id for the SDK call.
 
-    ``gemini/gemini-2.0-flash`` → ``gemini-2.0-flash``
-    ``vertex_ai/gemini-2.0-flash`` → ``gemini-2.0-flash``
+    ``gemini/gemini-2.5-flash`` → ``gemini-2.5-flash``
+    ``vertex_ai/gemini-2.5-flash`` → ``gemini-2.5-flash``
     """
     if model.startswith(_GEMINI_PREFIX):
         return model[len(_GEMINI_PREFIX):]
@@ -1783,26 +1787,29 @@ def is_fallback_logged() -> bool:
 # otherwise flood the log with identical messages (unbounded growth
 # pre-fix).
 #
-# Test reset hook is the module-level _reset_unsupported_kwargs_dedupe()
-# function below — DRY-up candidate (mirror functions live in
-# anthropic_native + openai_native) when a 4th adapter shows up.
+# The dedupe set is per-vendor: a LiteLLM-only kwarg dropped on the
+# Gemini path won't suppress the WARN if it later shows up on the
+# Anthropic / OpenAI path. The actual WARN-emit + dedupe machinery lives
+# in ``_native_client_helpers.warn_unsupported_kwarg_once``; this module
+# owns only the per-vendor state.
 _logged_unsupported_kwargs: set[str] = set()
 
 
 def _warn_unsupported_kwarg_once(key: str) -> None:
     """WARN once per unique unsupported kwarg name.
 
-    Used by ``_build_create_kwargs`` to surface litellm-only knobs the
-    adapter is silently dropping (or new fields the google-genai SDK
-    doesn't accept yet) without logging on every single request.
+    Thin wrapper over the shared helper so call sites stay terse
+    (single-arg) and the per-vendor dedupe state stays local to this
+    module. Used by ``_build_create_kwargs`` to surface litellm-only
+    knobs the adapter is silently dropping (or new fields the google-genai
+    SDK doesn't accept yet) without logging on every single request.
     """
-    if key in _logged_unsupported_kwargs:
-        return
-    _logged_unsupported_kwargs.add(key)
-    logger.warning(
-        "Native Gemini adapter dropping unsupported kwarg: '%s' "
-        "(LiteLLM-only — not forwarded to google.genai.Client.aio.models.generate_content)",
-        key,
+    warn_unsupported_kwarg_once(
+        _logged_unsupported_kwargs,
+        kwarg=key,
+        adapter_label="Gemini",
+        sdk_call_label="google.genai.Client.aio.models.generate_content",
+        logger=logger,
     )
 
 
@@ -1810,4 +1817,4 @@ def _reset_unsupported_kwargs_dedupe() -> None:
     """For tests — drop the WARN-once dedupe set so each test sees a fresh
     WARN trail. NOT for production use.
     """
-    _logged_unsupported_kwargs.clear()
+    reset_unsupported_kwargs_dedupe(_logged_unsupported_kwargs)

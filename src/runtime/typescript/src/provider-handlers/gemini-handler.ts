@@ -55,7 +55,7 @@ const debug = createDebug("gemini-handler");
  * Supported Models (via Vercel AI SDK):
  * - gemini-3-flash-preview (reasoning support)
  * - gemini-3-pro-preview (advanced reasoning)
- * - gemini-2.0-flash (fast, efficient)
+ * - gemini-2.5-flash (fast, efficient)
  * - gemini-2.0-flash-lite (fastest, most efficient)
  * - gemini-1.5-pro (high capability)
  * - gemini-1.5-flash (balanced)

@@ -6,7 +6,7 @@ path — only the model prefix and auth env vars change.
 
 ## What it shows
 
-- `model="vertex_ai/gemini-2.0-flash"` on `agent.addLlmProvider`
+- `model="vertex_ai/gemini-2.5-flash"` on `agent.addLlmProvider`
 - A Zod structured-output schema (`CapitalInfo`)
 - Mesh's HINT-mode prompt shaping is applied automatically (same as for
   `gemini/*`), so structured output works alongside tool use without
@@ -61,7 +61,7 @@ You should see a structured response like:
 To run the same agent against Google AI Studio instead, change two things:
 
 ```typescript
-model: "gemini/gemini-2.0-flash"   // was: "vertex_ai/gemini-2.0-flash"
+model: "gemini/gemini-2.5-flash"   // was: "vertex_ai/gemini-2.5-flash"
 ```
 
 ```bash

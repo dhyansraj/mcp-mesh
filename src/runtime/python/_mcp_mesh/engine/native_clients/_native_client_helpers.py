@@ -16,6 +16,49 @@ import logging
 from typing import Any
 
 
+def warn_unsupported_kwarg_once(
+    dedupe_set: set[str],
+    *,
+    kwarg: str,
+    adapter_label: str,
+    sdk_call_label: str,
+    logger: logging.Logger,
+) -> None:
+    """Log a WARNing for a dropped kwarg, deduplicating per-process via the
+    caller-supplied set.
+
+    Each adapter owns its own ``dedupe_set`` so dedupe is per-vendor — a
+    LiteLLM-only kwarg dropped on the Anthropic path won't suppress the
+    WARN if it later shows up on the OpenAI path (different translation
+    surface, different signal).
+
+    ``adapter_label`` is the human-readable vendor name ("Anthropic",
+    "OpenAI", "Gemini"); ``sdk_call_label`` is the qualified SDK method
+    referenced in the message body so reviewers can grep from the log line
+    back to the dropping site.
+    """
+    if kwarg in dedupe_set:
+        return
+    dedupe_set.add(kwarg)
+    logger.warning(
+        "Native %s adapter dropping unsupported kwarg: '%s' "
+        "(LiteLLM-only — not forwarded to %s)",
+        adapter_label,
+        kwarg,
+        sdk_call_label,
+    )
+
+
+def reset_unsupported_kwargs_dedupe(dedupe_set: set[str]) -> None:
+    """Clear the caller-supplied dedupe set so a re-run sees a fresh state.
+
+    Test hook — NOT for production use. The adapters expose thin module-
+    level wrappers (``_reset_unsupported_kwargs_dedupe``) that call this
+    with their own module-level dedupe set.
+    """
+    dedupe_set.clear()
+
+
 def resolve_request_timeout(
     request_params: dict[str, Any],
     *,

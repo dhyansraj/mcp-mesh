@@ -157,7 +157,7 @@ Provide detailed analysis appropriate for {{ user_level }}-level users.
 
 > **Vertex AI (Gemini via IAM)**: For production deployments using Google
 > Cloud IAM instead of API keys, run a Gemini provider with
-> `model="vertex_ai/gemini-2.0-flash"` and install the `[vertex]` extra.
+> `model="vertex_ai/gemini-2.5-flash"` and install the `[vertex]` extra.
 > Consumers don't change. The TypeScript and Java runtimes have equivalent
 > support — see the [Python](../python/llm/index.md),
 > [TypeScript](../typescript/llm/index.md), and [Java](../java/llm/index.md)

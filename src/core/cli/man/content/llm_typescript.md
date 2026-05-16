@@ -232,8 +232,8 @@ Uses LiteLLM model format:
 | ----------------------- | ------------------------------ |
 | Anthropic               | `anthropic/claude-sonnet-4-5`  |
 | OpenAI                  | `openai/gpt-4o`                |
-| Google AI Studio        | `gemini/gemini-2.0-flash`      |
-| Google Vertex AI (IAM)  | `vertex_ai/gemini-2.0-flash`   |
+| Google AI Studio        | `gemini/gemini-2.5-flash`      |
+| Google Vertex AI (IAM)  | `vertex_ai/gemini-2.5-flash`   |
 | Mistral                 | `mistral/mistral-large-latest` |
 | Ollama                  | `ollama/llama3`                |
 
@@ -282,7 +282,7 @@ needed.
 
    ```typescript
    agent.addLlmProvider({
-     model: "vertex_ai/gemini-2.0-flash",
+     model: "vertex_ai/gemini-2.5-flash",
      capability: "llm",
      tags: ["llm", "gemini", "vertex"],
    });
@@ -298,9 +298,9 @@ Migrate from AI Studio to Vertex AI by changing the model prefix and env vars:
 
 ```typescript
 // before:
-model: "gemini/gemini-2.0-flash"
+model: "gemini/gemini-2.5-flash"
 // after:
-model: "vertex_ai/gemini-2.0-flash"
+model: "vertex_ai/gemini-2.5-flash"
 ```
 
 ```bash
