@@ -15,8 +15,8 @@ client is actively waiting.
 This page walks through the mesh-idiomatic decomposition for that
 class of agent: a **state agent** that owns durable storage, an
 **orchestrator agent** that runs the long-lived unit of work, and a
-**client surface** (browser via `mesh.route`, MCP via Claude Code /
-Cursor) that talks to both. The pattern is small, but it pulls in
+**client surface** (browser via `mesh.route`, MCP-aware clients via the
+MCP transport) that talks to both. The pattern is small, but it pulls in
 several primitives — MeshJob, DDDI, the worker-pool topology — so the
 "why" matters as much as the "how."
 
@@ -39,8 +39,8 @@ several primitives — MeshJob, DDDI, the worker-pool topology — so the
   external signal; a timer fires at a deadline. None of this is gated
   on a user tool call landing.
 
-The temptation when you the author hit this for the first time is to
-cache state in process memory at the module level. The shape feels
+The temptation when you hit this for the first time is to cache state
+in process memory at the module level. The shape feels
 natural — it's how FastAPI services without mesh usually look:
 
 ```python
@@ -85,7 +85,7 @@ loop-bound resources (asyncpg pools, `redis.asyncio.Redis`,
 `motor.motor_asyncio.AsyncIOMotorClient`, `aiohttp.ClientSession`) bind
 to whatever loop created them and fail on every subsequent call that
 lands on a different worker. The full topology is documented in
-[`meshctl man dependency-injection`](../python/dependency-injection.md#single-worker-mode-for-shared-loop-bound-resources).
+[the dependency-injection reference](../python/dependency-injection.md#single-worker-mode-for-shared-loop-bound-resources).
 
 There are two clean answers to this problem in mesh. The simple one is
 to collapse to a single worker loop with `MCP_MESH_TOOL_WORKERS=1`
@@ -197,7 +197,7 @@ The orchestrator hosts the long-running unit of work. Each unit is one
 - Emit progress with `await job.update_progress(fraction, message)`.
 - Persist after every meaningful step. If the pod dies, the next claim
   cycle reroutes the job (orphan reroute is mesh-managed — see
-  [`jobs.md`](jobs.md)) and the new owner reads the latest snapshot
+  [Long-Running Jobs](jobs.md)) and the new owner reads the latest snapshot
   from the state agent to know where to resume.
 
 === "Python"
@@ -265,7 +265,7 @@ resources live across the boundary in the state agent's process).
 
 ### Client surface — `mesh.route` for web, MCP for tools
 
-Both the browser and an MCP-aware tool (Claude Code, Cursor) hit the
+Both the browser and MCP-aware clients (over the MCP transport) hit the
 same backend capabilities. A FastAPI route translates HTTP into a
 MeshJob submit + wait:
 
@@ -296,8 +296,8 @@ MeshJob submit + wait:
     ```
 
 The browser polls `__mesh_job_status` (or subscribes via SSE — see
-[`streaming.md`](streaming.md) for the progress-notification path) for
-updates. An MCP client calls `commission_workflow` directly through the
+[Streaming](streaming.md) for the progress-notification path) for
+updates. An MCP client calls `run_workflow` directly through the
 mesh as a normal tool that returns the `job_id`.
 
 ## Why this shape
@@ -312,8 +312,8 @@ Each piece of the decomposition pays for itself:
 - **MeshJob owns the long-running task lifecycle.** Orphan reroute on
   replica death, cancel propagation, progress streaming, per-attempt
   deadlines, retry-on-transient — all of that is the substrate's job,
-  not yours. You write the body. See [`jobs.md`](jobs.md) for the
-  full lifecycle.
+  not yours. You write the body. See [Long-Running Jobs](jobs.md) for
+  the full lifecycle.
 - **Tool calls are stateless from mesh's perspective.** The orchestrator
   scales horizontally without coordination; the state agent scales
   horizontally with Postgres as the coordination point; the route agent
@@ -478,7 +478,7 @@ A handful of anti-patterns this decomposition exists to prevent:
 ## See Also
 
 - [Long-Running Jobs](jobs.md) — MeshJob substrate: lifecycle, retries,
-  cancel, orphan reroute, `task=true` opt-in
+  cancel, orphan reroute, `task=True` opt-in
 - [Streaming](streaming.md) — progress notifications and chunked text
   responses; pairs with MeshJob for live updates
 - [In-Process State (Escape Hatch)](in-process-state.md) — when even

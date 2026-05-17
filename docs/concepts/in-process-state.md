@@ -159,7 +159,7 @@ pattern imposes that mesh otherwise handles for you.
 
 A `@mesh.tool` function's DI parameters (`McpMeshTool`, `MeshLlmAgent`,
 `MeshJob`) are injected by a wrapper mesh installs at module load time.
-The wrapper is what subsitutes the proxy for the parameter — the raw
+The wrapper is what substitutes the proxy for the parameter — the raw
 function underneath has `None` defaults that never get filled in unless
 you call the wrapper.
 

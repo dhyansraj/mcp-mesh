@@ -28,43 +28,43 @@ need the exact spelling.
 
 - :material-api:{ .lg .middle } **API**
 
-    ***
+  ***
 
-    Symbol references for the multimodal media surfaces — return types, parameter
-    annotations, upload helpers, and storage configuration.
+  Symbol references for the multimodal media surfaces — return types, parameter
+  annotations, upload helpers, and storage configuration.
 
-    [:octicons-arrow-right-24: MediaResult](../api/media-result.md)
-    [:octicons-arrow-right-24: MediaParam](../api/media-param.md)
-    [:octicons-arrow-right-24: save_upload](../api/save-upload.md)
-    [:octicons-arrow-right-24: MediaStore](../api/media-store.md)
+  - [MediaResult](../api/media-result.md)
+  - [MediaParam](../api/media-param.md)
+  - [save_upload](../api/save-upload.md)
+  - [MediaStore](../api/media-store.md)
 
 - :material-console:{ .lg .middle } **CLI**
 
-    ***
+  ***
 
-    `meshctl` command reference — every subcommand, flag, and environment
-    variable that the CLI honors, generated from the embedded man pages.
+  `meshctl` command reference — every subcommand, flag, and environment
+  variable that the CLI honors, generated from the embedded man pages.
 
-    [:octicons-arrow-right-24: meshctl Overview](../cli/index.md)
+  [:octicons-arrow-right-24: meshctl Overview](../cli/index.md)
 
 - :material-cog:{ .lg .middle } **Environment Variables**
 
-    ***
+  ***
 
-    Exhaustive list of runtime environment variables read by the registry,
-    agents, and SDKs — TLS, observability, retries, transport, and more.
+  Exhaustive list of runtime environment variables read by the registry,
+  agents, and SDKs — TLS, observability, retries, transport, and more.
 
-    [:octicons-arrow-right-24: Environment Variables](../environment-variables.md)
+  [:octicons-arrow-right-24: Environment Variables](../environment-variables.md)
 
 - :material-tune:{ .lg .middle } **Kwargs**
 
-    ***
+  ***
 
-    Vendor-specific `model_params` cheatsheet for `@mesh.llm` consumers —
-    `thinking_config` (Gemini), `output_config` (Anthropic), `reasoning_effort`
-    (OpenAI), and the cross-vendor common kwargs.
+  Vendor-specific `model_params` cheatsheet for `@mesh.llm` consumers —
+  `thinking_config` (Gemini), `output_config` (Anthropic), `reasoning_effort`
+  (OpenAI), and the cross-vendor common kwargs.
 
-    [:octicons-arrow-right-24: LLM Kwargs](kwargs.md)
+  [:octicons-arrow-right-24: LLM Kwargs](kwargs.md)
 
 </div>
 
