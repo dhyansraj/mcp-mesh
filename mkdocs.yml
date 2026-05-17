@@ -220,6 +220,7 @@ nav:
 
   # Shared sections (language-agnostic)
   - Concepts:
+      - concepts/index.md
       - Architecture & Design: concepts/architecture.md
       - "DDDI: Distributed Dynamic Dependency Injection": concepts/dddi.md
       - Registry: concepts/registry.md
@@ -229,6 +230,8 @@ nav:
       - Audit Trail: concepts/audit.md
       - Streaming: concepts/streaming.md
       - Long-Running Jobs: concepts/jobs.md
+      - Stateful Agents: concepts/stateful-agents.md
+      - In-Process State (Escape Hatch): concepts/in-process-state.md
 
   - Multimodal:
       - Getting Started: multimodal/getting-started.md
@@ -252,6 +255,7 @@ nav:
       - Producer Spec (Conformance): a2a/surfaces-spec.md
 
   - Reference:
+      - reference/index.md
       - API:
           - MediaResult: api/media-result.md
           - MediaParam: api/media-param.md

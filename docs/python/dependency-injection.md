@@ -182,9 +182,123 @@ When topology changes (agents join/leave), the mesh:
 
 No code changes needed - happens transparently.
 
+## Single-worker mode for shared loop-bound resources
+
+Some Python async libraries hand back objects that are bound to the
+specific asyncio loop they were created on — `asyncpg.Pool`,
+`redis.asyncio.Redis`, `motor.motor_asyncio.AsyncIOMotorClient`,
+`aiohttp.ClientSession`, and many others. The library caches internal
+`Future` objects against the creating loop; awaiting any of them from a
+different loop throws:
+
+```
+RuntimeError: Task <...> got Future <...> attached to a different loop
+```
+
+The mesh Python runtime dispatches `async def` `@mesh.tool` functions
+across a small pool of worker loops (default `min(8, max(2, cpu_count()))`,
+always ≥ 2). The pool keeps `/health`, `/livez`, registry heartbeats,
+and other concurrent tool calls responsive even when one tool blocks the
+loop. The full topology is documented in `meshctl man dependency-injection`.
+
+The interaction: if you cache a pool at module level on default workers,
+the lazy initializer runs on whichever worker loop happened to receive
+the first call. Subsequent calls round-robin to a different worker, the
+pool's internal Futures fail the cross-loop check, and every call after
+the first raises.
+
+### The flag: `MCP_MESH_TOOL_WORKERS=1`
+
+Pin the agent to a single worker loop. The pool gets created on that
+loop, every subsequent tool call lands on that same loop, no cross-loop
+sharing happens. Module-level resource caching works the way you'd
+expect from a non-mesh FastAPI agent.
+
+### Trade-offs
+
+| Property | Default (N≥2) | `WORKERS=1` |
+|---|---|---|
+| Health/livez endpoint stays responsive when a tool blocks | ✓ | ✓ |
+| Module-level loop-bound resource shared across tools | ✗ | ✓ |
+| Parallel execution when a tool does blocking sync work | ✓ | ✗ (serialized) |
+| Async cooperative concurrency within a tool body | ✓ | ✓ |
+
+The `/health` and `/livez` endpoints run on their own thread regardless
+of `WORKERS`, so infra signals stay responsive in both modes. The
+asymmetry is in parallel execution of tool bodies that block the loop:
+on default workers, two blocking tools run concurrently on two
+workers; on `WORKERS=1`, the second waits for the first.
+
+### When to use it
+
+Good fit:
+
+- **Single-tenant CRUD agents** with one shared asyncpg pool or one
+  shared Redis client.
+- **State agents** in the [stateful-agents pattern](../concepts/stateful-agents.md) —
+  pure read/write tools over durable storage, no long-running work in
+  the agent itself.
+- Any agent where the shared resource cost (creating per-tool pools)
+  outweighs the parallel-execution gain.
+
+Bad fit:
+
+- **Agents that do blocking sync work** (sync DB drivers, CPU-bound
+  computation) and need true parallelism. Keep default workers and use
+  `await asyncio.to_thread(blocking_fn, ...)` inside the handler — that
+  offloads to the runtime's thread pool without freezing the worker
+  loop.
+- **CPU-bound workloads** that need to use multiple cores in parallel.
+  `WORKERS=1` serializes; default workers parallelize only across
+  loops, not across CPU cores (use process-level parallelism for that).
+- **Agents that hold genuinely long-lived state in process memory**
+  beyond a connection pool. See
+  [In-Process State (Escape Hatch)](../concepts/in-process-state.md)
+  for the narrower cases where `WORKERS=1` isn't enough.
+
+### How to set it
+
+Docker compose:
+
+```yaml
+services:
+  state-agent:
+    environment:
+      MCP_MESH_TOOL_WORKERS: "1"
+```
+
+Helm values:
+
+```yaml
+env:
+  MCP_MESH_TOOL_WORKERS: "1"
+```
+
+Kubernetes deployment spec:
+
+```yaml
+spec:
+  containers:
+    - name: state-agent
+      env:
+        - name: MCP_MESH_TOOL_WORKERS
+          value: "1"
+```
+
+For the bigger-picture decomposition (state agent + MeshJob orchestrator
++ client surface) that motivates this flag, see
+[Stateful Agents](../concepts/stateful-agents.md). For the narrower
+cases where even single-worker isn't enough (sub-10ms latency budgets,
+unportable loop-bound resources, true background daemons), see
+[In-Process State](../concepts/in-process-state.md).
+
 ## See Also
 
 - `meshctl man capabilities` - Declaring capabilities
 - `meshctl man tags` - Tag-based selection
 - `meshctl man health` - Health monitoring
 - `meshctl man proxies` - Proxy details
+- [Stateful Agents](../concepts/stateful-agents.md) - State agents +
+  MeshJob orchestrators
+- [In-Process State](../concepts/in-process-state.md) - Escape hatch
+  for narrow cases
