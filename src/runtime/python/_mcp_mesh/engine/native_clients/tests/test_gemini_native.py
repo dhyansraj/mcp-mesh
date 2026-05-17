@@ -1005,6 +1005,131 @@ class TestBuildCreateKwargs:
         assert cfg["stop_sequences"] == ["END"]
         assert cfg["seed"] == 42
 
+    # ---- thinking_config passthrough (Gemini 2.5+ thinking-mode budget) ----
+    #
+    # ``thinking_config`` in request_params lets callers control Gemini's
+    # internal reasoning budget. The adapter accepts either a dict (built
+    # into a ``ThinkingConfig`` here) or an already-built ``ThinkingConfig``
+    # instance (passed through). Default (no key) → SDK default applies, so
+    # config.thinking_config stays absent. Tests cover each case below.
+
+    def test_thinking_config_budget_zero_disables_thinking(self):
+        """``{"thinking_budget": 0}`` disables Gemini's internal reasoning so
+        the full token budget goes to the visible response (the comparison
+        use-case for parity with non-thinking models)."""
+        out = gemini_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi"}],
+                "thinking_config": {"thinking_budget": 0},
+            },
+            model="gemini/gemini-2.5-flash",
+        )
+        tc = out["config"].get("thinking_config")
+        assert tc is not None
+        assert tc.thinking_budget == 0
+
+    def test_thinking_config_budget_positive_passes_through(self):
+        out = gemini_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi"}],
+                "thinking_config": {"thinking_budget": 1024},
+            },
+            model="gemini/gemini-2.5-flash",
+        )
+        tc = out["config"].get("thinking_config")
+        assert tc is not None
+        assert tc.thinking_budget == 1024
+
+    def test_thinking_config_include_thoughts_flag(self):
+        out = gemini_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi"}],
+                "thinking_config": {"include_thoughts": True},
+            },
+            model="gemini/gemini-2.5-flash",
+        )
+        tc = out["config"].get("thinking_config")
+        assert tc is not None
+        assert tc.include_thoughts is True
+
+    def test_thinking_config_multi_field(self):
+        out = gemini_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi"}],
+                "thinking_config": {
+                    "thinking_budget": 0,
+                    "include_thoughts": False,
+                },
+            },
+            model="gemini/gemini-2.5-flash",
+        )
+        tc = out["config"].get("thinking_config")
+        assert tc is not None
+        assert tc.thinking_budget == 0
+        assert tc.include_thoughts is False
+
+    def test_thinking_config_absent_leaves_default(self):
+        """No ``thinking_config`` in request_params → key absent in
+        ``config`` so the SDK default applies (current behavior unchanged)."""
+        out = gemini_native._build_create_kwargs(
+            {"messages": [{"role": "user", "content": "Hi"}]},
+            model="gemini/gemini-2.5-flash",
+        )
+        assert "thinking_config" not in out["config"]
+
+    def test_thinking_config_instance_passed_through(self):
+        """An already-built ``ThinkingConfig`` instance is forwarded as-is
+        (no re-wrap). Callers using the SDK's typed config directly hit this
+        path."""
+        from google.genai.types import ThinkingConfig
+
+        instance = ThinkingConfig(thinking_budget=512)
+        out = gemini_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi"}],
+                "thinking_config": instance,
+            },
+            model="gemini/gemini-2.5-flash",
+        )
+        # Same object reference — not a re-wrap.
+        assert out["config"]["thinking_config"] is instance
+
+    @pytest.mark.parametrize(
+        "bad_value, expected_type_name",
+        [
+            ("auto", "str"),
+            (True, "bool"),
+            ([1, 2, 3], "list"),
+        ],
+    )
+    def test_thinking_config_unsupported_type_warns_and_drops(
+        self, caplog, bad_value, expected_type_name
+    ):
+        """Unsupported ``thinking_config`` types (not dict / ThinkingConfig)
+        must NOT silently fall through — emit a WARN naming the offending
+        type so callers see a diagnostic signal (the key is in the
+        passthrough set, so the generic unknown-kwarg WARN won't fire)."""
+        with caplog.at_level("WARNING", logger=gemini_native.logger.name):
+            out = gemini_native._build_create_kwargs(
+                {
+                    "messages": [{"role": "user", "content": "Hi"}],
+                    "thinking_config": bad_value,
+                },
+                model="gemini/gemini-2.5-flash",
+            )
+        # Not set on config → SDK default applies (defensive choice over raise).
+        assert out["config"].get("thinking_config") is None
+        # Warning surfaces both the kwarg name and the unexpected type name.
+        warnings = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING"
+        ]
+        assert any(
+            "thinking_config" in m and expected_type_name in m
+            for m in warnings
+        ), warnings
+
     def test_response_format_json_schema_translates(self):
         out = gemini_native._build_create_kwargs(
             {

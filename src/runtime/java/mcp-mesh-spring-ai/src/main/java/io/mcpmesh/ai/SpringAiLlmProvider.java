@@ -266,7 +266,7 @@ public class SpringAiLlmProvider {
                     yield vertexAiGeminiChatModel;
                 }
                 throw new IllegalStateException("Gemini ChatModel not configured. " +
-                    "Add spring-ai-google-genai dependency and set GEMINI_API_KEY, " +
+                    "Add spring-ai-google-genai dependency and set GOOGLE_AI_GEMINI_API_KEY, " +
                     "or add spring-ai-vertex-ai-gemini dependency and configure GCP credentials");
             }
             case "vertex_ai" -> {
@@ -352,7 +352,7 @@ public class SpringAiLlmProvider {
                     yield vertexAiGeminiChatModel;
                 }
                 throw new IllegalStateException(
-                    "Gemini ChatModel not configured. Add spring-ai-google-genai and set GEMINI_API_KEY");
+                    "Gemini ChatModel not configured. Add spring-ai-google-genai and set GOOGLE_AI_GEMINI_API_KEY");
             }
             case "vertex_ai" -> {
                 if (vertexAiGeminiChatModel != null) {

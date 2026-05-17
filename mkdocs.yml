@@ -251,11 +251,16 @@ nav:
       - Architecture & Decisions: a2a/architecture.md
       - Producer Spec (Conformance): a2a/surfaces-spec.md
 
-  - API Reference:
-      - MediaResult: api/media-result.md
-      - MediaParam: api/media-param.md
-      - save_upload: api/save-upload.md
-      - MediaStore: api/media-store.md
+  - Reference:
+      - API:
+          - MediaResult: api/media-result.md
+          - MediaParam: api/media-param.md
+          - save_upload: api/save-upload.md
+          - MediaStore: api/media-store.md
+      - CLI:
+          - meshctl Overview: cli/index.md
+      - Environment Variables: environment-variables.md
+      - Kwargs: reference/kwargs.md
 
   - Local Development:
       - Overview: 02-local-development.md
@@ -304,10 +309,6 @@ nav:
       - Registration Trust: security/registration-trust.md
       - Agent-to-Agent mTLS: security/agent-to-agent-mtls.md
       - Authorization: security/authorization.md
-
-  - CLI Reference:
-      - meshctl Overview: cli/index.md
-      - Environment Variables: environment-variables.md
 
   - FAQ: faq.md
 

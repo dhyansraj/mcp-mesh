@@ -1087,6 +1087,12 @@ _GEMINI_PASSTHROUGH_KWARGS = frozenset({
     "response_schema",
     "presence_penalty",
     "frequency_penalty",
+    # Gemini 2.5+ thinking-mode budget control. Translated below into a
+    # ``google.genai.types.ThinkingConfig`` and attached to ``config``.
+    # Accepts either a dict (e.g. ``{"thinking_budget": 0}``) or an already-
+    # built ``ThinkingConfig`` instance. Default (absent) → SDK chooses
+    # — current behavior is unchanged for callers that don't set it.
+    "thinking_config",
     # Escape-hatch / transport kwargs translated to a per-call HttpOptions
     # override below (HttpOptions.timeout / .headers / .extra_body). They're
     # consumed — not forwarded as-is — so they belong in the passthrough set
@@ -1220,6 +1226,33 @@ def _build_create_kwargs(
         max_tokens = request_params.get("max_completion_tokens")
     if max_tokens is not None:
         config["max_output_tokens"] = max_tokens
+
+    # thinking_config → ``GenerateContentConfig.thinking_config``. Lets callers
+    # control Gemini 2.5+ thinking-mode budget (e.g. ``{"thinking_budget": 0}``
+    # disables internal reasoning so the full token budget goes to the visible
+    # response). Accept either a dict (constructed → ThinkingConfig here) or an
+    # already-built ThinkingConfig instance (passed through). Absent → leave
+    # the field unset so the SDK default applies (current behavior unchanged).
+    # Lazy import so the module stays importable when google-genai is absent.
+    thinking_config = request_params.get("thinking_config")
+    if thinking_config is not None:
+        from google.genai.types import ThinkingConfig
+
+        if isinstance(thinking_config, ThinkingConfig):
+            config["thinking_config"] = thinking_config
+        elif isinstance(thinking_config, dict):
+            config["thinking_config"] = ThinkingConfig(**thinking_config)
+        else:
+            # Unsupported type — key is in the passthrough set so the generic
+            # "unknown kwarg" WARN-once filter won't fire; emit a dedicated
+            # warning so callers see a diagnostic signal instead of a silent
+            # fallthrough to the SDK default.
+            logger.warning(
+                "Native Gemini adapter: ignoring thinking_config of "
+                "unsupported type %s; expected dict or "
+                "google.genai.types.ThinkingConfig",
+                type(thinking_config).__name__,
+            )
 
     # Generation params: forward under Gemini names. Drop None values so
     # callers passing ``temperature=None`` get the SDK default (Gemini

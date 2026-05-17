@@ -378,9 +378,8 @@ class MeshLlmAgent(Protocol):
             return llm(message)
 
     Configuration Hierarchy:
-        - Decorator parameters provide defaults
-        - Environment variables override decorator settings:
-          * MESH_LLM_PROVIDER: Override provider
+        - Provider always comes from the decorator's ``provider={...}`` filter
+        - Environment variables override other decorator settings:
           * MESH_LLM_MODEL: Override model
           * ANTHROPIC_API_KEY: Claude API key
           * OPENAI_API_KEY: OpenAI API key

@@ -21,7 +21,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * <h2>Running</h2>
  * <pre>
  * # Set API key (same as Python/LiteLLM)
- * export GEMINI_API_KEY=your-api-key
+ * export GOOGLE_AI_GEMINI_API_KEY=your-api-key
  *
  * # Start the registry
  * meshctl start --registry-only

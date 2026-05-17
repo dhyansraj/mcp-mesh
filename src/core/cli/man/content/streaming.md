@@ -80,7 +80,7 @@ Server ← {result: {content: [{type: "text", text: "Hello world"}]}}
 
 ## Limitations
 
-- **Direct-mode LLM only** — `MeshLlmAgent.stream()` works when the injected provider does direct LiteLLM calls. Mesh-delegated providers (zero-code `@mesh.llm_provider` wrappers) raise `NotImplementedError` for `stream()`.
+- **`MeshLlmAgent.stream()` is `str`-output only.** Mesh-delegated streaming is the default and only mode in v2.x. The constraint is on the return type: `MeshLlmAgent.stream()` supports `output_type=str` (token-by-token text chunks). For typed structured output, use `MeshLlmAgent.__call__()` with a Pydantic return type — typed structured streaming raises `NotImplementedError` by design.
 - **`Stream[str]` only** — typed Pydantic streaming is intentionally unsupported (consumer needs complete JSON for schema validation).
 - **Final iteration only** — in agentic loops, only the LAST iteration (text-only, no tool calls) streams. Intermediate tool-calling iterations are buffered.
 - **Python only for `proxy.stream()`** — TS/Java consumer parity pending.

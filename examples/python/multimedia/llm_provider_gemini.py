@@ -7,7 +7,7 @@ When the LLM's agentic loop calls tools that return resource_links,
 the media resolver on this provider automatically converts them to
 inline base64 images so the LLM can see and describe the actual media.
 
-Requires GEMINI_API_KEY environment variable.
+Requires GOOGLE_API_KEY environment variable.
 """
 
 import mesh

@@ -127,6 +127,12 @@ var guideRegistry = map[string]*Guide{
 		Title:       "Environment Variables",
 		Description: "Configuration via environment variables",
 	},
+	"kwargs": {
+		Name:        "kwargs",
+		Aliases:     []string{"model-params", "params", "llm-kwargs"},
+		Title:       "LLM Kwargs",
+		Description: "model_params surface for @mesh.llm consumers (max_tokens, temperature, thinking_config, etc.)",
+	},
 	"deployment": {
 		Name:                 "deployment",
 		Aliases:              []string{"deploy"},
@@ -333,7 +339,7 @@ func ListGuides() []*Guide {
 		"quickstart", "prerequisites", "tutorial", "overview", "capabilities", "tags",
 		"schema-matching", "decorators",
 		"dependency-injection", "audit", "streaming", "jobs", "a2a", "health", "registry", "llm", "media", "multimodal",
-		"proxies", "api", "environment", "deployment", "observability", "headers",
+		"proxies", "api", "environment", "kwargs", "deployment", "observability", "headers",
 		"testing", "scaffold", "cli", "security",
 	}
 	for _, name := range order {

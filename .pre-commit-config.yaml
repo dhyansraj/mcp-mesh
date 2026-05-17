@@ -30,7 +30,20 @@ repos:
     rev: v2.13.1-beta
     hooks:
       - id: hadolint-docker
-        entry: hadolint
+        # Override the entry so pre-commit's docker_image language gets BOTH
+        # the image name AND the command — issue #1017. The repo manifest
+        # ships ``entry: ghcr.io/hadolint/hadolint hadolint`` (image + cmd);
+        # the previous local override was ``entry: hadolint`` only, which
+        # made pre-commit treat ``hadolint`` as the IMAGE NAME (Docker Hub
+        # default tag), with NO command appended. Because the upstream image's
+        # ENTRYPOINT is empty, ``docker run`` then tried to exec each
+        # Dockerfile path as a binary → "permission denied" on every file.
+        # Restore the upstream image+cmd shape. NB: there is no
+        # ``v2.13.1-beta`` image on ghcr.io (the git tag exists, the image
+        # build doesn't — same empty-entrypoint bug in v2.12.0 anyway), so
+        # pin the image to ``v2.12.0`` while leaving the repo rev at the
+        # ``v2.13.1-beta`` git tag pre-commit needs to clone the manifest.
+        entry: ghcr.io/hadolint/hadolint:v2.12.0 hadolint
         language: docker_image
         # Match real Dockerfiles including extension variants like
         # `Dockerfile.dev`, `Dockerfile.base`, `Dockerfile.debian`.
