@@ -229,6 +229,8 @@ nav:
       - Audit Trail: concepts/audit.md
       - Streaming: concepts/streaming.md
       - Long-Running Jobs: concepts/jobs.md
+      - Stateful Agents: concepts/stateful-agents.md
+      - In-Process State (Escape Hatch): concepts/in-process-state.md
 
   - Multimodal:
       - Getting Started: multimodal/getting-started.md
