@@ -1002,6 +1002,18 @@ export interface LlmCallOptions {
    * with text + image_url blocks (OpenAI-compatible format).
    */
   media?: Array<string | { data: Buffer; mimeType: string }>;
+  /**
+   * Escape-hatch for vendor-specific kwargs that aren't covered by the
+   * typed option surface (e.g., Gemini `thinking_config`, Anthropic
+   * `output_config`, OpenAI `reasoning_effort`). Merged into the wire
+   * `model_params` dict BEFORE typed fields, so typed options
+   * (`maxOutputTokens`, `temperature`, etc.) win on collision and the
+   * typed surface stays authoritative. For arbitrary kwargs the typed
+   * surface doesn't expose, this field is the only way to set them.
+   *
+   * Example: ``modelParams: { thinking_config: { thinking_budget: 0 } }``
+   */
+  modelParams?: Record<string, unknown>;
 }
 
 /**

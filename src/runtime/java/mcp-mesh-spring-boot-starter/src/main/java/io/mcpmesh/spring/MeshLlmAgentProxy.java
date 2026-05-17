@@ -378,6 +378,12 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         private List<String> stopSequences = null;
         private int maxIterations = defaultMaxIterations;
 
+        // Issue #1019: escape-hatch for vendor-specific model_params kwargs
+        // (e.g., thinking_config, output_config, reasoning_effort) not exposed
+        // by the typed builder. Merged into the wire model_params BEFORE typed
+        // setters so typed values win on collision.
+        private Map<String, Object> userModelParams = null;
+
         // Response type for auto-generating JSON schema instructions
         private Class<?> responseType = null;
 
@@ -465,6 +471,12 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         @Override
         public GenerateBuilder stop(String... sequences) {
             this.stopSequences = Arrays.asList(sequences);
+            return this;
+        }
+
+        @Override
+        public GenerateBuilder modelParams(Map<String, Object> params) {
+            this.userModelParams = params;
             return this;
         }
 
@@ -591,8 +603,29 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
                 // Build model_params (LLM provider configuration)
                 Map<String, Object> modelParams = new LinkedHashMap<>();
-                modelParams.put("max_tokens", maxTokens != null ? maxTokens : defaultMaxTokens);
-                modelParams.put("temperature", temperature != null ? temperature : defaultTemperature);
+                // Issue #1019: escape-hatch merge — callers can pass vendor-
+                // specific kwargs (e.g., thinking_config, output_config) via
+                // .modelParams(...). Merged FIRST so typed setters below take
+                // precedence on collision (keeps the typed surface authoritative).
+                if (userModelParams != null && !userModelParams.isEmpty()) {
+                    modelParams.putAll(userModelParams);
+                }
+                // Typed setters win on collision with modelParams (escape-hatch).
+                // Annotation defaults apply only when neither typed setter nor
+                // modelParams provided the key. Matches TS guard semantics
+                // (`if (options?.maxOutputTokens) ...`) so callers can set
+                // max_tokens / temperature purely via .modelParams(...) without
+                // the annotation defaults clobbering their values.
+                if (maxTokens != null) {
+                    modelParams.put("max_tokens", maxTokens);
+                } else if (!modelParams.containsKey("max_tokens")) {
+                    modelParams.put("max_tokens", defaultMaxTokens);
+                }
+                if (temperature != null) {
+                    modelParams.put("temperature", temperature);
+                } else if (!modelParams.containsKey("temperature")) {
+                    modelParams.put("temperature", defaultTemperature);
+                }
                 if (topP != null) {
                     modelParams.put("top_p", topP);
                 }
