@@ -480,72 +480,83 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
         @Override
         public Flow.Publisher<String> streamGenerate() {
-            ProviderEndpoint provider = providerRef.get();
-            if (provider == null || !provider.isAvailable()) {
-                throw new IllegalStateException(
-                    "MeshLlmAgent.streamGenerate(): LLM provider not available for " + functionId
-                        + ". Ensure the @MeshLlm providerSelector resolves a streaming @mesh.llm_provider "
-                        + "(must include the 'ai.mcpmesh.stream' tag)."
-                );
-            }
-            if (mcpClient == null) {
-                throw new IllegalStateException(
-                    "MeshLlmAgent.streamGenerate(): MCP client not configured for LLM agent " + functionId);
-            }
-
-            // Build llmMessages mirroring executeAgenticLoop:
-            // 1. Prepend rendered system prompt template if no explicit system message.
-            // Use LinkedHashMap instead of Map.of() because Message.content() can be null
-            // for tool/assistant messages that only carry tool_calls (Map.of throws NPE on null).
-            List<Map<String, Object>> llmMessages = new ArrayList<>();
-            boolean hasExplicitSystem = messages.stream()
-                .anyMatch(m -> "system".equals(m.role()));
-            if (!hasExplicitSystem) {
-                String renderedSystemPrompt = renderSystemPrompt();
-                if (!renderedSystemPrompt.isBlank()) {
-                    Map<String, Object> systemEntry = new LinkedHashMap<>(2);
-                    systemEntry.put("role", "system");
-                    systemEntry.put("content", renderedSystemPrompt);
-                    llmMessages.add(systemEntry);
+            try {
+                ProviderEndpoint provider = providerRef.get();
+                if (provider == null || !provider.isAvailable()) {
+                    throw new IllegalStateException(
+                        "MeshLlmAgent.streamGenerate(): LLM provider not available for " + functionId
+                            + ". Ensure the @MeshLlm providerSelector resolves a streaming @mesh.llm_provider "
+                            + "(must include the 'ai.mcpmesh.stream' tag)."
+                    );
                 }
+                if (mcpClient == null) {
+                    throw new IllegalStateException(
+                        "MeshLlmAgent.streamGenerate(): MCP client not configured for LLM agent " + functionId);
+                }
+
+                // Build llmMessages mirroring executeAgenticLoop:
+                // 1. Prepend rendered system prompt template if no explicit system message.
+                // Use LinkedHashMap instead of Map.of() because Message.content() can be null
+                // for tool/assistant messages that only carry tool_calls (Map.of throws NPE on null).
+                List<Map<String, Object>> llmMessages = new ArrayList<>();
+                boolean hasExplicitSystem = messages.stream()
+                    .anyMatch(m -> "system".equals(m.role()));
+                if (!hasExplicitSystem) {
+                    String renderedSystemPrompt = renderSystemPrompt();
+                    if (!renderedSystemPrompt.isBlank()) {
+                        Map<String, Object> systemEntry = new LinkedHashMap<>(2);
+                        systemEntry.put("role", "system");
+                        systemEntry.put("content", renderedSystemPrompt);
+                        llmMessages.add(systemEntry);
+                    }
+                }
+
+                // 2. Convert builder messages to LLM format
+                for (Message msg : messages) {
+                    Map<String, Object> entry = new LinkedHashMap<>(2);
+                    entry.put("role", msg.role());
+                    entry.put("content", msg.content());
+                    llmMessages.add(entry);
+                }
+
+                // 2.5. Resolve media URIs and attach to last user message
+                if (!mediaUris.isEmpty()) {
+                    attachMediaToLastUserMessage(llmMessages, provider);
+                }
+
+                // 3. Build merged model_params (same guard semantics as executeAgenticLoop:
+                // userModelParams merged FIRST, typed setters take precedence on collision,
+                // annotation defaults apply only when neither source supplied the key).
+                Map<String, Object> modelParams = buildMergedModelParams();
+
+                // 4. Tool definitions (provider executes them server-side in its loop)
+                List<Map<String, Object>> toolDefs = buildToolDefinitions();
+
+                // 5. Build request wrapper
+                Map<String, Object> request = new LinkedHashMap<>();
+                request.put("messages", llmMessages);
+                if (!toolDefs.isEmpty()) {
+                    request.put("tools", toolDefs);
+                }
+                request.put("model_params", modelParams);
+
+                Map<String, Object> params = Map.of("request", request);
+
+                log.debug("streamGenerate(mesh): routing to {}/{} (messages={}, tools={})",
+                    provider.endpoint(), provider.functionName(),
+                    llmMessages.size(), toolDefs.size());
+
+                return mcpClient.streamTool(provider.endpoint(), provider.functionName(), params, null);
+            } finally {
+                // Clear the ThreadLocal invocationContext on return so it does not
+                // leak across pooled-thread reuse (Spring/Tomcat). The ThreadLocal
+                // is only read synchronously during Publisher construction
+                // (renderSystemPrompt above); subscriber callbacks run on the
+                // streaming I/O thread, so clearing here on the originating
+                // thread is the correct place. Mirrors the buffered generate()
+                // path which already wraps in try/finally.
+                clearInvocationContext();
             }
-
-            // 2. Convert builder messages to LLM format
-            for (Message msg : messages) {
-                Map<String, Object> entry = new LinkedHashMap<>(2);
-                entry.put("role", msg.role());
-                entry.put("content", msg.content());
-                llmMessages.add(entry);
-            }
-
-            // 2.5. Resolve media URIs and attach to last user message
-            if (!mediaUris.isEmpty()) {
-                attachMediaToLastUserMessage(llmMessages, provider);
-            }
-
-            // 3. Build merged model_params (same guard semantics as executeAgenticLoop:
-            // userModelParams merged FIRST, typed setters take precedence on collision,
-            // annotation defaults apply only when neither source supplied the key).
-            Map<String, Object> modelParams = buildMergedModelParams();
-
-            // 4. Tool definitions (provider executes them server-side in its loop)
-            List<Map<String, Object>> toolDefs = buildToolDefinitions();
-
-            // 5. Build request wrapper
-            Map<String, Object> request = new LinkedHashMap<>();
-            request.put("messages", llmMessages);
-            if (!toolDefs.isEmpty()) {
-                request.put("tools", toolDefs);
-            }
-            request.put("model_params", modelParams);
-
-            Map<String, Object> params = Map.of("request", request);
-
-            log.debug("streamGenerate(mesh): routing to {}/{} (messages={}, tools={})",
-                provider.endpoint(), provider.functionName(),
-                llmMessages.size(), toolDefs.size());
-
-            return mcpClient.streamTool(provider.endpoint(), provider.functionName(), params, null);
         }
 
         // --- Internal ---
@@ -560,8 +571,14 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
          *   <li>Typed setters ({@link #maxTokens}, {@link #temperature}, etc.)
          *       win on collision with {@code modelParams}.</li>
          *   <li>Annotation defaults ({@code defaultMaxTokens},
-         *       {@code defaultTemperature}) apply only when neither typed
-         *       setter nor {@code modelParams} supplied the key.</li>
+         *       {@code defaultTemperature}, {@code parallel_tool_calls})
+         *       apply only when {@code modelParams} did not supply the key.
+         *       For {@code parallel_tool_calls} specifically: the annotation
+         *       value is written only when {@code parallelToolCalls=true} AND
+         *       {@code modelParams} did not already provide the key, so a
+         *       caller can explicitly disable parallel-tool-calls for a single
+         *       call via {@code .modelParams(Map.of("parallel_tool_calls", false))}
+         *       even when the annotation enabled it.</li>
          * </ol>
          *
          * <p>Note: {@code output_schema} (structured-output) is not added here
@@ -589,7 +606,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             if (stopSequences != null && !stopSequences.isEmpty()) {
                 modelParams.put("stop", stopSequences);
             }
-            if (parallelToolCalls) {
+            if (parallelToolCalls && !modelParams.containsKey("parallel_tool_calls")) {
                 modelParams.put("parallel_tool_calls", true);
             }
             return modelParams;

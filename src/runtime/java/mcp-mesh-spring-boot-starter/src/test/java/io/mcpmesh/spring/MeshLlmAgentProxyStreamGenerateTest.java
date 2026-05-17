@@ -215,6 +215,41 @@ class MeshLlmAgentProxyStreamGenerateTest {
     }
 
     @Test
+    @DisplayName("streamGenerate clears ThreadLocal invocationContext on return (issue #1026)")
+    @SuppressWarnings("unchecked")
+    void streamGenerateClearsInvocationContextOnReturn() throws Exception {
+        // Issue #1026: buffered generate() wraps in try/finally{clearInvocationContext()},
+        // but streamGenerate() did not — leaking the per-invocation ThreadLocal
+        // context onto the originating thread. In Spring/Tomcat pooled-thread
+        // environments the next request reusing the thread can observe the
+        // stale context until MeshToolWrapper re-populates it. Fix wraps the
+        // streamGenerate body in try/finally so the ThreadLocal is cleared
+        // synchronously after Publisher construction.
+        enqueueCapturingDispatcher();
+
+        // Seed the ThreadLocal as MeshToolWrapper.setInvocationContext() would.
+        proxy.setInvocationContext(Map.of("user_name", "alice"));
+
+        // Sanity: the ThreadLocal is populated BEFORE the call.
+        Field ctxField = MeshLlmAgentProxy.class.getDeclaredField("invocationContext");
+        ctxField.setAccessible(true);
+        ThreadLocal<Map<String, Object>> tl = (ThreadLocal<Map<String, Object>>) ctxField.get(proxy);
+        assertNotNull(tl.get(), "ThreadLocal must be seeded before streamGenerate()");
+        assertEquals("alice", tl.get().get("user_name"));
+
+        Flow.Publisher<String> pub = proxy.request().user("hi").streamGenerate();
+        assertNotNull(pub, "streamGenerate() must return a non-null Publisher");
+
+        // IMMEDIATELY after return (no subscriber yet) the ThreadLocal must be cleared.
+        assertNull(tl.get(),
+            "streamGenerate() must clear the ThreadLocal invocationContext on return "
+            + "to prevent leak across pooled-thread reuse (issue #1026)");
+
+        // Drain the publisher so the mock server doesn't hang.
+        collect(pub);
+    }
+
+    @Test
     @DisplayName("legacy stream(messages) shortcut delegates to builder — same wire shape as streamGenerate")
     void streamLegacyShortFormDelegatesToBuilder() throws Exception {
         // Path A: legacy stream(messages)
