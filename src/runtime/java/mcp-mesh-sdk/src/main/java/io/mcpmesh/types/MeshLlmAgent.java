@@ -452,6 +452,26 @@ public interface MeshLlmAgent {
         <T> CompletableFuture<T> generateAsync(Class<T> responseType);
 
         /**
+         * Execute the generation and stream the text response chunk-by-chunk.
+         *
+         * <p>Requires a streaming-tagged mesh provider (see
+         * {@link MeshLlmAgent#stream(List)} for the tag-opt-in convention).
+         * Honors all builder state: messages,
+         * {@link #maxTokens(int)}, {@link #temperature(double)}, {@link #topP(double)},
+         * {@link #stop(String...)}, {@link #modelParams(Map)}, etc.
+         *
+         * <p>Annotation defaults apply only when neither typed setter nor
+         * {@code modelParams} provided the key, matching the buffered
+         * {@link #generate()} merge semantics.
+         *
+         * @return A {@link Flow.Publisher} that emits text chunks as the
+         *         provider produces them. The final accumulated result is NOT
+         *         emitted (consumers iterate to assemble it themselves).
+         * @throws UnsupportedOperationException for direct (non-mesh) providers
+         */
+        Flow.Publisher<String> streamGenerate();
+
+        /**
          * Get metadata from the last generation call.
          *
          * <p>Returns null if generate() hasn't been called yet.
