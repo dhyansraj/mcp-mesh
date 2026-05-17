@@ -60,6 +60,11 @@ func ListAgents() ([]AgentEntry, error) {
 		if err != nil || pid == 0 {
 			continue
 		}
+		// Alive here intentionally stays single-PID: ListAgents results feed
+		// cosmetic surfaces (e.g., suggestAgentNames fuzzy match). The
+		// actionable liveness predicate that drives stop / start-validation
+		// lives in LookupAgent / LookupService and is group-aware via
+		// groupAliveFn.
 		entry := AgentEntry{Name: base, PID: pid, Alive: processAliveFn(pid)}
 		// Best-effort group lookup; missing .group means the agent was written
 		// by some non-current code path (or via WriteService) — treat as no
