@@ -121,6 +121,22 @@ const result = await agent.run("Help me draft a release note", {
 });
 ```
 
+For vendor-specific kwargs the typed surface doesn't expose (e.g. Gemini
+`thinking_config`, Anthropic `output_config`, OpenAI `reasoning_effort`), use
+the `modelParams` escape hatch on `LlmCallOptions`. The dict is merged into the
+wire `model_params` **before** typed fields, so typed options (`maxOutputTokens`,
+`temperature`, ...) win on collision and remain authoritative:
+
+```typescript
+const reply = await llm.call(prompt, {
+  maxOutputTokens: 4096,
+  temperature: 0.3,
+  modelParams: {
+    thinking_config: { thinking_budget: 0 }, // escape hatch for vendor-specific kwargs
+  },
+});
+```
+
 Source: [`src/runtime/typescript/src/llm-agent.ts`](https://github.com/dhyansraj/mcp-mesh/blob/main/src/runtime/typescript/src/llm-agent.ts).
 
 ### Java
@@ -152,6 +168,23 @@ public String summarize(@Param("text") String text, MeshLlmAgent llm) {
         .generate()
         .text();
 }
+```
+
+For vendor-specific kwargs the typed builder doesn't expose (e.g. Gemini
+`thinking_config`, Anthropic `output_config`, OpenAI `reasoning_effort`), use
+the `.modelParams(...)` escape hatch on the builder. The map is merged into the
+wire `model_params` **before** typed setters, so typed setters (`maxTokens`,
+`temperature`, ...) win on collision and remain authoritative:
+
+```java
+String response = llm.request()
+    .user(prompt)
+    .maxTokens(4096)
+    .temperature(0.3)
+    .modelParams(Map.of(
+        "thinking_config", Map.of("thinking_budget", 0)
+    ))
+    .generate();
 ```
 
 Source: [`MeshLlmAgentProxy.java`](https://github.com/dhyansraj/mcp-mesh/blob/main/src/runtime/java/mcp-mesh-spring-boot-starter/src/main/java/io/mcpmesh/spring/MeshLlmAgentProxy.java).

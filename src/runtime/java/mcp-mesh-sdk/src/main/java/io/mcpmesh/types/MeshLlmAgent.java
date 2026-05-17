@@ -318,6 +318,38 @@ public interface MeshLlmAgent {
          */
         GenerateBuilder stop(String... sequences);
 
+        /**
+         * Set additional model parameters that aren't covered by the typed
+         * builder methods.
+         *
+         * <p>Escape-hatch for vendor-specific kwargs (e.g., Gemini
+         * {@code thinking_config}, Anthropic {@code output_config}, OpenAI
+         * {@code reasoning_effort}). Merged into the wire {@code model_params}
+         * dict BEFORE typed fields, so typed setters ({@link #maxTokens},
+         * {@link #temperature}, etc.) win on collision and the typed surface
+         * stays authoritative.
+         *
+         * <p>Example:
+         * <pre>{@code
+         * String response = llm.request()
+         *     .user("Tell me a story")
+         *     .maxTokens(4096)
+         *     .modelParams(Map.of(
+         *         "thinking_config", Map.of("thinking_budget", 0)
+         *     ))
+         *     .generate();
+         * }</pre>
+         *
+         * <p>Successive calls REPLACE prior values (not merged). Pass
+         * {@code null} or empty map to clear/reset.
+         *
+         * @param params Map of model parameter names to values (any JSON-
+         *               serializable value: primitives, lists, nested maps).
+         *               Pass {@code null} or empty map to clear/reset.
+         * @return This builder for chaining
+         */
+        GenerateBuilder modelParams(Map<String, Object> params);
+
         // --- Media ---
 
         /**

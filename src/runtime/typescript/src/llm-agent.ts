@@ -136,6 +136,9 @@ export interface LlmProvider {
       stop?: string[];
       // Issue #459: Output schema for provider to apply vendor-specific handling
       outputSchema?: { schema: Record<string, unknown>; name: string };
+      // Issue #1019: escape-hatch for vendor-specific kwargs not exposed by the
+      // typed option surface (e.g., thinking_config, output_config, reasoning_effort).
+      modelParams?: Record<string, unknown>;
     }
   ): Promise<LlmCompletionResponse>;
 }
@@ -165,10 +168,19 @@ export class MeshDelegatedProvider implements LlmProvider {
       stop?: string[];
       // Issue #459: Output schema for provider to apply vendor-specific handling
       outputSchema?: { schema: Record<string, unknown>; name: string };
+      // Issue #1019: escape-hatch for vendor-specific kwargs not exposed by the
+      // typed option surface (e.g., thinking_config, output_config, reasoning_effort).
+      modelParams?: Record<string, unknown>;
     }
   ): Promise<LlmCompletionResponse> {
     // Build MeshLlmRequest structure (matches Python claude_provider schema)
     const modelParams: Record<string, unknown> = {};
+    // Escape-hatch merge: callers can pass vendor-specific kwargs
+    // (e.g., thinking_config, output_config) via options.modelParams.
+    // Merged FIRST so typed fields below take precedence on collision.
+    if (options?.modelParams) {
+      Object.assign(modelParams, options.modelParams);
+    }
     // Only pass model if it's a real model name (not "default")
     if (model && model !== "default") {
       modelParams.model = model;
@@ -400,10 +412,19 @@ export class MeshDelegatedProvider implements LlmProvider {
       topP?: number;
       stop?: string[];
       outputSchema?: { schema: Record<string, unknown>; name: string };
+      // Issue #1019: escape-hatch for vendor-specific kwargs not exposed by the
+      // typed option surface (e.g., thinking_config, output_config, reasoning_effort).
+      modelParams?: Record<string, unknown>;
     }
   ): AsyncGenerator<string, void, void> {
     // Build MeshLlmRequest body — same shape as complete()
     const modelParams: Record<string, unknown> = {};
+    // Escape-hatch merge: callers can pass vendor-specific kwargs
+    // (e.g., thinking_config, output_config) via options.modelParams.
+    // Merged FIRST so typed fields below take precedence on collision.
+    if (options?.modelParams) {
+      Object.assign(modelParams, options.modelParams);
+    }
     if (model && model !== "default") {
       modelParams.model = model;
     }
@@ -633,7 +654,15 @@ export class MeshLlmAgent<T = string> {
         model,
         messages,
         toolDefs.length > 0 ? toolDefs : undefined,
-        { maxOutputTokens: maxTokens, temperature, topP: this.config.topP, stop: this.config.stop, outputSchema }
+        {
+          maxOutputTokens: maxTokens,
+          temperature,
+          topP: this.config.topP,
+          stop: this.config.stop,
+          outputSchema,
+          // Issue #1019: forward caller-supplied escape-hatch kwargs
+          modelParams: context.options?.modelParams,
+        }
       );
 
       // Track tokens
@@ -876,7 +905,15 @@ export class MeshLlmAgent<T = string> {
       model,
       messages,
       toolDefs.length > 0 ? toolDefs : undefined,
-      { maxOutputTokens: maxTokens, temperature, topP: this.config.topP, stop: this.config.stop, outputSchema },
+      {
+        maxOutputTokens: maxTokens,
+        temperature,
+        topP: this.config.topP,
+        stop: this.config.stop,
+        outputSchema,
+        // Issue #1019: forward caller-supplied escape-hatch kwargs
+        modelParams: context.options?.modelParams,
+      },
     );
   }
 
