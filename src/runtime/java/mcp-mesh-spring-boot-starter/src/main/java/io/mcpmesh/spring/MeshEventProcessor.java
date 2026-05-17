@@ -323,8 +323,10 @@ public class MeshEventProcessor implements SmartLifecycle {
             String contextParam = config != null ? config.contextParam() : "ctx";
             int maxIterations = config != null ? config.maxIterations() : 1;
             boolean parallelToolCalls = config != null && config.parallelToolCalls();
+            int maxTokens = config != null ? config.maxTokens() : 4096;
+            double temperature = config != null ? config.temperature() : 0.7;
 
-            proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations, parallelToolCalls);
+            proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations, parallelToolCalls, maxTokens, temperature);
 
             // Wire MediaStore for multimodal support
             wireMediaStore(proxy);
@@ -500,8 +502,10 @@ public class MeshEventProcessor implements SmartLifecycle {
             String contextParam = config != null ? config.contextParam() : "ctx";
             int maxIterations = config != null ? config.maxIterations() : 1;
             boolean parallelToolCalls = config != null && config.parallelToolCalls();
+            int maxTokens = config != null ? config.maxTokens() : 4096;
+            double temperature = config != null ? config.temperature() : 0.7;
 
-            proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations, parallelToolCalls);
+            proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations, parallelToolCalls, maxTokens, temperature);
 
             // Wire MediaStore for multimodal support
             wireMediaStore(proxy);

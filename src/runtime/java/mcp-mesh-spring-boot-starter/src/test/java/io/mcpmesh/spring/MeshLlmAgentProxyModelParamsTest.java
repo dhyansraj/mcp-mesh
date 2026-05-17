@@ -301,6 +301,34 @@ class MeshLlmAgentProxyModelParamsTest {
     }
 
     @Test
+    @DisplayName("@MeshLlm(maxTokens, temperature) annotation defaults flow through to wire model_params")
+    void annotationDefaultsFromMeshLlmFlowToWire() throws Exception {
+        // Regression: MeshLlmAgentProxy previously hardcoded defaultMaxTokens=4096
+        // and defaultTemperature=0.7. The @MeshLlm(maxTokens=…, temperature=…)
+        // annotation values carried by MeshLlmRegistry.LlmConfig were never wired
+        // through MeshEventProcessor → proxy.configure(...). Now the 10-arg
+        // configure overload accepts them and writes them onto the proxy so a
+        // user-supplied annotation value reaches the wire.
+        server.enqueue(stubLlmResponse("ok"));
+
+        // Re-configure proxy via the 10-arg overload simulating @MeshLlm(maxTokens=2000, temperature=0.3).
+        proxy.configure(client, null, null, null, "", "ctx", 1, false, 2000, 0.3);
+
+        proxy.request()
+            .user("hi")
+            // NO typed .maxTokens()/.temperature() and NO .modelParams() — defaults must surface.
+            .generate();
+
+        RecordedRequest req = server.takeRequest();
+        JsonNode modelParams = readModelParams(req);
+
+        assertEquals(2000, modelParams.get("max_tokens").asInt(),
+            "@MeshLlm(maxTokens=2000) must reach the wire — not the hardcoded 4096 default");
+        assertEquals(0.3, modelParams.get("temperature").asDouble(), 1e-9,
+            "@MeshLlm(temperature=0.3) must reach the wire — not the hardcoded 0.7 default");
+    }
+
+    @Test
     @DisplayName("null/empty modelParams → behavior unchanged from before this change")
     void nullOrEmptyModelParamsIsNoOp() throws Exception {
         server.enqueue(stubLlmResponse("ok"));

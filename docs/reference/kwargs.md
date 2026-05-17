@@ -165,8 +165,7 @@ public String summarize(@Param("text") String text, MeshLlmAgent llm) {
         .temperature(0.5)
         .topP(0.95)
         .stop("END")
-        .generate()
-        .text();
+        .generate();
 }
 ```
 
@@ -186,6 +185,27 @@ String response = llm.request()
     ))
     .generate();
 ```
+
+The same builder surface — including `.modelParams(...)` — is available on the
+streaming path via `.streamGenerate()`. The merge semantics (escape hatch
+first, typed setters win, annotation defaults only when unset) are shared with
+the buffered `.generate()` path:
+
+```java
+Flow.Publisher<String> chunks = llm.request()
+    .system("You are helpful")
+    .user(prompt)
+    .maxTokens(4096)
+    .temperature(0.7)
+    .modelParams(Map.of(
+        "thinking_config", Map.of("thinking_budget", 0)
+    ))
+    .streamGenerate();
+```
+
+Streaming requires the consumer to opt in via the `ai.mcpmesh.stream` tag on
+`@MeshLlm(providerSelector = ...)` — see
+[Java LLM Integration](../java/llm/index.md).
 
 Source: [`MeshLlmAgentProxy.java`](https://github.com/dhyansraj/mcp-mesh/blob/main/src/runtime/java/mcp-mesh-spring-boot-starter/src/main/java/io/mcpmesh/spring/MeshLlmAgentProxy.java).
 
