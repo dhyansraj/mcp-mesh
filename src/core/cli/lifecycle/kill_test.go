@@ -251,8 +251,9 @@ func TestIsAliveOrGroupAlive_RealFork(t *testing.T) {
 	}
 	parentPID := parent.Process.Pid
 	t.Cleanup(func() {
+		// Kill the orphan group descendants. Parent was already reaped
+		// inline above (exec.Cmd.Wait may only be called once).
 		_ = syscall.Kill(-parentPID, syscall.SIGKILL)
-		_ = parent.Wait()
 	})
 
 	// Give the shell time to fork its background sleep into the pgid.
@@ -263,18 +264,15 @@ func TestIsAliveOrGroupAlive_RealFork(t *testing.T) {
 	if err := parent.Process.Signal(syscall.SIGKILL); err != nil {
 		t.Fatalf("signal parent: %v", err)
 	}
-	go func() { _ = parent.Wait() }()
+	// Reap the parent inline. Wait() blocks until the kernel finishes
+	// teardown so the PID is no longer in the process table when we check
+	// IsAlive below. Single Wait() — t.Cleanup must NOT call Wait() again
+	// since exec.Cmd.Wait() is callable exactly once (race detector flags
+	// concurrent or repeated calls).
+	_ = parent.Wait()
 
-	// Wait for the parent to be reaped from the process table.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if !IsAlive(parentPID) {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
 	if IsAlive(parentPID) {
-		t.Fatal("parent did not die")
+		t.Fatal("parent did not die after SIGKILL + Wait")
 	}
 
 	// Parent is dead. Group still has the orphan sleep — group probe should
@@ -292,7 +290,7 @@ func TestIsAliveOrGroupAlive_RealFork(t *testing.T) {
 	}
 
 	// Wait for the group to drain.
-	deadline = time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if !IsAliveOrGroupAlive(parentPID) {
 			break
