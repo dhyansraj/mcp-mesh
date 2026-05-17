@@ -36,6 +36,15 @@ from _mcp_mesh.pipeline.api_startup.route_integration import (
     _resolve_user_function,
 )
 
+# Production-shaped @mesh.route handlers for issue #1037 regression tests.
+# Defined in a sibling module that does NOT use `from __future__ import
+# annotations`, so FastAPI sees real type objects (not PEP 563 strings) on
+# parameters like `request: Request` and `dep: McpMeshTool`.
+from tests.unit._route_sse_gateway_handlers import (  # noqa: E402
+    chat_single_fn as _gw_chat_single_fn,
+    chat_two_fn_outer as _gw_chat_two_fn_outer,
+)
+
 
 # ---------------------------------------------------------------------------
 # _resolve_user_function
@@ -456,3 +465,236 @@ class TestSseEndpointEndToEnd:
             "data: beta\n\n"
             "data: [DONE]\n\n"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1037: production-natural @mesh.route SSE shape
+# ---------------------------------------------------------------------------
+
+
+class FakeStreamingDep:
+    """Stand-in for an injected McpMeshTool whose remote tool streams chunks."""
+
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.last_kwargs = None
+
+    async def stream(self, **kwargs):
+        self.last_kwargs = kwargs
+        for c in self.chunks:
+            yield c
+
+
+class TestSseGatewayShape:
+    """Regression coverage for issue #1037.
+
+    Probes the single-function, user-natural gateway shape combining:
+      * async-gen handler (`yield` in body)
+      * `mesh.Stream[str]` return annotation
+      * `request: Request` parameter (FastAPI request injection)
+      * `await request.json()` as the first async operation INSIDE the gen body
+      * mesh-DI'd McpMeshTool consumed via `async for chunk in dep.stream(...)`
+      * early-error branch with `yield "..."; return` when dep is missing
+
+    Findings (May 2026):
+
+    * The `_build_sse_endpoint` machinery handles the user-natural shape
+      correctly when driven directly with an async-iter response (see
+      ``test_async_gen_with_request_body_inside_works_at_wrapper_level``).
+    * Routing the same shape through TestClient (and, by extension, any real
+      ASGI server) **deadlocks** because Starlette parses the request body
+      lazily: the StreamingResponse iterator must yield its first chunk
+      before the request body is available, but the iterator is itself
+      ``await``-ing ``request.json()``. This is the production bug that
+      issue #1037 reproduces.
+    * The early-error branch (``yield "..."; return`` BEFORE
+      ``await request.json()``) does work end-to-end — it never touches the
+      request body, so the deadlock never forms. It surfaces as HTTP 200
+      with an SSE body, NOT as an HTTP-level error.
+    * The canonical two-function shape (parse + validate up-front in a
+      coroutine handler, ``return`` an async-gen helper) works cleanly
+      end-to-end, including HTTP 503 on the missing-dep path.
+    """
+
+    @pytest.mark.asyncio
+    async def test_async_gen_with_request_body_inside_works_at_wrapper_level(self):
+        """The mesh SSE wrapper itself handles the user-natural shape fine.
+
+        The bug (issue #1037) is NOT in ``_build_sse_endpoint`` — when driven
+        with an awaitable Request stand-in, all the chunks flow correctly,
+        ``dep.stream(**kwargs)`` is called with the right kwargs, and the
+        ``[DONE]`` terminator is emitted. The deadlock surfaces only when the
+        Request is a real Starlette request being parsed by an ASGI server
+        (see the next test for that production-path failure).
+        """
+        fake_dep = FakeStreamingDep(["alpha", "beta", "gamma"])
+        wrapper = MagicMock()
+        wrapper._mesh_original_func = _gw_chat_single_fn
+        wrapper._mesh_positions = [1]
+        wrapper._mesh_dependencies = ["dep-cap-name"]
+        wrapper._mesh_injected_deps = [fake_dep]
+        wrapper._mesh_route_metadata = {}
+
+        sse_endpoint = _build_sse_endpoint(wrapper, _gw_chat_single_fn)
+
+        class _FakeReq:
+            async def json(self):
+                return {"text": "hello"}
+
+        response = await sse_endpoint(request=_FakeReq())
+        body = await _drain(response)
+        assert body == (
+            "data: alpha\n\n"
+            "data: beta\n\n"
+            "data: gamma\n\n"
+            "data: [DONE]\n\n"
+        )
+        assert fake_dep.last_kwargs == {"text": "hello"}
+
+    def test_async_gen_with_request_body_deadlocks_over_http(self):
+        """**Regression guard for issue #1037.**
+
+        ``await request.json()`` placed INSIDE an async-gen body that's
+        wrapped in a StreamingResponse deadlocks under a real ASGI driver
+        (TestClient here, but the same applies to uvicorn). Starlette only
+        starts feeding the response generator after the request body has
+        been fully delivered — but the generator is suspended on
+        ``await request.json()``, which is itself waiting for the body.
+        Neither side can progress.
+
+        This test runs the call in a background thread and asserts the
+        thread does NOT finish within a generous timeout — i.e. the
+        deadlock IS reproducible. The day this test fails (i.e. the call
+        returns), the upstream framework deadlock has been fixed and the
+        single-function shape can be promoted to first-class.
+        """
+        import threading
+
+        fake_dep = FakeStreamingDep(["alpha", "beta", "gamma"])
+        wrapper = MagicMock()
+        wrapper._mesh_original_func = _gw_chat_single_fn
+        wrapper._mesh_positions = [1]
+        wrapper._mesh_dependencies = ["dep-cap-name"]
+        wrapper._mesh_injected_deps = [fake_dep]
+        wrapper._mesh_route_metadata = {}
+
+        sse_endpoint = _build_sse_endpoint(wrapper, _gw_chat_single_fn)
+        app = FastAPI()
+        app.post("/api/chat")(sse_endpoint)
+
+        result: dict = {}
+
+        def _call():
+            try:
+                client = TestClient(app)
+                r = client.post("/api/chat", json={"text": "hello"})
+                result["status"] = r.status_code
+                result["body"] = r.text
+            except Exception as e:
+                result["error"] = repr(e)
+
+        t = threading.Thread(target=_call, daemon=True)
+        t.start()
+        t.join(timeout=2.0)
+        assert t.is_alive(), (
+            "Expected the single-function gateway shape to deadlock over HTTP "
+            f"(issue #1037), but the call returned: result={result!r}. "
+            "If this test now passes-as-non-deadlock, the upstream Starlette/"
+            "FastAPI body-parsing flow has been fixed and docs should be "
+            "updated to promote the single-function shape."
+        )
+
+    def test_early_error_yield_before_request_body_works_over_http(self):
+        """The missing-dep branch (`yield "..."; return` BEFORE
+        ``await request.json()``) does NOT touch the request body, so the
+        deadlock never forms. It surfaces as HTTP 200 with an SSE body —
+        NOT HTTP 503. That's the contract trade-off users need to understand
+        when they pick the single-function shape.
+        """
+        wrapper = MagicMock()
+        wrapper._mesh_original_func = _gw_chat_single_fn
+        wrapper._mesh_positions = [1]
+        wrapper._mesh_dependencies = ["dep-cap-name"]
+        wrapper._mesh_injected_deps = [None]
+        wrapper._mesh_route_metadata = {}
+
+        sse_endpoint = _build_sse_endpoint(wrapper, _gw_chat_single_fn)
+        app = FastAPI()
+        app.post("/api/chat")(sse_endpoint)
+
+        client = TestClient(app)
+        with client.stream("POST", "/api/chat", json={}) as response:
+            status = response.status_code
+            ct = response.headers.get("content-type", "")
+            body = response.read().decode("utf-8")
+
+        # Status is 200 with SSE framing — NOT 503. Once the SSE wrapper
+        # returns a StreamingResponse, response headers flush before the
+        # user gen runs, so HTTP-level errors are unreachable from inside
+        # the gen body.
+        assert status == 200
+        assert ct.startswith("text/event-stream")
+        assert body == "data: no dep\n\ndata: [DONE]\n\n"
+
+    def test_canonical_two_function_shape_streams_and_503s_correctly(self):
+        """The canonical fix for issue #1037: a coroutine handler that
+        validates + parses the body up-front and ``return``s an async-gen
+        helper. The helper does the streaming; the outer coroutine can
+        ``raise HTTPException`` cleanly because the response status hasn't
+        been committed yet.
+
+        Happy path: stream all chunks + [DONE].
+        Error path: clean HTTP 503, no SSE framing.
+        """
+        fake_dep = FakeStreamingDep(["alpha", "beta", "gamma"])
+
+        # Outer coroutine (NOT an async-gen) defined at module scope so
+        # annotations resolve under `from __future__ import annotations`.
+        outer = _gw_chat_two_fn_outer
+
+        # Happy path
+        wrapper_ok = MagicMock()
+        wrapper_ok._mesh_original_func = outer
+        wrapper_ok._mesh_positions = [1]
+        wrapper_ok._mesh_dependencies = ["dep-cap-name"]
+        wrapper_ok._mesh_injected_deps = [fake_dep]
+        wrapper_ok._mesh_route_metadata = {}
+
+        sse_endpoint_ok = _build_sse_endpoint(wrapper_ok, outer)
+        app_ok = FastAPI()
+        app_ok.post("/api/chat")(sse_endpoint_ok)
+
+        client_ok = TestClient(app_ok)
+        with client_ok.stream(
+            "POST", "/api/chat", json={"text": "hello"}
+        ) as response:
+            assert response.status_code == 200
+            assert response.headers.get("content-type", "").startswith(
+                "text/event-stream"
+            )
+            body = response.read().decode("utf-8")
+        assert body == (
+            "data: alpha\n\n"
+            "data: beta\n\n"
+            "data: gamma\n\n"
+            "data: [DONE]\n\n"
+        )
+
+        # Error path — dep is None: outer raises HTTPException up-front,
+        # before any StreamingResponse is constructed, so FastAPI returns
+        # a clean HTTP 503.
+        wrapper_err = MagicMock()
+        wrapper_err._mesh_original_func = outer
+        wrapper_err._mesh_positions = [1]
+        wrapper_err._mesh_dependencies = ["dep-cap-name"]
+        wrapper_err._mesh_injected_deps = [None]
+        wrapper_err._mesh_route_metadata = {}
+
+        sse_endpoint_err = _build_sse_endpoint(wrapper_err, outer)
+        app_err = FastAPI()
+        app_err.post("/api/chat")(sse_endpoint_err)
+
+        client_err = TestClient(app_err)
+        r = client_err.post("/api/chat", json={})
+        assert r.status_code == 503
+        assert "dep unavailable" in r.text

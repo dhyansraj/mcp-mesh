@@ -160,6 +160,47 @@ Pre-flight checks in `chat_endpoint` fire BEFORE `StreamingResponse` is built, s
 
 Both patterns are valid — pick the one that matches the error model. If only mid-stream errors matter, the simpler `async def ... yield` form is fine; if pre-flight failures must be visible to non-SSE clients via HTTP status, use the coroutine-returns-generator pattern.
 
+### Don't parse `request.json()` inside an async-generator body
+
+A subtler failure mode: declaring `request: Request` and awaiting `request.json()` (or `await request.body()`, etc.) **inside** an `async def ... yield` handler hangs the connection. Starlette parses the request body lazily and only after the response generator has begun emitting — but the generator is suspended on `await request.json()`, which is itself waiting for the body. Neither side progresses.
+
+```python
+# Hangs — body parsing inside an async-gen wrapped in StreamingResponse.
+@app.post("/api/chat")
+@mesh.route(dependencies=["chat"])
+async def chat_endpoint(
+    request: Request,
+    chat: McpMeshTool = None,
+) -> mesh.Stream[str]:
+    body = await request.json()   # deadlocks
+    async for chunk in chat.stream(prompt=body["prompt"]):
+        yield chunk
+```
+
+Two safe shapes:
+
+1. **Pydantic body model (preferred).** FastAPI parses the body before your handler runs, so `body` is a plain dataclass by the time you yield. This is what the `Example` section above uses (`body: ChatRequest`).
+2. **Coroutine-returns-generator.** If you need the raw `Request`, parse the body in the outer coroutine (where awaits are safe), then `return` an inner async-gen helper:
+
+   ```python
+   @app.post("/api/chat")
+   @mesh.route(dependencies=["chat"])
+   async def chat_endpoint(
+       request: Request,
+       chat: McpMeshTool = None,
+   ) -> mesh.Stream[str]:
+       if chat is None:
+           raise HTTPException(status_code=503, detail="chat unavailable")
+       body = await request.json()   # OK — outer coroutine, no StreamingResponse yet
+       return _stream_chat(body, chat)
+
+   async def _stream_chat(body, chat):
+       async for chunk in chat.stream(prompt=body["prompt"]):
+           yield chunk
+   ```
+
+The same shape unblocks pre-stream `HTTPException` (see preceding section), so the two-function pattern is the right default whenever a handler needs `Request` introspection.
+
 ## Provider-side streaming resolution
 
 `MeshLlmAgent.stream()` always routes through a mesh-registered `@mesh.llm_provider` agent. The provider runs the agentic loop and the consumer iterates chunks via the auto-generated `process_chat_stream` tool. The resolver picks the right provider tool variant based on the consumer's return type:
