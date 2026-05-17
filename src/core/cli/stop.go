@@ -282,7 +282,15 @@ func killWatcherForAgent(agent string, timeout time.Duration, quiet bool) {
 // watcher meshctl processes). Returns true on confirmed death (including
 // zombie state — see lifecycle.KillVerifyAndCleanup commentary).
 func killProcessByPID(pid int, timeout time.Duration) bool {
-	if pid <= 0 || !lifecycle.IsAlive(pid) {
+	if pid <= 1 || !lifecycle.IsAlive(pid) {
+		// pid <= 0: invalid. pid == 1: kill(-1, ...) is POSIX broadcast to
+		// every process the user can signal — refuse rather than translate a
+		// corrupted/tampered <agent>.watcher.pid into a session-wide kill.
+		// Symmetric with the lifecycle.IsAliveOrGroupAlive / signalGroupOrPID
+		// guards on the agent-PID path.
+		if pid == 1 {
+			fmt.Fprintf(os.Stderr, "warning: refusing to signal PID 1 (corrupt watcher.pid?) — kill(-1, ...) would broadcast\n")
+		}
 		return true
 	}
 	// SIGTERM the process group first (the watcher meshctl was started with

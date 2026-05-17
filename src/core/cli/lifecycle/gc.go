@@ -74,15 +74,28 @@ func Sweep() (Report, error) {
 		// process is dead we sweep the file the same as any agent PID file, so
 		// stale service state from a crash doesn't haunt the user. Live
 		// services are left alone; stop is the only path that signals them.
+		//
+		// Group-aware liveness (issue #1033): we use groupAliveFn here so that
+		// when the recorded parent crashed mid-startup but its uvicorn worker
+		// (or other descendant in the same pgid) survives, we KEEP the .pid
+		// file. The user-facing `meshctl stop` path then has bookkeeping to
+		// act on and can reap the orphan group, rather than Sweep silently
+		// pruning the .pid and leaving the orphan invisible.
+		//
+		// MUST stay in sync with the deps-walk site below — if this site keeps
+		// the .pid but the deps walk prunes the agent from refcounts, the
+		// shared registry/UI service can be killed while the orphan is still
+		// using it. Wrapper markers (above) and watcher markers (above) stay
+		// on single-PID processAliveFn — see comments at those sites.
 		path := pidsDirJoin(name)
 		pid, _ := readPIDFromFile(path)
-		if pid > 0 && processAliveFn(pid) {
-			continue // alive — leave alone
+		if pid > 0 && groupAliveFn(pid) {
+			continue // alive (parent or group descendant) — leave alone
 		}
-		// Reaching here means pid==0 OR pid is dead — the cleanup branch is
-		// unconditional. (Previously this re-tested processAliveFn, which was
-		// always true given the continue above, and called the syscall twice
-		// for every dead PID.)
+		// Reaching here means pid==0 OR pid is dead OR the group is dead — the
+		// cleanup branch is unconditional. (Previously this re-tested
+		// processAliveFn, which was always true given the continue above, and
+		// called the syscall twice for every dead PID.)
 		if os.Remove(path) == nil {
 			r.DeadAgentPIDsCleaned++
 		}
@@ -134,7 +147,15 @@ func Sweep() (Report, error) {
 					}
 					pidPath := PIDFile(a)
 					pid, _ := readPIDFromFile(pidPath)
-					if pid > 0 && processAliveFn(pid) {
+					// Group-aware liveness (issue #1033): mirror the agent .pid
+					// sweep above. If the parent crashed but the process group
+					// has orphan descendants, the agent is still using the
+					// shared service (registry/UI). Pruning the deps entry
+					// here while the .pid sweep above keeps the .pid would
+					// underreport refcount and let stop kill a service that
+					// the orphan is still talking to. The two sites MUST move
+					// together.
+					if pid > 0 && groupAliveFn(pid) {
 						alive = append(alive, a)
 					} else {
 						r.StaleDepsEntries++

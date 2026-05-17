@@ -62,11 +62,25 @@ func validateAgentsNotRunning(agentPaths []string) error {
 			}
 		}
 		if running {
+			// Distinguish parent-alive (normal "already running") from
+			// orphan-descendants (parent crashed, group still has live
+			// processes — issue #1033). Better message for the orphan case
+			// so the user knows what to expect on `meshctl stop`.
+			if lifecycle.IsAlive(pid) {
+				return &PrerequisiteError{
+					Check:   "Agent already running",
+					Message: fmt.Sprintf("agent '%s' is already running (PID %d). Stop it first with 'meshctl stop %s'.", name, pid, name),
+					Remediation: fmt.Sprintf(`To fix this issue:
+  1. Stop the running agent: meshctl stop %s
+  2. Or list all running agents: meshctl list
+  3. Then start it again`, name),
+				}
+			}
 			return &PrerequisiteError{
 				Check:   "Agent already running",
-				Message: fmt.Sprintf("agent '%s' is already running (PID %d). Stop it first with 'meshctl stop %s'.", name, pid, name),
+				Message: fmt.Sprintf("agent '%s' has orphan descendants (tracked PID %d is dead but its process group is still alive). Run 'meshctl stop %s' to clean up before starting a new instance.", name, pid, name),
 				Remediation: fmt.Sprintf(`To fix this issue:
-  1. Stop the running agent: meshctl stop %s
+  1. Stop the orphan process group: meshctl stop %s
   2. Or list all running agents: meshctl list
   3. Then start it again`, name),
 			}

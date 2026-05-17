@@ -46,6 +46,48 @@ func useStubAlive(t *testing.T, alive map[int]bool) {
 	})
 }
 
+// stubGroupAlivePIDs mirrors stubAlivePIDs but for the group-aware probe.
+// Tests can drive parent-alive vs group-alive independently to exercise the
+// #1033 orphan-descendants branch in KillVerifyAndCleanup.
+var stubGroupAlivePIDs = struct {
+	sync.Mutex
+	pids map[int]bool
+	use  bool
+}{pids: make(map[int]bool)}
+
+func useStubGroupAlive(t *testing.T, alive map[int]bool) {
+	t.Helper()
+	stubGroupAlivePIDs.Lock()
+	prev := groupAliveFn
+	stubGroupAlivePIDs.pids = alive
+	stubGroupAlivePIDs.use = true
+	groupAliveFn = func(pid int) bool {
+		stubGroupAlivePIDs.Lock()
+		defer stubGroupAlivePIDs.Unlock()
+		return stubGroupAlivePIDs.pids[pid]
+	}
+	stubGroupAlivePIDs.Unlock()
+	t.Cleanup(func() {
+		stubGroupAlivePIDs.Lock()
+		groupAliveFn = prev
+		stubGroupAlivePIDs.use = false
+		stubGroupAlivePIDs.pids = make(map[int]bool)
+		stubGroupAlivePIDs.Unlock()
+	})
+}
+
+// setGroupAlive updates the stub map for an in-flight test (e.g., to flip
+// the group from "still alive" to "dead" after SIGTERM is sent).
+func setGroupAlive(pid int, alive bool) {
+	stubGroupAlivePIDs.Lock()
+	defer stubGroupAlivePIDs.Unlock()
+	if alive {
+		stubGroupAlivePIDs.pids[pid] = true
+	} else {
+		delete(stubGroupAlivePIDs.pids, pid)
+	}
+}
+
 func TestKillVerifyMissingPIDFile(t *testing.T) {
 	tmp := t.TempDir()
 	defer WithRoot(tmp)()
@@ -66,6 +108,9 @@ func TestKillVerifyDeadPIDCleansFile(t *testing.T) {
 	// Write a PID file pointing at a dead PID. Use the stub so we don't depend
 	// on the OS reporting a real PID as dead.
 	useStubAlive(t, map[int]bool{}) // empty map = nothing alive
+	// Group must also be empty so we hit the "pure stale bookkeeping" branch
+	// rather than the #1033 orphan-group path.
+	useStubGroupAlive(t, map[int]bool{})
 
 	g := NewGroupID()
 	_ = WriteAgent("zombie", 12345, g)
@@ -82,6 +127,178 @@ func TestKillVerifyDeadPIDCleansFile(t *testing.T) {
 	}
 	if _, err := os.Stat(GroupFile("zombie")); !os.IsNotExist(err) {
 		t.Errorf("expected group file removed: %v", err)
+	}
+}
+
+// TestKillVerifyAndCleanup_ParentDeadGroupDead_CleansFilesOnly verifies the
+// pure stale-bookkeeping branch: both single-PID and group probes return dead,
+// so no signal is sent and the PID/group files are cleaned.
+func TestKillVerifyAndCleanup_ParentDeadGroupDead_CleansFilesOnly(t *testing.T) {
+	tmp := t.TempDir()
+	defer WithRoot(tmp)()
+
+	useStubAlive(t, map[int]bool{})
+	useStubGroupAlive(t, map[int]bool{})
+
+	g := NewGroupID()
+	_ = WriteAgent("stale", 22222, g)
+
+	killed, err := KillVerifyAndCleanup("stale", 100*time.Millisecond)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if killed {
+		t.Error("killed should be false when parent and group are both dead")
+	}
+	if _, err := os.Stat(PIDFile("stale")); !os.IsNotExist(err) {
+		t.Errorf("pid file should be removed")
+	}
+	if _, err := os.Stat(GroupFile("stale")); !os.IsNotExist(err) {
+		t.Errorf("group file should be removed")
+	}
+}
+
+// TestKillVerifyAndCleanup_ParentDeadGroupAlive_SignalsGroup verifies the
+// #1033 orphan-descendants branch: parent is dead but group has surviving
+// processes. We expect SIGTERM to the group, then cleanup once the group dies.
+func TestKillVerifyAndCleanup_ParentDeadGroupAlive_SignalsGroup(t *testing.T) {
+	tmp := t.TempDir()
+	defer WithRoot(tmp)()
+
+	const pid = 33333
+	useStubAlive(t, map[int]bool{}) // parent already dead
+	useStubGroupAlive(t, map[int]bool{pid: true})
+
+	// Flip the group to "dead" after a short delay so pollUntilGroupDead
+	// observes the transition rather than timing out.
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		setGroupAlive(pid, false)
+	}()
+
+	g := NewGroupID()
+	_ = WriteAgent("orphan", pid, g)
+
+	killed, err := KillVerifyAndCleanup("orphan", 2*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !killed {
+		t.Error("killed should be true when orphan group was reaped")
+	}
+	if _, err := os.Stat(PIDFile("orphan")); !os.IsNotExist(err) {
+		t.Errorf("pid file should be removed after group reap")
+	}
+	if _, err := os.Stat(GroupFile("orphan")); !os.IsNotExist(err) {
+		t.Errorf("group file should be removed after group reap")
+	}
+}
+
+// TestKillVerifyAndCleanup_ParentDeadGroupRefusesToDie verifies that when the
+// orphan group survives SIGTERM and SIGKILL the function errors and does NOT
+// remove the PID file — the user must be able to retry.
+func TestKillVerifyAndCleanup_ParentDeadGroupRefusesToDie(t *testing.T) {
+	tmp := t.TempDir()
+	defer WithRoot(tmp)()
+
+	const pid = 44444
+	useStubAlive(t, map[int]bool{}) // parent dead
+	// Group stays alive throughout — no goroutine flips it.
+	useStubGroupAlive(t, map[int]bool{pid: true})
+
+	g := NewGroupID()
+	_ = WriteAgent("undead-group", pid, g)
+
+	_, err := KillVerifyAndCleanup("undead-group", 100*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected error when group can't be killed")
+	}
+	if _, statErr := os.Stat(PIDFile("undead-group")); statErr != nil {
+		t.Errorf("PID file should be preserved on verify failure: %v", statErr)
+	}
+}
+
+// TestPollUntilGroupDead_TreatsZombieAsDead guards the zombie-as-dead invariant
+// in the group-aware poll loop — init-reaped orphans must not be a false
+// negative.
+func TestPollUntilGroupDead_TreatsZombieAsDead(t *testing.T) {
+	prevGroup, prevZombie := groupAliveFn, isZombieFn
+	groupAliveFn = func(pid int) bool { return true } // never empty
+	isZombieFn = func(pid int) (bool, error) { return true, nil }
+	t.Cleanup(func() {
+		groupAliveFn = prevGroup
+		isZombieFn = prevZombie
+	})
+
+	if !pollUntilGroupDead(12345, 100*time.Millisecond) {
+		t.Error("pollUntilGroupDead must treat zombie as dead even when group probe stays alive")
+	}
+}
+
+// TestIsAliveOrGroupAlive_RealFork spawns a child with Setpgid, kills the
+// parent (leaving the child as an orphan in the same pgid), and verifies the
+// group probe correctly differentiates the orphan-alive case from group-dead.
+//
+// Darwin-friendly: relies only on POSIX kill(2) semantics that match Linux.
+func TestIsAliveOrGroupAlive_RealFork(t *testing.T) {
+	// Spawn the parent and the child via a single bash so the child inherits
+	// the parent's pgid. We use a shell that backgrounds a sleep, then the
+	// shell itself dies — the orphan sleep stays in the original pgid.
+	parent := exec.Command("bash", "-c", "sleep 10 & sleep 10")
+	parent.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := parent.Start(); err != nil {
+		t.Fatalf("spawn parent: %v", err)
+	}
+	parentPID := parent.Process.Pid
+	t.Cleanup(func() {
+		// Kill the orphan group descendants. Parent was already reaped
+		// inline above (exec.Cmd.Wait may only be called once).
+		_ = syscall.Kill(-parentPID, syscall.SIGKILL)
+	})
+
+	// Give the shell time to fork its background sleep into the pgid.
+	time.Sleep(150 * time.Millisecond)
+
+	// Kill ONLY the parent (the bash shell). The background sleep stays alive
+	// in the same pgid as an orphan.
+	if err := parent.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatalf("signal parent: %v", err)
+	}
+	// Reap the parent inline. Wait() blocks until the kernel finishes
+	// teardown so the PID is no longer in the process table when we check
+	// IsAlive below. Single Wait() — t.Cleanup must NOT call Wait() again
+	// since exec.Cmd.Wait() is callable exactly once (race detector flags
+	// concurrent or repeated calls).
+	_ = parent.Wait()
+
+	if IsAlive(parentPID) {
+		t.Fatal("parent did not die after SIGKILL + Wait")
+	}
+
+	// Parent is dead. Group still has the orphan sleep — group probe should
+	// return true.
+	if !IsAliveOrGroupAlive(parentPID) {
+		t.Errorf("IsAliveOrGroupAlive(%d): expected true (orphan in group), got false", parentPID)
+	}
+	if IsAlive(parentPID) {
+		t.Errorf("IsAlive(%d): expected false (parent dead), got true", parentPID)
+	}
+
+	// Kill the whole group.
+	if err := syscall.Kill(-parentPID, syscall.SIGKILL); err != nil {
+		t.Fatalf("kill group: %v", err)
+	}
+
+	// Wait for the group to drain.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !IsAliveOrGroupAlive(parentPID) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if IsAliveOrGroupAlive(parentPID) {
+		t.Errorf("IsAliveOrGroupAlive(%d): expected false after group SIGKILL", parentPID)
 	}
 }
 
@@ -177,6 +394,59 @@ func TestKillVerifyFailureLeavesFile(t *testing.T) {
 	}
 	if _, statErr := os.Stat(PIDFile("undead")); statErr != nil {
 		t.Errorf("PID file should be preserved on verify failure: %v", statErr)
+	}
+}
+
+// TestIsAliveOrGroupAlive_RefusesPID1 guards against accidental broadcast
+// signals: a corrupted .pid file containing 1 must never be reported as
+// "alive" via the group probe, since kill(-1, ...) is POSIX broadcast to
+// every process the caller can signal — the orphan-group branch in
+// KillVerifyAndCleanup would then issue a session-wide SIGKILL.
+func TestIsAliveOrGroupAlive_RefusesPID1(t *testing.T) {
+	// PID 1 (init) is always alive on POSIX. The function must still return
+	// false because the group probe at -1 is too dangerous to issue.
+	if IsAliveOrGroupAlive(1) {
+		t.Error("IsAliveOrGroupAlive(1) must return false — kill(-1,...) would broadcast")
+	}
+}
+
+// TestSignalGroupOrPID_RefusesPID1 verifies the same guard at the signal-send
+// site: even if a pid==1 leaked past the probe layer somehow (caller bug,
+// future code path, etc.), signalGroupOrPID itself refuses rather than
+// translating to kill(-1, ...).
+//
+// Verification strategy: spawn a benign sleep, attempt signalGroupOrPID(1, ...)
+// for SIGTERM, and confirm (a) an error is returned and (b) the sleep is
+// still alive — proving no broadcast was issued.
+func TestSignalGroupOrPID_RefusesPID1(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("spawn sleep: %v", err)
+	}
+	go func() { _ = cmd.Wait() }()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+
+	sleepPID := cmd.Process.Pid
+
+	err := signalGroupOrPID(1, syscall.SIGTERM)
+	if err == nil {
+		t.Fatal("signalGroupOrPID(1, SIGTERM) must return an error — would broadcast")
+	}
+
+	// Give any (incorrectly issued) signal a moment to land before we probe.
+	time.Sleep(50 * time.Millisecond)
+
+	if !IsAlive(sleepPID) {
+		t.Errorf("benign sleep PID %d is dead — signalGroupOrPID(1, ...) appears to have broadcast", sleepPID)
+	}
+
+	// Also verify pid==0 and pid<0 are refused symmetrically.
+	if err := signalGroupOrPID(0, syscall.SIGTERM); err == nil {
+		t.Error("signalGroupOrPID(0, SIGTERM) must return an error")
+	}
+	if err := signalGroupOrPID(-5, syscall.SIGTERM); err == nil {
+		t.Error("signalGroupOrPID(-5, SIGTERM) must return an error")
 	}
 }
 

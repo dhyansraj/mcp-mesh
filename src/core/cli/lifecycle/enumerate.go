@@ -60,6 +60,11 @@ func ListAgents() ([]AgentEntry, error) {
 		if err != nil || pid == 0 {
 			continue
 		}
+		// Alive here intentionally stays single-PID: ListAgents results feed
+		// cosmetic surfaces (e.g., suggestAgentNames fuzzy match). The
+		// actionable liveness predicate that drives stop / start-validation
+		// lives in LookupAgent / LookupService and is group-aware via
+		// groupAliveFn.
 		entry := AgentEntry{Name: base, PID: pid, Alive: processAliveFn(pid)}
 		// Best-effort group lookup; missing .group means the agent was written
 		// by some non-current code path (or via WriteService) — treat as no
@@ -78,14 +83,19 @@ func ListAgents() ([]AgentEntry, error) {
 
 // IsAgentRunning reports whether an agent with the given name has a live
 // process recorded on disk. Returns (true, pid, nil) when the .pid file
-// exists AND the kernel still has an entry for that PID. Returns
-// (false, 0, nil) when no .pid file is present, the file is empty, or the
-// recorded PID is dead. Errors are only returned for unexpected I/O failures
-// reading the .pid file (e.g., permission denied) — "no such file" is not an
-// error.
+// exists AND either the kernel still has an entry for that PID or its
+// process group has surviving descendants. Returns (false, 0, nil) when no
+// .pid file is present or the file is empty; (false, pid, nil) when the
+// recorded PID is dead AND its process group is empty. Errors are only
+// returned for unexpected I/O failures reading the .pid file.
 //
 // Used by `meshctl start` to refuse same-name re-starts before a duplicate
 // process can clobber the on-disk PID/group bookkeeping.
+//
+// Group-aware (issue #1033): orphan descendants of a crashed parent count as
+// "running" so the user is told to clean up rather than getting a confusing
+// port-bind failure on re-start. Callers that need to distinguish parent-alive
+// from orphan-only can pair this with IsAlive(pid) on the returned PID.
 func IsAgentRunning(name string) (bool, int, error) {
 	pid, err := readPIDFromFile(PIDFile(name))
 	if err != nil {
@@ -94,7 +104,7 @@ func IsAgentRunning(name string) (bool, int, error) {
 	if pid == 0 {
 		return false, 0, nil
 	}
-	if !processAliveFn(pid) {
+	if !groupAliveFn(pid) {
 		return false, pid, nil
 	}
 	return true, pid, nil
@@ -102,6 +112,11 @@ func IsAgentRunning(name string) (bool, int, error) {
 
 // LookupAgent returns the on-disk record for a single agent, or (nil, nil)
 // if the agent has no PID file.
+//
+// Alive uses group-aware liveness so callers see the consistent
+// orphan-descendants story across start (single-instance), stop (kill
+// path), and status display. Single-PID liveness is available via
+// IsAlive() for callers that need the narrower predicate.
 func LookupAgent(name string) (*AgentEntry, error) {
 	pid, err := readPIDFromFile(PIDFile(name))
 	if err != nil {
@@ -110,7 +125,7 @@ func LookupAgent(name string) (*AgentEntry, error) {
 	if pid == 0 {
 		return nil, nil
 	}
-	entry := &AgentEntry{Name: name, PID: pid, Alive: processAliveFn(pid)}
+	entry := &AgentEntry{Name: name, PID: pid, Alive: groupAliveFn(pid)}
 	g, gErr := LookupGroup(name)
 	if gErr == nil {
 		entry.Group = g
@@ -129,6 +144,11 @@ type ServicePIDInfo struct {
 
 // LookupService returns the PID record for a service, or (nil, nil) if no
 // PID file is present.
+//
+// Alive uses group-aware liveness so callers see the consistent
+// orphan-descendants story across start (single-instance), stop (kill
+// path), and status display. Single-PID liveness is available via
+// IsAlive() for callers that need the narrower predicate.
 func LookupService(service string) (*ServicePIDInfo, error) {
 	if !isServiceName(service) {
 		return nil, nil
@@ -140,7 +160,7 @@ func LookupService(service string) (*ServicePIDInfo, error) {
 	if pid == 0 {
 		return nil, nil
 	}
-	return &ServicePIDInfo{Name: service, PID: pid, Alive: processAliveFn(pid)}, nil
+	return &ServicePIDInfo{Name: service, PID: pid, Alive: groupAliveFn(pid)}, nil
 }
 
 // isServiceName reports whether base is a known service PID filename.
