@@ -1,5 +1,5 @@
 # Dockerfile for openai-provider-ts MCP Mesh LLM provider
-FROM mcpmesh/typescript-runtime:2.0.1
+FROM mcpmesh/typescript-runtime:2.1.0
 
 WORKDIR /app
 
