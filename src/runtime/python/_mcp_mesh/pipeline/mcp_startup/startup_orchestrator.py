@@ -379,18 +379,26 @@ class DebounceCoordinator:
     def _start_blocking_fastapi_server(
         self, app: Any, binding_config: dict[str, Any]
     ) -> None:
-        """Start FastAPI server with uvicorn (signal handlers already registered)."""
+        """Start FastAPI server with uvicorn (signal handlers already registered).
+
+        Uses ``uvicorn.Server`` directly (rather than ``uvicorn.run``) so the
+        main-thread signal handler can request graceful shutdown by flipping
+        ``server.should_exit``. Uvicorn then runs its normal graceful-shutdown
+        sequence — including the FastAPI lifespan exit phase — before
+        :meth:`Server.run` returns. Without this, SIGTERM would kill the
+        uvicorn worker thread mid-flight and lifespan ``finally`` blocks
+        (asyncpg pool close, in-flight httpx cancel, etc.) would silently
+        leak. See issue #1029.
+        """
         try:
             import uvicorn
+
+            from ...shared.simple_shutdown import register_uvicorn_server
 
             bind_host = binding_config.get("bind_host", "0.0.0.0")
             bind_port = binding_config.get("bind_port", 8080)
 
-            self.logger.info(f"🚀 Starting FastAPI server on {bind_host}:{bind_port}")
-            self.logger.info("🛑 Press Ctrl+C to stop the service")
-
-            # Use uvicorn.run() - signal handlers should already be registered
-            uvicorn.run(
+            config = uvicorn.Config(
                 app,
                 host=bind_host,
                 port=bind_port,
@@ -398,6 +406,19 @@ class DebounceCoordinator:
                 access_log=False,  # Reduce noise
                 ws="websockets-sansio",  # Use modern websockets API (avoids deprecation warnings)
             )
+            server = uvicorn.Server(config)
+
+            # Register the server so main-thread signal handlers can request
+            # graceful shutdown via ``server.should_exit`` (issue #1029).
+            register_uvicorn_server(server)
+
+            self.logger.info(f"🚀 Starting FastAPI server on {bind_host}:{bind_port}")
+            self.logger.info("🛑 Press Ctrl+C to stop the service")
+
+            # Blocks until ``server.should_exit`` is set (via signal handler)
+            # AND uvicorn finishes its graceful shutdown (which runs the
+            # FastAPI lifespan exit phase).
+            server.run()
 
         except KeyboardInterrupt:
             self.logger.info(

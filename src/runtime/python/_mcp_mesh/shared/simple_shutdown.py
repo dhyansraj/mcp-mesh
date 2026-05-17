@@ -147,6 +147,11 @@ class SimpleShutdownCoordinator:
         self._registry_url: Optional[str] = None
         self._agent_id: Optional[str] = None
         self._shutdown_complete = False  # Flag to prevent race conditions
+        # Uvicorn Server handle (lazily registered by startup_orchestrator).
+        # When set, signal handlers flip ``server.should_exit`` so uvicorn
+        # runs its graceful shutdown (which drives the FastAPI lifespan exit
+        # phase) before the server thread returns. See issue #1029.
+        self._uvicorn_server: Optional[Any] = None
 
     def set_shutdown_context(self, registry_url: str, agent_id: str) -> None:
         """Set context for shutdown (used for logging)."""
@@ -156,12 +161,42 @@ class SimpleShutdownCoordinator:
             f"🔧 Shutdown context set: agent_id={agent_id}, registry_url={registry_url}"
         )
 
+    def register_uvicorn_server(self, server: Any) -> None:
+        """Register the uvicorn Server instance so the signal handler can
+        request graceful shutdown via ``server.should_exit``.
+
+        Without this hook, SIGTERM merely sets a flag on the main thread and
+        the uvicorn worker thread is killed mid-flight — the FastAPI
+        lifespan ``finally`` block (e.g. asyncpg pool close, in-flight
+        httpx cancel) never runs. With the hook, uvicorn observes
+        ``should_exit``, runs its normal graceful-shutdown sequence
+        (including the lifespan exit phase), and then ``server.run()``
+        returns cleanly. See issue #1029.
+        """
+        self._uvicorn_server = server
+        logger.debug("📡 Uvicorn server registered with shutdown coordinator")
+
     def install_signal_handlers(self) -> None:
-        """Install minimal signal handlers as backup."""
+        """Install signal handlers that request uvicorn graceful shutdown.
+
+        When a signal arrives the handler sets the local shutdown flag AND,
+        if a uvicorn Server has been registered via
+        :meth:`register_uvicorn_server`, flips ``server.should_exit`` so
+        uvicorn runs the FastAPI lifespan exit phase before its
+        ``run()`` returns. Avoid logging here — signal handlers are async
+        w.r.t. the interpreter and logging can reenter (issue #1029).
+        """
 
         def shutdown_signal_handler(signum, frame):
             # Avoid logging in signal handler to prevent reentrant call issues
             self._shutdown_requested = True
+            # Tell uvicorn to begin graceful shutdown — this lets the
+            # FastAPI lifespan finally block run before the server thread
+            # exits. Best-effort: if no server was registered (e.g. tests,
+            # API/A2A flows that don't own uvicorn), just set the flag.
+            server = self._uvicorn_server
+            if server is not None:
+                server.should_exit = True
 
         signal.signal(signal.SIGINT, shutdown_signal_handler)
         signal.signal(signal.SIGTERM, shutdown_signal_handler)
@@ -242,6 +277,17 @@ def inject_shutdown_lifespan(app, registry_url: str, agent_id: str) -> None:
 def install_signal_handlers() -> None:
     """Install signal handlers (module-level function)."""
     _simple_shutdown_coordinator.install_signal_handlers()
+
+
+def register_uvicorn_server(server: Any) -> None:
+    """Register the uvicorn Server instance (module-level function).
+
+    Internal coordination hook between ``startup_orchestrator`` and the
+    process-wide shutdown coordinator. Calling this after
+    :func:`install_signal_handlers` enables graceful FastAPI lifespan
+    teardown on SIGTERM/SIGINT (issue #1029).
+    """
+    _simple_shutdown_coordinator.register_uvicorn_server(server)
 
 
 def should_stop_heartbeat() -> bool:
