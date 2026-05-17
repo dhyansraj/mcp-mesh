@@ -220,6 +220,7 @@ nav:
 
   # Shared sections (language-agnostic)
   - Concepts:
+      - concepts/index.md
       - Architecture & Design: concepts/architecture.md
       - "DDDI: Distributed Dynamic Dependency Injection": concepts/dddi.md
       - Registry: concepts/registry.md
