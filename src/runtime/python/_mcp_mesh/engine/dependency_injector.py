@@ -599,6 +599,11 @@ class DependencyInjector:
         :class:`DualModuleCheckStep`) that need to inspect registrations
         across all modules. Public so callers don't depend on the private
         storage layout of the injector.
+
+        The returned view reflects live mutations to the underlying mapping —
+        callers that need a stable snapshot (e.g., for iteration that may
+        overlap with register_dependency / unregister_dependency calls) should
+        materialize via list(...) or tuple(...) explicitly.
         """
         return self._dependency_mapping.keys()
 

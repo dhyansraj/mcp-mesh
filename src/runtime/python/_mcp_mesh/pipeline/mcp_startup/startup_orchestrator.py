@@ -8,7 +8,6 @@ explicit pipeline execution that can be easily tested and debugged.
 import asyncio
 import logging
 import os
-import sys
 from typing import Any, Optional
 
 from .startup_pipeline import StartupPipeline
@@ -303,7 +302,7 @@ class DebounceCoordinator:
                                 async def run_configured_server():
                                     await server_obj.serve()
 
-                                # Run the server within the existing event loop context
+                                # Run the server in a fresh event loop (Timer thread has no live loop)
                                 asyncio.run(run_configured_server())
                                 self.logger.info(
                                     "✅ CONFIGURED SERVER: Server started successfully"
