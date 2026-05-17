@@ -224,11 +224,7 @@ JSON key file path. This is the **same** across all three runtimes.
 Override `@mesh.llm` decorator parameters at runtime:
 
 ```bash
-# Override LLM provider (direct mode only, not mesh delegation)
-# Values: claude, openai, anthropic
-export MESH_LLM_PROVIDER=openai
-
-# Override model
+# Override consumer-side model override forwarded to the provider
 export MESH_LLM_MODEL=gpt-4o
 
 # Override max agentic loop iterations
@@ -238,14 +234,21 @@ export MESH_LLM_MAX_ITERATIONS=5
 export MESH_LLM_FILTER_MODE=all
 ```
 
-**Use case**: Same agent code, different LLM backends per environment:
+Provider selection itself is governed by the `provider={...}` filter dict on
+`@mesh.llm` (capability, tags, version) and resolved through mesh DI — there is
+no `MESH_LLM_PROVIDER` env override in v2.x. To switch backends per
+environment, deploy a different `@mesh.llm_provider` agent (e.g., a Claude
+provider in prod, an OpenAI provider in dev) and let the filter resolve the
+right one.
+
+**Use case**: Same agent code, different pinned model per environment:
 
 ```bash
-# Development - use cheaper/faster model
-meshctl start agent.py --env MESH_LLM_PROVIDER=openai --env MESH_LLM_MODEL=gpt-4o-mini
+# Development - cheaper/faster model
+meshctl start agent.py --env MESH_LLM_MODEL=gpt-4o-mini
 
-# Production - use Claude
-meshctl start agent.py --env MESH_LLM_PROVIDER=claude --env MESH_LLM_MODEL=claude-sonnet-4-5
+# Production - stronger model
+meshctl start agent.py --env MESH_LLM_MODEL=claude-sonnet-4-5
 ```
 
 ## Observability

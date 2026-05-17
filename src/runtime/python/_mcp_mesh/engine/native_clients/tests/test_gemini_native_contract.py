@@ -729,9 +729,7 @@ class TestLLMRefusedErrorBackwardsCompat:
 
 _LIVE_GATE_ENV = "MCP_MESH_LIVE_INTEGRATION"
 _LIVE_GATE_ENABLED = os.environ.get(_LIVE_GATE_ENV) == "1"
-_GEMINI_API_KEY_PRESENT = bool(
-    os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-)
+_GEMINI_API_KEY_PRESENT = bool(os.environ.get("GOOGLE_API_KEY"))
 
 
 @pytest.mark.integration
@@ -744,7 +742,7 @@ _GEMINI_API_KEY_PRESENT = bool(
 )
 @pytest.mark.skipif(
     not _GEMINI_API_KEY_PRESENT,
-    reason="GOOGLE_API_KEY / GEMINI_API_KEY not set; live Gemini probe cannot run",
+    reason="GOOGLE_API_KEY not set; live Gemini probe cannot run",
 )
 class TestLiveSafetyBlockIntegration:
     """Live probe: real Gemini API exercises the safety-block channel.
