@@ -201,6 +201,10 @@
          <lastmod>2026-05-17</lastmod>
     </url>
     <url>
+         <loc>https://mcp-mesh.ai/concepts/</loc>
+         <lastmod>2026-05-17</lastmod>
+    </url>
+    <url>
          <loc>https://mcp-mesh.ai/concepts/architecture/</loc>
          <lastmod>2026-05-17</lastmod>
     </url>
@@ -217,6 +221,10 @@
          <lastmod>2026-05-17</lastmod>
     </url>
     <url>
+         <loc>https://mcp-mesh.ai/concepts/in-process-state/</loc>
+         <lastmod>2026-05-17</lastmod>
+    </url>
+    <url>
          <loc>https://mcp-mesh.ai/concepts/jobs/</loc>
          <lastmod>2026-05-17</lastmod>
     </url>
@@ -226,6 +234,10 @@
     </url>
     <url>
          <loc>https://mcp-mesh.ai/concepts/schema-matching/</loc>
+         <lastmod>2026-05-17</lastmod>
+    </url>
+    <url>
+         <loc>https://mcp-mesh.ai/concepts/stateful-agents/</loc>
          <lastmod>2026-05-17</lastmod>
     </url>
     <url>
@@ -390,6 +402,10 @@
     </url>
     <url>
          <loc>https://mcp-mesh.ai/python/local-development/troubleshooting/</loc>
+         <lastmod>2026-05-17</lastmod>
+    </url>
+    <url>
+         <loc>https://mcp-mesh.ai/reference/</loc>
          <lastmod>2026-05-17</lastmod>
     </url>
     <url>
