@@ -329,6 +329,48 @@ class MeshLlmAgentProxyModelParamsTest {
     }
 
     @Test
+    @DisplayName("parallelToolCalls annotation honors user modelParams override (issue #1026)")
+    void parallelToolCallsHonorsUserModelParamsOverride() throws Exception {
+        // Issue #1026: previously `if (parallelToolCalls) modelParams.put("parallel_tool_calls", true)`
+        // sat AFTER userModelParams.putAll() with NO containsKey guard. If the
+        // annotation enabled parallel-tool-calls but the caller passed `false`
+        // via .modelParams() to disable for one call, the annotation value
+        // silently clobbered the user's `false`. Now follows the same
+        // containsKey-guard pattern as max_tokens / temperature.
+
+        // Case A: annotation parallelToolCalls=true, user overrides to false.
+        proxy.configure(client, null, null, null, "", "ctx", 1, true);
+        server.enqueue(stubLlmResponse("ok"));
+        proxy.request()
+            .user("hi")
+            .modelParams(Map.of("parallel_tool_calls", false))
+            .generate();
+        JsonNode modelParamsA = readModelParams(server.takeRequest());
+        assertEquals(false, modelParamsA.get("parallel_tool_calls").asBoolean(),
+            "user-supplied parallel_tool_calls=false in modelParams must survive over annotation=true");
+
+        // Case B: annotation parallelToolCalls=true, no user override → annotation wins.
+        server.enqueue(stubLlmResponse("ok"));
+        proxy.request()
+            .user("hi")
+            .generate();
+        JsonNode modelParamsB = readModelParams(server.takeRequest());
+        assertEquals(true, modelParamsB.get("parallel_tool_calls").asBoolean(),
+            "annotation parallelToolCalls=true must reach the wire when caller passes no override (regression guard)");
+
+        // Case C: annotation parallelToolCalls=false, user passes true → user value wins.
+        proxy.configure(client, null, null, null, "", "ctx", 1, false);
+        server.enqueue(stubLlmResponse("ok"));
+        proxy.request()
+            .user("hi")
+            .modelParams(Map.of("parallel_tool_calls", true))
+            .generate();
+        JsonNode modelParamsC = readModelParams(server.takeRequest());
+        assertEquals(true, modelParamsC.get("parallel_tool_calls").asBoolean(),
+            "user-supplied parallel_tool_calls=true in modelParams must reach the wire when annotation is false");
+    }
+
+    @Test
     @DisplayName("null/empty modelParams → behavior unchanged from before this change")
     void nullOrEmptyModelParamsIsNoOp() throws Exception {
         server.enqueue(stubLlmResponse("ok"));
