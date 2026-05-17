@@ -40,7 +40,7 @@ from _mcp_mesh.pipeline.api_startup.route_integration import (
 # Defined in a sibling module that does NOT use `from __future__ import
 # annotations`, so FastAPI sees real type objects (not PEP 563 strings) on
 # parameters like `request: Request` and `dep: McpMeshTool`.
-from tests.unit._route_sse_gateway_handlers import (  # noqa: E402
+from ._route_sse_gateway_handlers import (
     chat_single_fn as _gw_chat_single_fn,
     chat_two_fn_outer as _gw_chat_two_fn_outer,
 )
@@ -551,6 +551,7 @@ class TestSseGatewayShape:
         )
         assert fake_dep.last_kwargs == {"text": "hello"}
 
+    @pytest.mark.filterwarnings("ignore::ResourceWarning")
     def test_async_gen_with_request_body_deadlocks_over_http(self):
         """**Regression guard for issue #1037.**
 
@@ -586,16 +587,16 @@ class TestSseGatewayShape:
 
         def _call():
             try:
-                client = TestClient(app)
-                r = client.post("/api/chat", json={"text": "hello"})
-                result["status"] = r.status_code
-                result["body"] = r.text
+                with TestClient(app) as client:
+                    r = client.post("/api/chat", json={"text": "hello"})
+                    result["status"] = r.status_code
+                    result["body"] = r.text
             except Exception as e:
                 result["error"] = repr(e)
 
         t = threading.Thread(target=_call, daemon=True)
         t.start()
-        t.join(timeout=2.0)
+        t.join(timeout=8.0)
         assert t.is_alive(), (
             "Expected the single-function gateway shape to deadlock over HTTP "
             f"(issue #1037), but the call returned: result={result!r}. "

@@ -164,6 +164,8 @@ Both patterns are valid — pick the one that matches the error model. If only m
 
 A subtler failure mode: declaring `request: Request` and awaiting `request.json()` (or `await request.body()`, etc.) **inside** an `async def ... yield` handler hangs the connection. Starlette parses the request body lazily and only after the response generator has begun emitting — but the generator is suspended on `await request.json()`, which is itself waiting for the body. Neither side progresses.
 
+This is the same underlying ASGI commit-timing constraint discussed in [Pre-stream errors](#pre-stream-errors) above: anything that needs to run *before* the response stream commits — `HTTPException`, body validation, header inspection — must run in the outer coroutine, before returning the async generator.
+
 ```python
 # Hangs — body parsing inside an async-gen wrapped in StreamingResponse.
 @app.post("/api/chat")
