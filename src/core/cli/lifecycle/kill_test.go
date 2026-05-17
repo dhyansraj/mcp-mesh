@@ -399,6 +399,59 @@ func TestKillVerifyFailureLeavesFile(t *testing.T) {
 	}
 }
 
+// TestIsAliveOrGroupAlive_RefusesPID1 guards against accidental broadcast
+// signals: a corrupted .pid file containing 1 must never be reported as
+// "alive" via the group probe, since kill(-1, ...) is POSIX broadcast to
+// every process the caller can signal — the orphan-group branch in
+// KillVerifyAndCleanup would then issue a session-wide SIGKILL.
+func TestIsAliveOrGroupAlive_RefusesPID1(t *testing.T) {
+	// PID 1 (init) is always alive on POSIX. The function must still return
+	// false because the group probe at -1 is too dangerous to issue.
+	if IsAliveOrGroupAlive(1) {
+		t.Error("IsAliveOrGroupAlive(1) must return false — kill(-1,...) would broadcast")
+	}
+}
+
+// TestSignalGroupOrPID_RefusesPID1 verifies the same guard at the signal-send
+// site: even if a pid==1 leaked past the probe layer somehow (caller bug,
+// future code path, etc.), signalGroupOrPID itself refuses rather than
+// translating to kill(-1, ...).
+//
+// Verification strategy: spawn a benign sleep, attempt signalGroupOrPID(1, ...)
+// for SIGTERM, and confirm (a) an error is returned and (b) the sleep is
+// still alive — proving no broadcast was issued.
+func TestSignalGroupOrPID_RefusesPID1(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("spawn sleep: %v", err)
+	}
+	go func() { _ = cmd.Wait() }()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+
+	sleepPID := cmd.Process.Pid
+
+	err := signalGroupOrPID(1, syscall.SIGTERM)
+	if err == nil {
+		t.Fatal("signalGroupOrPID(1, SIGTERM) must return an error — would broadcast")
+	}
+
+	// Give any (incorrectly issued) signal a moment to land before we probe.
+	time.Sleep(50 * time.Millisecond)
+
+	if !IsAlive(sleepPID) {
+		t.Errorf("benign sleep PID %d is dead — signalGroupOrPID(1, ...) appears to have broadcast", sleepPID)
+	}
+
+	// Also verify pid==0 and pid<0 are refused symmetrically.
+	if err := signalGroupOrPID(0, syscall.SIGTERM); err == nil {
+		t.Error("signalGroupOrPID(0, SIGTERM) must return an error")
+	}
+	if err := signalGroupOrPID(-5, syscall.SIGTERM); err == nil {
+		t.Error("signalGroupOrPID(-5, SIGTERM) must return an error")
+	}
+}
+
 // TestPollUntilDeadIgnoresZombieProbeError guards the invariant that a
 // transient ps failure (EAGAIN under load, RLIMIT_NPROC, etc.) must NEVER
 // be interpreted as "process is dead". Pre-fix, isZombie returned bool only

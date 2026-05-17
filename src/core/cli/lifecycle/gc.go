@@ -92,10 +92,10 @@ func Sweep() (Report, error) {
 		if pid > 0 && groupAliveFn(pid) {
 			continue // alive (parent or group descendant) — leave alone
 		}
-		// Reaching here means pid==0 OR pid is dead — the cleanup branch is
-		// unconditional. (Previously this re-tested processAliveFn, which was
-		// always true given the continue above, and called the syscall twice
-		// for every dead PID.)
+		// Reaching here means pid==0 OR pid is dead OR the group is dead — the
+		// cleanup branch is unconditional. (Previously this re-tested
+		// processAliveFn, which was always true given the continue above, and
+		// called the syscall twice for every dead PID.)
 		if os.Remove(path) == nil {
 			r.DeadAgentPIDsCleaned++
 		}

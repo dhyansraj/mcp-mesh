@@ -41,16 +41,24 @@ func IsAlive(pid int) bool {
 //
 // Tries kill(-pid, 0) first (group probe): success means at least one process
 // in the group whose pgid equals pid still exists. ESRCH falls through to
-// the single-PID IsAlive check, which catches processes that were not spawned
-// with Setpgid (PID != PGID, so the group probe doesn't apply).
+// the single-PID check, which catches processes that were not spawned with
+// Setpgid (PID != PGID, so the group probe doesn't apply).
 //
-// Returns true conservatively on EPERM: cannot probe doesn't mean dead.
+// Returns true conservatively on EPERM at either probe site: "cannot probe"
+// is not the same as "dead". The single-PID fallback inlines the syscall +
+// EPERM handling rather than calling IsAlive — IsAlive collapses EPERM to
+// false (its callers depend on that narrower predicate), but the group-aware
+// contract here promises EPERM-as-alive on both probes.
 //
 // NOTE: descendants that escaped the process group via setsid() or
 // multiprocessing(daemon=False) are NOT visible to this probe and will not
 // be reaped by the cleanup path. Documented limitation; see #1033.
 func IsAliveOrGroupAlive(pid int) bool {
-	if pid <= 0 {
+	if pid <= 1 {
+		// pid <= 0: invalid. pid == 1: kill(-1, ...) is POSIX broadcast —
+		// treating a PID file containing 1 as "alive" via the group probe
+		// would let the orphan-group branch in KillVerifyAndCleanup issue
+		// a broadcast SIGKILL. Refuse to probe.
 		return false
 	}
 	// Group probe: kill(-pid, 0) returns nil iff at least one process is
@@ -61,8 +69,19 @@ func IsAliveOrGroupAlive(pid int) bool {
 	} else if errors.Is(err, syscall.EPERM) {
 		return true
 	}
-	// Fall through to the canonical single-PID check.
-	return IsAlive(pid)
+	// Single-PID fallback — alive if signal-0 succeeds, OR errors with EPERM.
+	// Inlined (rather than delegating to IsAlive) so EPERM-as-alive symmetry
+	// with the group probe above is preserved.
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	if err := proc.Signal(syscall.Signal(0)); err == nil {
+		return true
+	} else if errors.Is(err, syscall.EPERM) {
+		return true
+	}
+	return false
 }
 
 // groupAliveFn is overridable for tests; production uses IsAliveOrGroupAlive.
@@ -131,8 +150,10 @@ func pollUntilDead(pid int, timeout time.Duration) bool {
 // would return true immediately in that scenario because the parent is gone —
 // we need to wait on the orphans instead.
 //
-// Same zombie semantics as pollUntilDead: a zombie counts as dead so an
-// init-reaped orphan isn't a false negative. Probe errors stay inconclusive.
+// Same zombie semantics as pollUntilDead: a zombie at the (originally
+// tracked) PID counts as dead so an init-reaped orphan isn't a false
+// negative. The PID-reuse race window is microseconds and matches
+// pollUntilDead's pre-existing exposure. Probe errors stay inconclusive.
 func pollUntilGroupDead(pid int, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -158,6 +179,12 @@ func pollUntilGroupDead(pid int, timeout time.Duration) bool {
 // with Setpgid). Returns the LAST error seen — caller should still verify
 // death rather than trust the error code.
 func signalGroupOrPID(pid int, sig syscall.Signal) error {
+	if pid <= 1 {
+		// Defensive: a corrupted PID file containing 1 (or 0/negative) must
+		// never trigger kill(-1, ...), which is a POSIX broadcast to every
+		// process the caller can signal. Refuse rather than translate.
+		return fmt.Errorf("lifecycle: refusing to signal pid %d (would broadcast)", pid)
+	}
 	if err := syscall.Kill(-pid, sig); err == nil {
 		return nil
 	}

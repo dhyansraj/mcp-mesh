@@ -99,7 +99,7 @@ func IsAgentRunning(name string) (bool, int, error) {
 	if pid == 0 {
 		return false, 0, nil
 	}
-	if !IsAliveOrGroupAlive(pid) {
+	if !groupAliveFn(pid) {
 		return false, pid, nil
 	}
 	return true, pid, nil
@@ -107,6 +107,11 @@ func IsAgentRunning(name string) (bool, int, error) {
 
 // LookupAgent returns the on-disk record for a single agent, or (nil, nil)
 // if the agent has no PID file.
+//
+// Alive uses group-aware liveness so callers see the consistent
+// orphan-descendants story across start (single-instance), stop (kill
+// path), and status display. Single-PID liveness is available via
+// IsAlive() for callers that need the narrower predicate.
 func LookupAgent(name string) (*AgentEntry, error) {
 	pid, err := readPIDFromFile(PIDFile(name))
 	if err != nil {
@@ -115,7 +120,7 @@ func LookupAgent(name string) (*AgentEntry, error) {
 	if pid == 0 {
 		return nil, nil
 	}
-	entry := &AgentEntry{Name: name, PID: pid, Alive: processAliveFn(pid)}
+	entry := &AgentEntry{Name: name, PID: pid, Alive: groupAliveFn(pid)}
 	g, gErr := LookupGroup(name)
 	if gErr == nil {
 		entry.Group = g
@@ -134,6 +139,11 @@ type ServicePIDInfo struct {
 
 // LookupService returns the PID record for a service, or (nil, nil) if no
 // PID file is present.
+//
+// Alive uses group-aware liveness so callers see the consistent
+// orphan-descendants story across start (single-instance), stop (kill
+// path), and status display. Single-PID liveness is available via
+// IsAlive() for callers that need the narrower predicate.
 func LookupService(service string) (*ServicePIDInfo, error) {
 	if !isServiceName(service) {
 		return nil, nil
@@ -145,7 +155,7 @@ func LookupService(service string) (*ServicePIDInfo, error) {
 	if pid == 0 {
 		return nil, nil
 	}
-	return &ServicePIDInfo{Name: service, PID: pid, Alive: processAliveFn(pid)}, nil
+	return &ServicePIDInfo{Name: service, PID: pid, Alive: groupAliveFn(pid)}, nil
 }
 
 // isServiceName reports whether base is a known service PID filename.
