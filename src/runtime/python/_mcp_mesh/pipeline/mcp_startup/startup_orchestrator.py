@@ -290,6 +290,15 @@ class DebounceCoordinator:
                                 # This runs in the same event loop as the pipeline - no conflict!
                                 import asyncio
 
+                                # Register so main-thread signal handlers can request
+                                # graceful shutdown via ``server.should_exit`` and the
+                                # FastAPI lifespan exit phase runs cleanly (issue #1029).
+                                from ...shared.simple_shutdown import (
+                                    register_uvicorn_server,
+                                )
+
+                                register_uvicorn_server(server_obj)
+
                                 # Define async function to run the server
                                 async def run_configured_server():
                                     await server_obj.serve()
@@ -403,6 +412,7 @@ class DebounceCoordinator:
                 host=bind_host,
                 port=bind_port,
                 log_level="info",
+                timeout_graceful_shutdown=30,  # Allow time for registry cleanup and FastAPI lifespan exit
                 access_log=False,  # Reduce noise
                 ws="websockets-sansio",  # Use modern websockets API (avoids deprecation warnings)
             )

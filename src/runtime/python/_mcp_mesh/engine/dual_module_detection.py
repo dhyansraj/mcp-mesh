@@ -49,6 +49,14 @@ def detect_dual_module_registration(
       first dot to ``pkg`` / ``main.foo:dep_0``, so the suffix grouping
       naturally avoids false-positives against a sibling ``__main__.foo:dep_0``
       (suffix ``foo:dep_0``) — they end up in different buckets.
+
+    Note: the algorithm flags any pair ``__main__.<suffix>`` vs
+    ``<single>.<suffix>`` where ``<single>`` is a top-level module name. In
+    rare cases this can flag a genuine collision between an
+    ``__main__``-defined tool and a same-named tool in a separate top-level
+    module — that's a real ambiguity the user should resolve regardless of
+    dual-import semantics, so the conservative behavior of flagging it is
+    intentional.
     """
     by_suffix: dict[str, list[str]] = {}
     for key in registry_keys:
