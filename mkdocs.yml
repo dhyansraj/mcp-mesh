@@ -102,7 +102,7 @@ markdown_extensions:
   - md_in_html
   - toc:
       permalink: true
-      toc_depth: 3
+      toc_depth: 2
 
   # Python Markdown Extensions
   - pymdownx.arithmatex:
@@ -254,6 +254,7 @@ nav:
       - Producer Spec (Conformance): a2a/surfaces-spec.md
 
   - Reference:
+      - reference/index.md
       - API:
           - MediaResult: api/media-result.md
           - MediaParam: api/media-param.md
