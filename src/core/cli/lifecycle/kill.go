@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -33,6 +34,39 @@ func IsAlive(pid int) bool {
 	}
 	return proc.Signal(syscall.Signal(0)) == nil
 }
+
+// IsAliveOrGroupAlive reports whether the given PID is alive OR any process
+// in PID's process group is alive. Used when the "is there cleanup to do"
+// decision should include orphan descendants of a dead parent.
+//
+// Tries kill(-pid, 0) first (group probe): success means at least one process
+// in the group whose pgid equals pid still exists. ESRCH falls through to
+// the single-PID IsAlive check, which catches processes that were not spawned
+// with Setpgid (PID != PGID, so the group probe doesn't apply).
+//
+// Returns true conservatively on EPERM: cannot probe doesn't mean dead.
+//
+// NOTE: descendants that escaped the process group via setsid() or
+// multiprocessing(daemon=False) are NOT visible to this probe and will not
+// be reaped by the cleanup path. Documented limitation; see #1033.
+func IsAliveOrGroupAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	// Group probe: kill(-pid, 0) returns nil iff at least one process is
+	// in the process group whose pgid equals pid. Permission errors are
+	// treated as "still there" — we cannot prove death.
+	if err := syscall.Kill(-pid, syscall.Signal(0)); err == nil {
+		return true
+	} else if errors.Is(err, syscall.EPERM) {
+		return true
+	}
+	// Fall through to the canonical single-PID check.
+	return IsAlive(pid)
+}
+
+// groupAliveFn is overridable for tests; production uses IsAliveOrGroupAlive.
+var groupAliveFn = IsAliveOrGroupAlive
 
 // readPIDFromFile reads and parses a PID file. Returns (0, nil) if missing.
 func readPIDFromFile(path string) (int, error) {
@@ -87,6 +121,38 @@ func pollUntilDead(pid int, timeout time.Duration) bool {
 	return false
 }
 
+// pollUntilGroupDead is the group-aware variant of pollUntilDead. It polls
+// groupAliveFn (kill(-pid, 0) + single-PID fallback) at 50ms ticks until either
+// the entire process group is empty or the deadline passes. Returns true iff
+// the group is confirmed empty.
+//
+// Used by the KillVerifyAndCleanup branch where the parent PID is already
+// dead but descendants survive in the same pgid (issue #1033). pollUntilDead
+// would return true immediately in that scenario because the parent is gone —
+// we need to wait on the orphans instead.
+//
+// Same zombie semantics as pollUntilDead: a zombie counts as dead so an
+// init-reaped orphan isn't a false negative. Probe errors stay inconclusive.
+func pollUntilGroupDead(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !groupAliveFn(pid) {
+			return true
+		}
+		if z, err := isZombieFn(pid); err == nil && z {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !groupAliveFn(pid) {
+		return true
+	}
+	if z, err := isZombieFn(pid); err == nil && z {
+		return true
+	}
+	return false
+}
+
 // signalGroupOrPID sends sig first to the process group (negative PID) and
 // falls back to a single-process signal if that errors (process wasn't started
 // with Setpgid). Returns the LAST error seen — caller should still verify
@@ -129,10 +195,33 @@ func KillVerifyAndCleanup(name string, timeout time.Duration) (killed bool, err 
 	}
 
 	if !processAliveFn(pid) {
-		// Process already dead — clean up bookkeeping and report no kill.
-		_ = os.Remove(pidPath)
+		// Parent PID is dead. Check whether descendants survive in the same
+		// process group — that's the #1033 case (crash mid-startup, uvicorn
+		// worker or similar lingers).
+		if !groupAliveFn(pid) {
+			// Parent dead AND group empty — pure stale bookkeeping. Clean up.
+			_ = os.Remove(pidPath)
+			_ = os.Remove(groupPath)
+			return false, nil
+		}
+		// Parent dead but group has surviving descendants — proceed to kill
+		// the group as if normal stop. signalGroupOrPID's negative-PID send
+		// catches everyone in the group. The "parent" SIGTERM to a dead PID
+		// is a no-op (ESRCH); signalGroupOrPID does -pid first.
+		// Poll on group death, not parent death, since the parent is already
+		// gone and pollUntilDead would return true immediately.
+		_ = signalGroupOrPID(pid, syscall.SIGTERM)
+		if !pollUntilGroupDead(pid, timeout) {
+			_ = signalGroupOrPID(pid, syscall.SIGKILL)
+			if !pollUntilGroupDead(pid, 3*time.Second) {
+				return false, fmt.Errorf("lifecycle: process group %d (%s) still alive after SIGKILL", pid, name)
+			}
+		}
+		if err := os.Remove(pidPath); err != nil && !os.IsNotExist(err) {
+			return true, fmt.Errorf("lifecycle: process group killed but failed to remove %s: %w", pidPath, err)
+		}
 		_ = os.Remove(groupPath)
-		return false, nil
+		return true, nil
 	}
 
 	// Graceful: SIGTERM + poll.

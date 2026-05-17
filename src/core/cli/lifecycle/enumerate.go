@@ -78,14 +78,19 @@ func ListAgents() ([]AgentEntry, error) {
 
 // IsAgentRunning reports whether an agent with the given name has a live
 // process recorded on disk. Returns (true, pid, nil) when the .pid file
-// exists AND the kernel still has an entry for that PID. Returns
-// (false, 0, nil) when no .pid file is present, the file is empty, or the
-// recorded PID is dead. Errors are only returned for unexpected I/O failures
-// reading the .pid file (e.g., permission denied) — "no such file" is not an
-// error.
+// exists AND either the kernel still has an entry for that PID or its
+// process group has surviving descendants. Returns (false, 0, nil) when no
+// .pid file is present or the file is empty; (false, pid, nil) when the
+// recorded PID is dead AND its process group is empty. Errors are only
+// returned for unexpected I/O failures reading the .pid file.
 //
 // Used by `meshctl start` to refuse same-name re-starts before a duplicate
 // process can clobber the on-disk PID/group bookkeeping.
+//
+// Group-aware (issue #1033): orphan descendants of a crashed parent count as
+// "running" so the user is told to clean up rather than getting a confusing
+// port-bind failure on re-start. Callers that need to distinguish parent-alive
+// from orphan-only can pair this with IsAlive(pid) on the returned PID.
 func IsAgentRunning(name string) (bool, int, error) {
 	pid, err := readPIDFromFile(PIDFile(name))
 	if err != nil {
@@ -94,7 +99,7 @@ func IsAgentRunning(name string) (bool, int, error) {
 	if pid == 0 {
 		return false, 0, nil
 	}
-	if !processAliveFn(pid) {
+	if !IsAliveOrGroupAlive(pid) {
 		return false, pid, nil
 	}
 	return true, pid, nil
