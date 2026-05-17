@@ -7,6 +7,7 @@ and FastAPI server setup during mesh agent initialization.
 
 from .configuration import ConfigurationStep
 from .decorator_collection import DecoratorCollectionStep
+from .dual_module_check import DualModuleCheckStep
 from .fastapiserver_setup import FastAPIServerSetupStep
 from .fastmcpserver_discovery import FastMCPServerDiscoveryStep
 from .heartbeat_loop import HeartbeatLoopStep
@@ -24,6 +25,7 @@ from .startup_pipeline import StartupPipeline
 __all__ = [
     "ConfigurationStep",
     "DecoratorCollectionStep",
+    "DualModuleCheckStep",
     "FastAPIServerSetupStep",
     "FastMCPServerDiscoveryStep",
     "HeartbeatLoopStep",

@@ -10,10 +10,11 @@ import logging
 
 from ..shared.mesh_pipeline import MeshPipeline
 from . import (ConfigurationStep, DecoratorCollectionStep,
-               FastAPIServerSetupStep, FastMCPServerDiscoveryStep,
-               HeartbeatLoopStep, HeartbeatPreparationStep,
-               JobsCancelRouteStep, JobsClaimWorkersStep,
-               JobsHelperToolsStep, MediaStoreValidationStep)
+               DualModuleCheckStep, FastAPIServerSetupStep,
+               FastMCPServerDiscoveryStep, HeartbeatLoopStep,
+               HeartbeatPreparationStep, JobsCancelRouteStep,
+               JobsClaimWorkersStep, JobsHelperToolsStep,
+               MediaStoreValidationStep)
 from .server_discovery import ServerDiscoveryStep
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,12 @@ class StartupPipeline(MeshPipeline):
         # Essential startup steps - agent preparation without registry dependency
         steps = [
             DecoratorCollectionStep(),
+            # Issue #1031: abort if the same @mesh.tool was registered
+            # under both __main__.X and <module>.X (the python main.py +
+            # from main import X footgun). Runs early — after decorators
+            # have fired but before any heartbeat / server bring-up — so
+            # the user sees the error immediately.
+            DualModuleCheckStep(),
             ConfigurationStep(),
             # Eagerly initialize the media store so MCP_MESH_MEDIA_STORAGE=s3
             # misconfiguration (missing boto3, missing bucket, bad creds when

@@ -8,7 +8,6 @@ explicit pipeline execution that can be easily tested and debugged.
 import asyncio
 import logging
 import os
-import sys
 from typing import Any, Optional
 
 from .startup_pipeline import StartupPipeline
@@ -290,11 +289,20 @@ class DebounceCoordinator:
                                 # This runs in the same event loop as the pipeline - no conflict!
                                 import asyncio
 
+                                # Register so main-thread signal handlers can request
+                                # graceful shutdown via ``server.should_exit`` and the
+                                # FastAPI lifespan exit phase runs cleanly (issue #1029).
+                                from ...shared.simple_shutdown import (
+                                    register_uvicorn_server,
+                                )
+
+                                register_uvicorn_server(server_obj)
+
                                 # Define async function to run the server
                                 async def run_configured_server():
                                     await server_obj.serve()
 
-                                # Run the server within the existing event loop context
+                                # Run the server in a fresh event loop (Timer thread has no live loop)
                                 asyncio.run(run_configured_server())
                                 self.logger.info(
                                     "✅ CONFIGURED SERVER: Server started successfully"
@@ -379,25 +387,47 @@ class DebounceCoordinator:
     def _start_blocking_fastapi_server(
         self, app: Any, binding_config: dict[str, Any]
     ) -> None:
-        """Start FastAPI server with uvicorn (signal handlers already registered)."""
+        """Start FastAPI server with uvicorn (signal handlers already registered).
+
+        Uses ``uvicorn.Server`` directly (rather than ``uvicorn.run``) so the
+        main-thread signal handler can request graceful shutdown by flipping
+        ``server.should_exit``. Uvicorn then runs its normal graceful-shutdown
+        sequence — including the FastAPI lifespan exit phase — before
+        :meth:`Server.run` returns. Without this, SIGTERM would kill the
+        uvicorn worker thread mid-flight and lifespan ``finally`` blocks
+        (asyncpg pool close, in-flight httpx cancel, etc.) would silently
+        leak. See issue #1029.
+        """
         try:
             import uvicorn
+
+            from ...shared.simple_shutdown import register_uvicorn_server
 
             bind_host = binding_config.get("bind_host", "0.0.0.0")
             bind_port = binding_config.get("bind_port", 8080)
 
-            self.logger.info(f"🚀 Starting FastAPI server on {bind_host}:{bind_port}")
-            self.logger.info("🛑 Press Ctrl+C to stop the service")
-
-            # Use uvicorn.run() - signal handlers should already be registered
-            uvicorn.run(
+            config = uvicorn.Config(
                 app,
                 host=bind_host,
                 port=bind_port,
                 log_level="info",
+                timeout_graceful_shutdown=30,  # Allow time for registry cleanup and FastAPI lifespan exit
                 access_log=False,  # Reduce noise
                 ws="websockets-sansio",  # Use modern websockets API (avoids deprecation warnings)
             )
+            server = uvicorn.Server(config)
+
+            # Register the server so main-thread signal handlers can request
+            # graceful shutdown via ``server.should_exit`` (issue #1029).
+            register_uvicorn_server(server)
+
+            self.logger.info(f"🚀 Starting FastAPI server on {bind_host}:{bind_port}")
+            self.logger.info("🛑 Press Ctrl+C to stop the service")
+
+            # Blocks until ``server.should_exit`` is set (via signal handler)
+            # AND uvicorn finishes its graceful shutdown (which runs the
+            # FastAPI lifespan exit phase).
+            server.run()
 
         except KeyboardInterrupt:
             self.logger.info(

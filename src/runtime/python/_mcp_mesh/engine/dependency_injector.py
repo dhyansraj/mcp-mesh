@@ -11,7 +11,7 @@ import functools
 import inspect
 import logging
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any, Optional
 
 from ..shared.logging_config import (
@@ -587,6 +587,25 @@ class DependencyInjector:
 
         self._llm_injector = get_global_llm_injector()
         logger.debug("🤖 DependencyInjector initialized with MeshLlmAgentInjector")
+
+    def iter_dependency_keys(self) -> Iterable[str]:
+        """Iterate over all currently-registered dependency keys.
+
+        Each key has the shape ``"<module>.<qualname>:dep_<N>"`` where
+        ``<module>`` is the fully-qualified module path the @mesh.tool
+        decorator observed when the dependency was registered.
+
+        Used by startup-time consistency checks (e.g.
+        :class:`DualModuleCheckStep`) that need to inspect registrations
+        across all modules. Public so callers don't depend on the private
+        storage layout of the injector.
+
+        The returned view reflects live mutations to the underlying mapping —
+        callers that need a stable snapshot (e.g., for iteration that may
+        overlap with register_dependency / unregister_dependency calls) should
+        materialize via list(...) or tuple(...) explicitly.
+        """
+        return self._dependency_mapping.keys()
 
     async def register_dependency(self, name: str, instance: Any) -> None:
         """Register a new dependency or update existing one.
