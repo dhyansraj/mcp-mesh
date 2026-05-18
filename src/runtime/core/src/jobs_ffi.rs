@@ -153,6 +153,13 @@ fn job_status_to_str(s: JobStatus) -> &'static str {
     }
 }
 
+// Stricter timeout-policy than mesh_job_proxy_wait's predicate (which
+// silently aliases NaN/Inf to "no timeout" for back-compat). New FFI
+// surfaces should adopt this form: surface callers' invalid inputs as
+// errors rather than aliasing — matches the napi/pyo3 `parse_timeout_secs`
+// helpers in jobs_napi.rs / jobs_py.rs. The two policies coexist
+// intentionally; do not unify without coordinating a deprecation cycle
+// for mesh_job_proxy_wait.
 /// Parse an FFI-supplied `timeout_secs` f64 into an `Option<Duration>`,
 /// using the negative-sentinel convention to bridge `Option<Duration>` over
 /// the C ABI (which cannot pass `null` doubles).

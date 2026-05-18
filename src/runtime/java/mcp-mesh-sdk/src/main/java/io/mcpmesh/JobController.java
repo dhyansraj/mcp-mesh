@@ -328,6 +328,12 @@ public final class JobController implements MeshJob, AutoCloseable {
             timeoutSecs = secs < 0.0 ? -1.0 : secs;
         }
 
+        // Lock held for the full long-poll duration. Mirrors JobProxy.await()'s
+        // trade-off: concurrent isCancelled() / updateProgress() / complete()
+        // calls on the same JobController will block while recvEvent is parked.
+        // The fence is required for use-after-free safety across the FFI
+        // boundary (handle pointer must not be freed mid-call). See PR #891
+        // for the original rationale on the wait/await side.
         Pointer p;
         synchronized (lock) {
             ensureOpen();

@@ -5,7 +5,7 @@ import io.mcpmesh.core.MeshException;
 /**
  * The targeted job does not exist (or has been swept) in the registry.
  *
- * <p>Translated from the Rust core's {@code JobError::Other(BackendError::NotFound)}
+ * <p>Translated from the Rust core's {@code JobError::Backend(BackendError::NotFound)}
  * error path (HTTP 404 from {@code GET}/{@code POST /jobs/{id}/events}).
  *
  * <p>Mirrors:
