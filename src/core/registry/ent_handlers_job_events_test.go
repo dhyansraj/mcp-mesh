@@ -127,10 +127,18 @@ func TestPostJobEvent_AssignsMonotonicSeq(t *testing.T) {
 	seqs := make([]int64, N)
 	errs := make([]error, N)
 
+	// Barrier: all goroutines block on `ready` until we close it, so
+	// they fire their HTTP posts as simultaneously as the runtime
+	// allows. Without the barrier the first goroutine usually runs to
+	// completion before its siblings have even been scheduled, which
+	// makes the concurrent-retry path effectively untested.
+	ready := make(chan struct{})
+
 	for i := 0; i < N; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
+			<-ready
 			body, _ := json.Marshal(generated.JobEventPostRequest{
 				Type:    fmt.Sprintf("event-%d", idx),
 				Payload: &map[string]interface{}{"i": float64(idx)},
@@ -153,6 +161,8 @@ func TestPostJobEvent_AssignsMonotonicSeq(t *testing.T) {
 			seqs[idx] = p.Seq
 		}(i)
 	}
+	// Fire all goroutines simultaneously now that they're scheduled.
+	close(ready)
 	wg.Wait()
 
 	for i, err := range errs {

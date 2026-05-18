@@ -281,6 +281,16 @@ pub struct JobController {
     /// of its `Clone`s). `0` means no events consumed yet — the next
     /// `recv_event` will return the first event in the job's event log.
     last_seen_seq: Arc<AtomicI64>,
+    /// Serialises the entire `recv_event` load→list→store window across
+    /// `Clone`s of this controller. Without this, two concurrent callers
+    /// on clones can both load the same `last_seen_seq`, both call
+    /// `list_job_events`, and both return the SAME head event — the
+    /// AtomicI64 prevents memory tearing but not the read-fetch-write
+    /// race across the `.await`. The `Arc` keeps clones cheap while
+    /// pinning every clone to the same lock instance; lock contention
+    /// is naturally bounded to the small number of helper tasks a
+    /// single handler typically spawns.
+    recv_event_lock: Arc<Mutex<()>>,
 }
 
 impl JobController {
@@ -298,6 +308,7 @@ impl JobController {
             backend,
             queue,
             last_seen_seq: Arc::new(AtomicI64::new(0)),
+            recv_event_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -481,11 +492,24 @@ impl JobController {
         // Server-side limit (matches OpenAPI `limit` maximum).
         const FETCH_LIMIT: usize = 100;
 
+        // Serialise the load→list→store window across `Clone`s of this
+        // controller. Without this, two concurrent callers can both load
+        // the same `last_seen_seq` cursor, both issue `list_job_events`
+        // with the same `after`, and both return the SAME head event.
+        // The AtomicI64 prevents tearing but not the read-fetch-write
+        // race across the `.await`. Acquire BEFORE the deadline check
+        // so a fast clone-vs-clone race ordering is deterministic.
+        let _guard = self.recv_event_lock.lock().await;
+
         let deadline = timeout.map(|t| Instant::now() + t);
         // Tracks the start of the current contiguous transient-failure
         // window for the same recovery semantics as `JobProxy::wait`.
         let mut transient_failure_started: Option<Instant> = None;
         let registry_unreachable_max = DEFAULT_REGISTRY_UNREACHABLE_MAX;
+        // Exponential backoff for transient registry errors. Reset to
+        // `POLL_INITIAL_MS` on every successful list, capped at
+        // `POLL_MAX_MS` — same shape as `JobProxy::wait_with_config`.
+        let mut backoff_ms = POLL_INITIAL_MS;
 
         loop {
             // Honour the caller's overall timeout BEFORE issuing the next
@@ -517,6 +541,10 @@ impl JobController {
             {
                 Ok(resp) => {
                     transient_failure_started = None;
+                    // Reset exponential backoff on every successful list,
+                    // mirroring `JobProxy::wait_with_config`'s reset on
+                    // any successful poll.
+                    backoff_ms = POLL_INITIAL_MS;
                     // First matching event wins. The registry already
                     // filters by `types` and orders ascending; we return
                     // the head and advance the cursor to its seq so the
@@ -549,12 +577,22 @@ impl JobController {
                     }
                     debug!(
                         "JobController::recv_event absorbing transient registry \
-                         error (job_id={}, elapsed={:?}, err={})",
-                        self.job_id, elapsed, e
+                         error (job_id={}, elapsed={:?}, err={}, backoff_ms={})",
+                        self.job_id, elapsed, e, backoff_ms
                     );
-                    // Brief backoff so we don't hot-loop while the
-                    // registry is restarting.
-                    sleep(Duration::from_millis(POLL_INITIAL_MS)).await;
+                    // Exponential backoff so we don't hot-loop while the
+                    // registry is restarting. Bound the sleep by the
+                    // caller's remaining `timeout` budget — without this
+                    // a long backoff could blow past the deadline.
+                    let mut sleep_ms = backoff_ms;
+                    if let Some(r) = remaining {
+                        let r_ms = r.as_millis() as u64;
+                        if r_ms < sleep_ms {
+                            sleep_ms = r_ms;
+                        }
+                    }
+                    sleep(Duration::from_millis(sleep_ms)).await;
+                    backoff_ms = (backoff_ms * 2).min(POLL_MAX_MS);
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -2359,5 +2397,126 @@ mod tests {
         assert_eq!(ev.event_type, "user_input");
         assert_eq!(ev.payload, Some(serde_json::json!({"answer": "yes"})));
         assert_eq!(ev.seq, 1);
+    }
+
+    #[tokio::test]
+    async fn recv_event_concurrent_callers_get_distinct_events() {
+        // Two concurrent `recv_event` calls on CLONES of the same controller
+        // must NOT both return the same event. Without the
+        // `recv_event_lock`, the AtomicI64 cursor prevents memory tearing
+        // but NOT the read-fetch-write race across `.await`: caller A
+        // loads after=0, issues list, gets seq=1; caller B loads after=0
+        // (A hasn't stored yet), issues list, ALSO gets seq=1.
+        //
+        // With the per-controller `recv_event_lock`, callers serialise on
+        // the load→list→store window so the second caller observes the
+        // cursor A has advanced and picks up seq=2.
+        let (backend, ctrl) = make_controller("j-recv-concurrent").await;
+        backend.push_event("j-recv-concurrent", "tick", serde_json::json!({"n": 1}));
+        backend.push_event("j-recv-concurrent", "tick", serde_json::json!({"n": 2}));
+
+        let ctrl_a = ctrl.clone();
+        let ctrl_b = ctrl.clone();
+        let a = tokio::spawn(async move {
+            ctrl_a
+                .recv_event(None, Some(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .unwrap()
+        });
+        let b = tokio::spawn(async move {
+            ctrl_b
+                .recv_event(None, Some(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .unwrap()
+        });
+        let ev_a = a.await.unwrap();
+        let ev_b = b.await.unwrap();
+
+        // The two callers must observe DIFFERENT seqs — one gets 1, the
+        // other gets 2. Order between them is not deterministic.
+        assert_ne!(
+            ev_a.seq, ev_b.seq,
+            "concurrent callers must not return the same event seq",
+        );
+        let seen: std::collections::HashSet<i64> = [ev_a.seq, ev_b.seq].into_iter().collect();
+        let want: std::collections::HashSet<i64> = [1, 2].into_iter().collect();
+        assert_eq!(
+            seen, want,
+            "concurrent callers must collectively observe seqs {{1,2}}, got {:?}",
+            seen
+        );
+    }
+
+    #[tokio::test]
+    async fn recv_event_lock_is_per_controller() {
+        // Two SEPARATE JobController instances must NOT serialise against
+        // each other — the lock is per-controller (matches the cursor
+        // scope), so an A long-poll must never block B's progress.
+        let backend = MockBackend::new();
+        for jid in ["j-lock-a", "j-lock-b"] {
+            backend.jobs.lock().unwrap().insert(
+                jid.to_string(),
+                Job {
+                    id: jid.to_string(),
+                    capability: "cap".into(),
+                    owner_instance_id: Some("inst-1".into()),
+                    status: JobStatus::Working,
+                    progress: None,
+                    progress_message: None,
+                    result: None,
+                    error: None,
+                    submitted_payload: serde_json::json!({}),
+                    attempt_count: 0,
+                    max_retries: 1,
+                    max_duration: None,
+                    total_deadline: None,
+                    lease_expires_at: None,
+                    last_heartbeat_at: None,
+                    submitted_at: 0,
+                    submitted_by: "client-1".into(),
+                },
+            );
+        }
+        backend.push_event("j-lock-b", "tick", serde_json::json!({}));
+
+        let ctrl_a = JobController::new(
+            "j-lock-a".to_string(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            new_coalescing_queue(),
+        );
+        let ctrl_b = JobController::new(
+            "j-lock-b".to_string(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            new_coalescing_queue(),
+        );
+
+        // Launch a long recv on A — no events, will time out.
+        let a_handle = tokio::spawn(async move {
+            ctrl_a
+                .recv_event(None, Some(Duration::from_millis(500)))
+                .await
+        });
+        // B should NOT be blocked; it has its own lock and an event ready.
+        let start = std::time::Instant::now();
+        let ev_b = ctrl_b
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("B should observe its event");
+        let elapsed = start.elapsed();
+        assert_eq!(ev_b.seq, 1);
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "controller B must not have serialised against A's long-poll \
+             (elapsed={:?})",
+            elapsed,
+        );
+
+        // Drain A.
+        let _ = a_handle.await.unwrap();
     }
 }

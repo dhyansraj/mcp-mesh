@@ -26,6 +26,7 @@ adds the helper + error classes around that surface.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any, Optional
 
@@ -34,6 +35,52 @@ __all__ = [
     "JobTerminalError",
     "post_event",
 ]
+
+
+# ---------------------------------------------------------------------------
+# JobProxy cache (W5 — review #1032)
+# ---------------------------------------------------------------------------
+#
+# ``post_event`` used to construct a fresh ``mcp_mesh_core.JobProxy`` on
+# every call. Each proxy wraps a Rust ``reqwest::Client`` with its own
+# connection pool, so a steady-state sender that fires off `post_event`
+# in a hot loop would force a fresh TCP/TLS handshake against the
+# registry on every call. Cache by ``(registry_url, job_id)`` for the
+# process lifetime; the cache key is invalidated naturally when a
+# different registry URL or job id is used. If a job is cancelled and
+# re-submitted with the same id (rare in practice), the cached proxy
+# would just see a JobTerminalError on its next send_event call — the
+# correct surface — and the caller can retry.
+_proxy_cache: dict[tuple[str, str], Any] = {}
+_proxy_cache_lock = asyncio.Lock()
+
+
+async def _get_or_create_proxy(registry_url: str, job_id: str) -> Any:
+    """Return a process-cached ``mcp_mesh_core.JobProxy`` for the given
+    ``(registry_url, job_id)`` pair, constructing one on first miss.
+
+    Double-checked locking under an asyncio ``Lock`` so concurrent
+    callers in the same event loop end up sharing a single proxy
+    instance — the lock is only contended on the first call per key.
+    """
+    key = (registry_url, job_id)
+    proxy = _proxy_cache.get(key)
+    if proxy is not None:
+        return proxy
+    async with _proxy_cache_lock:
+        proxy = _proxy_cache.get(key)
+        if proxy is not None:
+            return proxy
+        try:
+            from mcp_mesh_core import JobProxy
+        except Exception as e:  # pragma: no cover - extension build issue
+            raise RuntimeError(
+                f"mesh.jobs.post_event: mcp_mesh_core.JobProxy unavailable "
+                f"({e}); cannot construct a transient proxy"
+            ) from e
+        proxy = JobProxy(job_id, registry_url)
+        _proxy_cache[key] = proxy
+        return proxy
 
 
 # ---------------------------------------------------------------------------
@@ -172,16 +219,8 @@ async def post_event(
                 )
                 return {"posted_seq": receipt["seq"]}
     """
-    try:
-        from mcp_mesh_core import JobProxy
-    except Exception as e:  # pragma: no cover - extension build issue
-        raise RuntimeError(
-            f"mesh.jobs.post_event: mcp_mesh_core.JobProxy unavailable "
-            f"({e}); cannot construct a transient proxy"
-        ) from e
-
     registry_url = _resolve_registry_url()
-    proxy = JobProxy(job_id, registry_url)
+    proxy = await _get_or_create_proxy(registry_url, job_id)
     safe_payload: dict = payload if payload is not None else {}
     try:
         return await proxy.send_event(event_type, safe_payload)

@@ -96,6 +96,21 @@ class TestTypedErrors:
 # ===========================================================================
 
 
+@pytest.fixture(autouse=True)
+def _clear_jobproxy_cache():
+    """Reset the module-level proxy cache between tests so each
+    test starts from a clean slate. The cache is intentionally
+    process-lived in production (W5 — see ``mesh.jobs``); tests
+    must invalidate it to avoid one test's mock JobProxy bleeding
+    into the next test's run.
+    """
+    from mesh import jobs as mesh_jobs
+
+    mesh_jobs._proxy_cache.clear()
+    yield
+    mesh_jobs._proxy_cache.clear()
+
+
 class TestPostEventHelper:
     """``mesh.jobs.post_event`` constructs a transient
     :class:`mcp_mesh_core.JobProxy` against the running agent's
@@ -233,6 +248,68 @@ class TestPostEventHelper:
                 await mesh_jobs.post_event("x", "y", {})
         # NOT a typed subclass — kept as base RuntimeError.
         assert type(exc.value) is RuntimeError  # noqa: E721
+
+    @pytest.mark.asyncio
+    async def test_proxy_is_cached_per_registry_url_and_job_id(
+        self, monkeypatch
+    ):
+        """W5 (review #1032): two `post_event` calls against the same
+        ``(registry_url, job_id)`` MUST share a single underlying
+        ``JobProxy`` instance. Pre-W5 each call constructed a fresh
+        proxy + reqwest pool, costing a TCP/TLS handshake per send.
+        """
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        construct_count = 0
+
+        class _CountingFake:
+            def __init__(self, _job_id: str, _registry_url: str) -> None:
+                nonlocal construct_count
+                construct_count += 1
+
+            async def send_event(self, _et: str, _payload: dict) -> dict:
+                return {"job_id": "job-cached", "seq": 0, "created_at": 0}
+
+        with mock.patch("mcp_mesh_core.JobProxy", _CountingFake, create=True):
+            await mesh_jobs.post_event("job-cached", "tick", {"i": 1})
+            await mesh_jobs.post_event("job-cached", "tick", {"i": 2})
+            await mesh_jobs.post_event("job-cached", "tick", {"i": 3})
+
+        # Three sends, ONE proxy construction.
+        assert construct_count == 1, (
+            f"expected JobProxy to be constructed exactly once per "
+            f"(registry_url, job_id) key; got {construct_count} constructions"
+        )
+
+    @pytest.mark.asyncio
+    async def test_proxy_cache_keyed_by_job_id(self, monkeypatch):
+        """Different ``job_id`` values get separate cached proxies — the
+        cache key is ``(registry_url, job_id)``, not just registry_url."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        seen_ids: list[str] = []
+
+        class _RecordingFake:
+            def __init__(self, job_id: str, _registry_url: str) -> None:
+                seen_ids.append(job_id)
+
+            async def send_event(self, _et: str, _payload: dict) -> dict:
+                return {"job_id": "", "seq": 0, "created_at": 0}
+
+        with mock.patch("mcp_mesh_core.JobProxy", _RecordingFake, create=True):
+            await mesh_jobs.post_event("job-A", "ping", {})
+            await mesh_jobs.post_event("job-B", "ping", {})
+            # Second call against job-A reuses the cached proxy.
+            await mesh_jobs.post_event("job-A", "ping", {})
+
+        # Exactly two constructions — one per distinct job_id.
+        assert seen_ids == ["job-A", "job-B"], (
+            f"expected one construction per distinct job_id, got {seen_ids}"
+        )
 
 
 # ===========================================================================

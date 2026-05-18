@@ -6,6 +6,7 @@ package registry
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -885,27 +886,34 @@ func (s *EntService) PostJobEvent(
 		return 0, time.Time{}, fmt.Errorf("PostJobEvent: type is required")
 	}
 
-	// Verify the parent job exists and is non-terminal (unless caller opts
-	// past the terminal guard for the synthetic cancel path). We check
-	// outside the per-attempt transaction so a 404/409 doesn't waste retry
-	// budget on something that will never succeed.
-	parent, err := s.entDB.Job.Query().Where(job.IDEQ(jobID)).Only(ctx)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			return 0, time.Time{}, ErrJobNotFound
-		}
-		return 0, time.Time{}, fmt.Errorf("lookup parent job %s: %w", jobID, err)
-	}
-	if !allowTerminal && isTerminalStatus(parent.Status) {
-		return 0, time.Time{}, ErrJobTerminal
-	}
-
+	// Parent-existence + terminal-state check happens INSIDE the same
+	// transaction as the event insert (issue #1032 / W1+W6). An earlier
+	// pre-loop read-then-insert pattern had a TOCTOU window: a concurrent
+	// CancelJob between the check and the insert allowed external posters
+	// to slip an event past a now-terminal job. Folding the parent
+	// re-read into each per-attempt tx closes the gap — the row is
+	// observed under the same atomic boundary as the insert, so either
+	// CancelJob's terminal write hasn't committed yet (we proceed and
+	// the insert lands while still non-terminal) or it has (we observe
+	// terminal and reject with ErrJobTerminal).
 	for attempt := 0; attempt < postEventMaxAttempts; attempt++ {
 		var (
 			assignedSeq int64
 			createdAt   time.Time
 		)
 		txErr := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
+			// In-tx parent re-read closes the TOCTOU window vs. CancelJob.
+			parent, err := tx.Job.Query().Where(job.IDEQ(jobID)).Only(ctx)
+			if err != nil {
+				if ent.IsNotFound(err) {
+					return ErrJobNotFound
+				}
+				return fmt.Errorf("lookup parent job %s: %w", jobID, err)
+			}
+			if !allowTerminal && isTerminalStatus(parent.Status) {
+				return ErrJobTerminal
+			}
+
 			// Find the current max seq for this job. A previously-empty log
 			// produces an aggregate result with no rows; the Scan-into-struct
 			// pattern below handles the NULL case by yielding 0.
@@ -949,14 +957,19 @@ func (s *EntService) PostJobEvent(
 			return assignedSeq, createdAt, nil
 		}
 
+		// Sentinel errors from the in-tx parent check propagate verbatim —
+		// no retry, no wrap. The handler maps ErrJobNotFound→404 and
+		// ErrJobTerminal→409.
+		if errors.Is(txErr, ErrJobNotFound) || errors.Is(txErr, ErrJobTerminal) {
+			return 0, time.Time{}, txErr
+		}
+
 		// UNIQUE constraint violation on (job_id, seq) is the expected
 		// signal of a lost concurrency race — just retry the whole
-		// max+insert dance. The error wording differs across drivers
-		// (SQLite "UNIQUE constraint failed", Postgres "duplicate key"),
-		// so we match either substring rather than wiring driver-specific
-		// error codes.
-		msg := strings.ToLower(txErr.Error())
-		if strings.Contains(msg, "unique") || strings.Contains(msg, "duplicate") {
+		// max+insert dance. Use Ent's typed helper (matches the codebase
+		// pattern at ent_service.go:474) rather than substring-matching
+		// across SQLite / Postgres driver wording.
+		if ent.IsConstraintError(txErr) {
 			continue
 		}
 		return 0, time.Time{}, txErr

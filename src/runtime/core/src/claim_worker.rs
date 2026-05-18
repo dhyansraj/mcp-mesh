@@ -440,7 +440,13 @@ mod tests {
             _payload: Option<serde_json::Value>,
             _trace_context: Option<serde_json::Value>,
         ) -> Result<crate::task_backend::JobEventReceipt, BackendError> {
-            unimplemented!()
+            // Claim-worker tests don't exercise the event-injection
+            // surface; return a clean error rather than panicking so a
+            // future test that accidentally calls this fails with a
+            // readable message instead of unwinding.
+            Err(BackendError::Other(
+                "post_job_event not used in claim-worker tests".into(),
+            ))
         }
     }
 

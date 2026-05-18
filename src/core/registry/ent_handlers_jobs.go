@@ -16,6 +16,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -43,13 +44,52 @@ const cancelForwardTimeout = 5 * time.Second
 // behavior).
 const cancelEventGraceDefault = 200 * time.Millisecond
 
+// cancelEventGraceMaxMs caps the operator-supplied
+// MCP_MESH_CANCEL_EVENT_GRACE_MS. The grace is meant to be a "brief
+// window" for producers parked on recv_event to wake and unwind
+// cleanly; anything beyond ~10s starts blocking every cancel call
+// for an operationally noticeable amount of time and is almost
+// certainly a misconfiguration. Values above the cap are clamped
+// with a logged warning rather than rejected, so a bad env var
+// doesn't take down cancellation entirely.
+const cancelEventGraceMaxMs = 10000
+
+var (
+	cancelGraceOnce   sync.Once
+	cancelGraceCached time.Duration
+)
+
+// cancelEventGrace returns the cached grace duration. The env var is
+// parsed exactly once (process lifetime) — repeat reads in the cancel
+// handler hot path would re-tokenise the string on every call for no
+// gain, since the registry-process environment doesn't change after
+// startup. Operators tweaking the value must restart the registry,
+// which matches every other env-driven knob in the registry.
 func cancelEventGrace() time.Duration {
-	if v := os.Getenv("MCP_MESH_CANCEL_EVENT_GRACE_MS"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			return time.Duration(n) * time.Millisecond
-		}
+	cancelGraceOnce.Do(func() {
+		cancelGraceCached = parseCancelEventGraceFromEnv()
+	})
+	return cancelGraceCached
+}
+
+func parseCancelEventGraceFromEnv() time.Duration {
+	v := os.Getenv("MCP_MESH_CANCEL_EVENT_GRACE_MS")
+	if v == "" {
+		return cancelEventGraceDefault
 	}
-	return cancelEventGraceDefault
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		// Malformed input falls back to the default. The runtime
+		// warning is the operator-visible discovery surface for the
+		// misconfiguration.
+		log.Printf("[meshjob] warning: MCP_MESH_CANCEL_EVENT_GRACE_MS=%q is not a non-negative integer; falling back to %s", v, cancelEventGraceDefault)
+		return cancelEventGraceDefault
+	}
+	if n > cancelEventGraceMaxMs {
+		log.Printf("[meshjob] warning: MCP_MESH_CANCEL_EVENT_GRACE_MS=%d exceeds cap %dms; clamping", n, cancelEventGraceMaxMs)
+		n = cancelEventGraceMaxMs
+	}
+	return time.Duration(n) * time.Millisecond
 }
 
 // CreateJob implements POST /jobs.
@@ -567,8 +607,19 @@ func (h *EntBusinessLogicHandlers) CancelJob(c *gin.Context, jobId string) {
 	// Grace window for producers parked on recv_event to observe the
 	// synthetic event and return cleanly before the HTTP cancel-forward
 	// raises CancelledError on the task body. See issue #1032 / tc26.
+	//
+	// Honour the client's request context — if the caller disconnects
+	// (e.g. ctrl-C'd a `meshctl jobs cancel`) we abandon the grace
+	// immediately rather than holding the goroutine for up to 10s. The
+	// registry row is already terminal at this point, so the synthetic
+	// event has landed regardless of whether we sleep out the full
+	// grace; cutting it short on disconnect just saves a goroutine.
 	if grace := cancelEventGrace(); grace > 0 {
-		time.Sleep(grace)
+		select {
+		case <-c.Request.Context().Done():
+			// Client gone; skip the wait.
+		case <-time.After(grace):
+		}
 	}
 
 	// Best-effort owner notification. Errors are logged but never affect
