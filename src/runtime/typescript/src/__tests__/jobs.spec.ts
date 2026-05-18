@@ -61,7 +61,7 @@ vi.mock("@mcpmesh/core", async () => {
 
 import {
   postEvent,
-  getOrCreateProxy,
+  _getOrCreateProxy,
   _clearProxyCache,
   translateJobError,
   JobNotFoundError,
@@ -175,6 +175,13 @@ describe("JobController.recvEvent (via napi mock)", () => {
 // postEvent — happy path + error mapping + cache behavior
 // ---------------------------------------------------------------------------
 describe("postEvent", () => {
+  beforeEach(() => {
+    // Explicit reset so each test starts from a known state — prevents
+    // pollution from the "unset" test below (which deletes the env var)
+    // bleeding into later additions or reordering.
+    delete process.env.MCP_MESH_REGISTRY_URL;
+  });
+
   it("constructs a JobProxy from MCP_MESH_REGISTRY_URL + calls sendEvent", async () => {
     process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
     sendEventMock.mockResolvedValueOnce({
@@ -248,23 +255,23 @@ describe("postEvent", () => {
 // ---------------------------------------------------------------------------
 // LRU eviction — cap=2 via env override
 // ---------------------------------------------------------------------------
-describe("getOrCreateProxy LRU eviction", () => {
+describe("_getOrCreateProxy LRU eviction", () => {
   it("evicts the least-recently-used entry when the cap is reached", () => {
     process.env.MCP_MESH_JOBPROXY_CACHE_MAX = "2";
     // Insert 3 distinct entries — after the third insert only the 2
     // most recent ('b', 'c') should survive ('a' is evicted as LRU).
-    const p1 = getOrCreateProxy("http://r", "a");
-    const p2 = getOrCreateProxy("http://r", "b");
-    const p3 = getOrCreateProxy("http://r", "c");
+    const p1 = _getOrCreateProxy("http://r", "a");
+    const p2 = _getOrCreateProxy("http://r", "b");
+    const p3 = _getOrCreateProxy("http://r", "c");
     expect(proxyCalls).toHaveLength(3);
     // Cache state at this point: { b, c }. 'c' is most-recent.
     // 'b' and 'c' still cached — no new construction.
-    expect(getOrCreateProxy("http://r", "b")).toBe(p2);
-    expect(getOrCreateProxy("http://r", "c")).toBe(p3);
+    expect(_getOrCreateProxy("http://r", "b")).toBe(p2);
+    expect(_getOrCreateProxy("http://r", "c")).toBe(p3);
     expect(proxyCalls).toHaveLength(3);
     // Re-fetching 'a' constructs a NEW proxy (the original was evicted
     // by the 'c' insert). proxyCalls grows; new ref differs from p1.
-    const p1b = getOrCreateProxy("http://r", "a");
+    const p1b = _getOrCreateProxy("http://r", "a");
     expect(proxyCalls).toHaveLength(4);
     expect(p1b).not.toBe(p1);
     delete process.env.MCP_MESH_JOBPROXY_CACHE_MAX;
@@ -272,16 +279,16 @@ describe("getOrCreateProxy LRU eviction", () => {
 
   it("bumps an entry to most-recent on hit (LRU semantics)", () => {
     process.env.MCP_MESH_JOBPROXY_CACHE_MAX = "2";
-    const a1 = getOrCreateProxy("http://r", "a");
-    const b1 = getOrCreateProxy("http://r", "b");
+    const a1 = _getOrCreateProxy("http://r", "a");
+    const b1 = _getOrCreateProxy("http://r", "b");
     // Touch 'a' so it becomes most-recent and 'b' becomes least-recent.
-    expect(getOrCreateProxy("http://r", "a")).toBe(a1);
+    expect(_getOrCreateProxy("http://r", "a")).toBe(a1);
     // Insert 'c' — should evict 'b' (the now-LRU), NOT 'a'.
-    getOrCreateProxy("http://r", "c");
+    _getOrCreateProxy("http://r", "c");
     // 'a' is still cached.
-    expect(getOrCreateProxy("http://r", "a")).toBe(a1);
+    expect(_getOrCreateProxy("http://r", "a")).toBe(a1);
     // 'b' was evicted — re-fetching constructs a new instance.
-    const b2 = getOrCreateProxy("http://r", "b");
+    const b2 = _getOrCreateProxy("http://r", "b");
     expect(b2).not.toBe(b1);
     delete process.env.MCP_MESH_JOBPROXY_CACHE_MAX;
   });

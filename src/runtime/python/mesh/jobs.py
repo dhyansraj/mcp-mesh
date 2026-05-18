@@ -130,10 +130,14 @@ async def _get_or_create_proxy(registry_url: str, job_id: str) -> Any:
 # variants currently surface as plain `RuntimeError` from the pyo3 layer
 # (see `src/runtime/core/src/jobs_py.rs::job_error_to_py`). Until the
 # pyo3 binding switches to a custom exception type, we re-classify on
-# the Python side via stable substrings emitted by the Rust error
-# `Display` impls — `JobError::Display` in `src/runtime/core/src/jobs.rs`
-# is the source of truth. Both classes derive from `RuntimeError` so
-# existing `except RuntimeError:` handlers continue to catch them.
+# the Python side via stable substrings emitted by the pyo3 wrapper's
+# explicit error remap in `src/runtime/core/src/jobs_py.rs`
+# (`job_error_to_py` at lines 66-81, specifically the `JobTerminal` arm
+# at line 78). The wrapper deliberately remaps `JobError::Display` to a
+# stable SDK-facing format — do NOT collapse this remap thinking it just
+# passes core's Display through; the substring contract here depends on
+# it. Both classes derive from `RuntimeError` so existing
+# `except RuntimeError:` handlers continue to catch them.
 
 
 class JobNotFoundError(RuntimeError):
