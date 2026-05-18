@@ -398,6 +398,46 @@ agent.addTool({
 });
 
 agent.addTool({
+  name: "run_until_done",
+  capability: "run_until_done",
+  task: true,
+  meshJobParamIndex: 1,
+  description:
+    "Loop on recvEvent for 'work' events, exit on payload {final: true} — paired with subscribeEvents observer.",
+  parameters: z.object({}).passthrough(),
+  execute: async (_args, job: MeshJob | null = null) => {
+    if (!job?.recvEvent) {
+      return { status: "no_job_ctx" };
+    }
+    const eventsProcessed: Array<{ seq: number; payload: unknown }> = [];
+    // Bounded loop — safety net so a missing termination event doesn't
+    // hang the job indefinitely. Per-call long timeout matches the
+    // consumer's posting cadence (consumer fires ~3 events within a
+    // few seconds, so 10s/iteration is plenty).
+    for (let i = 0; i < 20; i++) {
+      const event = await job.recvEvent(["work"], 10);
+      if (event === null) {
+        return { status: "timeout", processed: eventsProcessed };
+      }
+      eventsProcessed.push({ seq: event.seq, payload: event.payload });
+      const payload = event.payload as Record<string, unknown> | null;
+      if (payload && typeof payload === "object" && payload.final === true) {
+        const result = {
+          status: "done",
+          processed_count: eventsProcessed.length,
+          events: eventsProcessed,
+        };
+        if (job.complete) {
+          await job.complete(result);
+        }
+        return result;
+      }
+    }
+    return { status: "loop_exhausted", processed: eventsProcessed };
+  },
+});
+
+agent.addTool({
   name: "run_until_cancel",
   capability: "run_until_cancel",
   task: true,

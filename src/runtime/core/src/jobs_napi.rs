@@ -421,6 +421,70 @@ impl JsJobProxy {
             .map_err(job_error_to_napi)?;
         Ok(job_event_receipt_to_json(receipt))
     }
+
+    /// Fetch a single batch of events from this job's event log with
+    /// `seq > after`, optionally filtered by `types`. The TS SDK's
+    /// `mesh.jobs.subscribeEvents` async iterator is built on top of
+    /// this primitive — callers manage their own cursor between calls.
+    ///
+    /// `timeoutSecs`: long-poll budget. `null`/`undefined` ≡ single
+    /// immediate read; a number long-polls up to that many seconds
+    /// (capped at 60s by the registry). An empty `events` array means
+    /// "no events arrived within the wait window" — the caller
+    /// continues with the same cursor (or advances to `nextAfter` if
+    /// the registry returned a higher watermark, which happens when
+    /// server-side `types` filtering hides events in the scanned range).
+    ///
+    /// Returns a `ListEventsResult { events, nextAfter }` object:
+    /// `events` is the list of event objects (same shape as
+    /// `recvEvent`'s single-event object); `nextAfter` is the
+    /// registry-supplied watermark the caller should feed back as
+    /// `after` on the next call so empty pages caused by server-side
+    /// `types` filtering still advance the cursor.
+    #[napi]
+    pub async fn list_events(
+        &self,
+        after: i64,
+        types: Option<Vec<String>>,
+        timeout_secs: Option<f64>,
+    ) -> Result<ListEventsResult> {
+        let wait = parse_timeout_secs(timeout_secs)?;
+        let (events, next_after) = self
+            .inner
+            .list_events(after, types, wait)
+            .await
+            .map_err(job_error_to_napi)?;
+        let events_json = events.into_iter().map(job_event_to_json).collect();
+        Ok(ListEventsResult {
+            events: events_json,
+            next_after,
+        })
+    }
+}
+
+/// Result of [`JsJobProxy::list_events`]. Wrapped struct rather than a
+/// bare `(Vec<X>, i64)` tuple because napi-rs's auto-serialisation does
+/// not emit a tuple shape on the JS side — wrapping in a `#[napi(object)]`
+/// gives us a stable `{ events, nextAfter }` object the TS SDK consumes
+/// directly.
+///
+/// Note: the Rust struct intentionally drops the `Js` prefix used by
+/// sibling types in this module (`JsJobProxy`, `JsSubmitJobArgs`, …)
+/// because napi-rs's codegen emits the Rust struct name verbatim for
+/// method return types (it honours `js_name` for top-level function
+/// returns but not for `#[napi] impl` method returns). Keeping the Rust
+/// name aligned with the JS name avoids a dangling `JsListEventsResult`
+/// reference in the generated `index.d.ts`.
+#[napi(object)]
+pub struct ListEventsResult {
+    /// The list of events returned by the registry. Same shape as
+    /// `recvEvent`'s single-event object.
+    pub events: Vec<serde_json::Value>,
+    /// Registry-supplied cursor watermark to feed back as `after` on
+    /// the next call. Larger than `after` whenever the registry scanned
+    /// events that were hidden by a server-side `types` filter — the
+    /// caller advances past the filtered range without re-scanning.
+    pub next_after: i64,
 }
 
 // =============================================================================

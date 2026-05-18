@@ -25,14 +25,17 @@ vi.mock("@mcpmesh/core", async () => {
   // tests can assert how many distinct proxies were built.
   const proxyCalls: Array<{ jobId: string; registryUrl: string }> = [];
   const sendEventMock = vi.fn();
+  const listEventsMock = vi.fn();
   class JobProxy {
     public readonly jobId: string;
     public readonly registryUrl: string;
     public readonly sendEvent: typeof sendEventMock;
+    public readonly listEvents: typeof listEventsMock;
     constructor(jobId: string, registryUrl: string) {
       this.jobId = jobId;
       this.registryUrl = registryUrl;
       this.sendEvent = sendEventMock;
+      this.listEvents = listEventsMock;
       proxyCalls.push({ jobId, registryUrl });
     }
   }
@@ -55,12 +58,14 @@ vi.mock("@mcpmesh/core", async () => {
     // so the tests can reach for them.
     __sendEventMock: sendEventMock,
     __recvEventMock: recvEventMock,
+    __listEventsMock: listEventsMock,
     __proxyCalls: proxyCalls,
   };
 });
 
 import {
   postEvent,
+  subscribeEvents,
   _getOrCreateProxy,
   _clearProxyCache,
   translateJobError,
@@ -73,6 +78,7 @@ import {
 const core = (await import("@mcpmesh/core")) as unknown as {
   __sendEventMock: ReturnType<typeof vi.fn>;
   __recvEventMock: ReturnType<typeof vi.fn>;
+  __listEventsMock: ReturnType<typeof vi.fn>;
   __proxyCalls: Array<{ jobId: string; registryUrl: string }>;
   JobController: new (jobId: string, instanceId: string, registryUrl: string) => {
     recvEvent: (
@@ -84,11 +90,13 @@ const core = (await import("@mcpmesh/core")) as unknown as {
 
 const sendEventMock = core.__sendEventMock;
 const recvEventMock = core.__recvEventMock;
+const listEventsMock = core.__listEventsMock;
 const proxyCalls = core.__proxyCalls;
 
 beforeEach(() => {
   sendEventMock.mockReset();
   recvEventMock.mockReset();
+  listEventsMock.mockReset();
   proxyCalls.length = 0;
   _clearProxyCache();
 });
@@ -291,5 +299,220 @@ describe("_getOrCreateProxy LRU eviction", () => {
     const b2 = _getOrCreateProxy("http://r", "b");
     expect(b2).not.toBe(b1);
     delete process.env.MCP_MESH_JOBPROXY_CACHE_MAX;
+  });
+});
+
+// ---------------------------------------------------------------------------
+// subscribeEvents — async iterator over listEvents
+// ---------------------------------------------------------------------------
+describe("subscribeEvents", () => {
+  beforeEach(() => {
+    delete process.env.MCP_MESH_REGISTRY_URL;
+  });
+
+  it("yields events from a non-empty page", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    listEventsMock
+      .mockResolvedValueOnce({
+        events: [
+          {
+            job_id: "j-1",
+            seq: 1,
+            type: "work",
+            payload: { item: 1 },
+            trace_context: null,
+            posted_by: "consumer",
+            created_at: 1_700_000_000,
+          },
+          {
+            job_id: "j-1",
+            seq: 2,
+            type: "work",
+            payload: { item: 2 },
+            trace_context: null,
+            posted_by: "consumer",
+            created_at: 1_700_000_001,
+          },
+        ],
+        nextAfter: 2,
+      })
+      // Stop the iterator after the first batch — second call returns
+      // empty + same cursor so we can `break` after consuming the
+      // expected events.
+      .mockResolvedValue({ events: [], nextAfter: 2 });
+
+    const observed: Array<{ seq: number; type: string }> = [];
+    for await (const event of subscribeEvents("j-1", { types: ["work"] })) {
+      observed.push({ seq: event.seq as number, type: event.type });
+      if (observed.length >= 2) break;
+    }
+    expect(observed).toEqual([
+      { seq: 1, type: "work" },
+      { seq: 2, type: "work" },
+    ]);
+    // First call: starts at cursor 0, with the supplied filter + default
+    // long-poll (30s). The binding-side `wait` is forwarded as a number.
+    expect(listEventsMock).toHaveBeenNthCalledWith(1, 0, ["work"], 30);
+  });
+
+  it("advances cursor from nextAfter on empty page (server-filtered range)", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    listEventsMock
+      // Empty page (every event in the scanned range was filtered out)
+      // but registry returns a higher watermark — observer must resume
+      // from 42, not 0, on the next call.
+      .mockResolvedValueOnce({ events: [], nextAfter: 42 })
+      .mockResolvedValueOnce({
+        events: [
+          {
+            job_id: "j-1",
+            seq: 43,
+            type: "work",
+            payload: { item: 43 },
+            trace_context: null,
+            posted_by: null,
+            created_at: 1_700_000_000,
+          },
+        ],
+        nextAfter: 43,
+      })
+      .mockResolvedValue({ events: [], nextAfter: 43 });
+
+    const observed: number[] = [];
+    for await (const event of subscribeEvents("j-1", { types: ["work"] })) {
+      observed.push(event.seq as number);
+      break;
+    }
+    expect(observed).toEqual([43]);
+    // 2nd call must resume from cursor=42 (the watermark from the 1st
+    // empty-page response) — proof that empty-page cursor advance works.
+    expect(listEventsMock).toHaveBeenNthCalledWith(2, 42, ["work"], 30);
+  });
+
+  it("rejects an event whose seq is a boolean", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    listEventsMock.mockResolvedValueOnce({
+      events: [
+        {
+          job_id: "j-1",
+          // Wire-level malformed — registry contract is integer seqs.
+          seq: true,
+          type: "work",
+          payload: {},
+          trace_context: null,
+          posted_by: null,
+          created_at: 1,
+        },
+      ],
+      nextAfter: 1,
+    });
+
+    const iter = subscribeEvents("j-1")[Symbol.asyncIterator]();
+    await expect(iter.next()).rejects.toThrow(/boolean 'seq'/);
+  });
+
+  it("rejects event without seq key", async () => {
+    // Mirror of Python's test_subscribe_events_raises_on_missing_seq:
+    // an event missing the integer `seq` key must surface as an Error
+    // BEFORE the event is yielded, with `'seq'` in the message so
+    // callers can identify the offending field.
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    listEventsMock.mockResolvedValueOnce({
+      events: [{ type: "work", payload: {} }],
+      nextAfter: 1n,
+    });
+
+    const iter = subscribeEvents("j-1")[Symbol.asyncIterator]();
+    await expect(iter.next()).rejects.toThrow(/'seq'/);
+  });
+
+  it("forwards longPollSecs=null to the binding verbatim", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    listEventsMock.mockResolvedValueOnce({
+      events: [
+        {
+          job_id: "j-1",
+          seq: 1,
+          type: "work",
+          payload: {},
+          trace_context: null,
+          posted_by: null,
+          created_at: 1,
+        },
+      ],
+      nextAfter: 1,
+    });
+
+    const iter = subscribeEvents("j-1", { longPollSecs: null })[
+      Symbol.asyncIterator
+    ]();
+    await iter.next();
+    // Mirror of Python's `long_poll_secs=None` forwarding test —
+    // `null` should reach the binding unchanged so a single-immediate
+    // -read call hits the right code path.
+    expect(listEventsMock).toHaveBeenCalledWith(0, undefined, null);
+  });
+
+  it("translates JobNotFoundError when the binding rejects with that message", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    listEventsMock.mockRejectedValueOnce(
+      new Error("backend error: job not found: stale-job"),
+    );
+    const iter = subscribeEvents("stale-job")[Symbol.asyncIterator]();
+    await expect(iter.next()).rejects.toBeInstanceOf(JobNotFoundError);
+  });
+
+  it("per-subscriber cursor: same proxy, both iters observe seq=1 independently", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    // Resolve with a single event then `.return()` the iterator so the
+    // generator's outer `while(true)` doesn't spin microtasks forever.
+    // (mockResolvedValue without an end-condition would loop the
+    // generator indefinitely and OOM the test runner.)
+    //
+    // The headline contract of subscribeEvents is that each call manages
+    // its own cursor: both iter1 and iter2 start at cursor=0, so both
+    // must observe the same seq=1 event even though they share the
+    // cached proxy. This asserts:
+    //   1. iter1 observes seq=1 (cursor starts at 0).
+    //   2. iter2 also observes seq=1 (its OWN cursor also starts at 0).
+    //   3. Only ONE proxy was constructed (LRU reuse).
+    listEventsMock.mockResolvedValue({
+      events: [
+        {
+          job_id: "j-shared",
+          seq: 1,
+          type: "x",
+          payload: {},
+          trace_context: null,
+          posted_by: null,
+          created_at: 1,
+        },
+      ],
+      nextAfter: 1,
+    });
+
+    const observed1: number[] = [];
+    const iter1 = subscribeEvents("j-shared")[Symbol.asyncIterator]();
+    const r1 = await iter1.next();
+    if (!r1.done) observed1.push(r1.value.seq as number);
+    await iter1.return?.(undefined);
+    // Subscribe again for the same job — must hit the same cached proxy
+    // AND start with its own fresh cursor=0 so it observes seq=1 too.
+    const observed2: number[] = [];
+    const iter2 = subscribeEvents("j-shared")[Symbol.asyncIterator]();
+    const r2 = await iter2.next();
+    if (!r2.done) observed2.push(r2.value.seq as number);
+    await iter2.return?.(undefined);
+
+    // Both iterators independently observed the seq=1 event — proves
+    // per-subscriber cursor isolation (the headline contract).
+    expect(observed1).toEqual([1]);
+    expect(observed2).toEqual([1]);
+    // Only ONE proxy was constructed — proves LRU caching.
+    expect(proxyCalls).toHaveLength(1);
+    expect(proxyCalls[0]).toEqual({
+      jobId: "j-shared",
+      registryUrl: "http://localhost:8000",
+    });
   });
 });

@@ -421,6 +421,117 @@ agent.addTool({
 });
 
 agent.addTool({
+  name: "commission_subscribe_observer",
+  capability: "commission_subscribe_observer",
+  dependencies: [{ capability: "run_until_done" }],
+  meshJobDepIndex: 0,
+  description:
+    "Submit run_until_done, concurrently post 'work' events and subscribe — verifies observer pattern.",
+  parameters: z.object({}).passthrough(),
+  execute: async (_args, runUntilDone: MeshJob | null = null) => {
+    if (!runUntilDone?.submit) {
+      return { error: "run_until_done submitter not injected" };
+    }
+    const proxy = await runUntilDone.submit({}, { maxDuration: 60 });
+    const jobId = (proxy as { jobId?: string }).jobId ?? "";
+
+    // Give the producer a moment to claim + park on recvEvent before
+    // we post anything. Without this the first 'work' event could land
+    // before the producer's claim worker has pulled the row off the
+    // queue — the event would still be observable (the cursor is
+    // per-controller), but the test would not exercise the long-poll
+    // wake path.
+    await sleepMs(2000);
+
+    const observedEvents: Array<{ seq: number; payload: unknown }> = [];
+
+    // Subscriber: observe events via subscribeEvents until the final one
+    // arrives. Use a tighter long-poll than the default so the iterator
+    // wakes more often during the test's narrow time budget.
+    async function runSubscriber(): Promise<void> {
+      for await (const event of mesh.jobs.subscribeEvents(jobId, {
+        types: ["work"],
+        longPollSecs: 5,
+      })) {
+        observedEvents.push({ seq: event.seq, payload: event.payload });
+        const payload = event.payload as Record<string, unknown> | null;
+        if (payload && typeof payload === "object" && payload.final === true) {
+          return;
+        }
+      }
+    }
+
+    // Poster: fire 3 'work' events spaced ~500ms apart — the last
+    // carries {final: true} to terminate the producer + subscriber.
+    async function runPoster(): Promise<number[]> {
+      const seqs: number[] = [];
+      const payloads: Array<Record<string, unknown>> = [
+        { item: 1 },
+        { item: 2 },
+        { item: 3, final: true },
+      ];
+      for (const payload of payloads) {
+        await sleepMs(500);
+        const receipt = await mesh.jobs.postEvent(jobId, "work", payload);
+        seqs.push(receipt.seq);
+      }
+      return seqs;
+    }
+
+    // Start both concurrently. Subscriber races the producer for events,
+    // but each has its own cursor — both must observe the same set.
+    const subPromise = runSubscriber();
+    const postedSeqs = await runPoster();
+
+    // Bound the subscriber wait so a stuck observer doesn't hang the
+    // whole test — 15s is well above the producer's expected runtime
+    // (3 events * 500ms post spacing + handler overhead).
+    let subscriberStatus: string;
+    try {
+      await Promise.race([
+        subPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("subscriber_timeout")),
+            15000,
+          ),
+        ),
+      ]);
+      subscriberStatus = "ok";
+    } catch (e) {
+      // On timeout, suppress the subscriber promise's eventual rejection (or
+      // resolution) to avoid an unhandled-rejection warning when we abandon
+      // the wait. We CANNOT actually cancel the underlying long-poll from
+      // here — `proxy.listEvents` is a fire-and-forget native await and JS
+      // has no cancellation primitive for it. The subscriber will continue
+      // to long-poll for up to `longPollSecs` after we report
+      // subscriber_status="timeout" before resolving naturally. Plumbing an
+      // AbortController through the napi layer would close this leak window
+      // but is out of scope for this fixture.
+      subPromise.catch(() => {});
+      subscriberStatus =
+        e instanceof Error && e.message === "subscriber_timeout"
+          ? "timeout"
+          : "error";
+    }
+
+    let jobResult: unknown = null;
+    if (proxy.wait) {
+      jobResult = await proxy.wait(30);
+    }
+
+    return {
+      job_id: jobId,
+      posted_seqs: postedSeqs,
+      subscriber_status: subscriberStatus,
+      observed_count: observedEvents.length,
+      observed_events: observedEvents,
+      job_result: jobResult,
+    };
+  },
+});
+
+agent.addTool({
   name: "commission_cancel_via_event",
   capability: "commission_cancel_via_event",
   dependencies: [{ capability: "run_until_cancel" }],
