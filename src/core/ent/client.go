@@ -15,6 +15,7 @@ import (
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
 	"mcp-mesh/src/core/ent/job"
+	"mcp-mesh/src/core/ent/jobevent"
 	"mcp-mesh/src/core/ent/llmproviderresolution"
 	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
@@ -39,6 +40,8 @@ type Client struct {
 	DependencyResolution *DependencyResolutionClient
 	// Job is the client for interacting with the Job builders.
 	Job *JobClient
+	// JobEvent is the client for interacting with the JobEvent builders.
+	JobEvent *JobEventClient
 	// LLMProviderResolution is the client for interacting with the LLMProviderResolution builders.
 	LLMProviderResolution *LLMProviderResolutionClient
 	// LLMToolResolution is the client for interacting with the LLMToolResolution builders.
@@ -62,6 +65,7 @@ func (c *Client) init() {
 	c.Capability = NewCapabilityClient(c.config)
 	c.DependencyResolution = NewDependencyResolutionClient(c.config)
 	c.Job = NewJobClient(c.config)
+	c.JobEvent = NewJobEventClient(c.config)
 	c.LLMProviderResolution = NewLLMProviderResolutionClient(c.config)
 	c.LLMToolResolution = NewLLMToolResolutionClient(c.config)
 	c.RegistryEvent = NewRegistryEventClient(c.config)
@@ -162,6 +166,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		Capability:            NewCapabilityClient(cfg),
 		DependencyResolution:  NewDependencyResolutionClient(cfg),
 		Job:                   NewJobClient(cfg),
+		JobEvent:              NewJobEventClient(cfg),
 		LLMProviderResolution: NewLLMProviderResolutionClient(cfg),
 		LLMToolResolution:     NewLLMToolResolutionClient(cfg),
 		RegistryEvent:         NewRegistryEventClient(cfg),
@@ -189,6 +194,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		Capability:            NewCapabilityClient(cfg),
 		DependencyResolution:  NewDependencyResolutionClient(cfg),
 		Job:                   NewJobClient(cfg),
+		JobEvent:              NewJobEventClient(cfg),
 		LLMProviderResolution: NewLLMProviderResolutionClient(cfg),
 		LLMToolResolution:     NewLLMToolResolutionClient(cfg),
 		RegistryEvent:         NewRegistryEventClient(cfg),
@@ -222,8 +228,8 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.Agent, c.Capability, c.DependencyResolution, c.Job, c.LLMProviderResolution,
-		c.LLMToolResolution, c.RegistryEvent, c.SchemaEntry,
+		c.Agent, c.Capability, c.DependencyResolution, c.Job, c.JobEvent,
+		c.LLMProviderResolution, c.LLMToolResolution, c.RegistryEvent, c.SchemaEntry,
 	} {
 		n.Use(hooks...)
 	}
@@ -233,8 +239,8 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.Agent, c.Capability, c.DependencyResolution, c.Job, c.LLMProviderResolution,
-		c.LLMToolResolution, c.RegistryEvent, c.SchemaEntry,
+		c.Agent, c.Capability, c.DependencyResolution, c.Job, c.JobEvent,
+		c.LLMProviderResolution, c.LLMToolResolution, c.RegistryEvent, c.SchemaEntry,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -251,6 +257,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.DependencyResolution.mutate(ctx, m)
 	case *JobMutation:
 		return c.Job.mutate(ctx, m)
+	case *JobEventMutation:
+		return c.JobEvent.mutate(ctx, m)
 	case *LLMProviderResolutionMutation:
 		return c.LLMProviderResolution.mutate(ctx, m)
 	case *LLMToolResolutionMutation:
@@ -924,6 +932,139 @@ func (c *JobClient) mutate(ctx context.Context, m *JobMutation) (Value, error) {
 	}
 }
 
+// JobEventClient is a client for the JobEvent schema.
+type JobEventClient struct {
+	config
+}
+
+// NewJobEventClient returns a client for the JobEvent from the given config.
+func NewJobEventClient(c config) *JobEventClient {
+	return &JobEventClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `jobevent.Hooks(f(g(h())))`.
+func (c *JobEventClient) Use(hooks ...Hook) {
+	c.hooks.JobEvent = append(c.hooks.JobEvent, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `jobevent.Intercept(f(g(h())))`.
+func (c *JobEventClient) Intercept(interceptors ...Interceptor) {
+	c.inters.JobEvent = append(c.inters.JobEvent, interceptors...)
+}
+
+// Create returns a builder for creating a JobEvent entity.
+func (c *JobEventClient) Create() *JobEventCreate {
+	mutation := newJobEventMutation(c.config, OpCreate)
+	return &JobEventCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of JobEvent entities.
+func (c *JobEventClient) CreateBulk(builders ...*JobEventCreate) *JobEventCreateBulk {
+	return &JobEventCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *JobEventClient) MapCreateBulk(slice any, setFunc func(*JobEventCreate, int)) *JobEventCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &JobEventCreateBulk{err: fmt.Errorf("calling to JobEventClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*JobEventCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &JobEventCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for JobEvent.
+func (c *JobEventClient) Update() *JobEventUpdate {
+	mutation := newJobEventMutation(c.config, OpUpdate)
+	return &JobEventUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *JobEventClient) UpdateOne(je *JobEvent) *JobEventUpdateOne {
+	mutation := newJobEventMutation(c.config, OpUpdateOne, withJobEvent(je))
+	return &JobEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *JobEventClient) UpdateOneID(id int) *JobEventUpdateOne {
+	mutation := newJobEventMutation(c.config, OpUpdateOne, withJobEventID(id))
+	return &JobEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for JobEvent.
+func (c *JobEventClient) Delete() *JobEventDelete {
+	mutation := newJobEventMutation(c.config, OpDelete)
+	return &JobEventDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *JobEventClient) DeleteOne(je *JobEvent) *JobEventDeleteOne {
+	return c.DeleteOneID(je.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *JobEventClient) DeleteOneID(id int) *JobEventDeleteOne {
+	builder := c.Delete().Where(jobevent.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &JobEventDeleteOne{builder}
+}
+
+// Query returns a query builder for JobEvent.
+func (c *JobEventClient) Query() *JobEventQuery {
+	return &JobEventQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeJobEvent},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a JobEvent entity by its id.
+func (c *JobEventClient) Get(ctx context.Context, id int) (*JobEvent, error) {
+	return c.Query().Where(jobevent.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *JobEventClient) GetX(ctx context.Context, id int) *JobEvent {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *JobEventClient) Hooks() []Hook {
+	return c.hooks.JobEvent
+}
+
+// Interceptors returns the client interceptors.
+func (c *JobEventClient) Interceptors() []Interceptor {
+	return c.inters.JobEvent
+}
+
+func (c *JobEventClient) mutate(ctx context.Context, m *JobEventMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&JobEventCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&JobEventUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&JobEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&JobEventDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown JobEvent mutation op: %q", m.Op())
+	}
+}
+
 // LLMProviderResolutionClient is a client for the LLMProviderResolution schema.
 type LLMProviderResolutionClient struct {
 	config
@@ -1539,11 +1680,11 @@ func (c *SchemaEntryClient) mutate(ctx context.Context, m *SchemaEntryMutation) 
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		Agent, Capability, DependencyResolution, Job, LLMProviderResolution,
+		Agent, Capability, DependencyResolution, Job, JobEvent, LLMProviderResolution,
 		LLMToolResolution, RegistryEvent, SchemaEntry []ent.Hook
 	}
 	inters struct {
-		Agent, Capability, DependencyResolution, Job, LLMProviderResolution,
+		Agent, Capability, DependencyResolution, Job, JobEvent, LLMProviderResolution,
 		LLMToolResolution, RegistryEvent, SchemaEntry []ent.Interceptor
 	}
 )

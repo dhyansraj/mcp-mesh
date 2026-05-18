@@ -20,6 +20,8 @@ type Tx struct {
 	DependencyResolution *DependencyResolutionClient
 	// Job is the client for interacting with the Job builders.
 	Job *JobClient
+	// JobEvent is the client for interacting with the JobEvent builders.
+	JobEvent *JobEventClient
 	// LLMProviderResolution is the client for interacting with the LLMProviderResolution builders.
 	LLMProviderResolution *LLMProviderResolutionClient
 	// LLMToolResolution is the client for interacting with the LLMToolResolution builders.
@@ -163,6 +165,7 @@ func (tx *Tx) init() {
 	tx.Capability = NewCapabilityClient(tx.config)
 	tx.DependencyResolution = NewDependencyResolutionClient(tx.config)
 	tx.Job = NewJobClient(tx.config)
+	tx.JobEvent = NewJobEventClient(tx.config)
 	tx.LLMProviderResolution = NewLLMProviderResolutionClient(tx.config)
 	tx.LLMToolResolution = NewLLMToolResolutionClient(tx.config)
 	tx.RegistryEvent = NewRegistryEventClient(tx.config)

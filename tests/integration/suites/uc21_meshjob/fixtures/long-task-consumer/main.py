@@ -278,6 +278,133 @@ async def commission_downstream(
     return {"job_id": getattr(proxy, "job_id", None)}
 
 
+# ---------------------------------------------------------------------------
+# Event-injection scenarios (tc24 / tc25 / tc26)
+# ---------------------------------------------------------------------------
+#
+# Each capability submits one of the new ``task=True`` producers and
+# drives ``mesh.jobs.post_event`` from inside the consumer's tool body
+# to exercise the producer's ``recv_event`` long-poll. The Phase C
+# helper ``mesh.jobs.post_event`` is the surface under test — it
+# discovers the registry URL from ``MCP_MESH_REGISTRY_URL`` (set by
+# the agent startup pipeline) and POSTs ``/jobs/{id}/events``.
+
+import asyncio  # noqa: E402  (event-injection helpers below need asyncio.sleep)
+
+
+@app.tool()
+@mesh.tool(
+    capability="commission_event",
+    dependencies=["run_with_event"],
+    description="Submit run_with_event, sleep so producer parks on recv_event, then post one event.",
+)
+async def commission_event(
+    run_with_event: MeshJob = None,
+) -> dict:
+    if run_with_event is None:
+        return {"error": "run_with_event submitter not injected"}
+    proxy = await run_with_event.submit(ctx={}, max_duration=60)
+    # Brief wait so producer reaches recv_event before we post. Without
+    # this, the post may land before the producer's claim worker has
+    # even pulled the job off the queue — the event would still be
+    # observable (the cursor is per-controller) but the test would
+    # not exercise the long-poll wake path.
+    await asyncio.sleep(2.0)
+    receipt = await mesh.jobs.post_event(
+        job_id=proxy.job_id,
+        event_type="signal",
+        payload={"hello": "world", "n": 42},
+    )
+    result = await proxy.wait(timeout_secs=30)
+    return {
+        "job_id": proxy.job_id,
+        "post_seq": receipt["seq"],
+        "job_result": result,
+    }
+
+
+@app.tool()
+@mesh.tool(
+    capability="commission_event_filter",
+    dependencies=["run_with_filter"],
+    description="Submit run_with_filter, post 2 ignored events, then the matching one.",
+)
+async def commission_event_filter(
+    run_with_filter: MeshJob = None,
+) -> dict:
+    if run_with_filter is None:
+        return {"error": "run_with_filter submitter not injected"}
+    proxy = await run_with_filter.submit(ctx={}, max_duration=60)
+    # Give the producer a moment to claim + park on recv_event.
+    await asyncio.sleep(2.0)
+    # Post 2 unrelated events — producer must NOT wake on these.
+    r1 = await mesh.jobs.post_event(
+        job_id=proxy.job_id,
+        event_type="ignore_a",
+        payload={"n": 1},
+    )
+    r2 = await mesh.jobs.post_event(
+        job_id=proxy.job_id,
+        event_type="ignore_b",
+        payload={"n": 2},
+    )
+    # Brief gap so a buggy filter (one that DID wake on ignore_a) has
+    # time to drive the producer to completion; if the producer is
+    # already done by now, the matching post will get JobTerminalError.
+    await asyncio.sleep(1.0)
+    r3 = await mesh.jobs.post_event(
+        job_id=proxy.job_id,
+        event_type="target",
+        payload={"got_it": True},
+    )
+    result = await proxy.wait(timeout_secs=30)
+    return {
+        "job_id": proxy.job_id,
+        "ignore_seqs": [r1["seq"], r2["seq"]],
+        "target_seq": r3["seq"],
+        "result": result,
+    }
+
+
+@app.tool()
+@mesh.tool(
+    capability="commission_cancel_via_event",
+    dependencies=["run_until_cancel"],
+    description="Submit run_until_cancel, post a 'work' event, then cancel — synthetic 'cancelled' event must arrive.",
+)
+async def commission_cancel_via_event(
+    run_until_cancel: MeshJob = None,
+) -> dict:
+    if run_until_cancel is None:
+        return {"error": "run_until_cancel submitter not injected"}
+    proxy = await run_until_cancel.submit(ctx={}, max_duration=60)
+    await asyncio.sleep(2.0)
+    work_receipt = await mesh.jobs.post_event(
+        job_id=proxy.job_id,
+        event_type="work",
+        payload={"item": 1},
+    )
+    # Give the producer a moment to consume the 'work' event before we
+    # fire the cancel. This makes the two events strictly ordered in
+    # the producer's events_seen list (work first, cancelled second).
+    await asyncio.sleep(1.0)
+    await proxy.cancel(reason="external_stop_requested")
+    # The job is now cancelled — the producer's recv_event loop will
+    # observe the synthetic 'cancelled' event and return its dict via
+    # the normal task return path. We CANNOT use proxy.wait() because
+    # wait() raises RuntimeError on a cancelled terminal state. Instead
+    # we read the status row + read the producer's log via the
+    # __mesh_job_status helper from the test driver.
+    await asyncio.sleep(3.0)
+    status = await proxy.status()
+    return {
+        "job_id": proxy.job_id,
+        "work_seq": work_receipt["seq"],
+        "terminal_status": status.get("status"),
+        "terminal_error": status.get("error"),
+    }
+
+
 import os  # noqa: E402  (kept here for clarity that env-port is the only env hook)
 
 

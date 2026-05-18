@@ -6,6 +6,8 @@ package registry
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -17,6 +19,7 @@ import (
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/job"
+	"mcp-mesh/src/core/ent/jobevent"
 	"mcp-mesh/src/core/registry/generated"
 )
 
@@ -828,6 +831,284 @@ func (s *EntService) ResetOrphanedJobs(ctx context.Context) (reset, exhausted in
 		reset++
 	}
 	return reset, exhausted, nil
+}
+
+// ErrJobNotFound is returned by event-injection paths when the parent job
+// does not exist. CancelJob path uses ent.IsNotFound directly instead; this
+// distinct sentinel exists because PostJobEvent's transaction wraps the
+// notfound in additional context that would mask ent.NotFoundError.
+var ErrJobNotFound = fmt.Errorf("job not found")
+
+// ErrJobTerminal is returned by PostJobEvent when an external caller tries
+// to inject an event into a job that has already reached a terminal state.
+// The handler maps this to HTTP 409.
+//
+// The internal cancel path (which posts the synthetic `cancelled` event
+// AFTER transitioning the row into terminal=cancelled) opts past this guard
+// via the allowTerminal flag on PostJobEvent.
+var ErrJobTerminal = fmt.Errorf("job is already in a terminal state")
+
+// postEventMaxAttempts caps the number of optimistic-retry attempts inside
+// PostJobEvent when the (job_id, seq) UNIQUE index rejects a concurrent
+// duplicate. Small bound — concurrent posters on a single job are expected
+// to be rare (most events are 1:1 between user action and registry write);
+// when contention does happen each retry is one query + one insert, so a
+// handful of attempts converges quickly.
+const postEventMaxAttempts = 5
+
+// PostJobEvent atomically assigns the next per-job seq and inserts the
+// event into the job's event log. Returns the assigned seq and the
+// registry-side creation timestamp.
+//
+// Concurrency: seq is assigned inside a transaction as max(seq)+1.
+// Concurrent posters on the same job race the UNIQUE (job_id, seq) index —
+// the loser sees a constraint-violation error and retries from scratch
+// (re-reading max). Bounded by postEventMaxAttempts.
+//
+// Returns:
+//   - ErrJobNotFound when the parent job doesn't exist (handler: 404)
+//   - ErrJobTerminal when the job is in a terminal state AND allowTerminal
+//     is false (handler: 409). The CancelJob handler opts past this guard
+//     via allowTerminal=true so it can stamp the synthetic `cancelled`
+//     event after the row has already transitioned to terminal=cancelled.
+func (s *EntService) PostJobEvent(
+	ctx context.Context,
+	jobID string,
+	eventType string,
+	payload interface{},
+	traceContext map[string]interface{},
+	postedBy string,
+	allowTerminal bool,
+) (int64, time.Time, error) {
+	if jobID == "" {
+		return 0, time.Time{}, fmt.Errorf("PostJobEvent: job_id is required")
+	}
+	if eventType == "" {
+		return 0, time.Time{}, fmt.Errorf("PostJobEvent: type is required")
+	}
+
+	// Parent-existence + terminal-state check happens INSIDE the same
+	// transaction as the event insert (issue #1032 / W1+W6). An earlier
+	// pre-loop read-then-insert pattern had a TOCTOU window: a concurrent
+	// CancelJob between the check and the insert allowed external posters
+	// to slip an event past a now-terminal job. Folding the parent
+	// re-read into each per-attempt tx closes the gap — the row is
+	// observed under the same atomic boundary as the insert, so either
+	// CancelJob's terminal write hasn't committed yet (we proceed and
+	// the insert lands while still non-terminal) or it has (we observe
+	// terminal and reject with ErrJobTerminal).
+	for attempt := 0; attempt < postEventMaxAttempts; attempt++ {
+		var (
+			assignedSeq int64
+			createdAt   time.Time
+		)
+		txErr := s.entDB.Transaction(ctx, func(tx *ent.Tx) error {
+			// In-tx parent re-read closes the TOCTOU window vs. CancelJob.
+			parent, err := tx.Job.Query().Where(job.IDEQ(jobID)).Only(ctx)
+			if err != nil {
+				if ent.IsNotFound(err) {
+					return ErrJobNotFound
+				}
+				return fmt.Errorf("lookup parent job %s: %w", jobID, err)
+			}
+			if !allowTerminal && isTerminalStatus(parent.Status) {
+				return ErrJobTerminal
+			}
+
+			// Find the current max seq for this job. A previously-empty log
+			// produces an aggregate result with no rows; the Scan-into-struct
+			// pattern below handles the NULL case by yielding 0.
+			var maxRow []struct {
+				Max *int64 `json:"max"`
+			}
+			if err := tx.JobEvent.Query().
+				Where(jobevent.JobID(jobID)).
+				Aggregate(ent.Max(jobevent.FieldSeq)).
+				Scan(ctx, &maxRow); err != nil {
+				return fmt.Errorf("query max seq: %w", err)
+			}
+			next := int64(1)
+			if len(maxRow) > 0 && maxRow[0].Max != nil {
+				next = *maxRow[0].Max + 1
+			}
+
+			builder := tx.JobEvent.Create().
+				SetSeq(next).
+				SetJobID(jobID).
+				SetType(eventType)
+			if payload != nil {
+				raw, err := json.Marshal(payload)
+				if err != nil {
+					return fmt.Errorf("marshal event payload: %w", err)
+				}
+				builder = builder.SetPayload(raw)
+			}
+			if traceContext != nil {
+				builder = builder.SetTraceContext(traceContext)
+			}
+			if postedBy != "" {
+				builder = builder.SetPostedBy(postedBy)
+			}
+
+			row, err := builder.Save(ctx)
+			if err != nil {
+				return err
+			}
+			assignedSeq = row.Seq
+			createdAt = row.CreatedAt
+			return nil
+		})
+		if txErr == nil {
+			return assignedSeq, createdAt, nil
+		}
+
+		// Sentinel errors from the in-tx parent check propagate verbatim —
+		// no retry, no wrap. The handler maps ErrJobNotFound→404 and
+		// ErrJobTerminal→409.
+		if errors.Is(txErr, ErrJobNotFound) || errors.Is(txErr, ErrJobTerminal) {
+			return 0, time.Time{}, txErr
+		}
+
+		// UNIQUE constraint violation on (job_id, seq) is the expected
+		// signal of a lost concurrency race — just retry the whole
+		// max+insert dance. Use Ent's typed helper (matches the codebase
+		// pattern at ent_service.go:474) rather than substring-matching
+		// across SQLite / Postgres driver wording.
+		if ent.IsConstraintError(txErr) {
+			continue
+		}
+		return 0, time.Time{}, txErr
+	}
+
+	return 0, time.Time{}, fmt.Errorf("PostJobEvent: exhausted %d attempts under contention", postEventMaxAttempts)
+}
+
+// listJobEventsPollResolution is the inner sleep granularity of
+// ListJobEvents' long-poll. We re-poll the DB every 100ms; finer than that
+// hammers the row store for marginal latency benefit, coarser than that
+// pushes p99 wake latency past what `recv_event` callers expect.
+const listJobEventsPollResolution = 100 * time.Millisecond
+
+// ListJobEvents returns events for a job with seq > after, optionally
+// filtered to a comma-separated allowlist of types. Results are ordered by
+// seq ascending and capped at `limit`.
+//
+// When wait > 0, the call performs a short long-poll: if no events match
+// immediately, it sleeps in 100ms increments up to `wait`, re-querying
+// each tick. Returns as soon as a matching event arrives or wait expires.
+//
+// Returns ErrJobNotFound if the parent job doesn't exist.
+func (s *EntService) ListJobEvents(
+	ctx context.Context,
+	jobID string,
+	after int64,
+	types []string,
+	wait time.Duration,
+	limit int,
+) ([]*ent.JobEvent, error) {
+	if jobID == "" {
+		return nil, fmt.Errorf("ListJobEvents: job_id is required")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+
+	// Confirm the parent job exists so the handler can surface 404 even
+	// when the call is a long-poll with no events.
+	exists, err := s.entDB.Job.Query().Where(job.IDEQ(jobID)).Exist(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("lookup parent job %s: %w", jobID, err)
+	}
+	if !exists {
+		return nil, ErrJobNotFound
+	}
+
+	queryEvents := func() ([]*ent.JobEvent, error) {
+		q := s.entDB.JobEvent.Query().
+			Where(jobevent.JobID(jobID), jobevent.SeqGT(after))
+		if len(types) > 0 {
+			cleaned := make([]string, 0, len(types))
+			for _, t := range types {
+				t = strings.TrimSpace(t)
+				if t != "" {
+					cleaned = append(cleaned, t)
+				}
+			}
+			if len(cleaned) > 0 {
+				q = q.Where(jobevent.TypeIn(cleaned...))
+			}
+		}
+		return q.Order(jobevent.BySeq(entsql.OrderAsc())).Limit(limit).All(ctx)
+	}
+
+	rows, err := queryEvents()
+	if err != nil {
+		return nil, fmt.Errorf("query events: %w", err)
+	}
+	if len(rows) > 0 || wait <= 0 {
+		return rows, nil
+	}
+
+	// Long-poll: re-query every listJobEventsPollResolution until a match
+	// shows up or the deadline expires. Honors ctx cancellation so a
+	// client hangup unwinds promptly.
+	deadline := time.Now().Add(wait)
+	for time.Now().Before(deadline) {
+		remaining := time.Until(deadline)
+		step := listJobEventsPollResolution
+		if remaining < step {
+			step = remaining
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(step):
+		}
+		rows, err = queryEvents()
+		if err != nil {
+			return nil, fmt.Errorf("query events: %w", err)
+		}
+		if len(rows) > 0 {
+			return rows, nil
+		}
+	}
+	return rows, nil
+}
+
+// DeleteEventsForTerminalJobs removes JobEvent rows for jobs that have been
+// in a terminal state for longer than the retention window. Used by the
+// sweep loop — events outlive the parent job by the grace window so any
+// in-flight tailer can drain the final cancel/result event, then both go.
+//
+// Implementation: collect terminal jobs older than threshold, then delete
+// their events. Per-job loop keeps the delete predicate simple (no JOIN)
+// and bounds each delete to one job's row set.
+func (s *EntService) DeleteEventsForTerminalJobs(ctx context.Context, threshold time.Time) (int, error) {
+	candidates, err := s.entDB.Client.Job.Query().
+		Where(
+			job.StatusIn(job.StatusCompleted, job.StatusFailed, job.StatusCancelled),
+			job.LastHeartbeatAtLT(threshold),
+		).
+		Select(job.FieldID).
+		Strings(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("query terminal jobs for event GC: %w", err)
+	}
+	if len(candidates) == 0 {
+		return 0, nil
+	}
+
+	purged := 0
+	for _, id := range candidates {
+		n, err := s.entDB.Client.JobEvent.Delete().
+			Where(jobevent.JobID(id)).
+			Exec(ctx)
+		if err != nil {
+			return purged, fmt.Errorf("delete events for job %s: %w", id, err)
+		}
+		purged += n
+	}
+	return purged, nil
 }
 
 // ExpireDeadlinedJobs handles the total_deadline cron phase of the sweep.

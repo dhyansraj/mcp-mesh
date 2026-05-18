@@ -232,6 +232,35 @@ var (
 			},
 		},
 	}
+	// JobEventsColumns holds the columns for the "job_events" table.
+	JobEventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "seq", Type: field.TypeInt64},
+		{Name: "job_id", Type: field.TypeString},
+		{Name: "type", Type: field.TypeString},
+		{Name: "payload", Type: field.TypeJSON, Nullable: true},
+		{Name: "trace_context", Type: field.TypeJSON, Nullable: true},
+		{Name: "posted_by", Type: field.TypeString, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+	}
+	// JobEventsTable holds the schema information for the "job_events" table.
+	JobEventsTable = &schema.Table{
+		Name:       "job_events",
+		Columns:    JobEventsColumns,
+		PrimaryKey: []*schema.Column{JobEventsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "jobevent_job_id_seq",
+				Unique:  true,
+				Columns: []*schema.Column{JobEventsColumns[2], JobEventsColumns[1]},
+			},
+			{
+				Name:    "jobevent_job_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{JobEventsColumns[2], JobEventsColumns[7]},
+			},
+		},
+	}
 	// LlmProviderResolutionsColumns holds the columns for the "llm_provider_resolutions" table.
 	LlmProviderResolutionsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -422,6 +451,7 @@ var (
 		CapabilitiesTable,
 		DependencyResolutionsTable,
 		JobsTable,
+		JobEventsTable,
 		LlmProviderResolutionsTable,
 		LlmToolResolutionsTable,
 		RegistryEventsTable,

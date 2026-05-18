@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -140,4 +141,75 @@ func TestGetJob_NotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+// TestCancelEventGrace_EnvVar pins the parsing & clamping behaviour for
+// MCP_MESH_CANCEL_EVENT_GRACE_MS. The exported helper `cancelEventGrace`
+// is sync.Once-cached for the process lifetime; we exercise the parsing
+// path directly so each subtest sees a fresh read.
+func TestCancelEventGrace_EnvVar(t *testing.T) {
+	tests := []struct {
+		name string
+		set  bool
+		val  string
+		want time.Duration
+	}{
+		{
+			name: "unset returns default",
+			set:  false,
+			want: cancelEventGraceDefault,
+		},
+		{
+			name: "explicit small value honoured",
+			set:  true,
+			val:  "150",
+			want: 150 * time.Millisecond,
+		},
+		{
+			name: "zero disables grace",
+			set:  true,
+			val:  "0",
+			want: 0,
+		},
+		{
+			name: "huge value clamped to cap",
+			// 24h in ms = 86400000. Cap is 10000ms. An operator
+			// who set this would otherwise block every cancel call
+			// for 24h; the cap keeps things sane.
+			set:  true,
+			val:  "86400000",
+			want: time.Duration(cancelEventGraceMaxMs) * time.Millisecond,
+		},
+		{
+			name: "negative falls back to default",
+			set:  true,
+			val:  "-5",
+			want: cancelEventGraceDefault,
+		},
+		{
+			name: "malformed string falls back to default",
+			set:  true,
+			val:  "not-a-number",
+			want: cancelEventGraceDefault,
+		},
+		{
+			name: "exactly at cap is honoured (boundary)",
+			set:  true,
+			val:  "10000",
+			want: time.Duration(cancelEventGraceMaxMs) * time.Millisecond,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.set {
+				t.Setenv("MCP_MESH_CANCEL_EVENT_GRACE_MS", tc.val)
+			} else {
+				// t.Setenv with empty also works but the explicit
+				// path makes the intent obvious in test output.
+				t.Setenv("MCP_MESH_CANCEL_EVENT_GRACE_MS", "")
+			}
+			got := parseCancelEventGraceFromEnv()
+			assert.Equal(t, tc.want, got, "MCP_MESH_CANCEL_EVENT_GRACE_MS=%q", tc.val)
+		})
+	}
 }

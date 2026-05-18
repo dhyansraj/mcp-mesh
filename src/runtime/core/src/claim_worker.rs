@@ -419,6 +419,35 @@ mod tests {
                 attempt_count: 1,
             })
         }
+        async fn list_job_events(
+            &self,
+            _job_id: &str,
+            _after: i64,
+            _types: Option<&[String]>,
+            _wait: Duration,
+            _limit: usize,
+        ) -> Result<crate::task_backend::JobEventListResponse, BackendError> {
+            // Claim-worker tests don't exercise the event channel.
+            Ok(crate::task_backend::JobEventListResponse {
+                events: vec![],
+                next_after: 0,
+            })
+        }
+        async fn post_job_event(
+            &self,
+            _job_id: &str,
+            _event_type: &str,
+            _payload: Option<serde_json::Value>,
+            _trace_context: Option<serde_json::Value>,
+        ) -> Result<crate::task_backend::JobEventReceipt, BackendError> {
+            // Claim-worker tests don't exercise the event-injection
+            // surface; return a clean error rather than panicking so a
+            // future test that accidentally calls this fails with a
+            // readable message instead of unwinding.
+            Err(BackendError::Other(
+                "post_job_event not used in claim-worker tests".into(),
+            ))
+        }
     }
 
     // ---- mock dispatchers ---------------------------------------------------

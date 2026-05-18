@@ -308,6 +308,134 @@ async def report_with_downstream_call(
     return result
 
 
+# ---------------------------------------------------------------------------
+# Event-injection scenarios (tc24/tc25/tc26 — recv_event / send_event primitive)
+# ---------------------------------------------------------------------------
+#
+# These tools all use ``task=True`` and call ``job.recv_event(...)`` in
+# the handler body. Each one targets a different facet of the event
+# channel:
+#
+# - ``run_with_event``  — happy path: wait for ONE event of a single type
+#                         and return its payload.
+# - ``run_with_filter`` — type-filter correctness: ignore unrelated events
+#                         and only wake on the requested type.
+# - ``run_until_cancel`` — synthetic cancel event: loop on ``recv_event``
+#                          and exit gracefully when the registry posts
+#                          the ``{type: "cancelled"}`` synthetic event
+#                          that fires inside ``CancelJob``.
+#
+# All three use ``timeout_secs=`` as the kwarg (the pyo3 binding's
+# canonical name — see ``src/runtime/core/src/jobs_py.rs``); the
+# ``MeshJob`` docstring's ``timeout=`` form is informational only.
+
+
+@app.tool()
+@mesh.tool(
+    capability="run_with_event",
+    task=True,
+    description="Wait for one 'signal' event and return its payload — happy path for recv_event.",
+)
+async def run_with_event(
+    ctx: dict | None = None,
+    job: MeshJob = None,
+) -> dict[str, Any]:
+    if job is None:
+        return {"status": "no_job_ctx"}
+    await job.update_progress(0.1, "parked on recv_event")
+    event = await job.recv_event(types=["signal"], timeout_secs=10.0)
+    if event is None:
+        return {"status": "timeout", "received": False}
+    payload = {
+        "status": "got_event",
+        "received": True,
+        "type": event["type"],
+        "payload": event["payload"],
+        "seq": event["seq"],
+    }
+    await job.complete(payload)
+    return payload
+
+
+@app.tool()
+@mesh.tool(
+    capability="run_with_filter",
+    task=True,
+    description="Wait for a 'target' event and ignore other types — exercises recv_event filter.",
+)
+async def run_with_filter(
+    ctx: dict | None = None,
+    job: MeshJob = None,
+) -> dict[str, Any]:
+    if job is None:
+        return {"status": "no_job_ctx"}
+    await job.update_progress(0.1, "parked with type filter")
+    # Long timeout so the consumer has slack to post 2 ignored events
+    # before the matching one. If the filter is broken the producer
+    # will wake on the FIRST event (ignore_a) and the assertions will
+    # catch it.
+    event = await job.recv_event(types=["target"], timeout_secs=15.0)
+    if event is None:
+        return {"timeout": True}
+    payload = {
+        "type": event["type"],
+        "payload": event["payload"],
+        "seq": event["seq"],
+    }
+    await job.complete(payload)
+    return payload
+
+
+@app.tool()
+@mesh.tool(
+    capability="run_until_cancel",
+    task=True,
+    description="Loop on recv_event for 'work'/'cancelled' types until cancelled-event arrives.",
+)
+async def run_until_cancel(
+    ctx: dict | None = None,
+    job: MeshJob = None,
+) -> dict[str, Any]:
+    if job is None:
+        return {"status": "no_job_ctx"}
+    events_seen: list[dict[str, Any]] = []
+    # Loop with a per-iteration long timeout. A correct flow exits via
+    # the "cancelled" branch within ~3s of the consumer firing cancel.
+    # The bounded loop count is a safety net against runaway iterations
+    # if the cancel event never lands.
+    for _ in range(20):
+        event = await job.recv_event(
+            types=["work", "cancelled"],
+            timeout_secs=15.0,
+        )
+        if event is None:
+            # Surface the partial state so the test can distinguish
+            # "no event ever arrived" from "wrong event type observed".
+            return {"status": "timeout", "events_seen": events_seen}
+        events_seen.append(
+            {"type": event["type"], "payload": event["payload"]}
+        )
+        if event["type"] == "cancelled":
+            # Don't call job.complete() / job.fail() — the registry row
+            # is already cancelled (the synthetic event was posted by
+            # CancelJob AFTER the row transition). The runtime's
+            # auto-complete is a no-op once a terminal state has been
+            # recorded, so returning here is safe.
+            #
+            # Log a marker line so the test driver can assert the
+            # producer observed the synthetic cancel event WITHOUT
+            # relying on proxy.wait() (which raises on a cancelled
+            # terminal state). Mirrors the [runs_overlong] marker
+            # pattern used by tc06.
+            print(
+                f"[run_until_cancel] cancelled_gracefully "
+                f"events_seen={events_seen}",
+                flush=True,
+            )
+            return {"status": "cancelled_gracefully", "events_seen": events_seen}
+    return {"status": "loop_exhausted", "events_seen": events_seen}
+
+
 @mesh.agent(
     name="long-task-provider",
     version="1.0.0",

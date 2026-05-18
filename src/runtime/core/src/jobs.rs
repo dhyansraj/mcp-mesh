@@ -10,6 +10,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,8 +25,8 @@ use tracing::{debug, info, warn};
 use crate::cancel_registry;
 use crate::job_context::{self, JobContext};
 use crate::task_backend::{
-    BackendError, CreateJobRequest, CreateJobResponse, Job, JobDelta, JobStatus,
-    ReleaseJobResponse, TaskBackend,
+    BackendError, CreateJobRequest, CreateJobResponse, Job, JobDelta, JobEvent,
+    JobEventReceipt, JobStatus, ReleaseJobResponse, TaskBackend,
 };
 
 // =============================================================================
@@ -55,6 +56,12 @@ pub enum JobError {
     /// the caller can surface a clean error rather than blocking forever.
     #[error("registry unreachable for {duration:?}")]
     RegistryUnreachable { duration: Duration },
+
+    /// `send_event` was called against a job that has already reached a
+    /// terminal state — the registry rejects the post with 409. Distinct
+    /// from `Backend(Conflict(_))` so callers can `match` cleanly.
+    #[error("cannot post event: job is in a terminal state ({0})")]
+    JobTerminal(String),
 }
 
 /// Marker error used by [`run_cancellable`].
@@ -257,12 +264,33 @@ async fn flush_once(
 /// Producer-side handle bound to a single job row. Application code calls
 /// `update_progress`/`complete`/`fail`. Updates are coalesced and flushed
 /// by the background batching tick (or immediately for terminal calls).
+///
+/// Also exposes [`Self::recv_event`] for handlers running inside a
+/// `task=True` job to drain events posted via [`JobProxy::send_event`].
+/// The per-controller `last_seen_seq` cursor is shared across `Clone`s of
+/// the same instance (via `Arc<AtomicI64>`), so passing the controller
+/// into helper tasks doesn't reset the cursor. A NEW controller created
+/// for the same `job_id` starts from seq=0 — replay is per-instance.
 #[derive(Clone)]
 pub struct JobController {
     job_id: String,
     instance_id: String,
     backend: Arc<dyn TaskBackend>,
     queue: Arc<Mutex<CoalescingQueue>>,
+    /// Last event seq returned by `recv_event` on this controller (or any
+    /// of its `Clone`s). `0` means no events consumed yet — the next
+    /// `recv_event` will return the first event in the job's event log.
+    last_seen_seq: Arc<AtomicI64>,
+    /// Serialises the entire `recv_event` load→list→store window across
+    /// `Clone`s of this controller. Without this, two concurrent callers
+    /// on clones can both load the same `last_seen_seq`, both call
+    /// `list_job_events`, and both return the SAME head event — the
+    /// AtomicI64 prevents memory tearing but not the read-fetch-write
+    /// race across the `.await`. The `Arc` keeps clones cheap while
+    /// pinning every clone to the same lock instance; lock contention
+    /// is naturally bounded to the small number of helper tasks a
+    /// single handler typically spawns.
+    recv_event_lock: Arc<Mutex<()>>,
 }
 
 impl JobController {
@@ -279,6 +307,8 @@ impl JobController {
             instance_id: instance_id.into(),
             backend,
             queue,
+            last_seen_seq: Arc::new(AtomicI64::new(0)),
+            recv_event_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -419,6 +449,155 @@ impl JobController {
             .await?;
         Ok(resp)
     }
+
+    /// Wait for the next event posted to this job's event log.
+    ///
+    /// On first call (or for a freshly-constructed controller) starts from
+    /// `seq=0` and returns the first matching event in the log. Subsequent
+    /// calls return events strictly newer than the last consumed — the
+    /// internal cursor is incremented on every successful return. The
+    /// cursor is per-`JobController`-instance (shared across `Clone`s of
+    /// the same instance via `Arc<AtomicI64>`); a NEW controller for the
+    /// same `job_id` starts replay from `seq=0`.
+    ///
+    /// `types`: if `Some`, only events whose `event_type` matches one of
+    /// the provided strings are returned. If `None`, all event types match.
+    ///
+    /// `timeout` bounds the long-poll. `None` waits indefinitely (loops
+    /// the registry's 60s cap until an event arrives). `Some(d)` returns
+    /// `Ok(None)` once roughly `d` has elapsed without a matching event.
+    ///
+    /// Trace context: when an event with `trace_context` is returned, the
+    /// field is passed through verbatim on [`JobEvent::trace_context`].
+    /// TODO: wire OpenTelemetry child-span creation when the core crate
+    /// adopts the `opentelemetry` crate (today this crate uses only the
+    /// `tracing` facade with no OTel surface).
+    ///
+    /// Returns:
+    /// - `Ok(Some(event))` on event arrival
+    /// - `Ok(None)` on timeout
+    /// - `Err(Backend(NotFound(_)))` if the registry reports the job
+    ///   no longer exists
+    /// - `Err(Backend(...))` for other transport-layer failures (with
+    ///   the same transient-error backoff pattern as `JobProxy::wait`)
+    pub async fn recv_event(
+        &self,
+        types: Option<Vec<String>>,
+        timeout: Option<Duration>,
+    ) -> Result<Option<JobEvent>, JobError> {
+        // Per-round long-poll cap. Matches the registry's server-side
+        // ceiling (`wait` query param ≤ 60s); requesting longer is
+        // silently truncated, so we loop client-side instead.
+        const REGISTRY_LONG_POLL_CAP: Duration = Duration::from_secs(60);
+        // Server-side limit (matches OpenAPI `limit` maximum).
+        const FETCH_LIMIT: usize = 100;
+
+        // Serialise the load→list→store window across `Clone`s of this
+        // controller. Without this, two concurrent callers can both load
+        // the same `last_seen_seq` cursor, both issue `list_job_events`
+        // with the same `after`, and both return the SAME head event.
+        // The AtomicI64 prevents tearing but not the read-fetch-write
+        // race across the `.await`. Acquire BEFORE the deadline check
+        // so a fast clone-vs-clone race ordering is deterministic.
+        let _guard = self.recv_event_lock.lock().await;
+
+        let deadline = timeout.map(|t| Instant::now() + t);
+        // Tracks the start of the current contiguous transient-failure
+        // window for the same recovery semantics as `JobProxy::wait`.
+        let mut transient_failure_started: Option<Instant> = None;
+        let registry_unreachable_max = DEFAULT_REGISTRY_UNREACHABLE_MAX;
+        // Exponential backoff for transient registry errors. Reset to
+        // `POLL_INITIAL_MS` on every successful list, capped at
+        // `POLL_MAX_MS` — same shape as `JobProxy::wait_with_config`.
+        let mut backoff_ms = POLL_INITIAL_MS;
+
+        loop {
+            // Honour the caller's overall timeout BEFORE issuing the next
+            // long-poll round-trip so a tight `timeout` doesn't get one
+            // 60s-cap round-trip past its budget.
+            let remaining = match deadline {
+                Some(d) => {
+                    let now = Instant::now();
+                    if now >= d {
+                        return Ok(None);
+                    }
+                    Some(d - now)
+                }
+                None => None,
+            };
+
+            // Cap the long-poll at min(remaining, REGISTRY_LONG_POLL_CAP).
+            let wait = match remaining {
+                Some(r) => r.min(REGISTRY_LONG_POLL_CAP),
+                None => REGISTRY_LONG_POLL_CAP,
+            };
+
+            let after = self.last_seen_seq.load(Ordering::SeqCst);
+            let types_ref = types.as_deref();
+            match self
+                .backend
+                .list_job_events(&self.job_id, after, types_ref, wait, FETCH_LIMIT)
+                .await
+            {
+                Ok(resp) => {
+                    transient_failure_started = None;
+                    // Reset exponential backoff on every successful list,
+                    // mirroring `JobProxy::wait_with_config`'s reset on
+                    // any successful poll.
+                    backoff_ms = POLL_INITIAL_MS;
+                    // First matching event wins. The registry already
+                    // filters by `types` and orders ascending; we return
+                    // the head and advance the cursor to its seq so the
+                    // next call picks up strictly after it.
+                    if let Some(ev) = resp.events.into_iter().next() {
+                        self.last_seen_seq.store(ev.seq, Ordering::SeqCst);
+                        return Ok(Some(ev));
+                    }
+                    // Empty page: keep next_after as the cursor (matches
+                    // the registry's contract — the watermark may have
+                    // advanced even though no matching event arrived).
+                    // We only ever advance, never retreat.
+                    let cur = self.last_seen_seq.load(Ordering::SeqCst);
+                    if resp.next_after > cur {
+                        self.last_seen_seq.store(resp.next_after, Ordering::SeqCst);
+                    }
+                    // No event yet — loop. The deadline check at the top
+                    // of the next iteration returns Ok(None) if expired.
+                }
+                Err(e) if e.is_transient() => {
+                    let started = *transient_failure_started.get_or_insert_with(Instant::now);
+                    let elapsed = started.elapsed();
+                    if elapsed > registry_unreachable_max {
+                        warn!(
+                            "JobController::recv_event giving up after {:?} of \
+                             transient registry errors (job_id={}, last_err={})",
+                            elapsed, self.job_id, e
+                        );
+                        return Err(JobError::RegistryUnreachable { duration: elapsed });
+                    }
+                    debug!(
+                        "JobController::recv_event absorbing transient registry \
+                         error (job_id={}, elapsed={:?}, err={}, backoff_ms={})",
+                        self.job_id, elapsed, e, backoff_ms
+                    );
+                    // Exponential backoff so we don't hot-loop while the
+                    // registry is restarting. Bound the sleep by the
+                    // caller's remaining `timeout` budget — without this
+                    // a long backoff could blow past the deadline.
+                    let mut sleep_ms = backoff_ms;
+                    if let Some(r) = remaining {
+                        let r_ms = r.as_millis() as u64;
+                        if r_ms < sleep_ms {
+                            sleep_ms = r_ms;
+                        }
+                    }
+                    sleep(Duration::from_millis(sleep_ms)).await;
+                    backoff_ms = (backoff_ms * 2).min(POLL_MAX_MS);
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
 }
 
 // =============================================================================
@@ -494,6 +673,51 @@ impl JobProxy {
     pub async fn cancel(&self, reason: Option<String>) -> Result<(), JobError> {
         self.backend.cancel_job(&self.job_id, reason).await?;
         Ok(())
+    }
+
+    /// Post an event into this job's event log. The executing handler
+    /// (inside the running `task=True` job) will see it on its next
+    /// `recv_event` call — or wake immediately if it's currently long-polling.
+    ///
+    /// Trace context propagation: when the core crate adopts the
+    /// `opentelemetry` crate, the current span's W3C trace context will
+    /// be captured and forwarded automatically via `trace_context` so the
+    /// receiver's `recv_event` can link a child span. Today this crate
+    /// uses only the `tracing` facade with no OTel surface — language
+    /// SDKs (Python, TS, Java) capture trace context on their side and
+    /// can pass it as part of `payload` if needed. The wire field is
+    /// reserved on `JobEventPostRequest` for the eventual wire-through.
+    /// TODO: capture OTel current span context here.
+    ///
+    /// Returns:
+    /// - `Ok(receipt)` on success
+    /// - `Err(Backend(NotFound(_)))` if the job doesn't exist
+    /// - `Err(JobTerminal(_))` if the job is already terminal
+    ///   (`completed` / `failed` / `cancelled`) — the registry rejects
+    ///   the post with 409 Conflict and the SDK surfaces it as a
+    ///   dedicated variant for clean `match`-ing
+    /// - `Err(Backend(...))` for transport failures
+    pub async fn send_event(
+        &self,
+        event_type: String,
+        payload: serde_json::Value,
+    ) -> Result<JobEventReceipt, JobError> {
+        // TODO: capture OpenTelemetry current span context once the core
+        // crate adopts the `opentelemetry` crate and wire it as
+        // `trace_context`. For now: pass-through None — language SDKs
+        // can populate trace_context themselves via a future overload
+        // (or by carrying it inside `payload`).
+        let trace_context: Option<serde_json::Value> = None;
+        let payload_opt = if payload.is_null() { None } else { Some(payload) };
+        match self
+            .backend
+            .post_job_event(&self.job_id, &event_type, payload_opt, trace_context)
+            .await
+        {
+            Ok(receipt) => Ok(receipt),
+            Err(BackendError::Conflict(msg)) => Err(JobError::JobTerminal(msg)),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Poll until the job reaches a terminal state, returns its `result`
@@ -770,7 +994,7 @@ mod tests {
     use std::sync::Mutex as StdMutex;
 
     use crate::task_backend::{
-        CancelJobResponse, ClaimedJob, JobBatchResponse,
+        CancelJobResponse, ClaimedJob, JobBatchResponse, JobEventListResponse,
     };
 
     // ---- mock backend -------------------------------------------------------
@@ -792,6 +1016,21 @@ mod tests {
         cancels: StdMutex<Vec<(String, Option<String>)>>,
         /// Voluntary release calls: (job_id, instance_id, reason)
         releases: StdMutex<Vec<(String, String, Option<String>)>>,
+        /// All persisted events keyed by job_id. Seq is 1-based per job.
+        events: StdMutex<HashMap<String, Vec<JobEvent>>>,
+        /// Record of post_job_event calls: (job_id, event_type, payload, trace_context)
+        event_posts: StdMutex<
+            Vec<(
+                String,
+                String,
+                Option<serde_json::Value>,
+                Option<serde_json::Value>,
+            )>,
+        >,
+        /// If set, every post_job_event returns Conflict (terminal job).
+        events_post_returns_conflict: AtomicUsize,
+        /// If set, every list_job_events returns NotFound.
+        events_list_returns_not_found: AtomicUsize,
         next_id: AtomicUsize,
         /// Auto-progress to terminal on the Nth `get_job` call. 0 = never.
         terminal_after: AtomicUsize,
@@ -815,6 +1054,10 @@ mod tests {
                 batches: StdMutex::new(Vec::new()),
                 cancels: StdMutex::new(Vec::new()),
                 releases: StdMutex::new(Vec::new()),
+                events: StdMutex::new(HashMap::new()),
+                event_posts: StdMutex::new(Vec::new()),
+                events_post_returns_conflict: AtomicUsize::new(0),
+                events_list_returns_not_found: AtomicUsize::new(0),
                 next_id: AtomicUsize::new(0),
                 terminal_after: AtomicUsize::new(0),
                 get_calls: AtomicUsize::new(0),
@@ -822,6 +1065,28 @@ mod tests {
                 always_transient: AtomicUsize::new(0),
                 always_not_found: AtomicUsize::new(0),
             })
+        }
+        fn push_event(&self, job_id: &str, event_type: &str, payload: serde_json::Value) {
+            let mut all = self.events.lock().unwrap();
+            let list = all.entry(job_id.to_string()).or_default();
+            let seq = (list.len() as i64) + 1;
+            list.push(JobEvent {
+                job_id: job_id.to_string(),
+                seq,
+                event_type: event_type.to_string(),
+                payload: Some(payload),
+                trace_context: None,
+                posted_by: None,
+                created_at: 1700000000 + seq,
+            });
+        }
+        fn set_events_post_conflict(&self, on: bool) {
+            self.events_post_returns_conflict
+                .store(usize::from(on), Ordering::SeqCst);
+        }
+        fn set_events_list_not_found(&self, on: bool) {
+            self.events_list_returns_not_found
+                .store(usize::from(on), Ordering::SeqCst);
         }
         fn set_terminal_after(&self, n: usize) {
             self.terminal_after.store(n, Ordering::SeqCst);
@@ -1029,6 +1294,90 @@ mod tests {
             Ok(ReleaseJobResponse {
                 status,
                 attempt_count,
+            })
+        }
+
+        async fn list_job_events(
+            &self,
+            job_id: &str,
+            after: i64,
+            types: Option<&[String]>,
+            _wait: Duration,
+            limit: usize,
+        ) -> Result<JobEventListResponse, BackendError> {
+            if self.events_list_returns_not_found.load(Ordering::SeqCst) == 1 {
+                return Err(BackendError::NotFound(job_id.to_string()));
+            }
+            let all = self.events.lock().unwrap();
+            let list = match all.get(job_id) {
+                Some(l) => l,
+                None => {
+                    // No events yet for this job — registry returns empty
+                    // (NOT NotFound — `not found` is the job-row state).
+                    return Ok(JobEventListResponse {
+                        events: vec![],
+                        next_after: after,
+                    });
+                }
+            };
+            let mut out: Vec<JobEvent> = list
+                .iter()
+                .filter(|e| e.seq > after)
+                .filter(|e| match types {
+                    Some(ts) if !ts.is_empty() => ts.iter().any(|t| t == &e.event_type),
+                    _ => true,
+                })
+                .take(limit)
+                .cloned()
+                .collect();
+            // Default `next_after` to the caller's watermark when nothing
+            // matched; otherwise advance to the last returned seq.
+            let next_after = out.last().map(|e| e.seq).unwrap_or(after);
+            // Mock semantics: no actual long-poll. Tests that need wait
+            // behaviour drive the clock manually.
+            // (We don't drain — list_job_events is read-only.)
+            out.shrink_to_fit();
+            Ok(JobEventListResponse {
+                events: out,
+                next_after,
+            })
+        }
+
+        async fn post_job_event(
+            &self,
+            job_id: &str,
+            event_type: &str,
+            payload: Option<serde_json::Value>,
+            trace_context: Option<serde_json::Value>,
+        ) -> Result<crate::task_backend::JobEventReceipt, BackendError> {
+            if self.events_post_returns_conflict.load(Ordering::SeqCst) == 1 {
+                return Err(BackendError::Conflict(
+                    "job is in a terminal state (mock)".into(),
+                ));
+            }
+            self.event_posts.lock().unwrap().push((
+                job_id.to_string(),
+                event_type.to_string(),
+                payload.clone(),
+                trace_context.clone(),
+            ));
+            let mut all = self.events.lock().unwrap();
+            let list = all.entry(job_id.to_string()).or_default();
+            let seq = (list.len() as i64) + 1;
+            let created_at = 1700000000 + seq;
+            list.push(JobEvent {
+                job_id: job_id.to_string(),
+                seq,
+                event_type: event_type.to_string(),
+                payload,
+                trace_context,
+                posted_by: None,
+                created_at,
+            });
+            Ok(crate::task_backend::JobEventReceipt {
+                job_id: job_id.to_string(),
+                seq,
+                created_at,
             })
         }
     }
@@ -1770,5 +2119,404 @@ mod tests {
         })
         .await;
         assert!(matches!(result, Err(JobError::Cancelled)));
+    }
+
+    // ---- recv_event / send_event tests --------------------------------------
+
+    /// Build a working JobController against a fresh MockBackend with the
+    /// given job_id pre-created in the backend's job map.
+    async fn make_controller(job_id: &str) -> (Arc<MockBackend>, JobController) {
+        let backend = MockBackend::new();
+        backend.jobs.lock().unwrap().insert(
+            job_id.to_string(),
+            Job {
+                id: job_id.to_string(),
+                capability: "cap".into(),
+                owner_instance_id: Some("inst-1".into()),
+                status: JobStatus::Working,
+                progress: None,
+                progress_message: None,
+                result: None,
+                error: None,
+                submitted_payload: serde_json::json!({}),
+                attempt_count: 0,
+                max_retries: 1,
+                max_duration: None,
+                total_deadline: None,
+                lease_expires_at: None,
+                last_heartbeat_at: None,
+                submitted_at: 0,
+                submitted_by: "client-1".into(),
+            },
+        );
+        let queue = new_coalescing_queue();
+        let ctrl = JobController::new(
+            job_id.to_string(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            queue,
+        );
+        (backend, ctrl)
+    }
+
+    #[tokio::test]
+    async fn recv_event_returns_event_after_post() {
+        // Pre-post an event then call recv_event — should see it on the
+        // first poll without waiting out the timeout.
+        let (backend, ctrl) = make_controller("j-recv-1").await;
+        backend.push_event("j-recv-1", "extend_deadline", serde_json::json!({"secs": 30}));
+
+        let ev = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("expected an event");
+        assert_eq!(ev.seq, 1);
+        assert_eq!(ev.event_type, "extend_deadline");
+        assert_eq!(ev.payload, Some(serde_json::json!({"secs": 30})));
+    }
+
+    #[tokio::test]
+    async fn recv_event_returns_none_on_timeout() {
+        // No events posted — recv_event with a tight timeout returns
+        // Ok(None). The mock's list_job_events doesn't actually long-poll
+        // (returns immediately), so the recv loop spins through the
+        // deadline within the requested budget.
+        let (_backend, ctrl) = make_controller("j-recv-timeout").await;
+
+        let result = ctrl
+            .recv_event(None, Some(Duration::from_millis(150)))
+            .await
+            .unwrap();
+        assert!(result.is_none(), "expected timeout (None), got {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn recv_event_filter_by_types() {
+        // Three events with different types; recv_event(types=["B"])
+        // should skip past A and return B (then on a follow-up, skip C).
+        let (backend, ctrl) = make_controller("j-recv-filter").await;
+        backend.push_event("j-recv-filter", "A", serde_json::json!({"n": 1}));
+        backend.push_event("j-recv-filter", "B", serde_json::json!({"n": 2}));
+        backend.push_event("j-recv-filter", "C", serde_json::json!({"n": 3}));
+
+        let ev = ctrl
+            .recv_event(Some(vec!["B".into()]), Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("expected event of type B");
+        assert_eq!(ev.event_type, "B");
+        assert_eq!(ev.seq, 2);
+    }
+
+    #[tokio::test]
+    async fn recv_event_increments_cursor_between_calls() {
+        // Two successive calls return seq=1 then seq=2 — the cursor must
+        // advance between calls so we don't replay the first event.
+        let (backend, ctrl) = make_controller("j-recv-cursor").await;
+        backend.push_event("j-recv-cursor", "tick", serde_json::json!({"n": 1}));
+        backend.push_event("j-recv-cursor", "tick", serde_json::json!({"n": 2}));
+
+        let first = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.seq, 1);
+
+        let second = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.seq, 2);
+    }
+
+    #[tokio::test]
+    async fn recv_event_new_controller_starts_from_zero() {
+        // Cursor is per-instance: a freshly-constructed controller for the
+        // same job_id replays from seq=0.
+        let (backend, ctrl) = make_controller("j-recv-replay").await;
+        backend.push_event("j-recv-replay", "tick", serde_json::json!({}));
+
+        // First controller consumes the event.
+        let first = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.seq, 1);
+
+        // Second controller pointing at the same job + backend replays.
+        let queue2 = new_coalescing_queue();
+        let ctrl2 = JobController::new(
+            "j-recv-replay".to_string(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            queue2,
+        );
+        let replayed = ctrl2
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(replayed.seq, 1);
+    }
+
+    #[tokio::test]
+    async fn recv_event_clone_shares_cursor() {
+        // Cloning the controller (e.g. into a helper task) must share the
+        // cursor — otherwise the cloned handle would replay events the
+        // original already consumed.
+        let (backend, ctrl) = make_controller("j-recv-clone").await;
+        backend.push_event("j-recv-clone", "tick", serde_json::json!({"n": 1}));
+        backend.push_event("j-recv-clone", "tick", serde_json::json!({"n": 2}));
+
+        let cloned = ctrl.clone();
+        let first = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.seq, 1);
+
+        // Clone picks up where the original left off.
+        let second = cloned
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.seq, 2);
+    }
+
+    #[tokio::test]
+    async fn recv_event_returns_error_on_job_not_found() {
+        // Registry NotFound surfaces as JobError::Backend(NotFound(_)).
+        let (backend, ctrl) = make_controller("j-recv-404").await;
+        backend.set_events_list_not_found(true);
+
+        let err = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, JobError::Backend(BackendError::NotFound(_))),
+            "expected Backend(NotFound), got {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn send_event_calls_backend_with_expected_args() {
+        // send_event hits post_job_event verbatim — args reach the backend
+        // unmodified and the receipt is propagated back.
+        let backend = MockBackend::new();
+        backend.jobs.lock().unwrap().insert(
+            "j-send-1".to_string(),
+            Job {
+                id: "j-send-1".to_string(),
+                capability: "cap".into(),
+                owner_instance_id: None,
+                status: JobStatus::Working,
+                progress: None,
+                progress_message: None,
+                result: None,
+                error: None,
+                submitted_payload: serde_json::json!({}),
+                attempt_count: 0,
+                max_retries: 1,
+                max_duration: None,
+                total_deadline: None,
+                lease_expires_at: None,
+                last_heartbeat_at: None,
+                submitted_at: 0,
+                submitted_by: "client-1".into(),
+            },
+        );
+        let proxy = JobProxy::new("j-send-1", backend.clone() as Arc<dyn TaskBackend>);
+        let receipt = proxy
+            .send_event(
+                "extend_deadline".into(),
+                serde_json::json!({"secs": 60}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(receipt.job_id, "j-send-1");
+        assert_eq!(receipt.seq, 1);
+
+        let posts = backend.event_posts.lock().unwrap();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].0, "j-send-1");
+        assert_eq!(posts[0].1, "extend_deadline");
+        assert_eq!(posts[0].2, Some(serde_json::json!({"secs": 60})));
+        // Trace context: not wired yet (TODO comment in send_event).
+        // Pass-through-only — the wire field defaults to None.
+        assert!(posts[0].3.is_none());
+    }
+
+    #[tokio::test]
+    async fn send_event_returns_job_terminal_on_409() {
+        // Registry returns 409 Conflict for events posted to terminal
+        // jobs — send_event surfaces JobError::JobTerminal so callers can
+        // match cleanly without inspecting strings.
+        let backend = MockBackend::new();
+        backend.set_events_post_conflict(true);
+        let proxy = JobProxy::new("j-send-term", backend.clone() as Arc<dyn TaskBackend>);
+        let err = proxy
+            .send_event("anything".into(), serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, JobError::JobTerminal(_)),
+            "expected JobTerminal, got {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn send_event_then_recv_event_roundtrip() {
+        // End-to-end: a proxy sends, a controller for the same job receives.
+        // Validates the SDK's primary use case — out-of-band signalling
+        // between an external sender and the in-flight handler.
+        let (backend, ctrl) = make_controller("j-roundtrip").await;
+        let proxy = JobProxy::new("j-roundtrip", backend.clone() as Arc<dyn TaskBackend>);
+
+        // Post from the "outside" (proxy).
+        let receipt = proxy
+            .send_event("user_input".into(), serde_json::json!({"answer": "yes"}))
+            .await
+            .unwrap();
+        assert_eq!(receipt.seq, 1);
+
+        // The handler drains it from the "inside" (controller).
+        let ev = ctrl
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ev.event_type, "user_input");
+        assert_eq!(ev.payload, Some(serde_json::json!({"answer": "yes"})));
+        assert_eq!(ev.seq, 1);
+    }
+
+    #[tokio::test]
+    async fn recv_event_concurrent_callers_get_distinct_events() {
+        // Two concurrent `recv_event` calls on CLONES of the same controller
+        // must NOT both return the same event. Without the
+        // `recv_event_lock`, the AtomicI64 cursor prevents memory tearing
+        // but NOT the read-fetch-write race across `.await`: caller A
+        // loads after=0, issues list, gets seq=1; caller B loads after=0
+        // (A hasn't stored yet), issues list, ALSO gets seq=1.
+        //
+        // With the per-controller `recv_event_lock`, callers serialise on
+        // the load→list→store window so the second caller observes the
+        // cursor A has advanced and picks up seq=2.
+        let (backend, ctrl) = make_controller("j-recv-concurrent").await;
+        backend.push_event("j-recv-concurrent", "tick", serde_json::json!({"n": 1}));
+        backend.push_event("j-recv-concurrent", "tick", serde_json::json!({"n": 2}));
+
+        let ctrl_a = ctrl.clone();
+        let ctrl_b = ctrl.clone();
+        let a = tokio::spawn(async move {
+            ctrl_a
+                .recv_event(None, Some(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .unwrap()
+        });
+        let b = tokio::spawn(async move {
+            ctrl_b
+                .recv_event(None, Some(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .unwrap()
+        });
+        let ev_a = a.await.unwrap();
+        let ev_b = b.await.unwrap();
+
+        // The two callers must observe DIFFERENT seqs — one gets 1, the
+        // other gets 2. Order between them is not deterministic.
+        assert_ne!(
+            ev_a.seq, ev_b.seq,
+            "concurrent callers must not return the same event seq",
+        );
+        let seen: std::collections::HashSet<i64> = [ev_a.seq, ev_b.seq].into_iter().collect();
+        let want: std::collections::HashSet<i64> = [1, 2].into_iter().collect();
+        assert_eq!(
+            seen, want,
+            "concurrent callers must collectively observe seqs {{1,2}}, got {:?}",
+            seen
+        );
+    }
+
+    #[tokio::test]
+    async fn recv_event_lock_is_per_controller() {
+        // Two SEPARATE JobController instances must NOT serialise against
+        // each other — the lock is per-controller (matches the cursor
+        // scope), so an A long-poll must never block B's progress.
+        let backend = MockBackend::new();
+        for jid in ["j-lock-a", "j-lock-b"] {
+            backend.jobs.lock().unwrap().insert(
+                jid.to_string(),
+                Job {
+                    id: jid.to_string(),
+                    capability: "cap".into(),
+                    owner_instance_id: Some("inst-1".into()),
+                    status: JobStatus::Working,
+                    progress: None,
+                    progress_message: None,
+                    result: None,
+                    error: None,
+                    submitted_payload: serde_json::json!({}),
+                    attempt_count: 0,
+                    max_retries: 1,
+                    max_duration: None,
+                    total_deadline: None,
+                    lease_expires_at: None,
+                    last_heartbeat_at: None,
+                    submitted_at: 0,
+                    submitted_by: "client-1".into(),
+                },
+            );
+        }
+        backend.push_event("j-lock-b", "tick", serde_json::json!({}));
+
+        let ctrl_a = JobController::new(
+            "j-lock-a".to_string(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            new_coalescing_queue(),
+        );
+        let ctrl_b = JobController::new(
+            "j-lock-b".to_string(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            new_coalescing_queue(),
+        );
+
+        // Launch a long recv on A — no events, will time out.
+        let a_handle = tokio::spawn(async move {
+            ctrl_a
+                .recv_event(None, Some(Duration::from_millis(500)))
+                .await
+        });
+        // B should NOT be blocked; it has its own lock and an event ready.
+        let start = std::time::Instant::now();
+        let ev_b = ctrl_b
+            .recv_event(None, Some(Duration::from_secs(2)))
+            .await
+            .unwrap()
+            .expect("B should observe its event");
+        let elapsed = start.elapsed();
+        assert_eq!(ev_b.seq, 1);
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "controller B must not have serialised against A's long-poll \
+             (elapsed={:?})",
+            elapsed,
+        );
+
+        // Drain A.
+        let _ = a_handle.await.unwrap();
     }
 }

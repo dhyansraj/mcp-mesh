@@ -211,6 +211,60 @@ pub struct ReleaseJobResponse {
     pub attempt_count: u32,
 }
 
+/// Request body for `POST /jobs/{id}/events`. Append-only event posted into
+/// a running job's event log; the executing handler drains these via the
+/// `recv_event` long-poll. `payload` is arbitrary JSON; `trace_context`
+/// carries W3C trace propagation so the receiver can link a child span.
+#[derive(Debug, Clone, Serialize)]
+pub struct JobEventPostRequest {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<serde_json::Value>,
+}
+
+/// Response from `POST /jobs/{id}/events`. `seq` is the server-assigned
+/// per-job monotonic sequence number; `created_at` is Unix epoch seconds.
+#[derive(Debug, Clone, Deserialize)]
+pub struct JobEventReceipt {
+    pub job_id: String,
+    pub seq: i64,
+    pub created_at: i64,
+}
+
+/// A single event row from a job's event log
+/// (returned by `GET /jobs/{id}/events`).
+///
+/// `created_at` is Unix epoch seconds — matches the rest of the wire
+/// surface (`submitted_at`, `lease_expires_at`, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobEvent {
+    pub job_id: String,
+    pub seq: i64,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
+    #[serde(default)]
+    pub trace_context: Option<serde_json::Value>,
+    #[serde(default)]
+    pub posted_by: Option<String>,
+    pub created_at: i64,
+}
+
+/// Response from `GET /jobs/{id}/events`. `events` is in ascending-seq
+/// order; `next_after` is the watermark to feed back as `after` on the
+/// next round-trip (the seq of the last returned event, or the same
+/// `after` the caller sent if no events arrived).
+#[derive(Debug, Clone, Deserialize)]
+pub struct JobEventListResponse {
+    #[serde(default)]
+    pub events: Vec<JobEvent>,
+    pub next_after: i64,
+}
+
 /// Full job record (`Job` schema).
 #[derive(Debug, Clone, Deserialize)]
 pub struct Job {
@@ -360,6 +414,33 @@ pub trait TaskBackend: Send + Sync {
         instance_id: &str,
         reason: Option<String>,
     ) -> Result<ReleaseJobResponse, BackendError>;
+
+    /// Anyone-side: long-poll for events on a job
+    /// (`GET /jobs/{id}/events`). Returns events with `seq > after`. If
+    /// `types` is `Some`, only events whose `event_type` matches one of
+    /// the given strings are returned (the registry filters server-side
+    /// via the `types` query param). `wait` caps at 60s registry-side —
+    /// callers requesting longer waits should loop. `limit` caps at 500.
+    async fn list_job_events(
+        &self,
+        job_id: &str,
+        after: i64,
+        types: Option<&[String]>,
+        wait: Duration,
+        limit: usize,
+    ) -> Result<JobEventListResponse, BackendError>;
+
+    /// Anyone-side: post an event into a running job's event log
+    /// (`POST /jobs/{id}/events`). Returns the server-assigned `seq` and
+    /// `created_at`. Rejected with `Conflict` if the job is already in a
+    /// terminal state.
+    async fn post_job_event(
+        &self,
+        job_id: &str,
+        event_type: &str,
+        payload: Option<serde_json::Value>,
+        trace_context: Option<serde_json::Value>,
+    ) -> Result<JobEventReceipt, BackendError>;
 }
 
 // =============================================================================
@@ -530,6 +611,64 @@ impl TaskBackend for RegistryHttpBackend {
         }
         Ok(resp.json::<ReleaseJobResponse>().await?)
     }
+
+    async fn list_job_events(
+        &self,
+        job_id: &str,
+        after: i64,
+        types: Option<&[String]>,
+        wait: Duration,
+        limit: usize,
+    ) -> Result<JobEventListResponse, BackendError> {
+        let url = format!("{}/jobs/{}/events", self.base_url, job_id);
+        // Registry caps `wait` at 60s — clamp client-side so we don't
+        // round-trip a value the registry will silently truncate.
+        let wait_secs = wait.as_secs().min(60);
+        let mut req = self.client.get(&url).query(&[
+            ("after", after.to_string()),
+            ("wait", wait_secs.to_string()),
+            ("limit", limit.to_string()),
+        ]);
+        if let Some(ts) = types {
+            if !ts.is_empty() {
+                req = req.query(&[("types", ts.join(","))]);
+            }
+        }
+        // Per-request timeout > registry's long-poll window so the HTTP
+        // call doesn't time out before the registry replies. Pad by 10s
+        // beyond the requested wait to absorb network jitter.
+        let req = req.timeout(Duration::from_secs(wait_secs + 10));
+        debug!(
+            "GET {} (after={}, wait={}s, limit={}, types={:?})",
+            url, after, wait_secs, limit, types
+        );
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(Self::classify_error(resp).await);
+        }
+        Ok(resp.json::<JobEventListResponse>().await?)
+    }
+
+    async fn post_job_event(
+        &self,
+        job_id: &str,
+        event_type: &str,
+        payload: Option<serde_json::Value>,
+        trace_context: Option<serde_json::Value>,
+    ) -> Result<JobEventReceipt, BackendError> {
+        let url = format!("{}/jobs/{}/events", self.base_url, job_id);
+        let body = JobEventPostRequest {
+            event_type: event_type.to_string(),
+            payload,
+            trace_context,
+        };
+        debug!("POST {} (type={})", url, event_type);
+        let resp = self.client.post(&url).json(&body).send().await?;
+        if !resp.status().is_success() {
+            return Err(Self::classify_error(resp).await);
+        }
+        Ok(resp.json::<JobEventReceipt>().await?)
+    }
 }
 
 // =============================================================================
@@ -659,5 +798,48 @@ mod tests {
     fn registry_backend_constructs() {
         let b = RegistryHttpBackend::new("http://localhost:9000/").unwrap();
         assert_eq!(b.base_url, "http://localhost:9000");
+    }
+
+    #[test]
+    fn job_event_post_request_serializes_type_field() {
+        // `type` is a reserved word in Rust — must be renamed via serde.
+        let req = JobEventPostRequest {
+            event_type: "extend_deadline".into(),
+            payload: Some(serde_json::json!({"secs": 30})),
+            trace_context: None,
+        };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(s.contains("\"type\":\"extend_deadline\""));
+        assert!(s.contains("\"payload\""));
+        // None fields omitted.
+        assert!(!s.contains("trace_context"));
+    }
+
+    #[test]
+    fn job_event_deserializes_from_registry_shape() {
+        // Mirrors the OpenAPI JobEvent schema field-for-field.
+        let s = r#"{
+            "job_id": "j-1",
+            "seq": 7,
+            "type": "extend_deadline",
+            "payload": {"secs": 30},
+            "trace_context": {"traceparent": "00-...-01"},
+            "posted_by": "agent-x",
+            "created_at": 1729999500
+        }"#;
+        let ev: JobEvent = serde_json::from_str(s).unwrap();
+        assert_eq!(ev.job_id, "j-1");
+        assert_eq!(ev.seq, 7);
+        assert_eq!(ev.event_type, "extend_deadline");
+        assert_eq!(ev.posted_by.as_deref(), Some("agent-x"));
+        assert_eq!(ev.created_at, 1729999500);
+    }
+
+    #[test]
+    fn job_event_list_response_deserializes_with_empty_events() {
+        let s = r#"{"events": [], "next_after": 0}"#;
+        let resp: JobEventListResponse = serde_json::from_str(s).unwrap();
+        assert!(resp.events.is_empty());
+        assert_eq!(resp.next_after, 0);
     }
 }

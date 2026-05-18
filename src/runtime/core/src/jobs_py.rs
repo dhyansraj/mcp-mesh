@@ -30,12 +30,27 @@ use crate::jobs::{
     BatchingHandle, JobController, JobError, JobProxy, SubmitJobArgs,
 };
 use crate::task_backend::{
-    Job, JobStatus, RegistryHttpBackend, TaskBackend,
+    Job, JobEvent, JobEventReceipt, JobStatus, RegistryHttpBackend, TaskBackend,
 };
 
 // =============================================================================
 // Helpers
 // =============================================================================
+
+/// Validate and convert a Python-supplied `timeout_secs` (`Option<f64>`) into
+/// an `Option<Duration>`. `Duration::from_secs_f64` panics on negative, NaN,
+/// or infinite inputs; this helper traps those at the Python boundary and
+/// surfaces a clean `ValueError` instead so the runtime can't be crashed by
+/// a typo'd timeout literal in user code.
+fn parse_timeout_secs(secs: Option<f64>) -> PyResult<Option<Duration>> {
+    match secs {
+        None => Ok(None),
+        Some(s) if s.is_nan() || s.is_infinite() || s < 0.0 => Err(PyValueError::new_err(
+            format!("timeout_secs must be non-negative and finite, got {s}"),
+        )),
+        Some(s) => Ok(Some(Duration::from_secs_f64(s))),
+    }
+}
 
 /// Build an `Arc<dyn TaskBackend>` from a registry URL. Returns a Python
 /// exception on transport-construction failure (mirrors the pattern in
@@ -55,6 +70,12 @@ fn job_error_to_py(err: JobError) -> PyErr {
             d
         )),
         JobError::Cancelled => PyRuntimeError::new_err("job cancelled by enclosing context"),
+        // `JobTerminal` is a distinct Rust variant but currently surfaces
+        // as a generic RuntimeError on the Python side. When the Python
+        // SDK adopts a dedicated `JobTerminalError` exception (Phase C)
+        // we can swap this for `JobTerminalError::new_err(...)` without
+        // touching the Rust core.
+        JobError::JobTerminal(msg) => PyRuntimeError::new_err(format!("job is terminal: {}", msg)),
         other => PyRuntimeError::new_err(other.to_string()),
     }
 }
@@ -147,6 +168,40 @@ fn pyany_to_json(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<serde_json:
     let s: String = dumps.call1((obj,))?.extract()?;
     serde_json::from_str(&s)
         .map_err(|e| PyValueError::new_err(format!("invalid JSON-shaped value: {}", e)))
+}
+
+/// Convert a [`JobEvent`] to a Python `dict`. Field-for-field mirror of
+/// the OpenAPI `JobEvent` schema so application code can index by the
+/// same keys it would see on the wire.
+fn job_event_to_pydict<'py>(py: Python<'py>, ev: JobEvent) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("job_id", ev.job_id)?;
+    dict.set_item("seq", ev.seq)?;
+    dict.set_item("type", ev.event_type)?;
+    dict.set_item(
+        "payload",
+        json_value_to_py(py, ev.payload.unwrap_or(serde_json::Value::Null))?,
+    )?;
+    dict.set_item(
+        "trace_context",
+        json_value_to_py(py, ev.trace_context.unwrap_or(serde_json::Value::Null))?,
+    )?;
+    dict.set_item("posted_by", ev.posted_by)?;
+    dict.set_item("created_at", ev.created_at)?;
+    Ok(dict)
+}
+
+/// Convert a [`JobEventReceipt`] to a Python `dict`. Mirrors the
+/// `JobEventPostResponse` schema field-for-field.
+fn job_event_receipt_to_pydict<'py>(
+    py: Python<'py>,
+    receipt: JobEventReceipt,
+) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("job_id", receipt.job_id)?;
+    dict.set_item("seq", receipt.seq)?;
+    dict.set_item("created_at", receipt.created_at)?;
+    Ok(dict)
 }
 
 // =============================================================================
@@ -311,6 +366,32 @@ impl PyJobController {
         })
     }
 
+    /// Wait for the next event posted into this job's event log.
+    ///
+    /// Mirrors [`JobController::recv_event`]. Returns the event as a
+    /// Python ``dict`` on arrival, ``None`` on timeout. Cursor is
+    /// per-controller-instance (shared across ``clone``s); a fresh
+    /// controller for the same ``job_id`` replays from seq=0.
+    ///
+    /// Signature: ``recv_event(types: Optional[List[str]] = None, timeout_secs: Optional[float] = None) -> Optional[dict]``
+    #[pyo3(signature = (types=None, timeout_secs=None))]
+    fn recv_event<'py>(
+        &self,
+        py: Python<'py>,
+        types: Option<Vec<String>>,
+        timeout_secs: Option<f64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        let timeout = parse_timeout_secs(timeout_secs)?;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let result = inner.recv_event(types, timeout).await.map_err(job_error_to_py)?;
+            Python::with_gil(|py| match result {
+                None => Ok::<Py<PyAny>, PyErr>(py.None()),
+                Some(ev) => Ok(job_event_to_pydict(py, ev)?.into_any().unbind()),
+            })
+        })
+    }
+
     fn __repr__(&self) -> String {
         format!("JobController(job_id={:?})", self.inner.job_id())
     }
@@ -369,7 +450,7 @@ impl PyJobProxy {
         timeout_secs: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let timeout = timeout_secs.map(Duration::from_secs_f64);
+        let timeout = parse_timeout_secs(timeout_secs)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let value = inner.wait(timeout).await.map_err(job_error_to_py)?;
             Python::with_gil(|py| Ok(json_value_to_py(py, value)?))
@@ -388,6 +469,32 @@ impl PyJobProxy {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             inner.cancel(reason).await.map_err(job_error_to_py)?;
             Ok(())
+        })
+    }
+
+    /// Post an event into this job's event log. The running handler will
+    /// see it on its next ``recv_event`` call (or wake from a long-poll).
+    ///
+    /// ``payload`` may be any JSON-shaped Python value (``dict``/``list``/
+    /// primitive). The receipt dict carries ``job_id`` / ``seq`` /
+    /// ``created_at`` so callers can stitch a follow-up ``recv_event``
+    /// to it via ``after``.
+    ///
+    /// Signature: ``send_event(event_type: str, payload: Any) -> dict``
+    fn send_event<'py>(
+        &self,
+        py: Python<'py>,
+        event_type: String,
+        payload: Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let payload_json = pyany_to_json(py, &payload)?;
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let receipt = inner
+                .send_event(event_type, payload_json)
+                .await
+                .map_err(job_error_to_py)?;
+            Python::with_gil(|py| Ok(job_event_receipt_to_pydict(py, receipt)?.unbind()))
         })
     }
 
