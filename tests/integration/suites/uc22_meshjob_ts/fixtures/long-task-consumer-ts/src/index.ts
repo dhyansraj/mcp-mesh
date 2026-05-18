@@ -327,6 +327,144 @@ agent.addTool({
   },
 });
 
+// ---------------------------------------------------------------------------
+// Event-injection scenarios (tc24 / tc25 / tc26)
+// ---------------------------------------------------------------------------
+//
+// Each capability submits one of the new `task: true` producers and
+// drives `mesh.jobs.postEvent` from inside the consumer's tool body to
+// exercise the producer's `recvEvent` long-poll. `mesh.jobs.postEvent`
+// is the surface under test — it discovers the registry URL from
+// `MCP_MESH_REGISTRY_URL` (set by the agent startup pipeline) and POSTs
+// `/jobs/{id}/events`.
+// ---------------------------------------------------------------------------
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+agent.addTool({
+  name: "commission_event",
+  capability: "commission_event",
+  dependencies: [{ capability: "run_with_event" }],
+  meshJobDepIndex: 0,
+  description:
+    "Submit run_with_event, sleep so producer parks on recvEvent, then post one event.",
+  parameters: z.object({}).passthrough(),
+  execute: async (_args, runWithEvent: MeshJob | null = null) => {
+    if (!runWithEvent?.submit) {
+      return { error: "run_with_event submitter not injected" };
+    }
+    const proxy = await runWithEvent.submit({}, { maxDuration: 60 });
+    const jobId = (proxy as { jobId?: string }).jobId ?? "";
+    // Brief wait so producer reaches recvEvent before we post. Without
+    // this, the post may land before the producer's claim worker has
+    // pulled the job — the event would still be observable (cursor is
+    // per-controller) but the test wouldn't exercise the long-poll
+    // wake path.
+    await sleepMs(2000);
+    const receipt = await mesh.jobs.postEvent(jobId, "signal", {
+      hello: "world",
+      n: 42,
+    });
+    if (!proxy.wait) {
+      return { job_id: jobId, post_seq: receipt.seq };
+    }
+    const result = await proxy.wait(30);
+    return {
+      job_id: jobId,
+      post_seq: receipt.seq,
+      job_result: result,
+    };
+  },
+});
+
+agent.addTool({
+  name: "commission_event_filter",
+  capability: "commission_event_filter",
+  dependencies: [{ capability: "run_with_filter" }],
+  meshJobDepIndex: 0,
+  description:
+    "Submit run_with_filter, post 2 ignored events, then the matching one.",
+  parameters: z.object({}).passthrough(),
+  execute: async (_args, runWithFilter: MeshJob | null = null) => {
+    if (!runWithFilter?.submit) {
+      return { error: "run_with_filter submitter not injected" };
+    }
+    const proxy = await runWithFilter.submit({}, { maxDuration: 60 });
+    const jobId = (proxy as { jobId?: string }).jobId ?? "";
+    // Give the producer a moment to claim + park on recvEvent.
+    await sleepMs(2000);
+    // Post 2 unrelated events — producer must NOT wake on these.
+    const r1 = await mesh.jobs.postEvent(jobId, "ignore_a", { n: 1 });
+    const r2 = await mesh.jobs.postEvent(jobId, "ignore_b", { n: 2 });
+    // Brief gap so a buggy filter (one that DID wake on ignore_a) has
+    // time to drive the producer to completion; if the producer is
+    // already done by now, the matching post will get JobTerminalError.
+    await sleepMs(1000);
+    const r3 = await mesh.jobs.postEvent(jobId, "target", { got_it: true });
+    if (!proxy.wait) {
+      return {
+        job_id: jobId,
+        ignore_seqs: [r1.seq, r2.seq],
+        target_seq: r3.seq,
+      };
+    }
+    const result = await proxy.wait(30);
+    return {
+      job_id: jobId,
+      ignore_seqs: [r1.seq, r2.seq],
+      target_seq: r3.seq,
+      result,
+    };
+  },
+});
+
+agent.addTool({
+  name: "commission_cancel_via_event",
+  capability: "commission_cancel_via_event",
+  dependencies: [{ capability: "run_until_cancel" }],
+  meshJobDepIndex: 0,
+  description:
+    "Submit run_until_cancel, post a 'work' event, then cancel — synthetic 'cancelled' event must arrive.",
+  parameters: z.object({}).passthrough(),
+  execute: async (_args, runUntilCancel: MeshJob | null = null) => {
+    if (!runUntilCancel?.submit) {
+      return { error: "run_until_cancel submitter not injected" };
+    }
+    const proxy = await runUntilCancel.submit({}, { maxDuration: 60 });
+    const jobId = (proxy as { jobId?: string }).jobId ?? "";
+    await sleepMs(2000);
+    const workReceipt = await mesh.jobs.postEvent(jobId, "work", { item: 1 });
+    // Give the producer a moment to consume the 'work' event before we
+    // fire the cancel. This makes the two events strictly ordered in
+    // the producer's events_seen list (work first, cancelled second).
+    await sleepMs(1000);
+    if (proxy.cancel) {
+      await proxy.cancel("external_stop_requested");
+    }
+    // The job is now cancelled — the producer's recvEvent loop will
+    // observe the synthetic 'cancelled' event and return its dict via
+    // the normal task return path. We CANNOT use proxy.wait() because
+    // wait() raises on a cancelled terminal state. Instead read the
+    // status row + the producer's log via the test driver.
+    await sleepMs(3000);
+    let terminalStatus: string | undefined;
+    let terminalError: string | undefined;
+    if (proxy.status) {
+      const status = (await proxy.status()) as Record<string, unknown>;
+      terminalStatus = status.status as string | undefined;
+      terminalError = (status.error as string | undefined) ?? undefined;
+    }
+    return {
+      job_id: jobId,
+      work_seq: workReceipt.seq,
+      terminal_status: terminalStatus,
+      terminal_error: terminalError,
+    };
+  },
+});
+
 console.log(
   `long-task-consumer-ts uc22 fixture defined on port ${HTTP_PORT}. Waiting for auto-start...`,
 );

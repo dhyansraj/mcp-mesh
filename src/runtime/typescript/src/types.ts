@@ -117,6 +117,18 @@ export interface MeshJob {
   updateProgress?(progress: number, message?: string): Promise<void>;
   complete?(result: unknown): Promise<void>;
   fail?(error: string): Promise<void>;
+  /**
+   * Wait for the next event posted into this job's event log.
+   *
+   * Returns the event object on arrival, `null` on timeout. Cursor is
+   * per-controller-instance (shared across `clone`s); a fresh
+   * controller for the same `jobId` replays from seq=0.
+   *
+   * Mirrors Python's `MeshJob.recv_event` (event-channel extension that
+   * shipped with v2.2 via PR #1041). Throws on `JobNotFound` /
+   * transport-layer failures; `timeoutSecs` rejects NaN/Infinity/negative.
+   */
+  recvEvent?(types?: string[], timeoutSecs?: number): Promise<import("./jobs.js").JobEvent | null>;
 
   // Consumer-side surface (when injected as JobProxy / submitter):
   submit?(payload?: Record<string, unknown>, options?: {
@@ -128,6 +140,15 @@ export interface MeshJob {
   wait?(timeoutSecs?: number): Promise<unknown>;
   status?(): Promise<Record<string, unknown>>;
   cancel?(reason?: string): Promise<void>;
+  /**
+   * Post an event into this job's event log. The running handler
+   * (inside the `task: true` job) will see it on its next `recvEvent`
+   * call — or wake immediately if it's currently long-polling.
+   *
+   * Mirrors Python's `MeshJob.send_event`. Throws `JobNotFoundError` /
+   * `JobTerminalError` for the corresponding registry error codes.
+   */
+  sendEvent?(eventType: string, payload?: unknown): Promise<import("./jobs.js").JobEventReceipt>;
 }
 
 /**
