@@ -39,16 +39,20 @@ use crate::task_backend::{
 
 /// Validate and convert a Python-supplied `timeout_secs` (`Option<f64>`) into
 /// an `Option<Duration>`. `Duration::from_secs_f64` panics on negative, NaN,
-/// or infinite inputs; this helper traps those at the Python boundary and
-/// surfaces a clean `ValueError` instead so the runtime can't be crashed by
-/// a typo'd timeout literal in user code.
+/// infinite, or out-of-range inputs; this helper traps those at the Python
+/// boundary and surfaces a clean `ValueError` instead so the runtime can't
+/// be crashed by a typo'd timeout literal in user code. Uses the fallible
+/// `try_from_secs_f64` for the final conversion so even finite-but-huge
+/// values (e.g. `sys.float_info.max`) reject cleanly instead of panicking.
 fn parse_timeout_secs(secs: Option<f64>) -> PyResult<Option<Duration>> {
     match secs {
         None => Ok(None),
         Some(s) if s.is_nan() || s.is_infinite() || s < 0.0 => Err(PyValueError::new_err(
             format!("timeout_secs must be non-negative and finite, got {s}"),
         )),
-        Some(s) => Ok(Some(Duration::from_secs_f64(s))),
+        Some(s) => Duration::try_from_secs_f64(s).map(Some).map_err(|e| {
+            PyValueError::new_err(format!("timeout_secs out of range: {e} (got {s})"))
+        }),
     }
 }
 
@@ -642,8 +646,23 @@ pub fn with_job_async_py<'py>(
     // to "now" on the Tokio runtime, which matches the semantics of the
     // SDK reading `X-Mesh-Timeout: <secs>` from the inbound request).
     let ctx = match deadline_secs {
+        Some(secs) if secs.is_nan() || secs.is_infinite() => {
+            return Err(PyValueError::new_err(format!(
+                "with_job_async: deadline_secs ({}) must be a finite number or None",
+                secs
+            )));
+        }
         Some(secs) if secs > 0.0 => {
-            JobContext::with_timeout(job_id.clone(), Duration::from_secs_f64(secs))
+            // Finite-but-huge `secs` (e.g. `sys.float_info.max`) would
+            // panic in `Duration::from_secs_f64`. Use the fallible variant
+            // and surface a clean `ValueError` instead.
+            let dur = Duration::try_from_secs_f64(secs).map_err(|e| {
+                PyValueError::new_err(format!(
+                    "with_job_async: deadline_secs ({}) out of range for job {} — {}",
+                    secs, job_id, e
+                ))
+            })?;
+            JobContext::with_timeout(job_id.clone(), dur)
         }
         _ => JobContext::new(job_id.clone()),
     };
@@ -744,3 +763,11 @@ pub fn current_job_py(py: Python<'_>) -> PyResult<Option<Py<PyDict>>> {
         }
     }
 }
+
+// NOTE: no `#[cfg(test)] mod tests` here. `parse_timeout_secs`'s error
+// path constructs a `PyValueError` which requires a linked Python
+// interpreter — `pyo3`'s `extension-module` feature (the default here)
+// deliberately omits the interpreter symbols at static-link time so the
+// resulting `.so` can be loaded as a Python C extension. The parallel
+// overflow test for the panic path lives in `jobs_napi.rs::tests`
+// (same helper shape, same `try_from_secs_f64` logic).
