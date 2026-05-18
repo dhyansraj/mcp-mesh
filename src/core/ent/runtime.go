@@ -7,6 +7,7 @@ import (
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/dependencyresolution"
 	"mcp-mesh/src/core/ent/job"
+	"mcp-mesh/src/core/ent/jobevent"
 	"mcp-mesh/src/core/ent/llmproviderresolution"
 	"mcp-mesh/src/core/ent/llmtoolresolution"
 	"mcp-mesh/src/core/ent/registryevent"
@@ -131,6 +132,20 @@ func init() {
 	jobDescID := jobFields[0].Descriptor()
 	// job.IDValidator is a validator for the "id" field. It is called by the builders before save.
 	job.IDValidator = jobDescID.Validators[0].(func(string) error)
+	jobeventFields := schema.JobEvent{}.Fields()
+	_ = jobeventFields
+	// jobeventDescJobID is the schema descriptor for job_id field.
+	jobeventDescJobID := jobeventFields[1].Descriptor()
+	// jobevent.JobIDValidator is a validator for the "job_id" field. It is called by the builders before save.
+	jobevent.JobIDValidator = jobeventDescJobID.Validators[0].(func(string) error)
+	// jobeventDescType is the schema descriptor for type field.
+	jobeventDescType := jobeventFields[2].Descriptor()
+	// jobevent.TypeValidator is a validator for the "type" field. It is called by the builders before save.
+	jobevent.TypeValidator = jobeventDescType.Validators[0].(func(string) error)
+	// jobeventDescCreatedAt is the schema descriptor for created_at field.
+	jobeventDescCreatedAt := jobeventFields[6].Descriptor()
+	// jobevent.DefaultCreatedAt holds the default value on creation for the created_at field.
+	jobevent.DefaultCreatedAt = jobeventDescCreatedAt.Default.(func() time.Time)
 	llmproviderresolutionFields := schema.LLMProviderResolution{}.Fields()
 	_ = llmproviderresolutionFields
 	// llmproviderresolutionDescRequiredNamespace is the schema descriptor for required_namespace field.

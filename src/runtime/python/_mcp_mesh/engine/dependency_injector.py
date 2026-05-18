@@ -342,6 +342,25 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
     # Single parameter rule: inject regardless of typing
     if param_count == 1:
         if not mesh_positions:
+            # Phase 1 MeshJob substrate: a function may declare a single
+            # MeshJob param without any McpMeshTool param — that's the
+            # consumer pattern (commission a remote job). Don't inject a
+            # dependency proxy into that slot; the MeshJob param is wired
+            # by ``_prepare_injection_kwargs`` via a different code path.
+            try:
+                from .signature_analyzer import analyze_mesh_job_signature
+
+                _mj = analyze_mesh_job_signature(func)
+                if _mj.mesh_job_param_name is not None:
+                    logger.debug(
+                        f"Function '{func_name}' has a single MeshJob param; "
+                        f"injection of {len(dependencies)} declared dependency(ies) "
+                        f"will be handled via the MeshJob auto-injection path."
+                    )
+                    return []
+            except Exception:
+                pass
+
             param_name = params[0].name
             logger.warning(
                 f"Single parameter '{param_name}' in function '{func_name}' found, "

@@ -235,12 +235,13 @@ func (s *SweepJob) Stop() {
 // Returned by runOnce so tests can assert each phase independently and the
 // tick logger can render a single human-friendly line.
 type sweepResult struct {
-	agentsPurged   int
-	eventsPurged   int
-	schemasPurged  int
-	jobsReset      int // orphan jobs returned to the pool for re-claim
-	jobsExhausted  int // orphan jobs that ran out of retries (status=failed)
-	jobsDeadlined  int // total_deadline-exceeded jobs (status=failed)
+	agentsPurged     int
+	eventsPurged     int
+	schemasPurged    int
+	jobsReset        int // orphan jobs returned to the pool for re-claim
+	jobsExhausted    int // orphan jobs that ran out of retries (status=failed)
+	jobsDeadlined    int // total_deadline-exceeded jobs (status=failed)
+	jobEventsPurged  int // JobEvent rows GC'd for terminal jobs past retention
 }
 
 // tick runs a single sweep iteration with logging. Errors are logged but
@@ -259,11 +260,12 @@ func (s *SweepJob) tick(ctx context.Context) {
 
 	if s.logger != nil {
 		anyWork := res.agentsPurged > 0 || res.eventsPurged > 0 || res.schemasPurged > 0 ||
-			res.jobsReset > 0 || res.jobsExhausted > 0 || res.jobsDeadlined > 0
+			res.jobsReset > 0 || res.jobsExhausted > 0 || res.jobsDeadlined > 0 ||
+			res.jobEventsPurged > 0
 		if anyWork {
-			s.logger.Info("sweep: purged %d agents, %d events, %d orphan schemas; jobs: %d reset, %d exhausted, %d deadlined (took %s)",
+			s.logger.Info("sweep: purged %d agents, %d events, %d orphan schemas; jobs: %d reset, %d exhausted, %d deadlined, %d job_events purged (took %s)",
 				res.agentsPurged, res.eventsPurged, res.schemasPurged,
-				res.jobsReset, res.jobsExhausted, res.jobsDeadlined, took)
+				res.jobsReset, res.jobsExhausted, res.jobsDeadlined, res.jobEventsPurged, took)
 		} else {
 			s.logger.Debug("sweep: nothing to purge (took %s)", took)
 		}
@@ -318,6 +320,21 @@ func (s *SweepJob) runOnce(ctx context.Context) (sweepResult, error) {
 		res.jobsDeadlined = expired
 		if err != nil {
 			return res, fmt.Errorf("expire deadlined jobs: %w", err)
+		}
+
+		// JobEvent GC. Events outlive their parent job by the retention
+		// grace window so any in-flight tailer can drain the final
+		// cancel/result event; once the parent has been terminal beyond
+		// that window the events go too. Gated on Retention > 0 since
+		// the cutoff is `now - Retention`; with Retention=0 the sweep is
+		// disabled entirely (the outer loop in Start handles that).
+		if s.cfg.Retention > 0 {
+			threshold := now.Add(-s.cfg.Retention)
+			eventsPurged, err := s.service.DeleteEventsForTerminalJobs(ctx, threshold)
+			res.jobEventsPurged = eventsPurged
+			if err != nil {
+				return res, fmt.Errorf("purge job events: %w", err)
+			}
 		}
 	}
 

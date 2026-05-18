@@ -239,11 +239,25 @@ class MeshJob(Protocol):
         - ``await job.update_progress(progress, message=None)`` — coalesced delta.
         - ``await job.complete(result)`` — terminal success.
         - ``await job.fail(error)`` — terminal failure.
+        - ``await job.recv_event(types=None, timeout=None)`` *(since v2.2)* —
+          wait for the next event posted into this job's event channel.
+          Returns the event dict ``{seq, type, payload, trace_context,
+          posted_by, created_at}`` or ``None`` on timeout. Used by
+          handlers that need to receive external inputs (extend-deadline
+          signals, user-supplied input on ``input_required`` pauses,
+          arbitrary user-defined events) without blocking the registry.
 
     On the consumer side the injected object exposes:
         - ``await job.wait(timeout_secs=None)`` — poll until terminal.
         - ``await job.status()`` — single registry read.
         - ``await job.cancel(reason=None)`` — request cancellation.
+        - ``await job.send_event(event_type, payload=None)`` *(since v2.2)* —
+          post an event into the job's event channel. Returns a receipt
+          dict ``{job_id, seq, created_at}``. The running handler sees
+          the event on its next ``recv_event`` call (or wakes
+          immediately if already long-polling). Raises
+          :class:`mesh.JobTerminalError` if the job has reached a
+          terminal state.
 
     A ``MeshJob`` parameter is **orthogonal** to the positional indexing
     used by ``McpMeshTool``: the DDDI resolver records its signature

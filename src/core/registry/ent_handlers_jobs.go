@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,6 +31,26 @@ import (
 // heartbeat/lease + sweep loop guarantees correctness even when the
 // forward is dropped.
 const cancelForwardTimeout = 5 * time.Second
+
+// cancelEventGraceDefault is the wall-clock pause between posting the
+// synthetic "cancelled" event and HTTP-forwarding the cancel to the
+// owner instance. The grace gives any producer parked on recv_event
+// a window to observe the event and return cleanly before its task
+// is interrupted via CancelledError. See issue #1032.
+//
+// Tunable via MCP_MESH_CANCEL_EVENT_GRACE_MS (positive integer); 0
+// disables the grace and reverts to immediate cancel-forward (pre-#1032
+// behavior).
+const cancelEventGraceDefault = 200 * time.Millisecond
+
+func cancelEventGrace() time.Duration {
+	if v := os.Getenv("MCP_MESH_CANCEL_EVENT_GRACE_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return time.Duration(n) * time.Millisecond
+		}
+	}
+	return cancelEventGraceDefault
+}
 
 // CreateJob implements POST /jobs.
 //
@@ -472,6 +493,12 @@ func (h *EntBusinessLogicHandlers) ReleaseJob(c *gin.Context, jobId string) {
 //     (best-effort forward; lease/sweep guarantees eventual correctness).
 //   - Unowned (orphan / pre-claim): registry directly marks cancelled.
 //   - Already terminal: 409 Conflict.
+//
+// Ordering (see issue #1032 / tc26): status transition → synthetic
+// "cancelled" event post → grace window → HTTP cancel-forward. The grace
+// gives a producer parked on recv_event a chance to observe the synthetic
+// event and unwind cleanly before the forward raises CancelledError on
+// the task body. See cancelEventGrace().
 func (h *EntBusinessLogicHandlers) CancelJob(c *gin.Context, jobId string) {
 	if jobId == "" {
 		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
@@ -517,6 +544,31 @@ func (h *EntBusinessLogicHandlers) CancelJob(c *gin.Context, jobId string) {
 			})
 		}
 		return
+	}
+
+	// Synthetic event: any task=True handler currently parked on
+	// recv_event sees a `{type: "cancelled"}` event in its log and can
+	// unwind cleanly. We post AFTER the registry row has transitioned
+	// to terminal=cancelled, so allowTerminal=true bypasses the
+	// "no events on terminal jobs" guard. Best-effort: if the post fails
+	// the cancel itself still succeeded — log and continue.
+	if _, _, evErr := h.entService.PostJobEvent(
+		c.Request.Context(),
+		jobId,
+		"cancelled",
+		map[string]interface{}{"reason": reason},
+		nil,
+		extractPostedByIdentity(c),
+		true,
+	); evErr != nil {
+		log.Printf("[meshjob] warning: failed to post synthetic cancel event for job %s: %v", jobId, evErr)
+	}
+
+	// Grace window for producers parked on recv_event to observe the
+	// synthetic event and return cleanly before the HTTP cancel-forward
+	// raises CancelledError on the task body. See issue #1032 / tc26.
+	if grace := cancelEventGrace(); grace > 0 {
+		time.Sleep(grace)
 	}
 
 	// Best-effort owner notification. Errors are logged but never affect
@@ -785,4 +837,225 @@ type CreateJobInput struct {
 	MaxRetries       int
 	MaxDuration      *int
 	TotalDeadline    *int // Unix epoch seconds; converted to time.Time on persist
+}
+
+// listJobEventsMaxWait caps the long-poll timeout to 60 seconds. Mirrors
+// the OpenAPI `wait` parameter's `maximum: 60` — kept here as a server-side
+// guard so a hand-rolled client bypassing schema validation can't pin a
+// goroutine for hours.
+const listJobEventsMaxWait = 60
+
+// listJobEventsMaxLimit mirrors the OpenAPI `limit` schema's maximum.
+const listJobEventsMaxLimit = 500
+
+// PostJobEvent implements POST /jobs/{job_id}/events.
+//
+// Appends an event to the per-job event log. Sequence numbers are assigned
+// server-side as a per-job monotonic counter (UNIQUE (job_id, seq) index
+// enforces the invariant under concurrent posters; the service layer
+// retries on conflict).
+//
+// Returns 404 if the parent job is unknown, 409 if the job is already
+// terminal (external posters can't inject events into a finished job —
+// the internal CancelJob path opts past this guard via allowTerminal).
+func (h *EntBusinessLogicHandlers) PostJobEvent(c *gin.Context, jobId string) {
+	if jobId == "" {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     "job_id is required",
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	var req generated.JobEventPostRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Invalid JSON payload: %v", err),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+	if strings.TrimSpace(req.Type) == "" {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     "type is required",
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	var payload map[string]interface{}
+	if req.Payload != nil {
+		payload = *req.Payload
+	}
+	var traceContext map[string]interface{}
+	if req.TraceContext != nil {
+		traceContext = *req.TraceContext
+	}
+
+	postedBy := extractPostedByIdentity(c)
+
+	seq, createdAt, err := h.entService.PostJobEvent(
+		c.Request.Context(),
+		jobId,
+		req.Type,
+		payload,
+		traceContext,
+		postedBy,
+		false, // not the internal cancel path
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrJobNotFound):
+			c.JSON(http.StatusNotFound, generated.ErrorResponse{
+				Error:     fmt.Sprintf("job not found: %s", jobId),
+				Timestamp: time.Now().UTC(),
+			})
+		case errors.Is(err, ErrJobTerminal):
+			c.JSON(http.StatusConflict, generated.ErrorResponse{
+				Error:     "job is already in a terminal state",
+				Timestamp: time.Now().UTC(),
+			})
+		default:
+			c.JSON(http.StatusServiceUnavailable, generated.ErrorResponse{
+				Error:     fmt.Sprintf("Failed to post job event: %v", err),
+				Timestamp: time.Now().UTC(),
+			})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, generated.JobEventPostResponse{
+		JobId:     jobId,
+		Seq:       seq,
+		CreatedAt: int(createdAt.Unix()),
+	})
+}
+
+// ListJobEvents implements GET /jobs/{job_id}/events.
+//
+// Returns events with seq > after, optionally filtered to a comma-separated
+// allowlist of types. When `wait` is non-zero (capped at 60s) the call
+// long-polls — the registry sleeps in 100ms increments until matching
+// events arrive or the deadline expires.
+//
+// next_after in the response is the seq of the last returned event (or the
+// same `after` the caller sent if nothing arrived). Callers feed it back
+// in to skip past already-seen events.
+func (h *EntBusinessLogicHandlers) ListJobEvents(c *gin.Context, jobId string, params generated.ListJobEventsParams) {
+	if jobId == "" {
+		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
+			Error:     "job_id is required",
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	after := int64(0)
+	if params.After != nil && *params.After > 0 {
+		after = *params.After
+	}
+
+	var types []string
+	if params.Types != nil {
+		raw := strings.Split(*params.Types, ",")
+		for _, t := range raw {
+			t = strings.TrimSpace(t)
+			if t != "" {
+				types = append(types, t)
+			}
+		}
+	}
+
+	waitSeconds := 0
+	if params.Wait != nil {
+		waitSeconds = *params.Wait
+		if waitSeconds < 0 {
+			waitSeconds = 0
+		}
+		if waitSeconds > listJobEventsMaxWait {
+			waitSeconds = listJobEventsMaxWait
+		}
+	}
+
+	limit := 100
+	if params.Limit != nil && *params.Limit > 0 {
+		limit = *params.Limit
+		if limit > listJobEventsMaxLimit {
+			limit = listJobEventsMaxLimit
+		}
+	}
+
+	events, err := h.entService.ListJobEvents(
+		c.Request.Context(),
+		jobId,
+		after,
+		types,
+		time.Duration(waitSeconds)*time.Second,
+		limit,
+	)
+	if err != nil {
+		if errors.Is(err, ErrJobNotFound) {
+			c.JSON(http.StatusNotFound, generated.ErrorResponse{
+				Error:     fmt.Sprintf("job not found: %s", jobId),
+				Timestamp: time.Now().UTC(),
+			})
+			return
+		}
+		c.JSON(http.StatusServiceUnavailable, generated.ErrorResponse{
+			Error:     fmt.Sprintf("Failed to list job events: %v", err),
+			Timestamp: time.Now().UTC(),
+		})
+		return
+	}
+
+	resp := generated.JobEventListResponse{
+		Events:    make([]generated.JobEvent, 0, len(events)),
+		NextAfter: after,
+	}
+	for _, e := range events {
+		resp.Events = append(resp.Events, jobEventToAPI(e))
+		if e.Seq > resp.NextAfter {
+			resp.NextAfter = e.Seq
+		}
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// jobEventToAPI converts an Ent JobEvent into the OpenAPI representation.
+// Mirrors jobToAPI's field-mapping style: Time fields exposed as Unix epoch
+// seconds; optional JSON columns surfaced as `*map[string]interface{}`.
+func jobEventToAPI(e *ent.JobEvent) generated.JobEvent {
+	out := generated.JobEvent{
+		JobId:     e.JobID,
+		Seq:       e.Seq,
+		Type:      e.Type,
+		CreatedAt: int(e.CreatedAt.Unix()),
+	}
+	if len(e.Payload) > 0 {
+		p := map[string]interface{}(e.Payload)
+		out.Payload = &p
+	}
+	if len(e.TraceContext) > 0 {
+		tc := map[string]interface{}(e.TraceContext)
+		out.TraceContext = &tc
+	}
+	if e.PostedBy != nil {
+		v := *e.PostedBy
+		out.PostedBy = &v
+	}
+	return out
+}
+
+// extractPostedByIdentity recovers the sender's identity for a job-event
+// post. The TLS middleware sets `entity_id` in the gin context on every
+// mTLS-authenticated request; absence is normal in tests and in
+// non-TLS local deployments — we return "" and let the service layer
+// treat the field as optional.
+func extractPostedByIdentity(c *gin.Context) string {
+	if v, ok := c.Get("entity_id"); ok {
+		if id, ok := v.(string); ok {
+			return id
+		}
+	}
+	return ""
 }

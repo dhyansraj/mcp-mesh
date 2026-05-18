@@ -18,7 +18,8 @@ Note: Direct imports like 'from mesh import tool' are discouraged.
 Use 'import mesh' and then '@mesh.tool()' for consistency with MCP patterns.
 """
 
-from . import decorators
+from . import decorators, jobs
+from .jobs import JobNotFoundError, JobTerminalError
 from .types import (
     LlmMeta,
     McpMeshAgent,
@@ -157,6 +158,12 @@ def __getattr__(name):
         return MeshContextModel
     elif name == "MeshJob":
         return MeshJob
+    elif name == "jobs":
+        return jobs
+    elif name == "JobNotFoundError":
+        return JobNotFoundError
+    elif name == "JobTerminalError":
+        return JobTerminalError
     elif name == "MeshLlmAgent":
         return MeshLlmAgent
     elif name == "MeshLlmRequest":

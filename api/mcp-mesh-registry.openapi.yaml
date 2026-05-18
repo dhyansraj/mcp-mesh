@@ -585,6 +585,150 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
+  /jobs/{job_id}/events:
+    post:
+      tags: [jobs]
+      summary: Post an event into a running job's event log
+      description: |
+        Appends an event to the per-job ordered event log. The executing
+        job-handler can drain these events via `recv_event` (Python SDK)
+        to receive inputs from outside the job — extend-deadline signals,
+        user-supplied input on `input_required` pauses, the synthetic
+        `cancelled` event emitted by POST /jobs/{job_id}/cancel, etc.
+
+        Sequence numbers are assigned server-side as a monotonic per-job
+        counter — concurrent posters cannot collide, and tailers can
+        keyset-scan with `after=<last_seq>`.
+
+        🤖 AI NOTE: events posted to a job that has reached a terminal
+        state are rejected with 409 (no further side-effects possible).
+        The cancel handler bypasses this internally to emit the
+        `cancelled` synthetic event.
+      operationId: postJobEvent
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Server-assigned job identifier (UUID)
+      requestBody:
+        required: true
+        description: Event to append to the job's event log.
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JobEventPostRequest"
+      responses:
+        "200":
+          description: Event posted; seq + created_at returned for follow-up tailing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobEventPostResponse"
+        "400":
+          description: Invalid request payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Job already in a terminal state, cannot accept events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      tags: [jobs]
+      summary: List events posted to a job (with optional long-poll)
+      description: |
+        Returns events for the job with `seq > after`, ordered by seq
+        ascending. Optional `types` filter narrows to a comma-separated
+        allowlist. When `wait` is set the registry holds the connection
+        open for up to that many seconds (max 60) and returns as soon
+        as a matching event arrives — used by the SDK's `recv_event`
+        long-poll loop.
+
+        🤖 AI NOTE: empty event arrays are normal — they mean either
+        the wait expired or `after` is already at the tip. `next_after`
+        is the seq the caller should use on the next round-trip (the
+        last returned seq, or the same `after` if nothing arrived).
+      operationId: listJobEvents
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Server-assigned job identifier (UUID)
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            default: 0
+          description: Return events with seq strictly greater than this value.
+        - name: types
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Optional comma-separated allowlist of event types to return.
+            Empty / absent ⇒ all types.
+        - name: wait
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 60
+            default: 0
+          description: |
+            Long-poll timeout in seconds (0 = no wait). Caps at 60s.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+          description: Max events to return in this round-trip.
+      responses:
+        "200":
+          description: Events for the job (may be empty)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobEventListResponse"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Registry backend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /agents:
     get:
       tags: [agents]
@@ -3060,3 +3204,108 @@ components:
           nullable: true
           example: "claude-provider-replica-2"
           description: Owner instance the cancel was forwarded to (null if owner was already dead/orphaned).
+
+    JobEventPostRequest:
+      type: object
+      required: [type]
+      description: |
+        Event to append to a running job's event log. `type` is a free-form
+        tag the executing handler dispatches on (e.g. `extend_deadline`,
+        `user_input`); `payload` carries arbitrary JSON associated with
+        the event. `trace_context` propagates W3C trace context so the
+        downstream span the SDK opens around `recv_event` can link back
+        to the sender's span.
+      properties:
+        type:
+          type: string
+          minLength: 1
+          example: "extend_deadline"
+          description: Event type tag the handler dispatches on.
+        payload:
+          type: object
+          additionalProperties: true
+          description: Arbitrary JSON payload associated with the event.
+        trace_context:
+          type: object
+          additionalProperties: true
+          description: |
+            Optional W3C trace context (traceparent + tracestate) propagated
+            from the sender for child-span linkage on the handler side.
+
+    JobEventPostResponse:
+      type: object
+      required: [job_id, seq, created_at]
+      description: |
+        Acknowledgement of a successful event post. `seq` is the
+        server-assigned per-job monotonic sequence number — feed it
+        back as `after` to skip past this event when tailing.
+      properties:
+        job_id:
+          type: string
+          example: "8f2b4e6a-1c3d-4e5f-9a0b-1c2d3e4f5a6b"
+          description: Job identifier the event was posted to.
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 7
+          description: Server-assigned monotonic sequence number within this job.
+        created_at:
+          type: integer
+          example: 1729999500
+          description: Unix epoch seconds when the registry persisted the event.
+
+    JobEvent:
+      type: object
+      required: [job_id, seq, type, created_at]
+      description: A single event row from a job's event log.
+      properties:
+        job_id:
+          type: string
+          description: Job identifier this event belongs to.
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Per-job monotonic sequence number.
+        type:
+          type: string
+          description: Event type tag.
+        payload:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Arbitrary JSON payload.
+        trace_context:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: W3C trace context propagated from sender.
+        posted_by:
+          type: string
+          nullable: true
+          description: Identity of the sender (entity ID from TLS, if available).
+        created_at:
+          type: integer
+          description: Unix epoch seconds when the registry persisted the event.
+
+    JobEventListResponse:
+      type: object
+      required: [events, next_after]
+      description: |
+        List of events newer than the caller's `after` watermark, plus
+        the watermark to feed back on the next round-trip.
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/JobEvent"
+          description: Events in ascending-seq order.
+        next_after:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Watermark for the next call: the seq of the last returned
+            event, or the same `after` the caller sent if no events
+            arrived.

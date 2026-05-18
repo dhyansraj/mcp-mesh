@@ -18,6 +18,9 @@ type DependencyResolution func(*sql.Selector)
 // Job is the predicate function for job builders.
 type Job func(*sql.Selector)
 
+// JobEvent is the predicate function for jobevent builders.
+type JobEvent func(*sql.Selector)
+
 // LLMProviderResolution is the predicate function for llmproviderresolution builders.
 type LLMProviderResolution func(*sql.Selector)
 
