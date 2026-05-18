@@ -1,0 +1,123 @@
+# tc25_event_type_filter_java — Java port of uc21/tc25 + uc22/tc25_ts
+# (recvEvent types filter; issue #1032).
+#
+# Producer `runWithFilter` calls `controller.recvEvent(List.of("target"),
+# Duration.ofSeconds(15))` and must IGNORE events whose `type` is not in
+# that list. Consumer posts three events in sequence:
+#
+#   1. `ignore_a` — wrong type, must be skipped
+#   2. `ignore_b` — wrong type, must be skipped
+#   3. `target`   — matching type, producer wakes here
+#
+# Asserts:
+#   - the producer returned the THIRD event (seq=3), not the first or second
+#   - payload echoes `{got_it: true}`
+#   - producer did NOT time out
+#
+# This proves the type-filter is applied during the long-poll: a broken
+# filter would wake on seq=1 (`ignore_a`), return `{n: 1}` instead of
+# `{got_it: true}`, and complete the job with the wrong payload.
+
+name: "MeshJob Java: recvEvent type filter skips unrelated events and wakes on matching type"
+description: "Post 2 ignored events + 1 matching; producer must see only the matching one (seq=3)"
+tags:
+  - meshjob
+  - java
+  - issue-1032
+  - events
+timeout: 360
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (port 9120)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for Java provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done
+      echo "ERROR: provider not healthy"
+      meshctl logs long-task-provider-java 2>&1 | tail -50 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start consumer (port 9121)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Wait for consumer + DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
+        S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && [ "$T" != "null" ] && exit 0; sleep 2
+      done
+      echo "ERROR: consumer not ready"
+      meshctl logs long-task-consumer-java 2>&1 | tail -50 || true
+      exit 1
+    timeout: 150
+
+  - name: "Call commission_event_filter — post 3 events, expect producer to wake only on 'target'"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_event_filter '{}'
+    capture: commission_response
+    timeout: 60
+
+assertions:
+  - expr: "${captured.commission_response} not contains '\"isError\":true'"
+    message: "commission_event_filter should NOT return an MCP error envelope"
+  # Producer must not have timed out.
+  - expr: "${captured.commission_response} not contains '\\\"timeout\\\":true'"
+    message: "producer must NOT have timed out — the 'target' event should have woken it"
+  # The matching event was the 3rd posted into the job; the producer
+  # must surface its seq, type and payload — NOT the ignored events'.
+  - expr: "${captured.commission_response} contains '\\\"type\\\":\\\"target\\\"'"
+    message: "producer must wake on the 'target' event type"
+  - expr: "${captured.commission_response} contains '\\\"got_it\\\":true'"
+    message: "payload of the matching event must round-trip to the producer"
+  # Belt-and-suspenders: ensure the producer's result is NOT one of the
+  # ignored events. A broken filter would wake on the first post and
+  # complete with payload={"n":1} type="ignore_a".
+  - expr: "${captured.commission_response} not contains '\\\"type\\\":\\\"ignore_a\\\"'"
+    message: "producer must NOT have woken on the 'ignore_a' event (filter broken)"
+  - expr: "${captured.commission_response} not contains '\\\"type\\\":\\\"ignore_b\\\"'"
+    message: "producer must NOT have woken on the 'ignore_b' event (filter broken)"
+  # Sequence number: the matching event was the 3rd post into this job.
+  - expr: "${captured.commission_response} contains '\\\"target_seq\\\":3'"
+    message: "the matching event must have been the 3rd post (seq=3)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

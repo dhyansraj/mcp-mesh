@@ -9,6 +9,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -256,6 +259,115 @@ public final class JobController implements MeshJob, AutoCloseable {
                 throw new MeshException("mesh_job_controller_is_cancelled failed: " + lastError(core));
             }
             return rc == 1;
+        }
+    }
+
+    /**
+     * Wait for the next event posted to this job's event channel
+     * (mirror of {@code JobController::recv_event} in the Rust core,
+     * issue #1032). Returns the event payload as a {@code Map<String,
+     * Object>} on arrival, or {@code null} on a clean timeout.
+     *
+     * <p>The cursor is per-controller-instance (shared across handle
+     * copies); a fresh controller for the same {@code jobId} replays
+     * from seq=0.
+     *
+     * <p>Mirrors:
+     * <ul>
+     *   <li>Python {@code job.recv_event(types=..., timeout_secs=...)}</li>
+     *   <li>TypeScript {@code job.recvEvent(types, timeoutSecs)}</li>
+     * </ul>
+     *
+     * @param types   Optional list of event-type tags to filter on
+     *                (e.g. {@code List.of("signal","cancel")}); {@code null}
+     *                or empty means "receive all types".
+     * @param timeout Optional max wait. {@code null} means block until
+     *                an event arrives or the enclosing cancel token
+     *                fires (internally bridged to FFI's negative-
+     *                sentinel "no timeout" convention since the C ABI
+     *                cannot pass {@code null} doubles). Negative
+     *                durations behave like {@code null}.
+     * @return Event map with fields {@code job_id, seq, type, payload,
+     *         trace_context, posted_by, created_at}; or {@code null} if
+     *         the timeout elapsed without a matching event.
+     * @throws JobNotFoundException if the job has been deleted from the
+     *                              registry (or never existed)
+     * @throws MeshException        for transport errors after retry
+     *                              exhaustion, or invalid arguments
+     *                              (NaN/Infinity timeout, etc.)
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> recvEvent(List<String> types, Duration timeout) {
+        // Serialize the types filter OUTSIDE the lock — Jackson is
+        // thread-safe and the list is typically short, but keeping
+        // user-data work off the FFI critical section matches the
+        // pattern used by complete()/wait().
+        String typesJson;
+        if (types == null || types.isEmpty()) {
+            // null on the Java side → null pointer on the FFI side →
+            // "receive all types" in the Rust core. Don't serialize an
+            // empty list — the wire shape uses null/missing as the
+            // "all types" sentinel (matches Python's
+            // recv_event(types=None) and TS's recvEvent(undefined, ...)).
+            typesJson = null;
+        } else {
+            try {
+                typesJson = MAPPER.writeValueAsString(types);
+            } catch (Exception e) {
+                throw new MeshException("Failed to serialize types filter", e);
+            }
+        }
+        // Bridge Optional<Duration> to the FFI's negative-sentinel
+        // convention. Treat null AND negative as "no timeout" so the
+        // boundary matches Python/TS Optional<float>/Optional<number>.
+        double timeoutSecs;
+        if (timeout == null) {
+            timeoutSecs = -1.0;
+        } else {
+            double secs = timeout.toNanos() / 1_000_000_000.0;
+            timeoutSecs = secs < 0.0 ? -1.0 : secs;
+        }
+
+        // Lock held for the full long-poll duration. Mirrors JobProxy.await()'s
+        // trade-off: concurrent isCancelled() / updateProgress() / complete()
+        // calls on the same JobController will block while recvEvent is parked.
+        // The fence is required for use-after-free safety across the FFI
+        // boundary (handle pointer must not be freed mid-call). See PR #891
+        // for the original rationale on the wait/await side.
+        Pointer p;
+        synchronized (lock) {
+            ensureOpen();
+            PointerByReference out = new PointerByReference();
+            int rc = core.mesh_job_controller_recv_event(handle, typesJson, timeoutSecs, out);
+            String err = rc == 0 ? null : lastError(core);
+            switch (rc) {
+                case 0:
+                    // Success — out may carry the event JSON or NULL on
+                    // clean timeout.
+                    p = out.getValue();
+                    break;
+                case -2:
+                    throw new JobNotFoundException(
+                        "mesh_job_controller_recv_event: job not found: " + err);
+                case -1:
+                default:
+                    // -1 = invalid args; -3 = backend error; any other
+                    // value is treated as a generic backend failure.
+                    throw new MeshException(
+                        "mesh_job_controller_recv_event failed (rc=" + rc + "): " + err);
+            }
+        }
+        if (p == null) {
+            // Clean timeout — caller distinguishes by the null return.
+            return null;
+        }
+        try {
+            String json = p.getString(0);
+            return (Map<String, Object>) MAPPER.readValue(json, Map.class);
+        } catch (Exception e) {
+            throw new MeshException("Failed to parse recv_event JSON", e);
+        } finally {
+            core.mesh_free_string(p);
         }
     }
 

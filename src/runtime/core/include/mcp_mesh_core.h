@@ -761,6 +761,46 @@ int32_t mesh_job_controller_is_terminal(const struct JobControllerHandle *handle
 // `-1` on error.
 int32_t mesh_job_controller_is_cancelled(const struct JobControllerHandle *handle);
 
+// Wait for the next event posted to this job's event channel.
+//
+// Mirrors [`JobController::recv_event`]. Returns the event as a JSON
+// string written to `*out_event_json`, or a null pointer when the
+// timeout elapses without a matching event. Cursor is per-controller-
+// instance (shared across `clone`s); a fresh controller for the same
+// `job_id` replays from seq=0.
+//
+// # Arguments
+// - `types_json`: optional UTF-8 NUL-terminated JSON string encoding an
+//   array of event-type tags. `NULL` (or a JSON `null`) means "receive
+//   all types". Invalid JSON or non-array shape returns -1 with the
+//   last-error slot populated.
+// - `timeout_secs`: f64 timeout in seconds. The C ABI cannot pass
+//   `Option<f64>`, so the convention is: pass a negative value (e.g.
+//   `-1.0`) to express "no timeout" (mirrors `Optional<Duration>::empty()`
+//   on the Java side). NaN / ±Infinity reject with -1. Finite-but-
+//   overflowing values (e.g. `f64::MAX`) reject with -1 via
+//   [`Duration::try_from_secs_f64`] — see `parse_ffi_timeout_secs`.
+// - `out_event_json`: receives `*mut c_char` JSON string of the event
+//   on arrival, or a NULL pointer on clean timeout (in which case the
+//   return code is still 0). Caller frees via `mesh_free_string` when
+//   the pointer is non-null.
+//
+// # Returns
+// - `0` on success (event delivered OR clean timeout — caller checks
+//   if `*out_event_json` is null to distinguish)
+// - `-1` on invalid args (null handle, malformed types_json, invalid
+//   timeout)
+// - `-2` on JobNotFound (registry doesn't know the job — typically
+//   "404 Not Found" from `GET /jobs/{id}/events`). Distinct from the
+//   generic -3 so the Java SDK can map to a typed
+//   `JobNotFoundException`.
+// - `-3` on other backend errors (5xx after retries, network failure,
+//   etc.). See `mesh_last_error` for details.
+int32_t mesh_job_controller_recv_event(struct JobControllerHandle *handle,
+                                       const char *types_json,
+                                       double timeout_secs,
+                                       char **out_event_json);
+
 // Read the job ID this controller is bound to. Caller frees the returned
 // string via `mesh_free_string`.
 int32_t mesh_job_controller_job_id(const struct JobControllerHandle *handle, char **out_job_id);
@@ -829,6 +869,40 @@ int32_t mesh_job_proxy_wait(struct JobProxyHandle *handle,
 // Request cancellation. The registry forwards the signal to the owner
 // replica when alive. `reason` may be NULL.
 int32_t mesh_job_proxy_cancel(struct JobProxyHandle *handle, const char *reason);
+
+// Post an event into this job's event channel.
+//
+// Mirrors [`JobProxy::send_event`]. The running handler (inside a
+// `task=true` job) will see the event on its next `recv_event` call —
+// or wake immediately if it's currently long-polling.
+//
+// # Arguments
+// - `event_type`: UTF-8 NUL-terminated event-type tag (e.g. `"signal"`,
+//   `"user_input"`).
+// - `payload_json`: optional UTF-8 NUL-terminated JSON string encoding
+//   the event payload. May be `NULL` to send an empty payload (the
+//   Rust core treats null/missing as an empty JSON object — matching
+//   the Python/TS `payload=None` shape).
+// - `out_receipt_json`: receives `*mut c_char` JSON string of the
+//   receipt (`{job_id, seq, created_at}`). Caller frees via
+//   `mesh_free_string`.
+//
+// # Returns
+// - `0` on success
+// - `-1` on invalid args (null handle, malformed payload_json)
+// - `-2` on JobNotFound (registry doesn't know the job — 404 from
+//   `POST /jobs/{id}/events`). Mapped by the Java SDK to
+//   `JobNotFoundException`.
+// - `-3` on JobTerminal (job already completed/failed/cancelled — 409
+//   from the registry, surfaced as [`JobError::JobTerminal`]). Mapped
+//   by the Java SDK to `JobTerminalException`. Distinct from -2 so
+//   callers can branch on terminal-state vs. unknown-job.
+// - `-4` on other backend errors (transport failure, 5xx after
+//   retries, etc.). See `mesh_last_error` for details.
+int32_t mesh_job_proxy_send_event(struct JobProxyHandle *handle,
+                                  const char *event_type,
+                                  const char *payload_json,
+                                  char **out_receipt_json);
 
 // Free a [`JobProxyHandle`] returned by [`mesh_submit_job`] /
 // [`mesh_job_proxy_new`].
