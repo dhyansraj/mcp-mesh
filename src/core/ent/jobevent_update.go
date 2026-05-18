@@ -4,6 +4,7 @@ package ent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"mcp-mesh/src/core/ent/jobevent"
@@ -11,6 +12,7 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 )
 
@@ -77,8 +79,14 @@ func (jeu *JobEventUpdate) SetNillableType(s *string) *JobEventUpdate {
 }
 
 // SetPayload sets the "payload" field.
-func (jeu *JobEventUpdate) SetPayload(m map[string]interface{}) *JobEventUpdate {
-	jeu.mutation.SetPayload(m)
+func (jeu *JobEventUpdate) SetPayload(jm json.RawMessage) *JobEventUpdate {
+	jeu.mutation.SetPayload(jm)
+	return jeu
+}
+
+// AppendPayload appends jm to the "payload" field.
+func (jeu *JobEventUpdate) AppendPayload(jm json.RawMessage) *JobEventUpdate {
+	jeu.mutation.AppendPayload(jm)
 	return jeu
 }
 
@@ -194,6 +202,11 @@ func (jeu *JobEventUpdate) sqlSave(ctx context.Context) (n int, err error) {
 	if value, ok := jeu.mutation.Payload(); ok {
 		_spec.SetField(jobevent.FieldPayload, field.TypeJSON, value)
 	}
+	if value, ok := jeu.mutation.AppendedPayload(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, jobevent.FieldPayload, value)
+		})
+	}
 	if jeu.mutation.PayloadCleared() {
 		_spec.ClearField(jobevent.FieldPayload, field.TypeJSON)
 	}
@@ -279,8 +292,14 @@ func (jeuo *JobEventUpdateOne) SetNillableType(s *string) *JobEventUpdateOne {
 }
 
 // SetPayload sets the "payload" field.
-func (jeuo *JobEventUpdateOne) SetPayload(m map[string]interface{}) *JobEventUpdateOne {
-	jeuo.mutation.SetPayload(m)
+func (jeuo *JobEventUpdateOne) SetPayload(jm json.RawMessage) *JobEventUpdateOne {
+	jeuo.mutation.SetPayload(jm)
+	return jeuo
+}
+
+// AppendPayload appends jm to the "payload" field.
+func (jeuo *JobEventUpdateOne) AppendPayload(jm json.RawMessage) *JobEventUpdateOne {
+	jeuo.mutation.AppendPayload(jm)
 	return jeuo
 }
 
@@ -425,6 +444,11 @@ func (jeuo *JobEventUpdateOne) sqlSave(ctx context.Context) (_node *JobEvent, er
 	}
 	if value, ok := jeuo.mutation.Payload(); ok {
 		_spec.SetField(jobevent.FieldPayload, field.TypeJSON, value)
+	}
+	if value, ok := jeuo.mutation.AppendedPayload(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, jobevent.FieldPayload, value)
+		})
 	}
 	if jeuo.mutation.PayloadCleared() {
 		_spec.ClearField(jobevent.FieldPayload, field.TypeJSON)

@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -592,8 +593,18 @@ func (h *EntBusinessLogicHandlers) CancelJob(c *gin.Context, jobId string) {
 	// to terminal=cancelled, so allowTerminal=true bypasses the
 	// "no events on terminal jobs" guard. Best-effort: if the post fails
 	// the cancel itself still succeeded — log and continue.
+	//
+	// Use a detached background context (with a small timeout) for the
+	// write so a client disconnect mid-cancel doesn't strand the
+	// synthetic event. The registry row is already terminal at this
+	// point; landing the event is what lets long-polling consumers
+	// unwind cleanly, and we don't want that bound to the caller's
+	// connection liveness. The grace-window wait below still honours
+	// c.Request.Context() so a disconnected caller doesn't pay for the
+	// full grace.
+	evCtx, evCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if _, _, evErr := h.entService.PostJobEvent(
-		c.Request.Context(),
+		evCtx,
 		jobId,
 		"cancelled",
 		map[string]interface{}{"reason": reason},
@@ -603,6 +614,7 @@ func (h *EntBusinessLogicHandlers) CancelJob(c *gin.Context, jobId string) {
 	); evErr != nil {
 		log.Printf("[meshjob] warning: failed to post synthetic cancel event for job %s: %v", jobId, evErr)
 	}
+	evCancel()
 
 	// Grace window for producers parked on recv_event to observe the
 	// synthetic event and return cleanly before the HTTP cancel-forward
@@ -926,7 +938,8 @@ func (h *EntBusinessLogicHandlers) PostJobEvent(c *gin.Context, jobId string) {
 		})
 		return
 	}
-	if strings.TrimSpace(req.Type) == "" {
+	normalizedType := strings.TrimSpace(req.Type)
+	if normalizedType == "" {
 		c.JSON(http.StatusBadRequest, generated.ErrorResponse{
 			Error:     "type is required",
 			Timestamp: time.Now().UTC(),
@@ -934,10 +947,7 @@ func (h *EntBusinessLogicHandlers) PostJobEvent(c *gin.Context, jobId string) {
 		return
 	}
 
-	var payload map[string]interface{}
-	if req.Payload != nil {
-		payload = *req.Payload
-	}
+	payload := req.Payload
 	var traceContext map[string]interface{}
 	if req.TraceContext != nil {
 		traceContext = *req.TraceContext
@@ -948,7 +958,7 @@ func (h *EntBusinessLogicHandlers) PostJobEvent(c *gin.Context, jobId string) {
 	seq, createdAt, err := h.entService.PostJobEvent(
 		c.Request.Context(),
 		jobId,
-		req.Type,
+		normalizedType,
 		payload,
 		traceContext,
 		postedBy,
@@ -1074,7 +1084,7 @@ func (h *EntBusinessLogicHandlers) ListJobEvents(c *gin.Context, jobId string, p
 
 // jobEventToAPI converts an Ent JobEvent into the OpenAPI representation.
 // Mirrors jobToAPI's field-mapping style: Time fields exposed as Unix epoch
-// seconds; optional JSON columns surfaced as `*map[string]interface{}`.
+// seconds; optional JSON columns surfaced via the generated pointer type.
 func jobEventToAPI(e *ent.JobEvent) generated.JobEvent {
 	out := generated.JobEvent{
 		JobId:     e.JobID,
@@ -1083,8 +1093,17 @@ func jobEventToAPI(e *ent.JobEvent) generated.JobEvent {
 		CreatedAt: int(e.CreatedAt.Unix()),
 	}
 	if len(e.Payload) > 0 {
-		p := map[string]interface{}(e.Payload)
-		out.Payload = &p
+		// Payload is stored as raw JSON bytes; decode back to a
+		// language-agnostic interface{} so arbitrary JSON shapes
+		// (object / array / scalar) round-trip through the API. On
+		// decode failure (corrupt row), surface the raw text rather
+		// than dropping the field silently.
+		var v interface{}
+		if err := json.Unmarshal(e.Payload, &v); err == nil {
+			out.Payload = v
+		} else {
+			out.Payload = string(e.Payload)
+		}
 	}
 	if len(e.TraceContext) > 0 {
 		tc := map[string]interface{}(e.TraceContext)

@@ -4,6 +4,7 @@ package ent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"mcp-mesh/src/core/ent/agent"
@@ -6184,7 +6185,8 @@ type JobEventMutation struct {
 	addseq        *int64
 	job_id        *string
 	_type         *string
-	payload       *map[string]interface{}
+	payload       *json.RawMessage
+	appendpayload json.RawMessage
 	trace_context *map[string]interface{}
 	posted_by     *string
 	created_at    *time.Time
@@ -6421,12 +6423,13 @@ func (m *JobEventMutation) ResetType() {
 }
 
 // SetPayload sets the "payload" field.
-func (m *JobEventMutation) SetPayload(value map[string]interface{}) {
-	m.payload = &value
+func (m *JobEventMutation) SetPayload(jm json.RawMessage) {
+	m.payload = &jm
+	m.appendpayload = nil
 }
 
 // Payload returns the value of the "payload" field in the mutation.
-func (m *JobEventMutation) Payload() (r map[string]interface{}, exists bool) {
+func (m *JobEventMutation) Payload() (r json.RawMessage, exists bool) {
 	v := m.payload
 	if v == nil {
 		return
@@ -6437,7 +6440,7 @@ func (m *JobEventMutation) Payload() (r map[string]interface{}, exists bool) {
 // OldPayload returns the old "payload" field's value of the JobEvent entity.
 // If the JobEvent object wasn't provided to the builder, the object is fetched from the database.
 // An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *JobEventMutation) OldPayload(ctx context.Context) (v map[string]interface{}, err error) {
+func (m *JobEventMutation) OldPayload(ctx context.Context) (v json.RawMessage, err error) {
 	if !m.op.Is(OpUpdateOne) {
 		return v, errors.New("OldPayload is only allowed on UpdateOne operations")
 	}
@@ -6451,9 +6454,23 @@ func (m *JobEventMutation) OldPayload(ctx context.Context) (v map[string]interfa
 	return oldValue.Payload, nil
 }
 
+// AppendPayload adds jm to the "payload" field.
+func (m *JobEventMutation) AppendPayload(jm json.RawMessage) {
+	m.appendpayload = append(m.appendpayload, jm...)
+}
+
+// AppendedPayload returns the list of values that were appended to the "payload" field in this mutation.
+func (m *JobEventMutation) AppendedPayload() (json.RawMessage, bool) {
+	if len(m.appendpayload) == 0 {
+		return nil, false
+	}
+	return m.appendpayload, true
+}
+
 // ClearPayload clears the value of the "payload" field.
 func (m *JobEventMutation) ClearPayload() {
 	m.payload = nil
+	m.appendpayload = nil
 	m.clearedFields[jobevent.FieldPayload] = struct{}{}
 }
 
@@ -6466,6 +6483,7 @@ func (m *JobEventMutation) PayloadCleared() bool {
 // ResetPayload resets all changes to the "payload" field.
 func (m *JobEventMutation) ResetPayload() {
 	m.payload = nil
+	m.appendpayload = nil
 	delete(m.clearedFields, jobevent.FieldPayload)
 }
 
@@ -6735,7 +6753,7 @@ func (m *JobEventMutation) SetField(name string, value ent.Value) error {
 		m.SetType(v)
 		return nil
 	case jobevent.FieldPayload:
-		v, ok := value.(map[string]interface{})
+		v, ok := value.(json.RawMessage)
 		if !ok {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}

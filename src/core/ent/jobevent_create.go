@@ -4,6 +4,7 @@ package ent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"mcp-mesh/src/core/ent/jobevent"
@@ -39,8 +40,8 @@ func (jec *JobEventCreate) SetType(s string) *JobEventCreate {
 }
 
 // SetPayload sets the "payload" field.
-func (jec *JobEventCreate) SetPayload(m map[string]interface{}) *JobEventCreate {
-	jec.mutation.SetPayload(m)
+func (jec *JobEventCreate) SetPayload(jm json.RawMessage) *JobEventCreate {
+	jec.mutation.SetPayload(jm)
 	return jec
 }
 

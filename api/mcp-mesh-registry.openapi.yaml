@@ -3222,9 +3222,11 @@ components:
           example: "extend_deadline"
           description: Event type tag the handler dispatches on.
         payload:
-          type: object
-          additionalProperties: true
-          description: Arbitrary JSON payload associated with the event.
+          description: |
+            Arbitrary JSON payload associated with the event. May be any
+            JSON-shaped value (object, array, string, number, boolean, null);
+            handlers interpret per `type`.
+          nullable: true
         trace_context:
           type: object
           additionalProperties: true
@@ -3272,10 +3274,10 @@ components:
           type: string
           description: Event type tag.
         payload:
-          type: object
-          additionalProperties: true
+          description: |
+            Arbitrary JSON payload. May be any JSON-shaped value (object,
+            array, string, number, boolean, null) or absent.
           nullable: true
-          description: Arbitrary JSON payload.
         trace_context:
           type: object
           additionalProperties: true

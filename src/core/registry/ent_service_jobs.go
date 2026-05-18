@@ -6,6 +6,7 @@ package registry
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -874,7 +875,7 @@ func (s *EntService) PostJobEvent(
 	ctx context.Context,
 	jobID string,
 	eventType string,
-	payload map[string]interface{},
+	payload interface{},
 	traceContext map[string]interface{},
 	postedBy string,
 	allowTerminal bool,
@@ -936,7 +937,11 @@ func (s *EntService) PostJobEvent(
 				SetJobID(jobID).
 				SetType(eventType)
 			if payload != nil {
-				builder = builder.SetPayload(payload)
+				raw, err := json.Marshal(payload)
+				if err != nil {
+					return fmt.Errorf("marshal event payload: %w", err)
+				}
+				builder = builder.SetPayload(raw)
 			}
 			if traceContext != nil {
 				builder = builder.SetTraceContext(traceContext)

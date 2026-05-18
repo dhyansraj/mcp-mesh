@@ -239,9 +239,9 @@ class MeshJob(Protocol):
         - ``await job.update_progress(progress, message=None)`` — coalesced delta.
         - ``await job.complete(result)`` — terminal success.
         - ``await job.fail(error)`` — terminal failure.
-        - ``await job.recv_event(types=None, timeout=None)`` *(since v2.2)* —
+        - ``await job.recv_event(types=None, timeout_secs=None)`` *(since v2.2)* —
           wait for the next event posted into this job's event channel.
-          Returns the event dict ``{seq, type, payload, trace_context,
+          Returns the event dict ``{job_id, seq, type, payload, trace_context,
           posted_by, created_at}`` or ``None`` on timeout. Used by
           handlers that need to receive external inputs (extend-deadline
           signals, user-supplied input on ``input_required`` pauses,

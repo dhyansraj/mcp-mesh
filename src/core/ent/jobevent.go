@@ -25,7 +25,7 @@ type JobEvent struct {
 	// Event type tag (e.g. 'extend_deadline', 'cancelled', user-defined)
 	Type string `json:"type,omitempty"`
 	// Arbitrary JSON event payload
-	Payload map[string]interface{} `json:"payload,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"`
 	// W3C trace context (traceparent + tracestate) propagated from sender
 	TraceContext map[string]interface{} `json:"trace_context,omitempty"`
 	// Identity of the sender (entity ID from TLS, if available)

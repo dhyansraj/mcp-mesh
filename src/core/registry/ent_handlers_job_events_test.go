@@ -39,7 +39,7 @@ func TestPostJobEvent_Success(t *testing.T) {
 
 	body, _ := json.Marshal(generated.JobEventPostRequest{
 		Type:    "extend_deadline",
-		Payload: &map[string]interface{}{"by_seconds": float64(60)},
+		Payload: map[string]interface{}{"by_seconds": float64(60)},
 	})
 	resp, err := http.Post(srv.URL+"/jobs/"+j.ID+"/events", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
@@ -64,7 +64,9 @@ func TestPostJobEvent_Success(t *testing.T) {
 	assert.Equal(t, int64(1), listed.Events[0].Seq)
 	assert.Equal(t, "extend_deadline", listed.Events[0].Type)
 	require.NotNil(t, listed.Events[0].Payload)
-	assert.Equal(t, float64(60), (*listed.Events[0].Payload)["by_seconds"])
+	payloadMap, ok := listed.Events[0].Payload.(map[string]interface{})
+	require.True(t, ok, "expected payload to round-trip as a JSON object map")
+	assert.Equal(t, float64(60), payloadMap["by_seconds"])
 	assert.Equal(t, int64(1), listed.NextAfter)
 }
 
@@ -141,7 +143,7 @@ func TestPostJobEvent_AssignsMonotonicSeq(t *testing.T) {
 			<-ready
 			body, _ := json.Marshal(generated.JobEventPostRequest{
 				Type:    fmt.Sprintf("event-%d", idx),
-				Payload: &map[string]interface{}{"i": float64(idx)},
+				Payload: map[string]interface{}{"i": float64(idx)},
 			})
 			resp, err := http.Post(srv.URL+"/jobs/"+j.ID+"/events", "application/json", bytes.NewReader(body))
 			if err != nil {
@@ -343,7 +345,9 @@ func TestCancelJob_PostsSyntheticCancelEvent(t *testing.T) {
 	ev := listed.Events[0]
 	assert.Equal(t, "cancelled", ev.Type)
 	require.NotNil(t, ev.Payload)
-	assert.Equal(t, "user requested", (*ev.Payload)["reason"])
+	payloadMap, ok := ev.Payload.(map[string]interface{})
+	require.True(t, ok, "expected synthetic cancel payload to be a JSON object map")
+	assert.Equal(t, "user requested", payloadMap["reason"])
 }
 
 // ---------- Sweep GC ----------

@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"time"
 
 	"entgo.io/ent"
@@ -43,7 +44,11 @@ func (JobEvent) Fields() []ent.Field {
 		field.String("type").
 			NotEmpty().
 			Comment("Event type tag (e.g. 'extend_deadline', 'cancelled', user-defined)"),
-		field.JSON("payload", map[string]interface{}{}).
+		// Payload is stored as raw JSON bytes so any JSON-shaped value
+		// (object, array, scalar) round-trips intact. Using
+		// map[string]interface{} would reject scalar/array payloads on
+		// scan, contradicting the OpenAPI contract.
+		field.JSON("payload", json.RawMessage{}).
 			Optional().
 			Comment("Arbitrary JSON event payload"),
 

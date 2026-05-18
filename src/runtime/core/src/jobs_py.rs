@@ -37,6 +37,21 @@ use crate::task_backend::{
 // Helpers
 // =============================================================================
 
+/// Validate and convert a Python-supplied `timeout_secs` (`Option<f64>`) into
+/// an `Option<Duration>`. `Duration::from_secs_f64` panics on negative, NaN,
+/// or infinite inputs; this helper traps those at the Python boundary and
+/// surfaces a clean `ValueError` instead so the runtime can't be crashed by
+/// a typo'd timeout literal in user code.
+fn parse_timeout_secs(secs: Option<f64>) -> PyResult<Option<Duration>> {
+    match secs {
+        None => Ok(None),
+        Some(s) if s.is_nan() || s.is_infinite() || s < 0.0 => Err(PyValueError::new_err(
+            format!("timeout_secs must be non-negative and finite, got {s}"),
+        )),
+        Some(s) => Ok(Some(Duration::from_secs_f64(s))),
+    }
+}
+
 /// Build an `Arc<dyn TaskBackend>` from a registry URL. Returns a Python
 /// exception on transport-construction failure (mirrors the pattern in
 /// `lib.rs::call_tool_py`).
@@ -367,7 +382,7 @@ impl PyJobController {
         timeout_secs: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let timeout = timeout_secs.map(Duration::from_secs_f64);
+        let timeout = parse_timeout_secs(timeout_secs)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let result = inner.recv_event(types, timeout).await.map_err(job_error_to_py)?;
             Python::with_gil(|py| match result {
@@ -435,7 +450,7 @@ impl PyJobProxy {
         timeout_secs: Option<f64>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        let timeout = timeout_secs.map(Duration::from_secs_f64);
+        let timeout = parse_timeout_secs(timeout_secs)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let value = inner.wait(timeout).await.map_err(job_error_to_py)?;
             Python::with_gil(|py| Ok(json_value_to_py(py, value)?))

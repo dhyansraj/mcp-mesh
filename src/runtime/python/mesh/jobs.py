@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections import OrderedDict
 from typing import Any, Optional
 
 __all__ = [
@@ -51,7 +52,34 @@ __all__ = [
 # re-submitted with the same id (rare in practice), the cached proxy
 # would just see a JobTerminalError on its next send_event call — the
 # correct surface — and the caller can retry.
-_proxy_cache: dict[tuple[str, str], Any] = {}
+#
+# Bounded LRU eviction: long-lived senders that post events to many
+# distinct jobs (e.g. a router fanning out across thousands of jobs)
+# would otherwise grow the cache without bound. ``OrderedDict`` +
+# ``move_to_end`` on hit / ``popitem(last=False)`` on overflow gives us
+# O(1) LRU semantics. The Rust ``JobProxy`` does not expose an explicit
+# ``close()`` over pyo3 — eviction just drops the dict entry and lets
+# Python GC release the wrapped ``reqwest::Client`` connection pool when
+# the last reference falls off the stack.
+_PROXY_CACHE_DEFAULT_MAX = 256
+
+
+def _proxy_cache_max() -> int:
+    """Resolve the cache cap from ``MCP_MESH_JOBPROXY_CACHE_MAX`` (env
+    override; falls back to ``_PROXY_CACHE_DEFAULT_MAX``). Invalid /
+    non-positive values fall back to the default so a typo'd env doesn't
+    silently disable the cache."""
+    raw = os.environ.get("MCP_MESH_JOBPROXY_CACHE_MAX")
+    if not raw:
+        return _PROXY_CACHE_DEFAULT_MAX
+    try:
+        value = int(raw)
+    except ValueError:
+        return _PROXY_CACHE_DEFAULT_MAX
+    return value if value > 0 else _PROXY_CACHE_DEFAULT_MAX
+
+
+_proxy_cache: "OrderedDict[tuple[str, str], Any]" = OrderedDict()
 _proxy_cache_lock = asyncio.Lock()
 
 
@@ -62,14 +90,19 @@ async def _get_or_create_proxy(registry_url: str, job_id: str) -> Any:
     Double-checked locking under an asyncio ``Lock`` so concurrent
     callers in the same event loop end up sharing a single proxy
     instance — the lock is only contended on the first call per key.
+    Cache is a bounded LRU: hits bump the entry to the most-recent end,
+    misses on a full cache evict the least-recent entry before
+    inserting.
     """
     key = (registry_url, job_id)
     proxy = _proxy_cache.get(key)
     if proxy is not None:
+        _proxy_cache.move_to_end(key)
         return proxy
     async with _proxy_cache_lock:
         proxy = _proxy_cache.get(key)
         if proxy is not None:
+            _proxy_cache.move_to_end(key)
             return proxy
         try:
             from mcp_mesh_core import JobProxy
@@ -79,6 +112,12 @@ async def _get_or_create_proxy(registry_url: str, job_id: str) -> Any:
                 f"({e}); cannot construct a transient proxy"
             ) from e
         proxy = JobProxy(job_id, registry_url)
+        max_size = _proxy_cache_max()
+        while len(_proxy_cache) >= max_size:
+            # Evict LRU. Dropping the entry releases our reference to
+            # the JobProxy; Python GC reclaims the wrapped reqwest
+            # client (and its connection pool) when no other refs exist.
+            _proxy_cache.popitem(last=False)
         _proxy_cache[key] = proxy
         return proxy
 
