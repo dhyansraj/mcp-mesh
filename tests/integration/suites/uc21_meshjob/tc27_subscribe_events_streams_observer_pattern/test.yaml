@@ -1,0 +1,135 @@
+# tc27_subscribe_events_streams_observer_pattern — JobProxy.subscribe_events
+# observer pattern (issue #1032).
+#
+# Verifies the consumer-side observer iterator built on the Phase D
+# `mesh.jobs.subscribe_events` async generator. Unlike `recv_event`
+# (single per-controller cursor that advances on consumption),
+# `subscribe_events` is an OBSERVER — it has a per-call cursor, so
+# multiple subscribers can watch the same job's events without
+# disturbing the producer's consumption.
+#
+# Sequence (driven by ``commission_subscribe_observer``):
+#   1. Submit ``run_until_done`` (producer that consumes 'work' events
+#      until one carries ``{"final": true}``).
+#   2. Spawn a subscriber via ``mesh.jobs.subscribe_events(job_id,
+#      types=["work"])`` in a background asyncio task. It collects every
+#      'work' event into a list, breaks when it sees ``{"final": true}``.
+#   3. Concurrently post 3 'work' events with ``mesh.jobs.post_event``,
+#      the 3rd carrying ``{"final": true}``.
+#   4. Wait for both the subscriber task and ``proxy.wait()`` to
+#      complete.
+#
+# Asserts:
+#   - producer's job result has ``status=done`` + ``processed_count=3``
+#     (proves the recv_event side consumed all 3 in order)
+#   - subscriber observed all 3 events
+#     (proves subscribe_events runs independently of the producer's cursor)
+#   - subscriber_status == "ok" (no observer timeout)
+#   - posted seqs are [1, 2, 3] (first events on a fresh job)
+#
+# This is the headline regression for the Phase D
+# ``JobProxy.subscribe_events`` async iterator surface — unit tests
+# cover the helper itself but they bind to a fake JobProxy, so this is
+# the first time we exercise the iterator against a real registry +
+# Rust core.
+
+name: "MeshJob: subscribe_events streams events to an observer running alongside the producer"
+description: "Producer recv_event + observer subscribe_events run independently against the same event stream"
+tags:
+  - meshjob
+  - python
+  - issue-1032
+  - events
+  - subscribe
+timeout: 90
+
+pre_run:
+  - routine: global.setup_for_python_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider /workspace/
+      cp -rL /uc-artifacts/long-task-consumer /workspace/
+
+  - name: "Install provider deps"
+    handler: pip-install
+    path: /workspace/long-task-provider
+
+  - name: "Install consumer deps"
+    handler: pip-install
+    path: /workspace/long-task-consumer
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for provider registration"
+    handler: wait
+    seconds: 12
+
+  - name: "Start consumer (port 9101)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+
+  - name: "Wait for consumer + DI resolution"
+    handler: wait
+    seconds: 18
+
+  - name: "Call commission_subscribe_observer — submit, post 3 events, observe via subscribe_events"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_subscribe_observer '{}'
+    capture: commission_response
+    timeout: 60
+
+assertions:
+  # MCP envelope check: must not be an error response.
+  - expr: "${captured.commission_response} not contains '\"isError\": true'"
+    message: "commission_subscribe_observer should NOT return an MCP error envelope"
+
+  # Subscriber finished cleanly (no observer timeout).
+  - expr: "${captured.commission_response} contains '\"subscriber_status\": \"ok\"'"
+    message: "subscriber task must complete cleanly (observed the final event before timeout)"
+  - expr: "${captured.commission_response} not contains '\"subscriber_status\": \"timeout\"'"
+    message: "subscriber must NOT have timed out — the final event should have arrived in time"
+
+  # Observer-side event count: subscribe_events yields all 3 'work' events.
+  - expr: "${captured.commission_response} contains '\"observed_count\": 3'"
+    message: "subscribe_events must yield all 3 'work' events the consumer posted (observer cursor is independent of producer's)"
+
+  # Producer-side processing: recv_event also consumed all 3 events.
+  - expr: "${captured.commission_response} contains '\"processed_count\": 3'"
+    message: "producer must have processed all 3 'work' events via recv_event (independent cursor from subscriber)"
+  - expr: "${captured.commission_response} contains '\"status\": \"done\"'"
+    message: "producer must report status=done after observing the final event"
+
+  # Posted seqs prove the events landed in order on a fresh job.
+  # We assert each seq is present near a posted_seqs reference; we don't
+  # match the array literal exactly because meshctl call's structuredContent
+  # pretty-printer may insert whitespace between elements while the embedded
+  # MCP `text` field uses compact JSON. Asserting on individual seqs is
+  # encoder-spacing tolerant.
+  - expr: "${captured.commission_response} contains 'posted_seqs'"
+    message: "commission response must include posted_seqs key from the post_event return values"
+  - expr: "${captured.commission_response} contains '\"seq\": 1'"
+    message: "first posted event must have seq=1"
+  - expr: "${captured.commission_response} contains '\"seq\": 2'"
+    message: "second posted event must have seq=2"
+  - expr: "${captured.commission_response} contains '\"seq\": 3'"
+    message: "third posted event must have seq=3"
+
+  # Payload round-trip: the final event's marker reaches both observers.
+  - expr: "${captured.commission_response} contains '\"final\": true'"
+    message: "the final event's payload marker must round-trip through both recv_event and subscribe_events"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

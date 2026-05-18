@@ -720,6 +720,55 @@ impl JobProxy {
         }
     }
 
+    /// Fetch a batch of events with `seq > after`, optionally filtered by
+    /// `types`.
+    ///
+    /// This is the low-level building block for the language SDKs'
+    /// ``subscribe_events`` async-iterator semantics — callers manage
+    /// their own cursor across calls. See [`JobController::recv_event`]
+    /// for the alternative single-event-with-internal-cursor shape used
+    /// inside running ``task=True`` jobs.
+    ///
+    /// `wait`: long-poll budget (`None` = single immediate read; `Some(d)`
+    /// = long-poll up to `d`, capped at 60s by the registry). An empty
+    /// result means "no events arrived within the wait window" — the
+    /// caller continues with the same cursor.
+    ///
+    /// Unlike [`JobController::recv_event`] this method:
+    ///
+    /// * Does NOT advance any internal cursor — `after` is supplied by
+    ///   the caller and the returned events leave it to the caller to
+    ///   track the next watermark.
+    /// * Is NOT serialised under a mutex — multiple subscribers against
+    ///   the same proxy run independently, observing the same events.
+    /// * Returns ALL matching events from the single registry round
+    ///   trip (up to 100), not just the head — this is a batch primitive,
+    ///   not a single-event primitive.
+    /// * Returns the registry-supplied `next_after` watermark alongside
+    ///   the events — callers should feed it back as `after` on the next
+    ///   call so empty pages caused by server-side filters still advance
+    ///   the cursor.
+    pub async fn list_events(
+        &self,
+        after: i64,
+        types: Option<Vec<String>>,
+        wait: Option<Duration>,
+    ) -> Result<(Vec<JobEvent>, i64), JobError> {
+        // Server-side limit (matches OpenAPI `limit` maximum).
+        const FETCH_LIMIT: usize = 100;
+        let resp = self
+            .backend
+            .list_job_events(
+                &self.job_id,
+                after,
+                types.as_deref(),
+                wait.unwrap_or_default(),
+                FETCH_LIMIT,
+            )
+            .await?;
+        Ok((resp.events, resp.next_after))
+    }
+
     /// Poll until the job reaches a terminal state, returns its `result`
     /// payload, or surfaces an error. Convenience wrapper around
     /// [`Self::wait_with_config`] that uses [`WaitConfig::default`] for
@@ -2518,5 +2567,149 @@ mod tests {
 
         // Drain A.
         let _ = a_handle.await.unwrap();
+    }
+
+    // ---- JobProxy::list_events ---------------------------------------------
+    //
+    // `list_events` is the low-level batch primitive that the language
+    // SDKs build their `subscribe_events` async-iterator semantics on top
+    // of. Unlike `JobController::recv_event` it has NO per-call mutex (no
+    // shared cursor), advances NO internal state, and returns the full
+    // batch up to limit. Tests below pin those three differences.
+
+    #[tokio::test]
+    async fn list_events_returns_all_matching_events_in_one_call() {
+        // Three events on the job; `list_events(after=0)` returns all three
+        // in ascending-seq order (the batch shape `subscribe_events` relies on).
+        let backend = MockBackend::new();
+        backend.push_event("j-list-1", "tick", serde_json::json!({"n": 1}));
+        backend.push_event("j-list-1", "tick", serde_json::json!({"n": 2}));
+        backend.push_event("j-list-1", "tick", serde_json::json!({"n": 3}));
+
+        let proxy = JobProxy::new("j-list-1", backend.clone() as Arc<dyn TaskBackend>);
+        let (events, next_after) = proxy.list_events(0, None, None).await.unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].seq, 1);
+        assert_eq!(events[1].seq, 2);
+        assert_eq!(events[2].seq, 3);
+        assert_eq!(next_after, 3);
+    }
+
+    #[tokio::test]
+    async fn list_events_honors_after_cursor() {
+        // `after=1` skips seq=1; the caller-managed cursor pattern that
+        // `subscribe_events` uses to avoid re-yielding observed events.
+        let backend = MockBackend::new();
+        backend.push_event("j-list-2", "tick", serde_json::json!({"n": 1}));
+        backend.push_event("j-list-2", "tick", serde_json::json!({"n": 2}));
+        backend.push_event("j-list-2", "tick", serde_json::json!({"n": 3}));
+
+        let proxy = JobProxy::new("j-list-2", backend.clone() as Arc<dyn TaskBackend>);
+        let (events, next_after) = proxy.list_events(1, None, None).await.unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].seq, 2);
+        assert_eq!(events[1].seq, 3);
+        assert_eq!(next_after, 3);
+    }
+
+    #[tokio::test]
+    async fn list_events_filters_by_types() {
+        // `types=["target"]` filters out unrelated event types — same
+        // filter contract the registry's `types=` query param honours.
+        let backend = MockBackend::new();
+        backend.push_event("j-list-3", "ignore", serde_json::json!({"n": 1}));
+        backend.push_event("j-list-3", "target", serde_json::json!({"n": 2}));
+        backend.push_event("j-list-3", "ignore", serde_json::json!({"n": 3}));
+        backend.push_event("j-list-3", "target", serde_json::json!({"n": 4}));
+
+        let proxy = JobProxy::new("j-list-3", backend.clone() as Arc<dyn TaskBackend>);
+        let (events, _next_after) = proxy
+            .list_events(0, Some(vec!["target".into()]), None)
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].seq, 2);
+        assert_eq!(events[1].seq, 4);
+    }
+
+    #[tokio::test]
+    async fn list_events_returns_empty_when_no_events() {
+        // No events on the job → empty batch (NOT NotFound). The caller's
+        // `subscribe_events` loop interprets this as "no events arrived
+        // within the wait window".
+        let backend = MockBackend::new();
+        let proxy = JobProxy::new("j-list-empty", backend.clone() as Arc<dyn TaskBackend>);
+        let (events, _next_after) = proxy.list_events(0, None, None).await.unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_events_propagates_not_found_error() {
+        // Registry-side NotFound (job reaped from registry) surfaces as
+        // `JobError::Backend(NotFound(_))` — the SDK translates it to a
+        // typed `JobNotFoundError` so `subscribe_events` callers can
+        // terminate cleanly when the job is gone.
+        let backend = MockBackend::new();
+        backend.set_events_list_not_found(true);
+        let proxy = JobProxy::new("j-list-404", backend.clone() as Arc<dyn TaskBackend>);
+        let err = proxy.list_events(0, None, None).await.unwrap_err();
+        assert!(
+            matches!(err, JobError::Backend(BackendError::NotFound(_))),
+            "expected Backend(NotFound), got {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn list_events_does_not_share_cursor_with_recv_event() {
+        // Two independent observer cursors per proxy call: a `JobController`
+        // recv_event consumes seq=1; a parallel `list_events(after=0)` MUST
+        // still see seq=1 (subscribe_events observes events without
+        // affecting the producer's recv_event cursor).
+        let backend = MockBackend::new();
+        backend.jobs.lock().unwrap().insert(
+            "j-mixed".to_string(),
+            Job {
+                id: "j-mixed".to_string(),
+                capability: "cap".into(),
+                owner_instance_id: Some("inst-1".into()),
+                status: JobStatus::Working,
+                progress: None,
+                progress_message: None,
+                result: None,
+                error: None,
+                submitted_payload: serde_json::json!({}),
+                attempt_count: 0,
+                max_retries: 1,
+                max_duration: None,
+                total_deadline: None,
+                lease_expires_at: None,
+                last_heartbeat_at: None,
+                submitted_at: 0,
+                submitted_by: "client-1".into(),
+            },
+        );
+        backend.push_event("j-mixed", "tick", serde_json::json!({"n": 1}));
+
+        let ctrl = JobController::new(
+            "j-mixed".to_string(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            new_coalescing_queue(),
+        );
+        let observed_by_recv = ctrl
+            .recv_event(None, Some(Duration::from_secs(1)))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(observed_by_recv.seq, 1);
+
+        // Observer-side: still sees seq=1 because `list_events` is
+        // stateless wrt the producer's recv_event cursor.
+        let proxy = JobProxy::new("j-mixed", backend.clone() as Arc<dyn TaskBackend>);
+        let (observer_batch, _next_after) =
+            proxy.list_events(0, None, None).await.unwrap();
+        assert_eq!(observer_batch.len(), 1);
+        assert_eq!(observer_batch[0].seq, 1);
     }
 }

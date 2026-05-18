@@ -10,6 +10,14 @@ The primary surfaces are:
   their request payload (e.g. a "submit_user_input" tool exposed by an
   orchestrator agent).
 
+* :func:`subscribe_events` — observer-side async iterator over events
+  posted to a running job. Useful for UI gateways that want to mirror
+  events as they arrive, or any agent that wants to forward events to
+  a downstream system in real time. Each call manages its own cursor,
+  so multiple subscribers can observe the same job's events
+  independently without disturbing the producer's ``recv_event``
+  consumption.
+
 * :class:`JobNotFoundError` / :class:`JobTerminalError` — typed
   ``RuntimeError`` subclasses translated from the Rust core's
   :enum:`JobError` variants. Because pyo3 surfaces all
@@ -18,10 +26,10 @@ The primary surfaces are:
   on the Python side via stable error-message substrings.
 
 The :class:`mcp_mesh_core.JobController` / :class:`mcp_mesh_core.JobProxy`
-methods (``recv_event`` / ``send_event``) are exposed directly on the
-pyo3-bound classes — application code calls them via the
-``MeshJob``-typed parameter the framework injects. This module just
-adds the helper + error classes around that surface.
+methods (``recv_event`` / ``send_event`` / ``list_events``) are exposed
+directly on the pyo3-bound classes — application code calls them via
+the ``MeshJob``-typed parameter the framework injects. This module
+just adds the helpers + error classes around that surface.
 """
 
 from __future__ import annotations
@@ -29,12 +37,13 @@ from __future__ import annotations
 import asyncio
 import os
 from collections import OrderedDict
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 
 __all__ = [
     "JobNotFoundError",
     "JobTerminalError",
     "post_event",
+    "subscribe_events",
 ]
 
 
@@ -272,3 +281,96 @@ async def post_event(
         if translated is exc:
             raise
         raise translated from exc
+
+
+# ---------------------------------------------------------------------------
+# subscribe_events convenience helper (observer-side iterator)
+# ---------------------------------------------------------------------------
+
+
+async def subscribe_events(
+    job_id: str,
+    types: Optional[list[str]] = None,
+    after: int = 0,
+    long_poll_secs: Optional[float] = 30.0,
+) -> AsyncIterator[dict]:
+    """Subscribe to events posted to a running job by ID.
+
+    Long-lived async iterator. Each call manages its own cursor — multiple
+    subscribers can observe the same job's events independently without
+    affecting the producer's ``recv_event`` consumption (the producer's
+    cursor is per-controller, this observer's cursor is per-call).
+
+    The iterator runs indefinitely until the caller breaks out of the
+    ``async for`` loop or the underlying registry returns
+    :class:`JobNotFoundError`. There is no automatic terminal-state
+    detection — use a synthetic event type (e.g. ``{"type": "ended"}``)
+    posted by your application to signal iteration end.
+
+    Args:
+        job_id: Target job's server-assigned id.
+        types: Optional filter; only events whose ``type`` matches one
+            of these is yielded. ``None`` ≡ all types.
+        after: Initial cursor (default ``0`` ≡ from the beginning of the
+            event log). Pass a higher value to skip historical events.
+        long_poll_secs: Long-poll wait budget per registry call.
+            Default ``30s``. Capped at ``60s`` by the registry.
+            Pass ``None`` to skip the long-poll entirely (single
+            immediate read; rarely needed — tight-poll callers should
+            pass ``0.0`` instead).
+
+    Yields:
+        Event dicts: ``{seq, type, payload, trace_context, posted_by,
+        created_at, job_id}``.
+
+    Raises:
+        JobNotFoundError: If the job has been reaped from the registry
+            (404 on the ``GET /jobs/{id}/events`` endpoint).
+        RuntimeError: For transport errors (registry unreachable, 5xx
+            after retries, malformed payload, etc.) — the underlying
+            error message is preserved.
+
+    Example:
+        Mirror events from a running job into a downstream system::
+
+            async def mirror_events(job_id: str) -> None:
+                async for event in mesh.jobs.subscribe_events(
+                    job_id, types=["progress", "result"]
+                ):
+                    await downstream.publish(event)
+                    if event["type"] == "result":
+                        break  # caller-defined termination
+    """
+    registry_url = _resolve_registry_url()
+    proxy = await _get_or_create_proxy(registry_url, job_id)
+    cursor = after
+    while True:
+        try:
+            events, next_after = await proxy.list_events(
+                cursor, types, long_poll_secs
+            )
+        except RuntimeError as exc:
+            translated = _translate_job_error(exc)
+            if translated is exc:
+                raise
+            raise translated from exc
+        for event in events:
+            seq = event.get("seq")
+            # `type(...) is not int` (rather than `isinstance(..., int)`)
+            # rejects booleans: `type(True) is bool`, but
+            # `isinstance(True, int)` is True. The registry contract is
+            # integer seqs; a bool here would be a wire-level malformed
+            # payload.
+            if type(seq) is not int:
+                raise RuntimeError(
+                    f"subscribe_events: registry returned event without integer 'seq': {event!r}"
+                )
+            cursor = max(cursor, seq)
+            # list_events returns ascending-seq; cursor advance before
+            # yield ensures correctness across consumer cancellation.
+            yield event
+        # Empty pages (or pages filtered by `types` server-side) still
+        # advance the cursor via the registry-supplied watermark, so
+        # subsequent polls don't re-scan the same filtered range.
+        if next_after > cursor:
+            cursor = next_after

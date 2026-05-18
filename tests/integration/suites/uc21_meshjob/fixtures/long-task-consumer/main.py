@@ -405,6 +405,114 @@ async def commission_cancel_via_event(
     }
 
 
+@app.tool()
+@mesh.tool(
+    capability="commission_subscribe_observer",
+    dependencies=["run_until_done"],
+    description="Submit run_until_done, concurrently post 'work' events and subscribe — verifies observer pattern.",
+)
+async def commission_subscribe_observer(
+    run_until_done: MeshJob = None,
+) -> dict:
+    """Tc27 driver: producer consumes 'work' events; observer subscribes
+    independently. Both sides must observe all 3 posted events; the
+    producer's recv_event cursor is independent of the observer's.
+
+    Sequence:
+      1. Submit run_until_done.
+      2. Concurrently:
+         a) Background task fires 3 'work' events (the 3rd carries
+            ``{"final": true}`` to terminate the producer).
+         b) Background task subscribes via mesh.jobs.subscribe_events
+            and collects every 'work' event until it sees the final one.
+      3. Wait for both tasks + the producer to complete.
+      4. Return a structured report so the integration assertions can
+         pin all three observers (producer, subscriber, posters) agree
+         on the event count and ordering.
+    """
+    if run_until_done is None:
+        return {"error": "run_until_done submitter not injected"}
+    proxy = await run_until_done.submit(ctx={}, max_duration=60)
+    job_id = proxy.job_id
+
+    # Give the producer a moment to claim + park on recv_event before we
+    # post anything. Without this the first 'work' event could land
+    # before the producer's claim worker has pulled the row off the
+    # queue — the event would still be observable (the cursor is
+    # per-controller), but the test would not exercise the long-poll
+    # wake path.
+    await asyncio.sleep(2.0)
+
+    observed_events: list[dict] = []
+
+    async def _subscriber() -> None:
+        """Observe events via subscribe_events until the final one arrives."""
+        async for event in mesh.jobs.subscribe_events(
+            job_id, types=["work"], long_poll_secs=5.0
+        ):
+            observed_events.append(
+                {"seq": event["seq"], "payload": event["payload"]}
+            )
+            payload = event.get("payload") or {}
+            if isinstance(payload, dict) and payload.get("final"):
+                return
+
+    async def _poster() -> list[int]:
+        """Fire 3 work events spaced ~500ms apart — last one terminates."""
+        seqs: list[int] = []
+        for i, payload in enumerate(
+            [
+                {"item": 1},
+                {"item": 2},
+                {"item": 3, "final": True},
+            ]
+        ):
+            await asyncio.sleep(0.5)
+            receipt = await mesh.jobs.post_event(
+                job_id=job_id,
+                event_type="work",
+                payload=payload,
+            )
+            seqs.append(receipt["seq"])
+        return seqs
+
+    # Run subscriber + poster concurrently. The subscriber races the
+    # producer for events but each has its own cursor, so both observe
+    # the same set.
+    sub_task = asyncio.create_task(_subscriber())
+    posted_seqs = await _poster()
+
+    # Bound the subscriber wait so a stuck observer doesn't hang the
+    # whole test — 15s is well above the producer's expected runtime
+    # (3 events * 500ms post-spacing + handler overhead).
+    try:
+        await asyncio.wait_for(sub_task, timeout=15.0)
+        subscriber_status = "ok"
+    except asyncio.TimeoutError:
+        sub_task.cancel()
+        # Drain the cancelled task so asyncio doesn't emit "Task was
+        # destroyed but it is pending" warnings. The `Exception` arm
+        # handles surfaces from the subscriber's error path — we've
+        # already decided the subscriber didn't keep up, so the failure
+        # mode of the drain is uninteresting.
+        try:
+            await sub_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        subscriber_status = "timeout"
+
+    job_result = await proxy.wait(timeout_secs=30)
+
+    return {
+        "job_id": job_id,
+        "posted_seqs": posted_seqs,
+        "subscriber_status": subscriber_status,
+        "observed_count": len(observed_events),
+        "observed_events": observed_events,
+        "job_result": job_result,
+    }
+
+
 import os  # noqa: E402  (kept here for clarity that env-port is the only env hook)
 
 

@@ -502,6 +502,50 @@ impl PyJobProxy {
         })
     }
 
+    /// Fetch a single batch of events from this job's event log with
+    /// ``seq > after``, optionally filtered by ``types``. The Python SDK's
+    /// ``mesh.jobs.subscribe_events`` async iterator is built on top of
+    /// this primitive — callers manage their own cursor between calls.
+    ///
+    /// ``timeout_secs``: long-poll budget. ``None`` ≡ single immediate
+    /// read; ``Some(secs)`` long-polls up to that many seconds (capped
+    /// at 60s by the registry). An empty result means "no events arrived
+    /// within the wait window" — the caller continues with the same
+    /// cursor.
+    ///
+    /// Returns a ``(events, next_after)`` tuple: ``events`` is the list
+    /// of event dicts (same shape as ``recv_event``'s single-event dict);
+    /// ``next_after`` is the registry-supplied watermark that the caller
+    /// should feed back as ``after`` on the next call so empty pages
+    /// caused by server-side ``types`` filtering still advance the cursor.
+    ///
+    /// Signature: ``list_events(after: int = 0, types: Optional[List[str]] = None, timeout_secs: Optional[float] = None) -> Tuple[List[dict], int]``
+    #[pyo3(signature = (after=0, types=None, timeout_secs=None))]
+    fn list_events<'py>(
+        &self,
+        py: Python<'py>,
+        after: i64,
+        types: Option<Vec<String>>,
+        timeout_secs: Option<f64>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        let wait = parse_timeout_secs(timeout_secs)?;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let (events, next_after) = inner
+                .list_events(after, types, wait)
+                .await
+                .map_err(job_error_to_py)?;
+            Python::with_gil(|py| {
+                let list = PyList::empty(py);
+                for ev in events {
+                    list.append(job_event_to_pydict(py, ev)?)?;
+                }
+                let tuple = (list, next_after).into_pyobject(py)?;
+                Ok::<Py<PyAny>, PyErr>(tuple.into_any().unbind())
+            })
+        })
+    }
+
     fn __repr__(&self) -> String {
         format!("JobProxy(job_id={:?})", self.inner.job_id())
     }

@@ -388,6 +388,50 @@ async def run_with_filter(
 
 @app.tool()
 @mesh.tool(
+    capability="run_until_done",
+    task=True,
+    description="Loop on recv_event for 'work' events, exit on payload {'final': true} — paired with subscribe_events observer.",
+)
+async def run_until_done(
+    ctx: dict | None = None,
+    job: MeshJob = None,
+) -> dict[str, Any]:
+    """Producer side of tc27_subscribe_events_streams_observer_pattern.
+
+    Consumes ``work`` events in a loop. A caller-defined termination event
+    — a ``work`` event whose payload contains ``{"final": true}`` — is
+    the signal to exit gracefully and return the count of events
+    processed. The subscribe_events observer on the consumer side
+    watches the SAME event stream independently.
+    """
+    if job is None:
+        return {"status": "no_job_ctx"}
+    events_processed: list[dict[str, Any]] = []
+    # Bounded loop — safety net so a missing termination event doesn't
+    # hang the job indefinitely. Per-call long timeout matches the
+    # consumer's posting cadence (the consumer fires ~3 events within
+    # a few seconds, so 10s/iteration is plenty).
+    for _ in range(20):
+        event = await job.recv_event(types=["work"], timeout_secs=10.0)
+        if event is None:
+            return {"status": "timeout", "processed": events_processed}
+        events_processed.append(
+            {"seq": event["seq"], "payload": event["payload"]}
+        )
+        payload = event.get("payload") or {}
+        if isinstance(payload, dict) and payload.get("final"):
+            payload_result = {
+                "status": "done",
+                "processed_count": len(events_processed),
+                "events": events_processed,
+            }
+            await job.complete(payload_result)
+            return payload_result
+    return {"status": "loop_exhausted", "processed": events_processed}
+
+
+@app.tool()
+@mesh.tool(
     capability="run_until_cancel",
     task=True,
     description="Loop on recv_event for 'work'/'cancelled' types until cancelled-event arrives.",

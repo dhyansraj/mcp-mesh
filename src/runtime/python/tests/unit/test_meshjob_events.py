@@ -329,11 +329,18 @@ class TestPublicExports:
         sub = mesh.jobs
         assert sub.__name__ == "mesh.jobs"
         assert callable(sub.post_event)
+        assert callable(sub.subscribe_events)
 
     def test_direct_jobs_import(self):
-        from mesh.jobs import post_event, JobNotFoundError, JobTerminalError
+        from mesh.jobs import (
+            JobNotFoundError,
+            JobTerminalError,
+            post_event,
+            subscribe_events,
+        )
 
         assert callable(post_event)
+        assert callable(subscribe_events)
         assert issubclass(JobNotFoundError, RuntimeError)
         assert issubclass(JobTerminalError, RuntimeError)
 
@@ -343,6 +350,324 @@ class TestPublicExports:
         # Lazy __getattr__ path.
         assert mesh.JobNotFoundError is not None
         assert mesh.JobTerminalError is not None
+
+
+# ===========================================================================
+# mesh.jobs.subscribe_events — observer-side async iterator
+# ===========================================================================
+
+
+class TestSubscribeEvents:
+    """``mesh.jobs.subscribe_events`` builds a long-lived async iterator
+    on top of the pyo3 ``JobProxy.list_events`` batch primitive. The
+    iterator manages its own cursor (no shared state with the producer's
+    ``recv_event``) and yields events strictly in ascending-seq order
+    until the caller breaks out of the loop."""
+
+    @pytest.mark.asyncio
+    async def test_subscribe_events_yields_events_until_break(
+        self, monkeypatch
+    ):
+        """A subscriber yields every event the fake ``list_events`` returns
+        across multiple batches, in order, until the caller breaks."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        # Two batches: first returns 2 events, second returns 1, then
+        # any further call returns []. The subscriber should yield 3
+        # events total, in seq order.
+        batches: list[list[dict[str, Any]]] = [
+            [
+                {"job_id": "j1", "seq": 1, "type": "work", "payload": {"n": 1}},
+                {"job_id": "j1", "seq": 2, "type": "work", "payload": {"n": 2}},
+            ],
+            [
+                {"job_id": "j1", "seq": 3, "type": "work", "payload": {"n": 3}},
+            ],
+        ]
+
+        class _FakeProxy:
+            def __init__(self, _job_id: str, _registry_url: str) -> None:
+                self._cursor = 0
+
+            async def list_events(
+                self, after: int, _types: Any, _wait: float
+            ) -> tuple[list[dict[str, Any]], int]:
+                if batches:
+                    batch = batches.pop(0)
+                    return batch, batch[-1]["seq"]
+                return [], after
+
+        observed: list[dict[str, Any]] = []
+        with mock.patch("mcp_mesh_core.JobProxy", _FakeProxy, create=True):
+            async for event in mesh_jobs.subscribe_events(
+                "j1", long_poll_secs=0.0
+            ):
+                observed.append(event)
+                if len(observed) == 3:
+                    break
+
+        seqs = [e["seq"] for e in observed]
+        assert seqs == [1, 2, 3], (
+            f"subscriber must yield events in ascending-seq order, got {seqs}"
+        )
+        assert observed[0]["payload"] == {"n": 1}
+        assert observed[2]["payload"] == {"n": 3}
+
+    @pytest.mark.asyncio
+    async def test_subscribe_events_advances_cursor_between_calls(
+        self, monkeypatch
+    ):
+        """The cursor passed to the SECOND ``list_events`` call must be
+        the seq of the last yielded event — proves the iterator advances
+        its watermark internally between batches."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        cursors_seen: list[int] = []
+        batches: list[list[dict[str, Any]]] = [
+            [
+                {"job_id": "j1", "seq": 1, "type": "x", "payload": None},
+                {"job_id": "j1", "seq": 5, "type": "x", "payload": None},
+            ],
+            [
+                {"job_id": "j1", "seq": 9, "type": "x", "payload": None},
+            ],
+        ]
+
+        class _FakeProxy:
+            def __init__(self, _job_id: str, _registry_url: str) -> None:
+                pass
+
+            async def list_events(
+                self, after: int, _types: Any, _wait: float
+            ) -> tuple[list[dict[str, Any]], int]:
+                cursors_seen.append(after)
+                if batches:
+                    batch = batches.pop(0)
+                    return batch, batch[-1]["seq"]
+                return [], after
+
+        observed: list[int] = []
+        with mock.patch("mcp_mesh_core.JobProxy", _FakeProxy, create=True):
+            async for event in mesh_jobs.subscribe_events(
+                "j1", long_poll_secs=0.0
+            ):
+                observed.append(event["seq"])
+                if len(observed) == 3:
+                    break
+
+        # First call uses the initial cursor (default 0). Second call
+        # must use the max seq from the first batch (5). Third would be
+        # 9 if we kept going, but we break first — at minimum the second
+        # call's cursor proves the advance.
+        assert cursors_seen[0] == 0, (
+            f"first list_events must use the initial after=0; got {cursors_seen[0]}"
+        )
+        assert cursors_seen[1] == 5, (
+            f"second list_events must use the seq of the last yielded event "
+            f"(5), got {cursors_seen[1]}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_subscribe_events_filter_by_types(self, monkeypatch):
+        """The ``types`` arg passes through to ``list_events`` so the
+        registry-side filter trims the batch BEFORE the iterator
+        observes it."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        types_seen: list[Any] = []
+
+        class _FakeProxy:
+            def __init__(self, _job_id: str, _registry_url: str) -> None:
+                pass
+
+            async def list_events(
+                self, _after: int, types: Any, _wait: float
+            ) -> tuple[list[dict[str, Any]], int]:
+                types_seen.append(types)
+                return [
+                    {"job_id": "j1", "seq": 1, "type": "user_input", "payload": None}
+                ], 1
+
+        with mock.patch("mcp_mesh_core.JobProxy", _FakeProxy, create=True):
+            async for _ in mesh_jobs.subscribe_events(
+                "j1", types=["user_input"], long_poll_secs=0.0
+            ):
+                break
+
+        assert types_seen[0] == ["user_input"], (
+            f"types filter must pass through to list_events verbatim; "
+            f"got {types_seen[0]!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_subscribe_events_propagates_job_not_found(
+        self, monkeypatch
+    ):
+        """When ``list_events`` raises a JobNotFound-shaped RuntimeError
+        (registry reaped the job row), the iterator must surface it as
+        the typed :class:`JobNotFoundError` so callers can ``except``
+        cleanly without inspecting strings."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        class _FakeProxy:
+            def __init__(self, _job_id: str, _registry_url: str) -> None:
+                pass
+
+            async def list_events(self, *_args: Any, **_kw: Any) -> list[Any]:
+                raise RuntimeError("backend error: job not found: gone")
+
+        with mock.patch("mcp_mesh_core.JobProxy", _FakeProxy, create=True):
+            with pytest.raises(mesh_jobs.JobNotFoundError):
+                async for _ in mesh_jobs.subscribe_events(
+                    "missing", long_poll_secs=0.0
+                ):
+                    pass  # pragma: no cover - iterator raises on first call
+
+    @pytest.mark.asyncio
+    async def test_mesh_jobs_subscribe_events_uses_cached_proxy(
+        self, monkeypatch
+    ):
+        """``subscribe_events`` reuses the same module-level
+        ``(registry_url, job_id)`` proxy cache as ``post_event``. Two
+        sequential subscriptions to the same job must construct ONE
+        underlying ``JobProxy`` instance (the cache is shared across
+        helpers)."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        construct_count = 0
+
+        class _CountingFake:
+            def __init__(self, _job_id: str, _registry_url: str) -> None:
+                nonlocal construct_count
+                construct_count += 1
+
+            async def list_events(
+                self, _after: int, _types: Any, _wait: float
+            ) -> tuple[list[dict[str, Any]], int]:
+                return [
+                    {"job_id": "j-cached", "seq": 1, "type": "t", "payload": None}
+                ], 1
+
+        with mock.patch("mcp_mesh_core.JobProxy", _CountingFake, create=True):
+            async for _ in mesh_jobs.subscribe_events(
+                "j-cached", long_poll_secs=0.0
+            ):
+                break
+            async for _ in mesh_jobs.subscribe_events(
+                "j-cached", long_poll_secs=0.0
+            ):
+                break
+
+        # Two iterations, ONE proxy construction — the cache hit on the
+        # second call must reuse the proxy from the first call (same
+        # `(registry_url, job_id)` key as `post_event`).
+        assert construct_count == 1, (
+            f"expected the JobProxy cache to be shared across helpers "
+            f"(post_event + subscribe_events); got {construct_count} "
+            f"constructions for the same job_id"
+        )
+
+    @pytest.mark.asyncio
+    async def test_subscribe_events_forwards_none_long_poll_secs(
+        self, monkeypatch
+    ):
+        """``long_poll_secs=None`` MUST pass through verbatim to the pyo3
+        binding so the Rust side treats it as "single immediate read"
+        (no ``wait`` query param sent). Pre-fix the signature typed this
+        as ``float`` and hid the ``None`` path entirely."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        wait_args: list[Any] = []
+
+        class _FakeProxy:
+            def __init__(self, _job_id: str, _registry_url: str) -> None:
+                pass
+
+            async def list_events(
+                self, _after: int, _types: Any, wait: Any
+            ) -> tuple[list[dict[str, Any]], int]:
+                wait_args.append(wait)
+                return [
+                    {"job_id": "j1", "seq": 1, "type": "x", "payload": None}
+                ], 1
+
+        with mock.patch("mcp_mesh_core.JobProxy", _FakeProxy, create=True):
+            async for _ in mesh_jobs.subscribe_events(
+                "j1", long_poll_secs=None
+            ):
+                break
+
+        assert wait_args[0] is None, (
+            f"long_poll_secs=None must forward as None to proxy.list_events "
+            f"(single immediate read); got {wait_args[0]!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_subscribe_events_raises_on_missing_seq(self, monkeypatch):
+        """An event missing the integer ``seq`` key surfaces as a
+        ``RuntimeError`` BEFORE the event is yielded — so callers don't
+        observe a half-yielded malformed payload, and the error message
+        names the offending field."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        class _FakeProxy:
+            def __init__(self, _job_id: str, _registry_url: str) -> None:
+                pass
+
+            async def list_events(
+                self, _after: int, _types: Any, _wait: Any
+            ) -> tuple[list[dict[str, Any]], int]:
+                return [{"type": "work", "payload": {}}], 0  # no 'seq' key
+
+        with mock.patch("mcp_mesh_core.JobProxy", _FakeProxy, create=True):
+            with pytest.raises(RuntimeError) as exc:
+                async for _ in mesh_jobs.subscribe_events(
+                    "j1", long_poll_secs=0.0
+                ):
+                    pass  # pragma: no cover - iterator raises on first event
+        assert "seq" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_subscribe_events_rejects_bool_seq(self, monkeypatch):
+        """A bool ``seq`` value (``True``/``False``) must be rejected:
+        ``isinstance(True, int)`` is True in Python, but the registry
+        contract is integer seqs — a bool here is a malformed wire payload.
+        The guard uses ``type(seq) is not int`` so booleans fail BEFORE
+        the event is yielded."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        class _FakeProxy:
+            def __init__(self, _job_id: str, _registry_url: str) -> None:
+                pass
+
+            async def list_events(
+                self, _after: int, _types: Any, _wait: Any
+            ) -> tuple[list[dict[str, Any]], int]:
+                return [{"seq": True, "type": "work", "payload": {}}], 1
+
+        with mock.patch("mcp_mesh_core.JobProxy", _FakeProxy, create=True):
+            with pytest.raises(RuntimeError) as exc:
+                async for _ in mesh_jobs.subscribe_events(
+                    "j1", long_poll_secs=0.0
+                ):
+                    pass  # pragma: no cover - iterator raises on first event
+        assert "seq" in str(exc.value)
 
 
 # ===========================================================================
