@@ -493,6 +493,136 @@ public class LongTaskProviderApplication {
         return client.send(req, HttpResponse.BodyHandlers.ofString());
     }
 
+    // -------------------------------------------------------------------
+    // Event-injection scenarios (tc24/tc25/tc26 — recvEvent primitive,
+    // issue #1032). Mirrors Python uc21 / TS uc22 fixtures field-for-field:
+    //   - run_with_event   — happy path: wait for one 'signal' event
+    //   - run_with_filter  — type-filter correctness
+    //   - run_until_cancel — synthetic 'cancelled' event observation
+    // All three use task=true and call job.recvEvent(...) on the injected
+    // JobController. The producer's recvEvent timeout uses Duration to
+    // bridge cleanly through the SDK's Optional<Duration> API.
+    // -------------------------------------------------------------------
+
+    @MeshTool(
+        capability = "run_with_event",
+        task = true,
+        description = "Wait for one 'signal' event and return its payload — happy path for recvEvent."
+    )
+    public Map<String, Object> runWithEvent(MeshJob job) {
+        JobController controller = job instanceof JobController c ? c : null;
+        if (controller == null) {
+            Map<String, Object> noJob = new LinkedHashMap<>();
+            noJob.put("status", "no_job_ctx");
+            return noJob;
+        }
+        controller.updateProgress(0.1, "parked on recvEvent");
+        Map<String, Object> event = controller.recvEvent(
+            List.of("signal"), Duration.ofSeconds(10));
+        if (event == null) {
+            Map<String, Object> timeout = new LinkedHashMap<>();
+            timeout.put("status", "timeout");
+            timeout.put("received", false);
+            return timeout;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("status", "got_event");
+        payload.put("received", true);
+        payload.put("type", event.get("type"));
+        payload.put("payload", event.get("payload"));
+        payload.put("seq", event.get("seq"));
+        controller.complete(payload);
+        return payload;
+    }
+
+    @MeshTool(
+        capability = "run_with_filter",
+        task = true,
+        description = "Wait for a 'target' event and ignore other types — exercises recvEvent filter."
+    )
+    public Map<String, Object> runWithFilter(MeshJob job) {
+        JobController controller = job instanceof JobController c ? c : null;
+        if (controller == null) {
+            Map<String, Object> noJob = new LinkedHashMap<>();
+            noJob.put("status", "no_job_ctx");
+            return noJob;
+        }
+        controller.updateProgress(0.1, "parked with type filter");
+        // Long timeout so the consumer has slack to post 2 ignored
+        // events before the matching one. A broken filter would wake
+        // on the FIRST event (ignore_a) and the test would catch it.
+        Map<String, Object> event = controller.recvEvent(
+            List.of("target"), Duration.ofSeconds(15));
+        if (event == null) {
+            Map<String, Object> timeout = new LinkedHashMap<>();
+            timeout.put("timeout", true);
+            return timeout;
+        }
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", event.get("type"));
+        payload.put("payload", event.get("payload"));
+        payload.put("seq", event.get("seq"));
+        controller.complete(payload);
+        return payload;
+    }
+
+    @MeshTool(
+        capability = "run_until_cancel",
+        task = true,
+        description = "Loop on recvEvent for 'work'/'cancelled' types until cancelled-event arrives."
+    )
+    public Map<String, Object> runUntilCancel(MeshJob job) {
+        JobController controller = job instanceof JobController c ? c : null;
+        if (controller == null) {
+            Map<String, Object> noJob = new LinkedHashMap<>();
+            noJob.put("status", "no_job_ctx");
+            return noJob;
+        }
+        List<Map<String, Object>> eventsSeen = new ArrayList<>();
+        // Loop with per-iteration long timeout. A correct flow exits
+        // via the "cancelled" branch within ~3s of the consumer firing
+        // cancel. Bounded loop count is a safety net against runaway
+        // iterations if the cancel event never lands.
+        for (int i = 0; i < 20; i++) {
+            Map<String, Object> event = controller.recvEvent(
+                List.of("work", "cancelled"), Duration.ofSeconds(15));
+            if (event == null) {
+                // Surface the partial state so the test can distinguish
+                // "no event ever arrived" from "wrong event type observed".
+                Map<String, Object> timeoutResult = new LinkedHashMap<>();
+                timeoutResult.put("status", "timeout");
+                timeoutResult.put("events_seen", eventsSeen);
+                return timeoutResult;
+            }
+            Map<String, Object> seen = new LinkedHashMap<>();
+            seen.put("type", event.get("type"));
+            seen.put("payload", event.get("payload"));
+            eventsSeen.add(seen);
+            if ("cancelled".equals(event.get("type"))) {
+                // Don't call complete()/fail() — the registry row is
+                // already cancelled (synthetic event posted by CancelJob
+                // AFTER the row transition). The runtime's auto-complete
+                // is a no-op once terminal is recorded.
+                //
+                // Log a marker line so the test driver can assert the
+                // producer observed the synthetic cancel event WITHOUT
+                // relying on proxy.wait() (raises on cancelled terminal).
+                System.out.println(
+                    "[run_until_cancel] cancelled_gracefully events_seen="
+                        + eventsSeen);
+                System.out.flush();
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("status", "cancelled_gracefully");
+                result.put("events_seen", eventsSeen);
+                return result;
+            }
+        }
+        Map<String, Object> exhausted = new LinkedHashMap<>();
+        exhausted.put("status", "loop_exhausted");
+        exhausted.put("events_seen", eventsSeen);
+        return exhausted;
+    }
+
     /**
      * Find the {@code endpoint} field for the named agent in a
      * registry {@code GET /agents} response body. Returns {@code null}

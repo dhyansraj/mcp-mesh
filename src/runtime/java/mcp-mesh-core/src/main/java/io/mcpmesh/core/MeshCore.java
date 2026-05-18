@@ -556,6 +556,38 @@ public interface MeshCore {
     int mesh_job_controller_is_cancelled(Pointer handle);
 
     /**
+     * Wait for the next event posted to this job's event channel
+     * (mirror of {@code JobController::recv_event} in the Rust core,
+     * issue #1032). Returns the event as a JSON string written to
+     * outEventJson; on a clean timeout writes a null pointer and
+     * returns 0.
+     *
+     * <p>The C ABI cannot pass a nullable double, so {@code timeoutSecs}
+     * uses a negative-sentinel convention: pass a negative value (e.g.
+     * {@code -1.0}) to express "no timeout" (mirrors Java's
+     * {@code Optional<Duration>::empty()} on the wrapper). NaN /
+     * Infinity / finite overflow (e.g. {@code Double.MAX_VALUE}) all
+     * reject with -1.
+     *
+     * @param handle         Controller handle
+     * @param typesJson      Optional JSON array of event-type strings to
+     *                       filter on (e.g. {@code ["signal","cancel"]});
+     *                       null or a JSON {@code null} means "all types"
+     * @param timeoutSecs    Wall-clock timeout in seconds; negative means
+     *                       "no timeout" (block until event arrives or
+     *                       cancellation fires)
+     * @param outEventJson   Out-param: receives the event JSON string
+     *                       (caller frees via mesh_free_string), or
+     *                       NULL on clean timeout
+     * @return 0 on success (event delivered OR clean timeout — distinguish
+     *         via whether {@code outEventJson} carries a non-null pointer),
+     *         -1 on invalid args, -2 on JobNotFound, -3 on other backend
+     *         errors (see {@link #mesh_last_error})
+     */
+    int mesh_job_controller_recv_event(
+        Pointer handle, String typesJson, double timeoutSecs, PointerByReference outEventJson);
+
+    /**
      * Read the job ID this controller is bound to.
      *
      * @param handle    Controller handle
@@ -635,6 +667,33 @@ public interface MeshCore {
      * @return 0 on success, -1 on error
      */
     int mesh_job_proxy_cancel(Pointer handle, String reason);
+
+    /**
+     * Post an event into this job's event channel (mirror of
+     * {@code JobProxy::send_event} in the Rust core, issue #1032).
+     * The running handler (inside a {@code task=true} job) will see
+     * the event on its next {@code recvEvent} call — or wake immediately
+     * if it's currently long-polling.
+     *
+     * @param handle           Proxy handle
+     * @param eventType        Event-type tag (e.g. {@code "signal"},
+     *                         {@code "user_input"}) — required, non-null
+     * @param payloadJson      Optional JSON-encoded payload (object,
+     *                         array, or scalar); null is treated as an
+     *                         empty JSON object {@code {}} matching the
+     *                         Python {@code payload=None} normalization
+     * @param outReceiptJson   Out-param: receives the receipt JSON
+     *                         string {@code {job_id, seq, created_at}}
+     *                         (caller frees via mesh_free_string)
+     * @return 0 on success, -1 on invalid args, -2 on JobNotFound,
+     *         -3 on JobTerminal (job already in a terminal state),
+     *         -4 on other backend errors (see {@link #mesh_last_error}).
+     *         Distinct error codes let the Java SDK map -2 and -3 to
+     *         typed {@code JobNotFoundException} /
+     *         {@code JobTerminalException}.
+     */
+    int mesh_job_proxy_send_event(
+        Pointer handle, String eventType, String payloadJson, PointerByReference outReceiptJson);
 
     /**
      * Free a JobProxy handle returned by mesh_submit_job / mesh_job_proxy_new.

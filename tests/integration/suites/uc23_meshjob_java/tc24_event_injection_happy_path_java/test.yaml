@@ -1,0 +1,128 @@
+# tc24_event_injection_happy_path_java — Java port of uc21/tc24 +
+# uc22/tc24_ts (recvEvent / postEvent happy path; issue #1032).
+#
+# Verifies the basic event-injection round trip end-to-end through a
+# real registry and two real Java agents:
+#
+#   1. Producer task=true tool `runWithEvent` parks on
+#      `controller.recvEvent(List.of("signal"), Duration.ofSeconds(10))`.
+#   2. Consumer's `commissionEvent` submits the job, sleeps ~2s so the
+#      producer reaches the long-poll, then calls the SDK helper
+#      `MeshJobs.postEvent(jobId, "signal", Map.of("hello","world","n",42))`.
+#   3. The registry persists the event, the producer's long-poll wakes,
+#      `recvEvent` returns the event Map, the handler returns it via
+#      `controller.complete(...)`.
+#   4. Consumer awaits `proxy.await(...)` and surfaces the structured payload.
+#
+# Asserts:
+#   - the producer returned `status=got_event` (not `timeout`)
+#   - the payload echoes `{hello: "world", n: 42}` exactly
+#   - the receipt's seq is 1 (first event posted into this job)
+#
+# This is the headline regression for the new Java `MeshJobs.postEvent`
+# helper in a real-agent context — the unit tests cover the helper
+# itself but they don't load the FFI library, so this is the first time
+# we exercise the helper from inside a running tool body.
+
+name: "MeshJob Java: postEvent helper wakes a producer parked on recvEvent"
+description: "Java producer recvEvent → Java consumer postEvent → handler completes with event payload"
+tags:
+  - meshjob
+  - java
+  - issue-1032
+  - events
+timeout: 360
+
+pre_run:
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-java /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-java /workspace/
+
+  - name: "Install provider deps"
+    handler: maven-install
+    path: /workspace/long-task-provider-java
+    timeout: 600
+
+  - name: "Install consumer deps"
+    handler: maven-install
+    path: /workspace/long-task-consumer-java
+    timeout: 600
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (port 9120)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-java --env MCP_MESH_HTTP_PORT=9120 -d
+
+  - name: "Wait for Java provider healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        S=$(curl -s http://localhost:8000/agents | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] && exit 0; sleep 2
+      done
+      echo "ERROR: provider not healthy"
+      meshctl logs long-task-provider-java 2>&1 | tail -50 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start consumer (port 9121)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+
+  - name: "Wait for consumer + DI"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        ROW=$(curl -s http://localhost:8000/agents | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
+        S=$(echo "$ROW" | jq -r '.status'); R=$(echo "$ROW" | jq -r '.dependencies_resolved'); T=$(echo "$ROW" | jq -r '.total_dependencies')
+        [ "$S" = "healthy" ] && [ "$R" = "$T" ] && [ "$T" != "0" ] && [ "$T" != "null" ] && exit 0; sleep 2
+      done
+      echo "ERROR: consumer not ready"
+      meshctl logs long-task-consumer-java 2>&1 | tail -50 || true
+      exit 1
+    timeout: 150
+
+  - name: "Call commission_event — submit, post one event, wait for result"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_event '{}'
+    capture: commission_response
+    timeout: 60
+
+assertions:
+  # Java's Jackson serializer emits compact JSON without spaces, and the
+  # meshctl envelope JSON-escapes the inner text — match the escaped form
+  # used by the Java tc01 baseline test (and tc24/tc26 TS).
+  - expr: "${captured.commission_response} not contains '\"isError\":true'"
+    message: "commission_event should NOT return an MCP error envelope"
+  # Producer reached recvEvent AND woke on the posted signal.
+  - expr: "${captured.commission_response} contains '\\\"status\\\":\\\"got_event\\\"'"
+    message: "producer must report status=got_event (proves recvEvent woke on the post)"
+  - expr: "${captured.commission_response} not contains '\\\"status\\\":\\\"timeout\\\"'"
+    message: "producer must NOT have timed out — the post should have woken it"
+  # Payload echo: full event payload must round-trip through the registry.
+  - expr: "${captured.commission_response} contains '\\\"hello\\\":\\\"world\\\"'"
+    message: "payload string field must round-trip through recvEvent"
+  - expr: "${captured.commission_response} contains '\\\"n\\\":42'"
+    message: "payload numeric field must round-trip through recvEvent"
+  - expr: "${captured.commission_response} contains '\\\"type\\\":\\\"signal\\\"'"
+    message: "event type must be surfaced on the producer side"
+  # Receipt seq: this was the first event posted into the job.
+  - expr: "${captured.commission_response} contains '\\\"post_seq\\\":1'"
+    message: "first postEvent into a fresh job must return seq=1"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

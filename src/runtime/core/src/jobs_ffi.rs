@@ -50,7 +50,9 @@ use crate::jobs::{
     new_coalescing_queue, run_as_job, spawn_batching_tick, submit_job, BatchingConfig,
     BatchingHandle, JobController, JobError, JobProxy, SubmitJobArgs,
 };
-use crate::task_backend::{Job, JobStatus, RegistryHttpBackend, TaskBackend};
+use crate::task_backend::{
+    Job, JobEvent, JobEventReceipt, JobStatus, RegistryHttpBackend, TaskBackend,
+};
 
 // =============================================================================
 // Process-wide blocking runtime
@@ -149,6 +151,64 @@ fn job_status_to_str(s: JobStatus) -> &'static str {
         JobStatus::Failed => "failed",
         JobStatus::Cancelled => "cancelled",
     }
+}
+
+/// Parse an FFI-supplied `timeout_secs` f64 into an `Option<Duration>`,
+/// using the negative-sentinel convention to bridge `Option<Duration>` over
+/// the C ABI (which cannot pass `null` doubles).
+///
+/// Policy (matches `parse_timeout_secs` in `jobs_napi.rs` / `jobs_py.rs`):
+/// - `secs < 0.0` → `Ok(None)` (no timeout — Java passes `-1.0` to express
+///   `Optional<Duration>::empty()`)
+/// - `secs.is_nan() || secs.is_infinite()` → `Err(...)` — these are likely
+///   bugs in the caller; surfacing a clean error beats silent "no timeout"
+/// - finite `>= 0` but overflows `Duration::from_secs_f64` (e.g. `f64::MAX`)
+///   → `Err(...)` via `try_from_secs_f64` (the panicking constructor
+///   `from_secs_f64` would have aborted the host process)
+/// - finite `>= 0` and convertible → `Ok(Some(Duration::...))`
+fn parse_ffi_timeout_secs(secs: f64) -> Result<Option<Duration>, String> {
+    if secs.is_nan() {
+        return Err(format!("timeout_secs must be a finite number, got NaN"));
+    }
+    if secs.is_infinite() {
+        return Err(format!(
+            "timeout_secs must be a finite number, got {}",
+            secs
+        ));
+    }
+    if secs < 0.0 {
+        return Ok(None);
+    }
+    Duration::try_from_secs_f64(secs)
+        .map(Some)
+        .map_err(|e| format!("timeout_secs out of range: {} (got {})", e, secs))
+}
+
+/// Convert a [`JobEvent`] to a JSON string matching the wire shape that
+/// the Python (`job_event_to_pydict`) and TS (`job_event_to_json`) bindings
+/// expose. Java callers parse this with Jackson on their side.
+fn job_event_to_json_string(ev: JobEvent) -> String {
+    serde_json::json!({
+        "job_id": ev.job_id,
+        "seq": ev.seq,
+        "type": ev.event_type,
+        "payload": ev.payload.unwrap_or(serde_json::Value::Null),
+        "trace_context": ev.trace_context.unwrap_or(serde_json::Value::Null),
+        "posted_by": ev.posted_by,
+        "created_at": ev.created_at,
+    })
+    .to_string()
+}
+
+/// Convert a [`JobEventReceipt`] to a JSON string matching the wire shape
+/// Python/TS bindings expose.
+fn job_event_receipt_to_json_string(receipt: JobEventReceipt) -> String {
+    serde_json::json!({
+        "job_id": receipt.job_id,
+        "seq": receipt.seq,
+        "created_at": receipt.created_at,
+    })
+    .to_string()
 }
 
 /// Serialize a [`Job`] row to JSON matching the wire shape Python/TS bindings
@@ -454,6 +514,128 @@ pub unsafe extern "C" fn mesh_job_controller_is_cancelled(
     }
 }
 
+/// Wait for the next event posted to this job's event channel.
+///
+/// Mirrors [`JobController::recv_event`]. Returns the event as a JSON
+/// string written to `*out_event_json`, or a null pointer when the
+/// timeout elapses without a matching event. Cursor is per-controller-
+/// instance (shared across `clone`s); a fresh controller for the same
+/// `job_id` replays from seq=0.
+///
+/// # Arguments
+/// - `types_json`: optional UTF-8 NUL-terminated JSON string encoding an
+///   array of event-type tags. `NULL` (or a JSON `null`) means "receive
+///   all types". Invalid JSON or non-array shape returns -1 with the
+///   last-error slot populated.
+/// - `timeout_secs`: f64 timeout in seconds. The C ABI cannot pass
+///   `Option<f64>`, so the convention is: pass a negative value (e.g.
+///   `-1.0`) to express "no timeout" (mirrors `Optional<Duration>::empty()`
+///   on the Java side). NaN / ±Infinity reject with -1. Finite-but-
+///   overflowing values (e.g. `f64::MAX`) reject with -1 via
+///   [`Duration::try_from_secs_f64`] — see `parse_ffi_timeout_secs`.
+/// - `out_event_json`: receives `*mut c_char` JSON string of the event
+///   on arrival, or a NULL pointer on clean timeout (in which case the
+///   return code is still 0). Caller frees via `mesh_free_string` when
+///   the pointer is non-null.
+///
+/// # Returns
+/// - `0` on success (event delivered OR clean timeout — caller checks
+///   if `*out_event_json` is null to distinguish)
+/// - `-1` on invalid args (null handle, malformed types_json, invalid
+///   timeout)
+/// - `-2` on JobNotFound (registry doesn't know the job — typically
+///   "404 Not Found" from `GET /jobs/{id}/events`). Distinct from the
+///   generic -3 so the Java SDK can map to a typed
+///   `JobNotFoundException`.
+/// - `-3` on other backend errors (5xx after retries, network failure,
+///   etc.). See `mesh_last_error` for details.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_controller_recv_event(
+    handle: *mut JobControllerHandle,
+    types_json: *const c_char,
+    timeout_secs: f64,
+    out_event_json: *mut *mut c_char,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    if out_event_json.is_null() {
+        set_last_error("out_event_json is null");
+        return -1;
+    }
+    // Default to empty so the success-path null-write is unambiguous
+    // (callers can treat a null out-pointer as "timeout elapsed").
+    *out_event_json = ptr::null_mut();
+    let handle = &*handle;
+
+    // Parse optional types filter — NULL → None (receive all); JSON array
+    // → Some(Vec<String>); anything else rejects.
+    let types_opt: Option<Vec<String>> = match opt_cstr(types_json, "types_json") {
+        Ok(None) => None,
+        Ok(Some(s)) => match serde_json::from_str::<serde_json::Value>(s) {
+            Ok(serde_json::Value::Null) => None,
+            Ok(serde_json::Value::Array(arr)) => {
+                let mut out = Vec::with_capacity(arr.len());
+                for v in arr {
+                    match v {
+                        serde_json::Value::String(s) => out.push(s),
+                        other => {
+                            set_last_error(format!(
+                                "types_json must be an array of strings, got element: {}",
+                                other
+                            ));
+                            return -1;
+                        }
+                    }
+                }
+                Some(out)
+            }
+            Ok(other) => {
+                set_last_error(format!(
+                    "types_json must be a JSON array or null, got: {}",
+                    other
+                ));
+                return -1;
+            }
+            Err(e) => {
+                set_last_error(format!("invalid types_json: {}", e));
+                return -1;
+            }
+        },
+        Err(()) => return -1,
+    };
+
+    let timeout = match parse_ffi_timeout_secs(timeout_secs) {
+        Ok(t) => t,
+        Err(msg) => {
+            set_last_error(msg);
+            return -1;
+        }
+    };
+
+    let inner = handle.inner.clone();
+    let result = jobs_runtime().block_on(async move { inner.recv_event(types_opt, timeout).await });
+    match result {
+        Ok(None) => {
+            // Clean timeout — leave out-pointer as null and return 0.
+            // Caller distinguishes "event arrived" from "timeout" by
+            // checking the out-pointer.
+            0
+        }
+        Ok(Some(ev)) => write_out_string(out_event_json, job_event_to_json_string(ev)),
+        Err(JobError::Backend(crate::task_backend::BackendError::NotFound(msg))) => {
+            set_last_error(format!("job not found: {}", msg));
+            -2
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            -3
+        }
+    }
+}
+
 /// Read the job ID this controller is bound to. Caller frees the returned
 /// string via `mesh_free_string`.
 #[no_mangle]
@@ -716,6 +898,91 @@ pub unsafe extern "C" fn mesh_job_proxy_cancel(
     jobs_runtime().block_on(async move { inner.cancel(reason).await })
         .map(|_| 0)
         .unwrap_or_else(jobs_set_err)
+}
+
+/// Post an event into this job's event channel.
+///
+/// Mirrors [`JobProxy::send_event`]. The running handler (inside a
+/// `task=true` job) will see the event on its next `recv_event` call —
+/// or wake immediately if it's currently long-polling.
+///
+/// # Arguments
+/// - `event_type`: UTF-8 NUL-terminated event-type tag (e.g. `"signal"`,
+///   `"user_input"`).
+/// - `payload_json`: optional UTF-8 NUL-terminated JSON string encoding
+///   the event payload. May be `NULL` to send an empty payload (the
+///   Rust core treats null/missing as an empty JSON object — matching
+///   the Python/TS `payload=None` shape).
+/// - `out_receipt_json`: receives `*mut c_char` JSON string of the
+///   receipt (`{job_id, seq, created_at}`). Caller frees via
+///   `mesh_free_string`.
+///
+/// # Returns
+/// - `0` on success
+/// - `-1` on invalid args (null handle, malformed payload_json)
+/// - `-2` on JobNotFound (registry doesn't know the job — 404 from
+///   `POST /jobs/{id}/events`). Mapped by the Java SDK to
+///   `JobNotFoundException`.
+/// - `-3` on JobTerminal (job already completed/failed/cancelled — 409
+///   from the registry, surfaced as [`JobError::JobTerminal`]). Mapped
+///   by the Java SDK to `JobTerminalException`. Distinct from -2 so
+///   callers can branch on terminal-state vs. unknown-job.
+/// - `-4` on other backend errors (transport failure, 5xx after
+///   retries, etc.). See `mesh_last_error` for details.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_proxy_send_event(
+    handle: *mut JobProxyHandle,
+    event_type: *const c_char,
+    payload_json: *const c_char,
+    out_receipt_json: *mut *mut c_char,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    if out_receipt_json.is_null() {
+        set_last_error("out_receipt_json is null");
+        return -1;
+    }
+    let handle = &*handle;
+
+    let event_type = match req_cstr(event_type, "event_type") {
+        Ok(s) => s.to_string(),
+        Err(()) => return -1,
+    };
+
+    // NULL payload → empty object (matches Python's `payload=None` →
+    // `{}` normalization in `mesh.jobs.post_event`).
+    let payload: serde_json::Value = match opt_cstr(payload_json, "payload_json") {
+        Ok(None) => serde_json::Value::Object(serde_json::Map::new()),
+        Ok(Some(s)) => match serde_json::from_str(s) {
+            Ok(v) => v,
+            Err(e) => {
+                set_last_error(format!("invalid payload_json: {}", e));
+                return -1;
+            }
+        },
+        Err(()) => return -1,
+    };
+
+    let inner = handle.inner.clone();
+    let result = jobs_runtime().block_on(async move { inner.send_event(event_type, payload).await });
+    match result {
+        Ok(receipt) => write_out_string(out_receipt_json, job_event_receipt_to_json_string(receipt)),
+        Err(JobError::JobTerminal(msg)) => {
+            set_last_error(format!("job is terminal: {}", msg));
+            -3
+        }
+        Err(JobError::Backend(crate::task_backend::BackendError::NotFound(msg))) => {
+            set_last_error(format!("job not found: {}", msg));
+            -2
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            -4
+        }
+    }
 }
 
 /// Free a [`JobProxyHandle`] returned by [`mesh_submit_job`] /
@@ -1197,6 +1464,75 @@ mod tests {
         // last-error slot should carry the diagnostic.
         let err = take_last_error();
         assert!(err.is_some(), "expected last_error to be populated");
+    }
+
+    /// `parse_ffi_timeout_secs` mirrors `parse_timeout_secs` in napi /
+    /// pyo3 bindings — same NaN/Inf/overflow rejection. The Java/FFI
+    /// twist is the negative-sentinel "no timeout" convention since C
+    /// ABI cannot pass a nullable double.
+    #[test]
+    fn parse_ffi_timeout_secs_negative_means_no_timeout() {
+        assert_eq!(parse_ffi_timeout_secs(-1.0).unwrap(), None);
+        assert_eq!(parse_ffi_timeout_secs(-0.5).unwrap(), None);
+        assert_eq!(parse_ffi_timeout_secs(f64::MIN).unwrap(), None);
+    }
+
+    #[test]
+    fn parse_ffi_timeout_secs_accepts_zero_and_positive() {
+        assert_eq!(
+            parse_ffi_timeout_secs(0.0).unwrap(),
+            Some(Duration::from_secs(0))
+        );
+        assert_eq!(
+            parse_ffi_timeout_secs(1.5).unwrap(),
+            Some(Duration::from_secs_f64(1.5))
+        );
+    }
+
+    #[test]
+    fn parse_ffi_timeout_secs_rejects_nan_and_infinity() {
+        assert!(parse_ffi_timeout_secs(f64::NAN).is_err());
+        assert!(parse_ffi_timeout_secs(f64::INFINITY).is_err());
+        assert!(parse_ffi_timeout_secs(f64::NEG_INFINITY).is_err());
+    }
+
+    #[test]
+    fn parse_ffi_timeout_secs_rejects_overflow() {
+        let err = parse_ffi_timeout_secs(f64::MAX).expect_err("overflow must reject");
+        assert!(err.contains("out of range"), "got: {err}");
+    }
+
+    /// `mesh_job_controller_recv_event` must reject null handle / null
+    /// out-ptr cleanly via the last-error slot rather than crashing.
+    #[test]
+    fn recv_event_rejects_null_handle() {
+        let mut out: *mut c_char = ptr::null_mut();
+        let rc = unsafe {
+            mesh_job_controller_recv_event(
+                ptr::null_mut(),
+                ptr::null(),
+                -1.0,
+                &mut out as *mut _,
+            )
+        };
+        assert_eq!(rc, -1);
+    }
+
+    /// `mesh_job_proxy_send_event` must reject null handle / null
+    /// out-ptr cleanly via the last-error slot rather than crashing.
+    #[test]
+    fn send_event_rejects_null_handle() {
+        let mut out: *mut c_char = ptr::null_mut();
+        let event_type = CString::new("signal").unwrap();
+        let rc = unsafe {
+            mesh_job_proxy_send_event(
+                ptr::null_mut(),
+                event_type.as_ptr(),
+                ptr::null(),
+                &mut out as *mut _,
+            )
+        };
+        assert_eq!(rc, -1);
     }
 
     /// `mesh_job_proxy_wait` with an overflowing finite timeout must

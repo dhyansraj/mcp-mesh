@@ -200,6 +200,90 @@ public final class JobProxy implements MeshJob, AutoCloseable {
         }
     }
 
+    /**
+     * Post an event into this job's event channel (mirror of
+     * {@code JobProxy::send_event} in the Rust core, issue #1032).
+     * The running handler (inside a {@code task=true} job) will see
+     * the event on its next {@code recvEvent} call — or wake immediately
+     * if it's currently long-polling.
+     *
+     * <p>Mirrors:
+     * <ul>
+     *   <li>Python {@code proxy.send_event(event_type, payload)}</li>
+     *   <li>TypeScript {@code proxy.sendEvent(eventType, payload)}</li>
+     * </ul>
+     *
+     * @param eventType Event-type tag (required, non-null)
+     * @param payload   Optional payload Map; {@code null} normalises to
+     *                  an empty JSON object {@code {}} matching the
+     *                  Python {@code payload=None} contract
+     * @return Receipt map with {@code job_id, seq, created_at} so
+     *         callers can stitch a follow-up {@code recvEvent} via
+     *         {@code seq}.
+     * @throws JobNotFoundException if the registry doesn't know the
+     *                              job (404 from {@code POST /jobs/{id}/events})
+     * @throws JobTerminalException if the job has already reached a
+     *                              terminal state — no more events
+     *                              accepted (409 from the registry)
+     * @throws MeshException        for transport errors, serialization
+     *                              failures, or other backend issues
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> sendEvent(String eventType, Map<String, Object> payload) {
+        if (eventType == null || eventType.isEmpty()) {
+            throw new IllegalArgumentException("eventType is required");
+        }
+        // Serialize OUTSIDE the lock — keep FFI critical section short.
+        String payloadJson;
+        if (payload == null) {
+            // null → null pointer at the FFI boundary → Rust treats as
+            // {} (matches Python's `payload=None` → empty-dict
+            // normalisation in `mesh.jobs.post_event`).
+            payloadJson = null;
+        } else {
+            try {
+                payloadJson = MAPPER.writeValueAsString(payload);
+            } catch (Exception e) {
+                throw new MeshException("Failed to serialize event payload", e);
+            }
+        }
+
+        Pointer p;
+        synchronized (lock) {
+            ensureOpen();
+            PointerByReference out = new PointerByReference();
+            int rc = core.mesh_job_proxy_send_event(handle, eventType, payloadJson, out);
+            String err = rc == 0 ? null : lastError(core);
+            switch (rc) {
+                case 0:
+                    p = out.getValue();
+                    break;
+                case -2:
+                    throw new JobNotFoundException(
+                        "mesh_job_proxy_send_event: job not found: " + err);
+                case -3:
+                    throw new JobTerminalException(
+                        "mesh_job_proxy_send_event: job is terminal: " + err);
+                case -1:
+                case -4:
+                default:
+                    throw new MeshException(
+                        "mesh_job_proxy_send_event failed (rc=" + rc + "): " + err);
+            }
+        }
+        if (p == null) {
+            throw new MeshException("mesh_job_proxy_send_event returned null receipt");
+        }
+        try {
+            String json = p.getString(0);
+            return (Map<String, Object>) MAPPER.readValue(json, Map.class);
+        } catch (Exception e) {
+            throw new MeshException("Failed to parse send_event receipt JSON", e);
+        } finally {
+            core.mesh_free_string(p);
+        }
+    }
+
     /** Free the underlying native handle. Idempotent. */
     @Override
     public void close() {

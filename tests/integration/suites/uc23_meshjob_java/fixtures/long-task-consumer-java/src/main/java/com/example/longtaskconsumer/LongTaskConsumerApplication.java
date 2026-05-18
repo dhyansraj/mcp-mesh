@@ -4,6 +4,7 @@ import io.mcpmesh.JobProxy;
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.MeshJob;
 import io.mcpmesh.MeshJobSubmitter;
+import io.mcpmesh.MeshJobs;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
 import io.mcpmesh.Selector;
@@ -366,6 +367,130 @@ public class LongTaskConsumerApplication {
         try (JobProxy proxy = submitter.submit(opts).get()) {
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("job_id", proxy.jobId());
+            return response;
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Event-injection submitters (tc24 / tc25 / tc26 — issue #1032)
+    // -------------------------------------------------------------------
+    //
+    // Each capability submits one of the new task=true producers and
+    // drives MeshJobs.postEvent from inside the consumer's tool body
+    // to exercise the producer's recvEvent long-poll. The static helper
+    // MeshJobs.postEvent discovers the registry URL from
+    // MCP_MESH_REGISTRY_URL (set by the agent startup pipeline) and
+    // POSTs /jobs/{id}/events.
+    // -------------------------------------------------------------------
+
+    @MeshTool(
+        capability = "commission_event",
+        description = "Submit run_with_event, sleep so producer parks on recvEvent, then post one event.",
+        dependencies = @Selector(capability = "run_with_event")
+    )
+    public Map<String, Object> commissionEvent(MeshJob runWithEvent) throws Exception {
+        if (!(runWithEvent instanceof MeshJobSubmitter submitter)) {
+            Map<String, Object> err = new LinkedHashMap<>();
+            err.put("error", "run_with_event submitter not injected");
+            return err;
+        }
+        MeshJobSubmitter.SubmitOptions opts = new MeshJobSubmitter.SubmitOptions(
+            new LinkedHashMap<>(), null, 60, null, null);
+        try (JobProxy proxy = submitter.submit(opts).get()) {
+            String jobId = proxy.jobId();
+            // Brief wait so producer reaches recvEvent before we post.
+            // Without this, the post may land before the producer's
+            // claim worker has even pulled the job off the queue.
+            Thread.sleep(2000);
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("hello", "world");
+            payload.put("n", 42);
+            Map<String, Object> receipt = MeshJobs.postEvent(jobId, "signal", payload);
+            Object result = proxy.await(30.0);
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("job_id", jobId);
+            response.put("post_seq", receipt.get("seq"));
+            response.put("job_result", result);
+            return response;
+        }
+    }
+
+    @MeshTool(
+        capability = "commission_event_filter",
+        description = "Submit run_with_filter, post 2 ignored events, then the matching one.",
+        dependencies = @Selector(capability = "run_with_filter")
+    )
+    public Map<String, Object> commissionEventFilter(MeshJob runWithFilter) throws Exception {
+        if (!(runWithFilter instanceof MeshJobSubmitter submitter)) {
+            Map<String, Object> err = new LinkedHashMap<>();
+            err.put("error", "run_with_filter submitter not injected");
+            return err;
+        }
+        MeshJobSubmitter.SubmitOptions opts = new MeshJobSubmitter.SubmitOptions(
+            new LinkedHashMap<>(), null, 60, null, null);
+        try (JobProxy proxy = submitter.submit(opts).get()) {
+            String jobId = proxy.jobId();
+            Thread.sleep(2000);
+            // Post 2 unrelated events — producer must NOT wake on these.
+            Map<String, Object> p1 = new LinkedHashMap<>();
+            p1.put("n", 1);
+            Map<String, Object> r1 = MeshJobs.postEvent(jobId, "ignore_a", p1);
+            Map<String, Object> p2 = new LinkedHashMap<>();
+            p2.put("n", 2);
+            Map<String, Object> r2 = MeshJobs.postEvent(jobId, "ignore_b", p2);
+            // Brief gap so a buggy filter (one that DID wake on ignore_a)
+            // has time to drive the producer to completion; if the producer
+            // is already done by now, the matching post will get
+            // JobTerminalException.
+            Thread.sleep(1000);
+            Map<String, Object> p3 = new LinkedHashMap<>();
+            p3.put("got_it", true);
+            Map<String, Object> r3 = MeshJobs.postEvent(jobId, "target", p3);
+            Object result = proxy.await(30.0);
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("job_id", jobId);
+            response.put("ignore_seqs", List.of(r1.get("seq"), r2.get("seq")));
+            response.put("target_seq", r3.get("seq"));
+            response.put("result", result);
+            return response;
+        }
+    }
+
+    @MeshTool(
+        capability = "commission_cancel_via_event",
+        description = "Submit run_until_cancel, post 'work', then cancel — synthetic 'cancelled' event must arrive.",
+        dependencies = @Selector(capability = "run_until_cancel")
+    )
+    public Map<String, Object> commissionCancelViaEvent(MeshJob runUntilCancel) throws Exception {
+        if (!(runUntilCancel instanceof MeshJobSubmitter submitter)) {
+            Map<String, Object> err = new LinkedHashMap<>();
+            err.put("error", "run_until_cancel submitter not injected");
+            return err;
+        }
+        MeshJobSubmitter.SubmitOptions opts = new MeshJobSubmitter.SubmitOptions(
+            new LinkedHashMap<>(), null, 60, null, null);
+        try (JobProxy proxy = submitter.submit(opts).get()) {
+            String jobId = proxy.jobId();
+            Thread.sleep(2000);
+            Map<String, Object> workPayload = new LinkedHashMap<>();
+            workPayload.put("item", 1);
+            Map<String, Object> workReceipt = MeshJobs.postEvent(jobId, "work", workPayload);
+            // Give producer a moment to consume the 'work' event before
+            // firing cancel — makes the events strictly ordered in
+            // events_seen (work first, cancelled second).
+            Thread.sleep(1000);
+            proxy.cancel("external_stop_requested");
+            // The job is now cancelled — producer's recvEvent loop will
+            // observe the synthetic 'cancelled' event and return its
+            // dict via the normal task return path. We CANNOT use
+            // proxy.await() because wait() raises on cancelled terminal.
+            Thread.sleep(3000);
+            Map<String, Object> status = proxy.status();
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("job_id", jobId);
+            response.put("work_seq", workReceipt.get("seq"));
+            response.put("terminal_status", status.get("status"));
+            response.put("terminal_error", status.get("error"));
             return response;
         }
     }
