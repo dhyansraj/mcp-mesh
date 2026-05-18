@@ -312,6 +312,133 @@ agent.addTool({
   },
 });
 
+// ---------------------------------------------------------------------------
+// Event-injection scenarios (tc24/tc25/tc26 — recvEvent / sendEvent primitive)
+// ---------------------------------------------------------------------------
+//
+// TS port of uc21_meshjob/fixtures/long-task-provider/main.py
+// (run_with_event / run_with_filter / run_until_cancel). All three use
+// `task: true` and call `job.recvEvent(...)` in the handler body. Each
+// one targets a different facet of the event channel:
+//
+//   - run_with_event   — happy path: wait for ONE event of a single type.
+//   - run_with_filter  — type-filter correctness: ignore unrelated events.
+//   - run_until_cancel — synthetic cancel event: loop on recvEvent and
+//                        exit gracefully when the registry posts the
+//                        `{ type: "cancelled" }` synthetic event that
+//                        fires inside CancelJob.
+// ---------------------------------------------------------------------------
+
+agent.addTool({
+  name: "run_with_event",
+  capability: "run_with_event",
+  task: true,
+  meshJobParamIndex: 1,
+  description:
+    "Wait for one 'signal' event and return its payload — happy path for recvEvent.",
+  parameters: z.object({}).passthrough(),
+  execute: async (_args, job: MeshJob | null = null) => {
+    if (!job?.recvEvent) {
+      return { status: "no_job_ctx" };
+    }
+    if (job.updateProgress) {
+      await job.updateProgress(0.1, "parked on recvEvent");
+    }
+    const event = await job.recvEvent(["signal"], 10);
+    if (event === null) {
+      return { status: "timeout", received: false };
+    }
+    const payload = {
+      status: "got_event",
+      received: true,
+      type: event.type,
+      payload: event.payload,
+      seq: event.seq,
+    };
+    if (job.complete) {
+      await job.complete(payload);
+    }
+    return payload;
+  },
+});
+
+agent.addTool({
+  name: "run_with_filter",
+  capability: "run_with_filter",
+  task: true,
+  meshJobParamIndex: 1,
+  description:
+    "Wait for a 'target' event and ignore other types — exercises recvEvent filter.",
+  parameters: z.object({}).passthrough(),
+  execute: async (_args, job: MeshJob | null = null) => {
+    if (!job?.recvEvent) {
+      return { status: "no_job_ctx" };
+    }
+    if (job.updateProgress) {
+      await job.updateProgress(0.1, "parked with type filter");
+    }
+    // Long timeout so the consumer has slack to post 2 ignored events
+    // before the matching one. If the filter is broken the producer
+    // will wake on the FIRST event (ignore_a) and the assertions will
+    // catch it.
+    const event = await job.recvEvent(["target"], 15);
+    if (event === null) {
+      return { timeout: true };
+    }
+    const payload = {
+      type: event.type,
+      payload: event.payload,
+      seq: event.seq,
+    };
+    if (job.complete) {
+      await job.complete(payload);
+    }
+    return payload;
+  },
+});
+
+agent.addTool({
+  name: "run_until_cancel",
+  capability: "run_until_cancel",
+  task: true,
+  meshJobParamIndex: 1,
+  description:
+    "Loop on recvEvent for 'work'/'cancelled' types until cancelled-event arrives.",
+  parameters: z.object({}).passthrough(),
+  execute: async (_args, job: MeshJob | null = null) => {
+    if (!job?.recvEvent) {
+      return { status: "no_job_ctx" };
+    }
+    const eventsSeen: Array<{ type: string; payload: unknown }> = [];
+    // Bounded loop count — safety net against runaway iterations if the
+    // cancel event never lands. A correct flow exits via the
+    // "cancelled" branch within ~3s of the consumer firing cancel.
+    for (let i = 0; i < 20; i++) {
+      const event = await job.recvEvent(["work", "cancelled"], 15);
+      if (event === null) {
+        return { status: "timeout", events_seen: eventsSeen };
+      }
+      eventsSeen.push({ type: event.type, payload: event.payload });
+      if (event.type === "cancelled") {
+        // Don't call job.complete()/fail() — the registry row is
+        // already cancelled (the synthetic event was posted by
+        // CancelJob AFTER the row transition). Auto-complete is a
+        // no-op once terminal has been recorded, so returning here
+        // is safe.
+        //
+        // Marker line for the test driver to grep on; mirrors the
+        // Python fixture's `[run_until_cancel] cancelled_gracefully`
+        // line.
+        console.log(
+          `[run_until_cancel] cancelled_gracefully events_seen=${JSON.stringify(eventsSeen)}`,
+        );
+        return { status: "cancelled_gracefully", events_seen: eventsSeen };
+      }
+    }
+    return { status: "loop_exhausted", events_seen: eventsSeen };
+  },
+});
+
 console.log(
   `long-task-provider-ts uc22 fixture defined on port ${HTTP_PORT}. Waiting for auto-start...`,
 );

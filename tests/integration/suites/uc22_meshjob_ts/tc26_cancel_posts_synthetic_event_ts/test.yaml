@@ -1,0 +1,159 @@
+# tc26_cancel_posts_synthetic_event_ts — TS port of uc21/tc26
+# (CancelJob posts a synthetic `{type: "cancelled"}` event the parked
+# recvEvent observes; issue #1032).
+#
+# Producer `run_until_cancel` loops calling `recvEvent(["work",
+# "cancelled"], 15)`. Consumer:
+#
+#   1. submits the job
+#   2. posts a 'work' event with payload `{item: 1}`
+#   3. sleeps so producer consumes it
+#   4. calls `proxy.cancel("external_stop_requested")`
+#
+# Inside the registry's CancelJob handler the row transitions to
+# status=cancelled AND the handler then posts a synthetic
+# `{type: "cancelled", payload: {reason: "external_stop_requested"}}`
+# event with `allowTerminal=true`. The producer's long-poll wakes on
+# that synthetic event and returns `{status: "cancelled_gracefully",
+# events_seen: [<work>, <cancelled>]}` — the test asserts the marker
+# line in the producer log.
+#
+# Asserts:
+#   - the registry row is in status=cancelled (per existing semantics)
+#   - the producer logged the cancelled_gracefully marker (proves the
+#     synthetic event was both posted by the registry AND observed by
+#     the parked recvEvent call)
+#   - the producer's events_seen log line contains BOTH the 'work'
+#     event and the 'cancelled' event (in that order)
+
+name: "MeshJob TS: cancel posts a synthetic 'cancelled' event the parked recvEvent observes"
+description: "Consumer cancels mid-flight; producer's recvEvent must wake on the synthetic 'cancelled' event"
+tags:
+  - meshjob
+  - typescript
+  - issue-1032
+  - events
+  - cancel
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_typescript_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/long-task-provider-ts /workspace/
+      cp -rL /uc-artifacts/long-task-consumer-ts /workspace/
+
+  - name: "Install provider deps"
+    handler: npm-install
+    path: /workspace/long-task-provider-ts
+
+  - name: "Install consumer deps"
+    handler: npm-install
+    path: /workspace/long-task-consumer-ts
+
+  - routine: start_registry_with_fast_sweep
+
+  - name: "Start provider (port 9110)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
+
+  - name: "Wait for provider registration"
+    handler: wait
+    seconds: 15
+
+  - name: "Start consumer (port 9111)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+
+  - name: "Wait for consumer + DI resolution"
+    handler: wait
+    seconds: 22
+
+  - name: "Call commission_cancel_via_event — submit, post work, cancel"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call commission_cancel_via_event '{}'
+    capture: commission_response
+    timeout: 60
+
+  # Allow a moment for the producer's stdout to flush after the
+  # cancelled event arrives. The producer's marker line is logged
+  # inside the recvEvent branch and the runtime captures stdout to
+  # the agent's log file.
+  - name: "Wait for producer log to flush"
+    handler: wait
+    seconds: 3
+
+  - name: "Read producer log for the cancelled_gracefully marker"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl logs long-task-provider-ts 2>&1 | tail -200 | grep "\[run_until_cancel\] cancelled_gracefully" || true
+    capture: producer_log
+
+  # Independent verification: even if the producer didn't observe the
+  # synthetic 'cancelled' event in its recvEvent branch (e.g., because
+  # the cancel-token race fired AbortError on the task body first), the
+  # registry MUST have persisted it. Hit the events endpoint directly
+  # to confirm the event-row exists. This separates "registry-side
+  # broken" from "SDK cancel-token races recvEvent".
+  - name: "Read registry events log for the synthetic cancelled event"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # TS runtime wraps the result inside `content[0].text` as a JSON
+      # string — unwrap that first, then read `.job_id` from the inner
+      # JSON. (Python tools surface plain JSON at top-level, so the
+      # Python tc26 used a `..` recursive descent — that doesn't apply
+      # here.)
+      JOB_ID=$(echo '${captured.commission_response}' | jq -r '.content[0].text | fromjson | .job_id')
+      echo "JOB_ID=${JOB_ID}"
+      curl -s "http://localhost:8000/jobs/${JOB_ID}/events" | jq '.events | map({seq, type, payload})'
+    capture: registry_events
+
+assertions:
+  - expr: "${captured.commission_response} not contains '\"isError\":true'"
+    message: "commission_cancel_via_event should NOT return an MCP error envelope"
+  # Registry's terminal status — per the existing cancel semantics. TS
+  # serialises compactly so the form is `\"terminal_status\":\"cancelled\"`.
+  - expr: "${captured.commission_response} contains '\\\"terminal_status\\\":\\\"cancelled\\\"'"
+    message: "registry row must show status=cancelled after proxy.cancel"
+  - expr: "${captured.commission_response} contains '\\\"work_seq\\\":1'"
+    message: "the 'work' event must have been the first posted (seq=1)"
+  # Synthetic-event observability: the producer logs the marker ONLY
+  # when its recvEvent branch sees type=='cancelled' and the
+  # events_seen list is the loop's accumulated view of every event the
+  # producer received.
+  - expr: "${captured.producer_log} contains '[run_until_cancel] cancelled_gracefully'"
+    message: "producer must log the cancelled_gracefully marker — proves recvEvent observed the synthetic 'cancelled' event"
+  # The events_seen list (rendered as JSON in the log line) must
+  # include BOTH the 'work' event the consumer posted AND the
+  # 'cancelled' synthetic event the registry stamped in CancelJob. A
+  # registry that transitioned the row without posting the synthetic
+  # event would never log this line (the recvEvent would time out at
+  # 15s instead).
+  - expr: "${captured.producer_log} contains '\"type\":\"work\"'"
+    message: "events_seen must include the 'work' event the consumer posted"
+  - expr: "${captured.producer_log} contains '\"type\":\"cancelled\"'"
+    message: "events_seen must include the synthetic 'cancelled' event from CancelJob"
+  - expr: "${captured.producer_log} contains 'external_stop_requested'"
+    message: "the cancel reason must propagate through the synthetic event payload"
+  # Registry-side check (independent of producer observability): the
+  # synthetic cancel event MUST have been posted to the events log.
+  - expr: "${captured.registry_events} contains '\"type\": \"work\"'"
+    message: "registry events log must contain the 'work' event"
+  - expr: "${captured.registry_events} contains '\"type\": \"cancelled\"'"
+    message: "registry events log must contain the synthetic 'cancelled' event posted by CancelJob"
+  - expr: "${captured.registry_events} contains 'external_stop_requested'"
+    message: "the cancel reason must appear in the synthetic event's payload"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

@@ -40,7 +40,7 @@ use crate::jobs::{
     BatchingHandle, JobController, JobError, JobProxy, SubmitJobArgs,
 };
 use crate::task_backend::{
-    Job, JobStatus, RegistryHttpBackend, TaskBackend,
+    Job, JobEvent, JobEventReceipt, JobStatus, RegistryHttpBackend, TaskBackend,
 };
 
 // =============================================================================
@@ -56,10 +56,36 @@ fn backend_from_url(registry_url: &str) -> napi::Result<Arc<dyn TaskBackend>> {
     Ok(backend.into_arc())
 }
 
+/// Validate and convert a JS-supplied `timeoutSecs` (`Option<f64>`) into
+/// an `Option<Duration>`. `Duration::from_secs_f64` panics on negative,
+/// NaN, infinite, or out-of-range inputs; this helper traps those at the
+/// JS boundary and surfaces a clean `Error` instead so a typo'd literal
+/// in user code can't crash the Rust runtime. Uses the fallible
+/// `try_from_secs_f64` for the final conversion so even finite-but-huge
+/// values (e.g. `f64::MAX`) reject cleanly instead of panicking. Mirrors
+/// `parse_timeout_secs` in `jobs_py.rs`.
+fn parse_timeout_secs(secs: Option<f64>) -> napi::Result<Option<Duration>> {
+    match secs {
+        None => Ok(None),
+        Some(s) if s.is_nan() || s.is_infinite() || s < 0.0 => Err(Error::from_reason(
+            format!("timeoutSecs must be non-negative and finite, got {s}"),
+        )),
+        Some(s) => Duration::try_from_secs_f64(s)
+            .map(Some)
+            .map_err(|e| Error::from_reason(format!("timeoutSecs out of range: {e} (got {s})"))),
+    }
+}
+
 /// Map [`JobError`] onto a napi error with reasonable messages so callers
 /// can `try/catch` cleanly. We don't have language-level distinct exception
 /// types like Python's `TimeoutError`, so we encode the variant name as
 /// the leading token; SDK code can string-match if it needs to discriminate.
+///
+/// `JobError::JobTerminal` and the `NotFound` backend error carry the
+/// distinct "job is terminal" / "job not found" prefixes that the TS SDK
+/// re-classifies into `JobTerminalError` / `JobNotFoundError` typed
+/// exceptions — matching the Python SDK's string-based dispatch in
+/// `mesh/jobs.py::_translate_job_error`.
 fn job_error_to_napi(err: JobError) -> Error {
     match err {
         JobError::Timeout(d) => {
@@ -68,8 +94,42 @@ fn job_error_to_napi(err: JobError) -> Error {
         JobError::Cancelled => {
             Error::from_reason("cancelled: job cancelled by enclosing context")
         }
+        // `JobTerminal` surfaces the exact "job is terminal" prefix the
+        // TS SDK's `JobTerminalError` re-classification keys on (mirror
+        // of Python's `mesh/jobs.py::_translate_job_error`). Keep the
+        // string stable — it is part of the SDK contract.
+        JobError::JobTerminal(msg) => {
+            Error::from_reason(format!("job is terminal: {}", msg))
+        }
         other => Error::from_reason(other.to_string()),
     }
+}
+
+/// Convert a [`JobEvent`] into a JSON value the TS layer consumes as a
+/// plain JS object via napi-rs's `serde-json` integration. Field shape
+/// mirrors the OpenAPI `JobEvent` schema and the Python `job_event_to_pydict`
+/// helper field-for-field so cross-runtime test fixtures can read either.
+fn job_event_to_json(ev: JobEvent) -> serde_json::Value {
+    serde_json::json!({
+        "job_id": ev.job_id,
+        "seq": ev.seq,
+        "type": ev.event_type,
+        "payload": ev.payload.unwrap_or(serde_json::Value::Null),
+        "trace_context": ev.trace_context.unwrap_or(serde_json::Value::Null),
+        "posted_by": ev.posted_by,
+        "created_at": ev.created_at,
+    })
+}
+
+/// Convert a [`JobEventReceipt`] into a JSON value the TS layer consumes
+/// as a plain JS object. Mirrors `JobEventPostResponse` field-for-field
+/// (= Python's `job_event_receipt_to_pydict`).
+fn job_event_receipt_to_json(receipt: JobEventReceipt) -> serde_json::Value {
+    serde_json::json!({
+        "job_id": receipt.job_id,
+        "seq": receipt.seq,
+        "created_at": receipt.created_at,
+    })
 }
 
 /// Convert a [`Job`] into a JSON value the TS layer can `JSON.parse`-style
@@ -240,6 +300,33 @@ impl JsJobController {
             .map_err(job_error_to_napi)?;
         Ok(())
     }
+
+    /// Wait for the next event posted into this job's event log.
+    ///
+    /// Mirrors [`JobController::recv_event`]. Returns the event as a JS
+    /// object on arrival, `null` on timeout. Cursor is
+    /// per-controller-instance (shared across `clone`s); a fresh
+    /// controller for the same `jobId` replays from seq=0.
+    ///
+    /// `timeoutSecs` is validated for NaN/Infinity/negative via
+    /// [`parse_timeout_secs`] — invalid inputs reject with a clear
+    /// `Error("timeoutSecs must be non-negative and finite")` rather than
+    /// crashing the Rust runtime via `Duration::from_secs_f64`'s panic
+    /// (mirror of the Python `PyValueError` path in `jobs_py.rs`).
+    #[napi]
+    pub async fn recv_event(
+        &self,
+        types: Option<Vec<String>>,
+        timeout_secs: Option<f64>,
+    ) -> Result<Option<serde_json::Value>> {
+        let timeout = parse_timeout_secs(timeout_secs)?;
+        let result = self
+            .inner
+            .recv_event(types, timeout)
+            .await
+            .map_err(job_error_to_napi)?;
+        Ok(result.map(job_event_to_json))
+    }
 }
 
 // =============================================================================
@@ -284,9 +371,13 @@ impl JsJobProxy {
     /// payload as a JS value (object/array/primitive) on success;
     /// rejects with a "timeout: ..." error on `timeoutSecs`, or
     /// "cancelled" / other reason on non-success terminal.
+    ///
+    /// `timeoutSecs` is validated via [`parse_timeout_secs`] — NaN /
+    /// Infinity / negative inputs reject with a clear `Error` rather
+    /// than panicking inside `Duration::from_secs_f64`.
     #[napi]
     pub async fn wait(&self, timeout_secs: Option<f64>) -> Result<serde_json::Value> {
-        let timeout = timeout_secs.map(Duration::from_secs_f64);
+        let timeout = parse_timeout_secs(timeout_secs)?;
         self.inner
             .wait(timeout)
             .await
@@ -300,6 +391,35 @@ impl JsJobProxy {
     pub async fn cancel(&self, reason: Option<String>) -> Result<()> {
         self.inner.cancel(reason).await.map_err(job_error_to_napi)?;
         Ok(())
+    }
+
+    /// Post an event into this job's event log. The running handler
+    /// (inside the `task: true` job) will see it on its next
+    /// `recvEvent` call — or wake immediately if it's currently
+    /// long-polling.
+    ///
+    /// `payload` is any JSON-shaped JS value (object/array/primitive).
+    /// The receipt object carries `{ job_id, seq, created_at }` so
+    /// callers can stitch a follow-up `recvEvent` to it via `after`.
+    ///
+    /// Throws on:
+    ///   - job-not-found (registry doesn't know the job) — the SDK
+    ///     re-classifies "job not found" into `JobNotFoundError`
+    ///   - job-terminal (job already completed/failed/cancelled) — the
+    ///     SDK re-classifies "job is terminal" into `JobTerminalError`
+    ///   - other transport / backend errors.
+    #[napi]
+    pub async fn send_event(
+        &self,
+        event_type: String,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        let receipt = self
+            .inner
+            .send_event(event_type, payload)
+            .await
+            .map_err(job_error_to_napi)?;
+        Ok(job_event_receipt_to_json(receipt))
     }
 }
 
@@ -540,7 +660,19 @@ pub async fn with_job_async_napi(
         return Err(Error::from_reason(msg));
     }
     let ctx = match deadline_secs {
-        Some(secs) if secs > 0.0 => JobContext::with_timeout(job_id, Duration::from_secs_f64(secs)),
+        Some(secs) if secs > 0.0 => {
+            // `validate_deadline_secs` already rejects NaN / Inf / negative,
+            // but a finite-but-huge `secs` (e.g. `f64::MAX`) would still
+            // panic in `Duration::from_secs_f64`. Use the fallible variant
+            // and surface a clean napi error instead.
+            let dur = Duration::try_from_secs_f64(secs).map_err(|e| {
+                Error::from_reason(format!(
+                    "withJobAsync: deadline_secs ({}) out of range for job {} — {}",
+                    secs, job_id, e
+                ))
+            })?;
+            JobContext::with_timeout(job_id, dur)
+        }
         _ => JobContext::new(job_id),
     };
     run_as_job(ctx, async move { body.await }).await
@@ -548,7 +680,43 @@ pub async fn with_job_async_napi(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_deadline_secs;
+    use super::{parse_timeout_secs, validate_deadline_secs};
+
+    #[test]
+    fn parse_timeout_secs_accepts_none_and_valid() {
+        assert_eq!(parse_timeout_secs(None).unwrap(), None);
+        assert_eq!(
+            parse_timeout_secs(Some(0.0)).unwrap(),
+            Some(std::time::Duration::from_secs(0))
+        );
+        assert_eq!(
+            parse_timeout_secs(Some(1.5)).unwrap(),
+            Some(std::time::Duration::from_millis(1500))
+        );
+    }
+
+    #[test]
+    fn parse_timeout_secs_rejects_nan_inf_negative() {
+        assert!(parse_timeout_secs(Some(f64::NAN)).is_err());
+        assert!(parse_timeout_secs(Some(f64::INFINITY)).is_err());
+        assert!(parse_timeout_secs(Some(f64::NEG_INFINITY)).is_err());
+        assert!(parse_timeout_secs(Some(-1.0)).is_err());
+    }
+
+    #[test]
+    fn parse_timeout_secs_rejects_overflow_finite() {
+        // `f64::MAX` is finite but vastly exceeds `Duration`'s range
+        // (`u64::MAX` seconds). The pre-fix `Duration::from_secs_f64`
+        // would panic here; the fix uses `try_from_secs_f64` and surfaces
+        // a clean napi error instead. Regression test for the panic path.
+        let err = parse_timeout_secs(Some(f64::MAX)).expect_err("should reject overflow");
+        let msg = err.reason.as_str();
+        assert!(
+            msg.contains("out of range"),
+            "expected 'out of range' in error, got: {msg}"
+        );
+    }
+
 
     #[test]
     fn validate_deadline_secs_accepts_none_and_zero_and_positive() {

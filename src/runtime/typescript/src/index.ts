@@ -57,6 +57,7 @@ import { llm } from "./llm.js";
 import { llmProvider } from "./llm-provider.js";
 import { sseStream } from "./sse-stream.js";
 import { mount as a2aMount } from "./a2a/producer/index.js";
+import { postEvent as jobsPostEvent } from "./jobs.js";
 
 /**
  * `mesh.a2a` namespace — A2A v1.0 producer surface (issue #933).
@@ -76,6 +77,20 @@ interface MeshA2ANamespace {
 
 const a2a: MeshA2ANamespace = { mount: a2aMount };
 
+/**
+ * `mesh.jobs` namespace — MeshJob event-injection convenience helpers
+ * (mirrors Python's `mesh.jobs` submodule shipped via PR #1041 for
+ * issue #1032). The `postEvent` helper lets MCP tool bodies push an
+ * event into a running job by id without holding a `JobProxy` reference
+ * in scope (the SDK resolves the registry URL from
+ * `MCP_MESH_REGISTRY_URL` and reuses a process-cached `JobProxy`).
+ */
+interface MeshJobsNamespace {
+  postEvent: typeof jobsPostEvent;
+}
+
+const jobs: MeshJobsNamespace = { postEvent: jobsPostEvent };
+
 // Create mesh namespace with route and llm attached
 interface MeshNamespace {
   (server: import("fastmcp").FastMCP, config: import("./types.js").AgentConfig): MeshAgent;
@@ -91,6 +106,8 @@ interface MeshNamespace {
   sseStream: typeof sseStream;
   /** A2A v1.0 producer surface (issue #933). */
   a2a: MeshA2ANamespace;
+  /** MeshJob event-injection helpers (mirrors Python `mesh.jobs`). */
+  jobs: MeshJobsNamespace;
 }
 
 /**
@@ -111,6 +128,7 @@ const mesh: MeshNamespace = Object.assign(meshFn, {
   llmProvider,
   sseStream,
   a2a,
+  jobs,
 });
 
 // Main API
@@ -322,6 +340,18 @@ export {
 } from "./claim-dispatcher.js";
 export { registerJobHelperTools } from "./jobs-helper-tools.js";
 export { registerCancelRoute } from "./jobs-cancel-route.js";
+// MeshJob event-injection helpers + typed errors (mirrors Python
+// `mesh.jobs` shipped via PR #1041 for issue #1032). The
+// `mesh.jobs.postEvent` helper is the primary surface; the error
+// classes are exported so consumers can `instanceof`-discriminate
+// against the napi binding's generic Error.
+export {
+  postEvent,
+  JobNotFoundError,
+  JobTerminalError,
+  type JobEvent,
+  type JobEventReceipt,
+} from "./jobs.js";
 // Re-export napi-rs job primitives for users who want to drop down
 // to the underlying handles directly (e.g. constructing a JobProxy
 // from a known job_id).
