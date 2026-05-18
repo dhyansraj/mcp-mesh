@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /**
  * Unit tests for {@link MeshJobs} — the static {@code postEvent} helper +
@@ -257,6 +258,9 @@ class MeshJobsTest {
     @Test
     void getOrCreateProxy_evictsLruAndClosesProxyAtCap() {
         int cap = MeshJobs.proxyCacheMax();
+        assumeTrue(cap <= 1024,
+            "Skipping eviction test: cache cap " + cap + " exceeds bound (1024). "
+                + "Unset MCP_MESH_JOBPROXY_CACHE_MAX or set it <= 1024 to run.");
         // Insert the LRU sentinel first — this entry will be the
         // least-recently-used after we populate the cache to the cap.
         JobProxy lru = MeshJobs.getOrCreateProxy(FAKE_REGISTRY, "job-lru");

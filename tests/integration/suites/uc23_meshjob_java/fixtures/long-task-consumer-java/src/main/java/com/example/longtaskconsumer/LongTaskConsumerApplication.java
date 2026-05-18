@@ -484,8 +484,18 @@ public class LongTaskConsumerApplication {
             // observe the synthetic 'cancelled' event and return its
             // dict via the normal task return path. We CANNOT use
             // proxy.await() because wait() raises on cancelled terminal.
-            Thread.sleep(3000);
+            // Poll for terminal status with deadline (was fixed 3s sleep);
+            // gives headroom on slow cancels and exits fast on quick ones.
+            long deadline = System.currentTimeMillis() + 8_000L;
             Map<String, Object> status = proxy.status();
+            while (System.currentTimeMillis() < deadline) {
+                String s = status != null ? (String) status.get("status") : null;
+                if (s != null && (s.equals("completed") || s.equals("failed") || s.equals("cancelled"))) {
+                    break;
+                }
+                Thread.sleep(300);
+                status = proxy.status();
+            }
             Map<String, Object> response = new LinkedHashMap<>();
             response.put("job_id", jobId);
             response.put("work_seq", workReceipt.get("seq"));
