@@ -1,0 +1,25 @@
+{
+  "name": "event-aware-consumer-ts",
+  "version": "1.0.0",
+  "description": "MCP Mesh — TypeScript MeshJob v2.2 event-aware consumer example",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/core": "file:../../../src/runtime/core/typescript",
+    "@mcpmesh/sdk": "file:../../../src/runtime/typescript",
+    "fastmcp": "^3.34.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}
