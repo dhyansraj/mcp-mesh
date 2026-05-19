@@ -1,5 +1,5 @@
 # Dockerfile for llm-agent MCP Mesh LLM agent
-FROM mcpmesh/python-runtime:2.1.0
+FROM mcpmesh/python-runtime:2.2.0
 
 WORKDIR /app
 
