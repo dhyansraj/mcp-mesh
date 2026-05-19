@@ -904,6 +904,51 @@ int32_t mesh_job_proxy_send_event(struct JobProxyHandle *handle,
                                   const char *payload_json,
                                   char **out_receipt_json);
 
+// Fetch a single batch of events from this job's event log with
+// `seq > after`, optionally filtered by `types`. The Java SDK's
+// `MeshJobs.subscribeEvents` blocking iterator is built on top of
+// this primitive — callers manage their own cursor between calls.
+//
+// Mirrors [`JobProxy::list_events`] one-for-one. Returns the events
+// AND the registry-supplied `next_after` watermark in a JSON envelope
+// `{"events": [...], "next_after": N}` written to
+// `*out_envelope_json`. Caller frees via `mesh_free_string`.
+//
+// # Arguments
+// - `after`: cursor — only events with `seq > after` are returned.
+//   Pass `0` for "from the beginning of the event log".
+// - `types_json`: optional UTF-8 NUL-terminated JSON string encoding an
+//   array of event-type tags (e.g. `["work","progress"]`). `NULL` (or
+//   a JSON `null`) means "all types". Invalid JSON or non-array shape
+//   returns -1 with the last-error slot populated.
+// - `timeout_secs`: f64 long-poll budget in seconds. Same negative-
+//   sentinel convention as [`mesh_job_controller_recv_event`]:
+//   pass a negative value (e.g. `-1.0`) to express "no timeout"
+//   (single immediate read; rarely needed). NaN / ±Infinity reject
+//   with -1; finite-but-overflowing values reject via
+//   [`Duration::try_from_secs_f64`] (see `parse_ffi_timeout_secs`).
+// - `out_envelope_json`: receives `*mut c_char` JSON envelope
+//   `{"events":[...],"next_after":N}`. Empty `events` array means
+//   "no events arrived within the wait window" — the caller advances
+//   the cursor to `next_after` (which may be `> after` when the
+//   registry scanned events hidden by a server-side `types` filter)
+//   and polls again. Caller frees via `mesh_free_string`.
+//
+// # Returns
+// - `0` on success (envelope written; events list may be empty).
+// - `-1` on invalid args (null handle, null out-pointer, malformed
+//   types_json, invalid timeout).
+// - `-2` on JobNotFound (registry doesn't know the job — 404 from
+//   `GET /jobs/{id}/events`). Mapped by the Java SDK to
+//   `JobNotFoundException`.
+// - `-3` on other backend errors (transport failure, 5xx after
+//   retries, decode failure, etc.). See `mesh_last_error` for details.
+int32_t mesh_job_proxy_list_events(struct JobProxyHandle *handle,
+                                   int64_t after,
+                                   const char *types_json,
+                                   double timeout_secs,
+                                   char **out_envelope_json);
+
 // Free a [`JobProxyHandle`] returned by [`mesh_submit_job`] /
 // [`mesh_job_proxy_new`].
 void mesh_job_proxy_free(struct JobProxyHandle *handle);

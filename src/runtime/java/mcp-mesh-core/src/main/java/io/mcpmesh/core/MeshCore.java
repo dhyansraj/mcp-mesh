@@ -696,6 +696,53 @@ public interface MeshCore {
         Pointer handle, String eventType, String payloadJson, PointerByReference outReceiptJson);
 
     /**
+     * Fetch a single batch of events from this job's event log with
+     * {@code seq > after}, optionally filtered by {@code types}. Java's
+     * {@code MeshJobs.subscribeEvents} blocking iterator is built on
+     * top of this primitive — callers manage their own cursor between
+     * calls. Mirror of {@code JobProxy::list_events} in the Rust core.
+     *
+     * <p>The result is a JSON envelope
+     * {@code {"events":[...],"next_after":N}} written to
+     * {@code outEnvelopeJson}. {@code next_after} is the registry-
+     * supplied watermark the caller should feed back as {@code after}
+     * on the next call so empty pages caused by server-side
+     * {@code types} filtering still advance the cursor.
+     *
+     * <p>The C ABI cannot pass a nullable double, so {@code timeoutSecs}
+     * uses the same negative-sentinel convention as
+     * {@link #mesh_job_controller_recv_event}: pass a negative value
+     * (e.g. {@code -1.0}) to express "no timeout"; NaN / Infinity /
+     * finite overflow all reject with -1.
+     *
+     * @param handle             Proxy handle
+     * @param after              Cursor — only events with
+     *                           {@code seq > after} are returned. Pass
+     *                           {@code 0} for "from the beginning".
+     * @param typesJson          Optional JSON array of event-type
+     *                           strings to filter on (e.g.
+     *                           {@code ["work","progress"]}); null or
+     *                           a JSON {@code null} means "all types"
+     * @param timeoutSecs        Long-poll budget in seconds; negative
+     *                           means "no timeout" (single immediate
+     *                           read; rarely needed)
+     * @param outEnvelopeJson    Out-param: receives the envelope JSON
+     *                           string (caller frees via
+     *                           {@code mesh_free_string})
+     * @return 0 on success (envelope written; events may be empty),
+     *         -1 on invalid args, -2 on JobNotFound, -3 on other
+     *         backend errors (see {@link #mesh_last_error}).
+     *         Distinct error codes let the Java SDK map -2 to a typed
+     *         {@code JobNotFoundException}.
+     */
+    int mesh_job_proxy_list_events(
+        Pointer handle,
+        long after,
+        String typesJson,
+        double timeoutSecs,
+        PointerByReference outEnvelopeJson);
+
+    /**
      * Free a JobProxy handle returned by mesh_submit_job / mesh_job_proxy_new.
      *
      * @param handle Proxy handle (may be null)

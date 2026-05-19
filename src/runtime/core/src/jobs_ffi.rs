@@ -992,6 +992,148 @@ pub unsafe extern "C" fn mesh_job_proxy_send_event(
     }
 }
 
+/// Fetch a single batch of events from this job's event log with
+/// `seq > after`, optionally filtered by `types`. The Java SDK's
+/// `MeshJobs.subscribeEvents` blocking iterator is built on top of
+/// this primitive — callers manage their own cursor between calls.
+///
+/// Mirrors [`JobProxy::list_events`] one-for-one. Returns the events
+/// AND the registry-supplied `next_after` watermark in a JSON envelope
+/// `{"events": [...], "next_after": N}` written to
+/// `*out_envelope_json`. Caller frees via `mesh_free_string`.
+///
+/// # Arguments
+/// - `after`: cursor — only events with `seq > after` are returned.
+///   Pass `0` for "from the beginning of the event log".
+/// - `types_json`: optional UTF-8 NUL-terminated JSON string encoding an
+///   array of event-type tags (e.g. `["work","progress"]`). `NULL` (or
+///   a JSON `null`) means "all types". Invalid JSON or non-array shape
+///   returns -1 with the last-error slot populated.
+/// - `timeout_secs`: f64 long-poll budget in seconds. Same negative-
+///   sentinel convention as [`mesh_job_controller_recv_event`]:
+///   pass a negative value (e.g. `-1.0`) to express "no timeout"
+///   (single immediate read; rarely needed). NaN / ±Infinity reject
+///   with -1; finite-but-overflowing values reject via
+///   [`Duration::try_from_secs_f64`] (see `parse_ffi_timeout_secs`).
+/// - `out_envelope_json`: receives `*mut c_char` JSON envelope
+///   `{"events":[...],"next_after":N}`. Empty `events` array means
+///   "no events arrived within the wait window" — the caller advances
+///   the cursor to `next_after` (which may be `> after` when the
+///   registry scanned events hidden by a server-side `types` filter)
+///   and polls again. Caller frees via `mesh_free_string`.
+///
+/// # Returns
+/// - `0` on success (envelope written; events list may be empty).
+/// - `-1` on invalid args (null handle, null out-pointer, malformed
+///   types_json, invalid timeout).
+/// - `-2` on JobNotFound (registry doesn't know the job — 404 from
+///   `GET /jobs/{id}/events`). Mapped by the Java SDK to
+///   `JobNotFoundException`.
+/// - `-3` on other backend errors (transport failure, 5xx after
+///   retries, decode failure, etc.). See `mesh_last_error` for details.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_proxy_list_events(
+    handle: *mut JobProxyHandle,
+    after: i64,
+    types_json: *const c_char,
+    timeout_secs: f64,
+    out_envelope_json: *mut *mut c_char,
+) -> i32 {
+    take_last_error();
+    if handle.is_null() {
+        set_last_error("handle is null");
+        return -1;
+    }
+    if out_envelope_json.is_null() {
+        set_last_error("out_envelope_json is null");
+        return -1;
+    }
+    *out_envelope_json = ptr::null_mut();
+    let handle = &*handle;
+
+    // Parse optional types filter — NULL → None (all types); JSON array
+    // → Some(Vec<String>); anything else rejects. Same shape as
+    // mesh_job_controller_recv_event.
+    let types_opt: Option<Vec<String>> = match opt_cstr(types_json, "types_json") {
+        Ok(None) => None,
+        Ok(Some(s)) => match serde_json::from_str::<serde_json::Value>(s) {
+            Ok(serde_json::Value::Null) => None,
+            Ok(serde_json::Value::Array(arr)) => {
+                let mut out = Vec::with_capacity(arr.len());
+                for v in arr {
+                    match v {
+                        serde_json::Value::String(s) => out.push(s),
+                        other => {
+                            set_last_error(format!(
+                                "types_json must be an array of strings, got element: {}",
+                                other
+                            ));
+                            return -1;
+                        }
+                    }
+                }
+                Some(out)
+            }
+            Ok(other) => {
+                set_last_error(format!(
+                    "types_json must be a JSON array or null, got: {}",
+                    other
+                ));
+                return -1;
+            }
+            Err(e) => {
+                set_last_error(format!("invalid types_json: {}", e));
+                return -1;
+            }
+        },
+        Err(()) => return -1,
+    };
+
+    let wait = match parse_ffi_timeout_secs(timeout_secs) {
+        Ok(t) => t,
+        Err(msg) => {
+            set_last_error(msg);
+            return -1;
+        }
+    };
+
+    let inner = handle.inner.clone();
+    let result = jobs_runtime()
+        .block_on(async move { inner.list_events(after, types_opt, wait).await });
+    match result {
+        Ok((events, next_after)) => {
+            // Build the envelope shape consumed by Java's
+            // EventSubscription. snake_case `next_after` keeps the wire
+            // shape consistent with the registry response.
+            let events_values: Vec<serde_json::Value> = events
+                .into_iter()
+                .map(|ev| serde_json::json!({
+                    "job_id": ev.job_id,
+                    "seq": ev.seq,
+                    "type": ev.event_type,
+                    "payload": ev.payload.unwrap_or(serde_json::Value::Null),
+                    "trace_context": ev.trace_context.unwrap_or(serde_json::Value::Null),
+                    "posted_by": ev.posted_by,
+                    "created_at": ev.created_at,
+                }))
+                .collect();
+            let envelope = serde_json::json!({
+                "events": events_values,
+                "next_after": next_after,
+            });
+            write_out_string(out_envelope_json, envelope.to_string())
+        }
+        Err(JobError::Backend(crate::task_backend::BackendError::NotFound(msg))) => {
+            set_last_error(format!("job not found: {}", msg));
+            -2
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            -3
+        }
+    }
+}
+
 /// Free a [`JobProxyHandle`] returned by [`mesh_submit_job`] /
 /// [`mesh_job_proxy_new`].
 #[no_mangle]
@@ -1517,6 +1659,24 @@ mod tests {
         let rc = unsafe {
             mesh_job_controller_recv_event(
                 ptr::null_mut(),
+                ptr::null(),
+                -1.0,
+                &mut out as *mut _,
+            )
+        };
+        assert_eq!(rc, -1);
+    }
+
+    /// `mesh_job_proxy_list_events` must reject null handle / null
+    /// out-ptr cleanly via the last-error slot rather than crashing.
+    /// Mirrors `recv_event_rejects_null_handle` / `send_event_rejects_null_handle`.
+    #[test]
+    fn list_events_rejects_null_handle() {
+        let mut out: *mut c_char = ptr::null_mut();
+        let rc = unsafe {
+            mesh_job_proxy_list_events(
+                ptr::null_mut(),
+                0,
                 ptr::null(),
                 -1.0,
                 &mut out as *mut _,

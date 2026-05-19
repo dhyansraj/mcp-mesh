@@ -567,6 +567,60 @@ public class LongTaskProviderApplication {
     }
 
     @MeshTool(
+        capability = "run_until_done",
+        task = true,
+        description = "Loop on recvEvent for 'work' events, exit on payload {final: true} — paired with subscribeEvents observer."
+    )
+    public Map<String, Object> runUntilDone(MeshJob job) {
+        // Producer side of tc27_subscribe_events_streams_observer_pattern_java.
+        // Consumes 'work' events in a loop; a caller-defined termination
+        // event (a 'work' event whose payload contains {"final": true})
+        // is the signal to exit gracefully and return the count of events
+        // processed. The subscribeEvents observer on the consumer side
+        // watches the SAME event stream independently — its cursor is
+        // per-subscription, not shared with the producer's recv_event cursor.
+        JobController controller = job instanceof JobController c ? c : null;
+        if (controller == null) {
+            Map<String, Object> noJob = new LinkedHashMap<>();
+            noJob.put("status", "no_job_ctx");
+            return noJob;
+        }
+        List<Map<String, Object>> eventsProcessed = new ArrayList<>();
+        // Bounded loop — safety net so a missing termination event
+        // doesn't hang the job indefinitely. Per-iteration long timeout
+        // matches the consumer's posting cadence (3 events with ~500ms
+        // spacing; 10s is plenty).
+        for (int i = 0; i < 20; i++) {
+            Map<String, Object> event = controller.recvEvent(
+                List.of("work"), Duration.ofSeconds(10));
+            if (event == null) {
+                Map<String, Object> timeout = new LinkedHashMap<>();
+                timeout.put("status", "timeout");
+                timeout.put("processed", eventsProcessed);
+                return timeout;
+            }
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("seq", event.get("seq"));
+            entry.put("payload", event.get("payload"));
+            eventsProcessed.add(entry);
+            Object payloadRaw = event.get("payload");
+            if (payloadRaw instanceof Map<?, ?> payloadMap
+                && Boolean.TRUE.equals(payloadMap.get("final"))) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("status", "done");
+                result.put("processed_count", eventsProcessed.size());
+                result.put("events", eventsProcessed);
+                controller.complete(result);
+                return result;
+            }
+        }
+        Map<String, Object> exhausted = new LinkedHashMap<>();
+        exhausted.put("status", "loop_exhausted");
+        exhausted.put("processed", eventsProcessed);
+        return exhausted;
+    }
+
+    @MeshTool(
         capability = "run_until_cancel",
         task = true,
         description = "Loop on recvEvent for 'work'/'cancelled' types until cancelled-event arrives."

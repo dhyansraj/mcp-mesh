@@ -1,5 +1,6 @@
 package com.example.longtaskconsumer;
 
+import io.mcpmesh.EventSubscription;
 import io.mcpmesh.JobProxy;
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.MeshJob;
@@ -8,9 +9,15 @@ import io.mcpmesh.MeshJobs;
 import io.mcpmesh.MeshTool;
 import io.mcpmesh.Param;
 import io.mcpmesh.Selector;
+import io.mcpmesh.SubscribeOptions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +53,8 @@ import java.util.Map;
 )
 @SpringBootApplication
 public class LongTaskConsumerApplication {
+
+    private static final Logger log = LoggerFactory.getLogger(LongTaskConsumerApplication.class);
 
     public static void main(String[] args) {
         SpringApplication.run(LongTaskConsumerApplication.class, args);
@@ -452,6 +461,135 @@ public class LongTaskConsumerApplication {
             response.put("ignore_seqs", List.of(r1.get("seq"), r2.get("seq")));
             response.put("target_seq", r3.get("seq"));
             response.put("result", result);
+            return response;
+        }
+    }
+
+    /**
+     * Tc27 driver — submit a {@code run_until_done} job, fire 3 'work'
+     * events concurrently with a {@link MeshJobs#subscribeEvents}
+     * subscriber, and return a structured report so the integration
+     * assertions can pin all three observers (producer, subscriber,
+     * posters) agree on the event count and ordering.
+     *
+     * <p>Mirror of Python's {@code commission_subscribe_observer}
+     * (uc21_meshjob/tc27). Java threading uses a daemon Thread + a
+     * synchronized observed-events list instead of asyncio tasks; the
+     * subscriber breaks on {@code payload.final == true}. A 15s join
+     * timeout bounds the subscriber wait — on timeout we close the
+     * subscription (drops the FFI long-poll's strong reference) and
+     * report {@code subscriber_status = "timeout"}.
+     */
+    @MeshTool(
+        capability = "commission_subscribe_observer",
+        description = "Submit run_until_done, concurrently post 'work' events and subscribe — verifies observer pattern.",
+        dependencies = @Selector(capability = "run_until_done")
+    )
+    public Map<String, Object> commissionSubscribeObserver(MeshJob runUntilDone) throws Exception {
+        if (!(runUntilDone instanceof MeshJobSubmitter submitter)) {
+            Map<String, Object> err = new LinkedHashMap<>();
+            err.put("error", "run_until_done submitter not injected");
+            return err;
+        }
+        MeshJobSubmitter.SubmitOptions opts = new MeshJobSubmitter.SubmitOptions(
+            new LinkedHashMap<>(), null, 60, null, null);
+        try (JobProxy proxy = submitter.submit(opts).get()) {
+            String jobId = proxy.jobId();
+
+            // Brief wait so producer claims the job + parks on
+            // recvEvent before we post anything. Without this the
+            // first 'work' event could land before the producer's
+            // claim worker has pulled the row off the queue — the
+            // event would still be observable but we wouldn't be
+            // exercising the long-poll wake path.
+            Thread.sleep(2000);
+
+            // Synchronized list so the subscriber thread and the main
+            // thread can both touch it safely. The subscriber writes;
+            // the main thread reads after the join.
+            List<Map<String, Object>> observedEvents = Collections.synchronizedList(new ArrayList<>());
+
+            // Subscriber thread: walks the EventSubscription iterator,
+            // collecting events into observedEvents, and breaks on the
+            // 'final: true' payload marker. Mirrors Python's
+            // _subscriber asyncio task. Wrapped in try-with-resources
+            // so the subscription is always closed — even if the
+            // poster loop throws InterruptedException or postEvent
+            // raises.
+            String subscriberStatus;
+            List<Object> postedSeqs = new ArrayList<>();
+            try (EventSubscription subscription = MeshJobs.subscribeEvents(
+                    jobId,
+                    SubscribeOptions.builder()
+                        .types(List.of("work"))
+                        .longPoll(Duration.ofSeconds(5))
+                        .build())) {
+                Thread subscriberThread = new Thread(() -> {
+                    try {
+                        while (subscription.hasNext()) {
+                            Map<String, Object> event = subscription.next();
+                            Map<String, Object> entry = new LinkedHashMap<>();
+                            entry.put("seq", event.get("seq"));
+                            entry.put("payload", event.get("payload"));
+                            observedEvents.add(entry);
+                            Object payloadRaw = event.get("payload");
+                            if (payloadRaw instanceof Map<?, ?> payloadMap
+                                && Boolean.TRUE.equals(payloadMap.get("final"))) {
+                                return;
+                            }
+                        }
+                    } catch (RuntimeException ex) {
+                        // Subscriber-side error (e.g. JobNotFoundException
+                        // if the job was reaped). Surface via the empty
+                        // observed_events list — the assertions tolerate
+                        // partial state — but log so test triage isn't
+                        // blind when the exception is unexpected.
+                        log.warn("tc27 subscriber thread caught exception (job_id={}): {}",
+                            jobId, ex.toString(), ex);
+                    }
+                }, "tc27-subscriber");
+                subscriberThread.setDaemon(true);
+                subscriberThread.start();
+
+                // Poster: fire 3 'work' events with ~500ms spacing; the
+                // 3rd carries final=true to terminate the producer AND
+                // the subscriber.
+                List<Map<String, Object>> payloads = List.of(
+                    Map.of("item", 1),
+                    Map.of("item", 2),
+                    Map.of("item", 3, "final", true));
+                for (Map<String, Object> payload : payloads) {
+                    Thread.sleep(500);
+                    Map<String, Object> receipt = MeshJobs.postEvent(
+                        jobId, "work", new LinkedHashMap<>(payload));
+                    postedSeqs.add(receipt.get("seq"));
+                }
+
+                // Bound the subscriber wait — 15s is well above the
+                // expected runtime (3 events * 500ms post-spacing + handler
+                // overhead). On timeout the try-with-resources close()
+                // drops the iterator's "keep polling" flag; the next
+                // hasNext() in the subscriber thread will return false.
+                // The thread may still be blocked on a long-poll — that's
+                // fine, the daemon thread reclaims itself.
+                subscriberThread.join(15_000L);
+                subscriberStatus = subscriberThread.isAlive() ? "timeout" : "ok";
+            }
+
+            Object jobResult;
+            try {
+                jobResult = proxy.await(30.0);
+            } catch (RuntimeException e) {
+                jobResult = Map.of("error", e.getMessage());
+            }
+
+            Map<String, Object> response = new LinkedHashMap<>();
+            response.put("job_id", jobId);
+            response.put("posted_seqs", postedSeqs);
+            response.put("subscriber_status", subscriberStatus);
+            response.put("observed_count", observedEvents.size());
+            response.put("observed_events", new ArrayList<>(observedEvents));
+            response.put("job_result", jobResult);
             return response;
         }
     }
