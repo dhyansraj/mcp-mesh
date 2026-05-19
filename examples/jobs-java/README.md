@@ -75,11 +75,81 @@ The registry forwards the cancel to the owner replica via
 controller stack), which fires the in-process cancel token and aborts
 the in-flight job.
 
-## What's NOT in Phase B
+## Phase 2: Event injection (v2.2)
 
-- Idempotency keys for retries (Phase 3).
-- Resumable checkpoints (Phase 3).
-- Webhook/SSE notifications (Phase 3).
-- SEP-1686 wire surfacing (Phase 2 — strictly additive on top).
+The event-channel extension added in v2.2 lets a running `task=true`
+handler drain a per-job event log inline, and lets any caller
+holding the `jobId` post events into that same log. Two more agents
+demonstrate the pattern end-to-end:
+
+- `event-aware-provider-java/` — registers `event_aware_long_task`
+  as `task=true`. Loops on
+  `controller.recvEvent(List.of("work", "stop"), Duration.ofSeconds(30))`,
+  processing `work` events and exiting cleanly on `stop`.
+- `event-aware-consumer-java/` — registers `drive_event_aware_task`
+  which depends on `event_aware_long_task`. Submits the job, walks an
+  `EventSubscription` on a daemon thread, posts 3 `work` events + 1
+  `stop` via `MeshJobs.postEvent`, then awaits the terminal result.
+
+Java has no async/await, so the subscriber runs on a separate daemon
+thread joined back on the main thread with a bounded timeout. The
+`EventSubscription` iterator is wrapped in try-with-resources so its
+"keep polling" flag flips deterministically on exit.
+
+### Quick start (Phase 2)
+
+Build the binary first if you haven't already: `make build` from the repo root.
+
+```bash
+# Terminal 1 — registry (same as Phase 1)
+./bin/mcp-mesh-registry > /tmp/registry.log 2>&1 &
+
+# Terminal 2 — event-aware provider (port 9122)
+cd examples/jobs-java/event-aware-provider-java
+MCP_MESH_REGISTRY_URL=http://localhost:8000 mvn spring-boot:run
+
+# Terminal 3 — event-aware consumer (port 9123)
+cd examples/jobs-java/event-aware-consumer-java
+MCP_MESH_REGISTRY_URL=http://localhost:8000 mvn spring-boot:run
+```
+
+Drive the demo from a fourth terminal:
+
+```bash
+meshctl call --timeout 60 event-aware-consumer-java:drive_event_aware_task '{}'
+```
+
+Expected output shape:
+
+```json
+{
+  "job_id": "01HXY...",
+  "posted_seqs": [1, 2, 3],
+  "subscriber_status": "ok",
+  "observed_count": 3,
+  "observed_events": [
+    {"seq": 1, "payload": {"item": 1}},
+    {"seq": 2, "payload": {"item": 2}},
+    {"seq": 3, "payload": {"item": 3}}
+  ],
+  "result": {"processed": 3, "status": "stopped"}
+}
+```
+
+The producer's `recvEvent` consumed all 3 `work` events plus the
+`stop` event (`processed: 3, status: "stopped"`); the consumer-side
+`EventSubscription` observer mirrored the same 3 `work` events with
+its own independent cursor (`observed_count: 3`).
+
+For the full conceptual treatment of the event-channel surfaces, see
+[`docs/concepts/jobs.md#event-injection`](../../docs/concepts/jobs.md#event-injection)
+and [`#stream-subscription`](../../docs/concepts/jobs.md#stream-subscription).
+
+## What's NOT in v2.2 yet
+
+- Idempotency keys for retries (future).
+- Resumable checkpoints (future).
+- Webhook/SSE notifications (future).
+- SPIRE-based caller-identity verification on `job_id` (future).
 
 See `MESHJOB_DESIGN.org` at the repo root for the full roadmap.
