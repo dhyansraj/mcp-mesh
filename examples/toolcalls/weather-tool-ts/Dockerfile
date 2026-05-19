@@ -1,5 +1,5 @@
 # Dockerfile for weather-tool-ts MCP Mesh agent
-FROM mcpmesh/typescript-runtime:2.1.0
+FROM mcpmesh/typescript-runtime:2.2.0
 
 WORKDIR /app
 

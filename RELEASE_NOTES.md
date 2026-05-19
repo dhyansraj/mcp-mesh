@@ -1,8 +1,10 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.1.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.2.0...HEAD)
 
-## v2.2.0 (UNRELEASED)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.1.0...v2.2.0)
+
+## v2.2.0 (2026-05-19)
 
 The MeshJob substrate gains a second-direction primitive: a per-job, ordered, append-only event log every running job carries, with cross-runtime parity across Python, TypeScript, and Java. Closes the sub-iteration gap left by the v2.0 progress-only surface — handlers can now drain events inline instead of polling state agents at iteration boundaries — and adds an observer iterator so multiple subscribers can mirror the same job's events independently without disturbing the producer's drain.
 
