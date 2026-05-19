@@ -398,11 +398,11 @@ boundary — which may be after the event was useful.
 The sub-iteration gap above closes with **MeshJob event injection** —
 a per-job, ordered, append-only event log every running job carries.
 Anyone holding the `job_id` posts into the log; the running handler
-drains it inline. Producer-side `proxy.send_event(payload)` (or
-`mesh.jobs.post_event(job_id, ...)` from a caller that doesn't already
-have a proxy), consumer-side `await job.recv_event(types=[...],
-timeout_secs=...)` inside the handler body. Cross-runtime parity
-(Python / TypeScript / Java).
+drains it inline. Producer-side `proxy.send_event(event_type, payload)`
+(or `mesh.jobs.post_event(job_id, event_type, payload)` from a caller
+that doesn't already have a proxy), consumer-side
+`await job.recv_event(types=[...], timeout_secs=...)` inside the
+handler body. Cross-runtime parity (Python / TypeScript / Java).
 
 For long-lived observers that want to mirror events without consuming
 them, the **stream subscription** counterpart opens a non-destructive
