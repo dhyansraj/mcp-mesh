@@ -132,6 +132,80 @@ public final class MeshJobs {
     }
 
     /**
+     * Subscribe to events posted to a running job by ID.
+     *
+     * <p>Returns a {@link EventSubscription} — a long-lived blocking
+     * iterator over the job's event log. Each call manages its own
+     * cursor, so multiple subscribers can observe the same job's
+     * events independently without affecting the producer's
+     * {@code recvEvent} consumption (the producer's cursor is
+     * per-controller; this observer's cursor is per-subscription).
+     *
+     * <p>The iterator runs indefinitely until the caller breaks out
+     * of the for-loop, calls {@link EventSubscription#close()}, or
+     * the underlying registry raises {@link JobNotFoundException}.
+     * There is no automatic terminal-state detection — use a
+     * synthetic event type (e.g. {@code {"type":"ended"}}) posted by
+     * your application to signal iteration end.
+     *
+     * <p>Mirrors:
+     * <ul>
+     *   <li>Python {@code mesh.jobs.subscribe_events(job_id, types, after, long_poll_secs)}</li>
+     *   <li>TypeScript {@code mesh.jobs.subscribeEvents(jobId, options)}</li>
+     * </ul>
+     *
+     * <p>The registry URL is discovered from {@code MCP_MESH_REGISTRY_URL}
+     * (same convention as {@link #postEvent(String, String, Map)}).
+     * Cached proxies: this method reuses the process-wide LRU cache,
+     * so a subscriber and a {@code postEvent} caller targeting the
+     * same job share one underlying {@link JobProxy}.
+     *
+     * <p>Recommended usage (try-with-resources):
+     * <pre>{@code
+     * try (EventSubscription sub = MeshJobs.subscribeEvents(jobId,
+     *         SubscribeOptions.builder().types(List.of("progress")).build())) {
+     *     while (sub.hasNext()) {
+     *         Map<String, Object> event = sub.next();
+     *         downstream.publish(event);
+     *         if ("result".equals(event.get("type"))) break;
+     *     }
+     * }
+     * }</pre>
+     *
+     * @param jobId   Target job's server-assigned ID
+     * @param options Filter / cursor / long-poll knobs; use
+     *                {@link SubscribeOptions#defaults()} or
+     *                {@link #subscribeEvents(String)} for defaults
+     * @return A blocking iterator over the job's events; caller MUST
+     *         {@link EventSubscription#close()} (or try-with-resources)
+     *         when done
+     * @throws JobNotFoundException if the job has been reaped from
+     *                              the registry (only raised when the
+     *                              caller advances the iterator)
+     * @throws MeshException        for transport errors or missing
+     *                              {@code MCP_MESH_REGISTRY_URL}
+     */
+    public static EventSubscription subscribeEvents(String jobId, SubscribeOptions options) {
+        if (jobId == null || jobId.isEmpty()) {
+            throw new IllegalArgumentException("jobId is required");
+        }
+        if (options == null) {
+            options = SubscribeOptions.defaults();
+        }
+        String registryUrl = resolveRegistryUrl();
+        JobProxy proxy = getOrCreateProxy(registryUrl, jobId);
+        return new EventSubscription(proxy, options);
+    }
+
+    /**
+     * Convenience overload — {@link #subscribeEvents(String, SubscribeOptions)}
+     * with {@link SubscribeOptions#defaults()}.
+     */
+    public static EventSubscription subscribeEvents(String jobId) {
+        return subscribeEvents(jobId, SubscribeOptions.defaults());
+    }
+
+    /**
      * Discover the registry base URL the running agent is bound to.
      * Mirrors the {@code MCP_MESH_REGISTRY_URL} convention used by
      * Python's {@code _resolve_registry_url} and TypeScript's
