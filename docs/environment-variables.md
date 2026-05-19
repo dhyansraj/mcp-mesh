@@ -301,6 +301,47 @@ export MCP_MESH_PROXY_TIMEOUT=120
 export MCP_MESH_CALL_TIMEOUT=600
 ```
 
+## MeshJob event channel
+
+Tunables for the [MeshJob event injection + stream subscription
+surface](concepts/jobs.md#event-injection). Both variables are
+optional with sensible defaults — most deployments never need to
+override them.
+
+```bash
+# Max JobProxy instances held in the SDK's process-wide LRU cache
+# (default: 256). Used by the SDK helpers mesh.jobs.post_event /
+# mesh.jobs.subscribe_events (Python), mesh.jobs.postEvent /
+# mesh.jobs.subscribeEvents (TypeScript), and MeshJobs.postEvent /
+# MeshJobs.subscribeEvents (Java). Each JobProxy wraps a Rust
+# reqwest::Client connection pool, so caching keyed by
+# (registry_url, job_id) eliminates a TCP/TLS handshake on every
+# call. When the cache fills, the least-recently-used entry is
+# evicted (its native handle is closed). Invalid / non-positive
+# values fall back to the default — a typo'd env doesn't silently
+# disable the cache. Increase if you have many concurrent active
+# jobs from the same SDK process.
+export MCP_MESH_JOBPROXY_CACHE_MAX=256
+
+# How long the registry's CancelJob handler waits (in milliseconds)
+# after writing a synthetic "cancelled" event into a job's event log
+# before HTTP-forwarding the cancel to the owner replica (default:
+# 200, capped at 10000). Closes a race window where a producer
+# parked on recv_event(["cancelled", ...]) could otherwise see
+# CancelledError before observing the synthetic event. Set to 0 to
+# disable the grace and revert to pre-v2.2 immediate cancel-forward
+# behavior. Values above the cap are clamped with a logged warning
+# rather than rejected, so a bad env var can't take down
+# cancellation entirely.
+export MCP_MESH_CANCEL_EVENT_GRACE_MS=200
+```
+
+The SDK-side cache cap is read by the runtime that owns the
+`post_event` / `subscribe_events` call (Python / TypeScript / Java
+agents that act as producers of events). The cancel-event grace is
+read by the **registry** binary at startup and applies to every job
+running against that registry.
+
 ## Tracing & Observability
 
 ### Distributed Tracing

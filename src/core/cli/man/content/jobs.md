@@ -217,6 +217,99 @@ app). On the producer side, the in-process cancel token fires:
 The registry treats cancel as terminal (idempotent — already-terminal
 jobs return ok without re-firing).
 
+## Event injection
+
+Per-job append-only event log every running job carries. Anyone with
+the `job_id` writes; the running handler drains.
+
+**Inside a `task=True` handler — receive events:**
+
+```python
+event = await job.recv_event(
+    types=["user_input", "cancelled"],
+    timeout_secs=10.0,
+)
+# event is dict with {seq, type, payload, ...}, or None on timeout.
+if event is None:
+    pass  # nothing arrived within timeout
+elif event["type"] == "cancelled":
+    return {"status": "cancelled", "reason": event["payload"].get("reason")}
+```
+
+**Outside the handler, with a `job_id` in scope — fire an event:**
+
+```python
+import mesh
+
+@app.tool()
+@mesh.tool(capability="submit_user_input")
+async def submit_user_input(job_id: str, text: str) -> dict:
+    receipt = await mesh.jobs.post_event(
+        job_id, "user_input", {"text": text},
+    )
+    return {"seq": receipt["seq"]}
+```
+
+`mesh.jobs.post_event` is the canonical fire-and-forget. It resolves
+the registry from `MCP_MESH_REGISTRY_URL` and reuses a process-cached
+`JobProxy` from a bounded LRU keyed by `(registry_url, job_id)`
+(default cap 256; tune via `MCP_MESH_JOBPROXY_CACHE_MAX`). If the
+calling code already holds a `JobProxy`, use `proxy.send_event(
+event_type, payload)` directly — same wire shape, skip the helper.
+
+**Typed errors** (both subclass `RuntimeError` for back-compat):
+
+- `mesh.JobNotFoundError` — job swept or id typo
+- `mesh.JobTerminalError` — job already terminal, no more events accepted
+
+**Synthetic cancel event**. When a consumer calls `proxy.cancel(
+reason)`, the registry writes a synthetic
+`{"type": "cancelled", "payload": {"reason": "..."}}` event into the
+log before forwarding the cancel signal. A handler parked on
+`recv_event(types=["cancelled", ...])` observes it and can return
+cleanly instead of being interrupted by `CancelledError`. The
+registry waits a small grace window before issuing the cancel-forward
+(default 200ms, tunable via `MCP_MESH_CANCEL_EVENT_GRACE_MS`, capped
+at 10s) so the synthetic event lands before the cancel token fires.
+
+## Stream subscription
+
+Non-destructive observer iterator. Multiple subscribers can mirror
+the same job's events independently — each call has its own cursor,
+none of them disturb the producer's `recv_event` drain.
+
+```python
+import mesh
+
+async def mirror(job_id: str) -> None:
+    async for event in mesh.jobs.subscribe_events(
+        job_id,
+        types=["progress", "ended"],
+        after=0,
+        long_poll_secs=30.0,
+    ):
+        await downstream.publish(event)
+        if event["type"] == "ended":
+            break
+```
+
+**Use it for**: fan-out to a downstream queue / UI websocket /
+metrics sink; third-party observer that mirrors events without
+being the running handler; reconnect-from-cursor (persist
+`next_after` between sessions). For the in-handler drain — where each
+event is processed once — use `recv_event` instead.
+
+**Semantics:**
+
+- `after=0` starts from the beginning of the log; pass a higher
+  value to skip historical events.
+- Server-side `types` filter; the `next_after` watermark advances
+  even on empty pages so filtered re-scans are O(1).
+- No automatic terminal-state detection. The iterator runs until the
+  caller breaks out of the loop or the registry raises
+  `JobNotFoundError`. Applications signal end via a sentinel event
+  type (e.g. `{"type": "ended"}`).
+
 ## Timeout propagation
 
 Jobs use the `X-Mesh-Timeout` header (#656) to carry a per-attempt
