@@ -305,14 +305,135 @@ The registry forwards the cancel to the owner replica via
 `POST /jobs/{id}/cancel` (auto-registered on every agent's HTTP
 server). On the producer side, the cancel token fires:
 
-- Thread interrupt is signaled at the next `Thread.sleep` /
-  `Object.wait` / blocking I/O — the handler should propagate
-  `InterruptedException` rather than swallow it.
+- Handlers cannot rely on `Thread#sleep` being interrupted — Java's
+  `Thread.interrupt()` cannot be signaled by the Tokio cancel token
+  firing on the registry side. Long-running task handlers MUST poll
+  `controller.isCancelled()` between work units (the cooperative
+  model), OR park on `controller.recvEvent(List.of("cancelled", ...),
+  ...)` to observe the synthetic cancel event (see [Event
+  injection](#event-injection) below).
 - Outbound `McpMeshTool` proxy calls abort their underlying HTTP
   request (cancel propagates through `X-Mesh-Job-Id` header binding).
 
 The registry treats cancel as terminal (idempotent — already-terminal
 jobs return ok without re-firing).
+
+## Event injection
+
+Per-job append-only event log every running job carries. Anyone with
+the `jobId` writes; the running handler drains.
+
+**Inside a `task = true` handler — receive events:**
+
+```java
+@MeshTool(capability = "run_workflow", task = true)
+public Map<String, Object> runWorkflow(
+    @Param("tenant_id") String tenantId,
+    MeshJob job) throws Exception {
+  JobController controller = (JobController) job;
+  while (true) {
+    Map<String, Object> event = controller.recvEvent(
+        List.of("user_input", "cancelled"),
+        Duration.ofSeconds(10));
+    if (event == null) continue;       // clean timeout
+    if ("cancelled".equals(event.get("type"))) {
+      return Map.of("status", "cancelled");
+    }
+    // ...handle user_input...
+  }
+}
+```
+
+**Outside the handler, with a `jobId` in scope — fire an event:**
+
+```java
+import io.mcpmesh.MeshJobs;
+
+@MeshTool(capability = "submit_user_input")
+public Map<String, Object> submitUserInput(
+    @Param("job_id") String jobId,
+    @Param("text") String text) {
+  Map<String, Object> receipt = MeshJobs.postEvent(
+      jobId, "user_input", Map.of("text", text));
+  return Map.of("seq", receipt.get("seq"));
+}
+```
+
+`MeshJobs.postEvent` is the canonical fire-and-forget. It resolves
+the registry from `MCP_MESH_REGISTRY_URL` and reuses a process-wide
+LRU cache keyed by `(registryUrl, jobId)` (default cap 256; tune via
+`MCP_MESH_JOBPROXY_CACHE_MAX`). If the calling code already holds a
+`JobProxy`, use `proxy.sendEvent(eventType, payload)` directly.
+
+**Typed exceptions** (both extend `MeshException`):
+
+- `JobNotFoundException` — job swept or id typo
+- `JobTerminalException` — job already terminal, no more events accepted
+
+**Synthetic cancel event**. When a consumer calls `proxy.cancel(
+reason)`, the registry writes a synthetic event into the log before
+HTTP-forwarding the cancel signal. A handler parked on `recvEvent(
+List.of("cancelled", ...), ...)` observes the synthetic event and can
+return cleanly. This is the recommended pattern for cancel-aware Java
+handlers — `Thread#sleep` cannot be interrupted by the registry's
+cancel token firing, so handlers that sleep between work units must
+poll `controller.isCancelled()` between intervals; `recvEvent` on the
+synthetic `"cancelled"` event type sidesteps the polling requirement
+by tying cancel observation to the event channel. The registry waits
+a small grace window before issuing the cancel-forward (default
+200ms, tunable via `MCP_MESH_CANCEL_EVENT_GRACE_MS`, capped at 10s).
+
+## Stream subscription
+
+Non-destructive observer iterator. Multiple subscribers can mirror
+the same job's events independently — each subscription has its own
+cursor, none disturb the producer's `recvEvent` drain.
+
+```java
+import io.mcpmesh.EventSubscription;
+import io.mcpmesh.MeshJobs;
+import io.mcpmesh.SubscribeOptions;
+
+void mirror(String jobId) {
+  SubscribeOptions opts = SubscribeOptions.builder()
+      .types(List.of("progress", "ended"))
+      .after(0L)
+      .longPoll(Duration.ofSeconds(30))
+      .build();
+  try (EventSubscription sub = MeshJobs.subscribeEvents(jobId, opts)) {
+    while (sub.hasNext()) {
+      Map<String, Object> event = sub.next();
+      downstream.publish(event);
+      if ("ended".equals(event.get("type"))) break;
+    }
+  }
+}
+```
+
+**`EventSubscription` is `Closeable` and blocking.** `hasNext()`
+parks inside the long-poll until an event arrives or the iterator is
+closed. Use try-with-resources so `close()` flips the "don't issue
+another long-poll" flag deterministically when control leaves the
+block. `close()` does **not** interrupt an in-flight FFI long-poll —
+if you need fast shutdown, configure a shorter `longPoll` budget so
+the in-flight call drains quickly.
+
+**Use it for**: fan-out to a downstream queue / UI websocket /
+metrics sink; third-party observer that mirrors events without being
+the running handler; reconnect-from-cursor (persist `next_after`
+between sessions). For the in-handler drain — where each event is
+processed once — use `recvEvent` instead.
+
+**Semantics:**
+
+- `after(0)` (the default) starts from the beginning of the log; pass
+  a higher value to skip historical events.
+- Server-side `types` filter; the `next_after` watermark advances
+  even on empty pages so filtered re-scans are O(1).
+- No automatic terminal-state detection. The iterator runs until the
+  caller breaks out of the loop, calls `close()`, or the registry
+  raises `JobNotFoundException`. Applications signal end via a
+  sentinel event type (e.g. `{"type": "ended"}`).
 
 ## Timeout propagation
 

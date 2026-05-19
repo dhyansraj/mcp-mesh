@@ -54,7 +54,7 @@ to understand the mechanism behind it.
     ***
 
     How data flows once agents are wired — streaming responses, long-running
-    jobs, and the audit trail that records every call.
+    jobs with event injection, and the audit trail that records every call.
 
     - [Streaming](streaming.md)
     - [Long-Running Jobs](jobs.md)

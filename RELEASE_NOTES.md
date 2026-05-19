@@ -1,5 +1,38 @@
 # MCP Mesh Release Notes
 
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.1.0...HEAD)
+
+## v2.2.0 (UNRELEASED)
+
+The MeshJob substrate gains a second-direction primitive: a per-job, ordered, append-only event log every running job carries, with cross-runtime parity across Python, TypeScript, and Java. Closes the sub-iteration gap left by the v2.0 progress-only surface — handlers can now drain events inline instead of polling state agents at iteration boundaries — and adds an observer iterator so multiple subscribers can mirror the same job's events independently without disturbing the producer's drain.
+
+### 📬 MeshJob event injection (#1041, #1043, #1045)
+
+Point-to-point: caller writes, handler drains. Same wire shape across all three runtimes; differences are limited to native idiom (async generator vs blocking `Closeable`, exception class hierarchy).
+
+- **Static helpers for fire-and-forget posting**: `mesh.jobs.post_event(job_id, event_type, payload)` (Python), `mesh.jobs.postEvent(jobId, eventType, payload)` (TypeScript), `MeshJobs.postEvent(jobId, eventType, payload)` (Java). Each helper resolves `MCP_MESH_REGISTRY_URL` and constructs (or reuses, via the new LRU) a `JobProxy` — MCP tool bodies that hold a `job_id` no longer need a controller reference in scope to push an event into a running job.
+- **In-handler drain**: producer-side `await controller.recv_event(types=[...], timeout_secs=N)` (Python) / `await controller.recvEvent([...], N)` (TypeScript) / `controller.recvEvent(List.of(...), Duration.ofSeconds(N))` (Java). Long-poll backed; returns one event dict (or `None` / null on timeout). Cursor is per-controller-instance.
+- **Per-proxy send**: `proxy.send_event` / `proxy.sendEvent` is the fire-and-forget on a `JobProxy` already in scope. Same wire shape as `post_event`; use whichever surface you have.
+- **Typed errors**: `JobNotFoundError` / `JobTerminalError` (Python, both subclass `RuntimeError`), `JobNotFoundError` / `JobTerminalError` (TypeScript, both extend `Error`), `JobNotFoundException` / `JobTerminalException` (Java, both extend `MeshException`). All translated from the Rust core's `JobError` variants via stable message substrings emitted by the pyo3 / napi wrappers.
+- **LRU `JobProxy` cache** (256 entries by default, override via `MCP_MESH_JOBPROXY_CACHE_MAX`): the SDK caches `JobProxy` instances keyed by `(registry_url, job_id)` so steady-state senders don't pay a TCP/TLS handshake on every call. Eviction closes the native handle.
+- **Synthetic cancel event with grace window**: when a consumer calls `proxy.cancel(reason)`, the registry writes `{"type": "cancelled", "payload": {"reason": "..."}}` into the job's event log before forwarding the cancel signal to the owner replica. A handler parked on `recv_event(types=["cancelled", ...])` observes the event and can return cleanly instead of being interrupted by `CancelledError`. The registry waits `MCP_MESH_CANCEL_EVENT_GRACE_MS` (default 200ms, capped at 10s) before issuing the cancel-forward so the synthetic event lands first.
+
+### 👁️ MeshJob stream subscription (#1047, #1049, #1051)
+
+Observer counterpart to `recv_event`: non-destructive, per-call cursor, multi-subscriber.
+
+- **Async-iterator surface**: `async for event in mesh.jobs.subscribe_events(job_id, types=[...], after=0, long_poll_secs=30.0)` (Python async generator), `for await (const event of mesh.jobs.subscribeEvents(jobId, { types, after, longPollSecs }))` (TypeScript async generator), `try (EventSubscription sub = MeshJobs.subscribeEvents(jobId, SubscribeOptions.builder()...build())) { while (sub.hasNext()) { ... } }` (Java blocking `Closeable` iterator with try-with-resources).
+- **Per-call cursor, registry-supplied watermark**: each subscription manages its own cursor — multiple subscribers can mirror the same job's events independently without affecting the producer's `recv_event` consumption. The `next_after` watermark advances even on empty pages, so a server-side `types` filter doesn't force the client to re-scan filtered ranges.
+- **No automatic terminal detection**: the iterator runs until the caller breaks out of the loop or the registry raises `JobNotFoundError` / `JobNotFoundException` (job reaped). Applications signal end via a sentinel event type (e.g. `{"type": "ended"}`). This is intentional — the registry's event log is append-only, and "the job is terminal" is not the same condition as "the subscriber wants to stop."
+- **Shared LRU**: `subscribe_events` and `post_event` reuse the same `JobProxy` cache, so a subscriber and a poster targeting the same job share one underlying connection pool.
+
+### 📚 Documentation
+
+- New "Event injection" and "Stream subscription" sections in `docs/concepts/jobs.md` with cross-runtime tabbed code examples and the synthetic-cancel-event flow.
+- `docs/concepts/stateful-agents.md` — replaces the v2.0 "Coming soon" pointer to issue #1032 with a brief paragraph linking to the new sections and noting the feature is now shipped.
+- `docs/environment-variables.md` + `meshctl man environment` — adds the `MCP_MESH_JOBPROXY_CACHE_MAX` and `MCP_MESH_CANCEL_EVENT_GRACE_MS` entries under a new "MeshJob event channel" section.
+- `meshctl man jobs` (Python / `--typescript` / `--java` variants) — adds the same two sections to each per-runtime man page.
+
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.0.1...v2.1.0)
 
 ## v2.1.0 (2026-05-17)

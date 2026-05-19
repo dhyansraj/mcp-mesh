@@ -393,16 +393,32 @@ streaming LLM call that runs for two minutes, the user clicking "extend
 my deadline" lands in `pending_inputs` and sits there until the next
 boundary — which may be after the event was useful.
 
-### Coming soon: mesh-managed event channel
+### Sub-iteration events: mesh-managed event channel (shipped in v2.2)
 
-A mesh-managed bidirectional event channel between consumer and running
-job is on the roadmap as **issue #1032**. The shape is symmetric to
-streaming today: `JobProxy.send_event(payload)` from any consumer that
-holds the `job_id`, `await job.recv_event()` inside the job body —
-mesh handles delivery, trace propagation, and survival across reroute.
-That closes the sub-iteration gap. Until it lands, the inbox pattern
-above covers the iteration-boundary case, which is most of what
-production workflows need.
+The sub-iteration gap above closes with **MeshJob event injection** —
+a per-job, ordered, append-only event log every running job carries.
+Anyone holding the `job_id` posts into the log; the running handler
+drains it inline. Producer-side `proxy.send_event(payload)` (or
+`mesh.jobs.post_event(job_id, ...)` from a caller that doesn't already
+have a proxy), consumer-side `await job.recv_event(types=[...],
+timeout_secs=...)` inside the handler body. Cross-runtime parity
+(Python / TypeScript / Java).
+
+For long-lived observers that want to mirror events without consuming
+them, the **stream subscription** counterpart opens a non-destructive
+iterator with per-call cursor — multiple subscribers can mirror the
+same job's events independently. See
+[Event injection](jobs.md#event-injection) and
+[Stream subscription](jobs.md#stream-subscription) on the Jobs page
+for the canonical surface, cross-runtime examples, and the synthetic
+cancel-event pattern that gives handlers a graceful shutdown path.
+
+The inbox-via-state-agent pattern above still has its place — it's the
+right tool when the workflow naturally syncs at iteration boundaries
+and the state agent's storage is also where you want the inbox to
+live. Reach for the event channel when sub-iteration latency matters:
+a handler parked on a long `recv_event` wakes the moment the event is
+posted, not on the next boundary.
 
 ## Cancel and graceful shutdown
 

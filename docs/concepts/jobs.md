@@ -511,6 +511,359 @@ and [`MESHJOB_DDDI_CONTRACT.md`](https://github.com/dhyansraj/mcp-mesh/blob/main
   Java peer claiming the same capability — declare the whitelist
   separately on each runtime that hosts the capability.
 
+## Event injection
+
+`update_progress` is producer-to-consumer one-way reporting. **Event
+injection** opens the other direction (and the side channel between
+two consumers): a per-job, ordered, append-only event log the registry
+hosts, that anyone holding the `job_id` can write into and that the
+running handler can drain from inline.
+
+The shape is symmetric to a tiny pub/sub bus scoped to one job. Three
+surfaces:
+
+- **Inside the `task=True` handler** — drain events posted to this job
+  via the injected `MeshJob` controller. Long-poll backed; returns one
+  event dict (or `None` on timeout).
+- **Outside the handler, holding a `job_id`** — fire one event into the
+  job's log via a static helper. The SDK constructs (and caches) a
+  transient `JobProxy` from `MCP_MESH_REGISTRY_URL`; no controller
+  reference needed.
+- **From a consumer that already holds a `JobProxy`** — `proxy.send_event`
+  is the per-proxy fire-and-forget. Same wire shape as `post_event`;
+  use whichever surface you have in scope.
+
+```mermaid
+sequenceDiagram
+    participant C as Caller (any agent w/ job_id)
+    participant R as Registry (event log)
+    participant H as Handler (task=True)
+
+    C->>R: POST /jobs/{id}/events  (type, payload)
+    R-->>C: 201 (seq, created_at)
+    Note over R: Append-only log<br/>(per-job seq)
+    H->>R: GET /jobs/{id}/events?after=N  (long-poll)
+    R-->>H: event dict (or empty after timeout)
+    Note over H: Cursor advances<br/>per-controller
+```
+
+### Receiving events inside a handler
+
+The producer-side recv loop. Filter by `types` to drop noise, set a
+`timeout_secs` so the loop can wake periodically to check other state.
+
+<!-- markdownlint-disable MD046 -->
+=== "Python"
+
+    ```python
+    @app.tool()
+    @mesh.tool(capability="run_workflow", task=True)
+    async def run_workflow(tenant_id: str, job: MeshJob = None) -> dict:
+        while True:
+            event = await job.recv_event(
+                types=["user_input", "cancelled"],
+                timeout_secs=10.0,
+            )
+            if event is None:
+                continue  # timeout: tick housekeeping, then re-park
+            if event["type"] == "cancelled":
+                return {"status": "cancelled", "reason": event["payload"].get("reason")}
+            # ...handle user_input...
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    agent.addTool({
+      name: "run_workflow",
+      capability: "run_workflow",
+      task: true,
+      meshJobParamIndex: 1,
+      parameters: z.object({ tenant_id: z.string() }),
+      execute: async ({ tenant_id }, job: MeshJob | null = null) => {
+        if (!job) throw new Error("job slot is not bound");
+        while (true) {
+          const event = await job.recvEvent(["user_input", "cancelled"], 10);
+          if (event === null) continue;
+          if (event.type === "cancelled") {
+            const payload = event.payload as Record<string, unknown> | null;
+            const reason = typeof payload?.reason === "string" ? payload.reason : "";
+            return { status: "cancelled", reason };
+          }
+          // ...handle user_input...
+        }
+      },
+    });
+    ```
+
+=== "Java"
+
+    ```java
+    @MeshTool(capability = "run_workflow", task = true)
+    public Map<String, Object> runWorkflow(
+        @Param("tenant_id") String tenantId,
+        MeshJob job) throws Exception {
+      JobController controller = (JobController) job;
+      while (true) {
+        Map<String, Object> event = controller.recvEvent(
+            List.of("user_input", "cancelled"),
+            Duration.ofSeconds(10));
+        if (event == null) continue;
+        if ("cancelled".equals(event.get("type"))) {
+          Map<?, ?> payload = (Map<?, ?>) event.get("payload");
+          String reason = payload == null ? "" : Objects.toString(payload.get("reason"), "");
+          return Map.of("status", "cancelled", "reason", reason);
+        }
+        // ...handle user_input...
+      }
+    }
+    ```
+<!-- markdownlint-enable MD046 -->
+
+The handler's `recv_event` cursor is per-`JobController` instance — a
+fresh controller for the same `job_id` replays from `seq=0`. The
+running handler always sees events in monotonic seq order.
+
+### Posting events from outside the handler
+
+`mesh.jobs.post_event` is the canonical fire-and-forget. It resolves the
+registry from `MCP_MESH_REGISTRY_URL`, reuses a process-cached
+`JobProxy` from the LRU keyed by `(registry_url, job_id)` (configurable
+via [`MCP_MESH_JOBPROXY_CACHE_MAX`](../environment-variables.md#meshjob-event-channel)),
+and forwards the call. Use it from any MCP tool that receives a
+`job_id` in its request payload (a "submit_user_input" pattern):
+
+<!-- markdownlint-disable MD046 -->
+=== "Python"
+
+    ```python
+    import mesh
+
+    @app.tool()
+    @mesh.tool(capability="submit_user_input")
+    async def submit_user_input(job_id: str, text: str) -> dict:
+        receipt = await mesh.jobs.post_event(
+            job_id, "user_input", {"text": text},
+        )
+        return {"seq": receipt["seq"]}
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    agent.addTool({
+      name: "submit_user_input",
+      capability: "submit_user_input",
+      parameters: z.object({ jobId: z.string(), text: z.string() }),
+      execute: async ({ jobId, text }) => {
+        const receipt = await mesh.jobs.postEvent(
+          jobId, "user_input", { text },
+        );
+        return { seq: receipt.seq };
+      },
+    });
+    ```
+
+=== "Java"
+
+    ```java
+    @MeshTool(capability = "submit_user_input")
+    public Map<String, Object> submitUserInput(
+        @Param("job_id") String jobId,
+        @Param("text") String text) {
+      Map<String, Object> receipt = MeshJobs.postEvent(
+          jobId, "user_input", Map.of("text", text));
+      return Map.of("seq", receipt.get("seq"));
+    }
+    ```
+<!-- markdownlint-enable MD046 -->
+
+If the calling code already holds a `JobProxy` (e.g. the consumer that
+called `submitter.submit(...)`), the same wire surface is on the proxy
+directly: `proxy.send_event(event_type, payload)` (Python) /
+`proxy.sendEvent(eventType, payload)` (TS/Java). Skip the helper +
+cache lookup when you already have a proxy in scope.
+
+### Typed errors
+
+Both `post_event` and `send_event` raise typed errors for the two
+classes of failure the registry surfaces explicitly. Catch the
+specific class if you care about distinguishing them; both still
+descend from the runtime's generic exception type for back-compat
+with broad handlers.
+
+| Runtime    | Job not found in registry  | Job in terminal state         |
+| ---------- | -------------------------- | ----------------------------- |
+| Python     | `mesh.JobNotFoundError`    | `mesh.JobTerminalError`       |
+| TypeScript | `JobNotFoundError`         | `JobTerminalError`            |
+| Java       | `JobNotFoundException`     | `JobTerminalException`        |
+
+Python's classes subclass `RuntimeError`; TypeScript's classes
+subclass `Error`; Java's classes subclass `MeshException`.
+`JobNotFoundError` covers the "sweep reaped it" / "id typo" case;
+`JobTerminalError` covers "the job already completed / failed /
+cancelled — no more events accepted."
+
+### Synthetic cancel event
+
+When a consumer calls `proxy.cancel(reason)`, the registry writes a
+synthetic event into the log before forwarding the cancel signal to
+the owner replica:
+
+```
+{"type": "cancelled", "payload": {"reason": "..."}}
+```
+
+A handler parked on `recv_event(types=["cancelled", ...])` observes
+the event and can return cleanly instead of being interrupted by a
+`CancelledError`-style exception at the next `await` point. The
+registry waits a small grace window (default 200ms, configurable via
+[`MCP_MESH_CANCEL_EVENT_GRACE_MS`](../environment-variables.md#meshjob-event-channel))
+before issuing the cancel-forward, closing the race where the
+synthetic event would otherwise be in flight when the cancel token
+fires. The grace is capped at 10s — long enough for any reasonable
+`recv_event` long-poll to wake, short enough that cancel calls don't
+visibly stall.
+
+Use this pattern when you want graceful shutdown semantics inside the
+handler body instead of exception unwinding. The traditional
+`CancelledError` path is still available — handlers that don't
+subscribe to events continue to see the same behavior as before.
+
+## Stream subscription
+
+`recv_event` is **consumed** — once the handler reads an event at
+`seq=N`, that controller's cursor advances past `N` and won't see it
+again. **Stream subscription** is the **observer** counterpart: a
+non-destructive iterator any caller can open against a job's event
+log, each with its own cursor. Multiple subscribers can mirror the
+same job's events without disturbing the producer's drain.
+
+```mermaid
+sequenceDiagram
+    participant H as Handler (producer)
+    participant R as Registry (event log)
+    participant S1 as Subscriber 1
+    participant S2 as Subscriber 2
+
+    H->>R: recv_event  (cursor advances)
+    S1->>R: list_events(after=0)
+    R-->>S1: events 1..N + next_after
+    S2->>R: list_events(after=12)
+    R-->>S2: events 13..N + next_after
+    Note over R: Each subscriber's<br/>cursor is per-call<br/>(not shared with handler)
+```
+
+### When to use it
+
+- **Fan-out**: ship the same event stream to a downstream queue, a UI
+  websocket, and a metrics sink — three subscribers, three cursors,
+  zero coordination.
+- **Third-party observer**: a sidecar that mirrors events without
+  being the running handler.
+- **Reconnect-from-cursor**: persist `next_after` between subscriber
+  sessions to resume from where the last session left off (the
+  registry's log is append-only; the cursor is durable as long as
+  the registry hasn't reaped the job).
+
+For the in-handler drain — where each event is processed once — use
+`recv_event` instead. Subscription is for cases where the act of
+observing must not consume.
+
+### Per-call cursor and watermark
+
+Each call manages its own cursor. `after=0` (the default) starts from
+the beginning of the log; pass a higher value to skip historical
+events. The registry returns an ascending batch of events plus a
+`next_after` watermark — the watermark advances even on empty pages
+(useful when a server-side `types` filter scans past events that
+don't match), so subsequent polls don't re-scan the same filtered
+range.
+
+There is **no automatic terminal-state detection**. The subscription
+keeps polling until the caller breaks out of the loop or the
+registry raises `JobNotFoundError` (job swept). Applications that
+want a clean end signal post a sentinel event (e.g.
+`{"type": "ended"}`) and break when the subscriber observes it.
+
+### Cross-runtime examples
+
+The three runtimes use the idiomatic iterator shape for each language:
+Python and TypeScript expose async generators; Java exposes a blocking
+`Closeable` iterator (try-with-resources is the canonical pattern).
+
+<!-- markdownlint-disable MD046 -->
+=== "Python"
+
+    ```python
+    import mesh
+
+    async def mirror_progress(job_id: str) -> None:
+        async for event in mesh.jobs.subscribe_events(
+            job_id,
+            types=["progress", "ended"],
+            after=0,
+            long_poll_secs=30.0,
+        ):
+            await downstream.publish(event)
+            if event["type"] == "ended":
+                break
+    ```
+
+=== "TypeScript"
+
+    ```typescript
+    import { mesh } from "@mcpmesh/sdk";
+
+    async function mirrorProgress(jobId: string): Promise<void> {
+      for await (const event of mesh.jobs.subscribeEvents(jobId, {
+        types: ["progress", "ended"],
+        after: 0,
+        longPollSecs: 30,
+      })) {
+        await downstream.publish(event);
+        if (event.type === "ended") break;
+      }
+    }
+    ```
+
+=== "Java"
+
+    ```java
+    void mirrorProgress(String jobId) {
+      SubscribeOptions opts = SubscribeOptions.builder()
+          .types(List.of("progress", "ended"))
+          .after(0L)
+          .longPoll(Duration.ofSeconds(30))
+          .build();
+      try (EventSubscription sub = MeshJobs.subscribeEvents(jobId, opts)) {
+        while (sub.hasNext()) {
+          Map<String, Object> event = sub.next();
+          downstream.publish(event);
+          if ("ended".equals(event.get("type"))) break;
+        }
+      }
+    }
+    ```
+<!-- markdownlint-enable MD046 -->
+
+A note on the Java shape: `EventSubscription` is **blocking** — `hasNext()`
+parks inside the long-poll until an event arrives or the subscription
+is closed. Use try-with-resources so `close()` flips the iterator's
+"don't issue another long-poll" flag deterministically. Callers that
+need fast shutdown should configure a shorter `longPoll` budget so an
+in-flight FFI long-poll drains quickly when `close()` is invoked from
+another thread (the close flag only stops *future* long-polls, not the
+in-flight one). Python's `async for` and TS's `for await` integrate
+with the runtime's cooperative cancellation natively.
+
+The underlying `JobProxy` is reused across `post_event` /
+`subscribe_events` calls targeting the same `(registry_url, job_id)`
+via the shared process-wide LRU cache — one TCP/TLS pool serves both
+surfaces. Cache cap and grace window knobs live with the other
+MeshJob event-channel variables in
+[Environment Variables](../environment-variables.md#meshjob-event-channel).
+
 ## See Also
 
 - [Streaming](streaming.md) — token-by-token progress for the request-
@@ -519,6 +872,12 @@ and [`MESHJOB_DDDI_CONTRACT.md`](https://github.com/dhyansraj/mcp-mesh/blob/main
   `X-Mesh-Timeout` propagation through the audit pipeline
 - [DDDI](dddi.md) — Distributed Dynamic Dependency Injection overview;
   explains how `MeshJob` slots are resolved
+- [Stateful Agents](stateful-agents.md) — the broader decomposition
+  pattern for agents that hold state across multiple tool calls;
+  event injection is the sub-iteration primitive that pattern leans
+  on for external signals
+- [Environment Variables](../environment-variables.md#meshjob-event-channel)
+  — `MCP_MESH_JOBPROXY_CACHE_MAX`, `MCP_MESH_CANCEL_EVENT_GRACE_MS`
 - [`MESHJOB_DESIGN.org`](https://github.com/dhyansraj/mcp-mesh/blob/main/MESHJOB_DESIGN.org)
   — full design doc with state machine, lifecycle, and SQL schema
 - [`MESHJOB_DDDI_CONTRACT.md`](https://github.com/dhyansraj/mcp-mesh/blob/main/MESHJOB_DDDI_CONTRACT.md)

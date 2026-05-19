@@ -251,6 +251,103 @@ server). On the producer side, the cancel token fires:
 The registry treats cancel as terminal (idempotent — already-terminal
 jobs return ok without re-firing).
 
+## Event injection
+
+Per-job append-only event log every running job carries. Anyone with
+the `jobId` writes; the running handler drains.
+
+**Inside a `task: true` handler — receive events:**
+
+```typescript
+if (!job) throw new Error("job slot is not bound");
+const event = await job.recvEvent(["user_input", "cancelled"], 10);
+// event is { seq, type, payload, ... } | null
+if (event === null) {
+  // nothing arrived within timeout
+} else if (event.type === "cancelled") {
+  const payload = event.payload as Record<string, unknown> | null;
+  const reason = typeof payload?.reason === "string" ? payload.reason : "";
+  return { status: "cancelled", reason };
+}
+```
+
+**Outside the handler, with a `jobId` in scope — fire an event:**
+
+```typescript
+import { mesh } from "@mcpmesh/sdk";
+
+agent.addTool({
+  name: "submit_user_input",
+  capability: "submit_user_input",
+  parameters: z.object({ jobId: z.string(), text: z.string() }),
+  execute: async ({ jobId, text }) => {
+    const receipt = await mesh.jobs.postEvent(
+      jobId, "user_input", { text },
+    );
+    return { seq: receipt.seq };
+  },
+});
+```
+
+`mesh.jobs.postEvent` is the canonical fire-and-forget. It resolves
+the registry from `MCP_MESH_REGISTRY_URL` and reuses a process-cached
+`JobProxy` from a bounded LRU keyed by `(registryUrl, jobId)` (default
+cap 256; tune via `MCP_MESH_JOBPROXY_CACHE_MAX`). If the calling code
+already holds a `JobProxy`, use `proxy.sendEvent(eventType, payload)`
+directly — same wire shape, skip the helper.
+
+**Typed errors** (both extend `Error`):
+
+- `JobNotFoundError` — job swept or id typo
+- `JobTerminalError` — job already terminal, no more events accepted
+
+**Synthetic cancel event**. When a consumer calls `proxy.cancel(
+reason)`, the registry writes a synthetic
+`{ type: "cancelled", payload: { reason: "..." } }` event into the log
+before forwarding the cancel signal. A handler parked on `recvEvent(
+["cancelled", ...])` observes it and can return cleanly instead of
+relying on the `AbortSignal`. The registry waits a small grace window
+before issuing the cancel-forward (default 200ms, tunable via
+`MCP_MESH_CANCEL_EVENT_GRACE_MS`, capped at 10s).
+
+## Stream subscription
+
+Non-destructive observer iterator. Multiple subscribers can mirror
+the same job's events independently — each call has its own cursor,
+none of them disturb the producer's `recvEvent` drain.
+
+```typescript
+import { mesh } from "@mcpmesh/sdk";
+
+async function mirror(jobId: string): Promise<void> {
+  for await (const event of mesh.jobs.subscribeEvents(jobId, {
+    types: ["progress", "ended"],
+    after: 0,
+    longPollSecs: 30,
+  })) {
+    await downstream.publish(event);
+    if (event.type === "ended") break;
+  }
+}
+```
+
+**Use it for**: fan-out to a downstream queue / UI websocket /
+metrics sink; third-party observer that mirrors events without
+being the running handler; reconnect-from-cursor (persist
+`next_after` between sessions). For the in-handler drain — where each
+event is processed once — use `recvEvent` instead.
+
+**Semantics:**
+
+- `after = 0` (the default) starts from the beginning of the log; pass
+  a higher value to skip historical events.
+- Server-side `types` filter; the `nextAfter` watermark advances even
+  on empty pages so filtered re-scans are O(1).
+- No automatic terminal-state detection. The iterator runs until the
+  caller breaks out of the `for await` loop or the registry raises
+  `JobNotFoundError`. Applications signal end via a sentinel event
+  type (e.g. `{ type: "ended" }`).
+
 ## Timeout propagation
 
 Jobs use the `X-Mesh-Timeout` header (#656) to carry a per-attempt

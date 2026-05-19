@@ -399,6 +399,34 @@ export MCP_MESH_PROXY_TIMEOUT=60
 export MCP_MESH_CALL_TIMEOUT=300
 ```
 
+## MeshJob event channel
+
+Tunables for the MeshJob event injection + stream subscription surface
+(see `meshctl man jobs`). Both variables are optional with sensible
+defaults — most deployments never need to override them.
+
+```bash
+# Max JobProxy instances held in the SDK's process-wide LRU cache
+# (default: 256). Used by mesh.jobs.post_event / mesh.jobs.subscribe_events
+# (Python), mesh.jobs.postEvent / mesh.jobs.subscribeEvents (TS), and
+# MeshJobs.postEvent / MeshJobs.subscribeEvents (Java). Each cached
+# JobProxy wraps a reqwest::Client connection pool — caching keyed by
+# (registry_url, job_id) eliminates a TCP/TLS handshake on every call.
+# Eviction closes the native handle. Invalid / non-positive values
+# fall back to the default. Increase if you have many concurrent
+# active jobs from the same SDK process.
+export MCP_MESH_JOBPROXY_CACHE_MAX=256
+
+# Registry-side: how long CancelJob waits (in ms) after writing the
+# synthetic "cancelled" event into the job's event log before HTTP-
+# forwarding the cancel to the owner replica (default: 200, capped at
+# 10000). Closes a race where a producer parked on recv_event(
+# ["cancelled", ...]) could otherwise see CancelledError before
+# observing the synthetic event. 0 disables the grace and reverts to
+# pre-v2.2 immediate cancel-forward behavior.
+export MCP_MESH_CANCEL_EVENT_GRACE_MS=200
+```
+
 ## Registry Configuration
 
 ```bash
