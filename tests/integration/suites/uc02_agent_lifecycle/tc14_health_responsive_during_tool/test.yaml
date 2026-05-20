@@ -1,0 +1,126 @@
+# tc14 - /health responsiveness while a tool holds the user loop
+# (issue #1061, v2.2.1 fix verification).
+#
+# The v2.2.1 architecture splits the framework loop (uvicorn — owns
+# /health, /ready, /livez, heartbeats) from the user loop (lifespan
+# body + tool bodies). This test proves the split:
+#
+#   1. Start an agent whose `slow_tool` does `await asyncio.sleep(10)`
+#      on the user loop.
+#   2. Fire the tool call in the background.
+#   3. While it's still running, hit `/health` on the framework loop
+#      and assert a 200 response within 1 second.
+#
+# If `/health` is queued behind the tool, the curl will take ~10s and
+# the elapsed-time guard will fail.
+
+name: "Framework Loop /health Responsive During Long Tool"
+description: "Verify /health stays responsive on the framework loop while the user loop is busy in a tool (issue #1061)"
+tags:
+  - lifecycle
+  - lifespan
+  - loop-affinity
+  - health
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy long-tool agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-long-tool-agent /workspace/"
+    capture: copy_output
+
+  - name: "Start long-tool agent on port 3014"
+    handler: shell
+    command: "meshctl start py-long-tool-agent/main.py --env MCP_MESH_HTTP_PORT=3014 -d"
+    workdir: /workspace
+    capture: start_output
+
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 15
+
+  - name: "Check agent is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  - name: "Baseline /health probe (no tool in flight)"
+    handler: shell
+    command: |
+      curl -s -o /tmp/health_baseline.out -w "%{http_code} %{time_total}" \
+        http://localhost:3014/health
+    capture: health_baseline
+
+  - name: "Kick slow_tool in background + probe /health mid-flight"
+    handler: shell
+    command: |
+      # Fire the tool in background — it will block ~10s on the user loop.
+      ( meshctl call slow_tool '{}' > /tmp/slow_tool.out 2>&1 ) &
+      SLOW_PID=$!
+
+      # Give the tool a moment to actually start executing on the user loop.
+      sleep 2
+
+      # Now probe /health on the framework loop — must come back fast.
+      # Capture time_total separately so we can bound it (a 2.9s response
+      # would still fit under --max-time 3, but indicates the framework
+      # loop IS being blocked).
+      HEALTH_BODY=$(curl -s -o /tmp/health_during.out \
+        -w "%{http_code} %{time_total}\nTIME_TOTAL=%{time_total}\n" \
+        --max-time 3 \
+        http://localhost:3014/health)
+      echo "$HEALTH_BODY"
+      echo "SLOW_PID=$SLOW_PID"
+
+      TIME_S=$(echo "$HEALTH_BODY" | grep '^TIME_TOTAL=' | head -1 | cut -d= -f2)
+      TIME_MS=$(awk -v t="$TIME_S" 'BEGIN { printf "%.0f", t * 1000 }')
+      echo "HEALTH_TIME_MS=$TIME_MS"
+      if [ -z "$TIME_MS" ] || [ "$TIME_MS" -ge 500 ]; then
+        echo "HEALTH_TOO_SLOW: ${TIME_MS}ms >= 500ms (framework loop appears blocked by user-loop tool)"
+      else
+        echo "HEALTH_FAST_OK"
+      fi
+
+      # Wait for the slow_tool call to complete cleanly.
+      wait $SLOW_PID || true
+      echo "---SLOW_TOOL_OUTPUT---"
+      cat /tmp/slow_tool.out
+    workdir: /workspace
+    capture: health_during
+
+  - name: "Show agent logs for debugging"
+    handler: shell
+    command: "meshctl logs long-tool-agent 2>/dev/null | tail -40 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+assertions:
+  - expr: ${captured.list_output} contains 'long-tool-agent'
+    message: "Agent should be registered"
+
+  - expr: ${captured.health_baseline} contains '200'
+    message: "Baseline /health probe must return 200"
+
+  - expr: ${captured.health_during} contains '200'
+    message: "/health MUST return 200 even while a tool is holding the user loop (issue #1061)"
+
+  - expr: ${captured.health_during} contains 'HEALTH_FAST_OK'
+    message: "/health MUST respond in <500ms while a tool holds the user loop (issue #1061: framework loop independence — typical observed is <5ms; a near-3s response would still fit the curl timeout but indicates the framework loop is being blocked)"
+
+  - expr: ${captured.health_during} contains 'done'
+    message: "slow_tool should still complete after /health returns (no deadlock)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

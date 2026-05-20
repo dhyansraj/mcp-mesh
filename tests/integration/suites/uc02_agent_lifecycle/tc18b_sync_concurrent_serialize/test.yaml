@@ -1,0 +1,117 @@
+# tc18b - two sync-blocking tools concurrent under N=1 serialize
+# (issue #1061 cost-of-default reproducer).
+#
+# Documents the trade-off cost of the v2.2.1 default
+# ``MCP_MESH_TOOL_WORKERS=1``: tools that do sync blocking work
+# (``time.sleep``, blocking DB drivers, CPU-bound numpy, etc.) hold the
+# single user loop for their full duration. A second concurrent call
+# of the same shape queues behind the first.
+#
+# Two concurrent calls to ``sync_sleep_5`` (each ``time.sleep(5)``)
+# observe wall-clock ~10s — half the parallelism gone. This is the
+# motivation for keeping ``MCP_MESH_TOOL_WORKERS`` as an opt-in
+# override (covered in tc18c).
+
+name: "Sync-Blocking Tools Serialize at N=1"
+description: "Verify two concurrent time.sleep tools serialize on the single user loop at N=1 (issue #1061 trade-off)"
+tags:
+  - lifecycle
+  - serialization
+  - python
+  - workers-trade-off
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy multi-slow-tool agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-multi-slow-tool-agent /workspace/"
+    capture: copy_output
+
+  - name: "Start multi-slow-tool agent (default N=1)"
+    handler: shell
+    command: "meshctl start py-multi-slow-tool-agent/main.py --env MCP_MESH_HTTP_PORT=3181 -d"
+    workdir: /workspace
+    capture: start_output
+
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 15
+
+  - name: "Check agent is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  - name: "Fire two sync_sleep_5 calls concurrently and measure wall-clock"
+    handler: shell
+    workdir: /workspace
+    command: |
+      START=$(date +%s)
+      ( meshctl call sync_sleep_5 '{}' > /tmp/tc18b_call1.out 2>&1 ) &
+      P1=$!
+      ( meshctl call sync_sleep_5 '{}' > /tmp/tc18b_call2.out 2>&1 ) &
+      P2=$!
+      wait $P1; RC1=$?
+      wait $P2; RC2=$?
+      if [ "$RC1" -ne 0 ] || [ "$RC2" -ne 0 ]; then
+        echo "ABORT: P1 rc=$RC1, P2 rc=$RC2"
+        exit 1
+      fi
+      END=$(date +%s)
+      ELAPSED=$((END - START))
+      echo "WALL_CLOCK_S=$ELAPSED"
+      echo "---CALL1---"
+      cat /tmp/tc18b_call1.out
+      echo "---CALL2---"
+      cat /tmp/tc18b_call2.out
+    capture: wall_clock_output
+    timeout: 90
+
+  - name: "Assert serialization (wall clock >= 9s, demonstrating the cost)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      OUT='${captured.wall_clock_output}'
+      ELAPSED=$(echo "$OUT" | grep -oE 'WALL_CLOCK_S=[0-9]+' | head -1 | sed 's/.*=//')
+      if [ -z "$ELAPSED" ]; then
+        echo "MISSING_WALL_CLOCK"
+        exit 1
+      fi
+      echo "OBSERVED_WALL_CLOCK_S=$ELAPSED"
+      if [ "$ELAPSED" -ge 9 ]; then
+        echo "SERIALIZE_CONFIRMED"
+      else
+        echo "UNEXPECTED_PARALLEL: ${ELAPSED}s < 9s at N=1 — did MCP_MESH_TOOL_WORKERS default get clobbered?"
+        exit 1
+      fi
+    capture: serialize_check
+
+  - name: "Show agent logs"
+    handler: shell
+    command: "meshctl logs multi-slow-tool-agent 2>/dev/null | tail -30 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+assertions:
+  - expr: ${captured.list_output} contains 'multi-slow-tool-agent'
+    message: "Agent should be registered"
+
+  - expr: "${captured.wall_clock_output} contains '\"kind\": \"sync\"'"
+    message: "Both sync_sleep_5 calls should return"
+
+  - expr: ${captured.serialize_check} contains 'SERIALIZE_CONFIRMED'
+    message: "Two concurrent time.sleep tools MUST serialize (>=9s wall-clock) at N=1 (issue #1061 trade-off cost)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

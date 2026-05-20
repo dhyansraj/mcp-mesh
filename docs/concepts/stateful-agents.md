@@ -39,58 +39,40 @@ several primitives — MeshJob, DDDI, the worker-pool topology — so the
   external signal; a timer fires at a deadline. None of this is gated
   on a user tool call landing.
 
-The temptation when you hit this for the first time is to cache state
-in process memory at the module level. The shape feels
-natural — it's how FastAPI services without mesh usually look:
+### Loop topology (v2.2.1+)
+
+mcp-mesh runs your agent across two event loops:
+
+- **Framework loop** (uvicorn main): serves `/health`, `/ready`, `/livez`, and routes MCP protocol traffic. Always responsive.
+- **User loop** (single, dedicated): runs your FastAPI `lifespan` startup, all `@mesh.tool` and `@app.tool` bodies, and `lifespan` exit. One loop for everything you write.
+
+The two-loop split means a long-running tool body (LLM call, slow registry hop, multi-minute MeshJob) holds the user loop, but never the framework loop — your K8s liveness/readiness probes stay responsive.
+
+**What this fixes**: standard FastAPI patterns for loop-bound resources work as expected. `asyncpg.Pool`, `redis.asyncio.Redis`, and `aiohttp.ClientSession` are all loop-affine — they bind to the asyncio loop that created them and fail if reused from a different one. Because v2.2.1 runs your lifespan AND your tools on the same user loop, the standard FastAPI idiom just works:
 
 ```python
-# DON'T DO THIS in a multi-worker mesh agent.
-import asyncpg
-import mesh
-from fastmcp import FastMCP
+@asynccontextmanager
+async def lifespan(app):
+    app.state.pool = await asyncpg.create_pool(...)
+    yield
+    await app.state.pool.close()
 
-app = FastMCP("Bad State Agent")
-_pool: asyncpg.Pool | None = None  # module-level cache
-
-async def _get_pool() -> asyncpg.Pool:
-    global _pool
-    if _pool is None:
-        _pool = await asyncpg.create_pool("postgres://...")
-    return _pool
+app = FastMCP("my-agent", lifespan=lifespan)
 
 @app.tool()
-@mesh.tool(capability="read_state")
-async def read_state(tenant_id: str) -> dict:
-    pool = await _get_pool()
-    async with pool.acquire() as conn:
-        return await conn.fetchrow("SELECT * FROM state WHERE tenant=$1", tenant_id)
+@mesh.tool(capability="query")
+async def query() -> dict:
+    async with app.state.pool.acquire() as conn:
+        return await conn.fetchrow("SELECT ...")
 ```
 
-The first `read_state` call lands on worker loop A, lazily builds the
-pool on loop A, returns. The second `read_state` call round-robins to
-worker loop B. The pool's internal Futures were created on loop A; when
-loop B tries to await them, asyncio throws:
+No per-loop dict workarounds, no `WORKERS=1` ceremony, no surprises. The pool is created on the user loop in `lifespan` startup; tools use it on the same user loop; `lifespan` exit closes it on the same loop.
 
-```
-RuntimeError: Task <Task pending name='Task-N'> got Future <Future pending>
-attached to a different loop
-```
+**Opt-in N>1 worker pool**: if a tool body does sync blocking work (e.g. `time.sleep`, a sync HTTP client, CPU-bound number crunching) and you need concurrent calls to absorb it instead of serializing on one loop, set `MCP_MESH_TOOL_WORKERS=N` (N>1). You get N worker loops, dispatched round-robin. Loop-bound resources created in `lifespan` still bind to one loop (worker-0); tools dispatched to worker-1..N-1 cannot access them. The supported pattern for that case is the per-loop dict cache (see `src/runtime/python/_mcp_mesh/engine/unified_mcp_proxy.py` for the SDK's own internal use of this pattern for httpx clients).
 
-Why does this happen? The Python runtime dispatches `async def`
-`@mesh.tool` functions across a small pool of worker loops — default
-`min(8, max(2, cpu_count()))`, always ≥ 2. The pool keeps `/health`,
-`/livez`, registry heartbeats, and other concurrent tool calls
-responsive even when one tool blocks. The trade-off: module-level
-loop-bound resources (asyncpg pools, `redis.asyncio.Redis`,
-`motor.motor_asyncio.AsyncIOMotorClient`, `aiohttp.ClientSession`) bind
-to whatever loop created them and fail on every subsequent call that
-lands on a different worker. The full topology is documented in
-[the dependency-injection reference](../python/dependency-injection.md#single-worker-mode-for-shared-loop-bound-resources).
+**Better escape for sync-blocking**: refactor the blocking call to `await asyncio.to_thread(blocking_call)`. The blocking call runs on Python's default thread pool; the user loop stays free; you don't need N>1 workers.
 
-There are two clean answers to this problem in mesh. The simple one is
-to collapse to a single worker loop with `MCP_MESH_TOOL_WORKERS=1`
-(covered in [single-worker mode](../python/dependency-injection.md#single-worker-mode-for-shared-loop-bound-resources)).
-The structural one — the one that survives replica restart, scales
+The structural answer — the one that survives replica restart, scales
 horizontally, and composes with the rest of the mesh — is the
 three-agent decomposition that follows.
 
@@ -107,10 +89,10 @@ The state agent exposes `@mesh.tool` functions that read and write a
 Postgres (or Redis) database. It does no business logic. It does no
 long-running work. From mesh's perspective it's an ordinary CRUD
 agent — every tool call is short, idempotent where possible, and
-returns. The pool lives inside the agent process and (because the agent
-is shaped for a single shared resource) runs with
-`MCP_MESH_TOOL_WORKERS=1` so it can cache the pool at module level
-without the cross-loop footgun.
+returns. The pool lives inside the agent process — created in
+`lifespan` startup, attached to `app.state`, and closed in `lifespan`
+exit. Since v2.2.1, `lifespan` and all tool bodies share the single
+user loop, so the standard FastAPI pattern is the supported pattern.
 
 Schema:
 
@@ -127,24 +109,23 @@ Schema:
 
     ```python
     import os
+    from contextlib import asynccontextmanager
     import asyncpg
     import mesh
     from fastmcp import FastMCP
 
-    app = FastMCP("State Agent")
-    _pool: asyncpg.Pool | None = None  # safe: MCP_MESH_TOOL_WORKERS=1
+    @asynccontextmanager
+    async def lifespan(app):
+        app.state.pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
+        yield
+        await app.state.pool.close()
 
-    async def _pool_handle() -> asyncpg.Pool:
-        global _pool
-        if _pool is None:
-            _pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
-        return _pool
+    app = FastMCP("State Agent", lifespan=lifespan)
 
     @app.tool()
     @mesh.tool(capability="read_state")
     async def read_state(tenant_id: str) -> dict:
-        pool = await _pool_handle()
-        async with pool.acquire() as conn:
+        async with app.state.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT state FROM tenant_state WHERE tenant_id=$1",
                 tenant_id,
@@ -154,8 +135,7 @@ Schema:
     @app.tool()
     @mesh.tool(capability="append_event")
     async def append_event(tenant_id: str, event_type: str, payload: dict) -> dict:
-        pool = await _pool_handle()
-        async with pool.acquire() as conn:
+        async with app.state.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
                     "INSERT INTO event_log (tenant_id, event_type, payload) "
@@ -179,7 +159,6 @@ Deployment env:
 
 ```yaml
 env:
-  MCP_MESH_TOOL_WORKERS: "1"      # collapse to one worker loop
   DATABASE_URL: "postgres://..."
 ```
 
@@ -259,9 +238,11 @@ The orchestrator hosts the long-running unit of work. Each unit is one
     class Orchestrator: pass
     ```
 
-This body runs on mesh's default worker pool (no `WORKERS=1` here — the
-agent is stateless from a resource-binding standpoint; all loop-bound
-resources live across the boundary in the state agent's process).
+The orchestrator is stateless from a resource-binding standpoint — all
+loop-bound resources live across the boundary in the state agent's
+process. Whether the orchestrator runs at the default single-user loop
+or opts into `MCP_MESH_TOOL_WORKERS=N` for sync-blocking parallelism
+is independent of this decomposition.
 
 ### Client surface — `mesh.route` for web, MCP for tools
 
@@ -319,9 +300,11 @@ Each piece of the decomposition pays for itself:
   horizontally with Postgres as the coordination point; the route agent
   scales horizontally trivially.
 - **Loop-bound resources stay inside one process.** The asyncpg pool
-  lives in the state agent (which runs `WORKERS=1`). No cross-loop
-  sharing. No cross-process sharing. The pool is invisible to the
-  orchestrator and to the route agent.
+  lives in the state agent — created in `lifespan` startup on the user
+  loop, used by every tool body on the same user loop, closed in
+  `lifespan` exit on the same loop. No cross-loop sharing. No
+  cross-process sharing. The pool is invisible to the orchestrator and
+  to the route agent.
 
 ## Handling external events during a run
 
@@ -479,13 +462,16 @@ A handful of anti-patterns this decomposition exists to prevent:
   with sub-10ms latency budgets) — see
   [In-Process State](in-process-state.md) — but it should never be
   the default reach.
-- **Module-level state without `MCP_MESH_TOOL_WORKERS=1`.** Don't
-  cache asyncpg pools, redis clients, or any other loop-bound resource
-  at module level on default workers. It will work the first call.
-  It will fail the second. The fix is either single-worker mode
-  ([details](../python/dependency-injection.md#single-worker-mode-for-shared-loop-bound-resources))
-  or moving the resource into a dedicated state agent (the pattern
-  above).
+- **Loop-bound resource cached at module level when `MCP_MESH_TOOL_WORKERS>1`.**
+  At the default `WORKERS=1`, module-level caching of an asyncpg pool /
+  redis client works, but it's brittle — anyone setting `WORKERS=N` to
+  absorb sync-blocking work will see "Future attached to a different
+  loop" on the second worker. The supported shape is to create the
+  resource in FastAPI `lifespan` startup (binds to the single-user
+  loop, used by all tools on the same loop) — see
+  [Loop topology](#loop-topology-v221) above. If you also need N>1
+  workers for sync-blocking parallelism, use a per-loop dict cache
+  (each worker lazily builds its own resource on first access).
 - **Putting orchestration state on the orchestrator process.** The
   orchestrator's job body should be a pure transformer: read state in,
   drive work, write state out. The moment it caches anything across
@@ -499,6 +485,6 @@ A handful of anti-patterns this decomposition exists to prevent:
   responses; pairs with MeshJob for live updates
 - [In-Process State (Escape Hatch)](in-process-state.md) — when even
   MeshJob can't fit your shape, with documented caveats
-- [Single-Worker Mode](../python/dependency-injection.md#single-worker-mode-for-shared-loop-bound-resources)
-  — the `MCP_MESH_TOOL_WORKERS=1` flag and when to use it
-- `meshctl man dependency-injection` — DDDI and worker-loop topology
+- [Loop Topology](../python/dependency-injection.md#loop-topology-v221)
+  — two-loop model, default `MCP_MESH_TOOL_WORKERS=1`, when to opt into N>1
+- `meshctl man dependency-injection` — DDDI and loop topology

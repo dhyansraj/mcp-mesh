@@ -1,6 +1,37 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.2.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.2.1...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.2.0...v2.2.1)
+
+## v2.2.1 (2026-05-20)
+
+Cross-loop affinity fix for v2.2 adopters using FastAPI lifespan patterns. Apps that create loop-bound resources (`asyncpg.Pool`, `redis.asyncio.Redis`, `aiohttp.ClientSession`) in `lifespan` startup and use them from tool bodies hit "Future attached to a different loop" errors in v2.2.0 — the documented `MCP_MESH_TOOL_WORKERS=1` "escape hatch" did not actually solve it. v2.2.1 fixes the topology so standard FastAPI patterns work as expected.
+
+### 🪢 Loop topology fix (#1061)
+
+- **Lifespan, tools, and lifespan exit now share one user loop.** Previously, `lifespan` ran on uvicorn's main loop and tools dispatched to N worker loops with their own asyncio runtimes — any loop-bound resource created in `lifespan` failed when reused from a tool body. The SDK now hijacks the composed lifespan and dispatches it to the user loop via `asyncio.run_coroutine_threadsafe` + `asyncio.wrap_future`, mirroring the pattern already used internally for cross-loop httpx-client close in `unified_mcp_proxy.close_connection_pools`.
+- **`/health` / `/ready` / `/livez` remain on the framework loop**, never blocked by user-tool execution. K8s probe responsiveness during long tool calls is preserved (verified by integration test: `/health` responded in 0.958ms during a 10-second `await asyncio.sleep(10)` tool).
+- **Contextvar propagation across the loop boundary** (mesh trace IDs, propagated headers) honored in the lifespan body via the same `contextvars.copy_context()` + `loop.create_task(..., context=ctx)` pattern used for tool dispatch.
+- **Exception forwarding through `__aexit__`** preserves `exc_type` / `exc_val` / `exc_tb` per PEP 343, so user lifespan `finally` / except blocks see the original error if uvicorn raises during the yield.
+- **Single wrap site** (`wrap_lifespan_for_user_loop()` in `lifespan_factory.py`) replaces the previous duplicate-wrap-site shape — future lifespan-related changes have one place to edit.
+
+### ⚙️ Default worker pool size: 1 (was `min(8, max(2, cpu_count()))`)
+
+- **Default tool dispatch now runs on a single-user loop.** Async-correct tool bodies (LLM calls, `asyncio.gather` fan-out, async DB drivers) see no throughput regression — `asyncio.gather` over 3 outbound mesh calls completes in 2.04 seconds at N=1, identical to N=8 (integration-test measured).
+- **Apps with sync-blocking calls in tool bodies** (`time.sleep`, `requests.get`, CPU-bound work) that relied on `cpu_count()` worker pool absorbing concurrent load **must either**:
+    - Refactor the blocking call to `await asyncio.to_thread(blocking_call)` (recommended — Python idiom; user loop stays free).
+    - Or set `MCP_MESH_TOOL_WORKERS=N` (N>1) in the agent's environment to restore N worker loops. The loop-affinity caveat applies — resources created in `lifespan` startup bind to worker-0 only.
+- **Apps that set `MCP_MESH_TOOL_WORKERS=1` as the documented escape hatch in v2.0/v2.1** are source-compatible in v2.2.1 — no code edits are required. The setting was previously insufficient for FastAPI `lifespan` + loop-bound resource patterns: it collapsed worker loops but did not unify the lifespan loop with the tool loop, so cross-loop errors still surfaced. v2.2.1 fixes the underlying lifespan-loop topology, so those same apps now function correctly without any changes — the previous escape hatch becomes a no-op duplication of the new default.
+
+### 📚 Documentation
+
+- `docs/concepts/stateful-agents.md`, `docs/python/dependency-injection.md`, `meshctl man dependency-injection` rewritten with a "Loop topology" section reflecting the new default and the FastAPI standard pattern that just works.
+- `docs/environment-variables.md` updated for the new `MCP_MESH_TOOL_WORKERS` default.
+
+### 🧪 Tests
+
+`uc02_agent_lifecycle` gains 10 new test files (`tc12`–`tc19`, with `tc18` split into three concurrency variants `tc18a`/`tc18b`/`tc18c`) covering 8 logical scenarios that pin the loop-affinity contract — the FastAPI lifespan pattern, parallel `asyncio.gather` fan-out, lazy pool reuse, sync-blocking serialization vs opt-in N>1 recovery, exception-propagation through hijack, and `/health` responsiveness during a 10-second tool.
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.1.0...v2.2.0)
 

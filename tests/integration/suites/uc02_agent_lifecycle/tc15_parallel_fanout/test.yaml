@@ -1,0 +1,230 @@
+# tc15 - parallel LLM-style fan-out within a single tool (issue #1061).
+#
+# Asserts that ``asyncio.gather`` over outbound mesh calls inside one
+# tool body delivers full parallelism, irrespective of the tool-worker
+# pool size. This is the load-bearing claim from #1061 that the v2.2.1
+# default ``MCP_MESH_TOOL_WORKERS=1`` does NOT regress parallel
+# tool-calling (e.g., LLM agents fanning out N tool calls in parallel):
+# parallelism on outbound calls comes from cooperative async I/O on a
+# single loop, not from multiple worker loops.
+#
+# Two phases in the same test:
+#   Phase A: default pool size (v2.2.1 default = 1).
+#   Phase B: explicit MCP_MESH_TOOL_WORKERS=8.
+#
+# Both phases must complete three concurrent ``slow_leaf`` calls
+# (each ``await asyncio.sleep(2)``) in well under 3000ms wall-clock.
+# Serial execution would take ~6000ms.
+
+name: "Parallel Fan-out Across Worker Pool Sizes"
+description: "Verify asyncio.gather on mesh calls runs in parallel at N=1 and N=8 worker loops (issue #1061)"
+tags:
+  - lifecycle
+  - parallel
+  - python
+  - fanout
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy leaf agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-slow-leaf-agent /workspace/"
+    capture: copy_leaf_output
+
+  - name: "Copy orchestrator agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-parallel-orchestrator-agent /workspace/"
+    capture: copy_orch_output
+
+  # -------- Phase A: default worker pool (N=1 in v2.2.1) --------
+
+  - name: "Phase A: start leaf agent (default workers)"
+    handler: shell
+    command: "meshctl start py-slow-leaf-agent/main.py --env MCP_MESH_HTTP_PORT=3150 -d"
+    workdir: /workspace
+    capture: start_leaf_a
+
+  - name: "Phase A: start orchestrator agent (default workers)"
+    handler: shell
+    command: "meshctl start py-parallel-orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=3151 -d"
+    workdir: /workspace
+    capture: start_orch_a
+
+  - name: "Phase A: wait for both agents to register and resolve dependencies"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="slow-leaf-agent parallel-orchestrator-agent"
+      EXPECTED_COUNT=2
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' || true)
+        READY_COUNT=0
+        for agent in $EXPECTED; do
+          LINE=$(echo "$AGENTS" | grep -E "^${agent}" || true)
+          if [ -n "$LINE" ]; then
+            DEPS=$(echo "$LINE" | awk '{print $5}')
+            RESOLVED=$(echo "$DEPS" | cut -d/ -f1)
+            TOTAL=$(echo "$DEPS" | cut -d/ -f2)
+            if [ "$RESOLVED" = "$TOTAL" ]; then
+              READY_COUNT=$((READY_COUNT + 1))
+            fi
+          fi
+        done
+        if [ "$READY_COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "READY_PHASE_A after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR_PHASE_A: only $READY_COUNT/$EXPECTED_COUNT agents ready"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_phase_a
+    timeout: 90
+
+  - name: "Phase A: call parallel_fanout (default workers)"
+    handler: shell
+    command: "meshctl call parallel_fanout '{}'"
+    workdir: /workspace
+    capture: fanout_result_a
+
+  - name: "Phase A: agent logs"
+    handler: shell
+    command: "meshctl logs parallel-orchestrator-agent 2>/dev/null | tail -30 || echo 'no logs'"
+    workdir: /workspace
+    capture: orch_logs_a
+
+  - name: "Phase A: stop all agents"
+    handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+
+  - name: "Phase A: settle"
+    handler: wait
+    seconds: 3
+
+  # -------- Phase B: explicit MCP_MESH_TOOL_WORKERS=8 --------
+
+  - name: "Phase B: start leaf agent with TOOL_WORKERS=8"
+    handler: shell
+    command: "meshctl start py-slow-leaf-agent/main.py --env MCP_MESH_HTTP_PORT=3152 --env MCP_MESH_TOOL_WORKERS=8 -d"
+    workdir: /workspace
+    capture: start_leaf_b
+
+  - name: "Phase B: start orchestrator agent with TOOL_WORKERS=8"
+    handler: shell
+    command: "meshctl start py-parallel-orchestrator-agent/main.py --env MCP_MESH_HTTP_PORT=3153 --env MCP_MESH_TOOL_WORKERS=8 -d"
+    workdir: /workspace
+    capture: start_orch_b
+
+  - name: "Phase B: wait for both agents to register and resolve dependencies"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="slow-leaf-agent parallel-orchestrator-agent"
+      EXPECTED_COUNT=2
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' || true)
+        READY_COUNT=0
+        for agent in $EXPECTED; do
+          LINE=$(echo "$AGENTS" | grep -E "^${agent}" || true)
+          if [ -n "$LINE" ]; then
+            DEPS=$(echo "$LINE" | awk '{print $5}')
+            RESOLVED=$(echo "$DEPS" | cut -d/ -f1)
+            TOTAL=$(echo "$DEPS" | cut -d/ -f2)
+            if [ "$RESOLVED" = "$TOTAL" ]; then
+              READY_COUNT=$((READY_COUNT + 1))
+            fi
+          fi
+        done
+        if [ "$READY_COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "READY_PHASE_B after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR_PHASE_B: only $READY_COUNT/$EXPECTED_COUNT agents ready"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_phase_b
+    timeout: 90
+
+  - name: "Phase B: call parallel_fanout (TOOL_WORKERS=8)"
+    handler: shell
+    command: "meshctl call parallel_fanout '{}'"
+    workdir: /workspace
+    capture: fanout_result_b
+
+  - name: "Phase B: agent logs"
+    handler: shell
+    command: "meshctl logs parallel-orchestrator-agent 2>/dev/null | tail -30 || echo 'no logs'"
+    workdir: /workspace
+    capture: orch_logs_b
+
+  # -------- Elapsed-time guards (run after both phases) --------
+
+  - name: "Extract elapsed_ms from both phases and assert parallelism"
+    handler: shell
+    command: |
+      RESULT_A='${captured.fanout_result_a}'
+      RESULT_B='${captured.fanout_result_b}'
+      ELAPSED_A=$(echo "$RESULT_A" | grep -oE '"elapsed_ms":[[:space:]]*[0-9]+(\.[0-9]+)?' | head -1 | sed 's/.*: *//')
+      ELAPSED_B=$(echo "$RESULT_B" | grep -oE '"elapsed_ms":[[:space:]]*[0-9]+(\.[0-9]+)?' | head -1 | sed 's/.*: *//')
+      echo "PHASE_A_ELAPSED_MS=$ELAPSED_A"
+      echo "PHASE_B_ELAPSED_MS=$ELAPSED_B"
+      # Numeric check (truncate fraction)
+      A_INT=${ELAPSED_A%.*}
+      B_INT=${ELAPSED_B%.*}
+      if [ -z "$A_INT" ] || [ -z "$B_INT" ]; then
+        echo "MISSING_ELAPSED_MS"
+        exit 1
+      fi
+      if [ "$A_INT" -ge 3000 ]; then
+        echo "PHASE_A_TOO_SLOW: ${A_INT}ms >= 3000ms (gather did not fan out at N=1)"
+        exit 1
+      fi
+      if [ "$B_INT" -ge 3000 ]; then
+        echo "PHASE_B_TOO_SLOW: ${B_INT}ms >= 3000ms (gather did not fan out at N=8)"
+        exit 1
+      fi
+      echo "PARALLEL_OK"
+    workdir: /workspace
+    capture: elapsed_check
+
+assertions:
+  - expr: ${captured.wait_phase_a} contains 'READY_PHASE_A'
+    message: "Phase A agents must register and resolve dependencies"
+
+  - expr: ${captured.fanout_result_a} contains 'elapsed_ms'
+    message: "Phase A parallel_fanout must return elapsed_ms"
+
+  - expr: "${captured.fanout_result_a} contains '\"count\": 3'"
+    message: "Phase A must return three gathered results"
+
+  - expr: ${captured.wait_phase_b} contains 'READY_PHASE_B'
+    message: "Phase B agents must register and resolve dependencies"
+
+  - expr: ${captured.fanout_result_b} contains 'elapsed_ms'
+    message: "Phase B parallel_fanout must return elapsed_ms"
+
+  - expr: "${captured.fanout_result_b} contains '\"count\": 3'"
+    message: "Phase B must return three gathered results"
+
+  - expr: ${captured.elapsed_check} contains 'PARALLEL_OK'
+    message: "Both N=1 and N=8 fan-outs must complete in <3000ms (issue #1061: N=1 default does not regress parallel fan-out)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

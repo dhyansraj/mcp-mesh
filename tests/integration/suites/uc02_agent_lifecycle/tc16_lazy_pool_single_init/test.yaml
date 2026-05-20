@@ -1,0 +1,148 @@
+# tc16 - lazy-init pool pattern works correctly under the user-loop default
+# (issue #1061, v2.2.1 fix verification).
+#
+# A common workaround for the cross-loop hazard is to skip ``lifespan``
+# startup and lazily create loop-bound resources on first tool call.
+# Under the v2.2.1 default ``MCP_MESH_TOOL_WORKERS=1`` there is a single
+# shared user loop, so the pool is constructed once and reused on every
+# subsequent tool invocation.
+#
+# Test invariants across three sequential calls:
+#   - All calls succeed.
+#   - ``pool_created_count`` is 1 on every call (pool reused, not rebuilt).
+#   - ``pool_loop_id == this_call_loop_id`` on every call (single user loop).
+
+name: "Lazy Pool Single-Init Under User-Loop Default"
+description: "Verify the lazy-init pool pattern creates exactly one pool and reuses it across tool calls (issue #1061)"
+tags:
+  - lifecycle
+  - lazy-init
+  - python
+  - pool-reuse
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy lazy-pool agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-lazy-pool-agent /workspace/"
+    capture: copy_output
+
+  - name: "Start lazy-pool agent"
+    handler: shell
+    command: "meshctl start py-lazy-pool-agent/main.py --env MCP_MESH_HTTP_PORT=3160 -d"
+    workdir: /workspace
+    capture: start_output
+
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 15
+
+  - name: "Check agent is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  - name: "Call use_lazy_pool (1/3)"
+    handler: shell
+    command: "meshctl call use_lazy_pool '{}'"
+    workdir: /workspace
+    capture: call_1
+
+  - name: "Call use_lazy_pool (2/3)"
+    handler: shell
+    command: "meshctl call use_lazy_pool '{}'"
+    workdir: /workspace
+    capture: call_2
+
+  - name: "Call use_lazy_pool (3/3)"
+    handler: shell
+    command: "meshctl call use_lazy_pool '{}'"
+    workdir: /workspace
+    capture: call_3
+
+  - name: "Cross-call loop affinity check (single user loop)"
+    handler: shell
+    command: |
+      # Re-issue the three calls, drop each response to a file, then
+      # parse the inner JSON from content[0].text (clean compact JSON).
+      # Assert pool_loop_id == this_call_loop_id on every call.
+      rm -f /tmp/tc16_call_*.out
+      for i in 1 2 3; do
+        meshctl call use_lazy_pool '{}' > /tmp/tc16_call_$i.out 2>&1
+      done
+      python3 - <<'PY'
+      import json, re, sys
+      ok = True
+      for i in (1, 2, 3):
+          raw = open(f"/tmp/tc16_call_{i}.out").read()
+          # The compact inner JSON lives in content[0].text — pull it
+          # out via regex (the outer wrapper has \"-escaped quotes).
+          m = re.search(r'\{\\"conn\\".*?\\"this_call_loop_id\\":[0-9]+\}', raw)
+          if not m:
+              print(f"NO_INNER_JSON_CALL_{i}")
+              print(raw)
+              ok = False
+              continue
+          inner = m.group(0).replace('\\"', '"')
+          obj = json.loads(inner)
+          if obj.get("pool_loop_id") != obj.get("this_call_loop_id"):
+              print(f"LOOP_MISMATCH_CALL_{i}: pool={obj.get('pool_loop_id')} this={obj.get('this_call_loop_id')}")
+              ok = False
+              continue
+          if obj.get("pool_created_count") != 1:
+              print(f"POOL_RECREATED_CALL_{i}: count={obj.get('pool_created_count')}")
+              ok = False
+              continue
+          print(f"OK_CALL_{i}: pool_loop_id={obj.get('pool_loop_id')} count={obj.get('pool_created_count')}")
+      if ok:
+          print("LAZY_POOL_REUSE_OK")
+      else:
+          sys.exit(1)
+      PY
+    workdir: /workspace
+    capture: affinity_check
+
+  - name: "Show agent logs"
+    handler: shell
+    command: "meshctl logs lazy-pool-agent 2>/dev/null | tail -30 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+assertions:
+  - expr: ${captured.list_output} contains 'lazy-pool-agent'
+    message: "Agent should be registered"
+
+  - expr: "${captured.call_1} contains '\"conn\": \"conn\"'"
+    message: "Call 1 must acquire a connection"
+
+  - expr: "${captured.call_2} contains '\"conn\": \"conn\"'"
+    message: "Call 2 must acquire a connection"
+
+  - expr: "${captured.call_3} contains '\"conn\": \"conn\"'"
+    message: "Call 3 must acquire a connection"
+
+  - expr: "${captured.call_1} contains '\"pool_created_count\": 1'"
+    message: "Call 1 must report pool_created_count=1"
+
+  - expr: "${captured.call_2} contains '\"pool_created_count\": 1'"
+    message: "Call 2 must still report pool_created_count=1 (pool reused)"
+
+  - expr: "${captured.call_3} contains '\"pool_created_count\": 1'"
+    message: "Call 3 must still report pool_created_count=1 (pool reused)"
+
+  - expr: ${captured.affinity_check} contains 'LAZY_POOL_REUSE_OK'
+    message: "pool_loop_id MUST equal this_call_loop_id on every call (single user loop, issue #1061)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

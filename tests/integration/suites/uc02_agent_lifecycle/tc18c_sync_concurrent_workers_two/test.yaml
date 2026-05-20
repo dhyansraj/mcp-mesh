@@ -1,0 +1,137 @@
+# tc18c - two sync-blocking tools concurrent with MCP_MESH_TOOL_WORKERS=2
+# parallelize (issue #1061 opt-in N>1 win).
+#
+# Documents the opt-in MCP_MESH_TOOL_WORKERS=N>1 win: when tools do
+# sync blocking work, raising the pool size lets distinct calls land
+# on distinct worker loops and run truly in parallel.
+#
+# Two concurrent ``sync_sleep_5`` (each ``time.sleep(5)``) with
+# ``MCP_MESH_TOOL_WORKERS=2`` complete in ~5s wall clock — the
+# parallel speed-up over tc18b's N=1 serialization.
+#
+# Trade-off: with N>1 the user loop is no longer unique, so
+# loop-affine resources (asyncpg pools, redis clients, aiohttp
+# sessions) created in lifespan startup are NOT safely reusable from
+# tool bodies. Operators opt into this when their workload is
+# sync-blocking-heavy and they accept owning the cross-loop coordination
+# themselves (e.g. via per-loop resource caches).
+
+name: "Sync-Blocking Tools Parallelize at TOOL_WORKERS=2"
+description: "Verify two concurrent time.sleep tools complete in ~5s when MCP_MESH_TOOL_WORKERS=2 (issue #1061 opt-in win)"
+tags:
+  - lifecycle
+  - serialization
+  - python
+  - workers-trade-off
+  - workers-multi
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy multi-slow-tool agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-multi-slow-tool-agent /workspace/"
+    capture: copy_output
+
+  - name: "Start multi-slow-tool agent with MCP_MESH_TOOL_WORKERS=2"
+    handler: shell
+    command: "meshctl start py-multi-slow-tool-agent/main.py --env MCP_MESH_HTTP_PORT=3182 --env MCP_MESH_TOOL_WORKERS=2 -d"
+    workdir: /workspace
+    capture: start_output
+
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 15
+
+  - name: "Check agent is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  - name: "Fire two sync_sleep_5 calls concurrently and measure wall-clock"
+    handler: shell
+    workdir: /workspace
+    command: |
+      START=$(date +%s)
+      ( meshctl call sync_sleep_5 '{}' > /tmp/tc18c_call1.out 2>&1 ) &
+      P1=$!
+      ( meshctl call sync_sleep_5 '{}' > /tmp/tc18c_call2.out 2>&1 ) &
+      P2=$!
+      wait $P1; RC1=$?
+      wait $P2; RC2=$?
+      if [ "$RC1" -ne 0 ] || [ "$RC2" -ne 0 ]; then
+        echo "ABORT: P1 rc=$RC1, P2 rc=$RC2"
+        exit 1
+      fi
+      END=$(date +%s)
+      ELAPSED=$((END - START))
+      echo "WALL_CLOCK_S=$ELAPSED"
+      echo "---CALL1---"
+      cat /tmp/tc18c_call1.out
+      echo "---CALL2---"
+      cat /tmp/tc18c_call2.out
+    capture: wall_clock_output
+    timeout: 90
+
+  - name: "Assert parallelism (wall clock < 7s, generous margin over 5s ideal)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      OUT='${captured.wall_clock_output}'
+      ELAPSED=$(echo "$OUT" | grep -oE 'WALL_CLOCK_S=[0-9]+' | head -1 | sed 's/.*=//')
+      if [ -z "$ELAPSED" ]; then
+        echo "MISSING_WALL_CLOCK"
+        exit 1
+      fi
+      echo "OBSERVED_WALL_CLOCK_S=$ELAPSED"
+      if [ "$ELAPSED" -lt 7 ]; then
+        echo "PARALLEL_CONFIRMED"
+      else
+        echo "DEGRADED: ${ELAPSED}s >= 7s with TOOL_WORKERS=2 — parallelism did not engage cleanly (ideal ~5s)"
+        exit 1
+      fi
+    capture: parallel_check
+
+  - name: "Capture call1 output for independent assertion"
+    handler: shell
+    command: "cat /tmp/tc18c_call1.out"
+    workdir: /workspace
+    capture: call1_output
+
+  - name: "Capture call2 output for independent assertion"
+    handler: shell
+    command: "cat /tmp/tc18c_call2.out"
+    workdir: /workspace
+    capture: call2_output
+
+  - name: "Show agent logs"
+    handler: shell
+    command: "meshctl logs multi-slow-tool-agent 2>/dev/null | tail -30 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+assertions:
+  - expr: ${captured.list_output} contains 'multi-slow-tool-agent'
+    message: "Agent should be registered"
+
+  - expr: "${captured.call1_output} contains '\"kind\": \"sync\"'"
+    message: "First sync_sleep_5 call MUST succeed independently"
+
+  - expr: "${captured.call2_output} contains '\"kind\": \"sync\"'"
+    message: "Second sync_sleep_5 call MUST succeed independently"
+
+  - expr: ${captured.parallel_check} contains 'PARALLEL_CONFIRMED'
+    message: "Two concurrent time.sleep tools MUST parallelize (<7s wall-clock; ideal ~5s) with MCP_MESH_TOOL_WORKERS=2 (issue #1061 opt-in win)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

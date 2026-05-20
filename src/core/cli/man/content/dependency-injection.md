@@ -35,25 +35,36 @@ health → capability_match → tags → version → schema → tiebreaker
 
 Every decision the registry makes is recorded as a `dependency_resolved` (or `dependency_unresolved`) event. Use `meshctl audit <agent>` to read them back — see `meshctl man audit`.
 
-## Loop topology
+## Loop topology (v2.2.1+)
 
-The Python runtime dispatches `async def` `@mesh.tool` functions across a pool of worker threads, each owning its own asyncio loop. Default pool size is `min(8, max(2, cpu_count()))` — always ≥ 2.
+mcp-mesh runs your agent across two event loops:
 
-**Why a pool, not one loop.** A tool that blocks the asyncio loop (sync `time.sleep`, sync DB driver, CPU-bound work) shouldn't freeze `/health`, `/livez`, registry heartbeats, or other concurrent tool calls. Isolating tool dispatch onto a pool of worker loops keeps infra endpoints responsive even when a handler is misbehaving.
+- **Framework loop** (uvicorn main): serves `/health`, `/ready`, `/livez`, and routes MCP protocol traffic. Always responsive.
+- **User loop** (single, dedicated): runs FastAPI `lifespan` startup, all `@mesh.tool` and `@app.tool` bodies, and `lifespan` exit.
 
-**The implication.** Module-level loop-bound resources bind to whatever loop created them and fail when reused from a different loop. The canonical examples are `asyncpg.Pool`, `redis.asyncio.Redis`, `motor.motor_asyncio.AsyncIOMotorClient`, and `aiohttp.ClientSession` — all of them cache internal `Future` objects against the creating loop. On default workers, the first call lazily creates the resource on worker A; the second call lands on worker B and throws:
+A long-running tool body holds the user loop, but never the framework loop — K8s probes stay responsive during long tool calls.
 
+**Default `MCP_MESH_TOOL_WORKERS=1`** (since v2.2.1; previously `min(8, max(2, cpu_count()))`). Loop-affine resources (`asyncpg.Pool`, `redis.asyncio.Redis`, `motor.motor_asyncio.AsyncIOMotorClient`, `aiohttp.ClientSession`) created in FastAPI `lifespan` startup bind to the single-user loop and are reused by every tool body on the same loop — the standard FastAPI pattern just works:
+
+```python
+from contextlib import asynccontextmanager
+import asyncpg
+from fastmcp import FastMCP
+
+@asynccontextmanager
+async def lifespan(app):
+    app.state.pool = await asyncpg.create_pool(...)
+    yield
+    await app.state.pool.close()
+
+app = FastMCP("my-agent", lifespan=lifespan)
 ```
-RuntimeError: Task <...> got Future <...> attached to a different loop
-```
 
-This is a real footgun for the natural FastAPI-shaped pattern of "cache a pool at module level." Two clean answers, depending on what you need:
+**Opt-in `MCP_MESH_TOOL_WORKERS=N` (N>1)** for tool bodies that do sync blocking work and need concurrent calls to absorb it. Loop-affinity caveat: resources created in `lifespan` bind to worker-0 only. For cross-worker access, use a per-loop dict cache (each worker lazily builds its own resource on first access). Better escape: `await asyncio.to_thread(blocking_call)` keeps the user loop free without N>1 workers.
 
-- **One shared loop-bound resource, CRUD-shape tools.** Set `MCP_MESH_TOOL_WORKERS=1` to collapse to a single worker loop. Module-level resource caching works as expected. Trade-off: lose parallel execution of blocking work (async still interleaves cooperatively within a single loop). Full trade-off table in `meshctl man dependency-injection` (Python doc) under "Single-worker mode for shared loop-bound resources".
+For long-running stateful work, use MeshJob (`@mesh.tool(task=True)`) with state externalized to a separate state agent — see `meshctl man jobs` and the Stateful Agents concept doc.
 
-- **Long-running stateful work.** Use MeshJob (`@mesh.tool(task=True)`) with state externalized to a separate state agent. The orchestrator stays stateless; the state agent owns the durable storage. See `meshctl man jobs` for the MeshJob primitive and the Stateful Agents concept doc for the full decomposition.
-
-For the narrow case where neither answer fits (sub-10ms state-mutation latency budgets, unportable loop-bound resources like GPU contexts, true background daemons running between tool calls), see the In-Process State escape hatch in the concepts docs. The default answer should still be MeshJob.
+For the narrow case where neither fits (sub-10ms state-mutation latency, unportable loop-bound resources like GPU contexts, true background daemons), see the In-Process State escape hatch. The default answer should still be MeshJob.
 
 ## Declaring Dependencies
 
@@ -225,4 +236,4 @@ No code changes needed - happens transparently.
 - `meshctl man proxies` - Proxy details
 - `meshctl man jobs` - MeshJob primitive for long-running stateful work
 - Stateful Agents concept doc - State agent + MeshJob orchestrator decomposition
-- In-Process State concept doc - Escape hatch for the narrow cases neither MeshJob nor `WORKERS=1` cover
+- In-Process State concept doc - Escape hatch for narrow cases where neither MeshJob nor the standard FastAPI `lifespan` pattern fits
