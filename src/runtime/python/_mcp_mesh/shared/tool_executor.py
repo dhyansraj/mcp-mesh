@@ -22,8 +22,14 @@ loops via ``asyncio.run_coroutine_threadsafe``, then awaits the resulting
 workers remain free to service concurrent calls.
 
 Pool size:
-    Default ``N = min(8, max(2, os.cpu_count() or 2))``.
-    Override at startup via ``MCP_MESH_TOOL_WORKERS=<N>`` env var.
+    Default ``N = 1`` — a single worker loop shared by the user's
+    ``lifespan`` body and all tool invocations. This makes the worker
+    loop the "user loop": loop-bound resources created in lifespan
+    startup (asyncpg pools, redis clients, aiohttp sessions, etc.) can
+    be safely used from tool bodies because they share the same loop.
+    Override at startup via ``MCP_MESH_TOOL_WORKERS=<N>`` env var (N > 1
+    re-enables parallel tool execution but breaks lifespan/tool loop
+    affinity for shared loop-bound resources).
 
     The pool size is read ONCE on first dispatch and cached. Changing the
     env var at runtime has no effect.
@@ -60,7 +66,14 @@ _shutdown_registered = False
 
 
 def _resolve_pool_size() -> int:
-    """Read pool size from env or compute default. Called once at first init."""
+    """Read pool size from env or use default. Called once at first init.
+
+    Default is ``1``: a single worker loop ("user loop") shared by the
+    user's lifespan body and tool invocations. This keeps loop-bound
+    resources (asyncpg pools, redis clients, aiohttp sessions) usable
+    across lifespan startup and tool bodies. Override with
+    ``MCP_MESH_TOOL_WORKERS=<N>`` to re-enable a multi-worker pool.
+    """
     env_val = os.environ.get("MCP_MESH_TOOL_WORKERS")
     if env_val:
         try:
@@ -75,8 +88,7 @@ def _resolve_pool_size() -> int:
                 "MCP_MESH_TOOL_WORKERS=%r is not an int; falling back to default",
                 env_val,
             )
-    cpu = os.cpu_count() or 2
-    return min(8, max(2, cpu))
+    return 1
 
 
 def _start_workers() -> list[tuple[threading.Thread, asyncio.AbstractEventLoop]]:

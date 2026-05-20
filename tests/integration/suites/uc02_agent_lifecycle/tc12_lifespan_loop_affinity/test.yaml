@@ -1,0 +1,92 @@
+# tc12 - lifespan/tool loop affinity (issue #1061, v2.2.1 fix verification).
+#
+# Asserts the FIXED behavior: the user's `lifespan` body and tool
+# invocations share a single asyncio event loop ("the user loop"), so
+# loop-bound resources created during lifespan startup (asyncpg pools,
+# redis clients, aiohttp sessions, etc.) are safely usable from tool
+# bodies. With the v2.2.1 default of MCP_MESH_TOOL_WORKERS=1, the user
+# loop is the lone worker loop the framework dispatches lifespan +
+# tools onto.
+#
+# Test passes when:
+#   - tool_loop_id == lifespan_loop_id  (same_loop: true)
+#   - the lifespan-created resource works from the tool (no error)
+#   - resource_result.ok is true
+
+name: "FastMCP Lifespan/Tool Loop Affinity"
+description: "Verify lifespan and tools share the user loop so loop-bound resources work end-to-end (issue #1061)"
+tags:
+  - lifecycle
+  - lifespan
+  - loop-affinity
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy lifespan loop-affine agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-lifespan-loop-affine-agent /workspace/"
+    capture: copy_output
+
+  - name: "Start lifespan loop-affine agent"
+    handler: shell
+    command: "meshctl start py-lifespan-loop-affine-agent/main.py -d"
+    workdir: /workspace
+    capture: start_output
+
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 15
+
+  - name: "Check agent is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  - name: "Call use_resource tool"
+    handler: shell
+    command: "meshctl call use_resource '{}'"
+    workdir: /workspace
+    capture: tool_result
+
+  - name: "Show agent logs for debugging"
+    handler: shell
+    command: "meshctl logs lifespan-loop-affine-agent 2>/dev/null | tail -30 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+assertions:
+  - expr: ${captured.list_output} contains 'lifespan-loop-affine-agent'
+    message: "Agent should be registered"
+
+  - expr: ${captured.tool_result} contains 'tool_loop_id'
+    message: "Tool should return tool_loop_id field"
+
+  - expr: ${captured.tool_result} contains 'lifespan_loop_id'
+    message: "Tool should return lifespan_loop_id field"
+
+  - expr: "${captured.tool_result} contains '\"same_loop\": true'"
+    message: "tool_loop_id MUST equal lifespan_loop_id - lifespan body and tools must share the user loop (issue #1061)"
+
+  - expr: "${captured.tool_result} not contains 'different loop'"
+    message: "No cross-loop failure should occur"
+
+  - expr: ${captured.tool_result} contains 'resource_result'
+    message: "Tool should return resource_result on success path"
+
+  - expr: "${captured.tool_result} contains '\"ok\": true'"
+    message: "Lifespan-created loop-affine resource MUST be usable from tool body"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

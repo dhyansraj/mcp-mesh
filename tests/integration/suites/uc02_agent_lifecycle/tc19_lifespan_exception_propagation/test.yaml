@@ -1,0 +1,110 @@
+# tc19 - lifespan startup exception propagation (issue #1061, Gap 2).
+#
+# The wrap site (`wrap_lifespan_for_user_loop`) drives the user's
+# lifespan ``__aenter__`` on the user loop via run_coroutine_threadsafe
+# + wrap_future. A startup-side raise must:
+#   1. Propagate cleanly back to uvicorn/FastAPI (visible in logs),
+#   2. Trigger the wrap-site WARNING with the forward-looking hint at
+#      @mesh.on_startup / @mesh.on_shutdown,
+#   3. Prevent the agent from registering — it never reaches the
+#      heartbeat / health-serving steady state.
+#
+# This is the highest-value new test for the v2.2.1 hijack hardening
+# because exception forwarding through a cross-loop bridge is the
+# subtlest of the four prototype gaps.
+
+name: "Lifespan Startup Exception Propagation"
+description: "Verify a user lifespan __aenter__ raise propagates cleanly through the user-loop hijack with a warning hint (issue #1061)"
+tags:
+  - lifecycle
+  - lifespan
+  - error-path
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy lifespan-raising agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-lifespan-raising-agent /workspace/"
+    capture: copy_output
+
+  - name: "Start lifespan-raising agent (expected to fail startup)"
+    handler: shell
+    command: "meshctl start py-lifespan-raising-agent/main.py -d 2>&1 || true"
+    workdir: /workspace
+    capture: start_output
+
+  - name: "Wait for startup to fail"
+    handler: wait
+    seconds: 10
+
+  - name: "Check agent is NOT registered (or transient/exited)"
+    handler: shell
+    command: "meshctl list 2>&1 || echo 'no agents'"
+    workdir: /workspace
+    capture: list_output
+
+  # The agent log file lives at ~/.mcp-mesh/logs/<agent>.log. Read it
+  # directly rather than via `meshctl logs` so we don't depend on the
+  # CLI's lookup-by-name working for a half-registered agent.
+  - name: "Dump full agent log file for debugging"
+    handler: shell
+    command: "ls -la /root/.mcp-mesh/logs/ 2>/dev/null; cat /root/.mcp-mesh/logs/lifespan-raising-agent.log 2>/dev/null | head -200 || echo 'log file missing'"
+    workdir: /workspace
+    capture: agent_log_head
+
+  # Greps below filter the full log file (not tail) — the warning and the
+  # user RuntimeError fire during uvicorn startup, which is buried under
+  # the noisier heartbeat/registry output that follows.
+  - name: "Grep for synthetic startup failure (user exception surfaced)"
+    handler: shell
+    command: "grep -q 'synthetic startup failure' /root/.mcp-mesh/logs/lifespan-raising-agent.log 2>/dev/null && echo MATCH_FOUND || echo MATCH_MISSING"
+    workdir: /workspace
+    capture: grep_user_exc
+
+  - name: "Grep for wrap-site WARNING (Directive B)"
+    handler: shell
+    command: "grep -q 'Lifespan hijack failed during startup' /root/.mcp-mesh/logs/lifespan-raising-agent.log 2>/dev/null && echo MATCH_FOUND || echo MATCH_MISSING"
+    workdir: /workspace
+    capture: grep_warning
+
+  - name: "Grep for @mesh.on_startup hint"
+    handler: shell
+    command: "grep -q '@mesh.on_startup' /root/.mcp-mesh/logs/lifespan-raising-agent.log 2>/dev/null && echo MATCH_FOUND || echo MATCH_MISSING"
+    workdir: /workspace
+    capture: grep_on_startup
+
+  - name: "Grep for @mesh.on_shutdown hint"
+    handler: shell
+    command: "grep -q '@mesh.on_shutdown' /root/.mcp-mesh/logs/lifespan-raising-agent.log 2>/dev/null && echo MATCH_FOUND || echo MATCH_MISSING"
+    workdir: /workspace
+    capture: grep_on_shutdown
+
+assertions:
+  - expr: ${captured.grep_user_exc} contains 'MATCH_FOUND'
+    message: "Original user RuntimeError message must reach the logs (not be swallowed by the hijack)"
+
+  - expr: ${captured.grep_warning} contains 'MATCH_FOUND'
+    message: "Wrap site must emit the WARNING when __aenter__ raises (Directive B)"
+
+  - expr: ${captured.grep_on_startup} contains 'MATCH_FOUND'
+    message: "Warning must include the forward-looking @mesh.on_startup hint"
+
+  - expr: ${captured.grep_on_shutdown} contains 'MATCH_FOUND'
+    message: "Warning must include the forward-looking @mesh.on_shutdown hint"
+
+  - expr: ${captured.list_output} not contains 'lifespan-raising-agent'
+    message: "Agent must NOT reach steady-state registration when lifespan startup raises"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

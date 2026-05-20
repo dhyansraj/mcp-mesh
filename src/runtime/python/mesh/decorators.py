@@ -93,9 +93,27 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
 
         # Create FastAPI app with FastMCP lifespan if available
         if fastmcp_lifespan:
-            app = FastAPI(title="MCP Mesh Agent (Starting)", lifespan=fastmcp_lifespan)
+            # Hijack the FastMCP/user lifespan so its body runs on the user
+            # loop (worker-0 of the tool_executor pool). Tools and lifespan
+            # then share the same asyncio loop, so loop-bound resources
+            # (asyncpg pools, redis clients, aiohttp sessions) created in
+            # lifespan startup are safely usable from tool bodies. The
+            # framework loop (uvicorn) stays free to service /health,
+            # /ready, /livez. See issue #1061.
+            #
+            # Both wrap sites (this one and the lifespan_factory composers)
+            # call the same wrap_lifespan_for_user_loop helper — the
+            # hijack logic lives in exactly one place.
+            from _mcp_mesh.pipeline.mcp_startup.lifespan_factory import (
+                wrap_lifespan_for_user_loop,
+            )
+
+            user_loop_lifespan = wrap_lifespan_for_user_loop(fastmcp_lifespan)
+            app = FastAPI(
+                title="MCP Mesh Agent (Starting)", lifespan=user_loop_lifespan
+            )
             logger.debug(
-                "📦 IMMEDIATE UVICORN: Created FastAPI app with FastMCP lifespan integration"
+                "📦 IMMEDIATE UVICORN: Created FastAPI app with user-loop-dispatched FastMCP lifespan"
             )
         else:
             app = FastAPI(title="MCP Mesh Agent (Starting)")

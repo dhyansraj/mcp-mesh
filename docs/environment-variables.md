@@ -65,6 +65,25 @@ export MCP_MESH_HEARTBEAT_INTERVAL=5
 export MCP_MESH_SESSION_TTL=3600
 ```
 
+### Tool Dispatch (Python)
+
+```bash
+# Number of worker loops for @mesh.tool / @app.tool body dispatch
+# Default: 1 (since v2.2.1; previously min(8, max(2, cpu_count())))
+#
+# At 1 (default): FastAPI lifespan startup, all tool bodies, and lifespan
+# exit share one user loop. Loop-bound resources (asyncpg.Pool, redis.asyncio,
+# aiohttp.ClientSession) created in lifespan startup work in every tool body.
+# /health, /ready, /livez stay responsive on a separate framework loop.
+#
+# At N>1: N worker loops dispatched round-robin. Use this when tool bodies
+# do sync blocking work (time.sleep, sync HTTP client, CPU-bound) and need
+# concurrent calls absorbed across loops. Caveat: resources created in
+# lifespan bind to worker-0 only; use a per-loop dict cache for cross-worker
+# access. Prefer `await asyncio.to_thread(blocking_call)` when feasible.
+export MCP_MESH_TOOL_WORKERS=1
+```
+
 ### HTTP Server Settings
 
 ```bash

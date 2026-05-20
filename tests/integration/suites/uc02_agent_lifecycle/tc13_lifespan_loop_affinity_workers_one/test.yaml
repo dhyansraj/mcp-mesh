@@ -1,0 +1,86 @@
+# tc13 - lifespan/tool loop affinity with explicit MCP_MESH_TOOL_WORKERS=1
+# (issue #1061, v2.2.1 fix verification).
+#
+# Same agent as tc12, but with MCP_MESH_TOOL_WORKERS=1 set explicitly.
+# Post-fix, the default IS 1 — this test ensures the explicit-override
+# path still produces the same correct behavior: lifespan body and
+# tools share the user loop. Acts as a guard that the env-var path
+# doesn't accidentally regress when the default flips.
+
+name: "FastMCP Lifespan/Tool Loop Affinity (TOOL_WORKERS=1)"
+description: "Verify MCP_MESH_TOOL_WORKERS=1 produces lifespan/tool loop affinity (issue #1061)"
+tags:
+  - lifecycle
+  - lifespan
+  - loop-affinity
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy lifespan loop-affine agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-lifespan-loop-affine-agent /workspace/"
+    capture: copy_output
+
+  - name: "Start lifespan loop-affine agent with MCP_MESH_TOOL_WORKERS=1"
+    handler: shell
+    command: "meshctl start py-lifespan-loop-affine-agent/main.py --env MCP_MESH_TOOL_WORKERS=1 -d"
+    workdir: /workspace
+    capture: start_output
+
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 15
+
+  - name: "Check agent is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  - name: "Call use_resource tool"
+    handler: shell
+    command: "meshctl call use_resource '{}'"
+    workdir: /workspace
+    capture: tool_result
+
+  - name: "Show agent logs for debugging"
+    handler: shell
+    command: "meshctl logs lifespan-loop-affine-agent 2>/dev/null | tail -30 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+assertions:
+  - expr: ${captured.list_output} contains 'lifespan-loop-affine-agent'
+    message: "Agent should be registered"
+
+  - expr: ${captured.tool_result} contains 'tool_loop_id'
+    message: "Tool should return tool_loop_id field"
+
+  - expr: ${captured.tool_result} contains 'lifespan_loop_id'
+    message: "Tool should return lifespan_loop_id field"
+
+  - expr: "${captured.tool_result} contains '\"same_loop\": true'"
+    message: "With explicit MCP_MESH_TOOL_WORKERS=1, tool_loop_id MUST equal lifespan_loop_id (issue #1061)"
+
+  - expr: "${captured.tool_result} not contains 'different loop'"
+    message: "No cross-loop failure should occur with TOOL_WORKERS=1"
+
+  - expr: ${captured.tool_result} contains 'resource_result'
+    message: "Tool should return resource_result on success path"
+
+  - expr: "${captured.tool_result} contains '\"ok\": true'"
+    message: "Lifespan-created loop-affine resource MUST be usable from tool body with TOOL_WORKERS=1"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

@@ -1,0 +1,136 @@
+# tc17 - per-loop dict pattern creates N pools under MCP_MESH_TOOL_WORKERS=N>1
+# (issue #1061 cost-of-multi-worker reproducer).
+#
+# Documents the structural side-effect of the per-loop dict workaround
+# (keying a resource cache by ``id(asyncio.get_running_loop())``) when
+# the framework runs more than one tool-worker loop: one pool is built
+# per worker loop the calls land on. For real resources (asyncpg pools,
+# redis clients, aiohttp sessions) this is a connection-pool multiplier
+# — the cost we are paying for tool-level parallelism.
+#
+# Test passes when, after driving many concurrent calls with
+# ``MCP_MESH_TOOL_WORKERS=4``, ``total_pools_created`` is >= 2.
+
+name: "Per-Loop Dict Connection Multiplier (TOOL_WORKERS=4)"
+description: "Verify the per-loop dict workaround creates multiple pools with multi-worker tool pool (issue #1061)"
+tags:
+  - lifecycle
+  - per-loop-dict
+  - python
+  - connection-waste
+  - workers-multi
+timeout: 180
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy per-loop-dict agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-per-loop-dict-agent /workspace/"
+    capture: copy_output
+
+  - name: "Start per-loop-dict agent with MCP_MESH_TOOL_WORKERS=4"
+    handler: shell
+    command: "meshctl start py-per-loop-dict-agent/main.py --env MCP_MESH_HTTP_PORT=3170 --env MCP_MESH_TOOL_WORKERS=4 -d"
+    workdir: /workspace
+    capture: start_output
+
+  - name: "Wait for agent to start"
+    handler: wait
+    seconds: 15
+
+  - name: "Check agent is running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: list_output
+
+  - name: "Drive 20 concurrent calls to spray across worker loops"
+    handler: shell
+    workdir: /workspace
+    command: |
+      mkdir -p /tmp/tc17_results
+      rm -f /tmp/tc17_results/*.out
+      # Fire 20 concurrent calls. With TOOL_WORKERS=4, calls should
+      # spread across multiple worker loops; the per-loop dict will
+      # therefore build more than one FakePool.
+      PIDS=()
+      for i in $(seq 1 20); do
+        ( meshctl call use_per_loop_pool '{}' > /tmp/tc17_results/call_$i.out 2>&1 ) &
+        PIDS+=($!)
+      done
+      FAILED=0
+      for pid in "${PIDS[@]}"; do
+        if ! wait "$pid"; then
+          FAILED=$((FAILED + 1))
+        fi
+      done
+      echo "FAILED_COUNT=$FAILED"
+      if [ "$FAILED" -gt 0 ]; then
+        echo "ABORT: $FAILED of 20 calls returned non-zero"
+        exit 1
+      fi
+      echo "ALL_CALLS_DONE"
+      # Pick the most recent observation (highest total_pools_created)
+      MAX_POOLS=0
+      for f in /tmp/tc17_results/call_*.out; do
+        N=$(grep -oE '"total_pools_created":[[:space:]]*[0-9]+' "$f" | head -1 | sed 's/.*: *//')
+        if [ -n "$N" ] && [ "$N" -gt "$MAX_POOLS" ]; then
+          MAX_POOLS=$N
+        fi
+      done
+      echo "MAX_TOTAL_POOLS_CREATED=$MAX_POOLS"
+      # Also dump distinct loop ids seen in any one response
+      LARGEST=$(grep -l "total_pools_created\": $MAX_POOLS" /tmp/tc17_results/call_*.out | head -1)
+      if [ -n "$LARGEST" ]; then
+        echo "---LARGEST_RESPONSE---"
+        cat "$LARGEST"
+      fi
+    capture: fanout_output
+    timeout: 120
+
+  - name: "Assert multi-pool multiplier observed"
+    handler: shell
+    workdir: /workspace
+    command: |
+      OUT='${captured.fanout_output}'
+      MAX=$(echo "$OUT" | grep -oE 'MAX_TOTAL_POOLS_CREATED=[0-9]+' | head -1 | sed 's/.*=//')
+      if [ -z "$MAX" ]; then
+        echo "MISSING_MAX"
+        exit 1
+      fi
+      echo "OBSERVED_MAX_POOLS=$MAX"
+      if [ "$MAX" -ge 2 ]; then
+        echo "MULTI_POOL_CONFIRMED"
+      else
+        echo "ONLY_ONE_POOL: per-loop dict did not multiply (max=$MAX) - did MCP_MESH_TOOL_WORKERS=4 take effect?"
+        exit 1
+      fi
+    capture: multi_pool_check
+
+  - name: "Show agent logs"
+    handler: shell
+    command: "meshctl logs per-loop-dict-agent 2>/dev/null | tail -40 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+assertions:
+  - expr: ${captured.list_output} contains 'per-loop-dict-agent'
+    message: "Agent should be registered"
+
+  - expr: ${captured.fanout_output} contains 'ALL_CALLS_DONE'
+    message: "All 20 concurrent calls should complete"
+
+  - expr: ${captured.multi_pool_check} contains 'MULTI_POOL_CONFIRMED'
+    message: "Per-loop dict with MCP_MESH_TOOL_WORKERS=4 MUST create >= 2 pools (issue #1061 connection-pool multiplier)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
