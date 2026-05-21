@@ -1,5 +1,5 @@
 # Dockerfile for planner-agent MCP Mesh streaming LLM agent
-FROM mcpmesh/python-runtime:2.2.1
+FROM mcpmesh/python-runtime:2.2.2
 
 WORKDIR /app
 
