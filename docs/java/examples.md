@@ -132,7 +132,7 @@ class AssistantAgentTest {
 # docker-compose.test.yml
 services:
   registry:
-    image: mcpmesh/registry:2.2.2
+    image: mcpmesh/registry:2.2.3
     ports:
       - "8000:8000"
     healthcheck:

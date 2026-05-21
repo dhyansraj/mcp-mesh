@@ -197,7 +197,7 @@ loop — K8s liveness/readiness probes stay responsive.
 
 ### Default `MCP_MESH_TOOL_WORKERS=1`
 
-Since v2.2.2, default tool dispatch runs on a single-user loop (was
+Since v2.2.3, default tool dispatch runs on a single-user loop (was
 `min(8, max(2, cpu_count()))`). The standard FastAPI pattern for
 loop-bound resources works as expected — `lifespan` startup creates the
 resource on the user loop; every tool body uses it on the same loop;
