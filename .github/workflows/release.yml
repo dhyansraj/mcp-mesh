@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version (e.g., v2.2.3)"
+        description: "Version (e.g., v2.2.4)"
         required: true
-        default: "v2.2.3"
+        default: "v2.2.4"
       environment:
         description: "Environment"
         type: choice
@@ -606,14 +606,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          # Node 24 ships npm 11.x natively. npm 11.5.1+ is required for full
+          # Trusted Publishing — the auto-OIDC handshake for the actual publish
+          # PUT, not just --provenance (Sigstore signing). Node 22 bundles
+          # npm 10.x and `npm install -g npm@11` hit a known npm 10.9.x
+          # transitive-dep bug (`Cannot find module 'promise-retry'`). See #1067.
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
-
-      - name: Upgrade npm to 11.x for Trusted Publishing
-        # Node 22 ships npm 10.x which supports --provenance (Sigstore signing)
-        # but NOT the auto-OIDC handshake for the actual publish PUT. npm 11.x
-        # adds full Trusted Publishing (no-token publish via OIDC). See #1061.
-        run: npm install -g npm@11
 
       - name: Determine version
         id: version
@@ -734,14 +733,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          # Node 24 ships npm 11.x natively. npm 11.5.1+ is required for full
+          # Trusted Publishing — the auto-OIDC handshake for the actual publish
+          # PUT, not just --provenance (Sigstore signing). Node 22 bundles
+          # npm 10.x and `npm install -g npm@11` hit a known npm 10.9.x
+          # transitive-dep bug (`Cannot find module 'promise-retry'`). See #1067.
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
-
-      - name: Upgrade npm to 11.x for Trusted Publishing
-        # Node 22 ships npm 10.x which supports --provenance (Sigstore signing)
-        # but NOT the auto-OIDC handshake for the actual publish PUT. npm 11.x
-        # adds full Trusted Publishing (no-token publish via OIDC). See #1061.
-        run: npm install -g npm@11
 
       - name: Determine version
         id: version
@@ -920,14 +918,13 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          # Node 24 ships npm 11.x natively. npm 11.5.1+ is required for full
+          # Trusted Publishing — the auto-OIDC handshake for the actual publish
+          # PUT, not just --provenance (Sigstore signing). Node 22 bundles
+          # npm 10.x and `npm install -g npm@11` hit a known npm 10.9.x
+          # transitive-dep bug (`Cannot find module 'promise-retry'`). See #1067.
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
-
-      - name: Upgrade npm to 11.x for Trusted Publishing
-        # Node 22 ships npm 10.x which supports --provenance (Sigstore signing)
-        # but NOT the auto-OIDC handshake for the actual publish PUT. npm 11.x
-        # adds full Trusted Publishing (no-token publish via OIDC). See #1061.
-        run: npm install -g npm@11
 
       - name: Determine version
         id: version

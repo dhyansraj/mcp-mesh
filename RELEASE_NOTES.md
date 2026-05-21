@@ -1,12 +1,12 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.2.3...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.2.4...HEAD)
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.2.0...v2.2.3)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.2.0...v2.2.4)
 
-## v2.2.3 (2026-05-21)
+## v2.2.4 (2026-05-21)
 
-Cross-loop affinity fix for v2.2 adopters using FastAPI lifespan patterns. Apps that create loop-bound resources (`asyncpg.Pool`, `redis.asyncio.Redis`, `aiohttp.ClientSession`) in `lifespan` startup and use them from tool bodies hit "Future attached to a different loop" errors in v2.2.0 — the documented `MCP_MESH_TOOL_WORKERS=1` "escape hatch" did not actually solve it. v2.2.3 fixes the topology so standard FastAPI patterns work as expected.
+Cross-loop affinity fix for v2.2 adopters using FastAPI lifespan patterns. Apps that create loop-bound resources (`asyncpg.Pool`, `redis.asyncio.Redis`, `aiohttp.ClientSession`) in `lifespan` startup and use them from tool bodies hit "Future attached to a different loop" errors in v2.2.0 — the documented `MCP_MESH_TOOL_WORKERS=1` "escape hatch" did not actually solve it. v2.2.4 fixes the topology so standard FastAPI patterns work as expected.
 
 ### 🪢 Loop topology fix (#1061)
 
@@ -22,7 +22,7 @@ Cross-loop affinity fix for v2.2 adopters using FastAPI lifespan patterns. Apps 
 - **Apps with sync-blocking calls in tool bodies** (`time.sleep`, `requests.get`, CPU-bound work) that relied on `cpu_count()` worker pool absorbing concurrent load **must either**:
     - Refactor the blocking call to `await asyncio.to_thread(blocking_call)` (recommended — Python idiom; user loop stays free).
     - Or set `MCP_MESH_TOOL_WORKERS=N` (N>1) in the agent's environment to restore N worker loops. The loop-affinity caveat applies — resources created in `lifespan` startup bind to worker-0 only.
-- **Apps that set `MCP_MESH_TOOL_WORKERS=1` as the documented escape hatch in v2.0/v2.1** are source-compatible in v2.2.3 — no code edits are required. The setting was previously insufficient for FastAPI `lifespan` + loop-bound resource patterns: it collapsed worker loops but did not unify the lifespan loop with the tool loop, so cross-loop errors still surfaced. v2.2.3 fixes the underlying lifespan-loop topology, so those same apps now function correctly without any changes — the previous escape hatch becomes a no-op duplication of the new default.
+- **Apps that set `MCP_MESH_TOOL_WORKERS=1` as the documented escape hatch in v2.0/v2.1** are source-compatible in v2.2.4 — no code edits are required. The setting was previously insufficient for FastAPI `lifespan` + loop-bound resource patterns: it collapsed worker loops but did not unify the lifespan loop with the tool loop, so cross-loop errors still surfaced. v2.2.4 fixes the underlying lifespan-loop topology, so those same apps now function correctly without any changes — the previous escape hatch becomes a no-op duplication of the new default.
 
 ### 📚 Documentation
 

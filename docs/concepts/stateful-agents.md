@@ -48,7 +48,7 @@ mcp-mesh runs your agent across two event loops:
 
 The two-loop split means a long-running tool body (LLM call, slow registry hop, multi-minute MeshJob) holds the user loop, but never the framework loop — your K8s liveness/readiness probes stay responsive.
 
-**What this fixes**: standard FastAPI patterns for loop-bound resources work as expected. `asyncpg.Pool`, `redis.asyncio.Redis`, and `aiohttp.ClientSession` are all loop-affine — they bind to the asyncio loop that created them and fail if reused from a different one. Because v2.2.3 runs your lifespan AND your tools on the same user loop, the standard FastAPI idiom just works:
+**What this fixes**: standard FastAPI patterns for loop-bound resources work as expected. `asyncpg.Pool`, `redis.asyncio.Redis`, and `aiohttp.ClientSession` are all loop-affine — they bind to the asyncio loop that created them and fail if reused from a different one. Because v2.2.4 runs your lifespan AND your tools on the same user loop, the standard FastAPI idiom just works:
 
 ```python
 @asynccontextmanager
@@ -91,7 +91,7 @@ long-running work. From mesh's perspective it's an ordinary CRUD
 agent — every tool call is short, idempotent where possible, and
 returns. The pool lives inside the agent process — created in
 `lifespan` startup, attached to `app.state`, and closed in `lifespan`
-exit. Since v2.2.3, `lifespan` and all tool bodies share the single
+exit. Since v2.2.4, `lifespan` and all tool bodies share the single
 user loop, so the standard FastAPI pattern is the supported pattern.
 
 Schema:
