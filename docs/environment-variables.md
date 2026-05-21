@@ -69,7 +69,7 @@ export MCP_MESH_SESSION_TTL=3600
 
 ```bash
 # Number of worker loops for @mesh.tool / @app.tool body dispatch
-# Default: 1 (since v2.2.1; previously min(8, max(2, cpu_count())))
+# Default: 1 (since v2.2.4; previously min(8, max(2, cpu_count())))
 #
 # At 1 (default): FastAPI lifespan startup, all tool bodies, and lifespan
 # exit share one user loop. Loop-bound resources (asyncpg.Pool, redis.asyncio,

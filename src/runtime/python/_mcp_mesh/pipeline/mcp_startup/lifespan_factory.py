@@ -194,9 +194,32 @@ def wrap_lifespan_for_user_loop(user_lifespan: Callable) -> Callable:
             _log_hijack_startup_failure(exc)
             raise
 
+        # Signal that the user lifespan has completed startup. Any
+        # post-startup hooks scheduled before this point (e.g. the
+        # health_check refresh loop) wait on this future before their
+        # first iteration — otherwise they may fire while the user's
+        # lifespan body is still mid-flight and see a partially-
+        # initialized state (e.g., a ``_pool`` global still ``None``).
+        try:
+            from ...shared.user_loop_hooks import signal_lifespan_ready
+
+            signal_lifespan_ready(app)
+        except Exception as e:
+            # Never let a signaling hiccup propagate into the lifespan.
+            logger.debug("lifespan: signal_lifespan_ready failed (%s)", e)
+
         try:
             yield cm_state
         except BaseException as exc:
+            # Cancel any user-loop futures registered against ``app.state``
+            # (e.g., the health_check_ttl refresh task — see
+            # ``user_loop_hooks.schedule_on_user_loop``) BEFORE driving
+            # user __aexit__ so background work stops touching user-loop
+            # state while lifespan teardown runs.
+            from ...shared.user_loop_hooks import cancel_app_user_loop_futures
+
+            cancel_app_user_loop_futures(app)
+
             # PEP 343: forward exception info into user __aexit__ so the
             # user lifespan can react (cleanup, suppression, etc.). This
             # also covers Gap 3 (partial-startup unwind) — if the outer
@@ -239,6 +262,14 @@ def wrap_lifespan_for_user_loop(user_lifespan: Callable) -> Callable:
                 raise
         else:
             # Clean-exit path: __aexit__(None, None, None) on the user loop.
+            # Cancel any user-loop futures registered against ``app.state``
+            # (e.g., the health_check_ttl refresh task) first, so
+            # background work stops before the user's lifespan exit closes
+            # the resources they depend on.
+            from ...shared.user_loop_hooks import cancel_app_user_loop_futures
+
+            cancel_app_user_loop_futures(app)
+
             shutdown_ctx = contextvars.copy_context()
 
             async def _exit_clean_on_user_loop():

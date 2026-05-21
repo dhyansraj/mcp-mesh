@@ -39,30 +39,43 @@ several primitives — MeshJob, DDDI, the worker-pool topology — so the
   external signal; a timer fires at a deadline. None of this is gated
   on a user tool call landing.
 
-### Loop topology (v2.2.1+)
+### Loop topology (v2.2.4+)
 
 mcp-mesh runs your agent across two event loops:
 
 - **Framework loop** (uvicorn main): serves `/health`, `/ready`, `/livez`, and routes MCP protocol traffic. Always responsive.
-- **User loop** (single, dedicated): runs your FastAPI `lifespan` startup, all `@mesh.tool` and `@app.tool` bodies, and `lifespan` exit. One loop for everything you write.
+- **User loop** (single, dedicated): runs your FastMCP/FastAPI `lifespan` startup, all `@mesh.tool` and `@app.tool` bodies, and `lifespan` exit. One loop for everything you write.
 
 The two-loop split means a long-running tool body (LLM call, slow registry hop, multi-minute MeshJob) holds the user loop, but never the framework loop — your K8s liveness/readiness probes stay responsive.
 
-**What this fixes**: standard FastAPI patterns for loop-bound resources work as expected. `asyncpg.Pool`, `redis.asyncio.Redis`, and `aiohttp.ClientSession` are all loop-affine — they bind to the asyncio loop that created them and fail if reused from a different one. Because v2.2.4 runs your lifespan AND your tools on the same user loop, the standard FastAPI idiom just works:
+**What this fixes**: loop-bound resources work as expected when created in `lifespan` startup. `asyncpg.Pool`, `redis.asyncio.Redis`, and `aiohttp.ClientSession` are all loop-affine — they bind to the asyncio loop that created them and fail if reused from a different one. Because v2.2.4 runs your `lifespan` AND your tools on the same user loop, the canonical FastMCP idiom is straightforward:
 
 ```python
-@asynccontextmanager
-async def lifespan(app):
-    app.state.pool = await asyncpg.create_pool(...)
-    yield
-    await app.state.pool.close()
+# Module-level — FastMCP's `lifespan` parameter receives a FastMCP server
+# instance, not a FastAPI app, so `.state` isn't available. The canonical
+# Python pattern for sharing a lifespan-bound resource with tools is a
+# module-level global.
+_pool = None
 
-app = FastMCP("my-agent", lifespan=lifespan)
+
+@asynccontextmanager
+async def _lifespan(server):
+    global _pool
+    _pool = await asyncpg.create_pool(...)
+    try:
+        yield
+    finally:
+        if _pool is not None:
+            await _pool.close()
+
+
+app = FastMCP("my-agent", lifespan=_lifespan)
+
 
 @app.tool()
 @mesh.tool(capability="query")
 async def query() -> dict:
-    async with app.state.pool.acquire() as conn:
+    async with _pool.acquire() as conn:
         return await conn.fetchrow("SELECT ...")
 ```
 
@@ -90,9 +103,12 @@ Postgres (or Redis) database. It does no business logic. It does no
 long-running work. From mesh's perspective it's an ordinary CRUD
 agent — every tool call is short, idempotent where possible, and
 returns. The pool lives inside the agent process — created in
-`lifespan` startup, attached to `app.state`, and closed in `lifespan`
-exit. Since v2.2.4, `lifespan` and all tool bodies share the single
-user loop, so the standard FastAPI pattern is the supported pattern.
+`lifespan` startup, stored in a module-level global, and closed in
+`lifespan` exit. Since v2.2.4, `lifespan` and all tool bodies share
+the single user loop, so a module-level pool created in `lifespan`
+startup is the supported pattern. (FastMCP's `lifespan` receives a
+FastMCP server instance — there is no `.state` namespace as there is
+on a FastAPI app.)
 
 Schema:
 
@@ -114,18 +130,27 @@ Schema:
     import mesh
     from fastmcp import FastMCP
 
-    @asynccontextmanager
-    async def lifespan(app):
-        app.state.pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
-        yield
-        await app.state.pool.close()
+    # Module-level — FastMCP's lifespan param is a FastMCP server instance,
+    # not a FastAPI app, so .state isn't available. The canonical Python
+    # pattern is a module-level global.
+    _pool = None
 
-    app = FastMCP("State Agent", lifespan=lifespan)
+    @asynccontextmanager
+    async def _lifespan(server):
+        global _pool
+        _pool = await asyncpg.create_pool(os.environ["DATABASE_URL"])
+        try:
+            yield
+        finally:
+            if _pool is not None:
+                await _pool.close()
+
+    app = FastMCP("State Agent", lifespan=_lifespan)
 
     @app.tool()
     @mesh.tool(capability="read_state")
     async def read_state(tenant_id: str) -> dict:
-        async with app.state.pool.acquire() as conn:
+        async with _pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT state FROM tenant_state WHERE tenant_id=$1",
                 tenant_id,
@@ -135,7 +160,7 @@ Schema:
     @app.tool()
     @mesh.tool(capability="append_event")
     async def append_event(tenant_id: str, event_type: str, payload: dict) -> dict:
-        async with app.state.pool.acquire() as conn:
+        async with _pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
                     "INSERT INTO event_log (tenant_id, event_type, payload) "
@@ -326,8 +351,7 @@ to it. The orchestrator polls it at iteration boundaries:
     @app.tool()
     @mesh.tool(capability="enqueue_input")
     async def enqueue_input(tenant_id: str, input_type: str, payload: dict) -> dict:
-        pool = await _pool_handle()
-        async with pool.acquire() as conn:
+        async with _pool.acquire() as conn:
             await conn.execute(
                 "INSERT INTO pending_inputs (tenant_id, input_type, payload, claimed) "
                 "VALUES ($1, $2, $3, FALSE)",
@@ -339,8 +363,7 @@ to it. The orchestrator polls it at iteration boundaries:
     @app.tool()
     @mesh.tool(capability="claim_inputs")
     async def claim_inputs(tenant_id: str) -> list[dict]:
-        pool = await _pool_handle()
-        async with pool.acquire() as conn:
+        async with _pool.acquire() as conn:
             rows = await conn.fetch(
                 "UPDATE pending_inputs SET claimed=TRUE "
                 "WHERE tenant_id=$1 AND NOT claimed RETURNING input_type, payload",
@@ -463,15 +486,17 @@ A handful of anti-patterns this decomposition exists to prevent:
   [In-Process State](in-process-state.md) — but it should never be
   the default reach.
 - **Loop-bound resource cached at module level when `MCP_MESH_TOOL_WORKERS>1`.**
-  At the default `WORKERS=1`, module-level caching of an asyncpg pool /
-  redis client works, but it's brittle — anyone setting `WORKERS=N` to
-  absorb sync-blocking work will see "Future attached to a different
-  loop" on the second worker. The supported shape is to create the
-  resource in FastAPI `lifespan` startup (binds to the single-user
+  At the default `WORKERS=1`, a module-level pool populated from
+  FastMCP `lifespan` startup works (lifespan and tools share the
+  single user loop). It's brittle the moment you opt into `WORKERS=N`
+  to absorb sync-blocking work — the second worker hits "Future
+  attached to a different loop" because the lifespan-created pool is
+  bound to worker-0. The supported shape at the default is the
+  FastMCP-`lifespan` + module-global pattern (binds to the single-user
   loop, used by all tools on the same loop) — see
   [Loop topology](#loop-topology-v221) above. If you also need N>1
-  workers for sync-blocking parallelism, use a per-loop dict cache
-  (each worker lazily builds its own resource on first access).
+  workers for sync-blocking parallelism, switch to a per-loop dict
+  cache (each worker lazily builds its own resource on first access).
 - **Putting orchestration state on the orchestrator process.** The
   orchestrator's job body should be a pure transformer: read state in,
   drive work, write state out. The moment it caches anything across

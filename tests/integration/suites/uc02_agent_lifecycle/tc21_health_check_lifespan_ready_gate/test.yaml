@@ -1,0 +1,89 @@
+# tc21 - lifespan-ready gate on the health_check refresh loop
+# (issue #1072 follow-up).
+#
+# Asserts that the periodic refresh loop does NOT fire its first
+# iteration until the user lifespan __aenter__ has returned. Without
+# the gate, an aggressive health_check_ttl can wake the refresh loop
+# while the lifespan body is still mid-flight, and the user's
+# health_check_fn observes partially-initialized state (e.g., a
+# ``_pool`` global still ``None``).
+#
+# Scenario: health_check_ttl=1 (refresh would fire every 1s), lifespan
+# body sleeps ~3s before flipping a sentinel to True. After all
+# lifespan + refresh activity has settled, the test calls a tool that
+# reports the number of refresh-side calls that ran BEFORE the
+# sentinel flipped. With correct gating that count is 0.
+
+name: "health_check refresh — lifespan-ready gate"
+description: "Refresh loop must wait for lifespan __aenter__ before firing iterations (issue #1072 follow-up)"
+tags:
+  - lifecycle
+  - health-check
+  - lifespan-gate
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy health-gate agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-health-gate-agent /workspace/"
+    capture: copy_output
+
+  - name: "Start health-gate agent"
+    handler: shell
+    command: "meshctl start py-health-gate-agent/main.py --env MCP_MESH_HTTP_PORT=3201 -d"
+    workdir: /workspace
+    capture: start_output
+
+  - name: "Wait for lifespan to complete + several refresh ticks"
+    # Lifespan body sleeps 3s. With TTL=1, the refresh loop would have
+    # fired ~7 times during this window if it weren't gated. Total
+    # wait of 10s leaves plenty of margin for the gate to release and
+    # for several refresh-side calls to land.
+    handler: wait
+    seconds: 10
+
+  - name: "Probe /health — encodes the premature counter into errors"
+    handler: shell
+    command: "curl -s http://localhost:3201/health"
+    workdir: /workspace
+    capture: health_probe
+
+  - name: "Show agent logs for debugging"
+    handler: shell
+    command: "meshctl logs health-gate-agent 2>/dev/null | tail -60 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+assertions:
+  # The refresh loop must have actually fired post-ready (proves the
+  # gate didn't deadlock and the refresh loop continued).
+  - expr: ${captured.health_probe} contains '"post_ready":true'
+    message: "/health must show post_ready=true — proves the refresh loop fired at least one iteration after lifespan ready"
+
+  - expr: ${captured.health_probe} contains 'post-ready-call-'
+    message: "/health errors must carry a 'post-ready-call-N' marker — proves the refresh loop re-ran the user health_check_fn after lifespan ready"
+
+  # The core assertion: no refresh-side call landed BEFORE lifespan
+  # signaled complete. Seed call doesn't count (it's framework-loop,
+  # pre-lifespan by design). The user's health_check embeds the
+  # premature counter directly in the errors marker so the test can
+  # read it from /health without a tool call.
+  - expr: ${captured.health_probe} contains 'premature=0'
+    message: "premature_calls must be 0 — proves the refresh loop waited for lifespan __aenter__ before firing"
+
+  - expr: ${captured.health_probe} not contains 'premature-call-'
+    message: "no 'premature-call-N' marker should ever appear — that would mean a refresh-side call landed before lifespan ready"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

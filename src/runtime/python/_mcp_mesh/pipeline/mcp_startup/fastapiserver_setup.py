@@ -365,10 +365,104 @@ class FastAPIServerSetupStep(PipelineStep):
 
             DecoratorRegistry.store_health_check_result(result)
 
-        # Run once immediately to populate initial result
-        # We're already in an async context (called from execute()), so just await it
-
+        # Run once immediately to populate initial result.
+        # We're already in an async context (called from execute()), so just
+        # await it. This seed call runs on the framework loop; if the user's
+        # health_check_fn touches loop-affine resources created in lifespan
+        # (asyncpg.Pool, redis.asyncio, ...) it may return unhealthy here.
+        # The periodic refresh below runs on the user loop and recovers.
         await update_health_result()
+
+        # Issue #1072: spawn a periodic refresh loop on the user loop so
+        # the stored /health result actually reflects the latest
+        # health_check_fn invocation. Two problems this fixes:
+        #   1. Without a refresher, /health is whatever the framework-loop
+        #      seed call computed at startup — forever.
+        #   2. Running the user's health_check_fn on the framework loop
+        #      can cross-loop-fault when it touches resources created on
+        #      the user loop in lifespan.
+        # The future is registered with app.state so the lifespan wrapper
+        # cancels it on shutdown.
+        if health_check_fn:
+            from ...shared.tool_executor import _start_workers, get_worker_loops
+            from ...shared.user_loop_hooks import (
+                get_or_create_lifespan_ready_future,
+                schedule_on_user_loop,
+            )
+
+            _start_workers()
+            user_loops = get_worker_loops()
+            if user_loops:
+                user_loop = user_loops[0]
+                log = self.logger
+
+                from ...shared.health_check_manager import clear_health_cache
+
+                # Resolve the lifespan-ready future eagerly (on this
+                # thread, before scheduling the user-loop coroutine).
+                # Whichever side runs first creates it; the other side
+                # finds the same future via app.state.
+                ready_future = get_or_create_lifespan_ready_future(app)
+
+                async def _refresh_health_loop():
+                    """Periodic health-check refresh on the user loop.
+
+                    Invalidates the per-agent health cache before each
+                    update so the user's ``health_check_fn`` is always
+                    re-executed (otherwise the refresh might land inside
+                    the cache window and return the previous result).
+
+                    Gated on the lifespan-ready signal — does not fire
+                    the first refresh until the user lifespan
+                    ``__aenter__`` has returned, so the user's
+                    ``health_check_fn`` never observes partially-
+                    initialized lifespan state.
+                    """
+                    try:
+                        await asyncio.wrap_future(ready_future)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        # Better to refresh than to hang if the gate
+                        # mechanism breaks for some unexpected reason.
+                        log.warning(
+                            "Health refresh: lifespan-ready gate failed "
+                            "for agent '%s' (%s). Proceeding without "
+                            "gating.",
+                            agent_name,
+                            e,
+                        )
+
+                    while True:
+                        try:
+                            await asyncio.sleep(health_check_ttl)
+                            clear_health_cache(agent_name)
+                            await update_health_result()
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as e:
+                            log.warning(
+                                f"Health refresh failed for agent "
+                                f"'{agent_name}': {e}",
+                                exc_info=True,
+                            )
+
+                schedule_on_user_loop(
+                    app,
+                    user_loop,
+                    _refresh_health_loop,
+                    name=f"health-refresh:{agent_name}",
+                )
+                self.logger.debug(
+                    f"Scheduled health-check refresh loop on user loop "
+                    f"for agent '{agent_name}' (TTL={health_check_ttl}s)"
+                )
+            else:
+                self.logger.warning(
+                    f"No user loop available — health-check refresh "
+                    f"will not run for agent '{agent_name}'. /health "
+                    f"will report the startup seed result indefinitely."
+                )
 
         # Note: /health, /ready, /livez endpoints are registered by immediate uvicorn
         # in decorators.py. They use health_check_manager to get stored health data.
