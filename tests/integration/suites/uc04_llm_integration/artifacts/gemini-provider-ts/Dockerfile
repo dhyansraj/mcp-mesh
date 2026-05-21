@@ -1,5 +1,5 @@
 # Dockerfile for gemini-provider-ts MCP Mesh LLM provider
-FROM mcpmesh/typescript-runtime:2.2.2
+FROM mcpmesh/typescript-runtime:2.2.3
 
 WORKDIR /app
 

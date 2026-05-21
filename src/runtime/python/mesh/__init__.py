@@ -34,7 +34,7 @@ from .types import (
 # Note: helpers.llm_provider is imported lazily in __getattr__ to avoid
 # initialization timing issues with @mesh.agent auto_run in tests
 
-__version__ = "2.2.2"
+__version__ = "2.2.3"
 
 
 # Helper function to create FastMCP server with proper naming

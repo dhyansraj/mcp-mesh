@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version (e.g., v2.2.2)"
+        description: "Version (e.g., v2.2.3)"
         required: true
-        default: "v2.2.2"
+        default: "v2.2.3"
       environment:
         description: "Environment"
         type: choice
@@ -609,6 +609,12 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
+      - name: Upgrade npm to 11.x for Trusted Publishing
+        # Node 22 ships npm 10.x which supports --provenance (Sigstore signing)
+        # but NOT the auto-OIDC handshake for the actual publish PUT. npm 11.x
+        # adds full Trusted Publishing (no-token publish via OIDC). See #1061.
+        run: npm install -g npm@11
+
       - name: Determine version
         id: version
         run: |
@@ -730,6 +736,12 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Upgrade npm to 11.x for Trusted Publishing
+        # Node 22 ships npm 10.x which supports --provenance (Sigstore signing)
+        # but NOT the auto-OIDC handshake for the actual publish PUT. npm 11.x
+        # adds full Trusted Publishing (no-token publish via OIDC). See #1061.
+        run: npm install -g npm@11
 
       - name: Determine version
         id: version
@@ -910,6 +922,12 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Upgrade npm to 11.x for Trusted Publishing
+        # Node 22 ships npm 10.x which supports --provenance (Sigstore signing)
+        # but NOT the auto-OIDC handshake for the actual publish PUT. npm 11.x
+        # adds full Trusted Publishing (no-token publish via OIDC). See #1061.
+        run: npm install -g npm@11
 
       - name: Determine version
         id: version

@@ -72,9 +72,9 @@ Documentation:
 
 Infrastructure:
   Docker Images:
-    mcpmesh/registry:2.2.2            - Registry service
-    mcpmesh/python-runtime:2.2.2      - Python agent runtime (has mcp-mesh SDK)
-    mcpmesh/typescript-runtime:2.2.2  - TypeScript agent runtime (has @mcpmesh/sdk)
+    mcpmesh/registry:2.2.3            - Registry service
+    mcpmesh/python-runtime:2.2.3      - Python agent runtime (has mcp-mesh SDK)
+    mcpmesh/typescript-runtime:2.2.3  - TypeScript agent runtime (has @mcpmesh/sdk)
 
   Helm Charts (for Kubernetes - OCI registry, no helm repo add needed):
     oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core   - Registry + PostgreSQL + observability
