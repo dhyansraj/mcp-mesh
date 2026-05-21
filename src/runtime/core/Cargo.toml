@@ -1,6 +1,6 @@
 [package]
 name = "mcp-mesh-core"
-version = "2.2.3"
+version = "2.2.4"
 edition = "2021"
 description = "Rust core runtime for MCP Mesh agents"
 license = "MIT"
