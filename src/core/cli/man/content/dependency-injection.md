@@ -35,29 +35,40 @@ health → capability_match → tags → version → schema → tiebreaker
 
 Every decision the registry makes is recorded as a `dependency_resolved` (or `dependency_unresolved`) event. Use `meshctl audit <agent>` to read them back — see `meshctl man audit`.
 
-## Loop topology (v2.2.1+)
+## Loop topology (v2.2.4+)
 
 mcp-mesh runs your agent across two event loops:
 
 - **Framework loop** (uvicorn main): serves `/health`, `/ready`, `/livez`, and routes MCP protocol traffic. Always responsive.
-- **User loop** (single, dedicated): runs FastAPI `lifespan` startup, all `@mesh.tool` and `@app.tool` bodies, and `lifespan` exit.
+- **User loop** (single, dedicated): runs FastMCP/FastAPI `lifespan` startup, all `@mesh.tool` and `@app.tool` bodies, and `lifespan` exit.
 
 A long-running tool body holds the user loop, but never the framework loop — K8s probes stay responsive during long tool calls.
 
-**Default `MCP_MESH_TOOL_WORKERS=1`** (since v2.2.1; previously `min(8, max(2, cpu_count()))`). Loop-affine resources (`asyncpg.Pool`, `redis.asyncio.Redis`, `motor.motor_asyncio.AsyncIOMotorClient`, `aiohttp.ClientSession`) created in FastAPI `lifespan` startup bind to the single-user loop and are reused by every tool body on the same loop — the standard FastAPI pattern just works:
+**Default `MCP_MESH_TOOL_WORKERS=1`** (since v2.2.4; previously `min(8, max(2, cpu_count()))`). Loop-affine resources (`asyncpg.Pool`, `redis.asyncio.Redis`, `motor.motor_asyncio.AsyncIOMotorClient`, `aiohttp.ClientSession`) created in `lifespan` startup bind to the single-user loop and are reused by every tool body on the same loop. FastMCP's `lifespan` parameter receives a FastMCP server instance (not a FastAPI app), so there is no `.state` namespace — the canonical Python pattern is a module-level global:
 
 ```python
 from contextlib import asynccontextmanager
 import asyncpg
 from fastmcp import FastMCP
 
-@asynccontextmanager
-async def lifespan(app):
-    app.state.pool = await asyncpg.create_pool(...)
-    yield
-    await app.state.pool.close()
+# Module-level — FastMCP's lifespan param is a FastMCP server instance,
+# not a FastAPI app, so .state isn't available. The canonical Python
+# pattern is a module-level global.
+_pool = None
 
-app = FastMCP("my-agent", lifespan=lifespan)
+
+@asynccontextmanager
+async def _lifespan(server):
+    global _pool
+    _pool = await asyncpg.create_pool(...)
+    try:
+        yield
+    finally:
+        if _pool is not None:
+            await _pool.close()
+
+
+app = FastMCP("my-agent", lifespan=_lifespan)
 ```
 
 **Opt-in `MCP_MESH_TOOL_WORKERS=N` (N>1)** for tool bodies that do sync blocking work and need concurrent calls to absorb it. Loop-affinity caveat: resources created in `lifespan` bind to worker-0 only. For cross-worker access, use a per-loop dict cache (each worker lazily builds its own resource on first access). Better escape: `await asyncio.to_thread(blocking_call)` keeps the user loop free without N>1 workers.

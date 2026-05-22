@@ -1,0 +1,102 @@
+# tc20 - health_check_ttl periodic refresh (issue #1072).
+#
+# Asserts that the runtime actually re-invokes the user-supplied
+# health_check_fn every health_check_ttl seconds AND that the /health
+# endpoint reflects the latest result, rather than staying pinned to
+# whatever the framework-loop seed call computed at startup.
+#
+# Agent's user health_check_fn returns unhealthy on its first 2
+# invocations, then healthy on every call after that (invocation count
+# tracked in a module-level global). With health_check_ttl=3s and seed
+# call counted as #1, /health reports "healthy" once the refresh loop
+# has fired the user function for the third time (#3 → healthy).
+#
+# Failure mode this catches: prior to v2.2.5 the runtime ran
+# update_health_result() exactly once at startup and never refreshed
+# it. The health_check_fn would only ever be invoked once (call #1,
+# unhealthy), and /health would report "unhealthy" forever.
+
+name: "health_check_ttl Periodic Refresh"
+description: "Verify the stored /health result is refreshed on the user loop every health_check_ttl seconds (issue #1072)"
+tags:
+  - lifecycle
+  - health-check
+  - ttl-refresh
+  - python
+timeout: 120
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+
+test:
+  - name: "Copy health-recovery agent artifact"
+    handler: shell
+    command: "cp -r /uc-artifacts/py-health-recovery-agent /workspace/"
+    capture: copy_output
+
+  - name: "Start health-recovery agent"
+    handler: shell
+    command: "meshctl start py-health-recovery-agent/main.py --env MCP_MESH_HTTP_PORT=3200 -d"
+    workdir: /workspace
+    capture: start_output
+
+  - name: "Wait briefly so the seed runs but no refresh fires yet"
+    handler: wait
+    seconds: 4
+
+  - name: "Probe /health while the seed result is the latest stored value"
+    handler: shell
+    command: "curl -s http://localhost:3200/health"
+    workdir: /workspace
+    capture: initial_health
+
+  - name: "Wait long enough for the refresh loop to fire enough times to flip healthy"
+    handler: wait
+    seconds: 15
+
+  - name: "Probe /health after the refresh loop has fired"
+    handler: shell
+    command: "curl -s http://localhost:3200/health"
+    workdir: /workspace
+    capture: recovered_health
+
+  - name: "Show agent logs for debugging"
+    handler: shell
+    command: "meshctl logs health-recovery-agent 2>/dev/null | tail -60 || echo 'no logs'"
+    workdir: /workspace
+    capture: agent_logs
+
+assertions:
+  # INITIAL probe — runtime is either still booting ('starting') or has
+  # stored the seed result (which is unhealthy because the seed is
+  # call #1 and the threshold is 2). Either way the stored result must
+  # NOT be 'healthy' — that would mean the seed lied or the refresh
+  # already fired faster than expected.
+  - expr: ${captured.initial_health} not contains '"status":"healthy"'
+    message: "INITIAL probe must not yet report healthy — agent should still be in the unhealthy startup window"
+
+  # RECOVERED probe — after several refresh windows, /health MUST flip
+  # to healthy AND carry the 'refresh-call-N' marker proving the user
+  # health_check_fn was invoked from the refresh loop (not just from
+  # the pipeline seed).
+  - expr: ${captured.recovered_health} contains '"status":"healthy"'
+    message: "RECOVERED probe must report healthy after the refresh loop has fired (issue #1072)"
+
+  - expr: ${captured.recovered_health} contains 'refresh-call-'
+    message: "RECOVERED probe must surface a 'refresh-call-N' marker — confirms the user health_check_fn was actually re-invoked by the refresh loop"
+
+  - expr: ${captured.recovered_health} contains 'refreshed'
+    message: "RECOVERED probe must carry the 'refreshed' check from the post-seed invocation"
+
+  - expr: ${captured.recovered_health} not contains 'startup-call-'
+    message: "RECOVERED probe must not still carry a 'startup-call-N' marker — that would mean the refresh never overwrote the seed result"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
