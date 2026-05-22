@@ -257,6 +257,27 @@ the registry from `MCP_MESH_REGISTRY_URL` and reuses a process-cached
 calling code already holds a `JobProxy`, use `proxy.send_event(
 event_type, payload)` directly — same wire shape, skip the helper.
 
+**Lifecycle facades by `job_id`.** Same DDDI-clean pattern as
+`post_event` — module-level helpers that take a `job_id` and dispatch
+through the shared proxy cache, for callers that don't hold a
+`JobProxy` reference:
+
+```python
+# Cancel a running job (idempotent — already-terminal jobs return ok)
+await mesh.jobs.cancel(job_id, reason="user requested abort")
+
+# Read latest job state (dict — registry Job row, field-for-field)
+snapshot = await mesh.jobs.status(job_id)
+# snapshot["status"] ∈ {"working","input_required","completed","failed","cancelled"}
+
+# Wait for terminal state and return the result payload
+result = await mesh.jobs.wait(job_id, timeout_secs=300.0)
+```
+
+`wait` raises `TimeoutError` on `timeout_secs` expiry; pass `None`
+(default) to wait until the job reaches a terminal state. All three
+raise `JobNotFoundError` if the registry has reaped the job.
+
 **Typed errors** (both subclass `RuntimeError` for back-compat):
 
 - `mesh.JobNotFoundError` — job swept or id typo

@@ -42,8 +42,11 @@ from typing import Any, AsyncIterator, Optional
 __all__ = [
     "JobNotFoundError",
     "JobTerminalError",
+    "cancel",
     "post_event",
+    "status",
     "subscribe_events",
+    "wait",
 ]
 
 
@@ -117,7 +120,7 @@ async def _get_or_create_proxy(registry_url: str, job_id: str) -> Any:
             from mcp_mesh_core import JobProxy
         except Exception as e:  # pragma: no cover - extension build issue
             raise RuntimeError(
-                f"mesh.jobs.post_event: mcp_mesh_core.JobProxy unavailable "
+                f"mesh.jobs: mcp_mesh_core.JobProxy unavailable "
                 f"({e}); cannot construct a transient proxy"
             ) from e
         proxy = JobProxy(job_id, registry_url)
@@ -216,7 +219,7 @@ def _resolve_registry_url() -> str:
     url = os.environ.get("MCP_MESH_REGISTRY_URL")
     if not url:
         raise RuntimeError(
-            "mesh.jobs.post_event: MCP_MESH_REGISTRY_URL is not set; "
+            "mesh.jobs: MCP_MESH_REGISTRY_URL is not set; "
             "cannot resolve registry base URL. Ensure the calling "
             "process is running inside a mesh agent."
         )
@@ -374,3 +377,187 @@ async def subscribe_events(
         # subsequent polls don't re-scan the same filtered range.
         if next_after > cursor:
             cursor = next_after
+
+
+# ---------------------------------------------------------------------------
+# cancel / status / wait — DDDI-clean lifecycle facades (issue #1074)
+# ---------------------------------------------------------------------------
+#
+# Mirror the ``post_event`` / ``subscribe_events`` pattern: take a
+# ``job_id`` as the first positional arg, resolve the registry URL
+# internally via ``_resolve_registry_url()``, dispatch through a cached
+# ``JobProxy`` from ``_get_or_create_proxy()``, and re-classify the
+# pyo3 layer's ``RuntimeError`` output via ``_translate_job_error``.
+#
+# These exist so callers that hold only a ``job_id`` (e.g. an HTTP route
+# handler, a tool body whose request payload carries a stashed id) can
+# operate on the job's lifecycle without constructing a ``JobProxy``
+# directly — which would leak ``MCP_MESH_REGISTRY_URL`` addressing into
+# user code and break the DDDI contract.
+
+
+async def cancel(job_id: str, reason: Optional[str] = None) -> None:
+    """Cancel a running job by ID.
+
+    Convenience helper for callers that hold a ``job_id`` but do not have
+    a :class:`mcp_mesh_core.JobProxy` reference in scope. Constructs a
+    transient proxy bound to the current agent's registry URL and
+    forwards the call.
+
+    Calling ``cancel`` on a job that is already in a terminal state is
+    a no-op per the registry's idempotency contract — the call returns
+    successfully without re-firing cancellation. If the registry's
+    contract changes or returns a 409 conflict for some other reason,
+    the facade surfaces it as :class:`JobTerminalError`. The registry
+    forwards the cancel signal to the owner replica via
+    ``POST /jobs/{id}/cancel``; the running handler's cancel token
+    fires on the next ``await`` point, and any outbound ``McpMeshTool``
+    proxy calls abort their underlying HTTP requests.
+
+    Args:
+        job_id: Target job's server-assigned id.
+        reason: Optional human-readable reason recorded against the
+            cancellation. Surfaces in the synthetic
+            ``{"type": "cancelled"}`` event the registry writes into
+            the job's event log, so a handler parked on
+            ``recv_event(types=["cancelled"])`` can return cleanly with
+            the reason in scope.
+
+    Raises:
+        JobNotFoundError: If the registry doesn't know the job
+            (sweep already removed it, or wrong id).
+        JobTerminalError: If the registry surfaces a 409 conflict for
+            this cancel (e.g. the idempotency contract changes upstream
+            or the registry treats the targeted terminal state as a
+            conflict).
+        RuntimeError: For transport errors (registry unreachable,
+            5xx after retries, malformed payload, etc.) — the
+            underlying error message is preserved.
+
+    Example:
+        Cancel a job from a tool that receives the id in its payload::
+
+            @mesh.tool(capability="abort_workflow")
+            async def abort_workflow(job_id: str, reason: str) -> dict:
+                await mesh.jobs.cancel(job_id, reason)
+                return {"cancelled": job_id}
+    """
+    registry_url = _resolve_registry_url()
+    proxy = await _get_or_create_proxy(registry_url, job_id)
+    try:
+        await proxy.cancel(reason)
+    except RuntimeError as exc:
+        translated = _translate_job_error(exc)
+        if translated is exc:
+            raise
+        raise translated from exc
+
+
+async def status(job_id: str) -> dict:
+    """Get the current status of a job by ID.
+
+    Convenience helper for callers that hold a ``job_id`` but do not
+    have a :class:`mcp_mesh_core.JobProxy` reference in scope.
+    Constructs a transient proxy bound to the current agent's registry
+    URL and forwards a single ``GET /jobs/{id}`` to the registry.
+
+    Args:
+        job_id: Target job's server-assigned id.
+
+    Returns:
+        Job status dict — the same shape :meth:`JobProxy.status` returns,
+        mirroring the registry's ``Job`` schema field-for-field. Keys
+        include ``id``, ``capability``, ``status`` (one of
+        ``"working" | "input_required" | "completed" | "failed" | "cancelled"``),
+        ``progress``, ``progress_message``, ``result``, ``error``,
+        ``attempt_count``, ``max_retries``, ``max_duration``,
+        ``total_deadline``, ``submitted_at``, ``submitted_by``,
+        ``submitted_payload`` (the request payload the job was created
+        with), plus the lease-tracking fields ``owner_instance_id`` /
+        ``lease_expires_at`` / ``last_heartbeat_at``.
+
+    Raises:
+        JobNotFoundError: If the registry doesn't know the job
+            (sweep already removed it, or wrong id).
+        RuntimeError: For transport errors (registry unreachable,
+            5xx after retries, malformed payload, etc.) — the
+            underlying error message is preserved.
+
+    Example:
+        Poll a job's progress from outside the producer agent::
+
+            @mesh.tool(capability="check_progress")
+            async def check_progress(job_id: str) -> dict:
+                snapshot = await mesh.jobs.status(job_id)
+                return {
+                    "status": snapshot["status"],
+                    "progress": snapshot["progress"],
+                    "message": snapshot["progress_message"],
+                }
+    """
+    registry_url = _resolve_registry_url()
+    proxy = await _get_or_create_proxy(registry_url, job_id)
+    try:
+        return await proxy.status()
+    except RuntimeError as exc:
+        translated = _translate_job_error(exc)
+        if translated is exc:
+            raise
+        raise translated from exc
+
+
+async def wait(job_id: str, timeout_secs: Optional[float] = None) -> Any:
+    """Wait for a job to complete and return its result.
+
+    Convenience helper for callers that hold a ``job_id`` but do not
+    have a :class:`mcp_mesh_core.JobProxy` reference in scope.
+    Constructs a transient proxy bound to the current agent's registry
+    URL and polls until the job reaches a terminal state.
+
+    On success, returns the ``result`` payload the handler passed to
+    :meth:`JobController.complete` — any JSON-shaped Python value (dict /
+    list / primitive). On a non-success terminal (failed / cancelled)
+    the underlying pyo3 layer raises a ``RuntimeError`` carrying the
+    Rust ``JobError`` display string; on ``timeout_secs`` expiry the
+    layer raises :class:`TimeoutError`.
+
+    Args:
+        job_id: Target job's server-assigned id.
+        timeout_secs: Maximum wait duration in seconds. ``None`` ≡ no
+            timeout (default) — wait until the job reaches a terminal
+            state. Negative / NaN / infinite values are rejected by
+            the pyo3 layer with :class:`ValueError`.
+
+    Returns:
+        The job's result payload (whatever the handler passed to
+        ``complete()``). Shape is application-defined — typically a
+        dict, but any JSON-shaped value is valid.
+
+    Raises:
+        TimeoutError: If ``timeout_secs`` elapses before the job reaches
+            a terminal state.
+        ValueError: If ``timeout_secs`` is negative, NaN, or infinite
+            — rejected by the pyo3 layer before any registry call.
+        JobNotFoundError: If the registry doesn't know the job
+            (sweep already removed it, or wrong id).
+        RuntimeError: If the job reached a non-success terminal state
+            (``failed`` / ``cancelled``) or for transport errors —
+            the underlying error message is preserved.
+
+    Example:
+        Submit-then-wait from a tool that doesn't hold the proxy::
+
+            @mesh.tool(capability="run_to_completion")
+            async def run_to_completion(job_id: str) -> dict:
+                result = await mesh.jobs.wait(job_id, timeout_secs=300.0)
+                return {"result": result}
+    """
+    registry_url = _resolve_registry_url()
+    proxy = await _get_or_create_proxy(registry_url, job_id)
+    try:
+        return await proxy.wait(timeout_secs)
+    except RuntimeError as exc:
+        translated = _translate_job_error(exc)
+        if translated is exc:
+            raise
+        raise translated from exc
