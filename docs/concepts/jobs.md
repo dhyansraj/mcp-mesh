@@ -689,14 +689,15 @@ cache lookup when you already have a proxy in scope.
 Symmetric to `post_event`: callers that hold a `job_id` but no
 `JobProxy` reference can drive the rest of the post-submit lifecycle
 through module-level facades that share the same registry-URL
-resolution + cached-proxy machinery. Python and TypeScript surfaces
-land in v2.2; Java parity follows in a separate PR.
+resolution + cached-proxy machinery. All three runtimes ship the
+same surface — Python, TypeScript, and Java each implement the same
+DDDI-clean facade pattern.
 
-| Operation                | Python                                             | TypeScript                                       | Returns                       |
-| ------------------------ | -------------------------------------------------- | ------------------------------------------------ | ----------------------------- |
-| Cancel a running job     | `await mesh.jobs.cancel(job_id, reason=None)`      | `await mesh.jobs.cancel(jobId, reason?)`         | `None` / `void`               |
-| Read latest job state    | `await mesh.jobs.status(job_id)`                   | `await mesh.jobs.status(jobId)`                  | `dict` / `JobStatus`          |
-| Wait for terminal state  | `await mesh.jobs.wait(job_id, timeout_secs=None)`  | `await mesh.jobs.wait(jobId, timeoutSecs?)`      | `result` payload on success   |
+| Operation                | Python                                             | TypeScript                                       | Java                                          | Returns                       |
+| ------------------------ | -------------------------------------------------- | ------------------------------------------------ | --------------------------------------------- | ----------------------------- |
+| Cancel a running job     | `await mesh.jobs.cancel(job_id, reason=None)`      | `await mesh.jobs.cancel(jobId, reason?)`         | `MeshJobs.cancel(jobId[, reason])`            | `None` / `void`               |
+| Read latest job state    | `await mesh.jobs.status(job_id)`                   | `await mesh.jobs.status(jobId)`                  | `MeshJobs.status(jobId)`                      | `dict` / `JobStatus` / `Map`  |
+| Wait for terminal state  | `await mesh.jobs.wait(job_id, timeout_secs=None)`  | `await mesh.jobs.wait(jobId, timeoutSecs?)`      | `MeshJobs.await(jobId[, timeoutSecs])`        | `result` payload on success   |
 
 <!-- markdownlint-disable MD046 -->
 === "Python"
@@ -764,6 +765,35 @@ land in v2.2; Java parity follows in a separate PR.
       },
     });
     ```
+
+=== "Java"
+
+    ```java
+    import io.mcpmesh.MeshJobs;
+
+    @MeshTool(capability = "abort_workflow")
+    public Map<String, Object> abortWorkflow(
+        @Param("job_id") String jobId,
+        @Param("reason") String reason) {
+      MeshJobs.cancel(jobId, reason);
+      return Map.of("cancelled", jobId);
+    }
+
+    @MeshTool(capability = "check_progress")
+    public Map<String, Object> checkProgress(@Param("job_id") String jobId) {
+      Map<String, Object> snapshot = MeshJobs.status(jobId);
+      return Map.of(
+          "status", snapshot.get("status"),
+          "progress", snapshot.get("progress"),
+          "message", snapshot.get("progress_message"));
+    }
+
+    @MeshTool(capability = "run_to_completion")
+    public Map<String, Object> runToCompletion(@Param("job_id") String jobId) {
+      Object result = MeshJobs.await(jobId, 300.0);
+      return Map.of("result", result);
+    }
+    ```
 <!-- markdownlint-enable MD046 -->
 
 `cancel` is idempotent — calling it on an already-terminal job returns
@@ -773,10 +803,20 @@ expiry; pass `None` / omit `timeoutSecs` to wait until the job reaches
 a terminal state. `status` returns the same shape `JobProxy.status()`
 exposes (registry `Job` row, field-for-field).
 
+The Java facade is named `MeshJobs.await` (not `wait`) to avoid
+readability confusion with the inherited `Object.wait()` / `wait(long)`
+/ `wait(long, int)` overload family, and to match the existing
+`JobProxy.await(double)` instance method precedent in the SDK. See the
+Javadoc on `MeshJobs.await` and `JobProxy.await` for the detailed
+rationale. `MeshJobs.await(jobId, timeoutSecs)` with `timeoutSecs <= 0.0`
+or non-finite values means "no timeout" (matches the no-arg
+`MeshJobs.await(jobId)` overload).
+
 If the calling code already holds a `JobProxy`, the same surface is
 on the proxy directly: `proxy.cancel(reason)`, `proxy.status()`,
-`proxy.wait(timeout_secs)`. Skip the facade + cache lookup when you
-already have a proxy in scope.
+`proxy.wait(timeout_secs)` (Python / TS) / `proxy.await(timeoutSecs)`
+(Java). Skip the facade + cache lookup when you already have a proxy
+in scope.
 
 ### Typed errors
 

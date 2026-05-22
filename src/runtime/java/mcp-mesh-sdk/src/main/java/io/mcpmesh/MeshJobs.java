@@ -131,6 +131,314 @@ public final class MeshJobs {
         return proxy.sendEvent(eventType, payload);
     }
 
+    // ---------------------------------------------------------------------------
+    // cancel / status / await — DDDI-clean lifecycle facades (issue #1080)
+    // ---------------------------------------------------------------------------
+    //
+    // Mirror the postEvent / subscribeEvents pattern: take a jobId as the
+    // first positional arg, resolve the registry URL internally via
+    // resolveRegistryUrl(), dispatch through a cached JobProxy from
+    // getOrCreateProxy(), and re-classify any MeshException raised by the
+    // proxy via substring match (translateJobError).
+    //
+    // These exist so callers that hold only a jobId (e.g. an HTTP route
+    // handler, a tool body whose request payload carries a stashed id) can
+    // operate on the job's lifecycle without constructing a JobProxy
+    // directly — which would leak MCP_MESH_REGISTRY_URL addressing into
+    // user code and break the DDDI contract.
+
+    /**
+     * Cancel a running job by ID.
+     *
+     * <p>Convenience helper for callers that hold a {@code jobId} but do
+     * not have a {@link JobProxy} reference in scope. Constructs (or
+     * reuses, via the LRU cache) a transient proxy bound to the current
+     * agent's registry URL and forwards the call.
+     *
+     * <p>Per the registry's idempotency contract, calling {@code cancel}
+     * on a job that is already in a terminal state returns successfully
+     * without re-firing cancellation. If the registry surfaces a conflict
+     * for some other reason, the facade re-classifies it as
+     * {@link JobTerminalException}. The registry forwards the cancel
+     * signal to the owner replica via {@code POST /jobs/{id}/cancel}; the
+     * running handler's cancel token fires on the next {@code await}
+     * point, and any outbound {@code McpMeshTool} proxy calls abort their
+     * underlying HTTP requests.
+     *
+     * <p>Mirrors Python {@code mesh.jobs.cancel} and TypeScript
+     * {@code mesh.jobs.cancel} one-for-one.
+     *
+     * @param jobId  Target job's server-assigned id
+     * @param reason Optional human-readable reason recorded against the
+     *               cancellation. Surfaces in the synthetic
+     *               {@code {"type":"cancelled"}} event the registry writes
+     *               into the job's event log, so a handler parked on
+     *               {@code recvEvent(List.of("cancelled", ...))} can return
+     *               cleanly with the reason in scope. May be {@code null}.
+     * @throws JobNotFoundException if the registry doesn't know the job
+     *                              (sweep already removed it, or wrong id)
+     * @throws JobTerminalException if the registry surfaces a conflict
+     *                              for this cancel (e.g. the idempotency
+     *                              contract changes upstream or the
+     *                              registry treats the targeted terminal
+     *                              state as a conflict)
+     * @throws MeshException        for transport errors or missing
+     *                              {@code MCP_MESH_REGISTRY_URL}
+     *
+     * @apiNote Example — cancel a job from a tool that receives the id
+     * in its payload:
+     * <pre>{@code
+     * @MeshTool(capability = "abort_workflow")
+     * public Map<String, Object> abortWorkflow(
+     *         @Param("job_id") String jobId,
+     *         @Param("reason") String reason) {
+     *     MeshJobs.cancel(jobId, reason);
+     *     return Map.of("cancelled", jobId);
+     * }
+     * }</pre>
+     */
+    public static void cancel(String jobId, String reason) {
+        if (jobId == null || jobId.isEmpty()) {
+            throw new IllegalArgumentException("jobId is required");
+        }
+        String registryUrl = resolveRegistryUrl();
+        JobProxy proxy = getOrCreateProxy(registryUrl, jobId);
+        try {
+            proxy.cancel(reason);
+        } catch (MeshException exc) {
+            throw translateJobError(exc);
+        }
+    }
+
+    /**
+     * Convenience overload — {@link #cancel(String, String)} with a
+     * {@code null} reason.
+     *
+     * @param jobId Target job's server-assigned id
+     * @throws JobNotFoundException if the registry doesn't know the job
+     * @throws JobTerminalException if the registry surfaces a conflict
+     *                              for this cancel
+     * @throws MeshException        for transport errors or missing
+     *                              {@code MCP_MESH_REGISTRY_URL}
+     */
+    public static void cancel(String jobId) {
+        cancel(jobId, null);
+    }
+
+    /**
+     * Get the current status of a job by ID.
+     *
+     * <p>Convenience helper for callers that hold a {@code jobId} but do
+     * not have a {@link JobProxy} reference in scope. Constructs (or
+     * reuses, via the LRU cache) a transient proxy bound to the current
+     * agent's registry URL and forwards a single {@code GET /jobs/{id}}
+     * to the registry.
+     *
+     * <p>Mirrors Python {@code mesh.jobs.status} and TypeScript
+     * {@code mesh.jobs.status} one-for-one.
+     *
+     * <p>The returned map mirrors the registry's OpenAPI {@code Job}
+     * schema field-for-field. Keys always present on the wire include:
+     * <ul>
+     *   <li>{@code id} — server-assigned job UUID</li>
+     *   <li>{@code capability} — capability the job was submitted against</li>
+     *   <li>{@code owner_instance_id} — instance id of the replica
+     *       currently holding the lease (or {@code null})</li>
+     *   <li>{@code status} — one of {@code "working"},
+     *       {@code "input_required"}, {@code "completed"},
+     *       {@code "failed"}, {@code "cancelled"}</li>
+     *   <li>{@code progress} — latest progress fraction in {@code [0.0, 1.0]}
+     *       (or {@code null})</li>
+     *   <li>{@code progress_message} — latest progress message (or {@code null})</li>
+     *   <li>{@code result} — terminal result payload (set when
+     *       {@code status == "completed"})</li>
+     *   <li>{@code error} — terminal error reason (set when status is
+     *       {@code "failed"} / {@code "cancelled"})</li>
+     *   <li>{@code submitted_payload} — original request payload</li>
+     *   <li>{@code attempt_count} — number of attempts so far (1-indexed)</li>
+     *   <li>{@code max_retries} — maximum retries beyond the initial attempt</li>
+     *   <li>{@code max_duration} — per-attempt soft timeout in seconds
+     *       (or {@code null})</li>
+     *   <li>{@code total_deadline} — hard ceiling across all attempts, as
+     *       a unix epoch second (or {@code null})</li>
+     *   <li>{@code lease_expires_at} — unix epoch second when the current
+     *       lease expires (or {@code null})</li>
+     *   <li>{@code last_heartbeat_at} — unix epoch second of the last
+     *       heartbeat from the owner replica (or {@code null})</li>
+     *   <li>{@code submitted_at} — unix epoch second the job row was created</li>
+     *   <li>{@code submitted_by} — identifier of the agent that submitted
+     *       the job</li>
+     * </ul>
+     *
+     * @param jobId Target job's server-assigned id
+     * @return Job status snapshot — the same shape {@link JobProxy#status()}
+     *         returns, mirroring the registry's {@code Job} schema
+     *         field-for-field.
+     * @throws JobNotFoundException if the registry doesn't know the job
+     *                              (sweep already removed it, or wrong id)
+     * @throws MeshException        for transport errors or missing
+     *                              {@code MCP_MESH_REGISTRY_URL}
+     *
+     * @apiNote Example — poll a job's progress from outside the producer
+     * agent:
+     * <pre>{@code
+     * @MeshTool(capability = "check_progress")
+     * public Map<String, Object> checkProgress(@Param("job_id") String jobId) {
+     *     Map<String, Object> snapshot = MeshJobs.status(jobId);
+     *     return Map.of(
+     *         "status", snapshot.get("status"),
+     *         "progress", snapshot.get("progress"),
+     *         "message", snapshot.get("progress_message"));
+     * }
+     * }</pre>
+     */
+    public static Map<String, Object> status(String jobId) {
+        if (jobId == null || jobId.isEmpty()) {
+            throw new IllegalArgumentException("jobId is required");
+        }
+        String registryUrl = resolveRegistryUrl();
+        JobProxy proxy = getOrCreateProxy(registryUrl, jobId);
+        try {
+            return proxy.status();
+        } catch (MeshException exc) {
+            throw translateJobError(exc);
+        }
+    }
+
+    /**
+     * Wait for a job to complete and return its result.
+     *
+     * <p>Convenience helper for callers that hold a {@code jobId} but do
+     * not have a {@link JobProxy} reference in scope. Constructs (or
+     * reuses, via the LRU cache) a transient proxy bound to the current
+     * agent's registry URL and polls until the job reaches a terminal
+     * state.
+     *
+     * <p>Named {@code await} (not {@code wait}) to avoid readability
+     * confusion with the inherited {@link Object#wait()} /
+     * {@link Object#wait(long)} / {@link Object#wait(long, int)}
+     * overload family, and to match the existing
+     * {@link JobProxy#await(double)} instance method. Mirrors the
+     * Python {@code mesh.jobs.wait} and TypeScript
+     * {@code mesh.jobs.wait} APIs semantically.
+     *
+     * <p>On success, returns the result payload the handler passed to
+     * {@link JobController#complete(Map)} — any JSON-shaped Java value
+     * ({@code Map} / {@code List} / {@code Number} / {@code String} /
+     * {@code Boolean} / {@code null}) per Jackson's default binding.
+     *
+     * @param jobId       Target job's server-assigned id
+     * @param timeoutSecs Wall-clock timeout in seconds.
+     *                    <ul>
+     *                      <li>{@code <= 0.0} (including {@code -0.0})
+     *                          → no timeout (block until terminal).</li>
+     *                      <li>Positive finite → wait that many seconds,
+     *                          then surface a timeout error.</li>
+     *                      <li>Non-finite (NaN, ±Inf) → no timeout.</li>
+     *                    </ul>
+     *                    Matches {@link JobProxy#await(double)}'s contract.
+     * @return The job's result payload (whatever the handler passed to
+     *         {@code complete()}). Shape is application-defined —
+     *         typically a {@code Map<String, Object>}, but any JSON-shaped
+     *         value is valid.
+     * @throws JobNotFoundException if the registry doesn't know the job
+     *                              (sweep already removed it, or wrong id)
+     * @throws JobTerminalException if the job has already reached a
+     *                              non-success terminal state when the
+     *                              call arrives and the registry surfaces
+     *                              that as a terminal-state conflict
+     * @throws MeshException        on timeout, cancellation, transport
+     *                              errors, or missing
+     *                              {@code MCP_MESH_REGISTRY_URL}.
+     *                              The underlying error message is
+     *                              preserved (e.g. messages starting with
+     *                              {@code "timeout: ..."} /
+     *                              {@code "cancelled: ..."} per the
+     *                              {@link JobProxy#await(double)} surface).
+     *
+     * @apiNote Example — submit-then-wait from a tool that doesn't hold
+     * the proxy:
+     * <pre>{@code
+     * @MeshTool(capability = "run_to_completion")
+     * public Map<String, Object> runToCompletion(@Param("job_id") String jobId) {
+     *     Object result = MeshJobs.await(jobId, 300.0);
+     *     return Map.of("result", result);
+     * }
+     * }</pre>
+     */
+    public static Object await(String jobId, double timeoutSecs) {
+        if (jobId == null || jobId.isEmpty()) {
+            throw new IllegalArgumentException("jobId is required");
+        }
+        String registryUrl = resolveRegistryUrl();
+        JobProxy proxy = getOrCreateProxy(registryUrl, jobId);
+        try {
+            return proxy.await(timeoutSecs);
+        } catch (MeshException exc) {
+            throw translateJobError(exc);
+        }
+    }
+
+    /**
+     * Convenience overload — {@link #await(String, double)} without a
+     * timeout. Equivalent to {@code await(jobId, -1.0)} (matches
+     * {@link JobProxy#await()}'s no-arg overload).
+     *
+     * @param jobId Target job's server-assigned id
+     * @return The job's result payload
+     * @throws JobNotFoundException if the registry doesn't know the job
+     * @throws JobTerminalException if the registry surfaces a terminal-
+     *                              state conflict
+     * @throws MeshException        on cancellation, transport errors, or
+     *                              missing {@code MCP_MESH_REGISTRY_URL}
+     */
+    public static Object await(String jobId) {
+        return await(jobId, -1.0);
+    }
+
+    /**
+     * Re-classify a generic {@link MeshException} raised by the proxy
+     * layer into one of the typed subclasses, if the message matches.
+     * Returns the original exception (or a typed clone) — callers should
+     * {@code throw} the returned value.
+     *
+     * <p>Mirrors:
+     * <ul>
+     *   <li>Python {@code mesh.jobs._translate_job_error}</li>
+     *   <li>TypeScript {@code translateJobError}</li>
+     * </ul>
+     *
+     * <p>The {@link JobProxy#cancel(String)}, {@link JobProxy#status()},
+     * and {@link JobProxy#await(double)} surfaces raise a generic
+     * {@link MeshException} for every non-zero rc — unlike
+     * {@link JobProxy#sendEvent(String, Map)}, they do not have explicit
+     * {@code rc == -2} / {@code rc == -3} branches. This helper bridges
+     * that gap by inspecting the registry's stable error-message prefixes
+     * (the Rust core's {@code JobError::Display} format).
+     *
+     * <p>Package-private for tests.
+     */
+    static MeshException translateJobError(MeshException exc) {
+        if (exc instanceof JobNotFoundException || exc instanceof JobTerminalException) {
+            return exc;
+        }
+        String msg = exc.getMessage();
+        if (msg == null) {
+            return exc;
+        }
+        String msgLower = msg.toLowerCase();
+        // Order matters: "job is terminal" is the JobTerminal variant's
+        // Display prefix (see jobs.rs::JobError::Display); "job not found"
+        // is BackendError::NotFound's Display prefix.
+        if (msgLower.contains("job is terminal")) {
+            return new JobTerminalException(msg, exc);
+        }
+        if (msgLower.contains("job not found")) {
+            return new JobNotFoundException(msg, exc);
+        }
+        return exc;
+    }
+
     /**
      * Subscribe to events posted to a running job by ID.
      *
@@ -215,7 +523,7 @@ public final class MeshJobs {
         String url = System.getenv("MCP_MESH_REGISTRY_URL");
         if (url == null || url.isEmpty()) {
             throw new MeshException(
-                "MeshJobs.postEvent: MCP_MESH_REGISTRY_URL is not set; "
+                "MeshJobs: MCP_MESH_REGISTRY_URL is not set; "
                     + "cannot resolve registry base URL. Ensure the calling "
                     + "process is running inside a mesh agent.");
         }

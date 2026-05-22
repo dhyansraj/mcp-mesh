@@ -370,6 +370,77 @@ LRU cache keyed by `(registryUrl, jobId)` (default cap 256; tune via
 - `JobNotFoundException` — job swept or id typo
 - `JobTerminalException` — job already terminal, no more events accepted
 
+## Lifecycle facades by `jobId`
+
+Symmetric to `MeshJobs.postEvent` / `MeshJobs.subscribeEvents`: callers
+that hold a `jobId` but no `JobProxy` reference drive the rest of the
+post-submit lifecycle through static facades on `MeshJobs`. Same
+registry-URL resolution + cached-proxy machinery — `cancel`, `status`,
+`await` and `postEvent` all reuse the same underlying `JobProxy` for a
+given `(registryUrl, jobId)`.
+
+| Operation                | Static facade                              | Returns                                   |
+| ------------------------ | ------------------------------------------ | ----------------------------------------- |
+| Cancel a running job     | `MeshJobs.cancel(jobId[, reason])`         | `void`                                    |
+| Read latest job state    | `MeshJobs.status(jobId)`                   | `Map<String, Object>` (registry Job row)  |
+| Wait for terminal state  | `MeshJobs.await(jobId[, timeoutSecs])`     | `Object` (handler's `complete()` payload) |
+
+```java
+import io.mcpmesh.MeshJobs;
+
+@MeshTool(capability = "abort_workflow")
+public Map<String, Object> abortWorkflow(
+    @Param("job_id") String jobId,
+    @Param("reason") String reason) {
+  MeshJobs.cancel(jobId, reason);
+  return Map.of("cancelled", jobId);
+}
+
+@MeshTool(capability = "check_progress")
+public Map<String, Object> checkProgress(@Param("job_id") String jobId) {
+  Map<String, Object> snapshot = MeshJobs.status(jobId);
+  return Map.of(
+      "status", snapshot.get("status"),
+      "progress", snapshot.get("progress"),
+      "message", snapshot.get("progress_message"));
+}
+
+@MeshTool(capability = "run_to_completion")
+public Map<String, Object> runToCompletion(@Param("job_id") String jobId) {
+  Object result = MeshJobs.await(jobId, 300.0);
+  return Map.of("result", result);
+}
+```
+
+**Notes:**
+
+- Named `await` (not `wait`) to avoid readability confusion with the
+  inherited `Object.wait()` / `Object.wait(long)` /
+  `Object.wait(long, int)` overload family, and to match the existing
+  `JobProxy.await(double)` instance method.
+- `cancel` is idempotent per the registry's contract — calling on an
+  already-terminal job returns ok without re-firing. If the registry
+  surfaces a conflict for some other reason, the facade re-classifies
+  it as `JobTerminalException`.
+- `await(jobId, timeoutSecs)` with `timeoutSecs <= 0.0` or non-finite
+  values means "no timeout" (matches `JobProxy.await(double)` and the
+  no-arg `MeshJobs.await(jobId)` overload). Positive finite waits the
+  given seconds before surfacing a timeout error.
+- `status` returns the full registry Job row (same shape
+  `JobProxy.status()` exposes); keys always present include `id`,
+  `capability`, `status`, `progress`, `progress_message`, `result`,
+  `error`, `submitted_payload`, plus lease-tracking fields
+  (`owner_instance_id`, `lease_expires_at`, `last_heartbeat_at`).
+- `JobNotFoundException` is raised from any of the three when the
+  registry doesn't know the `jobId` (sweep already removed it, or id
+  typo). `JobTerminalException` is the conflict surface for `cancel`
+  and `await` when the registry treats the targeted terminal state as
+  a conflict.
+- If the calling code already holds a `JobProxy`, the same surface is
+  on the proxy directly: `proxy.cancel(reason)`, `proxy.status()`,
+  `proxy.await(timeoutSecs)`. Skip the facade + cache lookup when you
+  already have a proxy in scope.
+
 **Synthetic cancel event**. When a consumer calls `proxy.cancel(
 reason)`, the registry writes a synthetic event into the log before
 HTTP-forwarding the cancel signal. A handler parked on `recvEvent(

@@ -140,11 +140,11 @@ public final class JobProxy implements MeshJob, AutoCloseable {
      * payload as a generic Java value (Map / List / Number / String /
      * Boolean / null) — Jackson default binding.
      *
-     * <p>Named {@code await} (not {@code wait}) because {@link Object#wait()}
-     * is {@code final} on every Java object — overloading the name on a
-     * subclass is a compile error. Mirrors the Python {@code .wait()} and
-     * TypeScript {@code .wait()} APIs semantically; the rename is purely a
-     * Java language constraint.
+     * <p>Named {@code await} (not {@code wait}) to avoid readability
+     * confusion with the inherited {@link Object#wait()} /
+     * {@link Object#wait(long)} / {@link Object#wait(long, int)}
+     * overload family. Mirrors the Python {@code .wait()} and
+     * TypeScript {@code .wait()} APIs semantically.
      *
      * @param timeoutSecs Wall-clock timeout in seconds.
      *                    <ul>
