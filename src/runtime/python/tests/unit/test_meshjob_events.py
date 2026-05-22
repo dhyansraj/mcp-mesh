@@ -330,17 +330,28 @@ class TestPublicExports:
         assert sub.__name__ == "mesh.jobs"
         assert callable(sub.post_event)
         assert callable(sub.subscribe_events)
+        # DDDI-clean lifecycle facades (issue #1074) — same access path
+        # as post_event / subscribe_events.
+        assert callable(sub.cancel)
+        assert callable(sub.status)
+        assert callable(sub.wait)
 
     def test_direct_jobs_import(self):
         from mesh.jobs import (
             JobNotFoundError,
             JobTerminalError,
+            cancel,
             post_event,
+            status,
             subscribe_events,
+            wait,
         )
 
         assert callable(post_event)
         assert callable(subscribe_events)
+        assert callable(cancel)
+        assert callable(status)
+        assert callable(wait)
         assert issubclass(JobNotFoundError, RuntimeError)
         assert issubclass(JobTerminalError, RuntimeError)
 
@@ -668,6 +679,338 @@ class TestSubscribeEvents:
                 ):
                     pass  # pragma: no cover - iterator raises on first event
         assert "seq" in str(exc.value)
+
+
+# ===========================================================================
+# mesh.jobs.cancel / status / wait — DDDI-clean lifecycle facades (#1074)
+# ===========================================================================
+
+
+class TestCancelFacade:
+    """``mesh.jobs.cancel`` constructs a transient
+    :class:`mcp_mesh_core.JobProxy` against the running agent's
+    registry URL and forwards a ``cancel(reason)`` call. Mirrors the
+    ``post_event`` dispatch + error-translation pattern."""
+
+    @pytest.mark.asyncio
+    async def test_constructs_proxy_with_registry_url_and_forwards(
+        self, monkeypatch
+    ):
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        captured_construct: dict = {}
+        captured_cancel: dict = {}
+
+        class _FakeJobProxy:
+            def __init__(self, job_id: str, registry_url: str) -> None:
+                captured_construct["job_id"] = job_id
+                captured_construct["registry_url"] = registry_url
+
+            async def cancel(self, reason: Any) -> None:
+                captured_cancel["reason"] = reason
+
+        with mock.patch("mcp_mesh_core.JobProxy", _FakeJobProxy, create=True):
+            result = await mesh_jobs.cancel("job-xyz", "user requested abort")
+
+        assert result is None
+        assert captured_construct == {
+            "job_id": "job-xyz",
+            "registry_url": "http://localhost:9999",
+        }
+        assert captured_cancel == {"reason": "user requested abort"}
+
+    @pytest.mark.asyncio
+    async def test_default_reason_is_none(self, monkeypatch):
+        """``reason`` is optional — omitting it forwards ``None`` to the
+        underlying proxy (the registry treats absent reason as ok)."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+        captured: dict = {}
+
+        class _Fake:
+            def __init__(self, _jid, _url):
+                pass
+
+            async def cancel(self, reason):
+                captured["reason"] = reason
+
+        with mock.patch("mcp_mesh_core.JobProxy", _Fake, create=True):
+            await mesh_jobs.cancel("job-xyz")
+
+        assert captured == {"reason": None}
+
+    @pytest.mark.asyncio
+    async def test_translates_job_not_found_runtime_error(self, monkeypatch):
+        """A ``RuntimeError`` shaped like the Rust JobNotFound variant
+        bubbles up as :class:`JobNotFoundError` so callers can
+        ``except`` on the typed class without inspecting strings."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        class _Fake:
+            def __init__(self, _jid, _url):
+                pass
+
+            async def cancel(self, _reason):
+                raise RuntimeError("backend error: job not found: gone")
+
+        with mock.patch("mcp_mesh_core.JobProxy", _Fake, create=True):
+            with pytest.raises(mesh_jobs.JobNotFoundError):
+                await mesh_jobs.cancel("gone", "no reason")
+
+    @pytest.mark.asyncio
+    async def test_raises_when_registry_url_missing(self, monkeypatch):
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.delenv("MCP_MESH_REGISTRY_URL", raising=False)
+        with pytest.raises(RuntimeError) as exc:
+            await mesh_jobs.cancel("x")
+        assert "MCP_MESH_REGISTRY_URL" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_translates_job_terminal_runtime_error(self, monkeypatch):
+        """A ``RuntimeError`` shaped like the Rust JobTerminal variant
+        bubbles up as :class:`JobTerminalError` so callers can
+        ``except`` on the typed class without inspecting strings."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        class _Fake:
+            def __init__(self, _jid, _url):
+                pass
+
+            async def cancel(self, _reason):
+                raise RuntimeError("job is terminal: completed")
+
+        with mock.patch("mcp_mesh_core.JobProxy", _Fake, create=True):
+            with pytest.raises(mesh_jobs.JobTerminalError):
+                await mesh_jobs.cancel("done", "no reason")
+
+
+class TestStatusFacade:
+    """``mesh.jobs.status`` constructs a transient
+    :class:`mcp_mesh_core.JobProxy` against the running agent's
+    registry URL and forwards a ``status()`` call."""
+
+    @pytest.mark.asyncio
+    async def test_constructs_proxy_with_registry_url_and_returns_dict(
+        self, monkeypatch
+    ):
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        captured_construct: dict = {}
+
+        class _FakeJobProxy:
+            def __init__(self, job_id: str, registry_url: str) -> None:
+                captured_construct["job_id"] = job_id
+                captured_construct["registry_url"] = registry_url
+
+            async def status(self) -> dict:
+                return {
+                    "id": "job-xyz",
+                    "capability": "run_workflow",
+                    "status": "working",
+                    "progress": 0.42,
+                    "progress_message": "halfway there",
+                    "result": None,
+                    "error": None,
+                }
+
+        with mock.patch("mcp_mesh_core.JobProxy", _FakeJobProxy, create=True):
+            snapshot = await mesh_jobs.status("job-xyz")
+
+        assert captured_construct == {
+            "job_id": "job-xyz",
+            "registry_url": "http://localhost:9999",
+        }
+        assert snapshot["id"] == "job-xyz"
+        assert snapshot["status"] == "working"
+        assert snapshot["progress"] == 0.42
+
+    @pytest.mark.asyncio
+    async def test_raises_when_registry_url_missing(self, monkeypatch):
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.delenv("MCP_MESH_REGISTRY_URL", raising=False)
+        with pytest.raises(RuntimeError) as exc:
+            await mesh_jobs.status("x")
+        assert "MCP_MESH_REGISTRY_URL" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_translates_job_not_found_runtime_error(self, monkeypatch):
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        class _Fake:
+            def __init__(self, _jid, _url):
+                pass
+
+            async def status(self):
+                raise RuntimeError("backend error: job not found: missing")
+
+        with mock.patch("mcp_mesh_core.JobProxy", _Fake, create=True):
+            with pytest.raises(mesh_jobs.JobNotFoundError):
+                await mesh_jobs.status("missing")
+
+
+class TestWaitFacade:
+    """``mesh.jobs.wait`` constructs a transient
+    :class:`mcp_mesh_core.JobProxy` against the running agent's
+    registry URL and forwards a ``wait(timeout_secs)`` call. The
+    underlying pyo3 layer raises :class:`TimeoutError` on
+    ``timeout_secs`` expiry; non-success terminals surface as
+    ``RuntimeError`` (potentially translated to typed subclasses)."""
+
+    @pytest.mark.asyncio
+    async def test_forwards_timeout_secs_and_returns_result(self, monkeypatch):
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        captured_wait: dict = {}
+
+        class _FakeJobProxy:
+            def __init__(self, _job_id: str, _registry_url: str) -> None:
+                pass
+
+            async def wait(self, timeout_secs: Any) -> Any:
+                captured_wait["timeout_secs"] = timeout_secs
+                return {"answer": 42}
+
+        with mock.patch("mcp_mesh_core.JobProxy", _FakeJobProxy, create=True):
+            result = await mesh_jobs.wait("job-xyz", timeout_secs=5.0)
+
+        assert captured_wait == {"timeout_secs": 5.0}
+        assert result == {"answer": 42}
+
+    @pytest.mark.asyncio
+    async def test_default_timeout_is_none(self, monkeypatch):
+        """``timeout_secs`` defaults to ``None`` ≡ no timeout — must
+        forward verbatim to the underlying proxy so the pyo3 layer
+        applies the "wait forever" path."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+        captured: dict = {}
+
+        class _Fake:
+            def __init__(self, _jid, _url):
+                pass
+
+            async def wait(self, timeout_secs):
+                captured["timeout_secs"] = timeout_secs
+                return "result-value"
+
+        with mock.patch("mcp_mesh_core.JobProxy", _Fake, create=True):
+            result = await mesh_jobs.wait("job-xyz")
+
+        assert captured == {"timeout_secs": None}
+        assert result == "result-value"
+
+    @pytest.mark.asyncio
+    async def test_translates_job_not_found_runtime_error(self, monkeypatch):
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        class _Fake:
+            def __init__(self, _jid, _url):
+                pass
+
+            async def wait(self, _timeout):
+                raise RuntimeError("backend error: job not found: vanished")
+
+        with mock.patch("mcp_mesh_core.JobProxy", _Fake, create=True):
+            with pytest.raises(mesh_jobs.JobNotFoundError):
+                await mesh_jobs.wait("vanished", timeout_secs=1.0)
+
+    @pytest.mark.asyncio
+    async def test_raises_when_registry_url_missing(self, monkeypatch):
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.delenv("MCP_MESH_REGISTRY_URL", raising=False)
+        with pytest.raises(RuntimeError) as exc:
+            await mesh_jobs.wait("x")
+        assert "MCP_MESH_REGISTRY_URL" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_translates_job_terminal_runtime_error(self, monkeypatch):
+        """A ``RuntimeError`` shaped like the Rust JobTerminal variant
+        bubbles up as :class:`JobTerminalError` so callers can
+        ``except`` on the typed class without inspecting strings."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        class _Fake:
+            def __init__(self, _jid, _url):
+                pass
+
+            async def wait(self, _timeout):
+                raise RuntimeError("job is terminal: failed")
+
+        with mock.patch("mcp_mesh_core.JobProxy", _Fake, create=True):
+            with pytest.raises(mesh_jobs.JobTerminalError):
+                await mesh_jobs.wait("terminal", timeout_secs=1.0)
+
+
+class TestSharedProxyCache:
+    """The ``(registry_url, job_id)`` LRU cache in ``mesh.jobs`` is
+    shared across every facade that dispatches through
+    ``_get_or_create_proxy``. The first facade call constructs the
+    underlying ``JobProxy``; subsequent calls — regardless of which
+    facade — must reuse the cached instance so callers don't pay a
+    fresh TCP/TLS handshake per lifecycle operation."""
+
+    @pytest.mark.asyncio
+    async def test_cancel_status_wait_share_proxy_cache(self, monkeypatch):
+        """``cancel`` → ``status`` → ``wait`` against the same
+        ``(registry_url, job_id)`` must construct ONE underlying
+        ``JobProxy`` instance. Guards against a refactor that splits
+        the cache per facade."""
+        from mesh import jobs as mesh_jobs
+
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://localhost:9999")
+
+        construct_count = 0
+
+        class _CountingFake:
+            def __init__(self, _job_id: str, _registry_url: str) -> None:
+                nonlocal construct_count
+                construct_count += 1
+
+            async def cancel(self, _reason: Any) -> None:
+                return None
+
+            async def status(self) -> dict:
+                return {"id": "job-A", "status": "working"}
+
+            async def wait(self, _timeout: Any) -> Any:
+                return {"answer": 42}
+
+        with mock.patch("mcp_mesh_core.JobProxy", _CountingFake, create=True):
+            await mesh_jobs.cancel("job-A")
+            assert construct_count == 1, (
+                f"first cancel must construct the proxy; got {construct_count}"
+            )
+            await mesh_jobs.status("job-A")
+            await mesh_jobs.wait("job-A")
+
+        # Three lifecycle calls, ONE proxy construction — the cache hit
+        # on status + wait must reuse the proxy constructed by cancel.
+        assert construct_count == 1, (
+            f"expected the JobProxy cache to be shared across cancel / "
+            f"status / wait; got {construct_count} constructions for the "
+            f"same (registry_url, job_id) key"
+        )
 
 
 # ===========================================================================

@@ -684,6 +684,61 @@ directly: `proxy.send_event(event_type, payload)` (Python) /
 `proxy.sendEvent(eventType, payload)` (TS/Java). Skip the helper +
 cache lookup when you already have a proxy in scope.
 
+### Lifecycle facades by `job_id`
+
+Symmetric to `post_event`: callers that hold a `job_id` but no
+`JobProxy` reference can drive the rest of the post-submit lifecycle
+through module-level facades that share the same registry-URL
+resolution + cached-proxy machinery. The Python surface lands in
+v2.2; TypeScript and Java parity follows in separate PRs.
+
+| Operation                | Facade (Python)                                    | Returns                       |
+| ------------------------ | -------------------------------------------------- | ----------------------------- |
+| Cancel a running job     | `await mesh.jobs.cancel(job_id, reason=None)`      | `None`                        |
+| Read latest job state    | `await mesh.jobs.status(job_id)`                   | `dict` (registry `Job` row)   |
+| Wait for terminal state  | `await mesh.jobs.wait(job_id, timeout_secs=None)`  | `result` payload on success   |
+
+<!-- markdownlint-disable MD046 -->
+=== "Python"
+
+    ```python
+    import mesh
+
+    @app.tool()
+    @mesh.tool(capability="abort_workflow")
+    async def abort_workflow(job_id: str, reason: str) -> dict:
+        await mesh.jobs.cancel(job_id, reason)
+        return {"cancelled": job_id}
+
+    @app.tool()
+    @mesh.tool(capability="check_progress")
+    async def check_progress(job_id: str) -> dict:
+        snapshot = await mesh.jobs.status(job_id)
+        return {
+            "status": snapshot["status"],
+            "progress": snapshot["progress"],
+            "message": snapshot["progress_message"],
+        }
+
+    @app.tool()
+    @mesh.tool(capability="run_to_completion")
+    async def run_to_completion(job_id: str) -> dict:
+        result = await mesh.jobs.wait(job_id, timeout_secs=300.0)
+        return {"result": result}
+    ```
+<!-- markdownlint-enable MD046 -->
+
+`cancel` is idempotent — calling it on an already-terminal job returns
+ok. `wait` raises `TimeoutError` on `timeout_secs` expiry; pass `None`
+(default) to wait until the job reaches a terminal state. `status`
+returns the same shape `JobProxy.status()` exposes (registry `Job`
+row, field-for-field).
+
+If the calling code already holds a `JobProxy`, the same surface is
+on the proxy directly: `proxy.cancel(reason)`, `proxy.status()`,
+`proxy.wait(timeout_secs)`. Skip the facade + cache lookup when you
+already have a proxy in scope.
+
 ### Typed errors
 
 Both `post_event` and `send_event` raise typed errors for the two

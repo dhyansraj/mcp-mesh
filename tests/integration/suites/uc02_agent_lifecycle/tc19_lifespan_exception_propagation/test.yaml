@@ -50,9 +50,11 @@ test:
     workdir: /workspace
     capture: list_output
 
-  # The agent log file lives at ~/.mcp-mesh/logs/<agent>.log. Read it
-  # directly rather than via `meshctl logs` so we don't depend on the
-  # CLI's lookup-by-name working for a half-registered agent.
+  # The agent log file lives at ~/.mcp-mesh/logs/<agent>.log. We read
+  # it directly here for simplicity — `meshctl logs lifespan-raising-agent`
+  # would also work (the CLI reads the same path; no registry dependency),
+  # but direct file access keeps the assertion steps below independent
+  # of the CLI's exit codes / formatting.
   - name: "Dump full agent log file for debugging"
     handler: shell
     command: "ls -la /root/.mcp-mesh/logs/ 2>/dev/null; cat /root/.mcp-mesh/logs/lifespan-raising-agent.log 2>/dev/null | head -200 || echo 'log file missing'"
