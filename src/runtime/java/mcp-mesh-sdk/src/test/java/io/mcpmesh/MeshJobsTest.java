@@ -4,6 +4,7 @@ import io.mcpmesh.core.MeshException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledIfEnvironmentVariable;
 
 import java.util.Map;
 
@@ -305,5 +306,192 @@ class MeshJobsTest {
             () -> MeshJobs.postEvent(null, "signal", payload));
         assertThrows(IllegalArgumentException.class,
             () -> MeshJobs.postEvent("j", null, payload));
+    }
+
+    // -----------------------------------------------------------------
+    // cancel / status / await — issue #1080 lifecycle facades
+    // -----------------------------------------------------------------
+    //
+    // The FFI round-trip (cancel POST, status GET, await poll) needs a
+    // live registry and is exercised by uc23_meshjob_java in the
+    // integration suite. The unit tests below only assert the static-
+    // facade layer that wraps the proxy: arg validation, env-var
+    // resolution, and proxy-cache reuse. Mocking the JNR-FFI binding
+    // here is not a pattern this codebase uses.
+
+    @Test
+    void cancel_rejectsNullJobId() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+            () -> MeshJobs.cancel(null, "reason"));
+        assertTrue(e.getMessage().toLowerCase().contains("jobid"),
+            "error should mention jobId; got: " + e.getMessage());
+    }
+
+    @Test
+    void cancel_rejectsEmptyJobId() {
+        assertThrows(IllegalArgumentException.class,
+            () -> MeshJobs.cancel("", "reason"));
+    }
+
+    @Test
+    void cancel_noArgOverloadRejectsNullJobId() {
+        assertThrows(IllegalArgumentException.class,
+            () -> MeshJobs.cancel(null));
+        assertThrows(IllegalArgumentException.class,
+            () -> MeshJobs.cancel(""));
+    }
+
+    @Test
+    void status_rejectsNullJobId() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+            () -> MeshJobs.status(null));
+        assertTrue(e.getMessage().toLowerCase().contains("jobid"),
+            "error should mention jobId; got: " + e.getMessage());
+    }
+
+    @Test
+    void status_rejectsEmptyJobId() {
+        assertThrows(IllegalArgumentException.class,
+            () -> MeshJobs.status(""));
+    }
+
+    @Test
+    void await_rejectsNullJobId() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+            () -> MeshJobs.await(null, 5.0));
+        assertTrue(e.getMessage().toLowerCase().contains("jobid"),
+            "error should mention jobId; got: " + e.getMessage());
+    }
+
+    @Test
+    void await_rejectsEmptyJobId() {
+        assertThrows(IllegalArgumentException.class,
+            () -> MeshJobs.await("", 5.0));
+    }
+
+    @Test
+    void await_noArgOverloadRejectsNullJobId() {
+        assertThrows(IllegalArgumentException.class,
+            () -> MeshJobs.await(null));
+        assertThrows(IllegalArgumentException.class,
+            () -> MeshJobs.await(""));
+    }
+
+    /**
+     * {@code MCP_MESH_REGISTRY_URL} unset must surface a clean
+     * MeshException through every lifecycle facade, exercising the same
+     * {@code resolveRegistryUrl()} pre-flight that {@code postEvent}
+     * uses.
+     */
+    @Test
+    @DisabledIfEnvironmentVariable(named = "MCP_MESH_REGISTRY_URL", matches = ".+")
+    void cancel_failsCleanlyWhenRegistryUrlUnset() {
+        MeshException e = assertThrows(MeshException.class,
+            () -> MeshJobs.cancel("job-x", "reason"));
+        assertTrue(e.getMessage().contains("MCP_MESH_REGISTRY_URL"),
+            "error should reference the env var name; got: " + e.getMessage());
+    }
+
+    @Test
+    @DisabledIfEnvironmentVariable(named = "MCP_MESH_REGISTRY_URL", matches = ".+")
+    void status_failsCleanlyWhenRegistryUrlUnset() {
+        MeshException e = assertThrows(MeshException.class,
+            () -> MeshJobs.status("job-x"));
+        assertTrue(e.getMessage().contains("MCP_MESH_REGISTRY_URL"),
+            "error should reference the env var name; got: " + e.getMessage());
+    }
+
+    @Test
+    @DisabledIfEnvironmentVariable(named = "MCP_MESH_REGISTRY_URL", matches = ".+")
+    void await_failsCleanlyWhenRegistryUrlUnset() {
+        MeshException e = assertThrows(MeshException.class,
+            () -> MeshJobs.await("job-x"));
+        assertTrue(e.getMessage().contains("MCP_MESH_REGISTRY_URL"),
+            "error should reference the env var name; got: " + e.getMessage());
+    }
+
+    /**
+     * Cross-facade cache sharing (mirror of Python's W6 review test
+     * from #1077): two different lifecycle facades targeting the same
+     * jobId share a single cached proxy — the cache key is
+     * {@code (registryUrl, jobId)} only, so {@code postEvent},
+     * {@code cancel}, {@code status}, {@code await} and
+     * {@code subscribeEvents} all reuse the same underlying
+     * {@link JobProxy}.
+     *
+     * <p>We exercise the cache via {@code getOrCreateProxy} directly
+     * because the facades' FFI call paths would fail without a live
+     * registry — the cache lookup itself runs before any FFI call, so
+     * this assertion holds without HTTP traffic.
+     */
+    @Test
+    void getOrCreateProxy_sharesAcrossLifecycleFacades() {
+        // First lookup — populates the cache.
+        JobProxy first = MeshJobs.getOrCreateProxy(FAKE_REGISTRY, "shared-job");
+        // Subsequent lookups for the same (registryUrl, jobId) — the
+        // four facades (cancel, status, await, postEvent) all funnel
+        // through getOrCreateProxy with the same key, so each call
+        // returns the same instance.
+        JobProxy second = MeshJobs.getOrCreateProxy(FAKE_REGISTRY, "shared-job");
+        JobProxy third = MeshJobs.getOrCreateProxy(FAKE_REGISTRY, "shared-job");
+        JobProxy fourth = MeshJobs.getOrCreateProxy(FAKE_REGISTRY, "shared-job");
+        assertSame(first, second,
+            "second facade lookup must reuse the cached proxy");
+        assertSame(first, third,
+            "third facade lookup must reuse the cached proxy");
+        assertSame(first, fourth,
+            "fourth facade lookup must reuse the cached proxy");
+        assertEquals(1, MeshJobs.cacheSizeForTest(),
+            "cache should hold exactly one entry across facade reuse");
+    }
+
+    /**
+     * Substring-based translation of generic {@code MeshException} into
+     * {@link JobNotFoundException} / {@link JobTerminalException} — the
+     * same contract Python's {@code _translate_job_error} and TypeScript's
+     * {@code translateJobError} implement against the registry's stable
+     * error-message prefixes. The proxy-level
+     * {@link JobProxy#cancel(String)}, {@link JobProxy#status()}, and
+     * {@link JobProxy#await(double)} surfaces all raise a generic
+     * {@code MeshException} on non-zero rc (unlike {@code sendEvent} /
+     * {@code listEvents} which dispatch on rc directly); the facade
+     * layer must close that gap.
+     */
+    @Test
+    void translateJobError_classifiesByMessageSubstring() {
+        // Pure MeshException with no marker → passes through unchanged.
+        MeshException plain = new MeshException("registry unreachable");
+        assertSame(plain, MeshJobs.translateJobError(plain));
+
+        // "job not found" → JobNotFoundException, preserving cause.
+        MeshException nf = new MeshException(
+            "mesh_job_proxy_cancel failed: job not found: job-x");
+        MeshException nfTranslated = MeshJobs.translateJobError(nf);
+        assertNotSame(nf, nfTranslated);
+        assertTrue(nfTranslated instanceof JobNotFoundException,
+            "expected JobNotFoundException; got: " + nfTranslated.getClass());
+        assertSame(nf, nfTranslated.getCause());
+        assertEquals(nf.getMessage(), nfTranslated.getMessage());
+
+        // "job is terminal" → JobTerminalException, preserving cause.
+        MeshException term = new MeshException(
+            "mesh_job_proxy_cancel failed: job is terminal: job-x");
+        MeshException termTranslated = MeshJobs.translateJobError(term);
+        assertNotSame(term, termTranslated);
+        assertTrue(termTranslated instanceof JobTerminalException,
+            "expected JobTerminalException; got: " + termTranslated.getClass());
+        assertSame(term, termTranslated.getCause());
+        assertEquals(term.getMessage(), termTranslated.getMessage());
+
+        // Case-insensitive match — substring contract documents
+        // lowercase comparison.
+        MeshException upper = new MeshException("JOB NOT FOUND in registry");
+        assertTrue(MeshJobs.translateJobError(upper) instanceof JobNotFoundException);
+
+        // Already-typed exception passes through (no double-wrap).
+        JobNotFoundException already = new JobNotFoundException("job not found: pre-typed");
+        assertSame(already, MeshJobs.translateJobError(already));
+        JobTerminalException alreadyTerm = new JobTerminalException("job is terminal: pre-typed");
+        assertSame(alreadyTerm, MeshJobs.translateJobError(alreadyTerm));
     }
 }
