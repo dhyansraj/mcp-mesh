@@ -61,6 +61,55 @@ export interface JobEventReceipt {
   created_at: number;
 }
 
+/**
+ * Latest job-row snapshot returned by `JobProxy.status` / {@link status}.
+ *
+ * Matches the registry's OpenAPI `Job` schema field-for-field — the same
+ * shape `job_to_json` in `src/runtime/core/src/jobs_napi.rs` produces.
+ * Every key is ALWAYS present on the wire: required fields are typed
+ * `T`, and Rust `Option<T>` fields are emitted as `T | null` (never
+ * absent / `undefined`). The Rust `serde_json::json!` macro the binding
+ * uses serialises `None` → `null` for every field unconditionally, so
+ * downstream callers can rely on key-presence and only need to null-check
+ * the nullable fields.
+ */
+export interface JobStatus {
+  /** Server-assigned job UUID. */
+  id: string;
+  /** Capability the job was submitted against. */
+  capability: string;
+  /** Instance id of the replica currently holding the lease (if any). */
+  owner_instance_id: string | null;
+  /** Lifecycle status. */
+  status: "working" | "input_required" | "completed" | "failed" | "cancelled";
+  /** Latest progress fraction in `[0.0, 1.0]`. */
+  progress: number | null;
+  /** Latest progress message string. */
+  progress_message: string | null;
+  /** Terminal result payload (set when `status === "completed"`). */
+  result: unknown;
+  /** Terminal error reason (set when `status === "failed"` / `"cancelled"`). */
+  error: string | null;
+  /** Original request payload the job was submitted with. */
+  submitted_payload: unknown;
+  /** Number of attempts so far (1-indexed). */
+  attempt_count: number;
+  /** Maximum retries beyond the initial attempt. */
+  max_retries: number;
+  /** Per-attempt soft timeout in seconds. */
+  max_duration: number | null;
+  /** Hard ceiling across all attempts, as a unix epoch second. */
+  total_deadline: number | null;
+  /** Unix epoch second when the current lease expires. */
+  lease_expires_at: number | null;
+  /** Unix epoch second of the last heartbeat from the owner replica. */
+  last_heartbeat_at: number | null;
+  /** Unix epoch second the job row was created. */
+  submitted_at: number;
+  /** Identifier of the agent that submitted the job. */
+  submitted_by: string;
+}
+
 // ---------------------------------------------------------------------------
 // Typed error classes
 // ---------------------------------------------------------------------------
@@ -236,7 +285,7 @@ function resolveRegistryUrl(): string {
   const url = process.env.MCP_MESH_REGISTRY_URL;
   if (!url) {
     throw new Error(
-      "mesh.jobs.postEvent: MCP_MESH_REGISTRY_URL is not set; " +
+      "mesh.jobs: MCP_MESH_REGISTRY_URL is not set; " +
         "cannot resolve registry base URL. Ensure the calling " +
         "process is running inside a mesh agent.",
     );
@@ -450,5 +499,203 @@ export async function* subscribeEvents(
     // advance the cursor via the registry-supplied watermark, so
     // subsequent polls don't re-scan the same filtered range.
     if (nextAfter > cursor) cursor = nextAfter;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// cancel / status / wait — DDDI-clean lifecycle facades (issue #1078)
+// ---------------------------------------------------------------------------
+//
+// Mirror the `postEvent` / `subscribeEvents` pattern: take a `jobId` as
+// the first positional arg, resolve the registry URL internally via
+// `resolveRegistryUrl()`, dispatch through a cached `JobProxy` from
+// `_getOrCreateProxy()`, and re-classify the napi layer's generic
+// `Error` output via `translateJobError`.
+//
+// These exist so callers that hold only a `jobId` (e.g. an Express
+// route handler, a tool body whose request payload carries a stashed
+// id) can operate on the job's lifecycle without constructing a
+// `JobProxy` directly — which would leak `MCP_MESH_REGISTRY_URL`
+// addressing into user code and break the DDDI contract.
+
+/**
+ * Cancel a running job by ID.
+ *
+ * Convenience helper for callers that hold a `jobId` but do not have a
+ * `JobProxy` reference in scope. Constructs (or reuses, via the LRU
+ * cache) a transient proxy bound to the current agent's registry URL
+ * and forwards the call.
+ *
+ * Per the registry's idempotency contract, calling `cancel` on a job
+ * that is already in a terminal state returns successfully without
+ * re-firing cancellation. If the registry surfaces a conflict for
+ * some other reason, the facade re-classifies it as
+ * {@link JobTerminalError}. The registry forwards the cancel signal to
+ * the owner replica via `POST /jobs/{id}/cancel`; the running handler's
+ * cancel token fires on the next `await` point, and any outbound
+ * `McpMeshTool` proxy calls abort their underlying `fetch`.
+ *
+ * Mirrors Python's `mesh.jobs.cancel` one-for-one.
+ *
+ * @param jobId - Target job's server-assigned id.
+ * @param reason - Optional human-readable reason recorded against the
+ *   cancellation. Surfaces in the synthetic
+ *   `{ type: "cancelled" }` event the registry writes into the job's
+ *   event log, so a handler parked on `recvEvent(["cancelled"])` can
+ *   return cleanly with the reason in scope.
+ *
+ * @throws {@link JobNotFoundError} If the registry doesn't know the
+ *   job (sweep already removed it, or wrong id).
+ * @throws {@link JobTerminalError} If the registry surfaces a conflict
+ *   for this cancel (e.g. the idempotency contract changes upstream or
+ *   the registry treats the targeted terminal state as a conflict).
+ * @throws Error For transport errors (registry unreachable, 5xx after
+ *   retries, malformed payload, etc.) — the underlying error message
+ *   is preserved.
+ *
+ * @example
+ * Cancel a job from a tool that receives the id in its payload:
+ * ```ts
+ * agent.addTool({
+ *   name: "abort_workflow",
+ *   capability: "abort_workflow",
+ *   parameters: z.object({ jobId: z.string(), reason: z.string() }),
+ *   execute: async ({ jobId, reason }) => {
+ *     await mesh.jobs.cancel(jobId, reason);
+ *     return { cancelled: jobId };
+ *   },
+ * });
+ * ```
+ */
+export async function cancel(jobId: string, reason?: string): Promise<void> {
+  const registryUrl = resolveRegistryUrl();
+  const proxy = _getOrCreateProxy(registryUrl, jobId);
+  try {
+    await proxy.cancel(reason ?? null);
+  } catch (err) {
+    const translated = translateJobError(err);
+    if (translated !== err) {
+      throw translated;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Get the current status of a job by ID.
+ *
+ * Convenience helper for callers that hold a `jobId` but do not have a
+ * `JobProxy` reference in scope. Constructs (or reuses, via the LRU
+ * cache) a transient proxy bound to the current agent's registry URL
+ * and forwards a single `GET /jobs/{id}` to the registry.
+ *
+ * Mirrors Python's `mesh.jobs.status` one-for-one.
+ *
+ * @param jobId - Target job's server-assigned id.
+ * @returns Job status snapshot — the same shape `JobProxy.status()`
+ *   returns, mirroring the registry's `Job` schema field-for-field.
+ *
+ * @throws {@link JobNotFoundError} If the registry doesn't know the
+ *   job (sweep already removed it, or wrong id).
+ * @throws Error For transport errors (registry unreachable, 5xx after
+ *   retries, malformed payload, etc.) — the underlying error message
+ *   is preserved.
+ *
+ * @example
+ * Poll a job's progress from outside the producer agent:
+ * ```ts
+ * agent.addTool({
+ *   name: "check_progress",
+ *   capability: "check_progress",
+ *   parameters: z.object({ jobId: z.string() }),
+ *   execute: async ({ jobId }) => {
+ *     const snapshot = await mesh.jobs.status(jobId);
+ *     return {
+ *       status: snapshot.status,
+ *       progress: snapshot.progress,
+ *       message: snapshot.progress_message,
+ *     };
+ *   },
+ * });
+ * ```
+ */
+export async function status(jobId: string): Promise<JobStatus> {
+  const registryUrl = resolveRegistryUrl();
+  const proxy = _getOrCreateProxy(registryUrl, jobId);
+  try {
+    return (await proxy.status()) as JobStatus;
+  } catch (err) {
+    const translated = translateJobError(err);
+    if (translated !== err) {
+      throw translated;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Wait for a job to complete and return its result.
+ *
+ * Convenience helper for callers that hold a `jobId` but do not have a
+ * `JobProxy` reference in scope. Constructs (or reuses, via the LRU
+ * cache) a transient proxy bound to the current agent's registry URL
+ * and polls until the job reaches a terminal state.
+ *
+ * On success, returns the `result` payload the handler passed to
+ * `JobController.complete` — any JSON-shaped value (object / array /
+ * primitive). On a non-success terminal (`failed` / `cancelled`) the
+ * underlying napi layer rejects with a generic `Error` carrying the
+ * Rust `JobError` display string. On `timeoutSecs` expiry the napi
+ * layer rejects with an `Error` whose message starts with
+ * `"timeout:"` — `translateJobError` does NOT (currently) re-classify
+ * this into a typed exception; callers that need to discriminate
+ * timeout from other failures should check `err.message.startsWith(
+ * "timeout:")`. A typed `TimeoutError` may be added in a future PR
+ * if usage warrants it.
+ *
+ * Mirrors Python's `mesh.jobs.wait` one-for-one.
+ *
+ * @param jobId - Target job's server-assigned id.
+ * @param timeoutSecs - Maximum wait duration in seconds. `undefined` /
+ *   `null` ≡ no timeout (default) — wait until the job reaches a
+ *   terminal state. Negative / NaN / infinite values are rejected by
+ *   the napi layer with a clear `Error` before any registry call.
+ * @returns The job's result payload (whatever the handler passed to
+ *   `complete()`). Shape is application-defined — typically an object,
+ *   but any JSON-shaped value is valid.
+ *
+ * @throws {@link JobNotFoundError} If the registry doesn't know the
+ *   job (sweep already removed it, or wrong id).
+ * @throws Error With message prefixed `"timeout:"` if `timeoutSecs`
+ *   elapses before the job reaches a terminal state.
+ * @throws Error If the job reached a non-success terminal state
+ *   (`failed` / `cancelled`) or for transport errors — the underlying
+ *   error message is preserved.
+ *
+ * @example
+ * Submit-then-wait from a tool that doesn't hold the proxy:
+ * ```ts
+ * agent.addTool({
+ *   name: "run_to_completion",
+ *   capability: "run_to_completion",
+ *   parameters: z.object({ jobId: z.string() }),
+ *   execute: async ({ jobId }) => {
+ *     const result = await mesh.jobs.wait(jobId, 300);
+ *     return { result };
+ *   },
+ * });
+ * ```
+ */
+export async function wait(jobId: string, timeoutSecs?: number): Promise<unknown> {
+  const registryUrl = resolveRegistryUrl();
+  const proxy = _getOrCreateProxy(registryUrl, jobId);
+  try {
+    return await proxy.wait(timeoutSecs ?? null);
+  } catch (err) {
+    const translated = translateJobError(err);
+    if (translated !== err) {
+      throw translated;
+    }
+    throw err;
   }
 }
