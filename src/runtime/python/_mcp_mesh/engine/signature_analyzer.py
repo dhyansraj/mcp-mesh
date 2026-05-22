@@ -122,10 +122,13 @@ def _is_mesh_job_type(param_type: Any) -> bool:
 class MeshJobResolution:
     """Resolver output for ``MeshJob`` parameter classification.
 
-    Per ``MESHJOB_DDDI_CONTRACT.md``: ``MeshJob`` is **orthogonal** to
-    ``MeshTool`` positional indexing — its signature position is recorded
-    separately so adding/removing a ``MeshJob`` parameter does not shift
-    the slot numbers used to inject mesh-tool dependencies.
+    Per ``MESHJOB_DDDI_CONTRACT.md``: ``MeshJob`` and ``McpMeshTool``
+    parameters share a **single unified positional ``dep_index``
+    namespace**. Adding or removing a ``MeshJob`` parameter shifts the
+    shared slot numbering used to inject all mesh dependencies; the
+    ``MeshJob`` position is recorded here so the dispatch at injection
+    time can identify which slot to construct a ``MeshJobSubmitter``
+    for (vs an ``McpMeshTool`` proxy).
 
     Attributes:
         mesh_tool_positions: Signature positions (0-indexed) of
@@ -307,14 +310,15 @@ def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[boo
     Validate that the number of dependencies matches the function's
     injectable slots.
 
-    A function may declare two kinds of typed dependency slot:
+    A function may declare two kinds of typed dependency slot, both
+    consuming a positional dependency entry (in declaration order):
 
-    * ``McpMeshTool`` — positional, dispatch via remote tools/call. Counted
-      via :func:`get_mesh_agent_positions`.
-    * ``MeshJob`` — name-matched (by parameter name == dependency
-      capability), dispatch via job submit. Counted by inspecting whether
-      the function declares any ``MeshJob`` param whose name appears in the
-      declared dependency capabilities (see MeshJob DDDI contract).
+    * ``McpMeshTool`` — dispatched via remote ``tools/call``. Counted via
+      :func:`get_mesh_agent_positions`.
+    * ``MeshJob`` — dispatched via job submit. Counted by the presence of
+      a single ``MeshJob`` parameter (Phase 1 enforces at most one). The
+      parameter name is free-form; binding is positional per
+      ``MESHJOB_DDDI_CONTRACT.md``.
 
     Validation passes when ``len(dependencies) == mcp_slots + job_slots``
     so consumer functions that only depend on a remote ``task=True`` tool
@@ -332,10 +336,8 @@ def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[boo
     func = _get_original_func(func)
     mesh_positions = get_mesh_agent_positions(func)
 
-    # Count MeshJob slots that match a declared dependency capability.
-    # MeshJob params are name-matched (not positional) so an unmatched
-    # MeshJob param does NOT consume a dependency slot — only the matched
-    # ones do.
+    # Count MeshJob slots positionally — name does not matter under the
+    # unified positional contract.
     #
     # Errors: ``analyze_mesh_job_signature`` raises ``ValueError`` when a
     # function declares multiple MeshJob parameters (Phase 1 contract).
@@ -358,18 +360,14 @@ def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[boo
         )
         resolution = None
 
-    if resolution is not None and resolution.mesh_job_param_name:
-        dep_caps = {
-            d.get("capability") for d in dependencies if isinstance(d, dict)
-        }
-        if resolution.mesh_job_param_name in dep_caps:
-            job_slots = 1
+    if resolution is not None and resolution.mesh_job_param_name is not None:
+        job_slots = 1
 
     expected = len(mesh_positions) + job_slots
     if len(dependencies) != expected:
         return False, (
             f"Function {func.__name__} has {len(mesh_positions)} McpMeshTool "
-            f"parameter(s) and {job_slots} matched MeshJob slot(s) "
+            f"parameter(s) and {job_slots} MeshJob slot(s) "
             f"but {len(dependencies)} dependencies declared. "
             f"Each typed slot needs a corresponding dependency."
         )
