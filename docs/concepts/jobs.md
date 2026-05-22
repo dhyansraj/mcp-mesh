@@ -689,14 +689,14 @@ cache lookup when you already have a proxy in scope.
 Symmetric to `post_event`: callers that hold a `job_id` but no
 `JobProxy` reference can drive the rest of the post-submit lifecycle
 through module-level facades that share the same registry-URL
-resolution + cached-proxy machinery. The Python surface lands in
-v2.2; TypeScript and Java parity follows in separate PRs.
+resolution + cached-proxy machinery. Python and TypeScript surfaces
+land in v2.2; Java parity follows in a separate PR.
 
-| Operation                | Facade (Python)                                    | Returns                       |
-| ------------------------ | -------------------------------------------------- | ----------------------------- |
-| Cancel a running job     | `await mesh.jobs.cancel(job_id, reason=None)`      | `None`                        |
-| Read latest job state    | `await mesh.jobs.status(job_id)`                   | `dict` (registry `Job` row)   |
-| Wait for terminal state  | `await mesh.jobs.wait(job_id, timeout_secs=None)`  | `result` payload on success   |
+| Operation                | Python                                             | TypeScript                                       | Returns                       |
+| ------------------------ | -------------------------------------------------- | ------------------------------------------------ | ----------------------------- |
+| Cancel a running job     | `await mesh.jobs.cancel(job_id, reason=None)`      | `await mesh.jobs.cancel(jobId, reason?)`         | `None` / `void`               |
+| Read latest job state    | `await mesh.jobs.status(job_id)`                   | `await mesh.jobs.status(jobId)`                  | `dict` / `JobStatus`          |
+| Wait for terminal state  | `await mesh.jobs.wait(job_id, timeout_secs=None)`  | `await mesh.jobs.wait(jobId, timeoutSecs?)`      | `result` payload on success   |
 
 <!-- markdownlint-disable MD046 -->
 === "Python"
@@ -726,13 +726,52 @@ v2.2; TypeScript and Java parity follows in separate PRs.
         result = await mesh.jobs.wait(job_id, timeout_secs=300.0)
         return {"result": result}
     ```
+
+=== "TypeScript"
+
+    ```typescript
+    agent.addTool({
+      name: "abort_workflow",
+      capability: "abort_workflow",
+      parameters: z.object({ jobId: z.string(), reason: z.string() }),
+      execute: async ({ jobId, reason }) => {
+        await mesh.jobs.cancel(jobId, reason);
+        return { cancelled: jobId };
+      },
+    });
+
+    agent.addTool({
+      name: "check_progress",
+      capability: "check_progress",
+      parameters: z.object({ jobId: z.string() }),
+      execute: async ({ jobId }) => {
+        const snapshot = await mesh.jobs.status(jobId);
+        return {
+          status: snapshot.status,
+          progress: snapshot.progress,
+          message: snapshot.progress_message,
+        };
+      },
+    });
+
+    agent.addTool({
+      name: "run_to_completion",
+      capability: "run_to_completion",
+      parameters: z.object({ jobId: z.string() }),
+      execute: async ({ jobId }) => {
+        const result = await mesh.jobs.wait(jobId, 300);
+        return { result };
+      },
+    });
+    ```
 <!-- markdownlint-enable MD046 -->
 
 `cancel` is idempotent — calling it on an already-terminal job returns
-ok. `wait` raises `TimeoutError` on `timeout_secs` expiry; pass `None`
-(default) to wait until the job reaches a terminal state. `status`
-returns the same shape `JobProxy.status()` exposes (registry `Job`
-row, field-for-field).
+ok. `wait` raises `TimeoutError` (Python) or rejects with an `Error`
+whose message starts with `"timeout:"` (TypeScript) on `timeout_secs`
+expiry; pass `None` / omit `timeoutSecs` to wait until the job reaches
+a terminal state. `status` returns the same shape `JobProxy.status()`
+exposes (registry `Job` row, field-for-field).
 
 If the calling code already holds a `JobProxy`, the same surface is
 on the proxy directly: `proxy.cancel(reason)`, `proxy.status()`,

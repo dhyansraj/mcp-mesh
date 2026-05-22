@@ -26,16 +26,25 @@ vi.mock("@mcpmesh/core", async () => {
   const proxyCalls: Array<{ jobId: string; registryUrl: string }> = [];
   const sendEventMock = vi.fn();
   const listEventsMock = vi.fn();
+  const cancelMock = vi.fn();
+  const statusMock = vi.fn();
+  const waitMock = vi.fn();
   class JobProxy {
     public readonly jobId: string;
     public readonly registryUrl: string;
     public readonly sendEvent: typeof sendEventMock;
     public readonly listEvents: typeof listEventsMock;
+    public readonly cancel: typeof cancelMock;
+    public readonly status: typeof statusMock;
+    public readonly wait: typeof waitMock;
     constructor(jobId: string, registryUrl: string) {
       this.jobId = jobId;
       this.registryUrl = registryUrl;
       this.sendEvent = sendEventMock;
       this.listEvents = listEventsMock;
+      this.cancel = cancelMock;
+      this.status = statusMock;
+      this.wait = waitMock;
       proxyCalls.push({ jobId, registryUrl });
     }
   }
@@ -59,13 +68,19 @@ vi.mock("@mcpmesh/core", async () => {
     __sendEventMock: sendEventMock,
     __recvEventMock: recvEventMock,
     __listEventsMock: listEventsMock,
+    __cancelMock: cancelMock,
+    __statusMock: statusMock,
+    __waitMock: waitMock,
     __proxyCalls: proxyCalls,
   };
 });
 
 import {
+  cancel as cancelFacade,
   postEvent,
+  status as statusFacade,
   subscribeEvents,
+  wait as waitFacade,
   _getOrCreateProxy,
   _clearProxyCache,
   translateJobError,
@@ -79,6 +94,9 @@ const core = (await import("@mcpmesh/core")) as unknown as {
   __sendEventMock: ReturnType<typeof vi.fn>;
   __recvEventMock: ReturnType<typeof vi.fn>;
   __listEventsMock: ReturnType<typeof vi.fn>;
+  __cancelMock: ReturnType<typeof vi.fn>;
+  __statusMock: ReturnType<typeof vi.fn>;
+  __waitMock: ReturnType<typeof vi.fn>;
   __proxyCalls: Array<{ jobId: string; registryUrl: string }>;
   JobController: new (jobId: string, instanceId: string, registryUrl: string) => {
     recvEvent: (
@@ -91,12 +109,18 @@ const core = (await import("@mcpmesh/core")) as unknown as {
 const sendEventMock = core.__sendEventMock;
 const recvEventMock = core.__recvEventMock;
 const listEventsMock = core.__listEventsMock;
+const cancelMock = core.__cancelMock;
+const statusMock = core.__statusMock;
+const waitMock = core.__waitMock;
 const proxyCalls = core.__proxyCalls;
 
 beforeEach(() => {
   sendEventMock.mockReset();
   recvEventMock.mockReset();
   listEventsMock.mockReset();
+  cancelMock.mockReset();
+  statusMock.mockReset();
+  waitMock.mockReset();
   proxyCalls.length = 0;
   _clearProxyCache();
 });
@@ -512,6 +536,257 @@ describe("subscribeEvents", () => {
     expect(proxyCalls).toHaveLength(1);
     expect(proxyCalls[0]).toEqual({
       jobId: "j-shared",
+      registryUrl: "http://localhost:8000",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cancel — DDDI-clean lifecycle facade (issue #1078)
+// ---------------------------------------------------------------------------
+describe("cancel", () => {
+  beforeEach(() => {
+    delete process.env.MCP_MESH_REGISTRY_URL;
+  });
+
+  it("constructs a JobProxy from MCP_MESH_REGISTRY_URL + calls cancel with reason", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    cancelMock.mockResolvedValueOnce(undefined);
+    await cancelFacade("j-1", "user requested");
+    expect(proxyCalls).toHaveLength(1);
+    expect(proxyCalls[0]).toEqual({
+      jobId: "j-1",
+      registryUrl: "http://localhost:8000",
+    });
+    expect(cancelMock).toHaveBeenCalledWith("user requested");
+  });
+
+  it("forwards null reason when omitted", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    cancelMock.mockResolvedValueOnce(undefined);
+    await cancelFacade("j-1");
+    expect(cancelMock).toHaveBeenCalledWith(null);
+  });
+
+  it("throws when MCP_MESH_REGISTRY_URL is unset", async () => {
+    delete process.env.MCP_MESH_REGISTRY_URL;
+    await expect(cancelFacade("j-1")).rejects.toThrow(
+      /MCP_MESH_REGISTRY_URL is not set/,
+    );
+  });
+
+  it("re-classifies a 'job not found' napi error to JobNotFoundError", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    cancelMock.mockRejectedValueOnce(
+      new Error("backend error: job not found: stale"),
+    );
+    await expect(cancelFacade("stale")).rejects.toBeInstanceOf(JobNotFoundError);
+  });
+
+  it("re-classifies a 'job is terminal' napi error to JobTerminalError", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    cancelMock.mockRejectedValueOnce(
+      new Error("job is terminal: completed"),
+    );
+    await expect(cancelFacade("done")).rejects.toBeInstanceOf(JobTerminalError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// status — DDDI-clean lifecycle facade (issue #1078)
+// ---------------------------------------------------------------------------
+describe("status", () => {
+  beforeEach(() => {
+    delete process.env.MCP_MESH_REGISTRY_URL;
+  });
+
+  it("constructs a JobProxy from MCP_MESH_REGISTRY_URL + returns the snapshot", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    statusMock.mockResolvedValueOnce({
+      id: "j-1",
+      capability: "do_work",
+      status: "working",
+      progress: 0.5,
+      progress_message: "halfway",
+      result: null,
+      error: null,
+      attempt_count: 1,
+      max_retries: 0,
+      submitted_at: 1_700_000_000,
+      submitted_by: "consumer",
+    });
+    const snapshot = await statusFacade("j-1");
+    expect(snapshot).toMatchObject({
+      id: "j-1",
+      status: "working",
+      progress: 0.5,
+      progress_message: "halfway",
+    });
+    expect(proxyCalls).toHaveLength(1);
+    expect(proxyCalls[0]).toEqual({
+      jobId: "j-1",
+      registryUrl: "http://localhost:8000",
+    });
+    expect(statusMock).toHaveBeenCalledWith();
+  });
+
+  it("throws when MCP_MESH_REGISTRY_URL is unset", async () => {
+    delete process.env.MCP_MESH_REGISTRY_URL;
+    await expect(statusFacade("j-1")).rejects.toThrow(
+      /MCP_MESH_REGISTRY_URL is not set/,
+    );
+  });
+
+  it("re-classifies a 'job not found' napi error to JobNotFoundError", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    statusMock.mockRejectedValueOnce(
+      new Error("backend error: job not found: stale"),
+    );
+    await expect(statusFacade("stale")).rejects.toBeInstanceOf(JobNotFoundError);
+  });
+
+  it("returns every JobStatus key from the wire snapshot (no key is omitted)", async () => {
+    // Pin the JobStatus interface contract: the napi binding's
+    // `job_to_json` (src/runtime/core/src/jobs_napi.rs) always emits
+    // EVERY field, using `null` for Rust `Option<T>::None`. Downstream
+    // callers must be able to rely on key-presence — only null-checks
+    // are needed for nullable fields.
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    statusMock.mockResolvedValueOnce({
+      id: "j-1",
+      capability: "do_work",
+      owner_instance_id: null,
+      status: "working",
+      progress: null,
+      progress_message: null,
+      result: null,
+      error: null,
+      submitted_payload: { task: "x" },
+      attempt_count: 1,
+      max_retries: 0,
+      max_duration: null,
+      total_deadline: null,
+      lease_expires_at: null,
+      last_heartbeat_at: null,
+      submitted_at: 1_700_000_000,
+      submitted_by: "consumer",
+    });
+    const snapshot = await statusFacade("j-1");
+    const expectedKeys = [
+      "id",
+      "capability",
+      "owner_instance_id",
+      "status",
+      "progress",
+      "progress_message",
+      "result",
+      "error",
+      "submitted_payload",
+      "attempt_count",
+      "max_retries",
+      "max_duration",
+      "total_deadline",
+      "lease_expires_at",
+      "last_heartbeat_at",
+      "submitted_at",
+      "submitted_by",
+    ].sort();
+    expect(Object.keys(snapshot).sort()).toEqual(expectedKeys);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// wait — DDDI-clean lifecycle facade (issue #1078)
+// ---------------------------------------------------------------------------
+describe("wait", () => {
+  beforeEach(() => {
+    delete process.env.MCP_MESH_REGISTRY_URL;
+  });
+
+  it("constructs a JobProxy + returns the result payload on success", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    waitMock.mockResolvedValueOnce({ ok: true, value: 42 });
+    const result = await waitFacade("j-1", 60);
+    expect(result).toEqual({ ok: true, value: 42 });
+    expect(proxyCalls).toHaveLength(1);
+    expect(proxyCalls[0]).toEqual({
+      jobId: "j-1",
+      registryUrl: "http://localhost:8000",
+    });
+    expect(waitMock).toHaveBeenCalledWith(60);
+  });
+
+  it("forwards null timeoutSecs when omitted", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    waitMock.mockResolvedValueOnce("done");
+    await waitFacade("j-1");
+    expect(waitMock).toHaveBeenCalledWith(null);
+  });
+
+  it("throws when MCP_MESH_REGISTRY_URL is unset", async () => {
+    delete process.env.MCP_MESH_REGISTRY_URL;
+    await expect(waitFacade("j-1")).rejects.toThrow(
+      /MCP_MESH_REGISTRY_URL is not set/,
+    );
+  });
+
+  it("re-classifies a 'job not found' napi error to JobNotFoundError", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    waitMock.mockRejectedValueOnce(
+      new Error("backend error: job not found: stale"),
+    );
+    await expect(waitFacade("stale")).rejects.toBeInstanceOf(JobNotFoundError);
+  });
+
+  it("re-classifies a 'job is terminal' napi error to JobTerminalError", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    waitMock.mockRejectedValueOnce(
+      new Error("job is terminal: failed"),
+    );
+    await expect(waitFacade("done")).rejects.toBeInstanceOf(JobTerminalError);
+  });
+
+  it("propagates a timeout error as a plain Error with 'timeout:' prefix", async () => {
+    // The napi binding maps `JobError::Timeout` → message starting with
+    // `"timeout:"` (see jobs_napi.rs::job_error_to_napi). The current
+    // `translateJobError` doesn't re-classify this — callers
+    // discriminate via the message prefix. A typed `TimeoutError` may
+    // be added in a follow-up.
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    waitMock.mockRejectedValueOnce(
+      new Error("timeout: wait timed out after 60s"),
+    );
+    await expect(waitFacade("slow", 60)).rejects.toThrow(/^timeout:/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Shared proxy cache across lifecycle facades (W6-style, issue #1078)
+// ---------------------------------------------------------------------------
+describe("shared JobProxy cache across cancel/status/wait/postEvent", () => {
+  it("reuses the same cached proxy across all four facades for the same jobId", async () => {
+    process.env.MCP_MESH_REGISTRY_URL = "http://localhost:8000";
+    cancelMock.mockResolvedValue(undefined);
+    statusMock.mockResolvedValue({ id: "shared", status: "working" });
+    waitMock.mockResolvedValue({ ok: true });
+    sendEventMock.mockResolvedValue({
+      job_id: "shared",
+      seq: 1,
+      created_at: 1,
+    });
+
+    await cancelFacade("shared", "test");
+    await statusFacade("shared");
+    await waitFacade("shared", 5);
+    await postEvent("shared", "signal", {});
+
+    // All four facades dispatched against the SAME cached proxy —
+    // only one construction recorded. Proves the lifecycle helpers
+    // share the same `(registryUrl, jobId)` cache as postEvent /
+    // subscribeEvents.
+    expect(proxyCalls).toHaveLength(1);
+    expect(proxyCalls[0]).toEqual({
+      jobId: "shared",
       registryUrl: "http://localhost:8000",
     });
   });

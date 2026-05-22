@@ -58,8 +58,11 @@ import { llmProvider } from "./llm-provider.js";
 import { sseStream } from "./sse-stream.js";
 import { mount as a2aMount } from "./a2a/producer/index.js";
 import {
+  cancel as jobsCancel,
   postEvent as jobsPostEvent,
+  status as jobsStatus,
   subscribeEvents as jobsSubscribeEvents,
+  wait as jobsWait,
 } from "./jobs.js";
 
 /**
@@ -89,13 +92,19 @@ const a2a: MeshA2ANamespace = { mount: a2aMount };
  * `MCP_MESH_REGISTRY_URL` and reuses a process-cached `JobProxy`).
  */
 interface MeshJobsNamespace {
+  cancel: typeof jobsCancel;
   postEvent: typeof jobsPostEvent;
+  status: typeof jobsStatus;
   subscribeEvents: typeof jobsSubscribeEvents;
+  wait: typeof jobsWait;
 }
 
 const jobs: MeshJobsNamespace = {
+  cancel: jobsCancel,
   postEvent: jobsPostEvent,
+  status: jobsStatus,
   subscribeEvents: jobsSubscribeEvents,
+  wait: jobsWait,
 };
 
 // Create mesh namespace with route and llm attached
@@ -353,12 +362,16 @@ export { registerCancelRoute } from "./jobs-cancel-route.js";
 // classes are exported so consumers can `instanceof`-discriminate
 // against the napi binding's generic Error.
 export {
+  cancel,
   postEvent,
+  status,
   subscribeEvents,
+  wait,
   JobNotFoundError,
   JobTerminalError,
   type JobEvent,
   type JobEventReceipt,
+  type JobStatus,
   type SubscribeEventsOptions,
 } from "./jobs.js";
 // Re-export napi-rs job primitives for users who want to drop down

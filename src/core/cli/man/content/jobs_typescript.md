@@ -296,6 +296,29 @@ cap 256; tune via `MCP_MESH_JOBPROXY_CACHE_MAX`). If the calling code
 already holds a `JobProxy`, use `proxy.sendEvent(eventType, payload)`
 directly — same wire shape, skip the helper.
 
+**Lifecycle facades by `jobId`.** Same DDDI-clean pattern as
+`postEvent` — module-level helpers that take a `jobId` and dispatch
+through the shared proxy cache, for callers that don't hold a
+`JobProxy` reference:
+
+```typescript
+// Cancel a running job (idempotent — already-terminal jobs return ok)
+await mesh.jobs.cancel(jobId, "user requested abort");
+
+// Read latest job state (JobStatus — registry Job row, field-for-field)
+const snapshot = await mesh.jobs.status(jobId);
+// snapshot.status ∈ "working" | "input_required" | "completed" | "failed" | "cancelled"
+
+// Wait for terminal state and return the result payload
+const result = await mesh.jobs.wait(jobId, 300);
+```
+
+`wait` rejects with an `Error` whose message starts with `"timeout:"`
+on `timeoutSecs` expiry; omit `timeoutSecs` (or pass `undefined`) to
+wait until the job reaches a terminal state. All three reject with
+`JobNotFoundError` if the registry has reaped the job; `cancel` also
+re-classifies a conflict response into `JobTerminalError`.
+
 **Typed errors** (both extend `Error`):
 
 - `JobNotFoundError` — job swept or id typo
