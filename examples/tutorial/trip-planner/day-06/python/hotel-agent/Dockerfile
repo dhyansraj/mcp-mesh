@@ -1,5 +1,5 @@
 # Dockerfile for hotel-agent MCP Mesh agent
-FROM mcpmesh/python-runtime:2.2.4
+FROM mcpmesh/python-runtime:2.3.0
 
 WORKDIR /app
 
