@@ -889,3 +889,260 @@ class TestDebugLogging:
             assert "dep1" in caplog.text
             assert "Tool 'test_func' returned:" in caplog.text
             assert "Tool 'test_func' result:" in caplog.text
+
+
+class TestUnifiedPositionalInjection:
+    """Cover the unified positional injection contract — McpMeshTool and
+    MeshJob parameters share a single ``dep_index`` namespace in
+    declaration order. Each ``dependencies[i]`` strictly pairs with ONE
+    parameter position; unresolved deps leave the slot ``None`` without
+    shifting later positions.
+
+    The tests exercise :func:`_prepare_injection_kwargs` directly so the
+    assertions don't have to navigate the async wrapper plumbing — the
+    function under test is the contract surface.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _registry_url(self, monkeypatch):
+        # MeshJob injection requires MCP_MESH_REGISTRY_URL to construct a
+        # MeshJobSubmitter; without it the framework logs a warning and
+        # leaves the slot None. Set it once for the whole class.
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://registry.local:8000")
+
+    @staticmethod
+    def _prep(func, dependencies, injected_deps_array=None):
+        """Invoke _prepare_injection_kwargs against a user function.
+
+        Mirrors what the real wrapper does during runtime injection so
+        we can assert each slot receives exactly the right value type.
+        """
+        import logging as _log
+        from _mcp_mesh.engine.dependency_injector import _prepare_injection_kwargs
+        from _mcp_mesh.engine.signature_analyzer import get_mesh_agent_positions
+
+        if injected_deps_array is None:
+            injected_deps_array = [None] * len(dependencies)
+        mesh_positions = get_mesh_agent_positions(func)
+        return _prepare_injection_kwargs(
+            func,
+            {},
+            mesh_positions,
+            dependencies,
+            injected_deps_array,
+            lambda _key: None,
+            _log.getLogger("test"),
+        )
+
+    def test_mesh_job_first_then_mesh_tool(self):
+        """The exact #1075 shape: MeshJob dep listed FIRST in deps[],
+        McpMeshTool dep second. Each param must receive the RIGHT slot
+        type — submitter into MeshJob, proxy into McpMeshTool."""
+        from mesh import MeshJob
+        from mesh.types import McpMeshTool
+        from _mcp_mesh.engine.mesh_job_submitter import MeshJobSubmitter
+
+        async def consumer(
+            user_id: str,
+            job: MeshJob = None,         # sig pos 1 → dep_index 0
+            tool: McpMeshTool = None,    # sig pos 2 → dep_index 1
+        ):
+            return (user_id, job, tool)
+
+        mock_proxy = MagicMock(name="fetch_data_proxy")
+        # The McpMeshTool's dep_index is 1 — slot 1 of the cache array.
+        final_kwargs, count = self._prep(
+            consumer,
+            ["run_workflow", "fetch_data"],
+            injected_deps_array=[None, mock_proxy],
+        )
+
+        assert isinstance(final_kwargs["job"], MeshJobSubmitter)
+        assert final_kwargs["job"].capability == "run_workflow"
+        assert final_kwargs["tool"] is mock_proxy
+        assert count == 2
+
+    def test_mesh_tool_first_then_mesh_job(self):
+        """Reversed order: McpMeshTool first, MeshJob second. Same
+        per-slot type assertion — confirms the binding is positional,
+        not type-prioritised."""
+        from mesh import MeshJob
+        from mesh.types import McpMeshTool
+        from _mcp_mesh.engine.mesh_job_submitter import MeshJobSubmitter
+
+        async def consumer(
+            user_id: str,
+            tool: McpMeshTool = None,   # sig pos 1 → dep_index 0
+            job: MeshJob = None,        # sig pos 2 → dep_index 1
+        ):
+            return (user_id, tool, job)
+
+        mock_proxy = MagicMock(name="fetch_data_proxy")
+        final_kwargs, count = self._prep(
+            consumer,
+            ["fetch_data", "run_workflow"],
+            injected_deps_array=[mock_proxy, None],
+        )
+
+        assert final_kwargs["tool"] is mock_proxy
+        assert isinstance(final_kwargs["job"], MeshJobSubmitter)
+        assert final_kwargs["job"].capability == "run_workflow"
+        assert count == 2
+
+    def test_unresolved_middle_dependency_does_not_shift(self):
+        """Three McpMeshTool params; the middle dep is unresolved (no
+        proxy registered). Positions 0 and 2 must still receive their
+        proxies — position 1 stays ``None`` rather than shifting up to
+        consume the position-2 proxy."""
+        from mesh.types import McpMeshTool
+
+        async def fan_out(
+            a: str,
+            dep0: McpMeshTool = None,
+            dep1: McpMeshTool = None,
+            dep2: McpMeshTool = None,
+        ):
+            return (dep0, dep1, dep2)
+
+        proxy_a = MagicMock(name="proxy_a")
+        proxy_c = MagicMock(name="proxy_c")
+        # Position 1 stays None (unresolved); positions 0 and 2 have proxies.
+        final_kwargs, _ = self._prep(
+            fan_out,
+            ["cap_a", "cap_b", "cap_c"],
+            injected_deps_array=[proxy_a, None, proxy_c],
+        )
+
+        assert final_kwargs["dep0"] is proxy_a
+        assert final_kwargs["dep1"] is None   # No shifting
+        assert final_kwargs["dep2"] is proxy_c
+
+    def test_unresolved_mixed_mesh_tool_with_mesh_job(self):
+        """MeshJob + McpMeshTool; the McpMeshTool dep is unresolved.
+        MeshJob still gets its submitter (registry URL set, name
+        free-form), McpMeshTool param stays ``None``."""
+        from mesh import MeshJob
+        from mesh.types import McpMeshTool
+        from _mcp_mesh.engine.mesh_job_submitter import MeshJobSubmitter
+
+        async def consumer(
+            a: str,
+            job: MeshJob = None,        # sig pos 1 → dep_index 0
+            tool: McpMeshTool = None,   # sig pos 2 → dep_index 1
+        ):
+            return (job, tool)
+
+        # No proxy for the McpMeshTool slot — leave None.
+        final_kwargs, _ = self._prep(
+            consumer,
+            ["run_workflow", "missing_tool"],
+            injected_deps_array=[None, None],
+        )
+
+        assert isinstance(final_kwargs["job"], MeshJobSubmitter)
+        assert final_kwargs["job"].capability == "run_workflow"
+        assert final_kwargs["tool"] is None
+
+    def test_mesh_job_param_name_is_free_form(self):
+        """The MeshJob param name no longer must match a capability —
+        positional binding only. A param named ``workflow`` paired with
+        dependency capability ``run_my_thing`` MUST receive a
+        MeshJobSubmitter with ``capability='run_my_thing'``."""
+        from mesh import MeshJob
+        from _mcp_mesh.engine.mesh_job_submitter import MeshJobSubmitter
+
+        async def consumer(
+            user_id: str,
+            workflow: MeshJob = None,
+        ):
+            return workflow
+
+        final_kwargs, _ = self._prep(
+            consumer,
+            ["run_my_thing"],
+            injected_deps_array=[None],
+        )
+
+        assert isinstance(final_kwargs["workflow"], MeshJobSubmitter)
+        # Name mismatch is fine — binding is positional.
+        assert final_kwargs["workflow"].capability == "run_my_thing"
+
+    def test_pure_mesh_tool_positional_unchanged(self):
+        """Regression: a pure-McpMeshTool function still injects each
+        proxy into its positional slot exactly as before the
+        unification."""
+        from mesh.types import McpMeshTool
+
+        async def fan_out(
+            a: str, dep0: McpMeshTool = None, dep1: McpMeshTool = None
+        ):
+            return (dep0, dep1)
+
+        proxy0 = MagicMock(name="proxy0")
+        proxy1 = MagicMock(name="proxy1")
+        final_kwargs, count = self._prep(
+            fan_out,
+            ["cap0", "cap1"],
+            injected_deps_array=[proxy0, proxy1],
+        )
+
+        assert final_kwargs["dep0"] is proxy0
+        assert final_kwargs["dep1"] is proxy1
+        assert count == 2
+
+    def test_explicit_kwarg_skips_meshjob_injection(self):
+        """Test-friendly contract: when the caller passes an explicit
+        value for a MeshJob param (e.g. a fake), the framework MUST NOT
+        overwrite it with a MeshJobSubmitter."""
+        import logging as _log
+        from mesh import MeshJob
+        from _mcp_mesh.engine.dependency_injector import _prepare_injection_kwargs
+        from _mcp_mesh.engine.signature_analyzer import get_mesh_agent_positions
+
+        async def consumer(a: str, job: MeshJob = None):
+            return job
+
+        fake_job = MagicMock(name="fake_job")
+        mesh_positions = get_mesh_agent_positions(consumer)
+        final_kwargs, injected_count = _prepare_injection_kwargs(
+            consumer,
+            {"job": fake_job},  # caller-supplied
+            mesh_positions,
+            ["run_workflow"],
+            [None],
+            lambda _key: None,
+            _log.getLogger("test"),
+        )
+
+        assert final_kwargs["job"] is fake_job
+        # Framework MUST NOT have injected anything — the caller-supplied
+        # value was preserved verbatim, no MeshJobSubmitter constructed.
+        assert injected_count == 0
+
+    def test_meshjob_slot_is_none_when_registry_url_unset(self, monkeypatch):
+        """When MCP_MESH_REGISTRY_URL is missing, the MeshJob slot must
+        be explicitly set to None (not omitted from final_kwargs) so the
+        consumer function's call signature is satisfied. Mirrors the
+        McpMeshTool branch's behavior of always assigning into kwargs."""
+        from mesh import MeshJob
+
+        # Override the class-wide _registry_url fixture for this test.
+        monkeypatch.delenv("MCP_MESH_REGISTRY_URL", raising=False)
+
+        async def consumer(user_id: str, job: MeshJob = None):
+            return job
+
+        final_kwargs, injected_count = self._prep(
+            consumer,
+            ["run_workflow"],
+            injected_deps_array=[None],
+        )
+
+        # The job slot is present in final_kwargs and is None — not
+        # missing-from-dict, which would surface as TypeError on call
+        # if the user's MeshJob param had no default.
+        assert "job" in final_kwargs
+        assert final_kwargs["job"] is None
+        # Framework didn't construct a MeshJobSubmitter (registry URL
+        # was unavailable), so injected_count stays at 0.
+        assert injected_count == 0

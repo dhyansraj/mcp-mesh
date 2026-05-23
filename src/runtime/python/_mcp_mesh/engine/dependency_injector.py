@@ -310,25 +310,45 @@ def _build_clean_signature(func: Any) -> inspect.Signature | None:
 
 def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[int]:
     """
-    Analyze function signature and determine injection strategy.
+    Analyze function signature and determine McpMeshTool injection positions.
 
     Rules:
     1. Single parameter: inject regardless of typing (with warning if not McpMeshTool)
     2. Multiple parameters: only inject into McpMeshTool typed parameters
     3. Log warnings for mismatches and edge cases
 
+    Returns ONLY ``McpMeshTool`` positions — ``MeshJob`` positions are
+    computed independently in :func:`_prepare_injection_kwargs` so the
+    diagnostic warnings below stay scoped to the proxy-injection path.
+
     Args:
         func: Function to analyze
         dependencies: List of dependency names to inject
 
     Returns:
-        List of parameter positions to inject into
+        List of McpMeshTool parameter positions to inject into
     """
     sig = inspect.signature(func)
     params = list(sig.parameters.values())
     param_count = len(params)
     mesh_positions = get_mesh_agent_positions(func)
     func_name = f"{func.__module__}.{func.__qualname__}"
+
+    # Detect whether the function declares any MeshJob param. The unified
+    # positional injection path handles those alongside McpMeshTool slots,
+    # so this function's diagnostics must NOT shout about "no injection
+    # target" when a MeshJob slot will consume the dependency.
+    has_mesh_job_param = False
+    try:
+        from .signature_analyzer import analyze_mesh_job_signature
+
+        _mj = analyze_mesh_job_signature(func)
+        has_mesh_job_param = _mj.mesh_job_param_name is not None
+    except (TypeError, AttributeError):
+        # Only narrow signature-introspection errors swallow silently;
+        # ValueError (Phase-1 multiple-MeshJob contract violation) MUST
+        # propagate per the resolver contract.
+        pass
 
     # No parameters at all
     if param_count == 0:
@@ -342,24 +362,11 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
     # Single parameter rule: inject regardless of typing
     if param_count == 1:
         if not mesh_positions:
-            # Phase 1 MeshJob substrate: a function may declare a single
-            # MeshJob param without any McpMeshTool param — that's the
-            # consumer pattern (commission a remote job). Don't inject a
-            # dependency proxy into that slot; the MeshJob param is wired
-            # by ``_prepare_injection_kwargs`` via a different code path.
-            try:
-                from .signature_analyzer import analyze_mesh_job_signature
-
-                _mj = analyze_mesh_job_signature(func)
-                if _mj.mesh_job_param_name is not None:
-                    logger.debug(
-                        f"Function '{func_name}' has a single MeshJob param; "
-                        f"injection of {len(dependencies)} declared dependency(ies) "
-                        f"will be handled via the MeshJob auto-injection path."
-                    )
-                    return []
-            except Exception:
-                pass
+            if has_mesh_job_param:
+                # The single parameter is a MeshJob — the unified injection
+                # path constructs a MeshJobSubmitter for it. No McpMeshTool
+                # position to record here.
+                return []
 
             param_name = params[0].name
             logger.warning(
@@ -372,28 +379,7 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
     # Multiple parameters rule: only inject into McpMeshTool typed parameters
     if param_count > 1:
         if not mesh_positions:
-            # Phase 1 MeshJob substrate: a function may declare a MeshJob
-            # param without any McpMeshTool params — that's the consumer
-            # pattern (commission a remote job). Don't shout WARNING in
-            # that case; the MeshJob slot is wired by ``_prepare_injection_kwargs``
-            # via a different code path.
-            has_mesh_job_param = False
-            try:
-                from .signature_analyzer import analyze_mesh_job_signature
-
-                _mj = analyze_mesh_job_signature(func)
-                has_mesh_job_param = _mj.mesh_job_param_name is not None
-            except Exception:
-                pass
-
-            if has_mesh_job_param:
-                logger.debug(
-                    f"Function '{func_name}' declares a MeshJob param but no "
-                    f"McpMeshTool params; injection of {len(dependencies)} "
-                    f"declared dependency(ies) will be handled via the "
-                    f"MeshJob auto-injection path."
-                )
-            else:
+            if not has_mesh_job_param:
                 logger.warning(
                     f"⚠️ Function '{func_name}' has {param_count} parameters but none are "
                     f"typed as McpMeshTool. Skipping injection of {len(dependencies)} dependencies. "
@@ -401,26 +387,26 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
                 )
             return []
 
-        # Check for dependency/parameter count mismatches
-        if len(dependencies) != len(mesh_positions):
-            if len(dependencies) > len(mesh_positions):
-                excess_deps = dependencies[len(mesh_positions) :]
-                logger.warning(
-                    f"Function '{func_name}' has {len(dependencies)} dependencies "
-                    f"but only {len(mesh_positions)} McpMeshTool parameters. "
-                    f"Dependencies {excess_deps} will not be injected."
-                )
-            else:
-                excess_params = [
-                    params[pos].name for pos in mesh_positions[len(dependencies) :]
-                ]
-                logger.warning(
-                    f"Function '{func_name}' has {len(mesh_positions)} McpMeshTool parameters "
-                    f"but only {len(dependencies)} dependencies declared. "
-                    f"Parameters {excess_params} will remain None."
-                )
+        # Check for excess-dependency mismatch. Eligible slots =
+        # McpMeshTool + MeshJob positions taken together, so MeshJob slots
+        # don't trigger spurious "excess dependencies" warnings.
+        # NOTE: the inverse case (more eligible slots than dependencies) is
+        # diagnosed at injection time inside ``_prepare_injection_kwargs``
+        # so it can name BOTH untouched McpMeshTool *and* MeshJob params —
+        # this strategy-time site sees McpMeshTool positions only.
+        eligible_count = len(mesh_positions) + (1 if has_mesh_job_param else 0)
+        if len(dependencies) > eligible_count:
+            excess_deps = dependencies[eligible_count:]
+            logger.warning(
+                f"Function '{func_name}' has {len(dependencies)} dependencies "
+                f"but only {eligible_count} injectable parameter(s) "
+                f"(McpMeshTool + MeshJob). "
+                f"Dependencies {excess_deps} will not be injected."
+            )
 
-        # Return positions we can actually inject into
+        # Return McpMeshTool positions we can actually inject into. The
+        # MeshJob slot's index in ``dependencies`` is computed positionally
+        # at injection time by :func:`_prepare_injection_kwargs`.
         return mesh_positions[: len(dependencies)]
 
     return mesh_positions
@@ -437,16 +423,24 @@ def _prepare_injection_kwargs(
 ) -> tuple[dict, int]:
     """Prepare kwargs with injected dependencies and LLM agent.
 
-    This contains the shared logic between async and sync dependency wrappers:
-    dependency resolution, LLM agent injection, and invocation logging.
+    Unified positional injection — ``McpMeshTool`` and ``MeshJob`` params
+    share a single ``dep_index`` namespace in declaration order. Each
+    ``dependencies[i]`` strictly pairs with ONE parameter position; the
+    slot's type (proxy vs submitter) determines what gets constructed.
+    Unresolved deps leave their slot ``None`` — positions never shift.
+
+    The ``mesh_positions`` argument carries the McpMeshTool positions
+    pre-computed by :func:`analyze_injection_strategy` (used for cache
+    indexing into ``injected_deps_array``); the MeshJob positions are
+    re-derived here from the live signature.
 
     Args:
         func: The original function being wrapped
         kwargs: Caller-supplied keyword arguments
-        mesh_positions: Parameter positions that accept mesh dependencies
-        dependencies: Dependency names declared on the function
-        injected_deps_array: Wrapper's mutable array of cached dependency instances
-        get_dependency_fn: Fallback lookup for dependencies not in the array
+        mesh_positions: McpMeshTool parameter positions (from analyze step)
+        dependencies: Dependency capability names declared on the function
+        injected_deps_array: Wrapper's mutable array of cached proxy instances
+        get_dependency_fn: Fallback lookup for proxies not in the array
         log: Logger instance for debug output
 
     Returns:
@@ -464,27 +458,130 @@ def _prepare_injection_kwargs(
     params = list(sig.parameters.keys())
     final_kwargs = kwargs.copy()
 
+    # Build the unified eligible-positions list from the live signature.
+    # Order is declaration order; the set is used inside the loop to
+    # branch between proxy- and submitter-construction.
+    mesh_job_positions: set[int] = set()
+    try:
+        from .signature_analyzer import analyze_mesh_job_signature
+
+        sig_target = getattr(func, "_mesh_original_func", func)
+        _mj_resolution = analyze_mesh_job_signature(sig_target)
+        if _mj_resolution.mesh_job_param_index is not None:
+            mesh_job_positions.add(_mj_resolution.mesh_job_param_index)
+    except (TypeError, AttributeError) as e:
+        # Only narrow signature-introspection errors swallow silently;
+        # ValueError (Phase-1 multiple-MeshJob contract violation) MUST
+        # propagate per the resolver contract.
+        log.debug(f"{tp}MeshJob analysis skipped for {func.__name__}: {e}")
+
+    eligible_positions = sorted(set(mesh_positions) | mesh_job_positions)
+
+    # Diagnostic: more eligible (McpMeshTool + MeshJob) slots than declared
+    # dependencies — the trailing slots will silently stay None. Flagging
+    # here (at injection time) covers cases the strategy-time warning at
+    # ``analyze_injection_strategy`` can't see, because it counts MeshJob
+    # positions too rather than McpMeshTool only.
+    if len(eligible_positions) > len(dependencies):
+        untouched_positions = eligible_positions[len(dependencies):]
+        sig_params = list(sig.parameters.values())
+        untouched_param_names = [sig_params[pos].name for pos in untouched_positions]
+        log.warning(
+            f"⚠️ Function '{func.__name__}' has {len(eligible_positions)} "
+            f"injection-eligible parameters (McpMeshTool/MeshJob) but only "
+            f"{len(dependencies)} dependency(ies) declared. Parameters "
+            f"{untouched_param_names} will remain None."
+        )
+
     injected_count = 0
     injected_deps: list[str] = []
 
-    for dep_index, param_position in enumerate(mesh_positions):
-        if dep_index < len(dependencies):
-            dep_name = dependencies[dep_index]
-            param_name = params[param_position]
+    # MeshJobSubmitter construction needs the registry URL + agent_id;
+    # resolve lazily on first MeshJob slot so non-job tools pay nothing.
+    _submitter_ctx: Optional[tuple[Optional[str], str]] = None
 
-            if param_name not in final_kwargs or final_kwargs.get(param_name) is None:
-                dependency = None
-                if dep_index < len(injected_deps_array):
-                    dependency = injected_deps_array[dep_index]
+    def _resolve_submitter_ctx() -> tuple[Optional[str], str]:
+        nonlocal _submitter_ctx
+        if _submitter_ctx is not None:
+            return _submitter_ctx
+        import os as _os
 
-                if dependency is None:
-                    dep_key = f"{func.__module__}.{func.__qualname__}:dep_{dep_index}"
-                    dependency = get_dependency_fn(dep_key)
+        from .decorator_registry import DecoratorRegistry
 
-                final_kwargs[param_name] = dependency
+        registry_url = _os.environ.get("MCP_MESH_REGISTRY_URL")
+        instance_id = "unknown"
+        try:
+            cfg = DecoratorRegistry.get_resolved_agent_config()
+            if isinstance(cfg, dict):
+                candidate = cfg.get("agent_id")
+                if candidate:
+                    instance_id = candidate
+        except Exception as exc:
+            log.debug(
+                f"{tp}MeshJob: DecoratorRegistry agent_id lookup failed "
+                f"({exc}); using 'unknown'"
+            )
+        _submitter_ctx = (registry_url, instance_id)
+        return _submitter_ctx
+
+    for dep_index, position in enumerate(eligible_positions):
+        if dep_index >= len(dependencies):
+            break
+
+        dep_name = dependencies[dep_index]
+        param_name = params[position]
+
+        # Skip if user explicitly passed a value — preserves the
+        # test-friendly contract that callers can supply a fake/mock for
+        # either a proxy or a submitter slot.
+        if param_name in final_kwargs and final_kwargs.get(param_name) is not None:
+            continue
+
+        if position in mesh_job_positions:
+            # MeshJob slot — construct a MeshJobSubmitter for the
+            # capability at this dep_index. Param NAME does not matter;
+            # the binding is positional.
+            registry_url, instance_id = _resolve_submitter_ctx()
+            if registry_url:
+                from .mesh_job_submitter import MeshJobSubmitter
+
+                submitter = MeshJobSubmitter(
+                    capability=dep_name,
+                    submitted_by=instance_id,
+                    registry_url=registry_url,
+                )
+                final_kwargs[param_name] = submitter
                 injected_count += 1
-                proxy_type = type(dependency).__name__ if dependency else "None"
-                injected_deps.append(f"{dep_name} → {proxy_type}")
+                injected_deps.append(f"{dep_name} → MeshJobSubmitter")
+                log.debug(
+                    f"{tp}📨 MESH_JOB_INJECTION: Injected MeshJobSubmitter "
+                    f"for capability={dep_name!r} into param={param_name!r}"
+                )
+            else:
+                log.warning(
+                    f"{tp}MeshJob param {param_name!r} on {func.__name__} "
+                    f"could not be wired: MCP_MESH_REGISTRY_URL not set"
+                )
+                # Set the slot explicitly to None so the user function's
+                # call signature is satisfied even when the MeshJob param
+                # has no default. Mirrors the McpMeshTool branch's behavior
+                # of always assigning into final_kwargs.
+                final_kwargs[param_name] = None
+        else:
+            # McpMeshTool slot — use the cached proxy / get_dependency_fn
+            # fallback. The dep_index lines up with the wrapper's
+            # injected_deps_array slot allocated at decoration time.
+            dependency = None
+            if dep_index < len(injected_deps_array):
+                dependency = injected_deps_array[dep_index]
+            if dependency is None:
+                dep_key = f"{func.__module__}.{func.__qualname__}:dep_{dep_index}"
+                dependency = get_dependency_fn(dep_key)
+
+            final_kwargs[param_name] = dependency
+            injected_count += 1
+            proxy_type = type(dependency).__name__ if dependency else "None"
+            injected_deps.append(f"{dep_name} → {proxy_type}")
 
     if injected_count > 0:
         log.debug(
@@ -498,74 +595,6 @@ def _prepare_injection_kwargs(
             llm_agent = getattr(func, "_mesh_llm_agent", None)
             final_kwargs[llm_param] = llm_agent
             log.debug(f"{tp}🤖 LLM_INJECTION: Injected {llm_param}={llm_agent}")
-
-    # Phase 1 MeshJob substrate: consumer-side injection.
-    # If the function declares a MeshJob-typed parameter whose name matches
-    # one of its declared dependency capabilities, inject a
-    # MeshJobSubmitter for that capability so the consumer can call
-    # ``await submitter.submit(...)``. Per the resolver contract
-    # (MESHJOB_DDDI_CONTRACT.md), MeshJob params are orthogonal to
-    # McpMeshTool position-indexing — they're identified by name, not slot.
-    try:
-        from .signature_analyzer import analyze_mesh_job_signature
-
-        # Use _mesh_original_func if present (set by injection wrapper) so
-        # we read the user's source-level annotations, not the wrapper's.
-        sig_target = getattr(func, "_mesh_original_func", func)
-        resolution = analyze_mesh_job_signature(sig_target)
-        mesh_job_param = resolution.mesh_job_param_name
-    except Exception as e:
-        log.debug(f"{tp}MeshJob analysis skipped for {func.__name__}: {e}")
-        mesh_job_param = None
-
-    if mesh_job_param and mesh_job_param in dependencies:
-        # Only inject when the slot is currently empty / None — preserves
-        # the test-friendly contract that callers can pass an explicit
-        # MeshJob (e.g. a fake) and bypass the framework's auto-wiring.
-        if (
-            mesh_job_param not in final_kwargs
-            or final_kwargs.get(mesh_job_param) is None
-        ):
-            from .mesh_job_submitter import MeshJobSubmitter
-            import os as _os
-
-            from .decorator_registry import DecoratorRegistry
-
-            registry_url = _os.environ.get("MCP_MESH_REGISTRY_URL")
-            # Single source of truth: the same DecoratorRegistry-resolved
-            # agent_id that the heartbeat registers, the claim worker
-            # sends on POST /jobs/claim, and the JobController stamps on
-            # batch deltas. Reading from it here means submitted_by
-            # lines up exactly with the eventual claim's
-            # owner_instance_id when this agent submits to itself.
-            instance_id = "unknown"
-            try:
-                cfg = DecoratorRegistry.get_resolved_agent_config()
-                if isinstance(cfg, dict):
-                    candidate = cfg.get("agent_id")
-                    if candidate:
-                        instance_id = candidate
-            except Exception as exc:
-                log.debug(
-                    f"{tp}MeshJob param {mesh_job_param!r}: DecoratorRegistry "
-                    f"agent_id lookup failed ({exc}); using 'unknown'"
-                )
-            if registry_url:
-                submitter = MeshJobSubmitter(
-                    capability=mesh_job_param,
-                    submitted_by=instance_id,
-                    registry_url=registry_url,
-                )
-                final_kwargs[mesh_job_param] = submitter
-                log.debug(
-                    f"{tp}📨 MESH_JOB_INJECTION: Injected MeshJobSubmitter "
-                    f"for capability={mesh_job_param!r}"
-                )
-            else:
-                log.warning(
-                    f"{tp}MeshJob param {mesh_job_param!r} on {func.__name__} "
-                    f"could not be wired: MCP_MESH_REGISTRY_URL not set"
-                )
 
     return final_kwargs, injected_count
 
@@ -897,7 +926,10 @@ class DependencyInjector:
 
             _mj = analyze_mesh_job_signature(func)
             has_mesh_job_param = _mj.mesh_job_param_name is not None
-        except Exception:
+        except (TypeError, AttributeError):
+            # Narrow catch: only swallow signature-introspection errors.
+            # ValueError (multi-MeshJob contract violation per the Phase-1
+            # resolver) MUST propagate so the wrapper fails fast.
             pass
 
         # If no mesh positions to inject AND no MeshJob slot, fall back to
