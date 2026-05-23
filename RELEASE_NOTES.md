@@ -1,6 +1,58 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.2.4...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.3.0...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.2.4...v2.3.0)
+
+## v2.3.0 (2026-05-23)
+
+Lifecycle facades across the polyglot trilogy + unified dependency-injection contract.
+
+v2.2 introduced the MeshJob substrate; v2.3 completes the lifecycle surface so callers that hold only a `job_id` can drive cancel / status / wait through DDDI-clean module-level facades — the same shape `post_event` and `subscribe_events` already had. The DI rules for `McpMeshTool` and `MeshJob` parameters are unified under a single positional contract, eliminating a silent wrong-proxy footgun when both types appeared in the same tool.
+
+### 🪢 Lifecycle facades by `job_id` (#1074, #1077, #1078, #1079, #1080, #1081)
+
+Three new facades on every runtime's `mesh.jobs` / `MeshJobs` surface. The underlying `JobProxy.cancel/status/wait` instance methods were already exposed in v2.2; this release adds the DDDI-clean module-level wrappers that resolve the registry URL internally — no more `JobProxy(jobId, registryUrl)` plumbing in user code.
+
+| Operation                | Python                                             | TypeScript                                       | Java                                          |
+| ------------------------ | -------------------------------------------------- | ------------------------------------------------ | --------------------------------------------- |
+| Cancel a running job     | `await mesh.jobs.cancel(job_id, reason=None)`      | `await mesh.jobs.cancel(jobId, reason?)`         | `MeshJobs.cancel(jobId[, reason])`            |
+| Read latest job state    | `await mesh.jobs.status(job_id)`                   | `await mesh.jobs.status(jobId)`                  | `MeshJobs.status(jobId)`                      |
+| Wait for terminal state  | `await mesh.jobs.wait(job_id, timeout_secs=None)`  | `await mesh.jobs.wait(jobId, timeoutSecs?)`      | `MeshJobs.await(jobId[, timeoutSecs])`        |
+
+- **Java naming nuance**: the static facade is `MeshJobs.await` (not `wait`) to avoid readability confusion with the inherited `Object.wait()` overload family, and to match the existing `JobProxy.await(double)` instance method precedent.
+- **TS adds** a typed `JobStatus` interface alongside `JobEvent` / `JobEventReceipt`, exported from `mesh.jobs`. Fields mirror `job_to_json` in `jobs_napi.rs`: required fields typed `T`, `Option<T>` fields emitted as `T | null` — every key always present, no key-presence checks needed.
+- **Typed errors** (`JobNotFoundError`, `JobTerminalError`) translate consistently across all three runtimes via substring-based dispatch from the underlying runtime exception.
+
+### ⚙️ Unified positional dependency injection (#1075, #1082, **Python only**)
+
+`McpMeshTool` and `MeshJob` parameters now share a **single positional `dep_index` namespace** in parameter declaration order. Each `dependencies[i]` strictly pairs with one parameter position; the slot's type determines what gets constructed (`MeshJobSubmitter` vs `McpMeshTool` proxy). Previously, the two types had inconsistent injection rules (positional for `McpMeshTool`, by-name for `MeshJob`), which produced wrong-proxy injection when both appeared in the same tool with `MeshJob` listed first in `dependencies[]`.
+
+- **Free-form parameter names work**: a `MeshJob` parameter named `workflow` with `dependencies=[{"capability": "run_my_thing"}]` now resolves to `MeshJobSubmitter(capability="run_my_thing")`. Param names no longer need to match capability names byte-for-byte.
+- **Unresolved-dependency invariant**: if `dependencies[i]` cannot be resolved at injection time, the corresponding parameter slot stays `None` — positions do NOT shift to fill the gap.
+- **Behavior change to be aware of**: users who deliberately wrote `MeshJob` parameters out-of-order with their `dependencies[]` array (relying on the previous by-name resolution) now need to put params in the same order as deps. The natural same-order case continues to work unchanged.
+
+The contract is documented end-to-end in `MESHJOB_DDDI_CONTRACT.md`. TypeScript and Java SDK DI paths still follow the orthogonal injection contract; their port to the unified positional rule is tracked separately.
+
+### 🩺 `health_check_ttl` refresh on the user loop (#1072, #1073)
+
+`@mesh.agent(health_check=fn, health_check_ttl=N)` now actually refreshes every N seconds. Previously, `update_health_result()` fired exactly once at startup and the stored result was served forever — a failed check during the startup window (e.g., racing with `lifespan`) cached as unhealthy and permanently failed the k8s readiness probe.
+
+The refresh loop runs on the user loop (same loop as `lifespan` and tools, per the v2.2.4 architecture) so health checks that touch loop-bound resources (`asyncpg.Pool`, `redis.asyncio.Redis`, etc.) work correctly without cross-loop errors. A lifespan-ready signal gates the refresh start so iterations don't fire while user `__aenter__` is still mid-flight.
+
+### 📚 FastMCP lifespan documentation correction (#1071, #1073)
+
+The v2.2.4 "Loop topology" docs showed a FastAPI-style `app.state.pool` example — but FastMCP's lifespan callable receives a FastMCP server instance, not a FastAPI app, and there is no `.state` attribute. Examples across `docs/concepts/stateful-agents.md`, `docs/python/dependency-injection.md`, and `meshctl man dependency-injection` are rewritten to use the canonical Python pattern: a module-level global initialized in the lifespan body. Matches the working pattern in our own test fixtures.
+
+### Internals — `user_loop_hooks` shared utility
+
+New `src/runtime/python/_mcp_mesh/shared/user_loop_hooks.py` exposes `schedule_on_user_loop(app, user_loop, coro_factory, name=...)`, `cancel_app_user_loop_futures(app)`, and `get_or_create_lifespan_ready_future(app)` / `signal_lifespan_ready(app)` helpers. Subsystem code (e.g. the health-refresh loop) owns when to schedule; `lifespan_factory.wrap_lifespan_for_user_loop` owns cancellation on both clean and exception paths. The lifespan-ready future is `concurrent.futures.Future` (loop-agnostic), avoiding the cross-loop trap that an `asyncio.Event` would have created.
+
+### Tests
+
+`tests/integration/suites/uc02_agent_lifecycle/` gains `tc20_health_check_ttl_refresh` (proves the refresh actually fires; observed 5 iterations on the user loop after the seed call) and `tc21_health_check_lifespan_ready_gate` (proves no premature refresh iterations fire before `lifespan` completes startup under aggressive `health_check_ttl=1`). `test_12_dependency_injector.py` gains a `TestUnifiedPositionalInjection` class covering the mixed-type ordering matrix, unresolved-middle without shift, free-form parameter names, and the missing-`MCP_MESH_REGISTRY_URL` graceful-None fallback. Python unit suite: 1010 passing. uc02: 23/23. uc21_meshjob: 21/21. uc22_meshjob_ts: 24/24. uc23_meshjob_java: 27/27.
+
+---
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.2.0...v2.2.4)
 

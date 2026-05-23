@@ -10,8 +10,8 @@ MCP Mesh supports multiple deployment patterns for TypeScript agents. Use `meshc
 
 | Image                            | Description                                        |
 | -------------------------------- | -------------------------------------------------- |
-| `mcpmesh/registry:2.2.4`           | Registry service for agent discovery               |
-| `mcpmesh/typescript-runtime:2.2.4` | TypeScript runtime with @mcpmesh/sdk pre-installed |
+| `mcpmesh/registry:2.3.0`           | Registry service for agent discovery               |
+| `mcpmesh/typescript-runtime:2.3.0` | TypeScript runtime with @mcpmesh/sdk pre-installed |
 
 ## Local Development
 
@@ -75,7 +75,7 @@ meshctl stop               # Stop all
 
 ```dockerfile
 # Dockerfile for my-agent MCP Mesh agent
-FROM mcpmesh/typescript-runtime:2.2.4
+FROM mcpmesh/typescript-runtime:2.3.0
 
 WORKDIR /app
 
@@ -123,8 +123,8 @@ meshctl scaffold --compose --observability
 Generated `docker-compose.yml` includes:
 
 - PostgreSQL database for registry
-- Registry service (`mcpmesh/registry:2.2.4`)
-- TypeScript agents with `mcpmesh/typescript-runtime:2.2.4`
+- Registry service (`mcpmesh/registry:2.3.0`)
+- TypeScript agents with `mcpmesh/typescript-runtime:2.3.0`
 - Health checks and dependency ordering
 - Optional: Redis, Tempo, Grafana (with `--observability`)
 
@@ -145,12 +145,12 @@ For production Kubernetes deployment:
 ```bash
 # Install core infrastructure
 helm install mcp-core oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-core \
-  --version 2.2.4 \
+  --version 2.3.0 \
   -n mcp-mesh --create-namespace
 
 # Deploy TypeScript agent
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 2.2.4 \
+  --version 2.3.0 \
   -n mcp-mesh \
   -f my-agent/helm-values.yaml
 ```
@@ -192,15 +192,15 @@ meshctl scaffold basic --name my-agent --lang typescript
 
 # 2. Build and push Docker image
 cd my-agent
-docker buildx build --platform linux/amd64 -t your-registry/my-agent:v2.2.4 --push .
+docker buildx build --platform linux/amd64 -t your-registry/my-agent:v2.3.0 --push .
 
 # 3. Deploy with Helm
 helm install my-agent oci://ghcr.io/dhyansraj/mcp-mesh/mcp-mesh-agent \
-  --version 2.2.4 \
+  --version 2.3.0 \
   -n mcp-mesh \
   -f helm-values.yaml \
   --set image.repository=your-registry/my-agent \
-  --set image.tag=v2.2.4
+  --set image.tag=v2.3.0
 ```
 
 ## Port Strategy
