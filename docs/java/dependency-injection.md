@@ -66,6 +66,93 @@ public String generateReport(
 }
 ```
 
+## Component-level dependency declaration with `@MeshDependsOn`
+
+`@MeshInject` and `@MeshRoute(dependencies=...)` work at the controller-method scope. For everything else — `@Service` beans, `@Component`s, servlet `Filter`s, `@Scheduled` jobs — declare the capabilities your bean needs with the class-level `@MeshDependsOn` annotation. The auto-configuration then registers a singleton `McpMeshTool` bean named by each capability, so you can wire it the standard Spring way.
+
+### Constructor injection (recommended)
+
+```java
+@Service
+@MeshDependsOn({
+    @MeshDependency(capability = "list_holidays"),
+    @MeshDependency(capability = "get_user_profile")
+})
+public class StaffSyncService {
+    private final McpMeshTool<List<Holiday>> holidays;
+    private final McpMeshTool<UserProfileResponse> profile;
+
+    public StaffSyncService(
+            @Qualifier("list_holidays") McpMeshTool<List<Holiday>> holidays,
+            @Qualifier("get_user_profile") McpMeshTool<UserProfileResponse> profile) {
+        this.holidays = holidays;
+        this.profile = profile;
+    }
+
+    public List<Holiday> upcomingHolidays() {
+        if (!holidays.isAvailable()) return List.of();
+        return holidays.call();
+    }
+}
+```
+
+### Field injection
+
+```java
+@Component
+@MeshDependsOn(@MeshDependency(capability = "list_holidays"))
+public class HolidayChecker {
+    @Autowired
+    @Qualifier("list_holidays")
+    private McpMeshTool<List<Holiday>> holidays;
+}
+```
+
+### Where to use it
+
+| Scenario | Annotation |
+| -------- | ---------- |
+| `@MeshTool` method needing remote helpers | `@MeshTool(dependencies = @Selector(...))` + parameter injection |
+| `@RestController` handler method | `@MeshRoute(dependencies = {...})` + `@MeshInject` parameter |
+| `@Service` / `@Component` / `Filter` / `@Scheduled` / any other Spring bean | **`@MeshDependsOn` + `@Qualifier`** |
+
+`@MeshDependsOn` and `@MeshInject`/`@MeshRoute` are complementary — same heartbeat-driven proxy lifecycle, same auto-rewiring on topology change, same `isAvailable()` semantics. Pick the surface that matches where you need the dependency. If the same capability shows up via multiple sources the framework deduplicates: a single proxy and a single registry entry per capability name.
+
+### Tags, version, and bean-name conflicts
+
+The `@MeshDependency` element accepts the same `tags`, `version`, `expectedType`, and `schemaMode` fields documented above for `@MeshRoute`. If a `@MeshDependsOn` capability happens to match the name of a user-owned Spring bean, the user's bean wins — the framework logs an `ERROR` naming the conflicting bean's class and every `@MeshDependsOn`-annotated class that declared the capability, then skips the proxy registration. Any consumer that `@Qualifier`-injected `McpMeshTool<...>` for that capability will fail context refresh with `BeanNotOfRequiredTypeException`. Resolve by renaming either the user bean or the capability.
+
+### Typed deserialization
+
+When you set `expectedType` on `@MeshDependency`, the framework wires it into the `McpMeshTool` proxy's deserialization type at registration time. The first call returns the typed value directly — no extra `setReturnType(...)` step required:
+
+```java
+@Service
+@MeshDependsOn(@MeshDependency(
+    capability   = "get_user_profile",
+    expectedType = UserProfileResponse.class))
+public class StaffSyncService {
+    public StaffSyncService(@Qualifier("get_user_profile") McpMeshTool<UserProfileResponse> profile) {
+        // profile.call(...) returns UserProfileResponse, not Map<String,Object>
+    }
+}
+```
+
+If you omit `expectedType` and the `@Qualifier`-injected field is declared as `McpMeshTool<UserProfileResponse>`, deserialization to that generic type is best-effort and the first call may return `Map<String, Object>` until something else (a `@MeshRoute` parameter with the same generic, an explicit `setReturnType(...)`) primes the proxy. Setting `expectedType` is the supported way to make typed responses work upfront from a `@MeshDependsOn` surface.
+
+### Discovery caveat — `@Bean` factory methods returning a supertype
+
+`@MeshDependsOn` is read off the bean's resolved class via Spring's bean-definition metadata, then `AnnotationUtils.findAnnotation` walks the class and its supertypes. This covers `@Component`-scanned beans AND `@Bean` factory methods — both surfaces work as expected when the annotation is on the class Spring sees.
+
+| Shape | Discovered? |
+| --- | --- |
+| `@Component @MeshDependsOn(...) class Foo` | ✓ |
+| `@Bean public ConcreteFoo foo()` where `@MeshDependsOn` is on `ConcreteFoo` | ✓ — Spring's `ResolvableType` reports the concrete return type |
+| `@Bean public Foo foo()` where `@MeshDependsOn` is on `Foo` (or any supertype `Foo` extends) | ✓ |
+| `@Bean public Foo foo() { return new ConcreteFoo(); }` where `@MeshDependsOn` is ONLY on `ConcreteFoo` | ✗ — `findAnnotation` walks supertypes of the declared return type, not subtypes of it |
+
+Only the last shape is a real gap. If your factory method declares a supertype return, either narrow the declared return type to the concrete class, or place `@MeshDependsOn` on the supertype itself (or on the `@Configuration` class).
+
 ## `McpMeshTool<T>` API Reference
 
 The `McpMeshTool<T>` interface is the primary way to interact with remote capabilities. The type parameter `T` indicates the expected return type.

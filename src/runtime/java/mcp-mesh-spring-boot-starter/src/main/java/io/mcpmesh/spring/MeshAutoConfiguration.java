@@ -15,13 +15,17 @@ import io.mcpmesh.spring.web.MeshA2ARegistry;
 import io.mcpmesh.spring.web.MeshA2ASseDispatcher;
 import io.mcpmesh.spring.web.MeshA2ASseHeaderFilter;
 import io.mcpmesh.spring.web.MeshA2ATaskStore;
+import io.mcpmesh.spring.web.MeshDependency;
+import io.mcpmesh.spring.web.MeshDependsOn;
 import io.mcpmesh.spring.web.MeshRouteRegistry;
+import io.mcpmesh.types.McpMeshTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -39,8 +43,11 @@ import org.springframework.web.servlet.function.ServerResponse;
 import io.mcpmesh.spring.tracing.TracingFilter;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -443,10 +450,19 @@ public class MeshAutoConfiguration {
      * {@code @Component} beans that autowired {@code MeshRuntime}, which
      * Spring 2.6+ rejects as {@code BeanCurrentlyInCreationException}
      * (issue #937).
+     *
+     * <p>The returned bean is a {@link MeshAgentSpecFinalizer} so other
+     * post-init beans (in particular {@link #meshCapabilityBeanRegistrar})
+     * can call {@link MeshAgentSpecFinalizer#ensureFinalized()} explicitly
+     * to guarantee the spec is fully built before they read it. Spring does
+     * NOT order {@link SmartInitializingSingleton#afterSingletonsInstantiated()}
+     * callbacks across beans (no {@code @DependsOn}/{@code Ordered} honoured
+     * there), so the explicit call is the only reliable ordering mechanism —
+     * see W2 in PR #1086 review.
      */
     @Bean
     @ConditionalOnMissingBean(name = "meshAgentSpecFinalizer")
-    public SmartInitializingSingleton meshAgentSpecFinalizer(
+    public MeshAgentSpecFinalizer meshAgentSpecFinalizer(
             MeshRuntime runtime,
             MeshToolRegistry toolRegistry,
             MeshLlmRegistry llmRegistry,
@@ -454,9 +470,134 @@ public class MeshAutoConfiguration {
             ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
             ObjectProvider<MeshA2ARegistry> a2aRegistryProvider,
             A2AConsumerBeanPostProcessor a2aConsumerBeanPostProcessor) {
-        return () -> finalizeAgentSpec(runtime.getAgentSpec(), toolRegistry,
-            llmRegistry, objectMapper, routeRegistryProvider, a2aRegistryProvider,
-            a2aConsumerBeanPostProcessor);
+        return new MeshAgentSpecFinalizer(() -> finalizeAgentSpec(runtime.getAgentSpec(),
+            toolRegistry, llmRegistry, objectMapper, routeRegistryProvider,
+            a2aRegistryProvider, a2aConsumerBeanPostProcessor));
+    }
+
+    /**
+     * Issue #1086: register a singleton {@link McpMeshTool} bean per
+     * {@code @MeshDependsOn}-declared capability so Spring-managed beans can
+     * inject the proxy by {@code @Qualifier("capability")} from anywhere —
+     * services, filters, schedulers, plain {@code @Component}s.
+     *
+     * <p>This must run BEFORE user singletons are instantiated, otherwise a
+     * {@code @Autowired @Qualifier("cap")} field on a user bean blows up
+     * with {@code NoSuchBeanDefinitionException} before the late
+     * {@link SmartInitializingSingleton} would have had a chance to register
+     * anything. We implement it as a {@link MeshCapabilityBeanRegistrar} —
+     * a {@code static} factory method ensures the post-processor is
+     * instantiated early, like the existing
+     * {@code meshToolBeanPostProcessor} / {@code meshA2ABeanPostProcessor}
+     * factories.
+     *
+     * <p>Source coverage: only {@code @MeshDependsOn} capabilities are
+     * registered up-front. Capabilities declared via {@code @MeshTool} /
+     * {@code @MeshRoute(dependencies=)} / {@code @MeshA2A(dependencies=)}
+     * already have direct injection paths ({@code @MeshTool} method
+     * parameters, {@code @MeshInject} on controller-method parameters) and
+     * don't need a globally-named bean. The late
+     * {@link #meshCapabilityBeanRegistrar} fills in any remaining
+     * capabilities so the bean factory is complete at runtime, but does NOT
+     * participate in the autowire phase.
+     *
+     * <p>Conflict policy: if a bean name equal to a capability is already
+     * registered (user has a {@code @Bean} or {@code @Component} that owns
+     * that name), the user's bean wins and we log a WARN.
+     */
+    @Bean
+    @ConditionalOnMissingBean(name = "meshDependsOnBeanRegistrar")
+    public static MeshCapabilityBeanRegistrar meshDependsOnBeanRegistrar() {
+        return new MeshCapabilityBeanRegistrar();
+    }
+
+    /**
+     * Late-phase complement to {@link #meshDependsOnBeanRegistrar}: walks the
+     * fully-built {@link AgentSpec} and registers a singleton
+     * {@link McpMeshTool} bean for every capability declared by any of the
+     * four sources that wasn't already registered. This keeps the bean
+     * factory's view of mesh dependencies complete at runtime, even though
+     * autowire-time resolution is handled by the earlier post-processor.
+     *
+     * <p>Runs as a {@link SmartInitializingSingleton} but does NOT rely on
+     * SIS ordering — {@link MeshAgentSpecFinalizer#ensureFinalized()} is
+     * invoked explicitly so the spec is fully built before this code reads
+     * it. Spring's {@code @DependsOn} only orders bean CREATION, not the
+     * {@code afterSingletonsInstantiated()} callbacks themselves, so the
+     * earlier {@code @DependsOn("meshAgentSpecFinalizer")} was a no-op for
+     * the actual ordering concern here.
+     */
+    @Bean
+    @ConditionalOnMissingBean(name = "meshCapabilityBeanRegistrar")
+    public SmartInitializingSingleton meshCapabilityBeanRegistrar(
+            MeshDependencyInjector injector,
+            ConfigurableListableBeanFactory beanFactory,
+            MeshRuntime runtime,
+            MeshAgentSpecFinalizer finalizer,
+            ObjectProvider<MeshRouteRegistry> routeRegistryProvider,
+            ObjectProvider<MeshA2ARegistry> a2aRegistryProvider) {
+        return () -> {
+            // Idempotent — fires the spec finalization if no other
+            // SmartInitializingSingleton has already done so. Whichever
+            // callback fires first wins; the other is a no-op.
+            finalizer.ensureFinalized();
+
+            // Merge the (capability -> expectedType) views from every source
+            // that tracks it. Without this the late-phase path would call
+            // injector.getToolProxy(capability) without a return type, and a
+            // downstream @Qualifier("cap") McpMeshTool<Foo> consumer would
+            // receive an untyped proxy returning Map<String, Object> instead
+            // of Foo — even though the source @MeshDependency declared
+            // expectedType=Foo.class. @MeshDependsOn already feeds expectedType
+            // into the early-phase registrar; this lambda is the symmetric
+            // wiring for the @MeshRoute / @MeshA2A cross-source paths.
+            Map<String, Class<?>> expectedTypes = new LinkedHashMap<>();
+            MeshRouteRegistry routeRegistry = routeRegistryProvider.getIfAvailable();
+            if (routeRegistry != null) {
+                expectedTypes.putAll(routeRegistry.getExpectedTypesByCapability());
+            }
+            MeshA2ARegistry a2aRegistry = a2aRegistryProvider.getIfAvailable();
+            if (a2aRegistry != null) {
+                for (Map.Entry<String, Class<?>> e
+                        : a2aRegistry.getExpectedTypesByCapability().entrySet()) {
+                    expectedTypes.putIfAbsent(e.getKey(), e.getValue());
+                }
+            }
+
+            AgentSpec spec = runtime.getAgentSpec();
+            // includeProducers=false: don't register McpMeshTool proxy beans
+            // for capabilities the agent itself produces — those would be
+            // self-loop proxies the agent never consumes through the registry.
+            Set<String> capabilities = collectKnownCapabilities(spec.getTools(), false);
+            int registered = 0;
+            int conflicts = 0;
+            for (String capability : capabilities) {
+                if (beanFactory.containsBean(capability)) {
+                    // Either the user owns that name, or our earlier
+                    // post-processor already registered it. Either way: leave it.
+                    continue;
+                }
+                if (beanFactory.containsSingleton(capability)) {
+                    continue;
+                }
+                Class<?> expectedType = expectedTypes.get(capability);
+                McpMeshTool<?> proxy = (expectedType != null)
+                    ? injector.getToolProxy(capability, expectedType)
+                    : injector.getToolProxy(capability);
+                try {
+                    beanFactory.registerSingleton(capability, proxy);
+                    registered++;
+                } catch (IllegalStateException e) {
+                    log.warn("Skipping McpMeshTool bean registration for capability '{}': {}",
+                        capability, e.getMessage());
+                    conflicts++;
+                }
+            }
+            if (registered > 0 || conflicts > 0) {
+                log.info("Late-phase: registered {} additional McpMeshTool bean(s) "
+                    + "(skipped {} due to name conflict)", registered, conflicts);
+            }
+        };
     }
 
     @Bean
@@ -738,6 +879,14 @@ public class MeshAutoConfiguration {
         // @Component was created during the singleton init phase.
         addA2ADependencies(allTools, a2aRegistryProvider);
 
+        // Issue #1086: 4th dependency source — class-level @MeshDependsOn on
+        // arbitrary @Component beans (services, filters, schedulers, etc.).
+        // Folds these capabilities into a synthetic __mesh_depends_on_deps
+        // tool so the heartbeat path wires proxies the same way it does for
+        // @MeshTool / @MeshRoute / @MeshA2A. Dedup is by capability name across
+        // all four sources — see collectKnownCapabilities().
+        addMeshDependsOnDependencies(allTools);
+
         if (consumerOnly) {
             MeshRouteRegistry routeRegistry = routeRegistryProvider.getIfAvailable();
             boolean hasRoutes = routeRegistry != null && routeRegistry.hasRoutes();
@@ -792,6 +941,131 @@ public class MeshAutoConfiguration {
         syntheticTool.setDependencies(deps);
         tools.add(syntheticTool);
         log.info("Added {} @MeshA2A dependencies to agent registration", deps.size());
+    }
+
+    /**
+     * Issue #1086: Add class-level {@code @MeshDependsOn} declarations as a
+     * synthetic {@code __mesh_depends_on_deps} tool. Mirrors
+     * {@link #addRouteDependencies} and {@link #addA2ADependencies} so
+     * Spring-managed beans outside {@code @RestController} handler methods
+     * (services, filters, schedulers, plain {@code @Component}s) can declare
+     * mesh dependencies and have them resolved by the registry's
+     * dependency-resolution mechanism.
+     *
+     * <p>Dedup runs against the capabilities already accumulated on
+     * {@code tools} — the same capability declared via {@code @MeshTool} or
+     * {@code @MeshRoute(dependencies=)} or {@code @MeshA2A(dependencies=)}
+     * wins; {@code @MeshDependsOn} entries are silently dropped when their
+     * capability already appears in any prior source. Within
+     * {@code @MeshDependsOn} itself the first occurrence wins.
+     */
+    private void addMeshDependsOnDependencies(List<AgentSpec.ToolSpec> tools) {
+        Map<String, Object> beans = applicationContext.getBeansWithAnnotation(MeshDependsOn.class);
+        if (beans.isEmpty()) {
+            return;
+        }
+
+        // includeProducers=true: a @MeshDependsOn on a capability the agent
+        // itself produces (@MeshTool capability=...) is dropped — the agent
+        // doesn't need a registry-resolved dependency to call its own tool.
+        Set<String> seenCapabilities = collectKnownCapabilities(tools, true);
+        List<AgentSpec.DependencySpec> deps = new ArrayList<>();
+        // Issue #547 Phase 4: cluster-wide strict knob promotes WARN→BLOCK on
+        // the consumer side too. Same source-of-truth as MeshRouteRegistry.
+        boolean clusterStrict = io.mcpmesh.spring.MeshSchemaSupport.clusterStrictEnabled();
+
+        for (Object bean : beans.values()) {
+            Class<?> targetClass = org.springframework.aop.support.AopUtils.getTargetClass(bean);
+            MeshDependsOn annotation = org.springframework.core.annotation.AnnotationUtils
+                .findAnnotation(targetClass, MeshDependsOn.class);
+            if (annotation == null) {
+                continue;
+            }
+            for (MeshDependency dep : annotation.value()) {
+                String capability = dep.capability();
+                if (capability == null || capability.isBlank()) {
+                    log.warn("@MeshDependsOn on {} has @MeshDependency with empty capability — skipping",
+                        targetClass.getName());
+                    continue;
+                }
+                if (!seenCapabilities.add(capability)) {
+                    log.debug("@MeshDependsOn capability '{}' on {} already declared by another source — skipping",
+                        capability, targetClass.getName());
+                    continue;
+                }
+                AgentSpec.DependencySpec agentDep = new AgentSpec.DependencySpec();
+                agentDep.setCapability(capability);
+                if (dep.tags().length > 0) {
+                    agentDep.setTags(String.join(",", dep.tags()));
+                }
+                if (dep.version() != null && !dep.version().isEmpty()) {
+                    agentDep.setVersion(dep.version());
+                }
+                // Issue #547: honour expectedType / schemaMode the same way
+                // @MeshRoute does. Default-sentinel (Void.class) means "not
+                // set" — same convention as MeshRouteRegistry.DependencySpec
+                // (see fromAnnotation).
+                Class<?> expectedType = dep.expectedType();
+                if (expectedType == Void.class || expectedType == void.class) {
+                    expectedType = null;
+                }
+                MeshRouteRegistry.applySchemaMatching(
+                    agentDep, capability, expectedType, dep.schemaMode(), clusterStrict);
+                deps.add(agentDep);
+            }
+        }
+
+        if (deps.isEmpty()) {
+            return;
+        }
+
+        AgentSpec.ToolSpec syntheticTool = new AgentSpec.ToolSpec();
+        syntheticTool.setFunctionName("__mesh_depends_on_deps");
+        syntheticTool.setCapability("__mesh_depends_on_deps");
+        syntheticTool.setDescription("Synthetic tool for @MeshDependsOn dependency resolution");
+        syntheticTool.setDependencies(deps);
+        tools.add(syntheticTool);
+        log.info("Added {} @MeshDependsOn dependencies to agent registration", deps.size());
+    }
+
+    /**
+     * Issue #1086: collect every capability already declared on the partially
+     * built tool list. Used by {@link #addMeshDependsOnDependencies} to skip
+     * re-declaring a capability that the user already attached to a
+     * {@code @MeshTool}, {@code @MeshRoute}, or {@code @MeshA2A} surface.
+     *
+     * <p>{@code includeProducers} controls whether the producer side of each
+     * tool spec (the {@code @MeshTool} capability name itself) participates
+     * in the dedup set. The dependency-folding path
+     * ({@link #addMeshDependsOnDependencies}) passes {@code true} so a
+     * {@code @MeshDependsOn} on a capability the agent itself produces is
+     * silently dropped (re-declaring it as a dependency creates a
+     * redundant self-edge). The bean-registration path
+     * ({@code meshCapabilityBeanRegistrar}) passes {@code false} so we
+     * still register {@code McpMeshTool} proxy beans for every consumed
+     * capability without trying to also register one for our own producer
+     * capabilities — those would be unused self-loops since the agent
+     * dispatches its own producer methods directly, not through a proxy.
+     */
+    private static Set<String> collectKnownCapabilities(
+            List<AgentSpec.ToolSpec> tools, boolean includeProducers) {
+        Set<String> seen = new LinkedHashSet<>();
+        for (AgentSpec.ToolSpec tool : tools) {
+            if (includeProducers && tool.getCapability() != null
+                    && !tool.getCapability().isEmpty()) {
+                seen.add(tool.getCapability());
+            }
+            List<AgentSpec.DependencySpec> deps = tool.getDependencies();
+            if (deps == null) {
+                continue;
+            }
+            for (AgentSpec.DependencySpec dep : deps) {
+                if (dep.getCapability() != null && !dep.getCapability().isEmpty()) {
+                    seen.add(dep.getCapability());
+                }
+            }
+        }
+        return seen;
     }
 
     /**

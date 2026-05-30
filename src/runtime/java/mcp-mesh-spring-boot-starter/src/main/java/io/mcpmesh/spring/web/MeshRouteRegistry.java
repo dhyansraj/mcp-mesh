@@ -13,6 +13,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -137,6 +138,35 @@ public class MeshRouteRegistry {
     }
 
     /**
+     * Surface the {@code expectedType} declared on each {@code @MeshDependency}
+     * across all registered routes. Returns the Class<?> reference for every
+     * capability whose source annotation set {@code expectedType} to a
+     * non-default value (i.e. not {@code Void.class}).
+     *
+     * <p>Used by the auto-configuration late-phase bean registrar to wire
+     * typed deserialisation into the {@link io.mcpmesh.types.McpMeshTool}
+     * singleton beans — without this, a
+     * {@code @Qualifier("cap") McpMeshTool<Foo>} consumer receives an
+     * untyped proxy that returns {@code Map<String, Object>} instead of
+     * {@code Foo}.
+     *
+     * @return map of capability name to expected return Class; capabilities
+     *         without expectedType are absent from the map
+     */
+    public Map<String, Class<?>> getExpectedTypesByCapability() {
+        Map<String, Class<?>> result = new LinkedHashMap<>();
+        for (RouteMetadata route : routesByPath.values()) {
+            for (DependencySpec dep : route.getDependencies()) {
+                Class<?> et = dep.getExpectedType();
+                if (et != null && et != Void.class && et != void.class) {
+                    result.putIfAbsent(dep.getCapability(), et);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
      * Apply issue #547 schema-aware matching fields to the outgoing AgentSpec
      * dependency. Mirrors the Python ({@code mesh.tool} decorator) and TypeScript
      * (Zod expectedSchema) behaviors:
@@ -153,8 +183,34 @@ public class MeshRouteRegistry {
      */
     private static void applySchemaMatching(
             AgentSpec.DependencySpec target, DependencySpec source, boolean clusterStrict) {
-        Class<?> expectedType = source.getExpectedType();
-        SchemaMode mode = source.getSchemaMode();
+        applySchemaMatching(target, source.getCapability(), source.getExpectedType(),
+            source.getSchemaMode(), clusterStrict);
+    }
+
+    /**
+     * Canonical schema-aware matching helper, shared between the
+     * {@code @MeshRoute} and {@code @MeshDependsOn} wiring paths (issue #547,
+     * issue #1086). Both surfaces must stamp {@code expectedSchemaCanonical},
+     * {@code expectedSchemaHash}, and {@code matchMode} the same way so the
+     * registry's schema stage sees identical shapes regardless of the source.
+     *
+     * <p>Caller passes raw inputs (capability name, expected type class,
+     * schema mode, cluster-strict flag) so {@code @MeshDependsOn}'s code path
+     * — which reads these off {@link MeshDependency} directly — doesn't need
+     * to materialise a {@link DependencySpec} intermediate.
+     *
+     * @param target        the outgoing {@link AgentSpec.DependencySpec} to mutate
+     * @param capability    capability name (for log context)
+     * @param expectedType  expected return type, or {@code null} when unset
+     * @param mode          requested {@link SchemaMode} (treated as {@link SchemaMode#NONE} when null)
+     * @param clusterStrict cluster-wide strict knob (typically from env var)
+     */
+    public static void applySchemaMatching(
+            AgentSpec.DependencySpec target,
+            String capability,
+            Class<?> expectedType,
+            SchemaMode mode,
+            boolean clusterStrict) {
         boolean modeRequested = mode != null && mode != SchemaMode.NONE;
 
         if (expectedType == null && !modeRequested) {
@@ -162,7 +218,7 @@ public class MeshRouteRegistry {
         }
         if (expectedType == null) {
             log.warn("Dependency '{}' sets schemaMode={} but no expectedType — ignoring schema match",
-                source.getCapability(), mode);
+                capability, mode);
             return;
         }
         // Default mode SUBSET when caller provides expectedType only (parity with Python).
@@ -171,11 +227,11 @@ public class MeshRouteRegistry {
         String rawJson = MeshSchemaSupport.generateRawSchemaJson(expectedType);
         if (rawJson == null) {
             log.warn("Dependency '{}': failed to generate JSON Schema for expectedType {} — skipping schema match",
-                source.getCapability(), expectedType.getName());
+                capability, expectedType.getName());
             return;
         }
         MeshCoreBridge.NormalizeResult result = MeshSchemaSupport.normalizeWithPolicy(
-            rawJson, "java", "dependency '" + source.getCapability() + "' expected schema",
+            rawJson, "java", "dependency '" + capability + "' expected schema",
             clusterStrict, true);
         if (result == null) {
             return;
