@@ -30,6 +30,37 @@ import java.lang.annotation.Target;
  * }
  * }</pre>
  *
+ * <h2>Response model vs tool output</h2>
+ * <p>Three types are involved in an LLM-powered tool, and they are independent:
+ * <ul>
+ *   <li>The {@code Class<T>} passed to {@code llm.generate(..., T.class)} is the
+ *       <b>response model</b> — the schema the LLM must <i>emit</i>, which the
+ *       provider's structured-output schema is built from and which the result
+ *       is validated/deserialized against.</li>
+ *   <li>{@link MeshTool#outputType()} is the tool's published {@code outputSchema}
+ *       — what <i>callers</i> receive.</li>
+ *   <li>The method's return type is what the method actually returns.</li>
+ * </ul>
+ * <p>Because they are separate, a tool can have the LLM emit only a focused
+ * subset of fields while the tool returns a fuller payload that combines those
+ * LLM-produced fields with deterministic, function-computed fields:
+ * <pre>{@code
+ * public record AnalystOutput(String summary, java.util.List<String> riskFlags) {}      // LLM emits this (focused)
+ * public record RunDailyResult(String email, String date, double totalValue,
+ *                              String summary, java.util.List<String> riskFlags) {}      // tool returns this
+ *
+ * @MeshLlm(
+ *     providerSelector = @Selector(capability = "llm", tags = {"+openai"}),
+ *     systemPrompt = "classpath://prompts/analyst.ftl"
+ * )
+ * @MeshTool(capability = "analysis.run_daily", outputType = RunDailyResult.class)        // tool outputSchema
+ * public RunDailyResult runDaily(RunDailyContext ctx, MeshLlmAgent llm) {
+ *     AnalystOutput analyst = llm.generate("Analyze the portfolio", AnalystOutput.class); // LLM emits the focused schema
+ *     return new RunDailyResult(ctx.email(), today(), ctx.totalValue(),
+ *                               analyst.summary(), analyst.riskFlags());                   // tool returns the full payload
+ * }
+ * }</pre>
+ *
  * <h2>System Prompts</h2>
  * <p>System prompts can be:
  * <ul>

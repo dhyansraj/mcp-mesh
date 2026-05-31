@@ -92,6 +92,31 @@ AnalysisResult result = llm.request()
     .generate(AnalysisResult.class);
 ```
 
+### Separating LLM output from deterministic fields
+
+The class passed to `generate(X.class)` is the **response model** — the schema the
+LLM must emit and is validated against. It is independent of `@MeshTool(outputType = Y.class)`,
+which sets the tool's published output schema (what callers receive). Have the LLM emit only
+a focused subset of fields, then return a fuller payload that combines those with
+deterministic, function-computed fields:
+
+```java
+public record AnalystOutput(String summary, List<String> riskFlags) {}            // LLM emits this (focused)
+public record RunDailyResult(String email, String date, double totalValue,
+                             String summary, List<String> riskFlags) {}           // tool returns this
+
+@MeshLlm(
+    providerSelector = @Selector(capability = "llm", tags = {"+openai"}),
+    systemPrompt = "classpath:prompts/analyst.ftl"
+)
+@MeshTool(capability = "analysis.run_daily", outputType = RunDailyResult.class)   // tool outputSchema
+public RunDailyResult runDaily(RunDailyContext ctx, MeshLlmAgent llm) {
+    AnalystOutput analyst = llm.generate("Analyze the portfolio", AnalystOutput.class);  // LLM emits the focused schema
+    return new RunDailyResult(ctx.email(), today(), ctx.totalValue(),
+                              analyst.summary(), analyst.riskFlags());            // tool returns the full payload
+}
+```
+
 ### With System Prompt Override
 
 ```java

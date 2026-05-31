@@ -280,6 +280,11 @@ if (llm != null && llm.isAvailable()) { /* ... */ }
 llm.request().lastMeta();
 ```
 
+The class passed to `generate(X.class)` is the **response model** the LLM must emit, and is
+independent of `@MeshTool(outputType = Y.class)` (the tool's published output schema) and the
+method's return type — so a tool can have the LLM emit a focused subset and return a fuller
+payload that adds deterministic fields. See `meshctl man llm --java` for a worked example.
+
 ## @MeshLlmProvider
 
 Creates a zero-code LLM provider. No implementation needed - the annotation handles everything.
