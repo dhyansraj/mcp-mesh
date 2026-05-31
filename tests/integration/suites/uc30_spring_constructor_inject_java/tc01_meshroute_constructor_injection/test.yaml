@@ -1,0 +1,147 @@
+# tc01_meshroute_constructor_injection — issue #1088.
+#
+# Proves a Java Spring @Service can CONSTRUCTOR-inject
+# @Qualifier("greeting_service") McpMeshTool<GreetingResponse> for a capability
+# DECLARED via @MeshRoute(dependencies=...). Before the fix the early-phase
+# BeanDefinitionRegistryPostProcessor only registered proxy beans for
+# @MeshDependsOn, so the constructor failed with NoSuchBeanDefinitionException
+# and the Spring context never refreshed — the consumer never appeared in
+# /agents. The healthy-poll therefore IS the regression signal: pre-fix it
+# times out and the log tail shows the Spring stack trace.
+#
+# GRANULAR: spring-route-consumer declares ONLY a @MeshRoute dependency (no
+# @MeshA2A anywhere), isolating the @MeshRoute declaration source from the
+# unrelated route+a2a coexistence interaction.
+#
+# After the fix: the consumer boots healthy AND `forward_via_route` returns the
+# provider's greeting ("hello alice"), proving the @MeshRoute-declared,
+# constructor-injected, typed proxy is live.
+
+name: "Spring constructor injection of @MeshRoute-declared capability (#1088)"
+description: "Java @Service constructor-injects @Qualifier McpMeshTool for a @MeshRoute-declared cap; agent boots healthy and the typed proxy is live"
+tags:
+  - java
+  - spring
+  - di
+  - constructor-injection
+  - issue-1088
+  - smoke
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/greeting-provider /workspace/
+      cp -rL /uc-artifacts/spring-route-consumer /workspace/
+
+  - name: "Install greeting-provider deps"
+    handler: pip-install
+    path: /workspace/greeting-provider
+
+  - name: "Install spring-route-consumer deps"
+    handler: maven-install
+    path: /workspace/spring-route-consumer
+    timeout: 600
+
+  - routine: start_registry
+
+  - name: "Start greeting-provider (Python, port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start greeting-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for greeting-provider to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null \
+          | jq -r '.agents[]|select(.name=="greeting-provider")|.status' 2>/dev/null || echo "")
+        [ "$STATUS" = "healthy" ] && { echo "greeting-provider healthy after ${i}x2s"; exit 0; }
+        sleep 2
+      done
+      echo "ERROR: greeting-provider not healthy within 120s (last status='$STATUS')"
+      meshctl logs greeting-provider 2>&1 | tail -120 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start spring-route-consumer (Java, port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/spring-route-consumer --env MCP_MESH_HTTP_PORT=9201 -d
+
+  # On the #1088 bug the consumer never appears in /agents at all (the Spring
+  # context refresh fails because the @Qualifier constructor cannot resolve the
+  # @MeshRoute-declared greeting_service proxy bean). This loop timing out —
+  # with the log tail showing NoSuchBeanDefinitionException — IS the pre-fix
+  # regression signal.
+  - name: "Wait for spring-route-consumer to be healthy (proves the ctor injection resolved early)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null \
+          | jq -r '.agents[]|select(.name=="spring-route-consumer")|.status' 2>/dev/null || echo "")
+        [ "$STATUS" = "healthy" ] && { echo "spring-route-consumer healthy after ${i}x2s"; exit 0; }
+        sleep 2
+      done
+      echo "ERROR: spring-route-consumer not healthy within 120s (last status='$STATUS')"
+      echo "===== spring-route-consumer log (last 120 lines) ====="
+      meshctl logs spring-route-consumer 2>&1 | tail -120 || true
+      exit 1
+    timeout: 150
+
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  # Dependency resolution is async (heartbeat-driven). Poll the call until the
+  # @MeshRoute-declared greeting_service proxy goes live, bounded ~60s — this
+  # mirrors the heartbeat-tolerant polling used elsewhere in the suite and is
+  # NOT an assertion weakening: the final captured response is still asserted
+  # to carry the real provider greeting.
+  - name: "Call forward_via_route until the @MeshRoute-declared proxy is live"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=""
+      for i in $(seq 1 30); do
+        RESP=$(meshctl call forward_via_route '{"name":"alice"}' --raw 2>&1 || true)
+        echo "$RESP" | grep -q "hello alice" && break
+        sleep 2
+      done
+      echo "$RESP"
+    capture: route_response
+    timeout: 90
+
+  - name: "Capture consumer log (negative NoSuchBeanDefinitionException guard + resolution state)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl logs spring-route-consumer 2>&1 | tail -300
+    capture: consumer_log
+
+assertions:
+  - expr: "${captured.agent_list} contains 'greeting-provider'"
+    message: "greeting-provider should be registered"
+  - expr: "${captured.agent_list} contains 'spring-route-consumer'"
+    message: "spring-route-consumer should be registered (proves the Spring context refreshed)"
+
+  # Negative guard: a healthy boot must not have logged the pre-fix failure.
+  - expr: "${captured.consumer_log} not contains 'NoSuchBeanDefinitionException'"
+    message: "consumer startup must NOT log NoSuchBeanDefinitionException (the #1088 pre-fix symptom)"
+
+  # End-to-end: the @MeshRoute-declared, constructor-injected, typed proxy is live.
+  - expr: "${captured.route_response} contains 'hello alice'"
+    message: "forward_via_route should return the provider greeting 'hello alice'"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace
