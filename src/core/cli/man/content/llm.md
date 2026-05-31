@@ -58,7 +58,7 @@ async def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistRes
 
 **Note**: `provider` and `filter` use the capability selector syntax (`capability`, `tags`, `version`). See `meshctl man capabilities` for details.
 
-**Note**: Response format is determined by the function's return type annotation, not a parameter. See [Response Formats](#response-formats).
+**Note**: The return type annotation always drives the tool's `outputSchema` (what callers receive). The LLM-emitted/validated schema follows that return annotation by default, but is overridden by `response_model` when provided. See [Response Formats](#response-formats) and [Focusing the LLM Schema with `response_model`](#focusing-the-llm-schema-with-response_model).
 
 ## Calling llm()
 
@@ -285,7 +285,7 @@ at call time, use the `context=` argument on `llm()` — see
 
 ## Response Formats
 
-Response format is determined by the **return type annotation** - not a decorator parameter.
+The **return type annotation** always drives the tool's `outputSchema` (what callers receive). The LLM-emitted/validated schema follows the return annotation by default, and is overridden by `response_model` when provided — see [Focusing the LLM Schema with `response_model`](#focusing-the-llm-schema-with-response_model).
 
 | Return Type        | Output          | Description                   |
 | ------------------ | --------------- | ----------------------------- |

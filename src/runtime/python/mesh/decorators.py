@@ -2664,8 +2664,9 @@ def llm(
                         inspect.isclass(output_type) and issubclass(output_type, BaseModel)
                     ):
                         warnings.warn(
-                            f"Function '{func.__name__}' decorated with @mesh.llm should return a Pydantic BaseModel subclass, "
-                            f"got {output_type}. This may cause validation errors at runtime.",
+                            f"@mesh.llm tool '{func.__name__}': the resolved LLM response schema {output_type} "
+                            f"is not a Pydantic BaseModel subclass (it comes from response_model= when set, "
+                            f"otherwise the function return annotation). LLM structured-output validation may fail at runtime.",
                             UserWarning,
                             stacklevel=2,
                         )

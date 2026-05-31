@@ -139,7 +139,7 @@ class TestMeshLlmResponseModel:
     def test_non_basemodel_response_model_warns(self):
         """A response_model that isn't a BaseModel triggers the BaseModel warning."""
 
-        with pytest.warns(UserWarning, match="should return a Pydantic BaseModel"):
+        with pytest.warns(UserWarning, match="not a Pydantic BaseModel subclass"):
 
             @mesh.llm(
                 provider={"capability": "llm"},
