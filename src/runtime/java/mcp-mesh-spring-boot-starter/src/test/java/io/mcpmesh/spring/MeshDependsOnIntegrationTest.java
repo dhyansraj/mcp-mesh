@@ -366,6 +366,71 @@ class MeshDependsOnIntegrationTest {
         @Bean public A2aTypedSurface a2aTypedSurface() { return new A2aTypedSurface(); }
     }
 
+    // Issue #1088: real constructor injection driven purely by a
+    // @MeshRoute-declared capability (no @MeshDependsOn anywhere). The
+    // early-phase BeanDefinitionRegistryPostProcessor must register the
+    // route_typed_cap McpMeshTool bean BEFORE this consumer's constructor is
+    // autowired, and the proxy's returnType must reflect the route's
+    // expectedType.
+    @Service
+    static class RouteCapConstructorConsumer {
+        final McpMeshTool<RouteTypedResponse> tool;
+        RouteCapConstructorConsumer(
+                @Qualifier("route_typed_cap") McpMeshTool<RouteTypedResponse> tool) {
+            this.tool = tool;
+        }
+    }
+
+    @Configuration
+    @MeshAgent(name = "route-ctor-inject-agent")
+    static class RouteConstructorInjectAgentConfig {
+        @Bean public RouteTypedController routeTypedController() { return new RouteTypedController(); }
+        @Bean public RouteCapConstructorConsumer routeCapConstructorConsumer(
+                @Qualifier("route_typed_cap") McpMeshTool<RouteTypedResponse> tool) {
+            return new RouteCapConstructorConsumer(tool);
+        }
+    }
+
+    // Issue #1088: analogous constructor-injection fixture for the @MeshA2A
+    // path. Capability declared only on the @MeshA2A surface; a separate
+    // @Service constructor-injects the qualified proxy.
+    @Service
+    static class A2aCapConstructorConsumer {
+        final McpMeshTool<A2aTypedResponse> tool;
+        A2aCapConstructorConsumer(
+                @Qualifier("a2a_typed_cap") McpMeshTool<A2aTypedResponse> tool) {
+            this.tool = tool;
+        }
+    }
+
+    @Configuration
+    @MeshAgent(name = "a2a-ctor-inject-agent")
+    static class A2aConstructorInjectAgentConfig {
+        @Bean public A2aTypedSurface a2aTypedSurface() { return new A2aTypedSurface(); }
+        @Bean public A2aCapConstructorConsumer a2aCapConstructorConsumer(
+                @Qualifier("a2a_typed_cap") McpMeshTool<A2aTypedResponse> tool) {
+            return new A2aCapConstructorConsumer(tool);
+        }
+    }
+
+    // Issue #1088: name-conflict guard for a @MeshRoute-declared capability.
+    // A user @Bean owns the capability name "route_conflict_cap"; the
+    // early-phase registrar must NOT overwrite it and must emit the ERROR
+    // diagnostic naming @MeshRoute as the source.
+    @RestController
+    static class RouteConflictController {
+        @PostMapping("/route-conflict")
+        @MeshRoute(dependencies = @MeshDependency(capability = "route_conflict_cap"))
+        public String handle() { return "ok"; }
+    }
+
+    @Configuration
+    @MeshAgent(name = "route-conflict-agent")
+    static class RouteConflictAgentConfig {
+        @Bean public RouteConflictController routeConflictController() { return new RouteConflictController(); }
+        @Bean(name = "route_conflict_cap") public UserOwnedBean userOwnedBean() { return new UserOwnedBean(); }
+    }
+
     private final WebApplicationContextRunner baseRunner = new WebApplicationContextRunner()
         .withConfiguration(AutoConfigurations.of(MeshAutoConfiguration.class,
             MeshRouteAutoConfiguration.class))
@@ -745,6 +810,88 @@ class MeshDependsOnIntegrationTest {
                     .as("proxy returnType must reflect expectedType declared on the @MeshA2A @MeshDependency")
                     .isEqualTo(A2aTypedResponse.class);
             });
+    }
+
+    @Test
+    @DisplayName("#1088: @MeshRoute-declared capability resolves @Qualifier constructor injection")
+    void meshRouteCapabilityResolvesConstructorInjection() throws Exception {
+        baseRunner
+            .withUserConfiguration(RouteConstructorInjectAgentConfig.class)
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                RouteCapConstructorConsumer consumer =
+                    context.getBean(RouteCapConstructorConsumer.class);
+                assertThat(consumer)
+                    .as("consumer bean must be created with the @MeshRoute capability proxy injected")
+                    .isNotNull();
+                assertThat(consumer.tool)
+                    .as("route_typed_cap proxy must be constructor-injected")
+                    .isNotNull();
+                assertThat(consumer.tool.getCapability()).isEqualTo("route_typed_cap");
+
+                // The early-phase registrar must thread expectedType from the
+                // @MeshRoute @MeshDependency into the proxy's returnType.
+                Object bean = context.getBean("route_typed_cap");
+                assertThat(bean).isInstanceOf(McpMeshToolProxy.class);
+                Field f = McpMeshToolProxy.class.getDeclaredField("returnType");
+                f.setAccessible(true);
+                assertThat(f.get(bean))
+                    .as("injected proxy returnType must reflect @MeshRoute expectedType")
+                    .isEqualTo(RouteTypedResponse.class);
+            });
+    }
+
+    @Test
+    @DisplayName("#1088: @MeshA2A-declared capability resolves @Qualifier constructor injection")
+    void meshA2ACapabilityResolvesConstructorInjection() throws Exception {
+        baseRunner
+            .withUserConfiguration(A2aConstructorInjectAgentConfig.class)
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                A2aCapConstructorConsumer consumer =
+                    context.getBean(A2aCapConstructorConsumer.class);
+                assertThat(consumer)
+                    .as("consumer bean must be created with the @MeshA2A capability proxy injected")
+                    .isNotNull();
+                assertThat(consumer.tool)
+                    .as("a2a_typed_cap proxy must be constructor-injected")
+                    .isNotNull();
+                assertThat(consumer.tool.getCapability()).isEqualTo("a2a_typed_cap");
+
+                Object bean = context.getBean("a2a_typed_cap");
+                assertThat(bean).isInstanceOf(McpMeshToolProxy.class);
+                Field f = McpMeshToolProxy.class.getDeclaredField("returnType");
+                f.setAccessible(true);
+                assertThat(f.get(bean))
+                    .as("injected proxy returnType must reflect @MeshA2A expectedType")
+                    .isEqualTo(A2aTypedResponse.class);
+            });
+    }
+
+    @Test
+    @DisplayName("#1088: name-conflict guard for @MeshRoute capability preserves user bean + logs ERROR")
+    void meshRouteCapabilityNameConflictPreservesUserBean() {
+        LogCapture capture = LogCapture.attach(MeshCapabilityBeanRegistrar.class);
+        try {
+            baseRunner
+                .withUserConfiguration(RouteConflictAgentConfig.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    Object bean = context.getBean("route_conflict_cap");
+                    assertThat(bean)
+                        .as("user-owned bean must NOT be overwritten by an McpMeshTool proxy")
+                        .isInstanceOf(UserOwnedBean.class);
+                });
+
+            // ERROR diagnostic must fire naming @MeshRoute as the source.
+            assertThat(capture.events)
+                .as("MeshCapabilityBeanRegistrar must emit an ERROR naming @MeshRoute as the source")
+                .anyMatch(e -> "ERROR".equals(e.level)
+                    && e.message.contains("route_conflict_cap")
+                    && e.message.contains("@MeshRoute"));
+        } finally {
+            capture.detach();
+        }
     }
 
     @Test

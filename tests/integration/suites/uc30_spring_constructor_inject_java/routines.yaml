@@ -1,0 +1,50 @@
+# UC-level routines for uc30_spring_constructor_inject_java (issue #1088).
+#
+# Proves the #1088 fix end-to-end: a Java Spring Boot agent that does
+# CONSTRUCTOR injection of @Qualifier("cap") McpMeshTool<T> for capabilities
+# DECLARED via @MeshRoute(dependencies=...) and @MeshA2A(dependencies=...).
+# Before the fix the early-phase BeanDefinitionRegistryPostProcessor only
+# covered @MeshDependsOn, so the Spring context failed to refresh
+# (NoSuchBeanDefinitionException) and the agent never booted.
+#
+#   tc01 — spring-route-consumer: @MeshRoute-declared cap, constructor-injected
+#   tc02 — spring-a2a-consumer:   @MeshA2A-declared cap, constructor-injected
+#
+# Each tc uses a GRANULAR single-source consumer (one declaration source only,
+# no @MeshRoute/@MeshA2A coexistence), so a healthy boot proves that source's
+# early-phase registration; the end-to-end call then proves the injected proxy
+# is live and typed. Both reuse the same greeting-provider (greeting_service +
+# farewell_service on port 9100); each tc consumes only the cap it needs.
+
+routines:
+  start_registry:
+    description: "Start the registry with fast-sweep timing for Java cold-start tolerance"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          MCP_MESH_SWEEP_INTERVAL=10s \
+          MCP_MESH_RETENTION=10s \
+          MCP_MESH_HEALTH_CHECK_INTERVAL=5 \
+          DEFAULT_TIMEOUT_THRESHOLD=15 \
+            meshctl start --registry-only -d
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "registry ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: registry did not become ready in 20s"
+          tail -50 ~/.mcp-mesh/logs/registry.log 2>/dev/null || true
+          exit 1
+        capture: registry_start
+        timeout: 30
+
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: meshctl stop 2>/dev/null || true
+        ignore_errors: true
