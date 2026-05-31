@@ -161,6 +161,84 @@ public Map<String, Object> secureTool(@Param("data") String data) {
 Spring Security reads the `Authorization` header from the HTTP request
 automatically — no extra wiring needed when headers are propagated.
 
+## Calling Mesh Tools from Spring Filters
+
+Authorization side-effects often need to run inside a Spring `Filter`, an
+`AuthenticationProvider`, or another bean that sits outside the
+`@MeshRoute` controller surface — for example, resolving an external
+identity-provider subject to a local user row on first login, recording
+an audit event on every authenticated request, or hydrating a
+request-scoped principal from a remote profile service.
+
+`@MeshInject` only fires on `@MeshRoute` controller methods. To reach
+mesh capabilities from any other Spring-managed bean, declare the
+capability on the bean class with `@MeshDependsOn` and inject it via
+`@Qualifier`:
+
+```java
+import io.mcpmesh.spring.web.MeshDependency;
+import io.mcpmesh.spring.web.MeshDependsOn;
+import io.mcpmesh.types.McpMeshTool;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+@Component
+@MeshDependsOn({
+    @MeshDependency(capability = "resolve_user_principal"),
+    @MeshDependency(capability = "audit_log")
+})
+public class AuthFilter extends OncePerRequestFilter {
+
+    private final McpMeshTool<Map<String, Object>> resolveTool;
+    private final McpMeshTool<Object> auditTool;
+
+    public AuthFilter(
+        @Qualifier("resolve_user_principal") McpMeshTool<Map<String, Object>> resolveTool,
+        @Qualifier("audit_log") McpMeshTool<Object> auditTool) {
+        this.resolveTool = resolveTool;
+        this.auditTool = auditTool;
+    }
+
+    @Override
+    protected void doFilterInternal(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            FilterChain chain) throws IOException, ServletException {
+
+        Jwt jwt = currentJwt();
+        String email = jwt.getClaimAsString("email");
+        String subject = jwt.getSubject();
+
+        // Idempotent JIT principal resolution — direct mesh call, no HTTP self-loopback.
+        resolveTool.call("email", email, "subject", subject);
+        auditTool.call("event", "auth.login", "subject", subject);
+
+        chain.doFilter(request, response);
+    }
+}
+```
+
+The same pattern works for `@Service`, `@Scheduled` tasks, `@Aspect`
+advice, `AuthenticationProvider`, and any other Spring bean. Capabilities
+declared via `@MeshDependsOn` follow the same heartbeat-driven proxy
+lifecycle as `@MeshRoute(dependencies=...)`: same `isAvailable()`
+semantics, same auto-rewiring on topology change, same typed exceptions
+on call.
+
+### Why not just put the side-effect in a `@MeshRoute` controller?
+
+Often that is the right answer — push provisioning, audit, and RBAC
+hydration into a controller body (or a downstream mesh tool) where
+`@MeshInject` works as designed. Use `@MeshDependsOn` when the
+side-effect *genuinely* belongs in a non-controller surface: filters
+that run before MVC dispatch, security beans Spring constructs outside
+the request lifecycle, scheduled jobs without a request context.
+
+See `meshctl man dependency-injection --java` for the complete
+`@MeshDependsOn` reference, including `tags`, `version`, `expectedType`,
+and bean-name conflict handling.
+
 ## Cross-Language Behavior
 
 All three SDKs inject headers via two mechanisms simultaneously:

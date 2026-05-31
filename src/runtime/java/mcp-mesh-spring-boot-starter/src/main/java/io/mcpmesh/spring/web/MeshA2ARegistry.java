@@ -155,6 +155,35 @@ public class MeshA2ARegistry {
     }
 
     /**
+     * Surface the {@code expectedType} declared on each {@code @MeshDependency}
+     * across all registered {@code @MeshA2A} surfaces. Returns the Class<?>
+     * reference for every capability whose source annotation set
+     * {@code expectedType} to a non-default value (i.e. not {@code Void.class}).
+     *
+     * <p>Used by the auto-configuration late-phase bean registrar to wire
+     * typed deserialisation into the {@link io.mcpmesh.types.McpMeshTool}
+     * singleton beans — without this, a
+     * {@code @Qualifier("cap") McpMeshTool<Foo>} consumer receives an
+     * untyped proxy that returns {@code Map<String, Object>} instead of
+     * {@code Foo}.
+     *
+     * @return map of capability name to expected return Class; capabilities
+     *         without expectedType are absent from the map
+     */
+    public Map<String, Class<?>> getExpectedTypesByCapability() {
+        Map<String, Class<?>> result = new LinkedHashMap<>();
+        for (SurfaceMetadata surface : getAllSurfaces()) {
+            for (MeshRouteRegistry.DependencySpec dep : surface.dependencies()) {
+                Class<?> et = dep.getExpectedType();
+                if (et != null && et != Void.class && et != void.class) {
+                    result.putIfAbsent(dep.getCapability(), et);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
      * Captured metadata for a single {@code @MeshA2A} method.
      *
      * <p>Constructed once at bean-post-processing time and immutable

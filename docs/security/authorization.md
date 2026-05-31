@@ -46,6 +46,8 @@ Use your platform's native auth framework to enforce access control:
 
 === "Java (Spring Security)"
 
+    Controller-level check (the common case):
+
     ```java
     @RestController
     @RequestMapping("/api")
@@ -60,6 +62,36 @@ Use your platform's native auth framework to enforce access control:
         }
     }
     ```
+
+    Filter-level work (auth side-effects that must run before MVC
+    dispatch — first-login user linking, audit emission, principal
+    hydration). Declare the capabilities your filter needs with
+    `@MeshDependsOn` and inject via `@Qualifier`:
+
+    ```java
+    @Component
+    @MeshDependsOn({
+        @MeshDependency(capability = "resolve_user_principal"),
+        @MeshDependency(capability = "audit_log")
+    })
+    public class AuthFilter extends OncePerRequestFilter {
+        private final McpMeshTool<Map<String, Object>> resolveTool;
+        private final McpMeshTool<Object> auditTool;
+
+        public AuthFilter(
+            @Qualifier("resolve_user_principal") McpMeshTool<Map<String, Object>> resolveTool,
+            @Qualifier("audit_log") McpMeshTool<Object> auditTool) {
+            this.resolveTool = resolveTool;
+            this.auditTool = auditTool;
+        }
+        // doFilterInternal calls resolveTool.call(...) / auditTool.call(...)
+    }
+    ```
+
+    The same pattern works for `@Service`, `@Scheduled`, `@Aspect`, and
+    any other Spring bean. See
+    [`meshctl man dependency-injection --java`](../java/dependency-injection.md)
+    for the full `@MeshDependsOn` reference.
 
 === "TypeScript (Express)"
 
