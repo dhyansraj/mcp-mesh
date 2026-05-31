@@ -149,6 +149,9 @@ Ingress mode (for Kubernetes clusters with ingress configured):
 	// Tracing flag (Issue #310)
 	cmd.Flags().Bool("trace", false, "Display trace ID for distributed tracing (use with 'meshctl trace <id>' to view call tree)")
 
+	// Arbitrary outbound HTTP headers (Issue #1084)
+	cmd.Flags().StringArrayP("header", "H", nil, "HTTP header to add to the outbound request, repeatable (format: 'Key: Value')")
+
 	return cmd
 }
 
@@ -198,6 +201,14 @@ func runCallCommand(cmd *cobra.Command, args []string) error {
 	ingressURL, _ := cmd.Flags().GetString("ingress-url")
 	useProxy, _ := cmd.Flags().GetBool("use-proxy")
 	traceFlag, _ := cmd.Flags().GetBool("trace")
+
+	// Parse and validate user-supplied headers early so we fail fast on
+	// malformed input before making any network call (Issue #1084).
+	headerFlags, _ := cmd.Flags().GetStringArray("header")
+	userHeaders, err := parseHeaderFlags(headerFlags)
+	if err != nil {
+		return err
+	}
 
 	// Generate trace context if --trace flag is set (Issue #310)
 	var traceCtx *TraceContext
@@ -261,9 +272,9 @@ func runCallCommand(cmd *cobra.Command, args []string) error {
 	var callResult *MCPCallResult
 	if ingressDomain != "" && agentURL == "" {
 		// Ingress mode: need Host header
-		callResult, err = callMCPToolWithHost(httpClient, agentEndpoint, agentHostHeader, resolvedToolName, toolArgs, traceCtx, timeout)
+		callResult, err = callMCPToolWithHost(httpClient, agentEndpoint, agentHostHeader, resolvedToolName, toolArgs, userHeaders, traceCtx, timeout)
 	} else {
-		callResult, err = callMCPTool(httpClient, agentEndpoint, resolvedToolName, toolArgs, traceCtx, timeout)
+		callResult, err = callMCPTool(httpClient, agentEndpoint, resolvedToolName, toolArgs, userHeaders, traceCtx, timeout)
 	}
 	if err != nil {
 		return fmt.Errorf("MCP call failed: %w", err)
@@ -298,6 +309,31 @@ func parseToolSpecifier(spec string) (agentName, toolName string) {
 		return parts[0], parts[1]
 	}
 	return "", parts[0]
+}
+
+// parseHeaderFlags converts repeatable "Key: Value" strings (from --header/-H,
+// Issue #1084) into an http.Header. Splits on the FIRST colon; trims surrounding
+// whitespace from key and value; rejects entries with no colon or an empty key.
+// An empty value is allowed. Repeated same-key flags accumulate via Add.
+// Returns nil, nil for empty input.
+func parseHeaderFlags(raw []string) (http.Header, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	headers := http.Header{}
+	for _, s := range raw {
+		parts := strings.SplitN(s, ":", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid header %q: expected format 'Key: Value'", s)
+		}
+		key := strings.TrimSpace(parts[0])
+		if key == "" {
+			return nil, fmt.Errorf("invalid header %q: empty key", s)
+		}
+		value := strings.TrimSpace(parts[1])
+		headers.Add(key, value)
+	}
+	return headers, nil
 }
 
 // createHTTPClient returns an HTTP client with the specified timeout.
@@ -661,7 +697,7 @@ func isIPAddress(s string) bool {
 }
 
 // callMCPToolWithHost makes an MCP tools/call request with a custom Host header (for ingress)
-func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName string, args map[string]interface{}, traceCtx *TraceContext, timeout int) (*MCPCallResult, error) {
+func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName string, args map[string]interface{}, userHeaders http.Header, traceCtx *TraceContext, timeout int) (*MCPCallResult, error) {
 	// Inject trace context into arguments (for agents that can't access HTTP headers)
 	// This is in addition to HTTP headers for maximum compatibility
 	argsWithTrace := args
@@ -694,6 +730,15 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 	req, err := http.NewRequest("POST", mcpURL, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// User-supplied headers (#1084) are applied first so framework-managed
+	// headers below (Content-Type, Accept, X-Mesh-Timeout, X-Trace-ID, Host)
+	// always win on conflict and can't be broken by user input.
+	for k, vs := range userHeaders {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -772,7 +817,7 @@ func callMCPToolWithHost(client *http.Client, endpoint, hostHeader, toolName str
 }
 
 // callMCPTool makes an MCP tools/call request to the agent
-func callMCPTool(client *http.Client, endpoint, toolName string, args map[string]interface{}, traceCtx *TraceContext, timeout int) (*MCPCallResult, error) {
+func callMCPTool(client *http.Client, endpoint, toolName string, args map[string]interface{}, userHeaders http.Header, traceCtx *TraceContext, timeout int) (*MCPCallResult, error) {
 	// Inject trace context into arguments (for agents that can't access HTTP headers)
 	// This is in addition to HTTP headers for maximum compatibility
 	argsWithTrace := args
@@ -805,6 +850,15 @@ func callMCPTool(client *http.Client, endpoint, toolName string, args map[string
 	req, err := http.NewRequest("POST", mcpURL, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// User-supplied headers (#1084) are applied first so framework-managed
+	// headers below (Content-Type, Accept, X-Mesh-Timeout, X-Trace-ID, Host)
+	// always win on conflict and can't be broken by user input.
+	for k, vs := range userHeaders {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
 	}
 
 	req.Header.Set("Content-Type", "application/json")
