@@ -927,6 +927,7 @@ The `@mesh.llm` decorator enables LLM integration as first-class mesh capabiliti
 | ---------------- | ------ | ------- | ------------------------------------------------------------ |
 | `provider`       | `dict` | `None`  | Provider selector — `{"capability": "llm", "tags": [...]}`   |
 | `system_prompt`  | `str`  | `None`  | Literal prompt or `file://path/to/template.jinja2`           |
+| `response_model` | `type` | `None`  | Pydantic model the LLM must emit and is validated against. Drives the LLM schema separately from the return annotation; when omitted, falls back to the return type. |
 | `filter`         | `list` | `None`  | Tool discovery filter (capability, tags, version)            |
 | `filter_mode`    | `str`  | `"all"` | `"all"`, `"best_match"`, or `"*"` (wildcard)                 |
 | `context_param`  | `str`  | `None`  | Parameter name containing template context                   |

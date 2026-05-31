@@ -2446,6 +2446,7 @@ def llm(
     max_iterations: int = 10,
     system_prompt: str | None = None,
     system_prompt_file: str | None = None,
+    response_model: type | None = None,
     context_param: str | None = None,
     parallel_tool_calls: bool = False,
     **kwargs: Any,
@@ -2496,6 +2497,12 @@ def llm(
         max_iterations: Max agentic loop iterations (can be overridden by MESH_LLM_MAX_ITERATIONS)
         system_prompt: Default system prompt (literal string or ``file://`` template)
         system_prompt_file: Path to Jinja2 template file (deprecated — use system_prompt="file://...")
+        response_model: Schema the LLM is required to emit and validate against. When
+                        set, it drives the provider structured-output schema and response
+                        validation independently of the function's return annotation.
+                        When omitted, falls back to the return annotation (current
+                        behavior). The return annotation continues to drive the tool
+                        ``outputSchema`` regardless.
         context_param: Function parameter name to auto-extract template context from
         parallel_tool_calls: Encourage the LLM to emit independent tool_calls in parallel
         **kwargs: Additional model parameters forwarded to the provider as defaults
@@ -2633,12 +2640,22 @@ def llm(
                 f"@mesh.llm '{func.__name__}': {e}"
             ) from None
 
-        output_type = None
-        if return_annotation and return_annotation != inspect.Signature.empty:
+        # Issue #1085: response_model takes precedence as the LLM-emitted/validated
+        # schema. When omitted, fall back to the return annotation (back-compat).
+        # The return annotation independently drives the tool outputSchema at
+        # heartbeat time, so that path is unaffected by this choice.
+        output_type = response_model
+        if (
+            output_type is None
+            and return_annotation
+            and return_annotation != inspect.Signature.empty
+        ):
             output_type = return_annotation
 
-            # Warn if not a Pydantic model — but skip the warning for streaming
-            # tools where the return annotation is intentionally Stream[str].
+        if output_type is not None:
+            # Warn if the resolved LLM-output type is not a Pydantic model — but
+            # skip the warning for streaming tools where the return annotation is
+            # intentionally Stream[str].
             if llm_stream_type is None:
                 try:
                     from pydantic import BaseModel

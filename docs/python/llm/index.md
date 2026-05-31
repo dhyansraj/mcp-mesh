@@ -39,6 +39,7 @@ export OPENAI_API_KEY=sk-...
     provider={"capability": "llm", "tags": ["+claude"]},
     max_iterations=5,
     system_prompt="file://prompts/assistant.jinja2",
+    response_model=AssistResponse,
     context_param="ctx",
     filter=[{"tags": ["tools"]}],
     filter_mode="all",
@@ -58,6 +59,7 @@ def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
 | `provider`       | dict | LLM provider selector (capability + tags)         |
 | `max_iterations` | int  | Max agentic loop iterations (default: 1)          |
 | `system_prompt`  | str  | Inline prompt or `file://path` to Jinja2 template |
+| `response_model` | type | Pydantic model the LLM must emit and is validated against (separate from the return type) |
 | `context_param`  | str  | Parameter name receiving context object           |
 | `filter`         | list | Tool filter criteria                              |
 | `filter_mode`    | str  | `"all"`, `"best_match"`, or `"*"`                 |
@@ -347,6 +349,31 @@ class AssistResponse(BaseModel):
 @mesh.tool(capability="smart_assistant")
 def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
     return llm("Analyze and respond")  # Returns validated Pydantic object
+```
+
+### Focusing the LLM Schema with `response_model`
+
+By default the LLM is asked to emit the function's return type. Use
+`response_model` to specify a separate Pydantic model the LLM must emit and is
+validated against. The return annotation continues to drive the tool's
+`outputSchema` (what callers receive); when `response_model` is omitted, the LLM
+schema falls back to the return annotation.
+
+This is useful when a tool combines LLM-produced fields with deterministic,
+function-computed fields: the LLM emits only the focused subset it should reason
+about, instead of being forced to emit (and possibly hallucinate) the
+deterministic fields too.
+
+```python
+@mesh.llm(
+    provider={"capability": "llm", "tags": ["+openai"]},
+    response_model=AnalystOutput,        # what the LLM must emit (focused)
+    system_prompt="file://prompts/analyst.jinja2",
+)
+@mesh.tool(capability="analysis.run_daily")
+async def run_daily(...) -> RunDailyResult:   # tool output = LLM fields + deterministic context
+    analyst = await llm("...")                # validated against AnalystOutput
+    return RunDailyResult(email=email, date=str(date.today()), total_value=total_value, **analyst.model_dump())
 ```
 
 ## Agentic Loops

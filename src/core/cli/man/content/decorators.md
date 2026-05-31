@@ -128,6 +128,7 @@ Enables LLM-powered tools with automatic tool discovery.
     provider={"capability": "llm", "tags": ["+claude"]},  # LLM provider selector
     max_iterations=5,                    # Max agentic loop iterations
     system_prompt="file://prompts/agent.jinja2",  # Jinja2 template
+    response_model=AssistResponse,       # Pydantic model the LLM must emit (optional)
     context_param="ctx",                 # Parameter name for context
     filter=[{"tags": ["tools"]}],        # Tool filter for discovery
     filter_mode="all",                   # "all", "best_match", or "*"
@@ -140,7 +141,7 @@ def assist(ctx: AssistContext, llm: mesh.MeshLlmAgent = None) -> AssistResponse:
     return llm("Help the user with their request")
 ```
 
-**Note**: Response format is determined by return type: `-> str` for text, `-> PydanticModel` for JSON.
+**Note**: Response format is determined by return type: `-> str` for text, `-> PydanticModel` for JSON. Use `response_model` to make the LLM emit a focused subset (validated against that model) while the return annotation still drives the tool's `outputSchema`; when omitted, the LLM schema falls back to the return annotation.
 
 ### Filter Modes
 
