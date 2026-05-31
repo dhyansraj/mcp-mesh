@@ -147,15 +147,20 @@ class OpenAIHandler(BaseProviderHandler):
         if tools:
             request_params["tools"] = tools
 
-        # Skip structured output for str return type (text mode)
-        if output_type is str:
-            return request_params
+        # Centralized mode selection (RFC #1100). For OpenAI the resolver
+        # reproduces the universal decision: str → TEXT (no response_format),
+        # BaseModel → RESPONSE_FORMAT_STRICT. The response_format-building body
+        # below is unchanged.
+        from .capabilities import StructuredOutputMode, resolve_capabilities
 
-        # Only add response_format for Pydantic models
-        if not (isinstance(output_type, type) and issubclass(output_type, BaseModel)):
-            return request_params
+        is_basemodel = isinstance(output_type, type) and issubclass(
+            output_type, BaseModel
+        )
+        caps = resolve_capabilities(
+            self.vendor, None, output_is_basemodel=is_basemodel
+        )
 
-        if isinstance(output_type, type) and issubclass(output_type, BaseModel):
+        if caps.structured_output == StructuredOutputMode.RESPONSE_FORMAT_STRICT:
             # CRITICAL: Add response_format for structured output
             # This is what makes OpenAI construct responses according to schema
             # rather than relying on prompt instructions alone

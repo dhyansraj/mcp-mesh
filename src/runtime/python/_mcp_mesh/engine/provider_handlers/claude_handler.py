@@ -440,7 +440,23 @@ class ClaudeHandler(BaseProviderHandler):
         # stream. HINT mode emits JSON as plain text which flows naturally
         # through stream chunks; the existing HINT-fallback machinery handles
         # parse failures.
-        if self.has_native() and not streaming:
+        # Centralized mode selection (RFC #1100). The resolver reproduces the
+        # exact decision this block made inline: BaseModel + native + buffered
+        # routes to output_config (Sonnet 4.5+ / Opus 4.1+) or synthetic-tool
+        # (older models); streaming or no-native falls through to HINT below.
+        # The mode-implementation bodies are unchanged — we only switch on the
+        # resolved mode here.
+        from .capabilities import StructuredOutputMode, resolve_capabilities
+
+        caps = resolve_capabilities(
+            self.vendor,
+            model,
+            output_is_basemodel=True,
+            has_native=self.has_native(),
+            streaming=streaming,
+        )
+
+        if caps.structured_output == StructuredOutputMode.OUTPUT_CONFIG:
             # Sonnet 4.5+ / Opus 4.1+ accept Anthropic's first-class
             # ``output_config.format`` primitive. Cheaper than the synthetic-
             # tool path (no extra tool slot, no system-prompt addendum, no
@@ -451,14 +467,10 @@ class ClaudeHandler(BaseProviderHandler):
             # ``_mesh_output_config_mode`` so the agentic loop knows the
             # returned TextBlock IS the structured JSON answer (no
             # synthetic-tool unwrap, no synthetic-fallback recovery).
-            from _mcp_mesh.engine.native_clients.anthropic_native import (
-                _supports_native_output_format,
+            return self._apply_native_output_config(
+                sanitized_schema, output_type_name, model_params
             )
-
-            if _supports_native_output_format(model):
-                return self._apply_native_output_config(
-                    sanitized_schema, output_type_name, model_params
-                )
+        if caps.structured_output == StructuredOutputMode.SYNTHETIC_TOOL:
             return self._apply_native_synthetic_format(
                 sanitized_schema, output_type_name, model_params
             )

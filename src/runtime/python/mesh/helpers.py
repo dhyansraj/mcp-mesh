@@ -2154,6 +2154,75 @@ def _extract_vendor_from_model(model: str) -> str | None:
     return None
 
 
+# Canonical LiteLLM-style prefix for each big-3 vendor. Used to normalize an
+# inferred bare model name to ``vendor/<name>`` at the routing boundary so the
+# native clients' ``supports_model`` / ``_strip_prefix`` work unchanged (they
+# require the prefix) and the wire model name is identical to the
+# already-prefixed input case (``_strip_prefix`` reverses the normalization).
+_BIG3_VENDOR_PREFIX: dict[str, str] = {
+    "openai": "openai/",
+    "anthropic": "anthropic/",
+    # Bare ``gemini-*`` implies Google AI Studio (GOOGLE_API_KEY) — the safe
+    # default. Vertex AI requires the explicit ``vertex_ai/`` prefix and is
+    # never inferred from a bare name.
+    "gemini": "gemini/",
+}
+
+
+def _infer_big3_vendor_from_bare_name(model: str) -> str | None:
+    """Infer a big-3 vendor from an UNPREFIXED model name, conservatively.
+
+    LiteLLM's ``get_llm_provider`` resolves some bare names (those in its
+    model DB) to a vendor, but raises for others (e.g. ``claude-3-haiku``,
+    ``gemini-3-pro``) — those then fall to ``vendor="unknown"`` →
+    ``GenericHandler`` → LiteLLM, even though the matching native SDK is
+    bundled and native dispatch is default-ON. This helper closes that gap
+    for the three vendors that ship native adapters, using only unambiguous
+    name prefixes:
+
+      * ``gpt-*``, ``o1*``/``o3*``/``o4*``, ``chatgpt-*`` → ``openai``
+      * ``claude-*``                                      → ``anthropic``
+      * ``gemini-*``                                      → ``gemini``
+
+    Anything else — including any string that already contains ``/`` (it has
+    an explicit prefix; do not second-guess it) and any unknown bare name —
+    returns ``None`` so the caller keeps the existing GenericHandler/LiteLLM
+    tail behavior.
+
+    Args:
+        model: A model identifier (bare or prefixed).
+
+    Returns:
+        ``"openai"`` / ``"anthropic"`` / ``"gemini"`` for an unambiguous bare
+        big-3 name, else ``None``.
+    """
+    if not model or "/" in model:
+        return None
+
+    name = model.lower().strip()
+
+    # ``o1``/``o3``/``o4`` reasoning families: match only when the prefix is
+    # the whole name or is followed by ``-`` (e.g. ``o3``, ``o3-mini``), so a
+    # hypothetical unrelated ``o3xyz`` does NOT misroute to openai. Mirrors the
+    # trailing-dash discipline of the ``gpt-``/``chatgpt-`` prefixes.
+    _openai_reasoning = name in ("o1", "o3", "o4") or name.startswith(
+        ("o1-", "o3-", "o4-")
+    )
+
+    if (
+        name.startswith("gpt-")
+        or _openai_reasoning
+        or name.startswith("chatgpt-")
+    ):
+        return "openai"
+    if name.startswith("claude-"):
+        return "anthropic"
+    if name.startswith("gemini-"):
+        return "gemini"
+
+    return None
+
+
 def llm_provider(
     model: str,
     capability: str = "llm",
@@ -2284,6 +2353,38 @@ def llm_provider(
                     f"using 'unknown'"
                 )
 
+        # Gap #1 (RFC #1100): route UNPREFIXED big-3 names to the native
+        # handler. LiteLLM's get_llm_provider only resolves bare names that
+        # are in its model DB; novel/uncommon ones (e.g. ``claude-3-haiku``,
+        # ``gemini-3-pro``) fall through to ``vendor="unknown"`` →
+        # GenericHandler → LiteLLM, bypassing the bundled native SDK. When the
+        # vendor is still unresolved AND the model has no explicit ``vendor/``
+        # prefix, conservatively infer the big-3 vendor from an unambiguous
+        # bare-name prefix and normalize ``model`` to the canonical
+        # ``vendor/<name>`` form. Normalizing here (the single vendor-
+        # resolution chokepoint) means the native clients' supports_model /
+        # _strip_prefix work unchanged and the outbound wire model name is
+        # identical to the already-prefixed-input case. Already-prefixed
+        # models and non-big-3 bare names are untouched (stay on the
+        # GenericHandler/LiteLLM tail).
+        #
+        # ``provider_model`` holds the (possibly-normalized) model string used
+        # for all downstream dispatch (it seeds ``effective_model``). The
+        # original ``model`` closure parameter is left untouched so reassigning
+        # it here cannot turn it into a function-local and trip an
+        # UnboundLocalError on the LiteLLM-detection read above.
+        provider_model = model
+        if vendor == "unknown" and "/" not in model:
+            inferred = _infer_big3_vendor_from_bare_name(model)
+            if inferred is not None:
+                vendor = inferred
+                provider_model = f"{_BIG3_VENDOR_PREFIX[inferred]}{model}"
+                logger.info(
+                    f"🔀 Inferred big-3 vendor '{vendor}' from bare model "
+                    f"name; normalized to '{provider_model}' for native "
+                    f"dispatch (RFC #1100 Gap #1)"
+                )
+
         def _prepare_provider_request(
             request: MeshLlmRequest,
             *,
@@ -2321,7 +2422,7 @@ def llm_provider(
             behavior of omitting ``tools`` from ``completion_args``).
             """
             # Determine effective model (check for consumer override - issue #308)
-            effective_model = model  # Default to provider's model
+            effective_model = provider_model  # Default to provider's (normalized) model
             model_params_copy = (
                 dict(request.model_params) if request.model_params else {}
             )
@@ -2340,7 +2441,7 @@ def llm_provider(
                         logger.warning(
                             f"⚠️ Model override '{override_model}' ignored - vendor mismatch "
                             f"(override vendor: '{override_vendor}', provider vendor: '{vendor}'). "
-                            f"Using provider's default model: '{model}'"
+                            f"Using provider's default model: '{provider_model}'"
                         )
                     else:
                         # Vendor matches or can't be determined - use override

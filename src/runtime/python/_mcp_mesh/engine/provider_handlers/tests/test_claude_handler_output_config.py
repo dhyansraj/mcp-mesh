@@ -38,9 +38,15 @@ def _native_on(monkeypatch):
     """Force ``ClaudeHandler.has_native()`` → True for the duration of the test.
 
     Patches the module-level lookup the handler uses, so we don't rely on the
-    real anthropic SDK being importable in CI.
+    real anthropic SDK being importable in CI. Also patches the RFC #1100
+    resolver's SDK-floor check to True (the resolver gates ``output_config`` on
+    ``anthropic >= 0.77``; CI has no anthropic SDK installed, so simulate a
+    conforming install — these tests assert mode SELECTION, not SDK detection).
     """
+    from _mcp_mesh.engine.provider_handlers import capabilities as _caps
+
     monkeypatch.setattr(ClaudeHandler, "has_native", lambda self: True)
+    monkeypatch.setattr(_caps, "_sdk_at_least", lambda dist, floor: True)
     yield
 
 

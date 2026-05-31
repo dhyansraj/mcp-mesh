@@ -70,9 +70,9 @@ dependencies = [
     "mcp>=1.26.0,<2.0.0",
     "fastmcp>=3.0.0,<4.0.0",
     "litellm>=1.80.5,!=1.82.7,!=1.82.8",
-    "anthropic>=0.42",
+    "anthropic>=0.77",
     "openai>=1.60",
-    "google-genai>=0.8.0",
+    "google-genai>=1.22",
     "prometheus-client>=0.19.0",
     "pyyaml>=6.0",
     "jinja2>=3.1.0",
@@ -105,10 +105,12 @@ kubernetes = [
     "pykube-ng>=22.9.0"
 ]
 vertex = [
-    # google-auth is required for LiteLLM's vertex_ai/* model prefix to read
-    # Application Default Credentials. Optional because non-Vertex users (AI
-    # Studio, Claude, OpenAI) don't need it. Install via:
-    #   pip install mcp-mesh[vertex]
+    # Backward-compat alias: ``google-auth`` is now always installed because
+    # ``google-genai`` (a base dependency) requires ``google-auth[requests]
+    # >=2.48.1`` transitively. This extra is preserved as a no-op so
+    # ``pip install mcp-mesh[vertex]`` still resolves cleanly for users who
+    # pinned it from earlier docs (Vertex AI ADC reading for the vertex_ai/*
+    # model prefix).
     "google-auth>=2.0.0"
 ]
 anthropic = [
@@ -116,14 +118,14 @@ anthropic = [
     # #834 — native dispatch is default ON). This extra is preserved as a
     # no-op so ``pip install mcp-mesh[anthropic]`` still resolves cleanly
     # for users who pinned it from earlier docs.
-    "anthropic>=0.42"
+    "anthropic>=0.77"
 ]
 anthropic-bedrock = [
     # AWS Bedrock backend for the native Anthropic adapter. Required when
     # using bedrock/anthropic.claude-* models with MCP_MESH_NATIVE_LLM=1.
     # Install via:
     #   pip install mcp-mesh[anthropic-bedrock]
-    "anthropic[bedrock]>=0.42"
+    "anthropic[bedrock]>=0.77"
 ]
 openai = [
     # Backward-compat alias: ``openai`` is now a base dependency (issue
@@ -137,7 +139,7 @@ gemini = [
     # (issue #834 PR 3 — native dispatch is default ON). This extra is
     # preserved as a no-op so ``pip install mcp-mesh[gemini]`` still
     # resolves cleanly for users who pinned it from earlier docs.
-    "google-genai>=0.8.0"
+    "google-genai>=1.22"
 ]
 
 [project.urls]
