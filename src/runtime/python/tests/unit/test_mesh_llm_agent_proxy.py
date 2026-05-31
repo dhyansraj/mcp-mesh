@@ -1106,6 +1106,70 @@ class TestLlmProviderModelOverride:
         assert _extract_vendor_from_model("Anthropic/claude-sonnet") == "anthropic"
         assert _extract_vendor_from_model("OPENAI/gpt-4") == "openai"
 
+    # ------------------------------------------------------------------
+    # Gap #1 (RFC #1100): bare-name big-3 vendor inference
+    # ------------------------------------------------------------------
+
+    def test_infer_big3_openai_bare_names(self):
+        """gpt-*/o1*/o3*/o4*/chatgpt-* bare names -> openai."""
+        from mesh.helpers import _infer_big3_vendor_from_bare_name
+
+        assert _infer_big3_vendor_from_bare_name("gpt-4o") == "openai"
+        assert _infer_big3_vendor_from_bare_name("gpt-4") == "openai"
+        assert _infer_big3_vendor_from_bare_name("o1-preview") == "openai"
+        assert _infer_big3_vendor_from_bare_name("o3") == "openai"
+        assert _infer_big3_vendor_from_bare_name("o3-mini") == "openai"
+        assert _infer_big3_vendor_from_bare_name("o4-mini") == "openai"
+        assert _infer_big3_vendor_from_bare_name("chatgpt-4o-latest") == "openai"
+
+    def test_infer_big3_reasoning_prefix_requires_dash_or_exact(self):
+        """o1/o3/o4 match only as the whole name or followed by ``-`` — a
+        hypothetical unrelated ``o3xyz`` does NOT misroute to openai."""
+        from mesh.helpers import _infer_big3_vendor_from_bare_name
+
+        assert _infer_big3_vendor_from_bare_name("o3xyz") is None
+        assert _infer_big3_vendor_from_bare_name("o1mini") is None
+        assert _infer_big3_vendor_from_bare_name("o4foo") is None
+
+    def test_infer_big3_anthropic_bare_names(self):
+        """claude-* bare names -> anthropic."""
+        from mesh.helpers import _infer_big3_vendor_from_bare_name
+
+        assert _infer_big3_vendor_from_bare_name("claude-sonnet-4-5") == "anthropic"
+        assert _infer_big3_vendor_from_bare_name("claude-3-haiku") == "anthropic"
+
+    def test_infer_big3_gemini_bare_names(self):
+        """gemini-* bare names -> gemini (AI Studio default, never vertex_ai)."""
+        from mesh.helpers import _infer_big3_vendor_from_bare_name
+
+        assert _infer_big3_vendor_from_bare_name("gemini-3-pro") == "gemini"
+        assert _infer_big3_vendor_from_bare_name("gemini-1.5-pro") == "gemini"
+
+    def test_infer_big3_case_insensitive(self):
+        """Inference is case-insensitive on the bare name."""
+        from mesh.helpers import _infer_big3_vendor_from_bare_name
+
+        assert _infer_big3_vendor_from_bare_name("GPT-4o") == "openai"
+        assert _infer_big3_vendor_from_bare_name("Claude-3-Haiku") == "anthropic"
+
+    def test_infer_big3_already_prefixed_returns_none(self):
+        """Already-prefixed strings are never second-guessed -> None."""
+        from mesh.helpers import _infer_big3_vendor_from_bare_name
+
+        assert _infer_big3_vendor_from_bare_name("openai/gpt-4o") is None
+        assert _infer_big3_vendor_from_bare_name("anthropic/claude-3-haiku") is None
+        assert _infer_big3_vendor_from_bare_name("vertex_ai/gemini-pro") is None
+
+    def test_infer_big3_unknown_and_empty_return_none(self):
+        """Non-big-3 bare names and empty/None -> None (LiteLLM tail)."""
+        from mesh.helpers import _infer_big3_vendor_from_bare_name
+
+        assert _infer_big3_vendor_from_bare_name("cohere-command") is None
+        assert _infer_big3_vendor_from_bare_name("llama-3") is None
+        assert _infer_big3_vendor_from_bare_name("mistral-large") is None
+        assert _infer_big3_vendor_from_bare_name("") is None
+        assert _infer_big3_vendor_from_bare_name(None) is None
+
     def test_process_chat_uses_override_model_when_vendor_matches(self):
         """Test: Provider uses override model when vendor matches."""
         from mesh.types import MeshLlmRequest

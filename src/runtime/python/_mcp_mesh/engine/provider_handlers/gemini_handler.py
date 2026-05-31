@@ -189,6 +189,11 @@ class GeminiHandler(BaseProviderHandler):
         # Gemini doesn't support parallel_tool_calls API param
         kwargs.pop("parallel_tool_calls", None)
 
+        # Configured model id is passed by the agent for resolver symmetry with
+        # the other handlers. Popped here so it does not flow into
+        # request_params (model is stamped separately downstream).
+        kwargs.pop("model", None)
+
         # Build base request
         request_params = {
             "messages": messages,
@@ -213,9 +218,21 @@ class GeminiHandler(BaseProviderHandler):
             # Store for HINT mode in format_system_prompt (always needed as fallback)
             set_pending_output_schema(schema, output_type.__name__)
 
-            # Only use response_format when NO tools present
-            # Gemini 3 + response_format + tools causes non-deterministic infinite tool loops
-            if not tools:
+            # Centralized mode selection (RFC #1100 Phase 1). The resolver
+            # decides: BaseModel + no tools → RESPONSE_FORMAT_STRICT
+            # (response_schema); BaseModel + tools → PROSE_HINT (response_format
+            # skipped because Gemini 3 + response_format + tools causes
+            # non-deterministic infinite tool loops).
+            from .capabilities import StructuredOutputMode, resolve_capabilities
+
+            caps = resolve_capabilities(
+                self.vendor,
+                None,
+                output_is_basemodel=True,
+                has_tools=bool(tools),
+            )
+
+            if caps.structured_output == StructuredOutputMode.RESPONSE_FORMAT_STRICT:
                 strict_schema = make_schema_strict(schema, add_all_required=True)
                 request_params["response_format"] = {
                     "type": "json_schema",
