@@ -210,9 +210,10 @@ export interface FastMcpToolDef {
  */
 export function llm<
   TParams extends ZodType,
-  TReturns extends ZodType | undefined = undefined
+  TReturns extends ZodType | undefined = undefined,
+  TResponse extends ZodType | undefined = undefined
 >(
-  config: MeshLlmConfig<TParams, TReturns>
+  config: MeshLlmConfig<TParams, TReturns, TResponse>
 ): FastMcpToolDef & { _meshLlmConfig: LlmToolConfig } {
   const registry = LlmToolRegistry.getInstance();
 
@@ -239,7 +240,7 @@ export function llm<
     topP: config.topP,
     stop: config.stop,
     inputSchema: JSON.stringify(zodToJsonSchema(config.parameters, { $refStrategy: "none" })),
-    returnSchema: config.returns,
+    returnSchema: config.responseModel ?? config.returns,
     outputMode: config.outputMode ?? "hint",
     parallelToolCalls: config.parallelToolCalls ?? false,
     execute: config.execute as LlmToolConfig["execute"],
@@ -345,7 +346,7 @@ export function llm<
 
             // Call user's execute handler
             debug.llm(`Calling user execute handler`);
-            const result = await llmConfig.execute(cleanArgs, { llm: llmCallable as LlmAgent<TReturns extends ZodType ? z.infer<TReturns> : string> });
+            const result = await llmConfig.execute(cleanArgs, { llm: llmCallable as LlmAgent<TResponse extends ZodType ? z.infer<TResponse> : TReturns extends ZodType ? z.infer<TReturns> : string> });
             debug.llm(`Execute completed successfully`);
 
             // Convert result to string for MCP
