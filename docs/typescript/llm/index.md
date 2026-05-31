@@ -71,7 +71,10 @@ agent.addTool({
 | `contextParam`  | `string`          | Parameter name passed to template context        |
 | `filter`        | `LlmFilterSpec[]` | Tool filter for discovery                        |
 | `filterMode`    | `string`          | How to select tools: "all", "best_match", "\*"   |
-| `returns`       | `ZodType`         | Optional: Schema for structured output           |
+| `responseModel` | `ZodType`         | Optional: Schema the LLM must emit (drives structured output) |
+| `returns`       | `ZodType`         | Optional: Schema for what `execute` returns to callers |
+
+When `responseModel` is set, it is the schema the LLM is required to emit and is validated against, and it drives the provider's structured-output schema; the injected `llm` callable is typed by it. `returns` independently types what `execute` returns to callers. When `responseModel` is omitted, the LLM schema falls back to `returns`. Separating the two lets a tool combine LLM-produced fields with deterministic, function-computed fields without forcing the LLM to emit the deterministic ones.
 
 ## Provider Selector
 
@@ -140,6 +143,26 @@ agent.addTool({
     // Returns AssistResponse type
     const result = await llm(query);
     return JSON.stringify(result);
+  },
+});
+```
+
+### Separating LLM output from deterministic fields
+
+Use `responseModel` for the schema the LLM must emit and `returns` for what
+`execute` returns to callers. This keeps the LLM focused on the fields it
+should produce, while `execute` adds deterministic, function-computed fields:
+
+```typescript
+const runDaily = mesh.llm({
+  name: "run_daily",
+  provider: { capability: "llm", tags: ["+openai"] },
+  parameters: z.object({ email: z.string() }),
+  responseModel: AnalystOutput,   // what the LLM must emit (focused)
+  returns: RunDailyResult,        // what execute returns to callers (LLM fields + deterministic context)
+  execute: async ({ email }, { llm }) => {
+    const analyst = await llm("...");                 // typed/validated as AnalystOutput
+    return { ...analyst, email, date: today(), totalValue }; // RunDailyResult
   },
 });
 ```

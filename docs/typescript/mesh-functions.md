@@ -101,6 +101,8 @@ agent.addTool({
     contextParam: "ctx",                 // Parameter name for context
     filter: [{ tags: ["tools"] }],       // Tool filter for discovery
     filterMode: "all",                   // "all", "best_match", or "*"
+    responseModel: AnalystOutput,        // Optional: schema the LLM must emit (drives structured output)
+    returns: RunDailyResult,             // Optional: schema for what execute returns to callers
   }),
   capability: "smart_assistant",
   description: "LLM-powered assistant",
@@ -114,6 +116,8 @@ agent.addTool({
   },
 });
 ```
+
+`responseModel` is the schema the LLM is required to emit and is validated against (and types the injected `llm` callable); `returns` types what `execute` returns to callers. When `responseModel` is omitted, the LLM schema falls back to `returns`. See `meshctl man llm --typescript` for a combined-fields example.
 
 ### Filter Modes
 

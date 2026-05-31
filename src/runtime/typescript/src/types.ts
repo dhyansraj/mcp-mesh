@@ -835,7 +835,11 @@ export interface LlmCompletionResponse {
 /**
  * Configuration for mesh.llm() tool definition.
  */
-export interface MeshLlmConfig<TParams extends z.ZodType, TReturns extends z.ZodType | undefined = undefined> {
+export interface MeshLlmConfig<
+  TParams extends z.ZodType,
+  TReturns extends z.ZodType | undefined = undefined,
+  TResponse extends z.ZodType | undefined = undefined
+> {
   /** Tool name (used in MCP protocol) */
   name: string;
   /** Capability name for mesh discovery. Defaults to tool name */
@@ -885,6 +889,14 @@ export interface MeshLlmConfig<TParams extends z.ZodType, TReturns extends z.Zod
   /** Zod schema for structured output (optional - returns string if not specified) */
   returns?: TReturns;
   /**
+   * Zod schema the LLM must emit and is validated against (feeds the provider's
+   * structured-output schema and the response parser). When omitted, falls back
+   * to `returns`. Use this when the schema the model should produce differs from
+   * the type your `execute` handler returns to callers — `returns` continues to
+   * type what `execute` returns to callers.
+   */
+  responseModel?: TResponse;
+  /**
    * Output mode for response parsing:
    * - "strict": Enforce exact schema compliance (use provider's native structured output if available)
    * - "hint": Include schema in prompt but accept any response (default)
@@ -900,7 +912,13 @@ export interface MeshLlmConfig<TParams extends z.ZodType, TReturns extends z.Zod
     args: z.infer<TParams>,
     context: {
       /** Call the LLM with the user message */
-      llm: LlmAgent<TReturns extends z.ZodType ? z.infer<TReturns> : string>;
+      llm: LlmAgent<
+        TResponse extends z.ZodType
+          ? z.infer<TResponse>
+          : TReturns extends z.ZodType
+          ? z.infer<TReturns>
+          : string
+      >;
     }
   ) => Promise<TReturns extends z.ZodType ? z.infer<TReturns> : string>;
 }
