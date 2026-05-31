@@ -226,7 +226,7 @@ class TestMeshLlmDecoratorOutputTypeExtraction:
     def test_warns_on_non_pydantic_return_type(self):
         """Test warning when return type is not Pydantic BaseModel."""
 
-        with pytest.warns(UserWarning, match="should return a Pydantic BaseModel"):
+        with pytest.warns(UserWarning, match="not a Pydantic BaseModel subclass"):
 
             @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
             def chat(message: str, llm: mesh.MeshLlmAgent = None) -> dict:
