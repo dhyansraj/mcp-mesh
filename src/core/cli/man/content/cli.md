@@ -142,7 +142,23 @@ meshctl call get_weather --agent-url http://localhost:8080
 # Capture a trace ID for distributed tracing
 meshctl call smart_analyze '{"query": "test"}' --trace
 # Output includes: Trace ID: abc123...
+
+# Add arbitrary outbound HTTP headers (-H is repeatable)
+meshctl call get_weather -H "Authorization: Bearer $TOKEN"
+meshctl call get_weather -H "Authorization: Bearer $TOKEN" -H "X-Tenant: acme"
+# Framework-managed headers (X-Trace-ID, X-Mesh-Timeout, Host) always take
+# precedence and cannot be overridden by --header.
 ```
+
+**Flags**
+
+| Flag                | Description                                                                       |
+| ------------------- | --------------------------------------------------------------------------------- |
+| `--header`, `-H`    | HTTP header to add to the outbound request, repeatable (format: `'Key: Value'`)   |
+| `--trace`           | Display a trace ID for distributed tracing                                        |
+| `--use-proxy`       | Route through the registry proxy (default true)                                   |
+| `--agent-url`       | Call an agent directly, bypassing registry endpoint lookup                        |
+| `--file`            | Read tool arguments from a JSON file                                              |
 
 ### `meshctl trace`
 

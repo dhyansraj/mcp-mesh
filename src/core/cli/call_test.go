@@ -351,6 +351,171 @@ func TestFindAgentWithToolIngress_CapabilityToolStillAmbiguous(t *testing.T) {
 	}
 }
 
+// TestParseHeaderFlags covers --header/-H parsing (Issue #1084): malformed
+// entries error, valid entries set headers, whitespace is trimmed, empty
+// values are allowed, repeated keys accumulate, and empty input is a no-op.
+func TestParseHeaderFlags(t *testing.T) {
+	t.Run("no colon errors", func(t *testing.T) {
+		_, err := parseHeaderFlags([]string{"Authorization Bearer abc"})
+		if err == nil {
+			t.Fatal("expected error for header with no colon")
+		}
+	})
+
+	t.Run("empty key errors", func(t *testing.T) {
+		_, err := parseHeaderFlags([]string{": value"})
+		if err == nil {
+			t.Fatal("expected error for empty key")
+		}
+	})
+
+	t.Run("valid single header", func(t *testing.T) {
+		h, err := parseHeaderFlags([]string{"Authorization: Bearer abc"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := h.Get("Authorization"); got != "Bearer abc" {
+			t.Errorf("got %q, want %q", got, "Bearer abc")
+		}
+	})
+
+	t.Run("whitespace trimmed", func(t *testing.T) {
+		h, err := parseHeaderFlags([]string{"  Key :  val "})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := h["Key"]; !ok {
+			t.Errorf("expected canonical key %q in %v", "Key", h)
+		}
+		if got := h.Get("Key"); got != "val" {
+			t.Errorf("got %q, want %q", got, "val")
+		}
+	})
+
+	t.Run("empty value allowed", func(t *testing.T) {
+		h, err := parseHeaderFlags([]string{"X-Flag:"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		vals, ok := h["X-Flag"]
+		if !ok || len(vals) != 1 || vals[0] != "" {
+			t.Errorf("expected one empty value for X-Flag, got %v", h)
+		}
+	})
+
+	t.Run("repeated key accumulates", func(t *testing.T) {
+		h, err := parseHeaderFlags([]string{"X-Multi: a", "X-Multi: b"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		vals := h["X-Multi"]
+		if len(vals) != 2 || vals[0] != "a" || vals[1] != "b" {
+			t.Errorf("expected [a b] for X-Multi, got %v", vals)
+		}
+	})
+
+	t.Run("value with colon preserved", func(t *testing.T) {
+		h, err := parseHeaderFlags([]string{"X-URL: http://example.com:8080"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got := h.Get("X-URL"); got != "http://example.com:8080" {
+			t.Errorf("got %q, want %q", got, "http://example.com:8080")
+		}
+	})
+
+	t.Run("empty input is nil no error", func(t *testing.T) {
+		h, err := parseHeaderFlags(nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if h != nil {
+			t.Errorf("expected nil header for empty input, got %v", h)
+		}
+	})
+}
+
+// mockMCPAgent returns an httptest server that captures the headers of the
+// last received request and replies with a minimal valid MCP result.
+func mockMCPAgent(t *testing.T, captured *http.Header) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*captured = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(MCPResponse{
+			JSONRPC: "2.0",
+			ID:      1,
+			Result:  json.RawMessage(`{"ok":true}`),
+		})
+	}))
+}
+
+// TestCallMCPTool_UserHeadersAndFrameworkPrecedence covers Issue #1084:
+// user-supplied headers reach the agent, but framework-managed headers
+// (Content-Type, X-Trace-ID, X-Mesh-Timeout) always win on conflict.
+func TestCallMCPTool_UserHeadersAndFrameworkPrecedence(t *testing.T) {
+	var got http.Header
+	srv := mockMCPAgent(t, &got)
+	defer srv.Close()
+
+	traceCtx := &TraceContext{TraceID: "real-framework-trace", SpanID: "span-1"}
+	userHeaders, err := parseHeaderFlags([]string{
+		"Authorization: Bearer abc",
+		"X-Trace-ID: user-should-lose",
+		"Content-Type: text/plain",
+	})
+	if err != nil {
+		t.Fatalf("parseHeaderFlags failed: %v", err)
+	}
+
+	_, err = callMCPTool(http.DefaultClient, srv.URL, "do_thing", map[string]interface{}{}, userHeaders, traceCtx, 30)
+	if err != nil {
+		t.Fatalf("callMCPTool failed: %v", err)
+	}
+
+	if got.Get("Authorization") != "Bearer abc" {
+		t.Errorf("custom header not forwarded: Authorization=%q", got.Get("Authorization"))
+	}
+	if got.Get("X-Trace-ID") != "real-framework-trace" {
+		t.Errorf("framework X-Trace-ID should win, got %q", got.Get("X-Trace-ID"))
+	}
+	if got.Get("Content-Type") != "application/json" {
+		t.Errorf("framework Content-Type should win, got %q", got.Get("Content-Type"))
+	}
+	if got.Get("X-Mesh-Timeout") != "30" {
+		t.Errorf("framework X-Mesh-Timeout should be set, got %q", got.Get("X-Mesh-Timeout"))
+	}
+}
+
+// TestCallMCPToolWithHost_UserHeadersAndFrameworkPrecedence is the
+// ingress-path counterpart for Issue #1084.
+func TestCallMCPToolWithHost_UserHeadersAndFrameworkPrecedence(t *testing.T) {
+	var got http.Header
+	srv := mockMCPAgent(t, &got)
+	defer srv.Close()
+
+	traceCtx := &TraceContext{TraceID: "real-framework-trace", SpanID: "span-1"}
+	userHeaders, err := parseHeaderFlags([]string{
+		"Authorization: Bearer abc",
+		"X-Trace-ID: user-should-lose",
+	})
+	if err != nil {
+		t.Fatalf("parseHeaderFlags failed: %v", err)
+	}
+
+	_, err = callMCPToolWithHost(http.DefaultClient, srv.URL, "", "do_thing", map[string]interface{}{}, userHeaders, traceCtx, 30)
+	if err != nil {
+		t.Fatalf("callMCPToolWithHost failed: %v", err)
+	}
+
+	if got.Get("Authorization") != "Bearer abc" {
+		t.Errorf("custom header not forwarded: Authorization=%q", got.Get("Authorization"))
+	}
+	if got.Get("X-Trace-ID") != "real-framework-trace" {
+		t.Errorf("framework X-Trace-ID should win, got %q", got.Get("X-Trace-ID"))
+	}
+}
+
 // TestAuditShortIsHelpful covers issue #956 item #22: the audit command's
 // Short text must convey when a user would reach for it (routing/why).
 func TestAuditShortIsHelpful(t *testing.T) {
