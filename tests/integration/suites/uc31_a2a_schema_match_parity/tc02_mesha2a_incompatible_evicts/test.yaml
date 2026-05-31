@@ -1,0 +1,188 @@
+# tc02_mesha2a_incompatible_evicts — issue #1089 (THE PAYOFF, @MeshA2A source).
+#
+# Runs the EXACT scenario of tc01 (CONTROL) but through the @MeshA2A
+# declaration source instead of @MeshRoute. The a2a-strict-consumer declares
+# parity_cap with the IDENTICAL expectedType=StrictResponse (required
+# `value: String`) and SchemaMode.SUBSET; the parity-provider publishes the
+# same INCOMPATIBLE schema (`other`, no `value`).
+#
+# BEFORE #1089: MeshA2ARegistry.getUniqueDependencySpecs() did NOT stamp the
+# schema-matching fields, so the registry SKIPPED schema matching for the A2A
+# dependency — the incompatible provider resolved anyway (DEPS 1/1) and a call
+# would later hit a runtime deserialization error (missing `value`). The
+# behavior DIVERGED from @MeshRoute.
+#
+# AFTER #1089: getUniqueDependencySpecs() calls
+# MeshRouteRegistry.applySchemaMatching(...), so the A2A dependency ships
+# matchMode=subset exactly like the route source. The registry's schema stage
+# now evicts the incompatible provider — DEPS 0/1 — and the forwarding call
+# returns "unavailable", IDENTICAL to tc01. That identical outcome IS the parity
+# #1089 establishes.
+#
+# If this tc shows DEPS 1/1 / the dep still resolving, the fix is NOT in the
+# image — rebuild tsuite-mesh:local from source and re-run. Do NOT weaken the
+# assertions.
+#
+# GRANULAR: a2a-strict-consumer declares ONLY a @MeshA2A dependency (no
+# @MeshRoute anywhere).
+
+name: "@MeshA2A incompatible provider is evicted — parity with @MeshRoute (#1089)"
+description: "Java @MeshA2A consumer declaring a strict expectedType against a schema-incompatible provider: provider evicted (DEPS 0/1) and the call is unavailable, identical to the @MeshRoute control — only true AFTER the #1089 fix"
+tags:
+  - java
+  - spring
+  - a2a
+  - schema-match
+  - parity
+  - issue-1089
+  - smoke
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/parity-provider /workspace/
+      cp -rL /uc-artifacts/a2a-strict-consumer /workspace/
+
+  - name: "Install parity-provider deps"
+    handler: pip-install
+    path: /workspace/parity-provider
+
+  - name: "Install a2a-strict-consumer deps"
+    handler: maven-install
+    path: /workspace/a2a-strict-consumer
+    timeout: 600
+
+  - routine: start_registry
+
+  - name: "Start parity-provider (Python, port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start parity-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for parity-provider to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null \
+          | jq -r '.agents[]|select(.name=="parity-provider")|.status' 2>/dev/null || echo "")
+        [ "$STATUS" = "healthy" ] && { echo "parity-provider healthy after ${i}x2s"; exit 0; }
+        sleep 2
+      done
+      echo "ERROR: parity-provider not healthy within 120s (last status='$STATUS')"
+      meshctl logs parity-provider 2>&1 | tail -120 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start a2a-strict-consumer (Java, port 9202)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/a2a-strict-consumer --env MCP_MESH_HTTP_PORT=9202 -d
+
+  # The consumer must boot healthy (proxy bean still registers via #1088); the
+  # eviction is a resolution outcome, not a boot failure.
+  - name: "Wait for a2a-strict-consumer to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null \
+          | jq -r '.agents[]|select(.name=="a2a-strict-consumer")|.status' 2>/dev/null || echo "")
+        [ "$STATUS" = "healthy" ] && { echo "a2a-strict-consumer healthy after ${i}x2s"; exit 0; }
+        sleep 2
+      done
+      echo "ERROR: a2a-strict-consumer not healthy within 120s (last status='$STATUS')"
+      echo "===== a2a-strict-consumer log (last 120 lines) ====="
+      meshctl logs a2a-strict-consumer 2>&1 | tail -120 || true
+      exit 1
+    timeout: 150
+
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  # THE PAYOFF: after #1089 the A2A dependency carries matchMode=subset, so the
+  # registry's schema stage evicts the incompatible provider exactly like route.
+  # Read a SETTLED DEPS cell rather than the first transient sample: require the
+  # value to be non-empty, non-0/0, and IDENTICAL across 3 consecutive reads
+  # (spaced 3s apart) before capturing. This spans several heartbeat cycles, so a
+  # provider that was ever going to resolve would have changed the cell within
+  # the window. We expect the settled value to be 0/1; pre-fix this would settle
+  # at 1/1 (schema matching skipped for A2A).
+  - name: "Read settled a2a-strict-consumer DEPS cell (expected 0/1: provider evicted after #1089)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      read_deps() {
+        meshctl list 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' \
+          | grep -E '^a2a-strict-consumer' | awk '{print $5}' || true
+      }
+      DEPS=""
+      STABLE=0
+      for i in $(seq 1 20); do
+        CUR=$(read_deps)
+        if [ -n "$CUR" ] && [ "$CUR" != "0/0" ] && [ "$CUR" = "$DEPS" ]; then
+          STABLE=$((STABLE + 1))
+        else
+          STABLE=0
+        fi
+        DEPS="$CUR"
+        [ "$STABLE" -ge 2 ] && { echo "DEPS settled at '$DEPS' after ${i} reads"; break; }
+        sleep 3
+      done
+      echo "DEPS=${DEPS}"
+    capture: a2a_deps
+    timeout: 90
+
+  # The forwarding call must surface the unresolved proxy: parity.call(...) on a
+  # proxy with no resolved provider throws MeshToolUnavailableException
+  # ("Mesh tool unavailable: parity_cap"), which meshctl renders as a tool error.
+  - name: "Call forward_a2a_strict (expected: unavailable, provider evicted after #1089)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=$(meshctl call forward_a2a_strict '{"name":"x"}' --raw 2>&1 || true)
+      echo "$RESP"
+    capture: a2a_response
+    timeout: 90
+
+  - name: "Capture consumer log (negative NoSuchBeanDefinitionException guard)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl logs a2a-strict-consumer 2>&1 | tail -300
+    capture: consumer_log
+
+assertions:
+  - expr: "${captured.agent_list} contains 'parity-provider'"
+    message: "parity-provider should be registered"
+  - expr: "${captured.agent_list} contains 'a2a-strict-consumer'"
+    message: "a2a-strict-consumer should be registered (proves the Spring context refreshed)"
+
+  # The proxy bean still registers via #1088; a healthy boot must not log the failure.
+  - expr: "${captured.consumer_log} not contains 'NoSuchBeanDefinitionException'"
+    message: "consumer startup must NOT log NoSuchBeanDefinitionException (#1088 keeps the proxy bean)"
+
+  # Core PAYOFF: after #1089 the A2A schema matching evicts the incompatible
+  # provider — dependency resolves 0/1, identical to the @MeshRoute control.
+  # Pre-fix this would be 1/1.
+  - expr: "${captured.a2a_deps} contains '0/1'"
+    message: "a2a-strict-consumer should show DEPS 0/1 (schema-incompatible parity_cap evicted via #1089 A2A schema matching); 1/1 means the fix is NOT in the image"
+
+  # The unresolved proxy surfaces as unavailable when called — same as route.
+  - expr: "${captured.a2a_response} icontains 'unavailable'"
+    message: "forward_a2a_strict should be unavailable (parity_cap proxy never resolved a provider after eviction)"
+  - expr: "${captured.a2a_response} not contains 'incompatible-x'"
+    message: "the incompatible provider's value must NOT be returned (it was evicted, not deserialized)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

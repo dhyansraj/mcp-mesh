@@ -180,8 +180,12 @@ public class MeshRouteRegistry {
      *
      * <p>Phase 4: cluster-wide strict knob promotes WARN→BLOCK on the consumer
      * side too. There's no per-tool override here — the override is producer-side.
+     *
+     * <p>Package-private convenience overload shared by the {@code @MeshRoute},
+     * {@code @MeshDependsOn}, AND {@code @MeshA2A} wiring paths — they all hold a
+     * {@link DependencySpec} and need the same schema-matching fields stamped.
      */
-    private static void applySchemaMatching(
+    static void applySchemaMatching(
             AgentSpec.DependencySpec target, DependencySpec source, boolean clusterStrict) {
         applySchemaMatching(target, source.getCapability(), source.getExpectedType(),
             source.getSchemaMode(), clusterStrict);
@@ -189,10 +193,11 @@ public class MeshRouteRegistry {
 
     /**
      * Canonical schema-aware matching helper, shared between the
-     * {@code @MeshRoute} and {@code @MeshDependsOn} wiring paths (issue #547,
-     * issue #1086). Both surfaces must stamp {@code expectedSchemaCanonical},
-     * {@code expectedSchemaHash}, and {@code matchMode} the same way so the
-     * registry's schema stage sees identical shapes regardless of the source.
+     * {@code @MeshRoute}, {@code @MeshDependsOn}, and {@code @MeshA2A} wiring
+     * paths (issue #547, issue #1086, issue #1089). All surfaces must stamp
+     * {@code expectedSchemaCanonical}, {@code expectedSchemaHash}, and
+     * {@code matchMode} the same way so the registry's schema stage sees
+     * identical shapes regardless of the source.
      *
      * <p>Caller passes raw inputs (capability name, expected type class,
      * schema mode, cluster-strict flag) so {@code @MeshDependsOn}'s code path
