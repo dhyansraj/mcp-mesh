@@ -1,0 +1,175 @@
+# tc01_meshroute_incompatible_evicts — issue #1089 (CONTROL, @MeshRoute source).
+#
+# Establishes the long-standing @MeshRoute baseline that #1089 brings @MeshA2A
+# into parity with: a consumer declaring expectedType=StrictResponse (required
+# `value: String`) under SchemaMode.SUBSET against a provider that publishes an
+# INCOMPATIBLE output schema (parity_cap returns `other`, no `value`) has its
+# provider EVICTED by the registry's schema stage — the dependency resolves
+# 0/1 and the forwarding call returns "unavailable".
+#
+# Because of #1088 the early-phase registrar still registers the @MeshRoute
+# proxy bean, so the Spring context refreshes and the agent boots healthy with
+# NO NoSuchBeanDefinitionException — the eviction is purely a schema-matching
+# (resolution) outcome, not a boot failure.
+#
+# GRANULAR: route-strict-consumer declares ONLY a @MeshRoute dependency (no
+# @MeshA2A anywhere). The companion tc02 runs the IDENTICAL scenario through the
+# @MeshA2A source; both producing 0/1 + unavailable is the parity #1089 proves.
+
+name: "@MeshRoute incompatible provider is evicted (#1089 control)"
+description: "Java @MeshRoute consumer declaring a strict expectedType against a schema-incompatible provider: provider evicted (DEPS 0/1) and the call is unavailable"
+tags:
+  - java
+  - spring
+  - a2a
+  - schema-match
+  - parity
+  - issue-1089
+  - smoke
+timeout: 900
+
+pre_run:
+  - routine: global.setup_for_python_agent
+  - routine: global.setup_for_java_agent
+
+test:
+  - name: "Copy artifacts"
+    handler: shell
+    workdir: /workspace
+    command: |
+      cp -rL /uc-artifacts/parity-provider /workspace/
+      cp -rL /uc-artifacts/route-strict-consumer /workspace/
+
+  - name: "Install parity-provider deps"
+    handler: pip-install
+    path: /workspace/parity-provider
+
+  - name: "Install route-strict-consumer deps"
+    handler: maven-install
+    path: /workspace/route-strict-consumer
+    timeout: 600
+
+  - routine: start_registry
+
+  - name: "Start parity-provider (Python, port 9100)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start parity-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
+
+  - name: "Wait for parity-provider to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null \
+          | jq -r '.agents[]|select(.name=="parity-provider")|.status' 2>/dev/null || echo "")
+        [ "$STATUS" = "healthy" ] && { echo "parity-provider healthy after ${i}x2s"; exit 0; }
+        sleep 2
+      done
+      echo "ERROR: parity-provider not healthy within 120s (last status='$STATUS')"
+      meshctl logs parity-provider 2>&1 | tail -120 || true
+      exit 1
+    timeout: 150
+
+  - name: "Start route-strict-consumer (Java, port 9201)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl start /workspace/route-strict-consumer --env MCP_MESH_HTTP_PORT=9201 -d
+
+  # The consumer must boot healthy (proxy bean still registers via #1088); the
+  # eviction is a resolution outcome, not a boot failure.
+  - name: "Wait for route-strict-consumer to be healthy"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        STATUS=$(curl -fsS --max-time 10 http://localhost:8000/agents 2>/dev/null \
+          | jq -r '.agents[]|select(.name=="route-strict-consumer")|.status' 2>/dev/null || echo "")
+        [ "$STATUS" = "healthy" ] && { echo "route-strict-consumer healthy after ${i}x2s"; exit 0; }
+        sleep 2
+      done
+      echo "ERROR: route-strict-consumer not healthy within 120s (last status='$STATUS')"
+      echo "===== route-strict-consumer log (last 120 lines) ====="
+      meshctl logs route-strict-consumer 2>&1 | tail -120 || true
+      exit 1
+    timeout: 150
+
+  - name: "Verify both agents registered"
+    handler: shell
+    workdir: /workspace
+    command: meshctl list
+    capture: agent_list
+
+  # Resolution is heartbeat-driven and the schema stage runs on the registry.
+  # Read a SETTLED DEPS cell rather than the first transient sample: require the
+  # value to be non-empty, non-0/0, and IDENTICAL across 3 consecutive reads
+  # (spaced 3s apart) before capturing. This spans several heartbeat cycles, so a
+  # provider that was ever going to resolve would have changed the cell within
+  # the window. We expect the settled value to be 0/1: the only provider is
+  # schema-incompatible and is evicted.
+  - name: "Read settled route-strict-consumer DEPS cell (expected 0/1: provider evicted)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      read_deps() {
+        meshctl list 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' \
+          | grep -E '^route-strict-consumer' | awk '{print $5}' || true
+      }
+      DEPS=""
+      STABLE=0
+      for i in $(seq 1 20); do
+        CUR=$(read_deps)
+        if [ -n "$CUR" ] && [ "$CUR" != "0/0" ] && [ "$CUR" = "$DEPS" ]; then
+          STABLE=$((STABLE + 1))
+        else
+          STABLE=0
+        fi
+        DEPS="$CUR"
+        [ "$STABLE" -ge 2 ] && { echo "DEPS settled at '$DEPS' after ${i} reads"; break; }
+        sleep 3
+      done
+      echo "DEPS=${DEPS}"
+    capture: route_deps
+    timeout: 90
+
+  # The forwarding call must surface the unresolved proxy: parity.call(...) on a
+  # proxy with no resolved provider throws MeshToolUnavailableException
+  # ("Mesh tool unavailable: parity_cap"), which meshctl renders as a tool error.
+  - name: "Call forward_route_strict (expected: unavailable, provider evicted)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      RESP=$(meshctl call forward_route_strict '{"name":"x"}' --raw 2>&1 || true)
+      echo "$RESP"
+    capture: route_response
+    timeout: 90
+
+  - name: "Capture consumer log (negative NoSuchBeanDefinitionException guard)"
+    handler: shell
+    workdir: /workspace
+    command: meshctl logs route-strict-consumer 2>&1 | tail -300
+    capture: consumer_log
+
+assertions:
+  - expr: "${captured.agent_list} contains 'parity-provider'"
+    message: "parity-provider should be registered"
+  - expr: "${captured.agent_list} contains 'route-strict-consumer'"
+    message: "route-strict-consumer should be registered (proves the Spring context refreshed)"
+
+  # The proxy bean still registers via #1088; a healthy boot must not log the failure.
+  - expr: "${captured.consumer_log} not contains 'NoSuchBeanDefinitionException'"
+    message: "consumer startup must NOT log NoSuchBeanDefinitionException (#1088 keeps the proxy bean)"
+
+  # Core: the incompatible provider is EVICTED — dependency resolves 0/1.
+  - expr: "${captured.route_deps} contains '0/1'"
+    message: "route-strict-consumer should show DEPS 0/1 (schema-incompatible parity_cap provider evicted)"
+
+  # The unresolved proxy surfaces as unavailable when called.
+  - expr: "${captured.route_response} icontains 'unavailable'"
+    message: "forward_route_strict should be unavailable (parity_cap proxy never resolved a provider)"
+  - expr: "${captured.route_response} not contains 'incompatible-x'"
+    message: "the incompatible provider's value must NOT be returned (it was evicted, not deserialized)"
+
+post_run:
+  - routine: stop_all
+  - routine: global.cleanup_workspace

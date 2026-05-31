@@ -1,6 +1,7 @@
 package io.mcpmesh.spring.web;
 
 import io.mcpmesh.core.AgentSpec;
+import io.mcpmesh.spring.MeshSchemaSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -131,11 +132,18 @@ public class MeshA2ARegistry {
      * {@code __mesh_a2a_deps} tool on the heartbeat envelope (built by
      * {@code MeshAutoConfiguration}) so the Rust core can drive
      * {@code dependency_available} events for them — the same mechanism
-     * that powers {@code @MeshRoute} dependency wiring.
+     * that powers {@code @MeshRoute} dependency wiring. The issue #547
+     * schema-matching fields ({@code expectedSchemaCanonical},
+     * {@code expectedSchemaHash}, {@code matchMode}) are stamped identically
+     * to the route path via {@link MeshRouteRegistry#applySchemaMatching}, so
+     * {@code @MeshA2A} dependencies are no longer skipped by the registry's
+     * schema-compatibility stage (issue #1089).
      */
     public List<AgentSpec.DependencySpec> getUniqueDependencySpecs() {
         Set<String> seenCapabilities = new HashSet<>();
         List<AgentSpec.DependencySpec> specs = new ArrayList<>();
+        // Issue #547 Phase 4: cluster-wide strict knob promotes WARN→BLOCK.
+        boolean clusterStrict = MeshSchemaSupport.clusterStrictEnabled();
         for (SurfaceMetadata surface : getAllSurfaces()) {
             for (MeshRouteRegistry.DependencySpec dep : surface.dependencies()) {
                 if (seenCapabilities.add(dep.getCapability())) {
@@ -147,6 +155,7 @@ public class MeshA2ARegistry {
                     if (dep.hasVersion()) {
                         agentDep.setVersion(dep.getVersion());
                     }
+                    MeshRouteRegistry.applySchemaMatching(agentDep, dep, clusterStrict);
                     specs.add(agentDep);
                 }
             }

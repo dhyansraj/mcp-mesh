@@ -1,0 +1,51 @@
+# UC-level routines for uc31_a2a_schema_match_parity (issue #1089).
+#
+# Proves the #1089 fix: @MeshA2A dependencies now flow through the SAME
+# expectedType/schemaMode schema-matching pipeline as @MeshRoute, so a
+# schema-INCOMPATIBLE provider is EVICTED identically for both sources.
+#
+# This suite is the NEGATIVE counterpart to uc30 (which proves a COMPATIBLE
+# provider resolves for both sources). Here the provider publishes an output
+# schema that does NOT satisfy the consumers' expected type, so the registry's
+# schema stage evicts it — DEPS 0/1 — and the forwarding tool call returns
+# "unavailable" for BOTH the @MeshRoute consumer (control) and the @MeshA2A
+# consumer (the payoff: only true after #1089).
+#
+#   tc01 — route-strict-consumer: @MeshRoute-declared cap, incompatible -> evicted
+#   tc02 — a2a-strict-consumer:   @MeshA2A-declared cap, incompatible -> evicted
+#
+# Both reuse the same parity-provider (parity_cap on port 9100); each tc
+# consumes the cap via exactly ONE source.
+
+routines:
+  start_registry:
+    description: "Start the registry with fast-sweep timing for Java cold-start tolerance"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: |
+          MCP_MESH_SWEEP_INTERVAL=10s \
+          MCP_MESH_RETENTION=10s \
+          MCP_MESH_HEALTH_CHECK_INTERVAL=5 \
+          DEFAULT_TIMEOUT_THRESHOLD=15 \
+            meshctl start --registry-only -d
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "registry ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: registry did not become ready in 20s"
+          tail -50 ~/.mcp-mesh/logs/registry.log 2>/dev/null || true
+          exit 1
+        capture: registry_start
+        timeout: 30
+
+  stop_all:
+    description: "Stop all mesh processes started by this test"
+    steps:
+      - handler: shell
+        workdir: /workspace
+        command: meshctl stop 2>/dev/null || true
+        ignore_errors: true
