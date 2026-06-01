@@ -21,24 +21,6 @@ import (
 	"mcp-mesh/src/core/registry/generated"
 )
 
-// resolvedDependency is the heartbeat-response shape for a single resolved
-// dependency. It mirrors the anonymous struct in the generated
-// MeshRegistrationResponse plus a ``kwargs`` field that carries the producer's
-// @mesh.tool kwargs (e.g. ``stream_type``) back to the consumer's proxy.
-//
-// Defined as a real type (not a type alias to the generated anonymous struct)
-// so the extra ``kwargs`` field actually serializes in the JSON response.
-// The OpenAPI spec hasn't been regenerated to include this field; the SDK
-// reads it best-effort and tolerates absence. Issue #645 bug 2.
-type resolvedDependency struct {
-	AgentId      string                                                       `json:"agent_id"`
-	Capability   string                                                       `json:"capability"`
-	Endpoint     string                                                       `json:"endpoint"`
-	FunctionName string                                                       `json:"function_name"`
-	Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
-	Kwargs       map[string]interface{}                                       `json:"kwargs,omitempty"`
-}
-
 // Package-level proxy configuration parsed once at init (#769)
 var (
 	proxyPropagateHeaderEntries []string
@@ -260,44 +242,63 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 		status = generated.MeshRegistrationResponseStatusError
 	}
 
-	// We marshal the response as a plain map so we can include the
-	// ``kwargs`` field on each resolved dependency. The generated
-	// MeshRegistrationResponse type has a fixed anonymous-struct shape that
-	// doesn't carry kwargs; until the OpenAPI spec is regenerated, building
-	// the JSON map by hand keeps the field on the wire (issue #645 bug 2).
-	//
-	// TODO(#850): Replace map[string]interface{} with regenerated typed
-	// struct once the OpenAPI spec includes the ``kwargs`` field on
-	// dependency entries.
-	// Tracking issue: https://github.com/dhyansraj/mcp-mesh/issues/850
-	response := map[string]interface{}{
-		"agent_id":  req.AgentId,
-		"status":    status,
-		"timestamp": time.Now().UTC(),
-		"message":   serviceResp.Message,
+	// The generated MeshRegistrationResponse now carries a kwargs field on each
+	// resolved dependency entry, so the typed struct serializes the producer's
+	// @mesh.tool kwargs back to the consumer's proxy (issue #850 / #645 bug 2).
+	response := generated.MeshRegistrationResponse{
+		AgentId:   req.AgentId,
+		Status:    status,
+		Timestamp: time.Now().UTC(),
+		Message:   serviceResp.Message,
 	}
 
 	// Include dependency resolution if available (heartbeat with tools should return dependencies)
 	if serviceResp.DependenciesResolved != nil {
-		depsMap := make(map[string][]resolvedDependency)
+		depsMap := make(map[string][]struct {
+			AgentId      string                                                       `json:"agent_id"`
+			Capability   string                                                       `json:"capability"`
+			Endpoint     string                                                       `json:"endpoint"`
+			FunctionName string                                                       `json:"function_name"`
+			Kwargs       *map[string]interface{}                                      `json:"kwargs,omitempty"`
+			Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
+		})
 
 		for functionName, deps := range serviceResp.DependenciesResolved {
 			if len(deps) > 0 {
-				depsList := make([]resolvedDependency, len(deps))
+				depsList := make([]struct {
+					AgentId      string                                                       `json:"agent_id"`
+					Capability   string                                                       `json:"capability"`
+					Endpoint     string                                                       `json:"endpoint"`
+					FunctionName string                                                       `json:"function_name"`
+					Kwargs       *map[string]interface{}                                      `json:"kwargs,omitempty"`
+					Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
+				}, len(deps))
 				for i, dep := range deps {
-					depsList[i] = resolvedDependency{
+					var kwargs *map[string]interface{}
+					if len(dep.Kwargs) > 0 {
+						k := dep.Kwargs
+						kwargs = &k
+					}
+					depsList[i] = struct {
+						AgentId      string                                                       `json:"agent_id"`
+						Capability   string                                                       `json:"capability"`
+						Endpoint     string                                                       `json:"endpoint"`
+						FunctionName string                                                       `json:"function_name"`
+						Kwargs       *map[string]interface{}                                      `json:"kwargs,omitempty"`
+						Status       generated.MeshRegistrationResponseDependenciesResolvedStatus `json:"status"`
+					}{
 						AgentId:      dep.AgentID,
 						Capability:   dep.Capability,
 						Endpoint:     dep.Endpoint,
 						FunctionName: dep.FunctionName,
+						Kwargs:       kwargs,
 						Status:       generated.MeshRegistrationResponseDependenciesResolvedStatus(dep.Status),
-						Kwargs:       dep.Kwargs,
 					}
 				}
 				depsMap[functionName] = depsList
 			}
 		}
-		response["dependencies_resolved"] = depsMap
+		response.DependenciesResolved = &depsMap
 	}
 
 	// Include LLM tools if available
@@ -326,7 +327,7 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 		}
 		// Always include llmToolsMap in response (even if empty)
 		// This enables LLM agents to receive {"function_name": []} for standalone agents
-		response["llm_tools"] = llmToolsMap
+		response.LlmTools = &llmToolsMap
 	}
 
 	// Include LLM providers if available (v0.6.1 mesh delegation)
@@ -337,7 +338,7 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 				llmProvidersMap[functionName] = *provider
 			}
 		}
-		response["llm_providers"] = llmProvidersMap
+		response.LlmProviders = &llmProvidersMap
 	}
 
 	// Include A2A surfaces with stamped FQDNs when present (issue #903).
@@ -346,7 +347,7 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 	if len(serviceResp.A2ASurfaces) > 0 {
 		h.maybeWarnPublicURLPrefixUnset()
 		if surfacesResp := buildA2ASurfaceResponses(serviceResp.A2ASurfaces); surfacesResp != nil {
-			response["surfaces"] = surfacesResp
+			response.Surfaces = &surfacesResp
 		}
 	}
 
@@ -354,7 +355,7 @@ func (h *EntBusinessLogicHandlers) SendHeartbeat(c *gin.Context) {
 	// only used for description-truncation warnings; the slice stays absent
 	// from the wire when empty (omitempty semantics via field skip).
 	if len(serviceResp.Warnings) > 0 {
-		response["warnings"] = serviceResp.Warnings
+		response.Warnings = &serviceResp.Warnings
 	}
 
 	c.JSON(http.StatusOK, response)
