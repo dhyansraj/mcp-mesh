@@ -534,20 +534,25 @@ class TestApplyStructuredOutputNative:
 
 
 class TestApplyStructuredOutputStreamingRouting:
-    """Phase C: streaming + structured output prefers HINT mode regardless of
-    native SDK availability. Synthetic-tool injection is a single forced tool
-    call that doesn't actually stream — HINT mode is the natural fit for
-    streaming (schema in prompt → JSON text → flows through chunks).
+    """Streaming + structured output mode selection.
+
+    - Capable models (Sonnet 4.5+ / Opus 4.1+) route to native
+      ``output_config`` on streaming (RFC #1100) — ``client.messages.stream``
+      accepts the primitive and the structured JSON streams as ``text_delta``
+      chunks.
+    - Older / unknown models (and the ``model=None`` default) route to HINT —
+      synthetic-tool injection is a single forced tool call that doesn't
+      actually stream, so HINT (schema in prompt → JSON text → chunks) is the
+      natural fit.
     """
 
-    def test_streaming_true_routes_to_hint_even_when_native_available(
-        self, _native_on
-    ):
-        """``streaming=True`` MUST take the HINT path on the native handler.
+    # Capable-model streaming → output_config is asserted in
+    # test_claude_handler_output_config.py (which carries the SDK-floor fixture).
 
-        Without this routing, synthetic-tool injection would fire and emit a
-        single discrete tool_use block — defeating the point of streaming.
-        """
+    def test_streaming_true_older_model_routes_to_hint(self, _native_on):
+        """``streaming=True`` on an older / unknown model (``model=None``
+        default) MUST take the HINT path — synthetic-tool injection emits a
+        single discrete tool_use block, defeating the point of streaming."""
         handler = ClaudeHandler()
         params: dict = {
             "messages": [{"role": "system", "content": "You are helpful."}]

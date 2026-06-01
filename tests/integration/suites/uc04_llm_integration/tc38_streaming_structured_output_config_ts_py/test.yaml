@@ -1,0 +1,282 @@
+# Test Case: Streaming + Structured Output via native output_config (RFC #1100)
+#
+# Validates the RFC #1100 change: Claude STREAMING structured output now uses
+# the server-enforced native ``output_config`` primitive for capable models
+# (Sonnet 4.5+ / Opus 4.1+) instead of being forced onto PROSE_HINT.
+#
+# Reachability: this combination is reachable through the TS consumer API only.
+#   - The Python consumer MeshLlmAgent.stream() hard-rejects non-str output_type
+#     (raises NotImplementedError), so a Python consumer can NEVER drive
+#     streaming + structured output.
+#   - The Java consumer explicitly does NOT add output_schema on the streaming
+#     path ("Buffered-path only" — MeshLlmAgentProxy).
+#   - The TypeScript consumer MeshLlmAgent.stream() does NOT gate on output type
+#     and forwards the Zod returnSchema as output_schema to the provider's
+#     process_chat_stream tool. This is the ONLY reachable driver.
+#
+# Native vs LiteLLM: the consumer wires a real mesh tool (calculator) so the
+# provider runs its NATIVE streaming agentic loop (anthropic_native.complete_stream
+# → _build_create_kwargs), which is the exact path RFC #1100 changed. A no-tools
+# consumer would hit the provider's LiteLLM no-tools streaming branch instead and
+# never reach the native output_config adapter.
+#
+# Topology:
+#   calculator-agent (Py tool)  ─┐
+#   claude-provider  (Py, sonnet-4-5, streaming variant auto-generated)
+#   streaming-structured-consumer-ts (TS, returns Zod, llm.stream())  ──┘
+#
+# Verifies:
+#   1. Provider log shows "output_config mode" engaged on the streaming call,
+#      NOT "HINT mode" and NOT "synthetic-tool mode".
+#   2. The streamed text_delta chunks accumulated into valid JSON that parsed
+#      to the schema (consumer reports _diag_parsed_ok=true, multiple chunks).
+#   3. The structured result is correct (multiply then add: a*b + a).
+#   4. No thinking-delta contamination (parsed JSON is clean).
+
+name: "Streaming + Structured Output via native output_config (RFC #1100)"
+description: "TS consumer drives streaming + structured output against Py Claude sonnet-4-5; verify native output_config path engages and JSON streams clean"
+tags:
+  - llm
+  - claude
+  - structured-output
+  - streaming
+  - cross-runtime
+  - typescript
+  - python
+  - rfc-1100
+timeout: 240
+
+pre_run:
+  # Python setup for Claude provider + calculator tool agent
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  # Node.js/TypeScript setup for consumer
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  # Copy UC-level Python Claude provider (uses anthropic/claude-sonnet-4-5)
+  - name: "Copy Python Claude provider to workspace"
+    handler: shell
+    command: "cp -rL /uc-artifacts/claude-provider /workspace/"
+    capture: copy_provider_output
+
+  # Copy TC-level calculator tool agent (symlink → resolve with -L)
+  - name: "Copy calculator tool agent to workspace"
+    handler: shell
+    command: "cp -rL /artifacts/calculator-agent /workspace/"
+    capture: copy_calc_output
+
+  # Copy TC-level TypeScript streaming+structured consumer
+  - name: "Copy streaming structured consumer to workspace"
+    handler: shell
+    command: "cp -rL /artifacts/streaming-structured-consumer-ts /workspace/"
+    capture: copy_consumer_output
+
+  # Create env file with secrets (ANTHROPIC_API_KEY)
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+
+  - name: "Verify workspace files"
+    handler: shell
+    command: "ls -la /workspace/"
+    capture: ls_output
+
+  # Install npm dependencies for TS consumer
+  - name: "Install npm dependencies"
+    handler: npm-install
+    path: /workspace/streaming-structured-consumer-ts
+
+  # Start Python Claude provider (DEBUG logs so the output_config / HINT mode
+  # log line is captured by meshctl logs).
+  - name: "Start Python Claude provider"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start claude-provider/main.py --env-file .env --env MCP_MESH_LOG_LEVEL=DEBUG --env MCP_MESH_HTTP_PORT=9001 -d"
+    capture: start_provider_output
+
+  # Start calculator tool agent
+  - name: "Start calculator tool agent"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start calculator-agent/main.py --env MCP_MESH_HTTP_PORT=9048 -d"
+    capture: start_calc_output
+
+  # Wait for provider + calculator to register and resolve deps
+  - name: "Wait for provider + calculator to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="claude-provider calculator-agent"
+      EXPECTED_COUNT=2
+      echo "Waiting for $EXPECTED_COUNT agents to register with resolved deps..."
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' || true)
+        READY_COUNT=0
+        for agent in $EXPECTED; do
+          LINE=$(echo "$AGENTS" | grep -E "^${agent}" || true)
+          if [ -n "$LINE" ]; then
+            DEPS=$(echo "$LINE" | awk '{print $5}')
+            RESOLVED=$(echo "$DEPS" | cut -d/ -f1)
+            TOTAL=$(echo "$DEPS" | cut -d/ -f2)
+            if [ "$RESOLVED" = "$TOTAL" ]; then
+              READY_COUNT=$((READY_COUNT + 1))
+            fi
+          fi
+        done
+        if [ "$READY_COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "All $EXPECTED_COUNT agents ready after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: Only $READY_COUNT/$EXPECTED_COUNT agents ready within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_provider_output
+    timeout: 90
+
+  - name: "List provider tools (confirm streaming variant registered)"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: provider_tools_output
+
+  # Start TypeScript streaming+structured consumer
+  - name: "Start streaming structured consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start streaming-structured-consumer-ts/src/index.ts --env-file .env --env MCP_MESH_HTTP_PORT=9042 -d"
+    capture: start_consumer_output
+
+  # Wait for consumer to register and resolve deps
+  - name: "Wait for streaming-structured-consumer-ts to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      EXPECTED="streaming-structured-consumer-ts"
+      EXPECTED_COUNT=1
+      echo "Waiting for $EXPECTED_COUNT agents to register with resolved deps..."
+      for i in $(seq 1 30); do
+        AGENTS=$(meshctl list 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' || true)
+        READY_COUNT=0
+        for agent in $EXPECTED; do
+          LINE=$(echo "$AGENTS" | grep -E "^${agent}" || true)
+          if [ -n "$LINE" ]; then
+            DEPS=$(echo "$LINE" | awk '{print $5}')
+            RESOLVED=$(echo "$DEPS" | cut -d/ -f1)
+            TOTAL=$(echo "$DEPS" | cut -d/ -f2)
+            if [ "$RESOLVED" = "$TOTAL" ]; then
+              READY_COUNT=$((READY_COUNT + 1))
+            fi
+          fi
+        done
+        if [ "$READY_COUNT" -ge "$EXPECTED_COUNT" ]; then
+          echo "Consumer ready after $((i * 2))s"
+          meshctl list
+          exit 0
+        fi
+        sleep 2
+      done
+      echo "ERROR: consumer not ready within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_consumer_output
+    timeout: 90
+
+  - name: "List all tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: all_tools_output
+
+  # Drive the streaming + structured-output call: multiply 7 by 6 then add 7
+  # → 7*6 + 7 = 49. The consumer streams the JSON, accumulates, parses, and
+  # returns the structured report plus streaming diagnostics.
+  - name: "Call streaming_calc_report (a=7, b=6)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call streaming_calc_report '{"ctx": {"a": 7, "b": 6}}'
+    capture: calc_response
+    timeout: 150
+
+  # Capture provider logs to inspect which structured-output mode engaged.
+  - name: "Capture provider logs (mode selection)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Grep to the runtime log lines that matter (the raw log also contains
+      # large tool-registration schema dumps that would otherwise crowd out
+      # the structured-output mode lines under any --tail window).
+      meshctl logs claude-provider --tail=2000 2>/dev/null \
+        | sed 's/\x1b\[[0-9;]*m//g' \
+        | grep -iE "output_config|HINT mode|synthetic-tool|Native Anthropic adapter|claude-sonnet-4-5|tokens?|usage|Heartbeat successful" \
+        || true
+    capture: provider_logs
+
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+
+assertions:
+  # --- Registration / wiring ---
+  - expr: "${captured.provider_tools_output} contains 'claude_provider'"
+    message: "claude_provider tool should be listed"
+  - expr: "${captured.provider_tools_output} contains 'claude_provider_stream'"
+    message: "Provider must expose the auto-generated streaming variant (process_chat_stream / claude_provider_stream)"
+  - expr: "${captured.all_tools_output} contains 'streaming_calc_report'"
+    message: "TS streaming+structured consumer tool should be listed"
+  - expr: "${captured.all_tools_output} contains 'calc_multiply'"
+    message: "Calculator mesh tool should be available to the LLM"
+
+  # --- RFC #1100: native output_config path engaged on the streaming call ---
+  # Authoritative proof: anthropic_native._build_create_kwargs (the exact
+  # function RFC #1100 changed by removing the `not stream` guard) logs this
+  # line at the moment it places output_config on the wire for the stream call.
+  - expr: "${captured.provider_logs} contains 'output_config.format (native structured output)'"
+    message: "Native Anthropic adapter must place output_config on the wire for the streaming call (RFC #1100)"
+  - expr: "${captured.provider_logs} not contains 'HINT mode'"
+    message: "Provider must NOT fall back to HINT mode for streaming+structured on a capable model (RFC #1100)"
+  - expr: "${captured.provider_logs} not contains 'synthetic-tool mode'"
+    message: "Provider must NOT use synthetic-tool mode (does not chunk)"
+
+  # --- Streaming actually chunked + JSON parsed clean (no thinking contamination) ---
+  # The tool result is an MCP content envelope: .content[0].text is a JSON
+  # string holding the consumer's returned object (incl. _diag_* fields).
+  - expr: "${captured.calc_response} contains '_diag_parsed_ok'"
+    message: "Consumer diagnostics should be present in the response"
+  - expr: "${jq:captured.calc_response:.content[0].text | fromjson | ._diag_parsed_ok} == 'true'"
+    message: "Accumulated streamed text_delta chunks must parse to valid schema-conforming JSON (no thinking/signature deltas leaking in)"
+  - expr: "${jq:captured.calc_response:.content[0].text | fromjson | ._diag_chunk_count} >= 1"
+    message: "Structured JSON must flow through the streaming text_delta accumulator (>=1 chunk); the authoritative 'output_config engaged on the stream call' proof is the provider-log assertion above — chunk count is nondeterministic for short payloads"
+  - expr: "${jq:captured.calc_response:.content[0].text | fromjson | ._diag_parse_error} == ''"
+    message: "No JSON parse error on the accumulated stream"
+
+  # --- Structured result correct (7*6 + 7 = 49) ---
+  - expr: "${jq:captured.calc_response:.content[0].text | fromjson | .result} == '49'"
+    message: "Structured result must be the correct computed value (7*6 + 7 = 49)"
+  - expr: "${captured.calc_response} contains 'expression'"
+    message: "Structured object must contain the 'expression' field"
+  - expr: "${captured.calc_response} contains 'explanation'"
+    message: "Structured object must contain the 'explanation' field"
+
+  # --- Live-call proof: the correct computed result (49) requires the model
+  # to actually call the calculator tool and reason, and the provider log
+  # references the live sonnet-4-5 model id. Together these prove a live call. ---
+  - expr: "${captured.provider_logs} contains 'claude-sonnet-4-5'"
+    message: "Provider logs should reference the live anthropic/claude-sonnet-4-5 model id (proves a live Claude call)"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: "meshctl stop 2>/dev/null || true"
+    ignore_errors: true
+  - routine: global.cleanup_workspace

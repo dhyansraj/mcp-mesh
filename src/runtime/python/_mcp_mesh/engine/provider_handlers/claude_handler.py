@@ -421,8 +421,10 @@ class ClaudeHandler(BaseProviderHandler):
             output_schema: JSON schema dict from consumer
             output_type_name: Name of the output type (e.g., "TripPlan")
             model_params: Current model parameters dict (will be modified)
-            streaming: When True, force HINT mode even when the native SDK is
-                available. See note below.
+            streaming: When True, route capable models (Sonnet 4.5+ /
+                Opus 4.1+) to native ``output_config`` (it streams as
+                ``text_delta`` chunks) and older models to HINT (synthetic-tool
+                doesn't chunk). See note below.
             model: Effective LiteLLM-style model id (e.g.
                 ``anthropic/claude-sonnet-4-6``). Used to gate the native
                 ``output_config`` branch — Sonnet 4.5+ / Opus 4.1+ accept the
@@ -434,18 +436,22 @@ class ClaudeHandler(BaseProviderHandler):
         """
         sanitized_schema = sanitize_schema_for_structured_output(output_schema)
 
-        # Streaming + structured output prefers HINT mode regardless of native
-        # SDK availability. Synthetic-tool injection produces a single forced
-        # tool call that arrives discrete (not chunked) — it doesn't actually
-        # stream. HINT mode emits JSON as plain text which flows naturally
-        # through stream chunks; the existing HINT-fallback machinery handles
-        # parse failures.
-        # Centralized mode selection (RFC #1100). The resolver reproduces the
-        # exact decision this block made inline: BaseModel + native + buffered
-        # routes to output_config (Sonnet 4.5+ / Opus 4.1+) or synthetic-tool
-        # (older models); streaming or no-native falls through to HINT below.
-        # The mode-implementation bodies are unchanged — we only switch on the
-        # resolved mode here.
+        # Centralized mode selection (RFC #1100). The resolver owns the full
+        # decision:
+        #   - BaseModel + native + capable model (Sonnet 4.5+ / Opus 4.1+) →
+        #     OUTPUT_CONFIG, for BOTH buffered and streaming. On streaming,
+        #     ``client.messages.stream`` accepts ``output_config`` and the
+        #     structured JSON arrives as ordinary ``text_delta`` chunks that
+        #     accumulate into the final ``TextBlock`` (RFC #1100 follow-up).
+        #   - BaseModel + native + older model, buffered → SYNTHETIC_TOOL.
+        #   - BaseModel + native + older model, streaming → PROSE_HINT
+        #     (synthetic-tool injection produces a single forced tool call that
+        #     arrives discrete, not chunked — it doesn't actually stream).
+        #   - no-native (LiteLLM) → PROSE_HINT.
+        # HINT mode emits JSON as plain text which flows naturally through
+        # stream chunks; the existing HINT-fallback machinery handles parse
+        # failures. The mode-implementation bodies are unchanged — we only
+        # switch on the resolved mode here.
         from .capabilities import StructuredOutputMode, resolve_capabilities
 
         caps = resolve_capabilities(

@@ -134,6 +134,48 @@ class TestApplyStructuredOutputOutputConfig:
         assert result["_mesh_output_config_mode"] is True
         assert "_mesh_synthetic_format_tool" not in result
 
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic/claude-sonnet-4-5",
+            "anthropic/claude-sonnet-4-6",
+            "anthropic/claude-opus-4-1",
+            "anthropic/claude-opus-4-7",
+            "anthropic.claude-sonnet-4-6-20260301-v1:0",
+        ],
+    )
+    def test_streaming_capable_model_sets_output_config_not_hint(
+        self, _native_on, model
+    ):
+        """RFC #1100: streaming + native + capable model routes to native
+        ``output_config`` (NOT HINT). ``client.messages.stream`` accepts the
+        primitive and the structured JSON arrives as ``text_delta`` chunks, so
+        capable models get server-enforced structured output on streaming —
+        no synthetic tool, no prompt-hint fallback machinery.
+        """
+        handler = ClaudeHandler()
+        params: dict = {
+            "messages": [
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "Plan a trip."},
+            ]
+        }
+        result = handler.apply_structured_output(
+            _trip_schema(), "Trip", params, streaming=True, model=model
+        )
+
+        # response_format set (adapter translates to output_config.format) and
+        # the output_config sentinel is stamped.
+        assert "response_format" in result
+        assert result["response_format"]["type"] == "json_schema"
+        assert result["_mesh_output_config_mode"] is True
+        assert result["_mesh_output_config_output_type_name"] == "Trip"
+        # HINT and synthetic sentinels MUST NOT be present — output_config
+        # supersedes both on the streaming capable-model path.
+        assert "_mesh_hint_mode" not in result
+        assert "_mesh_synthetic_format_tool" not in result
+        assert "_mesh_synthetic_format_tool_name" not in result
+
     def test_output_config_does_not_inject_system_addendum(self, _native_on):
         """``output_config`` mode must NOT append the synthetic "must call this
         tool" instruction to the system message — the API enforces the schema
@@ -354,17 +396,24 @@ class TestApplyStructuredOutputHaikuFallsThroughToSynthetic:
 
 
 class TestApplyStructuredOutputStreamingRoutingPreserved:
-    """Phase C: streaming + structured output prefers HINT mode regardless of
-    the new output_config branch. The model gate is only consulted when
-    ``streaming=False``."""
+    """Streaming mode selection. Capable models stream native output_config
+    (RFC #1100, asserted in
+    ``test_streaming_capable_model_sets_output_config_not_hint`` above); older
+    / unknown models and the no-native path stay on HINT — synthetic-tool
+    doesn't chunk and the LiteLLM path has no native primitive."""
 
     @pytest.mark.parametrize(
         "model",
-        ["anthropic/claude-sonnet-4-6", "anthropic/claude-opus-4-7"],
+        [
+            "anthropic/claude-3-5-sonnet-20241022",
+            "anthropic/claude-3-5-haiku-20241022",
+            "anthropic/claude-opus-4-10",
+        ],
     )
-    def test_streaming_sonnet_4_6_still_routes_to_hint(self, _native_on, model):
-        """Streaming MUST take the HINT path even on output_config-capable
-        models — the API's output_config is buffered-only in this design."""
+    def test_streaming_older_model_still_routes_to_hint(self, _native_on, model):
+        """Streaming on an older (non-output_config-capable) model MUST take
+        the HINT path — synthetic-tool injection emits a single discrete
+        tool_use block, defeating the point of streaming."""
         handler = ClaudeHandler()
         params: dict = {
             "messages": [{"role": "system", "content": "S"}]
@@ -379,6 +428,26 @@ class TestApplyStructuredOutputStreamingRoutingPreserved:
         assert "_mesh_output_config_mode" not in result
         # response_format must NOT leak through (issue #820 silent hang).
         assert "response_format" not in result
+
+    def test_streaming_capable_model_without_native_falls_through_to_hint(
+        self, _native_off
+    ):
+        """``has_native()`` False — even a capable model on the LiteLLM path
+        streams via HINT (no native output_config primitive available)."""
+        handler = ClaudeHandler()
+        params: dict = {
+            "messages": [{"role": "system", "content": "S"}]
+        }
+        result = handler.apply_structured_output(
+            _trip_schema(),
+            "Trip",
+            params,
+            streaming=True,
+            model="anthropic/claude-sonnet-4-6",
+        )
+
+        assert result["_mesh_hint_mode"] is True
+        assert "_mesh_output_config_mode" not in result
 
     def test_buffered_haiku_without_native_falls_through_to_hint(
         self, _native_off

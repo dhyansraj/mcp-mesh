@@ -3,12 +3,16 @@
 Phase C ties together three changes:
 
 1. ``BaseProviderHandler.apply_structured_output`` gains a ``streaming``
-   kwarg. ``ClaudeHandler`` consumes it: ``streaming=True`` forces HINT mode
-   even when the native Anthropic SDK is available, because synthetic-tool
-   injection (the buffered native path) is a single discrete forced tool
-   call that doesn't actually stream as text chunks. HINT mode (schema in
-   prompt, JSON-as-text) is the natural fit for streaming and reuses the
-   existing HINT-fallback machinery for parse failures.
+   kwarg. ``ClaudeHandler`` consumes it: ``streaming=True`` on an older /
+   unknown model routes to HINT mode, because synthetic-tool injection (the
+   buffered native path) is a single discrete forced tool call that doesn't
+   actually stream as text chunks. HINT mode (schema in prompt, JSON-as-text)
+   is the natural fit for those and reuses the existing HINT-fallback
+   machinery for parse failures. (RFC #1100 follow-up: capable models —
+   Sonnet 4.5+ / Opus 4.1+ — instead stream native ``output_config``, since
+   ``client.messages.stream`` accepts the primitive and the structured JSON
+   arrives as ``text_delta`` chunks. The tests in this module exercise the
+   older-model / Haiku paths, which still route to HINT.)
 
 2. The legacy buffered ``process_chat`` final-response branch in
    ``mesh.helpers`` gains a ``_maybe_run_synthetic_fallback`` call, mirroring
