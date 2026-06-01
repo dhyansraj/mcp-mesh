@@ -97,10 +97,45 @@ class TestAnthropicResolver:
         "model",
         [
             "anthropic/claude-sonnet-4-5",
-            "anthropic/claude-3-5-haiku-20241022",
+            "anthropic/claude-sonnet-4-5-20250101",
+            "anthropic/claude-sonnet-4-6",
+            "anthropic/claude-opus-4-1",
+            "anthropic/claude-opus-4-5",
+            "anthropic/claude-opus-4-7",
+            "anthropic.claude-sonnet-4-6-20260301-v1:0",
+            "anthropic/claude-sonnet-4.5",
         ],
     )
-    def test_basemodel_native_streaming_is_prose_hint(self, model):
+    def test_basemodel_native_streaming_supported_model_is_output_config(
+        self, model, _anthropic_floor_met
+    ):
+        """RFC #1100: streaming + native + capable model → OUTPUT_CONFIG.
+        ``client.messages.stream`` accepts ``output_config`` and the structured
+        JSON streams as ``text_delta`` chunks."""
+        caps = resolve_capabilities(
+            "anthropic",
+            model,
+            output_is_basemodel=True,
+            has_native=True,
+            streaming=True,
+        )
+        assert caps.structured_output == StructuredOutputMode.OUTPUT_CONFIG
+        assert caps.server_enforced is True
+        assert caps.streaming_structured is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic/claude-3-5-sonnet-20241022",
+            "anthropic/claude-sonnet-4-0",
+            "anthropic/claude-3-opus-20240229",
+            "anthropic/claude-3-5-haiku-20241022",
+            "anthropic/claude-opus-4-10",
+        ],
+    )
+    def test_basemodel_native_streaming_older_model_is_prose_hint(self, model):
+        """Streaming + native but older (non-output_config-capable) model stays
+        on PROSE_HINT — synthetic-tool injection doesn't chunk."""
         caps = resolve_capabilities(
             "anthropic",
             model,

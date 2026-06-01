@@ -178,10 +178,16 @@ def _resolve_anthropic(
     """Reproduce ``ClaudeHandler.apply_structured_output`` selection.
 
     - ``str`` output → TEXT.
-    - BaseModel + ``has_native`` + not ``streaming``:
-        - ``_supports_native_output_format(model)`` → OUTPUT_CONFIG
-        - else → SYNTHETIC_TOOL
-    - BaseModel otherwise (no native, or streaming) → PROSE_HINT.
+    - BaseModel + ``has_native``:
+        - buffered + ``_supports_native_output_format(model)`` → OUTPUT_CONFIG
+        - streaming + ``_supports_native_output_format(model)`` → OUTPUT_CONFIG
+          (RFC #1100: ``client.messages.stream`` accepts ``output_config`` and
+          delivers the structured JSON as ordinary ``text_delta`` chunks that
+          accumulate into the final ``TextBlock`` — no synthetic tool, which
+          does not chunk)
+        - buffered + older model → SYNTHETIC_TOOL
+        - streaming + older model → PROSE_HINT (synthetic-tool does not stream)
+    - BaseModel otherwise (no native) → PROSE_HINT.
     """
     # Reuse the single source of truth for the output_config model gate.
     from _mcp_mesh.engine.native_clients.anthropic_native import (
@@ -197,13 +203,20 @@ def _resolve_anthropic(
             recovery=RECOVERY_NONE,
         )
 
-    if has_native and not streaming:
+    if has_native:
         # OUTPUT_CONFIG requires anthropic >= 0.77 (stable ``output_config``).
         # With the dependency floor now 0.77 this gate never trips in
         # conforming installs; it makes the resolver correct for constrained
         # installs that pin an older SDK by degrading to the next-best native
         # mode (SYNTHETIC_TOOL, issue #834) rather than emitting a primitive
         # the SDK cannot serialize.
+        #
+        # RFC #1100: output_config is now allowed on the streaming path for
+        # capable models. ``client.messages.stream`` accepts the primitive and
+        # the structured JSON arrives as ordinary ``text_delta`` chunks. Older
+        # models stay on PROSE_HINT for streaming (synthetic-tool injection
+        # produces a single forced tool call that arrives discrete, not
+        # chunked) — see the streaming fall-through below.
         if _supports_native_output_format(model) and _sdk_at_least(
             "anthropic", _ANTHROPIC_OUTPUT_CONFIG_FLOOR
         ):
@@ -211,7 +224,7 @@ def _resolve_anthropic(
                 structured_output=StructuredOutputMode.OUTPUT_CONFIG,
                 server_enforced=True,
                 schema_with_tools=True,
-                streaming_structured=False,
+                streaming_structured=streaming,
                 min_sdk_version="0.77",
                 recovery=RECOVERY_NONE,
             )
@@ -219,15 +232,19 @@ def _resolve_anthropic(
         # decline to call the injected ``__mesh_format_response`` tool or emit
         # invalid args, so it relies on corrective response_format retries
         # (paths C/D). Hence server_enforced=False and a retry recovery value.
-        return ModelCapabilities(
-            structured_output=StructuredOutputMode.SYNTHETIC_TOOL,
-            server_enforced=False,
-            schema_with_tools=True,
-            streaming_structured=False,
-            recovery=RECOVERY_RESPONSE_FORMAT_RETRY,
-        )
+        if not streaming:
+            return ModelCapabilities(
+                structured_output=StructuredOutputMode.SYNTHETIC_TOOL,
+                server_enforced=False,
+                schema_with_tools=True,
+                streaming_structured=False,
+                recovery=RECOVERY_RESPONSE_FORMAT_RETRY,
+            )
+        # Streaming + native but older model: synthetic-tool can't chunk, so
+        # fall through to PROSE_HINT below.
 
-    # LiteLLM path (no native) or streaming → HINT, with response_format retry.
+    # LiteLLM path (no native) or streaming-on-older-model → HINT, with
+    # response_format retry.
     return ModelCapabilities(
         structured_output=StructuredOutputMode.PROSE_HINT,
         server_enforced=False,

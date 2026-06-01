@@ -900,23 +900,25 @@ def _build_create_kwargs(
             )
         else:
             schema = _extract_schema_from_response_format(response_format)
-            if schema is not None and _supports_native_output_format(model) and not stream:
+            if schema is not None and _supports_native_output_format(model):
                 # Native output_config branch — Sonnet 4.5+ / Opus 4.1+
                 # accept ``output_config.format`` as a first-class
                 # structured-output primitive. Cheaper than the synthetic-
                 # tool path (no extra tool slot, no system-instruction
                 # addendum, no agentic-loop tool_use→JSON unwrap) and
                 # enforced by the API rather than by a prompt hint.
-                # Streaming is intentionally NOT routed here —
-                # ``client.messages.stream`` requires separate wire-up
-                # (deferred to a follow-up PR); the handler at
-                # claude_handler.py:426 should have already forced HINT
-                # mode for stream=True, but the guard above is a safety
-                # net. ``maxItems`` / ``minItems`` are stripped because
-                # native output_config rejects them
-                # (Anthropic-cookbook issue #19444); the synthetic-tool
-                # path accepts them silently, so the strip is scoped to
-                # this branch.
+                # This branch is used for BOTH buffered and streaming
+                # (RFC #1100): ``client.messages.stream`` accepts
+                # ``output_config`` on the wire and the structured JSON
+                # arrives as ordinary ``text_delta`` chunks that
+                # accumulate into the final ``TextBlock`` — no separate
+                # event type or special assembly is needed. The resolver
+                # only routes capable models here for streaming; older
+                # models stay on HINT (synthetic-tool doesn't chunk).
+                # ``maxItems`` / ``minItems`` are stripped because native
+                # output_config rejects them (Anthropic-cookbook issue
+                # #19444); the synthetic-tool path accepts them silently,
+                # so the strip is scoped to this branch.
                 filtered_schema = _filter_anthropic_output_schema(schema)
                 request_params["output_config"] = {
                     "format": {

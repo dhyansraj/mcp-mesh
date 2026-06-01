@@ -417,9 +417,11 @@ class TestNativeOutputConfigRouting:
         assert synthetic_count == 1
 
     @pytest.mark.asyncio
-    async def test_stream_true_falls_through_to_synthetic_tool(self):
-        """Defensive: ``stream=True`` MUST fall through to synthetic-tool
-        path. Streaming output_config requires separate wire-up (deferred)."""
+    async def test_stream_true_capable_model_emits_output_config(self):
+        """RFC #1100: ``stream=True`` on a capable model (Sonnet 4.6) MUST
+        emit native ``output_config`` — ``client.messages.stream`` accepts the
+        primitive and the structured JSON arrives as ``text_delta`` chunks. No
+        synthetic tool is injected on this path."""
         # Direct call to _build_create_kwargs to inject stream=True without
         # actually opening a streaming context.
         create_kwargs = anthropic_native._build_create_kwargs(
@@ -430,7 +432,29 @@ class TestNativeOutputConfigRouting:
             model="anthropic/claude-sonnet-4-6",
             stream=True,
         )
-        # No native output_config — streaming branch defers.
+        # Native output_config engaged on the streaming path.
+        assert "output_config" in create_kwargs
+        assert create_kwargs["output_config"]["format"]["type"] == "json_schema"
+        # No synthetic tool (output_config path doesn't inject one).
+        tools = create_kwargs.get("tools") or []
+        assert not any(t.get("name") == SYNTHETIC_FORMAT_TOOL_NAME for t in tools)
+
+    @pytest.mark.asyncio
+    async def test_stream_true_older_model_uses_synthetic_tool(self):
+        """``stream=True`` on an older (non-output_config-capable) model still
+        falls through to the synthetic-tool path — native output_config is
+        only emitted for capable models. (The resolver routes older-model
+        streaming to HINT upstream, but the adapter remains correct if reached
+        directly.)"""
+        create_kwargs = anthropic_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi."}],
+                "response_format": _RESPONSE_FORMAT,
+            },
+            model="anthropic/claude-3-5-sonnet-20241022",
+            stream=True,
+        )
+        # No native output_config for older model.
         assert "output_config" not in create_kwargs
         # Synthetic-tool path engaged instead.
         tools = create_kwargs.get("tools") or []
