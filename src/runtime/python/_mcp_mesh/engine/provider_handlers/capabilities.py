@@ -119,11 +119,12 @@ class StructuredOutputMode:
     - ``RESPONSE_JSON_SCHEMA`` — Gemini 3+ WITH tools, google-genai
       ``response_json_schema`` field (stricter server-side enforcement than
       ``response_schema``, and avoids the ``response_schema`` + tools
-      infinite-loop bug). DEFAULT for qualifying requests (Gemini-3+ AND
-      google-genai >= 1.22 AND tools). The
-      ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0`` kill-switch reverts these
-      to ``PROSE_HINT``. gemini-2.x, an older SDK, or no-tools requests never
-      reach this mode and keep their prior behavior.
+      infinite-loop bug). Runtime-default for qualifying requests (Gemini-3+
+      AND google-genai >= 1.22 AND tools) — the handler enables it unless the
+      ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0`` kill-switch is set; the
+      resolver parameter's signature default is ``False``. gemini-2.x, an older
+      SDK, or no-tools requests never reach this mode and keep their prior
+      behavior.
     - ``RESPONSE_SCHEMA`` — reserved for future vendor variants of
       server-side schema enforcement. Unused.
     - ``PROSE_HINT`` — schema-in-prompt HINT mode (Claude LiteLLM path,
@@ -272,15 +273,17 @@ def _resolve_gemini(
       The tools path never selects a server-side schema primitive.
 
     DEFAULT-ON EXCEPTION (RFC #1100 follow-up): when
-    ``gemini_native_structured_tools`` is True (its default — the
-    ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0`` kill-switch is NOT set) AND
-    tools are present AND the model is Gemini-3+ AND google-genai >= 1.22,
-    select RESPONSE_JSON_SCHEMA — the stricter Gemini-3 server-side primitive,
-    now validated loop-safe (the documented infinite-loop bug is specific to
-    the OLDER ``response_schema`` primitive, which this path deliberately
-    avoids). The kill-switch (``gemini_native_structured_tools=False``) reverts
-    the tools path to PROSE_HINT exactly as the pre-#1102 default. gemini-2.x,
-    an older SDK, or no-tools requests never reach this branch.
+    ``gemini_native_structured_tools`` is True AND tools are present AND the
+    model is Gemini-3+ AND google-genai >= 1.22, select RESPONSE_JSON_SCHEMA —
+    the stricter Gemini-3 server-side primitive, now validated loop-safe (the
+    documented infinite-loop bug is specific to the OLDER ``response_schema``
+    primitive, which this path deliberately avoids). This parameter's signature
+    default is ``False``; the runtime default-on comes from the handler, which
+    passes ``True`` unless the ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0``
+    kill-switch is set. With the kill-switch set
+    (``gemini_native_structured_tools=False``) the tools path reverts to
+    PROSE_HINT exactly as the pre-#1102 default. gemini-2.x, an older SDK, or
+    no-tools requests never reach this branch.
     """
     if not output_is_basemodel:
         return ModelCapabilities(
@@ -371,11 +374,13 @@ def resolve_capabilities(
             (Anthropic only consults this).
         streaming: True on the streaming dispatch path (Anthropic only).
         has_tools: True when real user tools are present (Gemini only).
-        gemini_native_structured_tools: DEFAULT ON. When True (the default —
-            the ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0`` kill-switch is NOT
-            set), qualifying Gemini-3+ requests with tools use the
-            ``response_json_schema`` server-side primitive (Gemini only). When
-            False (kill-switch set), the tools path reverts to PROSE_HINT.
+        gemini_native_structured_tools: signature default ``False``
+            (pure-function default); the handler passes ``True`` at runtime
+            unless the ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0`` kill-switch
+            is set — i.e. runtime default-on. When True, qualifying Gemini-3+
+            requests with tools use the ``response_json_schema`` server-side
+            primitive (Gemini only); when False (kill-switch set), the tools
+            path reverts to PROSE_HINT.
     """
     v = (vendor or "").strip().lower()
 
