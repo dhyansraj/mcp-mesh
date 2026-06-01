@@ -1600,6 +1600,10 @@ components:
                   type: string
                   enum: [available, unavailable, degraded]
                   description: "Current status of the dependency"
+                kwargs:
+                  type: object
+                  additionalProperties: true
+                  description: "Producer @mesh.tool kwargs (e.g. stream_type) propagated to the consumer's proxy. Optional; absent when the provider declares none."
               required: [agent_id, function_name, endpoint, capability, status]
           description: |
             Function name to array of resolved dependencies mapping.
@@ -1994,6 +1998,10 @@ components:
                   type: string
                   enum: [available, unavailable, degraded]
                   description: "Current status of the dependency"
+                kwargs:
+                  type: object
+                  additionalProperties: true
+                  description: "Producer @mesh.tool kwargs (e.g. stream_type) propagated to the consumer's proxy. Optional; absent when the provider declares none."
               required: [agent_id, function_name, endpoint, capability, status]
           description: |
             Function name to array of resolved dependencies mapping.
