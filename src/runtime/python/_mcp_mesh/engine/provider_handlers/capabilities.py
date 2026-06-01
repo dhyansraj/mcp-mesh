@@ -215,12 +215,16 @@ def _resolve_anthropic(
                 min_sdk_version="0.77",
                 recovery=RECOVERY_NONE,
             )
+        # SYNTHETIC_TOOL is best-effort, not server-enforced: the model may
+        # decline to call the injected ``__mesh_format_response`` tool or emit
+        # invalid args, so it relies on corrective response_format retries
+        # (paths C/D). Hence server_enforced=False and a retry recovery value.
         return ModelCapabilities(
             structured_output=StructuredOutputMode.SYNTHETIC_TOOL,
-            server_enforced=True,
+            server_enforced=False,
             schema_with_tools=True,
             streaming_structured=False,
-            recovery=RECOVERY_NONE,
+            recovery=RECOVERY_RESPONSE_FORMAT_RETRY,
         )
 
     # LiteLLM path (no native) or streaming → HINT, with response_format retry.

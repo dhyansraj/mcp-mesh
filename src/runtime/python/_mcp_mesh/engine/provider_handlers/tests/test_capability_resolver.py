@@ -13,6 +13,8 @@ import pytest
 
 from _mcp_mesh.engine.provider_handlers import capabilities as caps_mod
 from _mcp_mesh.engine.provider_handlers.capabilities import (
+    RECOVERY_NONE,
+    RECOVERY_RESPONSE_FORMAT_RETRY,
     StructuredOutputMode,
     resolve_capabilities,
 )
@@ -188,6 +190,51 @@ class TestOpenAIResolver:
             "openai", None, output_is_basemodel=True, has_tools=has_tools
         )
         assert caps.structured_output == StructuredOutputMode.RESPONSE_FORMAT_STRICT
+
+
+class TestServerEnforcementMetadata:
+    """Descriptor-metadata correctness for ``server_enforced``/``recovery``.
+
+    These fields are currently descriptive-only (no control flow reads them),
+    but must be accurate before a future phase makes them load-bearing.
+    """
+
+    def test_synthetic_tool_is_best_effort_with_retry_recovery(self):
+        """SYNTHETIC_TOOL is NOT server-enforced: the model may decline the
+        injected ``__mesh_format_response`` tool or emit invalid args, so it
+        relies on corrective response_format retries (paths C/D)."""
+        caps = resolve_capabilities(
+            "anthropic",
+            "anthropic/claude-3-5-sonnet-20241022",  # older model → SYNTHETIC_TOOL
+            output_is_basemodel=True,
+            has_native=True,
+            streaming=False,
+        )
+        assert caps.structured_output == StructuredOutputMode.SYNTHETIC_TOOL
+        assert caps.server_enforced is False
+        assert caps.recovery == RECOVERY_RESPONSE_FORMAT_RETRY
+
+    def test_output_config_is_server_enforced_no_recovery(
+        self, _anthropic_floor_met
+    ):
+        caps = resolve_capabilities(
+            "anthropic",
+            "anthropic/claude-sonnet-4-5",
+            output_is_basemodel=True,
+            has_native=True,
+            streaming=False,
+        )
+        assert caps.structured_output == StructuredOutputMode.OUTPUT_CONFIG
+        assert caps.server_enforced is True
+        assert caps.recovery == RECOVERY_NONE
+
+    def test_response_format_strict_is_server_enforced_no_recovery(self):
+        caps = resolve_capabilities(
+            "openai", None, output_is_basemodel=True
+        )
+        assert caps.structured_output == StructuredOutputMode.RESPONSE_FORMAT_STRICT
+        assert caps.server_enforced is True
+        assert caps.recovery == RECOVERY_NONE
 
 
 class TestGeminiResolver:
