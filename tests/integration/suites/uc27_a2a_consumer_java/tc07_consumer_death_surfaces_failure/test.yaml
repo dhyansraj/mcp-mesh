@@ -12,7 +12,7 @@
 # Validation strategy mirrors uc25 tc07:
 #   - Submit + return immediately.
 #   - Wait so consumer's bridge is actively polling.
-#   - Kill ONLY the consumer (`meshctl stop consumer-report-agent-java`).
+#   - Kill ONLY the consumer (`meshctl stop report-consumer`).
 #   - Wait for fast-sweep registry to mark the consumer unhealthy.
 #   - Read final status — MUST be non-completed; owner_instance_id null
 #     and attempt_count > 0 (orphan-reset proof).
@@ -97,7 +97,7 @@ test:
         sleep 2
       done
       echo "ERROR: Java consumer not healthy within 120s (last status='$STATUS')"
-      meshctl logs consumer-report-agent-java 2>&1 | tail -80 || true
+      meshctl logs report-consumer 2>&1 | tail -80 || true
       exit 1
     timeout: 150
 
@@ -142,7 +142,7 @@ test:
   - name: "Kill the bridging Java consumer mid-job"
     handler: shell
     workdir: /workspace
-    command: meshctl stop consumer-report-agent-java
+    command: meshctl stop report-consumer
     capture: stop_resp
     timeout: 15
 
