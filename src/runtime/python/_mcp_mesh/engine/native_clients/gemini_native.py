@@ -1192,14 +1192,15 @@ def _build_create_kwargs(
     # ("Unknown name 'additional_properties'..."). The whitelist sanitizer
     # strips both casings (snake_case keys aren't in the whitelist either).
     #
-    # GATED Gemini-3 path (RFC #1100 follow-up, default OFF): when the
+    # Gemini-3 server-enforced path (RFC #1100 follow-up, DEFAULT ON): when the
     # ``_mesh_gemini_response_json_schema`` marker is set (stamped by
-    # GeminiHandler when MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS is enabled and
-    # the model/SDK qualify), emit ``response_json_schema`` — the stricter
-    # Gemini-3 server-side primitive — INSTEAD of ``response_schema``. The
-    # documented infinite-tool-loop bug is specific to ``response_schema`` +
-    # tools; this path deliberately avoids that translation. Tools (set above)
-    # are left intact alongside it.
+    # GeminiHandler by default for Gemini-3+ with tools when the model/SDK
+    # qualify; the MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0 kill-switch
+    # disables it), emit ``response_json_schema`` — the stricter Gemini-3
+    # server-side primitive — INSTEAD of ``response_schema``. The documented
+    # infinite-tool-loop bug is specific to ``response_schema`` + tools; this
+    # path deliberately avoids that translation. Tools (set above) are left
+    # intact alongside it.
     use_response_json_schema = bool(
         request_params.get("_mesh_gemini_response_json_schema")
     )

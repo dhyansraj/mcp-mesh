@@ -119,10 +119,12 @@ class StructuredOutputMode:
     - ``RESPONSE_JSON_SCHEMA`` — Gemini 3+ WITH tools, google-genai
       ``response_json_schema`` field (stricter server-side enforcement than
       ``response_schema``, and avoids the ``response_schema`` + tools
-      infinite-loop bug). Selected by the resolver only when
-      ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS`` is enabled and google-genai
-      >= 1.22 (server-enforced); otherwise the Gemini-with-tools path falls
-      back to ``PROSE_HINT``.
+      infinite-loop bug). Runtime-default for qualifying requests (Gemini-3+
+      AND google-genai >= 1.22 AND tools) — the handler enables it unless the
+      ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0`` kill-switch is set; the
+      resolver parameter's signature default is ``False``. gemini-2.x, an older
+      SDK, or no-tools requests never reach this mode and keep their prior
+      behavior.
     - ``RESPONSE_SCHEMA`` — reserved for future vendor variants of
       server-side schema enforcement. Unused.
     - ``PROSE_HINT`` — schema-in-prompt HINT mode (Claude LiteLLM path,
@@ -270,14 +272,18 @@ def _resolve_gemini(
       response_format + tools combo triggers Gemini's infinite-tool-loop bug).
       The tools path never selects a server-side schema primitive.
 
-    GATED EXCEPTION (RFC #1100 follow-up, default OFF): when
+    DEFAULT-ON EXCEPTION (RFC #1100 follow-up): when
     ``gemini_native_structured_tools`` is True AND tools are present AND the
     model is Gemini-3+ AND google-genai >= 1.22, select RESPONSE_JSON_SCHEMA —
-    the stricter Gemini-3 server-side primitive. This is the LIVE EXPERIMENT
-    path: it tests whether ``response_json_schema`` + tools is loop-safe (the
+    the stricter Gemini-3 server-side primitive, now validated loop-safe (the
     documented infinite-loop bug is specific to the OLDER ``response_schema``
-    primitive, which this path deliberately avoids). Off by default → the
-    tools path stays on PROSE_HINT exactly as today.
+    primitive, which this path deliberately avoids). This parameter's signature
+    default is ``False``; the runtime default-on comes from the handler, which
+    passes ``True`` unless the ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0``
+    kill-switch is set. With the kill-switch set
+    (``gemini_native_structured_tools=False``) the tools path reverts to
+    PROSE_HINT exactly as the pre-#1102 default. gemini-2.x, an older SDK, or
+    no-tools requests never reach this branch.
     """
     if not output_is_basemodel:
         return ModelCapabilities(
@@ -368,10 +374,13 @@ def resolve_capabilities(
             (Anthropic only consults this).
         streaming: True on the streaming dispatch path (Anthropic only).
         has_tools: True when real user tools are present (Gemini only).
-        gemini_native_structured_tools: GATED, default OFF. When True (set by
-            the ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS`` env flag), unlocks
-            the Gemini-3 ``response_json_schema`` + tools experiment path
-            (Gemini only). Off → no behavior change anywhere.
+        gemini_native_structured_tools: signature default ``False``
+            (pure-function default); the handler passes ``True`` at runtime
+            unless the ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0`` kill-switch
+            is set — i.e. runtime default-on. When True, qualifying Gemini-3+
+            requests with tools use the ``response_json_schema`` server-side
+            primitive (Gemini only); when False (kill-switch set), the tools
+            path reverts to PROSE_HINT.
     """
     v = (vendor or "").strip().lower()
 

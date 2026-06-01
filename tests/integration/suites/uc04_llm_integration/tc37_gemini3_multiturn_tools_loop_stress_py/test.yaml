@@ -1,0 +1,261 @@
+# Test Case: Gemini-3 multi-tool / multi-turn agentic LOOP-STRESS (RFC #1100)
+#
+# The Gemini-3 server-enforced response_json_schema + tools path is now
+# DEFAULT-ON (RFC #1100; kill-switch MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0).
+# The flip's risk vector is the documented response_format + tools
+# non-deterministic infinite-tool-loop bug. Existing structured Gemini-with-tools
+# coverage (tc36) is only a single tool / ~2 iterations -- too thin to catch a
+# loop. This TC stresses the agentic loop:
+#
+#   - Gemini-3 provider (gemini/gemini-3-flash-preview), DEFAULT flag (no env):
+#     so it uses response_json_schema + tools by default.
+#   - Consumer (@mesh.llm, structured return CalcAnalysis) with TWO distinct
+#     mesh tools (calc_add, calc_multiply) and a prompt with a hard data
+#     dependency that forces MULTIPLE sequential tool-call rounds:
+#     "first add 137 and 246, then multiply that sum by 4".
+#       137 + 246 = 383 ; 383 * 4 = 1532
+#   - max_iterations=8 (modest) so a runaway loop hits the cap fast; the call
+#     step has a bounded timeout (120s) so a runaway FAILS FAST instead of
+#     hanging the run.
+#
+# PASS (loop-safe): the call returns a valid structured object containing 1532
+#   within the bounded timeout; the provider log shows the gated
+#   response_json_schema + tools path engaged (server-enforced); the consumer
+#   log shows the agentic loop ran multiple iterations and TERMINATED (no
+#   "Max iterations" / no MaxIterationsError / no timeout).
+# FAIL (runaway): the call times out / hits max_iterations / never returns the
+#   object -> response_json_schema + tools STILL loops under the new default.
+#   We do NOT weaken these assertions to force a pass; that would mean the flip
+#   is NOT safe to land. Log evidence is captured regardless of outcome.
+
+name: "Gemini-3 multi-tool multi-turn agentic loop-stress (default response_json_schema + tools)"
+description: "RFC #1100: stress the default-on Gemini-3 response_json_schema + tools agentic loop with 2 tools + forced sequential rounds; confirm it terminates and returns the structured object (no runaway)"
+tags:
+  - llm
+  - gemini
+  - structured
+  - python
+  - tools
+  - loop-stress
+  - issue-1100
+  - smoke
+timeout: 400
+# Skip with --skip-tag llm if no API key is available.
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+test:
+  # --- Copy artifacts ---
+  - name: "Copy Gemini provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/gemini-provider /workspace/"
+    capture: copy_provider_output
+  - name: "Copy calculator-agent to workspace"
+    handler: shell
+    command: "cp -r /artifacts/calculator-agent /workspace/"
+    capture: copy_calc_output
+  - name: "Copy chat-tools-agent to workspace"
+    handler: shell
+    command: "cp -r /artifacts/chat-tools-agent /workspace/"
+    capture: copy_agent_output
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+  - name: "Verify workspace files"
+    handler: shell
+    command: "ls -la /workspace/"
+    capture: ls_output
+
+  # --- Start tool provider (two distinct tools) ---
+  - name: "Start calculator-agent (calc_add + calc_multiply)"
+    handler: shell
+    command: "meshctl start calculator-agent/main.py -d"
+    workdir: /workspace
+    capture: start_calc_output
+  - name: "Wait for calculator to register"
+    handler: wait
+    seconds: 3
+
+  # Provider started WITHOUT any structured-tools env flag: the gated
+  # response_json_schema + tools path is the DEFAULT for Gemini-3+ now.
+  # --debug so the provider-side "response_json_schema + tools" log line shows.
+  - name: "Start Gemini-3 provider (DEFAULT flag, no env)"
+    handler: shell
+    command: "meshctl start gemini-provider/main.py --env-file .env -d --debug"
+    workdir: /workspace
+    capture: start_provider_output
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 15
+  - name: "Verify calculator and provider running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: pre_agent_list_output
+
+  # Consumer started --debug. NOTE: this is a mesh-delegation setup, so the
+  # multi-round agentic loop actually runs PROVIDER-SIDE (provider-managed
+  # loop); the per-round tool-call markers + completion line are asserted on
+  # the PROVIDER log below, not here.
+  - name: "Start chat-tools-agent (consumer: structured + 2 tools)"
+    handler: shell
+    command: "meshctl start chat-tools-agent/main.py -d --debug"
+    workdir: /workspace
+    capture: start_agent_output
+  - name: "Wait for agent to register and resolve dependencies"
+    handler: wait
+    seconds: 15
+  - name: "Verify all agents running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: all_list_output
+  - name: "List available tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # THE LOOP-STRESS CALL. Two sequential tool rounds forced by the data
+  # dependency. Bounded timeout so a runaway FAILS FAST.
+  #   137 + 246 = 383 ; 383 * 4 = 1532
+  - name: "LOOP-STRESS call (default): multi-step structured output + 2 tools"
+    handler: shell
+    command: |
+      meshctl call analyze '{"ctx": {"question": "First use the calculator to add 137 and 246. Then use the calculator to multiply that sum by 4. Then return the structured analysis with the final number as the answer."}}'
+    workdir: /workspace
+    capture: stress_response
+    timeout: 120
+
+  # Capture provider log tail REGARDLESS of outcome: looking for the gated
+  # response_json_schema + tools line (server-enforced path engaged).
+  - name: "Capture Gemini provider log tail"
+    handler: shell
+    command: |
+      meshctl logs gemini-provider 2>/dev/null | tail -150 || true
+    workdir: /workspace
+    capture: provider_log
+    ignore_errors: true
+  - name: "Confirm gated response_json_schema path engaged in provider log"
+    handler: shell
+    command: |
+      meshctl logs gemini-provider 2>/dev/null | grep -iE "response_json_schema" || true
+    workdir: /workspace
+    capture: provider_json_schema_lines
+    ignore_errors: true
+
+  # This is a MESH-DELEGATION setup: the consumer's @mesh.llm delegates to the
+  # gemini-provider, which runs its OWN provider-managed agentic loop. So the
+  # per-round tool-call iteration markers and the loop-termination line live in
+  # the PROVIDER log, not the consumer log. Grep the provider log for the
+  # provider-managed loop markers (server-enforced multi-round tool use) and the
+  # explicit completion line.
+  - name: "Confirm provider-managed loop completed (provider log)"
+    handler: shell
+    command: |
+      meshctl logs gemini-provider 2>/dev/null | grep -iE "Provider-managed loop completed in [0-9]+ iterations" || true
+    workdir: /workspace
+    capture: loop_completed_line
+    ignore_errors: true
+  # Count tool-call rounds and emit an explicit newline-safe marker: a
+  # multi-round loop (forced add-then-multiply dependency) must show >= 2
+  # "Provider executing ... tool calls (iteration N/..)" lines.
+  - name: "Count provider-managed tool-call rounds (provider log)"
+    handler: shell
+    command: |
+      ROUNDS=$(meshctl logs gemini-provider 2>/dev/null | grep -cE "Provider executing [0-9]+ tool calls \(iteration" || echo 0)
+      echo "TOOL_ROUNDS=${ROUNDS}"
+      if [ "${ROUNDS}" -ge 2 ]; then echo "MULTI_ROUND_OK"; else echo "MULTI_ROUND_FAIL"; fi
+    workdir: /workspace
+    capture: tool_round_count
+    ignore_errors: true
+  - name: "Check provider log for max-iterations / runaway markers"
+    handler: shell
+    command: |
+      meshctl logs gemini-provider 2>/dev/null | grep -iE "Max iterations|MaxIterationsError|Exceeded maximum" || echo "NO_MAX_ITER"
+    workdir: /workspace
+    capture: max_iter_marker
+    ignore_errors: true
+  # Confirm BOTH distinct tools were actually invoked (not just one tool twice):
+  # emit explicit per-tool markers so the assertion is newline/format safe.
+  - name: "Confirm both distinct tools were actually invoked (provider log)"
+    handler: shell
+    command: |
+      LOG=$(meshctl logs gemini-provider 2>/dev/null || true)
+      echo "$LOG" | grep -q "calc_add"      && echo "CALC_ADD_INVOKED"      || echo "CALC_ADD_MISSING"
+      echo "$LOG" | grep -q "calc_multiply" && echo "CALC_MULTIPLY_INVOKED" || echo "CALC_MULTIPLY_MISSING"
+    workdir: /workspace
+    capture: tool_invocation_marker
+    ignore_errors: true
+
+  - name: "Stop all agents"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  # --- Infrastructure (must hold for the stress to be valid) ---
+  - expr: ${captured.pre_agent_list_output} contains 'calculator-agent'
+    message: "calculator-agent should be registered"
+  - expr: ${captured.pre_agent_list_output} contains 'gemini-provider'
+    message: "gemini-provider should be registered"
+  - expr: ${captured.all_list_output} contains 'chat-tools-agent'
+    message: "chat-tools-agent should be registered"
+  - expr: ${captured.tools_output} contains 'analyze'
+    message: "analyze tool should be listed"
+  - expr: ${captured.tools_output} contains 'calc_add'
+    message: "calc_add tool should be listed"
+  - expr: ${captured.tools_output} contains 'calc_multiply'
+    message: "calc_multiply tool should be listed (second distinct tool)"
+
+  # --- Confirm the GATED server-enforced path actually engaged by DEFAULT ---
+  # (no env flag was set; this proves the flipped default fired).
+  - expr: ${captured.provider_log} icontains 'response_json_schema'
+    message: "Provider log should show the gated response_json_schema + tools path engaged by default"
+  - expr: ${captured.provider_json_schema_lines} icontains 'response_json_schema'
+    message: "Provider log should contain the server-enforced response_json_schema + tools marker"
+
+  # --- Loop-safety: terminated correctly, returned the structured object ---
+  # 137+246=383 ; 383*4=1532. The final answer must contain 1532.
+  - expr: ${captured.stress_response} contains '1532'
+    message: "LOOP-STRESS: structured result should contain the final computed value 1532 (137+246=383, *4=1532)"
+  - expr: ${captured.stress_response} contains '"answer"'
+    message: "LOOP-STRESS: should return the structured 'answer' field"
+  - expr: ${captured.stress_response} contains '"confidence"'
+    message: "LOOP-STRESS: should return the structured 'confidence' field"
+  - expr: ${captured.stress_response} not contains 'ValidationError'
+    message: "LOOP-STRESS: should not have a ValidationError"
+
+  # --- No runaway: did NOT hit the cap / time out ---
+  - expr: ${captured.stress_response} not contains 'max_iterations'
+    message: "LOOP-STRESS: call should NOT hit max_iterations (runaway-loop indicator)"
+  - expr: ${captured.stress_response} not contains 'Exceeded maximum'
+    message: "LOOP-STRESS: call should NOT raise MaxIterationsError (runaway-loop indicator)"
+  - expr: ${captured.stress_response} not contains 'timed out'
+    message: "LOOP-STRESS: call should NOT time out (runaway-loop indicator)"
+  - expr: ${captured.max_iter_marker} contains 'NO_MAX_ITER'
+    message: "LOOP-STRESS: provider log should NOT show a Max iterations / MaxIterationsError marker (the loop terminated)"
+
+  # --- The provider-managed agentic loop actually ran MULTIPLE sequential tool
+  #     rounds (proves multi-turn stress) and TERMINATED (no runaway). This is a
+  #     mesh-delegation setup, so the loop runs provider-side. ---
+  - expr: ${captured.loop_completed_line} icontains 'Provider-managed loop completed'
+    message: "LOOP-STRESS: provider log should show the provider-managed loop completed (terminated, no runaway)"
+  - expr: ${captured.tool_round_count} contains 'MULTI_ROUND_OK'
+    message: "LOOP-STRESS: provider-managed loop should run at least 2 sequential tool-call rounds (forced data dependency: add then multiply)"
+  - expr: ${captured.tool_round_count} not contains 'MULTI_ROUND_FAIL'
+    message: "LOOP-STRESS: provider-managed loop should not run a single round (must be multi-round)"
+  - expr: ${captured.tool_invocation_marker} contains 'CALC_ADD_INVOKED'
+    message: "LOOP-STRESS: calc_add (tool A) should be invoked in the loop"
+  - expr: ${captured.tool_invocation_marker} contains 'CALC_MULTIPLY_INVOKED'
+    message: "LOOP-STRESS: calc_multiply (tool B) should be invoked in the loop (proves both distinct tools used)"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
