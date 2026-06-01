@@ -8,6 +8,7 @@ function finding without requiring actual MCP mesh infrastructure.
 
 import asyncio
 import inspect
+import logging
 import weakref
 from typing import Any
 from unittest.mock import MagicMock, call, patch
@@ -1146,3 +1147,67 @@ class TestUnifiedPositionalInjection:
         # Framework didn't construct a MeshJobSubmitter (registry URL
         # was unavailable), so injected_count stays at 0.
         assert injected_count == 0
+
+    def test_hidden_wrapper_param_diagnostic_does_not_raise(self, caplog):
+        """Regression for #1104 (from #1082): when a decorator like
+        @mesh.a2a_consumer rewrites the WRAPPER ``__signature__`` to hide
+        an injected param (``_a2a``), the wrapper signature has FEWER
+        params than the resolved/original function. The MeshJob position
+        is derived from the ORIGINAL signature, so the untouched-positional
+        diagnostic must NOT index the shorter wrapper signature with an
+        original-derived position (IndexError). With zero declared
+        dependencies the diagnostic always runs for such handlers.
+        """
+        from functools import wraps as _wraps
+        import inspect as _inspect
+
+        from mesh import MeshJob
+
+        # Original func: (user_id, sections, _a2a, job) — _a2a is the
+        # consumer-injected client; job is the MeshJob at ORIGINAL pos 3.
+        async def original(user_id: str, sections: list, _a2a=None, job: MeshJob = None):
+            return (user_id, sections, _a2a, job)
+
+        # Mimic the @mesh.a2a_consumer bridge: @wraps sets __wrapped__ to
+        # the original; __signature__ hides _a2a so the wrapper exposes
+        # only (user_id, sections, job) — three params, vs original's four.
+        # The MeshJob position (3) is resolved through __wrapped__ to the
+        # ORIGINAL signature, while the wrapper signature has only 3 params.
+        @_wraps(original)
+        async def bridge(*args, **call_kwargs):
+            call_kwargs.setdefault("_a2a", object())
+            return await original(*args, **call_kwargs)
+
+        user_sig = _inspect.signature(original)
+        cleaned = [p for n, p in user_sig.parameters.items() if n != "_a2a"]
+        bridge.__signature__ = user_sig.replace(parameters=cleaned)
+
+        # Sanity-check the precondition the regression depends on: the
+        # MeshJob is resolved (through __wrapped__) at ORIGINAL position 3,
+        # beyond the 3-param wrapper signature. This is what made the
+        # pre-fix diagnostic index out of bounds.
+        from _mcp_mesh.engine.signature_analyzer import analyze_mesh_job_signature
+
+        assert analyze_mesh_job_signature(original).mesh_job_param_index == 3
+
+        # a2a_consumer passes NO dependencies to the inner tool. Position 3
+        # (MeshJob, from the original sig) would index the 3-element wrapper
+        # signature → IndexError in the pre-fix diagnostic. Must not raise.
+        with caplog.at_level(logging.WARNING):
+            final_kwargs, count = self._prep(bridge, [], injected_deps_array=[])
+
+        # With zero declared dependencies the functional loop breaks before
+        # injecting; the diagnostic simply must not crash dispatch.
+        assert count == 0
+
+        # Positively confirm the formerly-crashing diagnostic branch ran:
+        # ``len(eligible_positions) > len(dependencies)`` was true (MeshJob
+        # slot present, zero deps), so the "untouched positional slots"
+        # warning fired without raising. Without this assertion a future
+        # signature-analysis regression could skip the branch and the test
+        # would still pass green while no longer guarding #1104.
+        assert any(
+            "injection-eligible parameters (McpMeshTool/MeshJob)" in r.message
+            and "will remain None" in r.message
+            for r in caplog.records
+        )
