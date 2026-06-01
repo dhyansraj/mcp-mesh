@@ -483,15 +483,37 @@ def _prepare_injection_kwargs(
     # ``analyze_injection_strategy`` can't see, because it counts MeshJob
     # positions too rather than McpMeshTool only.
     if len(eligible_positions) > len(dependencies):
-        untouched_positions = eligible_positions[len(dependencies):]
-        sig_params = list(sig.parameters.values())
-        untouched_param_names = [sig_params[pos].name for pos in untouched_positions]
-        log.warning(
-            f"⚠️ Function '{func.__name__}' has {len(eligible_positions)} "
-            f"injection-eligible parameters (McpMeshTool/MeshJob) but only "
-            f"{len(dependencies)} dependency(ies) declared. Parameters "
-            f"{untouched_param_names} will remain None."
-        )
+        try:
+            untouched_positions = eligible_positions[len(dependencies):]
+            # Positions are derived from the resolved/original signature
+            # (via ``analyze_mesh_job_signature``, which follows the
+            # ``__wrapped__``/``_mesh_original_func`` chain), which may have
+            # MORE params than the wrapper ``sig`` when a decorator (e.g.
+            # @mesh.a2a_consumer) rewrites ``__signature__`` to hide an
+            # injected param. Name the slots from that SAME original signature
+            # so positions line up — and bounds-guard regardless.
+            from .signature_analyzer import _get_original_func
+
+            diag_params = list(
+                inspect.signature(_get_original_func(func)).parameters.values()
+            )
+            untouched_param_names = [
+                diag_params[pos].name if pos < len(diag_params) else f"<arg {pos}>"
+                for pos in untouched_positions
+            ]
+            log.warning(
+                f"{tp}⚠️ Function '{func.__name__}' has {len(eligible_positions)} "
+                f"injection-eligible parameters (McpMeshTool/MeshJob) but only "
+                f"{len(dependencies)} dependency(ies) declared. Parameters "
+                f"{untouched_param_names} will remain None."
+            )
+        except (TypeError, ValueError, IndexError) as e:
+            # The diagnostic is purely informational and must never crash
+            # dispatch regardless of wrapper/original signature shape.
+            log.debug(
+                f"{tp}untouched-positional diagnostic skipped for "
+                f"{func.__name__}: {e}"
+            )
 
     injected_count = 0
     injected_deps: list[str] = []
