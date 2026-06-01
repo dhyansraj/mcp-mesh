@@ -49,6 +49,31 @@ OUTPUT_MODE_HINT = "hint"
 logger = logging.getLogger(__name__)
 
 
+def _gemini_native_structured_tools_enabled() -> bool:
+    """Read the ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS`` gate.
+
+    DEFAULT OFF (RFC #1100 follow-up). When unset / falsy, every Gemini path
+    is byte-identical to today (tools → HINT). Accepts ``1/true/yes/on``
+    (case-insensitive) as enable — mirrors the ``MCP_MESH_NATIVE_LLM``
+    parsing style. When ON, unlocks the Gemini-3 ``response_json_schema`` +
+    tools experiment on the mesh-delegated provider path; the resolver still
+    gates on model major version (>=3) and google-genai >= 1.22, so an
+    unsupported model/SDK silently stays on HINT.
+    """
+    return os.environ.get(
+        "MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+
+
+# Internal marker stamped on ``model_params`` when the gated
+# ``response_json_schema`` path is active. The ``gemini_native`` adapter reads
+# it to emit ``config["response_json_schema"]`` (the Gemini-3 strict primitive)
+# instead of the ``response_schema`` translation. ``_mesh_``-prefixed so the
+# native adapter's unsupported-kwarg WARN filter skips it and it is never
+# forwarded to the SDK as a literal kwarg.
+RESPONSE_JSON_SCHEMA_MARKER = "_mesh_gemini_response_json_schema"
+
+
 # One-time guard so the dispatch-status DEBUG log fires exactly once per
 # process. Mirrors ``_logged_fallback_once`` in gemini_native — we
 # deliberately keep the state at module level (not on the handler instance)
@@ -191,8 +216,9 @@ class GeminiHandler(BaseProviderHandler):
 
         # Configured model id is passed by the agent for resolver symmetry with
         # the other handlers. Popped here so it does not flow into
-        # request_params (model is stamped separately downstream).
-        kwargs.pop("model", None)
+        # request_params (model is stamped separately downstream). Captured for
+        # the resolver's Gemini-major gate (gated response_json_schema path).
+        configured_model = kwargs.pop("model", None)
 
         # Build base request
         request_params = {
@@ -227,9 +253,12 @@ class GeminiHandler(BaseProviderHandler):
 
             caps = resolve_capabilities(
                 self.vendor,
-                None,
+                configured_model,
                 output_is_basemodel=True,
                 has_tools=bool(tools),
+                gemini_native_structured_tools=(
+                    _gemini_native_structured_tools_enabled()
+                ),
             )
 
             if caps.structured_output == StructuredOutputMode.RESPONSE_FORMAT_STRICT:
@@ -244,6 +273,27 @@ class GeminiHandler(BaseProviderHandler):
                 }
                 logger.debug(
                     "Gemini: Using response_format with strict schema for '%s' (no tools)",
+                    output_type.__name__,
+                )
+            elif caps.structured_output == StructuredOutputMode.RESPONSE_JSON_SCHEMA:
+                # GATED (default OFF): Gemini-3 server-enforced structured
+                # output WITH tools via ``response_json_schema``. Stamp the
+                # marker + carry the strict schema in ``response_format`` (the
+                # adapter reads it but emits ``response_json_schema``, NOT the
+                # legacy ``response_schema`` translation). Tools stay intact.
+                strict_schema = make_schema_strict(schema, add_all_required=True)
+                request_params["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": output_type.__name__,
+                        "schema": strict_schema,
+                        "strict": True,
+                    },
+                }
+                request_params[RESPONSE_JSON_SCHEMA_MARKER] = True
+                logger.info(
+                    "Gemini: GATED response_json_schema + tools for '%s' "
+                    "(MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS enabled, Gemini-3+)",
                     output_type.__name__,
                 )
             else:
@@ -372,8 +422,61 @@ class GeminiHandler(BaseProviderHandler):
         The ``streaming`` kwarg is accepted for API symmetry with the other
         vendor handlers; Gemini is HINT-only here regardless, so the flag is
         a no-op.
+
+        GATED EXCEPTION (RFC #1100 follow-up, default OFF): when
+        ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS`` is enabled AND the resolver
+        confirms Gemini-3+ with google-genai >= 1.22, this stamps a
+        ``response_json_schema`` marker + the strict schema (as a
+        ``response_format`` carrier) and KEEPS tools — letting the native
+        adapter emit Gemini's stricter server-side primitive instead of HINT.
+        With the flag off, the resolver returns PROSE_HINT and the path below
+        is byte-identical to today (HINT injected, response_format popped).
         """
         sanitized_schema = sanitize_schema_for_structured_output(output_schema)
+
+        # Gated mode selection (RFC #1100 follow-up). Default OFF →
+        # PROSE_HINT (the resolver's tools-path default), so the HINT block
+        # below runs exactly as today. When the gate is open AND the model /
+        # SDK qualify, the resolver returns RESPONSE_JSON_SCHEMA and we take
+        # the server-enforced branch instead.
+        from .capabilities import StructuredOutputMode, resolve_capabilities
+
+        caps = resolve_capabilities(
+            self.vendor,
+            model,
+            output_is_basemodel=True,
+            has_tools=True,  # mesh delegation always attaches tools
+            gemini_native_structured_tools=(
+                _gemini_native_structured_tools_enabled()
+            ),
+        )
+
+        if caps.structured_output == StructuredOutputMode.RESPONSE_JSON_SCHEMA:
+            # Server-enforced structured output WITH tools. Do NOT set
+            # _mesh_hint_mode, do NOT pop response_format. Stamp the marker and
+            # carry the strict schema in response_format (the adapter reads it
+            # but emits ``response_json_schema``, NOT the legacy
+            # ``response_schema`` translation documented to infinite-loop with
+            # tools). Tools are left untouched in model_params.
+            strict_schema = make_schema_strict(
+                sanitized_schema, add_all_required=True
+            )
+            model_params["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": output_type_name or "Response",
+                    "schema": strict_schema,
+                    "strict": True,
+                },
+            }
+            model_params[RESPONSE_JSON_SCHEMA_MARKER] = True
+            logger.info(
+                "Gemini GATED response_json_schema + tools for '%s' "
+                "(mesh delegation; MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS "
+                "enabled, Gemini-3+ server-enforced, tools intact)",
+                output_type_name or "Response",
+            )
+            return model_params
 
         # Store for format_system_prompt (per-async-context to avoid races
         # across concurrent requests sharing this singleton handler).

@@ -1191,15 +1191,29 @@ def _build_create_kwargs(
     # (snake_case) — Gemini rejects both with HTTP 400 INVALID_ARGUMENT
     # ("Unknown name 'additional_properties'..."). The whitelist sanitizer
     # strips both casings (snake_case keys aren't in the whitelist either).
+    #
+    # GATED Gemini-3 path (RFC #1100 follow-up, default OFF): when the
+    # ``_mesh_gemini_response_json_schema`` marker is set (stamped by
+    # GeminiHandler when MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS is enabled and
+    # the model/SDK qualify), emit ``response_json_schema`` — the stricter
+    # Gemini-3 server-side primitive — INSTEAD of ``response_schema``. The
+    # documented infinite-tool-loop bug is specific to ``response_schema`` +
+    # tools; this path deliberately avoids that translation. Tools (set above)
+    # are left intact alongside it.
+    use_response_json_schema = bool(
+        request_params.get("_mesh_gemini_response_json_schema")
+    )
     rf = request_params.get("response_format")
     if isinstance(rf, dict):
         if rf.get("type") == "json_schema":
             schema = (rf.get("json_schema") or {}).get("schema") or {}
             config["response_mime_type"] = "application/json"
             if schema:
-                config["response_schema"] = _sanitize_gemini_parameters_schema(
-                    schema
-                )
+                sanitized = _sanitize_gemini_parameters_schema(schema)
+                if use_response_json_schema:
+                    config["response_json_schema"] = sanitized
+                else:
+                    config["response_schema"] = sanitized
         elif rf.get("type") == "json_object":
             config["response_mime_type"] = "application/json"
     # Allow callers to set response_mime_type directly too.

@@ -31,6 +31,28 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 # degrades gracefully to the next-best native mode when an installed SDK is
 # below its floor (e.g. a constrained install that pins an older SDK).
 _ANTHROPIC_OUTPUT_CONFIG_FLOOR = (0, 77)  # anthropic >= 0.77 → output_config
+_GEMINI_RESPONSE_JSON_SCHEMA_FLOOR = (1, 22)  # google-genai >= 1.22 → response_json_schema
+
+
+# Matches a leading ``gemini-<major>`` token in a LiteLLM-style model id, after
+# any backend prefix (``gemini/``, ``vertex_ai/``). Examples:
+# ``gemini/gemini-3-pro-preview`` → 3; ``vertex_ai/gemini-2.5-flash`` → 2;
+# ``gemini/gemini-1.5-pro`` → 1. Returns None when no gemini-major token is
+# present (unknown / unparseable model id → conservative degrade).
+_GEMINI_MAJOR_RE = re.compile(r"gemini-(\d+)")
+
+
+def _gemini_major(model: str | None) -> int | None:
+    """Return the Gemini major version from a model id, or ``None``.
+
+    Conservative on uncertainty: an absent / unparseable model id returns
+    ``None`` so the resolver does not select a Gemini-3-only primitive for a
+    model whose generation cannot be confirmed.
+    """
+    if not model:
+        return None
+    m = _GEMINI_MAJOR_RE.search(model)
+    return int(m.group(1)) if m else None
 
 
 @lru_cache(maxsize=None)
@@ -94,11 +116,13 @@ class StructuredOutputMode:
     - ``RESPONSE_FORMAT_STRICT`` — OpenAI / Gemini (no tools, Gemini 2.x or
       older SDK) native ``response_format`` with ``strict: true``. For Gemini
       this flows to the adapter's ``response_schema`` field.
-    - ``RESPONSE_JSON_SCHEMA`` — reserved for the Gemini 3.x+ (no tools)
-      google-genai ``response_json_schema`` field (stricter server-side
-      enforcement than ``response_schema``). Defined but not yet selected by
-      any resolver: wiring it into the mesh-delegated provider path needs
-      live-Gemini validation (RFC #1100 follow-up). Unused.
+    - ``RESPONSE_JSON_SCHEMA`` — Gemini 3+ WITH tools, google-genai
+      ``response_json_schema`` field (stricter server-side enforcement than
+      ``response_schema``, and avoids the ``response_schema`` + tools
+      infinite-loop bug). Selected by the resolver only when
+      ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS`` is enabled and google-genai
+      >= 1.22 (server-enforced); otherwise the Gemini-with-tools path falls
+      back to ``PROSE_HINT``.
     - ``RESPONSE_SCHEMA`` — reserved for future vendor variants of
       server-side schema enforcement. Unused.
     - ``PROSE_HINT`` — schema-in-prompt HINT mode (Claude LiteLLM path,
@@ -235,6 +259,7 @@ def _resolve_gemini(
     *,
     output_is_basemodel: bool,
     has_tools: bool,
+    gemini_native_structured_tools: bool = False,
 ) -> ModelCapabilities:
     """Reproduce ``GeminiHandler.prepare_request`` selection.
 
@@ -244,6 +269,15 @@ def _resolve_gemini(
     - BaseModel + tools → PROSE_HINT (response_format stripped; the
       response_format + tools combo triggers Gemini's infinite-tool-loop bug).
       The tools path never selects a server-side schema primitive.
+
+    GATED EXCEPTION (RFC #1100 follow-up, default OFF): when
+    ``gemini_native_structured_tools`` is True AND tools are present AND the
+    model is Gemini-3+ AND google-genai >= 1.22, select RESPONSE_JSON_SCHEMA —
+    the stricter Gemini-3 server-side primitive. This is the LIVE EXPERIMENT
+    path: it tests whether ``response_json_schema`` + tools is loop-safe (the
+    documented infinite-loop bug is specific to the OLDER ``response_schema``
+    primitive, which this path deliberately avoids). Off by default → the
+    tools path stays on PROSE_HINT exactly as today.
     """
     if not output_is_basemodel:
         return ModelCapabilities(
@@ -259,6 +293,20 @@ def _resolve_gemini(
             server_enforced=True,
             schema_with_tools=False,
             streaming_structured=True,
+            recovery=RECOVERY_NONE,
+        )
+    if (
+        gemini_native_structured_tools
+        and (major := _gemini_major(model)) is not None
+        and major >= 3
+        and _sdk_at_least("google-genai", _GEMINI_RESPONSE_JSON_SCHEMA_FLOOR)
+    ):
+        return ModelCapabilities(
+            structured_output=StructuredOutputMode.RESPONSE_JSON_SCHEMA,
+            server_enforced=True,
+            schema_with_tools=True,
+            streaming_structured=False,
+            min_sdk_version="1.22",
             recovery=RECOVERY_NONE,
         )
     return ModelCapabilities(
@@ -300,6 +348,7 @@ def resolve_capabilities(
     has_native: bool = False,
     streaming: bool = False,
     has_tools: bool = False,
+    gemini_native_structured_tools: bool = False,
 ) -> ModelCapabilities:
     """Resolve the structured-output capabilities for a request.
 
@@ -319,6 +368,10 @@ def resolve_capabilities(
             (Anthropic only consults this).
         streaming: True on the streaming dispatch path (Anthropic only).
         has_tools: True when real user tools are present (Gemini only).
+        gemini_native_structured_tools: GATED, default OFF. When True (set by
+            the ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS`` env flag), unlocks
+            the Gemini-3 ``response_json_schema`` + tools experiment path
+            (Gemini only). Off → no behavior change anywhere.
     """
     v = (vendor or "").strip().lower()
 
@@ -336,5 +389,6 @@ def resolve_capabilities(
             model,
             output_is_basemodel=output_is_basemodel,
             has_tools=has_tools,
+            gemini_native_structured_tools=gemini_native_structured_tools,
         )
     return _resolve_generic(output_is_basemodel=output_is_basemodel)
