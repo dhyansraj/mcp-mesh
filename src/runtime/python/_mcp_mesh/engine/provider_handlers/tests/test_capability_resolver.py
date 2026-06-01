@@ -249,6 +249,155 @@ class TestGeminiResolver:
         assert caps.structured_output == StructuredOutputMode.PROSE_HINT
 
 
+class TestGeminiNativeStructuredToolsGate:
+    """GATED Gemini-3 ``response_json_schema`` + tools path (RFC #1100
+    follow-up, default OFF). Off → PROSE_HINT exactly as today; on → only
+    Gemini-3+ with google-genai >= 1.22 unlocks RESPONSE_JSON_SCHEMA."""
+
+    @pytest.fixture
+    def _genai_floor_met(self, monkeypatch):
+        # CI may pin an older google-genai; assert SELECTION, not detection.
+        monkeypatch.setattr(caps_mod, "_sdk_at_least", lambda dist, floor: True)
+        yield
+
+    def test_flag_off_with_tools_is_prose_hint_unchanged(self, _genai_floor_met):
+        """Default OFF: even Gemini-3 + tools + new SDK stays on PROSE_HINT —
+        byte-identical to today's behavior."""
+        caps = resolve_capabilities(
+            "gemini",
+            "gemini/gemini-3-pro-preview",
+            output_is_basemodel=True,
+            has_tools=True,
+            gemini_native_structured_tools=False,
+        )
+        assert caps.structured_output == StructuredOutputMode.PROSE_HINT
+
+    def test_flag_on_gemini3_tools_sdk_ok_is_response_json_schema(
+        self, _genai_floor_met
+    ):
+        caps = resolve_capabilities(
+            "gemini",
+            "gemini/gemini-3-pro-preview",
+            output_is_basemodel=True,
+            has_tools=True,
+            gemini_native_structured_tools=True,
+        )
+        assert caps.structured_output == StructuredOutputMode.RESPONSE_JSON_SCHEMA
+        assert caps.server_enforced is True
+        assert caps.schema_with_tools is True
+        assert caps.min_sdk_version == "1.22"
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "gemini/gemini-3-pro-preview",
+            "gemini/gemini-3.0-flash",
+            "vertex_ai/gemini-3-flash",
+        ],
+    )
+    def test_flag_on_various_gemini3_ids_is_response_json_schema(
+        self, _genai_floor_met, model
+    ):
+        caps = resolve_capabilities(
+            "gemini",
+            model,
+            output_is_basemodel=True,
+            has_tools=True,
+            gemini_native_structured_tools=True,
+        )
+        assert caps.structured_output == StructuredOutputMode.RESPONSE_JSON_SCHEMA
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "gemini/gemini-2.5-flash",
+            "gemini/gemini-2.0-flash-lite",
+            "gemini/gemini-1.5-pro",
+        ],
+    )
+    def test_flag_on_gemini2x_tools_is_prose_hint(self, _genai_floor_met, model):
+        """Only Gemini-3+ unlocks the gated path; 2.x / 1.x with tools stays
+        on PROSE_HINT even with the flag on."""
+        caps = resolve_capabilities(
+            "gemini",
+            model,
+            output_is_basemodel=True,
+            has_tools=True,
+            gemini_native_structured_tools=True,
+        )
+        assert caps.structured_output == StructuredOutputMode.PROSE_HINT
+
+    def test_flag_on_unknown_model_is_prose_hint(self, _genai_floor_met):
+        """model=None → major version unknown → conservative PROSE_HINT."""
+        caps = resolve_capabilities(
+            "gemini",
+            None,
+            output_is_basemodel=True,
+            has_tools=True,
+            gemini_native_structured_tools=True,
+        )
+        assert caps.structured_output == StructuredOutputMode.PROSE_HINT
+
+    def test_flag_on_gemini3_but_sdk_too_old_is_prose_hint(self, monkeypatch):
+        """genai < 1.22 → degrade to PROSE_HINT even on Gemini-3 + flag on."""
+        monkeypatch.setattr(caps_mod, "_sdk_at_least", lambda dist, floor: False)
+        caps = resolve_capabilities(
+            "gemini",
+            "gemini/gemini-3-pro-preview",
+            output_is_basemodel=True,
+            has_tools=True,
+            gemini_native_structured_tools=True,
+        )
+        assert caps.structured_output == StructuredOutputMode.PROSE_HINT
+
+    def test_flag_on_gemini3_NO_tools_is_response_format_strict(
+        self, _genai_floor_met
+    ):
+        """No-tools path is unaffected by the gate — still RESPONSE_FORMAT_STRICT
+        (the no-tools branch never reaches the gated check)."""
+        caps = resolve_capabilities(
+            "gemini",
+            "gemini/gemini-3-pro-preview",
+            output_is_basemodel=True,
+            has_tools=False,
+            gemini_native_structured_tools=True,
+        )
+        assert caps.structured_output == StructuredOutputMode.RESPONSE_FORMAT_STRICT
+
+    def test_flag_on_str_output_is_text(self, _genai_floor_met):
+        caps = resolve_capabilities(
+            "gemini",
+            "gemini/gemini-3-pro-preview",
+            output_is_basemodel=False,
+            has_tools=True,
+            gemini_native_structured_tools=True,
+        )
+        assert caps.structured_output == StructuredOutputMode.TEXT
+
+
+class TestGeminiMajorParser:
+    """Unit tests for the Gemini major-version parser used by the gate."""
+
+    @pytest.mark.parametrize(
+        "model,expected",
+        [
+            ("gemini/gemini-3-pro-preview", 3),
+            ("gemini/gemini-3.0-flash", 3),
+            ("vertex_ai/gemini-3-flash", 3),
+            ("gemini/gemini-2.5-flash", 2),
+            ("gemini/gemini-2.0-flash-lite", 2),
+            ("gemini/gemini-1.5-pro", 1),
+            ("gemini/gemini-10-future", 10),
+            (None, None),
+            ("", None),
+            ("gpt-4o", None),
+            ("claude-sonnet-4-5", None),
+        ],
+    )
+    def test_gemini_major(self, model, expected):
+        assert caps_mod._gemini_major(model) == expected
+
+
 class TestVersionHelpers:
     """Unit tests for the SDK-version detection / compare helpers."""
 

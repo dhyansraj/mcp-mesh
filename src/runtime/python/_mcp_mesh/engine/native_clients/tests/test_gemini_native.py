@@ -1238,6 +1238,122 @@ class TestBuildCreateKwargs:
         assert "definitions" not in rs
         assert rs["type"] == "object"
 
+    def test_marker_emits_response_json_schema_not_response_schema(self):
+        """GATED Gemini-3 path (RFC #1100 follow-up): with the
+        ``_mesh_gemini_response_json_schema`` marker set, emit the stricter
+        ``response_json_schema`` from the response_format envelope (sanitized)
+        and NOT the legacy ``response_schema`` translation. Tools preserved."""
+        out = gemini_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi"}],
+                "_mesh_gemini_response_json_schema": True,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "description": "d",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "Plan",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "title": "Plan",
+                            "properties": {"answer": {"type": "string"}},
+                            "required": ["answer"],
+                        },
+                    },
+                },
+            },
+            model="gemini/gemini-3-pro-preview",
+        )
+        cfg = out["config"]
+        assert "response_json_schema" in cfg
+        assert "response_schema" not in cfg
+        assert cfg["response_mime_type"] == "application/json"
+        # Sanitized (rejected keys stripped).
+        rjs = cfg["response_json_schema"]
+        assert "additionalProperties" not in rjs
+        assert "title" not in rjs
+        assert rjs["type"] == "object"
+        assert rjs["properties"] == {"answer": {"type": "string"}}
+        assert rjs["required"] == ["answer"]
+        # Tools preserved alongside the schema.
+        assert "tools" in cfg
+
+    def test_no_marker_emits_response_schema_unchanged(self):
+        """Without the marker, the response_format envelope still translates to
+        ``response_schema`` (no tools case) — byte-identical to today."""
+        out = gemini_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi"}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "Plan",
+                        "schema": {"type": "object"},
+                    },
+                },
+            },
+            model="gemini/gemini-3-pro-preview",
+        )
+        cfg = out["config"]
+        assert cfg["response_schema"] == {"type": "object"}
+        assert "response_json_schema" not in cfg
+
+    def test_marker_does_not_leak_as_literal_kwarg_no_warn(self):
+        """The ``_mesh_``-prefixed marker is skipped by the WARN filter and is
+        never forwarded to the SDK as a literal kwarg."""
+        gemini_native._logged_unsupported_kwargs.clear()
+        out = gemini_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi"}],
+                "_mesh_gemini_response_json_schema": True,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "Plan",
+                        "schema": {"type": "object"},
+                    },
+                },
+            },
+            model="gemini/gemini-3-pro-preview",
+        )
+        # Marker not warned, not present in returned kwargs/config.
+        assert all(
+            not k.startswith("_mesh_")
+            for k in gemini_native._logged_unsupported_kwargs
+        )
+        assert "_mesh_gemini_response_json_schema" not in out
+        assert "_mesh_gemini_response_json_schema" not in out["config"]
+
+    def test_bare_response_json_schema_dropped_with_warn(self):
+        """A caller-supplied bare ``response_json_schema`` (no marker) is NOT
+        forwarded to the SDK — it's dropped with an unsupported-kwarg WARN.
+        The gated feature works only via the marker-driven derivation, so a
+        direct caller knob is treated as an unsupported kwarg (pre-RFC #1100
+        behavior)."""
+        gemini_native._logged_unsupported_kwargs.clear()
+        out = gemini_native._build_create_kwargs(
+            {
+                "messages": [{"role": "user", "content": "Hi"}],
+                "response_json_schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {"x": {"type": "string"}},
+                },
+            },
+            model="gemini/gemini-3-pro-preview",
+        )
+        assert "response_json_schema" not in out["config"]
+        assert "response_json_schema" in gemini_native._logged_unsupported_kwargs
+
     def test_drops_internal_mesh_sentinels(self):
         """``_mesh_*`` sentinels must NOT trigger a WARN — they're handled
         upstream in helpers._pop_mesh_*_flags."""

@@ -1,0 +1,244 @@
+# Test Case: Gemini-3 response_json_schema + tools loop experiment
+# LIVE EXPERIMENT for RFC #1100 follow-up.
+#
+# Open question: does Gemini-3 + response_json_schema + tools trigger the
+# documented infinite-tool-loop bug, or is it loop-safe?
+#
+# Today (flag OFF) Gemini-with-tools uses PROSE_HINT specifically because the
+# legacy response_schema + tools combo infinite-loops. This TC turns ON the
+# gated path (MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=1) on a Gemini-3 provider
+# and runs a structured-output consumer that ALSO has a tool available, so the
+# agentic loop runs WITH tools + server-enforced response_json_schema.
+#
+# OUTCOME A (LOOP / FAIL): the call times out / hits max_iterations / never
+#   returns the structured object -> response_json_schema + tools STILL loops.
+#   Valid negative result. Provider log tail shows repeated tool calls.
+# OUTCOME B (SUCCESS): the call returns a valid structured object within the
+#   bounded timeout and the provider log shows the loop completed in a small
+#   number of iterations -> response_json_schema + tools is loop-safe.
+#
+# Control: the same consumer/provider is also run with the flag OFF (default
+# HINT) to confirm the baseline still works.
+
+name: "Gemini-3 response_json_schema + tools loop experiment"
+description: "RFC #1100: does Gemini-3 response_json_schema + tools loop or is it loop-safe?"
+tags:
+  - llm
+  - gemini
+  - structured
+  - python
+  - tools
+  - experiment
+timeout: 400
+# Skip with --skip-tag llm if no API key is available.
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+test:
+  # --- Copy artifacts ---
+  - name: "Copy Gemini provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/gemini-provider /workspace/"
+    capture: copy_provider_output
+  - name: "Copy calculator-agent to workspace"
+    handler: shell
+    command: "cp -r /artifacts/calculator-agent /workspace/"
+    capture: copy_calc_output
+  - name: "Copy chat-tools-agent to workspace"
+    handler: shell
+    command: "cp -r /artifacts/chat-tools-agent /workspace/"
+    capture: copy_agent_output
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+  - name: "Verify workspace files"
+    handler: shell
+    command: "ls -la /workspace/"
+    capture: ls_output
+
+  # ============================================================
+  # PHASE 1: FLAG ON -> gated response_json_schema + tools path
+  # ============================================================
+  - name: "Start calculator-agent (tools)"
+    handler: shell
+    command: "meshctl start calculator-agent/main.py -d"
+    workdir: /workspace
+    capture: start_calc_output
+  - name: "Wait for calculator to register"
+    handler: wait
+    seconds: 3
+  # Provider started WITH the gated flag AND a Gemini-3 model (gemini-provider
+  # artifact already pins gemini/gemini-3-flash-preview). --debug so the gated
+  # "response_json_schema + tools" log line and per-iteration tool calls show.
+  - name: "Start Gemini-3 provider with NATIVE_STRUCTURED_TOOLS flag ON"
+    handler: shell
+    command: "meshctl start gemini-provider/main.py --env-file .env --env MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=1 -d --debug"
+    workdir: /workspace
+    capture: start_provider_output
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 15
+  - name: "Verify calculator and provider running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: pre_agent_list_output
+  - name: "Start chat-tools-agent (consumer: structured + tools)"
+    handler: shell
+    command: "meshctl start chat-tools-agent/main.py -d"
+    workdir: /workspace
+    capture: start_agent_output
+  - name: "Wait for agent to register and resolve dependencies"
+    handler: wait
+    seconds: 15
+  - name: "Verify all agents running"
+    handler: shell
+    command: "meshctl list"
+    workdir: /workspace
+    capture: all_list_output
+  - name: "List available tools"
+    handler: shell
+    command: "meshctl list -t"
+    workdir: /workspace
+    capture: tools_output
+
+  # THE EXPERIMENT CALL. Bounded timeout so a loop FAILS FAST instead of
+  # hanging the run. A deterministic single-tool prompt: add two numbers, then
+  # return the structured result.
+  - name: "EXPERIMENT call (flag ON): structured output + tool"
+    handler: shell
+    command: |
+      meshctl call analyze '{"ctx": {"question": "Use the calculator to add 137 and 246, then return the structured analysis result."}}'
+    workdir: /workspace
+    capture: experiment_response
+    timeout: 110
+
+  # Capture provider log tail REGARDLESS of call outcome (evidence for both
+  # the LOOP and SUCCESS outcomes). Looking for: the gated response_json_schema
+  # log line, per-iteration tool-call markers, and the final iteration count.
+  - name: "Capture Gemini provider log tail (flag ON)"
+    handler: shell
+    command: |
+      meshctl logs gemini-provider 2>/dev/null | tail -120 || true
+    workdir: /workspace
+    capture: provider_log_on
+    ignore_errors: true
+  - name: "Count tool-call iterations in provider log (flag ON)"
+    handler: shell
+    command: |
+      meshctl logs gemini-provider 2>/dev/null | grep -ciE "iteration|tool.call|calc_add|response_json_schema" || true
+    workdir: /workspace
+    capture: iteration_count_on
+    ignore_errors: true
+  - name: "Capture consumer (chat-tools-agent) log tail (flag ON)"
+    handler: shell
+    command: |
+      meshctl logs chat-tools-agent 2>/dev/null | tail -80 || true
+    workdir: /workspace
+    capture: consumer_log_on
+    ignore_errors: true
+
+  - name: "Stop all agents (end of phase 1)"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+    ignore_errors: true
+  - name: "Wait for clean shutdown"
+    handler: wait
+    seconds: 5
+
+  # ============================================================
+  # PHASE 2 (CONTROL): FLAG OFF -> default PROSE_HINT baseline
+  # ============================================================
+  - name: "Start calculator-agent (control)"
+    handler: shell
+    command: "meshctl start calculator-agent/main.py -d"
+    workdir: /workspace
+    capture: start_calc_control
+  - name: "Wait for calculator to register (control)"
+    handler: wait
+    seconds: 3
+  - name: "Start Gemini-3 provider with flag OFF (control)"
+    handler: shell
+    command: "meshctl start gemini-provider/main.py --env-file .env -d --debug"
+    workdir: /workspace
+    capture: start_provider_control
+  - name: "Wait for provider to register (control)"
+    handler: wait
+    seconds: 15
+  - name: "Start chat-tools-agent (control)"
+    handler: shell
+    command: "meshctl start chat-tools-agent/main.py -d"
+    workdir: /workspace
+    capture: start_agent_control
+  - name: "Wait for resolution (control)"
+    handler: wait
+    seconds: 15
+  - name: "CONTROL call (flag OFF): structured output + tool (HINT baseline)"
+    handler: shell
+    command: |
+      meshctl call analyze '{"ctx": {"question": "Use the calculator to add 137 and 246, then return the structured analysis result."}}'
+    workdir: /workspace
+    capture: control_response
+    timeout: 110
+  - name: "Capture Gemini provider log tail (control)"
+    handler: shell
+    command: |
+      meshctl logs gemini-provider 2>/dev/null | tail -80 || true
+    workdir: /workspace
+    capture: provider_log_off
+    ignore_errors: true
+  - name: "Stop all agents (end of phase 2)"
+    handler: shell
+    command: "meshctl stop"
+    workdir: /workspace
+    ignore_errors: true
+
+assertions:
+  # --- Infrastructure (must hold for the experiment to be valid) ---
+  - expr: ${captured.pre_agent_list_output} contains 'calculator-agent'
+    message: "calculator-agent should be registered"
+  - expr: ${captured.pre_agent_list_output} contains 'gemini-provider'
+    message: "gemini-provider should be registered"
+  - expr: ${captured.all_list_output} contains 'chat-tools-agent'
+    message: "chat-tools-agent should be registered"
+  - expr: ${captured.tools_output} contains 'analyze'
+    message: "analyze tool should be listed"
+  - expr: ${captured.tools_output} contains 'calc_add'
+    message: "calc_add tool should be listed"
+
+  # --- Confirm the GATED path actually engaged (real exercise, not a no-op) ---
+  - expr: ${captured.provider_log_on} icontains 'response_json_schema'
+    message: "Provider log (flag ON) should show the gated response_json_schema path engaged"
+
+  # --- OUTCOME B (SUCCESS / loop-safe) assertions ---
+  # These PASS only if response_json_schema + tools is loop-safe: a valid
+  # structured object returns within the bounded timeout. If the path LOOPS,
+  # these FAIL (the call times out / never returns the object) -> the negative
+  # result. We do NOT weaken these to force a pass; the log evidence is
+  # captured regardless of which way they go.
+  - expr: ${captured.experiment_response} contains '383'
+    message: "EXPERIMENT (flag ON): structured result should contain the computed sum 383 (137+246)"
+  - expr: ${captured.experiment_response} contains '"answer"'
+    message: "EXPERIMENT (flag ON): should return the structured 'answer' field"
+  - expr: ${captured.experiment_response} contains '"confidence"'
+    message: "EXPERIMENT (flag ON): should return the structured 'confidence' field"
+  - expr: ${captured.experiment_response} not contains 'max_iterations'
+    message: "EXPERIMENT (flag ON): should NOT hit max_iterations (loop indicator)"
+  - expr: ${captured.experiment_response} not contains 'timed out'
+    message: "EXPERIMENT (flag ON): call should NOT time out (loop indicator)"
+
+  # --- CONTROL (flag OFF / HINT baseline) should still work ---
+  - expr: ${captured.control_response} contains '383'
+    message: "CONTROL (flag OFF): HINT-mode baseline should still return the sum 383"
+  - expr: ${captured.control_response} contains '"answer"'
+    message: "CONTROL (flag OFF): HINT-mode baseline should return structured 'answer' field"
+
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace
