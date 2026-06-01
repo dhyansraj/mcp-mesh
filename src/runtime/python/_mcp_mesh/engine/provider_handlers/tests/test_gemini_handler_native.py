@@ -471,12 +471,45 @@ def _clean_gate_env():
 
 
 class TestGatedResponseJsonSchemaApplyStructuredOutput:
-    """``apply_structured_output`` is the provider-delegated path. With the
-    gate OFF it must behave EXACTLY as today (HINT, response_format popped);
-    with the gate ON + Gemini-3 it stamps the marker, keeps response_format,
-    does NOT set _mesh_hint_mode, and keeps tools intact."""
+    """``apply_structured_output`` is the provider-delegated path. DEFAULT ON
+    (RFC #1100 follow-up): with the env var UNSET, Gemini-3 + tools stamps the
+    marker, keeps response_format, does NOT set _mesh_hint_mode, and keeps
+    tools intact. The ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0`` kill-switch
+    reverts to HINT (response_format popped) — byte-identical to pre-#1102."""
 
-    def test_gate_off_is_hint_exactly_as_today(self, monkeypatch):
+    def test_default_on_gemini3_stamps_marker(self, monkeypatch):
+        """Default (env unset) → server-enforced response_json_schema for
+        Gemini-3 + tools + modern SDK."""
+        monkeypatch.setattr(
+            caps_mod, "_sdk_at_least", lambda dist, floor: True
+        )
+        assert _GATE not in os.environ
+        handler = GeminiHandler()
+        model_params = {
+            "messages": [{"role": "system", "content": "base"}],
+            "tools": _TOOLS,
+        }
+        out = handler.apply_structured_output(
+            {"type": "object", "properties": {"answer": {"type": "string"}}},
+            "Plan",
+            model_params,
+            model="gemini/gemini-3-pro-preview",
+        )
+        # Server-enforced branch by default: marker stamped, NO hint mode.
+        assert out[_MARKER] is True
+        assert "_mesh_hint_mode" not in out
+        assert out["response_format"]["type"] == "json_schema"
+        assert out["tools"] == _TOOLS
+
+    @pytest.mark.parametrize("value", ["0", "false", "no", "off", "OFF", "False"])
+    def test_kill_switch_reverts_to_hint_exactly_as_pre_1102(
+        self, monkeypatch, value
+    ):
+        """Kill-switch MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0 (or
+        false/no/off) reverts Gemini-3 + tools to the HINT path:
+        _mesh_hint_mode set, response_format popped, marker absent — byte-
+        identical to the pre-#1102 default."""
+        monkeypatch.setenv(_GATE, value)
         monkeypatch.setattr(
             caps_mod, "_sdk_at_least", lambda dist, floor: True
         )
@@ -492,14 +525,12 @@ class TestGatedResponseJsonSchemaApplyStructuredOutput:
             model_params,
             model="gemini/gemini-3-pro-preview",
         )
-        # HINT mode set, response_format popped, marker absent.
         assert out["_mesh_hint_mode"] is True
         assert "response_format" not in out
         assert _MARKER not in out
-        # Tools untouched.
         assert out["tools"] == _TOOLS
 
-    def test_gate_on_gemini3_stamps_marker_keeps_response_format_and_tools(
+    def test_explicit_on_gemini3_stamps_marker_keeps_response_format_and_tools(
         self, monkeypatch
     ):
         monkeypatch.setenv(_GATE, "true")
@@ -586,9 +617,12 @@ class TestGatedResponseJsonSchemaApplyStructuredOutput:
 
 
 class TestGatedResponseJsonSchemaPrepareRequest:
-    """``prepare_request`` mirrors the gated behavior for consistency."""
+    """``prepare_request`` mirrors the default-on behavior for consistency."""
 
-    def test_gate_off_tools_omits_response_format(self, monkeypatch):
+    def test_kill_switch_tools_omits_response_format(self, monkeypatch):
+        """Kill-switch MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0 → Gemini-3 +
+        tools omits response_format (HINT path), no marker."""
+        monkeypatch.setenv(_GATE, "0")
         monkeypatch.setattr(
             caps_mod, "_sdk_at_least", lambda dist, floor: True
         )
@@ -602,13 +636,15 @@ class TestGatedResponseJsonSchemaPrepareRequest:
         assert "response_format" not in params
         assert _MARKER not in params
 
-    def test_gate_on_gemini3_tools_stamps_marker_and_response_format(
+    def test_default_on_gemini3_tools_stamps_marker_and_response_format(
         self, monkeypatch
     ):
-        monkeypatch.setenv(_GATE, "on")
+        """Default (env unset) → Gemini-3 + tools stamps the marker and keeps
+        response_format as the response_json_schema carrier."""
         monkeypatch.setattr(
             caps_mod, "_sdk_at_least", lambda dist, floor: True
         )
+        assert _GATE not in os.environ
         handler = GeminiHandler()
         params = handler.prepare_request(
             messages=[{"role": "user", "content": "Hi"}],

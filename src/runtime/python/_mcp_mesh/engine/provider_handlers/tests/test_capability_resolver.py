@@ -220,8 +220,8 @@ class TestGeminiResolver:
         """Gemini no-tools BaseModel always selects response_format/strict
         (flows to the adapter's response_schema field), independent of the
         model major version. The stricter ``response_json_schema`` variant is
-        reserved (RFC #1100 follow-up) pending live-Gemini validation, so no
-        resolver selects it yet."""
+        only selected on the WITH-tools path (Gemini-3+), so the no-tools path
+        is unchanged by the RFC #1100 follow-up default-on flip."""
         caps = resolve_capabilities(
             "gemini", model, output_is_basemodel=True, has_tools=False
         )
@@ -233,10 +233,13 @@ class TestGeminiResolver:
         )
         assert caps.structured_output == StructuredOutputMode.PROSE_HINT
 
-    def test_gemini_3_WITH_tools_is_prose_hint_unchanged(self, monkeypatch):
-        """The Gemini-with-tools path is UNCHANGED — even Gemini 3.x with the
-        new SDK stays on PROSE_HINT (the infinite-tool-loop gate). RFC #1100
-        Phase 2 never touches the tools path."""
+    def test_gemini_3_WITH_tools_default_param_is_prose_hint(self, monkeypatch):
+        """The resolver's ``gemini_native_structured_tools`` parameter defaults
+        to False (resolver-level default). Callers pass the env-derived value;
+        the handler reader is now default-ON (kill-switch). With the param
+        left at its resolver default, Gemini 3.x + tools stays on PROSE_HINT —
+        this pins the resolver signature default, not the runtime contract
+        (covered by TestGeminiNativeStructuredToolsGate)."""
         monkeypatch.setattr(
             caps_mod, "_sdk_at_least", lambda dist, floor: True
         )
@@ -250,9 +253,13 @@ class TestGeminiResolver:
 
 
 class TestGeminiNativeStructuredToolsGate:
-    """GATED Gemini-3 ``response_json_schema`` + tools path (RFC #1100
-    follow-up, default OFF). Off → PROSE_HINT exactly as today; on → only
-    Gemini-3+ with google-genai >= 1.22 unlocks RESPONSE_JSON_SCHEMA."""
+    """Gemini-3 ``response_json_schema`` + tools path (RFC #1100 follow-up).
+    Now DEFAULT ON at the runtime layer via a kill-switch
+    (``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0`` disables). At the resolver
+    layer the decision is driven by the ``gemini_native_structured_tools``
+    parameter the handler passes in: True (default / kill-switch unset) +
+    Gemini-3+ + google-genai >= 1.22 → RESPONSE_JSON_SCHEMA; False
+    (kill-switch set) → PROSE_HINT."""
 
     @pytest.fixture
     def _genai_floor_met(self, monkeypatch):
@@ -260,9 +267,10 @@ class TestGeminiNativeStructuredToolsGate:
         monkeypatch.setattr(caps_mod, "_sdk_at_least", lambda dist, floor: True)
         yield
 
-    def test_flag_off_with_tools_is_prose_hint_unchanged(self, _genai_floor_met):
-        """Default OFF: even Gemini-3 + tools + new SDK stays on PROSE_HINT —
-        byte-identical to today's behavior."""
+    def test_kill_switch_with_tools_is_prose_hint(self, _genai_floor_met):
+        """Kill-switch (gemini_native_structured_tools=False): Gemini-3 + tools
+        + new SDK reverts to PROSE_HINT — byte-identical to the pre-#1102
+        default."""
         caps = resolve_capabilities(
             "gemini",
             "gemini/gemini-3-pro-preview",
@@ -316,8 +324,8 @@ class TestGeminiNativeStructuredToolsGate:
         ],
     )
     def test_flag_on_gemini2x_tools_is_prose_hint(self, _genai_floor_met, model):
-        """Only Gemini-3+ unlocks the gated path; 2.x / 1.x with tools stays
-        on PROSE_HINT even with the flag on."""
+        """Only Gemini-3+ unlocks the server-enforced path; 2.x / 1.x with
+        tools stays on PROSE_HINT even with the flag enabled (default)."""
         caps = resolve_capabilities(
             "gemini",
             model,

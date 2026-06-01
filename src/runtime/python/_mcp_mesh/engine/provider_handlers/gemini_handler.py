@@ -50,19 +50,22 @@ logger = logging.getLogger(__name__)
 
 
 def _gemini_native_structured_tools_enabled() -> bool:
-    """Read the ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS`` gate.
+    """Read the ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS`` kill-switch.
 
-    DEFAULT OFF (RFC #1100 follow-up). When unset / falsy, every Gemini path
-    is byte-identical to today (tools → HINT). Accepts ``1/true/yes/on``
-    (case-insensitive) as enable — mirrors the ``MCP_MESH_NATIVE_LLM``
-    parsing style. When ON, unlocks the Gemini-3 ``response_json_schema`` +
-    tools experiment on the mesh-delegated provider path; the resolver still
-    gates on model major version (>=3) and google-genai >= 1.22, so an
-    unsupported model/SDK silently stays on HINT.
+    DEFAULT ON (RFC #1100 follow-up). The Gemini-3 server-enforced
+    ``response_json_schema`` + tools path is now the default for qualifying
+    requests; this env var is an opt-OUT kill-switch. Returns False only when
+    explicitly set to ``0/false/no/off`` (case-insensitive); unset or any
+    other value → enabled (True). The resolver still gates on model major
+    version (>=3), google-genai >= 1.22, and tool presence, so gemini-2.x,
+    an older SDK, or a no-tools request silently keeps the prior behavior
+    (PROSE_HINT for tools / RESPONSE_FORMAT_STRICT for no-tools) even with
+    the default-on flag. Set ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0`` to
+    revert qualifying requests to the pre-#1102 PROSE_HINT path.
     """
     return os.environ.get(
         "MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS", ""
-    ).strip().lower() in ("1", "true", "yes", "on")
+    ).strip().lower() not in ("0", "false", "no", "off")
 
 
 # Internal marker stamped on ``model_params`` when the gated
@@ -276,11 +279,13 @@ class GeminiHandler(BaseProviderHandler):
                     output_type.__name__,
                 )
             elif caps.structured_output == StructuredOutputMode.RESPONSE_JSON_SCHEMA:
-                # GATED (default OFF): Gemini-3 server-enforced structured
-                # output WITH tools via ``response_json_schema``. Stamp the
-                # marker + carry the strict schema in ``response_format`` (the
-                # adapter reads it but emits ``response_json_schema``, NOT the
-                # legacy ``response_schema`` translation). Tools stay intact.
+                # DEFAULT ON for Gemini-3+ with tools (RFC #1100 follow-up):
+                # server-enforced structured output WITH tools via
+                # ``response_json_schema``. Stamp the marker + carry the strict
+                # schema in ``response_format`` (the adapter reads it but emits
+                # ``response_json_schema``, NOT the legacy ``response_schema``
+                # translation). Tools stay intact. Set the kill-switch
+                # MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0 to revert to HINT.
                 strict_schema = make_schema_strict(schema, add_all_required=True)
                 request_params["response_format"] = {
                     "type": "json_schema",
@@ -292,8 +297,9 @@ class GeminiHandler(BaseProviderHandler):
                 }
                 request_params[RESPONSE_JSON_SCHEMA_MARKER] = True
                 logger.info(
-                    "Gemini: GATED response_json_schema + tools for '%s' "
-                    "(MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS enabled, Gemini-3+)",
+                    "Gemini: response_json_schema + tools for '%s' "
+                    "(default-on for Gemini-3+; kill-switch: "
+                    "MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0 to disable)",
                     output_type.__name__,
                 )
             else:
@@ -423,22 +429,25 @@ class GeminiHandler(BaseProviderHandler):
         vendor handlers; Gemini is HINT-only here regardless, so the flag is
         a no-op.
 
-        GATED EXCEPTION (RFC #1100 follow-up, default OFF): when
-        ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS`` is enabled AND the resolver
-        confirms Gemini-3+ with google-genai >= 1.22, this stamps a
-        ``response_json_schema`` marker + the strict schema (as a
+        DEFAULT-ON EXCEPTION (RFC #1100 follow-up): when the resolver confirms
+        Gemini-3+ with google-genai >= 1.22 (and the
+        ``MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0`` kill-switch is NOT set),
+        this stamps a ``response_json_schema`` marker + the strict schema (as a
         ``response_format`` carrier) and KEEPS tools — letting the native
         adapter emit Gemini's stricter server-side primitive instead of HINT.
-        With the flag off, the resolver returns PROSE_HINT and the path below
-        is byte-identical to today (HINT injected, response_format popped).
+        With the kill-switch set, the resolver returns PROSE_HINT and the path
+        below is byte-identical to the pre-#1102 default (HINT injected,
+        response_format popped).
         """
         sanitized_schema = sanitize_schema_for_structured_output(output_schema)
 
-        # Gated mode selection (RFC #1100 follow-up). Default OFF →
-        # PROSE_HINT (the resolver's tools-path default), so the HINT block
-        # below runs exactly as today. When the gate is open AND the model /
-        # SDK qualify, the resolver returns RESPONSE_JSON_SCHEMA and we take
-        # the server-enforced branch instead.
+        # Mode selection (RFC #1100 follow-up). DEFAULT ON: when the model /
+        # SDK qualify (Gemini-3+, google-genai >= 1.22), the resolver returns
+        # RESPONSE_JSON_SCHEMA and we take the server-enforced branch. The
+        # kill-switch MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0 forces
+        # PROSE_HINT, so the HINT block below runs exactly as the pre-#1102
+        # default. Non-qualifying requests (gemini-2.x, older SDK) also stay
+        # on PROSE_HINT regardless of the flag.
         from .capabilities import StructuredOutputMode, resolve_capabilities
 
         caps = resolve_capabilities(
@@ -471,9 +480,10 @@ class GeminiHandler(BaseProviderHandler):
             }
             model_params[RESPONSE_JSON_SCHEMA_MARKER] = True
             logger.info(
-                "Gemini GATED response_json_schema + tools for '%s' "
-                "(mesh delegation; MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS "
-                "enabled, Gemini-3+ server-enforced, tools intact)",
+                "Gemini response_json_schema + tools for '%s' "
+                "(mesh delegation; default-on for Gemini-3+ server-enforced, "
+                "tools intact; kill-switch: "
+                "MCP_MESH_GEMINI_NATIVE_STRUCTURED_TOOLS=0 to disable)",
                 output_type_name or "Response",
             )
             return model_params
