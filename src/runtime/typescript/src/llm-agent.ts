@@ -157,23 +157,30 @@ export class MeshDelegatedProvider implements LlmProvider {
     this.parallelToolCalls = parallelToolCalls;
   }
 
-  async complete(
+  /**
+   * Build the MeshLlmRequest body shared by complete() and streamComplete().
+   *
+   * Assembles model_params (with the escape-hatch merge + typed overrides),
+   * wraps messages/tools into the MeshLlmRequest, and returns it pre-wrapped
+   * in the ``{ request }`` arguments object. Callers inject trace context /
+   * propagated headers into ``args`` afterward (per-caller — complete() uses
+   * injectTraceAndHeaders, streamComplete() lets streamMcpTool() handle it).
+   */
+  private buildMeshLlmRequest(
     model: string,
     messages: LlmMessage[],
-    tools?: LlmToolDefinition[],
-    options?: {
-      maxOutputTokens?: number;
-      temperature?: number;
-      topP?: number;
-      stop?: string[];
-      // Issue #459: Output schema for provider to apply vendor-specific handling
-      outputSchema?: { schema: Record<string, unknown>; name: string };
-      // Issue #1019: escape-hatch for vendor-specific kwargs not exposed by the
-      // typed option surface (e.g., thinking_config, output_config, reasoning_effort).
-      modelParams?: Record<string, unknown>;
-    }
-  ): Promise<LlmCompletionResponse> {
-    // Build MeshLlmRequest structure (matches Python claude_provider schema)
+    tools: LlmToolDefinition[] | undefined,
+    options:
+      | {
+          maxOutputTokens?: number;
+          temperature?: number;
+          topP?: number;
+          stop?: string[];
+          outputSchema?: { schema: Record<string, unknown>; name: string };
+          modelParams?: Record<string, unknown>;
+        }
+      | undefined
+  ): { request: Record<string, unknown>; args: Record<string, unknown> } {
     const modelParams: Record<string, unknown> = {};
     // Escape-hatch merge: callers can pass vendor-specific kwargs
     // (e.g., thinking_config, output_config) via options.modelParams.
@@ -215,7 +222,29 @@ export class MeshDelegatedProvider implements LlmProvider {
     }
 
     // Wrap in "request" parameter as expected by Python claude_provider
-    let args: Record<string, unknown> = { request };
+    const args: Record<string, unknown> = { request };
+
+    return { request, args };
+  }
+
+  async complete(
+    model: string,
+    messages: LlmMessage[],
+    tools?: LlmToolDefinition[],
+    options?: {
+      maxOutputTokens?: number;
+      temperature?: number;
+      topP?: number;
+      stop?: string[];
+      // Issue #459: Output schema for provider to apply vendor-specific handling
+      outputSchema?: { schema: Record<string, unknown>; name: string };
+      // Issue #1019: escape-hatch for vendor-specific kwargs not exposed by the
+      // typed option surface (e.g., thinking_config, output_config, reasoning_effort).
+      modelParams?: Record<string, unknown>;
+    }
+  ): Promise<LlmCompletionResponse> {
+    // Build MeshLlmRequest structure (matches Python claude_provider schema).
+    let { args } = this.buildMeshLlmRequest(model, messages, tools, options);
 
     // Set up timeout (default 300s to match Python SDK's stream_timeout)
     const timeoutMs = parseInt(process.env.MESH_PROVIDER_TIMEOUT_MS || "300000", 10);
@@ -402,38 +431,8 @@ export class MeshDelegatedProvider implements LlmProvider {
       modelParams?: Record<string, unknown>;
     }
   ): AsyncGenerator<string, void, void> {
-    // Build MeshLlmRequest body — same shape as complete()
-    const modelParams: Record<string, unknown> = {};
-    // Escape-hatch merge: callers can pass vendor-specific kwargs
-    // (e.g., thinking_config, output_config) via options.modelParams.
-    // Merged FIRST so typed fields below take precedence on collision.
-    if (options?.modelParams) {
-      Object.assign(modelParams, options.modelParams);
-    }
-    if (model && model !== "default") {
-      modelParams.model = model;
-    }
-    if (options?.maxOutputTokens) modelParams.max_tokens = options.maxOutputTokens;
-    if (options?.temperature !== undefined) modelParams.temperature = options.temperature;
-    if (options?.topP !== undefined) modelParams.top_p = options.topP;
-    if (options?.stop) modelParams.stop = options.stop;
-    if (options?.outputSchema) {
-      modelParams.output_schema = options.outputSchema.schema;
-      modelParams.output_type_name = options.outputSchema.name;
-    }
-    if (this.parallelToolCalls) {
-      modelParams.parallel_tool_calls = true;
-    }
-
-    const request: Record<string, unknown> = { messages };
-    if (Object.keys(modelParams).length > 0) {
-      request.model_params = modelParams;
-    }
-    if (tools && tools.length > 0) {
-      request.tools = tools;
-    }
-
-    const args: Record<string, unknown> = { request };
+    // Build MeshLlmRequest body — same shape as complete().
+    const { args } = this.buildMeshLlmRequest(model, messages, tools, options);
 
     // streamMcpTool() handles trace context injection / propagated headers /
     // dispatcher pooling internally — same path as createProxy().stream().
@@ -522,31 +521,25 @@ export class MeshLlmAgent<T = string> {
   }
 
   /**
-   * Run the agentic loop.
+   * Build the initial LlmMessage[] shared by run() and stream():
+   * render the system prompt (+ tool schema injection), optionally append the
+   * output-schema hint, resolve media inputs, and unwind multi-turn history
+   * (attaching resolved media to the last user message).
    *
-   * @param messageInput - User message string or multi-turn message array
-   * @param context - Runtime context with tools and options
-   * @returns Parsed response (validated if schema provided)
+   * The ONLY behavioral knob is opts.includeOutputSchemaHint:
+   * - run() passes `!meshDelegated` (consumer-side schema hint when not delegated).
+   * - stream() passes `false` (always mesh-delegated; provider applies formatting).
    */
-  async run(messageInput: LlmMessageInput, context: AgentRunContext): Promise<T> {
-    if (this.config.parallelToolCalls && !this._parallelLogEmitted) {
-      console.log("[mesh.llm] parallel tool calls enabled — tools will execute concurrently via Promise.all()");
-      this._parallelLogEmitted = true;
-    }
-    const startTime = Date.now();
-    const toolCalls: LlmToolCall[] = [];
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-
-    // Resolve provider
-    const provider = this.resolveProvider(context);
-
-    // Build initial messages
+  private async buildAgentMessages(
+    messageInput: LlmMessageInput,
+    context: AgentRunContext,
+    opts: { includeOutputSchemaHint: boolean }
+  ): Promise<LlmMessage[]> {
     const messages: LlmMessage[] = [];
 
-    // Build tool definitions first (needed for schema injection)
+    // Build tool definitions first (needed for schema injection).
     // When using mesh delegation, enrich tools with endpoint URLs
-    // so the provider can execute tools directly via MCP proxies
+    // so the provider can execute tools directly via MCP proxies.
     const isMeshDelegated = !!context.meshProvider;
     const toolDefs = this.buildToolDefinitions(context.tools, isMeshDelegated);
 
@@ -569,7 +562,7 @@ export class MeshLlmAgent<T = string> {
       // formatting via output_schema in model_params. Consumer doesn't know
       // the provider's vendor, so it must not add vendor-agnostic schema instructions.
       const outputMode = this.config.outputMode ?? "hint";
-      if (!context.meshProvider && outputMode !== "text" && this.config.returnSchema) {
+      if (opts.includeOutputSchemaHint && outputMode !== "text" && this.config.returnSchema) {
         const outputSchemaSection = this.buildOutputSchemaSection();
         systemContent += outputSchemaSection;
       }
@@ -622,6 +615,42 @@ export class MeshLlmAgent<T = string> {
         }
       }
     }
+
+    return messages;
+  }
+
+  /**
+   * Run the agentic loop.
+   *
+   * @param messageInput - User message string or multi-turn message array
+   * @param context - Runtime context with tools and options
+   * @returns Parsed response (validated if schema provided)
+   */
+  async run(messageInput: LlmMessageInput, context: AgentRunContext): Promise<T> {
+    if (this.config.parallelToolCalls && !this._parallelLogEmitted) {
+      console.log("[mesh.llm] parallel tool calls enabled — tools will execute concurrently via Promise.all()");
+      this._parallelLogEmitted = true;
+    }
+    const startTime = Date.now();
+    const toolCalls: LlmToolCall[] = [];
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+
+    // Resolve provider
+    const provider = this.resolveProvider(context);
+
+    // Build tool definitions (needed for schema injection + the agentic loop).
+    // When using mesh delegation, enrich tools with endpoint URLs
+    // so the provider can execute tools directly via MCP proxies.
+    const isMeshDelegated = !!context.meshProvider;
+    const toolDefs = this.buildToolDefinitions(context.tools, isMeshDelegated);
+
+    // Build initial messages (system prompt + tool schema + output-schema hint
+    // + resolved media + multi-turn unwinding). run() includes the output-schema
+    // hint only when NOT mesh-delegated.
+    const messages = await this.buildAgentMessages(messageInput, context, {
+      includeOutputSchemaHint: !isMeshDelegated,
+    });
 
     // Get effective options (runtime options > MESH_LLM_* env > config)
     const maxIterations =
@@ -814,65 +843,15 @@ export class MeshLlmAgent<T = string> {
     // server side and emits text chunks via notifications/progress; the
     // consumer just yields each one.
 
-    const messages: LlmMessage[] = [];
-    const isMeshDelegated = true; // by definition: we required meshProvider above
-    const toolDefs = this.buildToolDefinitions(context.tools, isMeshDelegated);
+    // Mesh-delegated by definition (we required meshProvider above).
+    const toolDefs = this.buildToolDefinitions(context.tools, true);
 
-    // System prompt with template rendering + tool schema injection.
-    // Mirrors run(): mesh-delegated path skips the output-schema hint
-    // because the provider applies vendor-specific output formatting.
-    const systemPromptTemplate = this.getSystemPrompt();
-    if (systemPromptTemplate) {
-      let systemContent = await renderTemplate(
-        systemPromptTemplate,
-        context.templateContext ?? {}
-      );
-      if (toolDefs.length > 0) {
-        systemContent += this.buildToolSchemaSection(toolDefs);
-      }
-      messages.push({ role: "system", content: systemContent });
-    }
-
-    // Resolve media items to OpenAI-compatible image_url parts
-    const mediaItems = context.options?.media;
-    let mediaParts: Array<{ type: string; [key: string]: unknown }> | null = null;
-    if (mediaItems && mediaItems.length > 0) {
-      mediaParts = await resolveMediaInputs(mediaItems);
-    }
-
-    if (typeof messageInput === "string") {
-      if (mediaParts && mediaParts.length > 0) {
-        messages.push({
-          role: "user",
-          content: [
-            { type: "text", text: messageInput },
-            ...mediaParts,
-          ] as LlmContentPart[],
-        });
-      } else {
-        messages.push({ role: "user", content: messageInput });
-      }
-    } else {
-      for (let i = 0; i < messageInput.length; i++) {
-        const msg = messageInput[i];
-        const isLastUser =
-          mediaParts &&
-          mediaParts.length > 0 &&
-          msg.role === "user" &&
-          i === messageInput.length - 1;
-        if (isLastUser) {
-          messages.push({
-            role: "user",
-            content: [
-              { type: "text", text: msg.content },
-              ...mediaParts!,
-            ] as LlmContentPart[],
-          });
-        } else {
-          messages.push({ role: msg.role, content: msg.content });
-        }
-      }
-    }
+    // Build initial messages (system prompt + tool schema + resolved media +
+    // multi-turn unwinding). stream() NEVER includes the output-schema hint —
+    // the provider applies vendor-specific output formatting.
+    const messages = await this.buildAgentMessages(messageInput, context, {
+      includeOutputSchemaHint: false,
+    });
 
     // Effective options (runtime > env > config)
     const maxTokens = context.options?.maxOutputTokens ?? this.config.maxOutputTokens;
