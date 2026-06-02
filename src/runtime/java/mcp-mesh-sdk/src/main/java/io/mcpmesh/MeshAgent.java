@@ -34,6 +34,7 @@ import java.lang.annotation.Target;
  *   <li>{@code MCP_MESH_HTTP_PORT} → {@link #port()}</li>
  *   <li>{@code MCP_MESH_HTTP_HOST} → {@link #host()}</li>
  *   <li>{@code MCP_MESH_NAMESPACE} → {@link #namespace()}</li>
+ *   <li>{@code MCP_MESH_HEALTH_INTERVAL} → {@link #heartbeatInterval()}</li>
  * </ul>
  */
 @Target(ElementType.TYPE)

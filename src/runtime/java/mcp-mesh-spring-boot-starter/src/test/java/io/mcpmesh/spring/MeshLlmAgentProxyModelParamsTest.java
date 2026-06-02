@@ -16,6 +16,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -494,10 +495,10 @@ class MeshLlmAgentProxyModelParamsTest {
         assertEquals("final answer", result);
 
         // Two LLM calls were made.
-        RecordedRequest first = server.takeRequest();
-        RecordedRequest second = server.takeRequest();
-        assertNotNull(first);
-        assertNotNull(second);
+        RecordedRequest first = server.takeRequest(2, TimeUnit.SECONDS);
+        RecordedRequest second = server.takeRequest(2, TimeUnit.SECONDS);
+        assertNotNull(first, "first LLM request must arrive");
+        assertNotNull(second, "second LLM request (tool result fed back) must arrive within timeout");
 
         // The second request's messages must include the assistant tool_calls turn
         // and the fed-back tool result.

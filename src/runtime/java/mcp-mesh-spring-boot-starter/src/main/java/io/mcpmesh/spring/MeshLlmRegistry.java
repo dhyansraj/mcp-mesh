@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Method;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -166,7 +167,7 @@ public class MeshLlmRegistry {
         if (envVal == null || envVal.isBlank()) {
             return annotationVal.ordinal();
         }
-        switch (envVal.trim().toLowerCase()) {
+        switch (envVal.trim().toLowerCase(Locale.ROOT)) {
             case "all":
                 return FilterMode.ALL.ordinal();
             case "best_match":

@@ -598,7 +598,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             } else if (!modelParams.containsKey("max_tokens") && defaultMaxTokens >= 0) {
                 modelParams.put("max_tokens", defaultMaxTokens);
             }
-            if (temperature != null) {
+            if (temperature != null && !Double.isNaN(temperature)) {
                 modelParams.put("temperature", temperature);
             } else if (!modelParams.containsKey("temperature") && !Double.isNaN(defaultTemperature)) {
                 modelParams.put("temperature", defaultTemperature);
