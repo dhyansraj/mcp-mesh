@@ -41,7 +41,7 @@ from .base_provider_handler import (
     BaseProviderHandler,
     has_media_params,
     make_schema_strict,
-    resolve_hint_fallback_timeout,
+    render_dispatch_status_log,
     sanitize_schema_for_structured_output,
 )
 
@@ -68,6 +68,42 @@ from .._structured_output_helpers import (  # noqa: F401
     schema_to_synthetic_tool,
 )
 
+# Single source of truth for every ``_mesh_*`` structured-output sentinel that
+# the three Claude modes (HINT / synthetic-tool / output_config) may stamp on
+# ``model_params``. Each mode clears ALL sentinels EXCEPT its own before
+# stamping — this cross-mode defense-in-depth prevents a stale sentinel from a
+# prior code path leaking into another mode and confusing the agentic loop's
+# recognition logic. Centralizing the list keeps the clear-scopes in lockstep.
+_HINT_SENTINELS = (
+    "_mesh_hint_mode",
+    "_mesh_hint_schema",
+    "_mesh_hint_fallback_timeout",
+    "_mesh_hint_output_type_name",
+)
+_SYNTHETIC_SENTINELS = (
+    "_mesh_synthetic_format_tool_name",
+    "_mesh_synthetic_format_tool",
+    "_mesh_synthetic_format_output_type_name",
+)
+_OUTPUT_CONFIG_SENTINELS = (
+    "_mesh_output_config_mode",
+    "_mesh_output_config_schema",
+    "_mesh_output_config_output_type_name",
+)
+def _clear_structured_output_sentinels(
+    model_params: dict[str, Any], *keys: str
+) -> None:
+    """Pop the given structured-output sentinels from ``model_params``.
+
+    Call sites pass the sentinel tuples (``_HINT_SENTINELS`` /
+    ``_SYNTHETIC_SENTINELS`` / ``_OUTPUT_CONFIG_SENTINELS``) so the exact
+    cross-mode clear-scope each mode had before centralization is preserved —
+    the only change is that the key lists now have a single source of truth.
+    """
+    for key in keys:
+        model_params.pop(key, None)
+
+
 # One-time guard so the dispatch-status DEBUG log fires exactly once per
 # process. Mirrors ``_logged_fallback_once`` in anthropic_native. The
 # registry caches a singleton handler per vendor
@@ -90,45 +126,41 @@ def is_dispatch_status_logged() -> bool:
     return _DISPATCH_STATUS_LOGGED
 
 
+def _anthropic_sdk_version() -> str:
+    """Probe the installed anthropic SDK version for the dispatch-status log."""
+    try:
+        import anthropic
+        return getattr(anthropic, "__version__", "<unknown>")
+    except Exception:
+        return "<import-failed>"
+
+
 def _log_dispatch_status_once() -> None:
     """Log the resolved native-dispatch status once per process at DEBUG level.
 
     Designed so users running with ``meshctl ... --debug`` can confirm whether
     a Claude provider agent is using the native anthropic SDK or falling back
     to LiteLLM. Fires on first call only; subsequent invocations are no-ops.
+
+    The rendered text is delegated to the shared base helper but the latch +
+    logger stay module-local so the DEBUG record is attributed to this module
+    and tests can re-arm the once-guard.
     """
     global _DISPATCH_STATUS_LOGGED
     if _DISPATCH_STATUS_LOGGED:
         return
     _DISPATCH_STATUS_LOGGED = True
 
-    env_value = os.getenv("MCP_MESH_NATIVE_LLM", "").strip().lower()
-
-    if env_value in ("0", "false", "no", "off"):
-        logger.debug(
-            "Claude native dispatch: disabled "
-            "(MCP_MESH_NATIVE_LLM=%s explicitly set; using LiteLLM)",
-            env_value,
-        )
-        return
-
     from _mcp_mesh.engine.native_clients import anthropic_native
 
-    if anthropic_native.is_available():
-        try:
-            import anthropic
-            version = getattr(anthropic, "__version__", "<unknown>")
-        except Exception:
-            version = "<import-failed>"
-        logger.debug(
-            "Claude native dispatch: enabled (anthropic SDK %s)",
-            version,
-        )
-    else:
-        logger.debug(
-            "Claude native dispatch: disabled "
-            "(anthropic SDK not installed; install mcp-mesh[anthropic] to enable)"
-        )
+    render_dispatch_status_log(
+        logger,
+        vendor_label="Claude",
+        sdk_display="anthropic",
+        install_extra="anthropic",
+        native_module=anthropic_native,
+        version_probe=_anthropic_sdk_version,
+    )
 
 
 class ClaudeHandler(BaseProviderHandler):
@@ -353,27 +385,6 @@ class ClaudeHandler(BaseProviderHandler):
             determined_mode,
         )
 
-    def _build_hint_text(self, sanitized_schema: dict[str, Any]) -> str:
-        """Build the ``OUTPUT FORMAT:`` HINT block for ``apply_structured_output``.
-
-        Returned text starts with leading blank lines so it can be appended
-        directly to existing system message content. Callers that synthesize
-        a fresh system message should ``.strip()`` the result.
-        """
-        hint_text = "\n\nOUTPUT FORMAT:\n"
-        hint_text += (
-            "Your FINAL response must be ONLY valid JSON (no markdown, "
-            "no code blocks) with this exact structure:\n"
-        )
-        properties = sanitized_schema.get("properties", {})
-        hint_text += self.build_json_example(properties) + "\n\n"
-        hint_text += (
-            "Return ONLY the JSON object with actual values. Do not "
-            "include the schema definition, markdown formatting, or "
-            "code blocks."
-        )
-        return hint_text
-
     def apply_structured_output(
         self,
         output_schema: dict[str, Any],
@@ -504,69 +515,22 @@ class ClaudeHandler(BaseProviderHandler):
         # Inject HINT instructions into the first system message.
         # Mesh delegation always involves tools, and Claude's response_format
         # path silently hangs on certain content+tools combos (issue #820),
-        # so we cannot use it here.
-        messages = model_params.get("messages", [])
-        hint_block_inserted = False
-        for msg in messages:
-            if msg.get("role") == "system":
-                base_content = msg.get("content", "")
-                hint_text = self._build_hint_text(sanitized_schema)
-                # Tolerate string OR content-block list (post-prompt-cache).
-                # Mirrors the synthetic-tool injection site below: a string
-                # concatenates; a list gets a NEW text block appended so the
-                # original blocks' cache_control is preserved.
-                if isinstance(base_content, str):
-                    msg["content"] = base_content + hint_text
-                elif isinstance(base_content, list):
-                    msg["content"] = list(base_content) + [
-                        {"type": "text", "text": hint_text}
-                    ]
-                else:
-                    # Unknown content shape — defensive coerce to string so
-                    # the model still sees the schema. Log so the unexpected
-                    # shape surfaces in debugging.
-                    logger.debug(
-                        "Claude HINT injection: unexpected system content "
-                        "type %s; coercing to string",
-                        type(base_content).__name__,
-                    )
-                    msg["content"] = str(base_content) + hint_text
-                hint_block_inserted = True
-                break
-
-        if not hint_block_inserted:
-            # No system message found — synthesize one containing just the
-            # HINT block. Without this, the _mesh_hint_* flags below would
-            # still be set but the model would never see the schema, every
-            # response would fail validation, and the 30s fallback timeout
-            # would fire on every request.
-            hint_text = self._build_hint_text(sanitized_schema)
-            messages.insert(0, {"role": "system", "content": hint_text.strip()})
-            logger.debug(
-                "Claude HINT mode for '%s': no system message found, "
-                "synthesized one with HINT block",
-                output_type_name or "Response",
-            )
-            # Keep model_params["messages"] in sync — messages may be a
-            # fresh list reference if the caller passed an empty/missing list.
-            model_params["messages"] = messages
-
-        # Internal flags read by _provider_agentic_loop. Prefixed with
-        # "_mesh_" so the loop strips them before calling LiteLLM (these
-        # are NOT API params).
-        # Fallback timeout: 30s was too tight for complex nested schemas
-        # (e.g. list[NestedModel] where Claude generates multi-day itineraries).
-        # Configurable via MCP_MESH_HINT_FALLBACK_TIMEOUT (seconds); the
-        # legacy MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT remains as a
-        # back-compat alias with a deprecation warning.
-        fallback_timeout = resolve_hint_fallback_timeout()
-        model_params["_mesh_hint_mode"] = True
-        model_params["_mesh_hint_schema"] = sanitized_schema
-        model_params["_mesh_hint_fallback_timeout"] = fallback_timeout
-        model_params["_mesh_hint_output_type_name"] = output_type_name or "Response"
-
-        # Explicitly DO NOT set response_format — that's the bug we're avoiding.
-        model_params.pop("response_format", None)
+        # so we cannot use it here. The shared base helper performs the
+        # inject/synthesize/stamp work and pops response_format; Claude uses
+        # ``support_content_blocks=True`` so the system message's post-prompt-
+        # cache content-block list shape is tolerated (a NEW text block is
+        # appended, preserving the original blocks' cache_control).
+        # Fallback timeout (stamped by the helper): configurable via
+        # MCP_MESH_HINT_FALLBACK_TIMEOUT (seconds); the legacy
+        # MCP_MESH_CLAUDE_HINT_FALLBACK_TIMEOUT remains as a back-compat alias
+        # with a deprecation warning.
+        self.apply_prose_hint(
+            model_params,
+            sanitized_schema,
+            output_type_name,
+            support_content_blocks=True,
+            logger=logger,
+        )
 
         logger.info(
             "Claude HINT mode for '%s' (mesh delegation, schema in prompt; "
@@ -678,13 +642,7 @@ class ClaudeHandler(BaseProviderHandler):
         # leak through (defense-in-depth; both response_format and HINT flags
         # would confuse the loop).
         model_params.pop("response_format", None)
-        for hint_key in (
-            "_mesh_hint_mode",
-            "_mesh_hint_schema",
-            "_mesh_hint_fallback_timeout",
-            "_mesh_hint_output_type_name",
-        ):
-            model_params.pop(hint_key, None)
+        _clear_structured_output_sentinels(model_params, *_HINT_SENTINELS)
 
         logger.info(
             "Claude native synthetic-tool mode for '%s' (mesh delegation; "
@@ -751,16 +709,9 @@ class ClaudeHandler(BaseProviderHandler):
         # Defense-in-depth: ``output_config`` mode is mutually exclusive with
         # HINT and synthetic-tool modes. Clear any leftover sentinels from a
         # prior code path so the loop's recognition logic stays deterministic.
-        for stale_key in (
-            "_mesh_hint_mode",
-            "_mesh_hint_schema",
-            "_mesh_hint_fallback_timeout",
-            "_mesh_hint_output_type_name",
-            "_mesh_synthetic_format_tool_name",
-            "_mesh_synthetic_format_tool",
-            "_mesh_synthetic_format_output_type_name",
-        ):
-            model_params.pop(stale_key, None)
+        _clear_structured_output_sentinels(
+            model_params, *_HINT_SENTINELS, *_SYNTHETIC_SENTINELS
+        )
 
         logger.info(
             "Claude native output_config mode for '%s' (mesh delegation; "
@@ -794,72 +745,23 @@ class ClaudeHandler(BaseProviderHandler):
     # False and the call sites in mesh.helpers fall back to LiteLLM with
     # a one-time INFO log nudging the user toward
     # ``pip install mcp-mesh[anthropic]``.
+    #
+    # ``has_native()`` / ``complete()`` / ``complete_stream()`` are inherited
+    # from BaseProviderHandler, driven by the one-line ``_native_module()`` hook
+    # below (plus label/version for the dispatch-status log).
 
-    def has_native(self) -> bool:
-        """Native dispatch is enabled by default when the anthropic SDK is
-        importable. Set ``MCP_MESH_NATIVE_LLM=0`` (or ``false``/``no``/``off``)
-        to disable and force the LiteLLM fallback path. Setting the flag to
-        ``1``/``true``/``yes``/``on`` is accepted as an explicit-enable
-        (same behavior as the default).
-        """
-        # Emit the one-time dispatch-status DEBUG log. Lazy here (vs. at
-        # module/handler init) so it fires when the first dispatch decision
-        # is actually made — the most useful signal for ``--debug`` runs.
-        # Skip the call entirely once the log has fired — the function
-        # dedupes internally, but avoiding the call frame on the hot path
-        # is cheaper still.
+    def _native_module(self):
+        # Lazy import inside the method so module import does not fail when the
+        # SDK is absent; this mirrors what the call sites do.
+        from _mcp_mesh.engine.native_clients import anthropic_native
+
+        return anthropic_native
+
+    def _native_label(self) -> str:
+        return "Claude"
+
+    def _log_dispatch_status(self) -> None:
+        # Skip the call entirely once the log has fired — the function dedupes
+        # internally, but avoiding the call frame on the hot path is cheaper.
         if not is_dispatch_status_logged():
             _log_dispatch_status_once()
-
-        flag = os.environ.get("MCP_MESH_NATIVE_LLM", "").strip().lower()
-        # Explicit opt-out wins over SDK availability.
-        if flag in ("0", "false", "no", "off"):
-            return False
-
-        # Lazy import inside the function so module import does not fail
-        # when the SDK is absent; this mirrors what the call sites do.
-        from _mcp_mesh.engine.native_clients import anthropic_native
-
-        if not anthropic_native.is_available():
-            # Skip the log call entirely once it has already fired — the
-            # function dedupes internally, but on the no-native hot path
-            # avoiding the call frame altogether is cheaper still.
-            if not anthropic_native.is_fallback_logged():
-                anthropic_native.log_fallback_once()
-            return False
-
-        return True
-
-    async def complete(
-        self,
-        request_params: dict[str, Any],
-        *,
-        model: str,
-        **kwargs: Any,
-    ) -> Any:
-        """Dispatch a buffered completion to the native Anthropic SDK adapter."""
-        from _mcp_mesh.engine.native_clients import anthropic_native
-
-        return await anthropic_native.complete(
-            request_params,
-            model=model,
-            api_key=kwargs.get("api_key"),
-            base_url=kwargs.get("base_url"),
-        )
-
-    async def complete_stream(
-        self,
-        request_params: dict[str, Any],
-        *,
-        model: str,
-        **kwargs: Any,
-    ):
-        """Dispatch a streaming completion to the native Anthropic SDK adapter."""
-        from _mcp_mesh.engine.native_clients import anthropic_native
-
-        return anthropic_native.complete_stream(
-            request_params,
-            model=model,
-            api_key=kwargs.get("api_key"),
-            base_url=kwargs.get("base_url"),
-        )

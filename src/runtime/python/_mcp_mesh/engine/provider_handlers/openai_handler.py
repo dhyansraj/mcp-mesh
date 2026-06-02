@@ -7,7 +7,6 @@ using OpenAI's native structured output capabilities.
 
 import json
 import logging
-import os
 from typing import Any, Optional
 
 import mcp_mesh_core
@@ -16,6 +15,7 @@ from pydantic import BaseModel
 from .base_provider_handler import (
     BaseProviderHandler,
     has_media_params,
+    render_dispatch_status_log,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,45 +43,41 @@ def is_dispatch_status_logged() -> bool:
     return _DISPATCH_STATUS_LOGGED
 
 
+def _openai_sdk_version() -> str:
+    """Probe the installed openai SDK version for the dispatch-status log."""
+    try:
+        import openai
+        return getattr(openai, "__version__", "<unknown>")
+    except Exception:
+        return "<import-failed>"
+
+
 def _log_dispatch_status_once() -> None:
     """Log the resolved native-dispatch status once per process at DEBUG level.
 
     Designed so users running with ``meshctl ... --debug`` can confirm whether
     an OpenAI provider agent is using the native openai SDK or falling back
     to LiteLLM. Fires on first call only; subsequent invocations are no-ops.
+
+    The rendered text is delegated to the shared base helper but the latch +
+    logger stay module-local so the DEBUG record is attributed to this module
+    and tests can re-arm the once-guard.
     """
     global _DISPATCH_STATUS_LOGGED
     if _DISPATCH_STATUS_LOGGED:
         return
     _DISPATCH_STATUS_LOGGED = True
 
-    env_value = os.getenv("MCP_MESH_NATIVE_LLM", "").strip().lower()
-
-    if env_value in ("0", "false", "no", "off"):
-        logger.debug(
-            "OpenAI native dispatch: disabled "
-            "(MCP_MESH_NATIVE_LLM=%s explicitly set; using LiteLLM)",
-            env_value,
-        )
-        return
-
     from _mcp_mesh.engine.native_clients import openai_native
 
-    if openai_native.is_available():
-        try:
-            import openai
-            version = getattr(openai, "__version__", "<unknown>")
-        except Exception:
-            version = "<import-failed>"
-        logger.debug(
-            "OpenAI native dispatch: enabled (openai SDK %s)",
-            version,
-        )
-    else:
-        logger.debug(
-            "OpenAI native dispatch: disabled "
-            "(openai SDK not installed; install mcp-mesh[openai] to enable)"
-        )
+    render_dispatch_status_log(
+        logger,
+        vendor_label="OpenAI",
+        sdk_display="openai",
+        install_extra="openai",
+        native_module=openai_native,
+        version_probe=_openai_sdk_version,
+    )
 
 
 class OpenAIHandler(BaseProviderHandler):
@@ -249,81 +245,23 @@ class OpenAIHandler(BaseProviderHandler):
     # the missing-SDK branch should never trigger — kept for symmetry with
     # the Anthropic handler and to guard against custom installs that
     # strip the SDK.
+    #
+    # ``has_native()`` / ``complete()`` / ``complete_stream()`` are inherited
+    # from BaseProviderHandler, driven by the one-line ``_native_module()`` hook
+    # below (plus label/version for the dispatch-status log).
 
-    def has_native(self) -> bool:
-        """Native dispatch is enabled by default when the openai SDK is
-        importable. Set ``MCP_MESH_NATIVE_LLM=0`` (or ``false``/``no``/``off``)
-        to disable and force the LiteLLM fallback path. Setting the flag to
-        ``1``/``true``/``yes``/``on`` is accepted as an explicit-enable
-        (same behavior as the default).
-        """
-        # Emit the one-time dispatch-status DEBUG log. Lazy here (vs. at
-        # module/handler init) so it fires when the first dispatch decision
-        # is actually made — the most useful signal for ``--debug`` runs.
-        # Skip the call entirely once the log has fired — the function
-        # dedupes internally, but avoiding the call frame on the hot path
-        # is cheaper still.
+    def _native_module(self):
+        # Lazy import inside the method so module import does not fail when the
+        # SDK is absent; this mirrors what the call sites do.
+        from _mcp_mesh.engine.native_clients import openai_native
+
+        return openai_native
+
+    def _native_label(self) -> str:
+        return "OpenAI"
+
+    def _log_dispatch_status(self) -> None:
+        # Skip the call entirely once the log has fired — the function dedupes
+        # internally, but avoiding the call frame on the hot path is cheaper.
         if not is_dispatch_status_logged():
             _log_dispatch_status_once()
-
-        flag = os.environ.get("MCP_MESH_NATIVE_LLM", "").strip().lower()
-        # Explicit opt-out wins over SDK availability.
-        if flag in ("0", "false", "no", "off"):
-            return False
-
-        # Lazy import inside the function so module import does not fail
-        # when the SDK is absent; this mirrors what the call sites do.
-        from _mcp_mesh.engine.native_clients import openai_native
-
-        if not openai_native.is_available():
-            # Skip the log call entirely once it has already fired — the
-            # function dedupes internally, but on the no-native hot path
-            # avoiding the call frame altogether is cheaper still.
-            if not openai_native.is_fallback_logged():
-                openai_native.log_fallback_once()
-            return False
-
-        return True
-
-    async def complete(
-        self,
-        request_params: dict[str, Any],
-        *,
-        model: str,
-        **kwargs: Any,
-    ) -> Any:
-        """Dispatch a buffered completion to the native OpenAI SDK adapter."""
-        from _mcp_mesh.engine.native_clients import openai_native
-
-        return await openai_native.complete(
-            request_params,
-            model=model,
-            api_key=kwargs.get("api_key"),
-            base_url=kwargs.get("base_url"),
-        )
-
-    async def complete_stream(
-        self,
-        request_params: dict[str, Any],
-        *,
-        model: str,
-        **kwargs: Any,
-    ):
-        """Streaming completion via the native OpenAI SDK.
-
-        Note: this method is ``async def`` but ``return``s (without
-        awaiting) the async generator from
-        ``openai_native.complete_stream``. Callers ``await`` the handler
-        call (which resolves the coroutine to the AG), then
-        ``async for chunk in stream_iter:`` to consume. Mirrors the
-        dispatch contract used in mesh/helpers.py and matches the
-        ClaudeHandler pattern.
-        """
-        from _mcp_mesh.engine.native_clients import openai_native
-
-        return openai_native.complete_stream(
-            request_params,
-            model=model,
-            api_key=kwargs.get("api_key"),
-            base_url=kwargs.get("base_url"),
-        )
