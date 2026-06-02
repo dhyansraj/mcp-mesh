@@ -17,12 +17,10 @@
  * - https://ai.google.dev/gemini-api/docs
  */
 
-import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
 import { formatSystemPrompt as coreFormatSystemPrompt } from "@mcpmesh/core";
 import {
-  makeSchemaStrict,
-  sanitizeSchemaForStructuredOutput,
+  applyStrictResponseFormat,
   hasMediaParams,
   defaultDetermineOutputMode,
   prepareRequestBaseline,
@@ -34,8 +32,6 @@ import {
   type OutputMode,
 } from "./provider-handler.js";
 import { ProviderHandlerRegistry } from "./provider-handler-registry.js";
-
-const debug = createDebug("gemini-handler");
 
 /**
  * Provider handler for Google Gemini models.
@@ -95,19 +91,7 @@ export class GeminiHandler implements ProviderHandler {
     // Hint mode relies on prompt instructions instead
     if (determinedMode === "strict") {
       // Vercel AI SDK translates this to Gemini's native format
-      const sanitizedSchema = sanitizeSchemaForStructuredOutput(outputSchema.schema);
-      const strictSchema = makeSchemaStrict(sanitizedSchema, { addAllRequired: true });
-
-      request.responseFormat = {
-        type: "json_schema",
-        jsonSchema: {
-          name: outputSchema.name,
-          schema: strictSchema,
-          strict: true, // Enforce schema compliance
-        },
-      };
-
-      debug(`Using response_format with strict schema: ${outputSchema.name}`);
+      applyStrictResponseFormat(request, outputSchema);
     }
 
     return request;

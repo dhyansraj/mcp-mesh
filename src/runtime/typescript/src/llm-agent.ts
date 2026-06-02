@@ -484,10 +484,35 @@ export class MeshLlmAgent<T = string> {
   private _meta: LlmMeta | null = null;
   private _systemPromptOverride: string | null = null;
   private _parallelLogEmitted = false;
+  // Cached output schema derived from the immutable returnSchema (Issue #459).
+  // Computed once: `null` means "not yet computed", an object holds the result
+  // (which may itself be `undefined` when conversion failed).
+  private _outputSchema: { schema: Record<string, unknown>; name: string } | undefined | null = null;
+  private _outputSchemaSection: string | null = null;
 
   constructor(config: MeshLlmAgentConfig) {
     this.config = config;
     this.responseParser = new ResponseParser(config.returnSchema as ZodType<T> | undefined);
+  }
+
+  /**
+   * Build (once) the provider output schema from the immutable returnSchema.
+   * Returns `undefined` when there is no schema or conversion failed.
+   */
+  private getOutputSchema(): { schema: Record<string, unknown>; name: string } | undefined {
+    if (this._outputSchema !== null) return this._outputSchema;
+    let result: { schema: Record<string, unknown>; name: string } | undefined;
+    if (this.config.returnSchema) {
+      try {
+        const jsonSchema = zodToJsonSchema(this.config.returnSchema) as Record<string, unknown>;
+        const schemaName = (jsonSchema.title as string) ?? "Response";
+        result = { schema: jsonSchema, name: schemaName };
+      } catch {
+        // If schema conversion fails, skip
+      }
+    }
+    this._outputSchema = result;
+    return result;
   }
 
   /**
@@ -629,18 +654,8 @@ export class MeshLlmAgent<T = string> {
       this.config.model ??
       this.getDefaultModel();
 
-    // Build output schema for provider (Issue #459) - computed once before loop
-    let outputSchema: { schema: Record<string, unknown>; name: string } | undefined;
-    if (this.config.returnSchema) {
-      try {
-        const jsonSchema = zodToJsonSchema(this.config.returnSchema) as Record<string, unknown>;
-        // Extract schema name from title or use generic name
-        const schemaName = (jsonSchema.title as string) ?? "Response";
-        outputSchema = { schema: jsonSchema, name: schemaName };
-      } catch {
-        // If schema conversion fails, skip
-      }
-    }
+    // Build output schema for provider (Issue #459) - computed once, cached
+    const outputSchema = this.getOutputSchema();
 
     // Agentic loop
     let iteration = 0;
@@ -884,16 +899,7 @@ export class MeshLlmAgent<T = string> {
       this.config.model ??
       this.getDefaultModel();
 
-    let outputSchema: { schema: Record<string, unknown>; name: string } | undefined;
-    if (this.config.returnSchema) {
-      try {
-        const jsonSchema = zodToJsonSchema(this.config.returnSchema) as Record<string, unknown>;
-        const schemaName = (jsonSchema.title as string) ?? "Response";
-        outputSchema = { schema: jsonSchema, name: schemaName };
-      } catch {
-        // skip
-      }
-    }
+    const outputSchema = this.getOutputSchema();
 
     const provider = new MeshDelegatedProvider(
       context.meshProvider.endpoint,
@@ -929,8 +935,9 @@ export class MeshLlmAgent<T = string> {
   } {
     const agent = this;
 
-    const callable = async (message: LlmMessageInput, options?: LlmCallOptions): Promise<T> => {
-      // Handle context mode
+    // Shared "context merge vs replace" semantics used by both the buffered
+    // callable and the stream method below.
+    const mergeRunContext = (options?: LlmCallOptions): AgentRunContext => {
       const contextMode: LlmContextMode = options?.contextMode ?? "merge";
       let mergedTemplateContext: Record<string, unknown>;
 
@@ -945,14 +952,15 @@ export class MeshLlmAgent<T = string> {
         mergedTemplateContext = context.templateContext ?? {};
       }
 
-      // Merge options
-      const mergedContext: AgentRunContext = {
+      return {
         ...context,
         options: options ? { ...context.options, ...options } : context.options,
         templateContext: mergedTemplateContext,
       };
+    };
 
-      return agent.run(message, mergedContext);
+    const callable = async (message: LlmMessageInput, options?: LlmCallOptions): Promise<T> => {
+      return agent.run(message, mergeRunContext(options));
     };
 
     // Attach meta property
@@ -975,21 +983,7 @@ export class MeshLlmAgent<T = string> {
     // "context merge vs replace" behavior as the buffered call.
     Object.defineProperty(callable, "stream", {
       value: (message: LlmMessageInput, options?: LlmCallOptions): AsyncIterable<string> => {
-        const contextMode: LlmContextMode = options?.contextMode ?? "merge";
-        let mergedTemplateContext: Record<string, unknown>;
-        if (contextMode === "replace" && options?.context) {
-          mergedTemplateContext = options.context;
-        } else if (options?.context) {
-          mergedTemplateContext = { ...context.templateContext, ...options.context };
-        } else {
-          mergedTemplateContext = context.templateContext ?? {};
-        }
-        const mergedContext: AgentRunContext = {
-          ...context,
-          options: options ? { ...context.options, ...options } : context.options,
-          templateContext: mergedTemplateContext,
-        };
-        return agent.stream(message, mergedContext);
+        return agent.stream(message, mergeRunContext(options));
       },
     });
 
@@ -1085,17 +1079,17 @@ export class MeshLlmAgent<T = string> {
    * Guides the LLM to produce structured output matching the schema.
    */
   private buildOutputSchemaSection(): string {
-    if (!this.config.returnSchema) return "";
+    if (this._outputSchemaSection !== null) return this._outputSchemaSection;
 
-    try {
-      const jsonSchema = zodToJsonSchema(this.config.returnSchema);
-      const schemaStr = JSON.stringify(jsonSchema, null, 2);
-
-      return `\n\n## Output Format\n\nYour response MUST be valid JSON matching this schema:\n\n\`\`\`json\n${schemaStr}\n\`\`\`\n\nRespond ONLY with the JSON object, no additional text.`;
-    } catch {
-      // If schema conversion fails, skip injection
+    const cached = this.getOutputSchema();
+    if (!cached) {
+      this._outputSchemaSection = "";
       return "";
     }
+
+    const schemaStr = JSON.stringify(cached.schema, null, 2);
+    this._outputSchemaSection = `\n\n## Output Format\n\nYour response MUST be valid JSON matching this schema:\n\n\`\`\`json\n${schemaStr}\n\`\`\`\n\nRespond ONLY with the JSON object, no additional text.`;
+    return this._outputSchemaSection;
   }
 
   /**
