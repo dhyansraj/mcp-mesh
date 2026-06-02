@@ -67,7 +67,9 @@ class MeshLlmAgentProxyModelParamsTest {
 
         proxy = new MeshLlmAgentProxy("test.modelparams");
         // Configure with maxIterations=1 so generate() returns after a single LLM call.
-        // Defaults: maxTokens=4096, temperature=0.7, parallelToolCalls=false.
+        // The 8-arg overload leaves maxTokens/temperature at the sentinel defaults
+        // (-1 / NaN), so neither key is injected unless a per-call setter supplies one.
+        // parallelToolCalls=false.
         proxy.configure(client, null, null, null, "", "ctx", 1, false);
         proxy.updateProvider(
             server.url("/").toString().replaceAll("/$", ""),
@@ -93,6 +95,51 @@ class MeshLlmAgentProxyModelParamsTest {
         Map<String, Object> innerPayload = Map.of(
             "role", "assistant",
             "content", reply
+        );
+        String innerJson;
+        try {
+            innerJson = mapper.writeValueAsString(innerPayload);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        Map<String, Object> envelope = Map.of(
+            "jsonrpc", "2.0",
+            "id", id,
+            "result", Map.of(
+                "content", java.util.List.of(
+                    Map.of("type", "text", "text", innerJson)
+                )
+            )
+        );
+        String body;
+        try {
+            body = mapper.writeValueAsString(envelope);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return new MockResponse()
+            .setBody(body)
+            .setHeader("Content-Type", "application/json");
+    }
+
+    /**
+     * Stub an LLM response that requests a single tool call. Mirrors the nested
+     * MCP shape: {@code content[0].text} is a JSON object carrying {@code tool_calls}.
+     */
+    private MockResponse stubToolCallResponse(String callId, String toolName, Map<String, Object> args) {
+        long id = System.currentTimeMillis();
+        Map<String, Object> toolCall = Map.of(
+            "id", callId,
+            "type", "function",
+            "function", Map.of(
+                "name", toolName,
+                "arguments", args
+            )
+        );
+        Map<String, Object> innerPayload = Map.of(
+            "role", "assistant",
+            "content", "",
+            "tool_calls", java.util.List.of(toolCall)
         );
         String innerJson;
         try {
@@ -158,9 +205,10 @@ class MeshLlmAgentProxyModelParamsTest {
         assertEquals(0, thinking.get("thinking_budget").asInt());
         assertEquals("high", modelParams.get("reasoning_effort").asText());
 
-        // Typed defaults still emitted
-        assertTrue(modelParams.has("max_tokens"));
-        assertTrue(modelParams.has("temperature"));
+        // With sentinel defaults and no per-call setter, the typed keys are NOT
+        // injected — the provider's own defaults apply (parity with Python/TS).
+        assertFalse(modelParams.has("max_tokens"));
+        assertFalse(modelParams.has("temperature"));
     }
 
     @Test
@@ -393,5 +441,76 @@ class MeshLlmAgentProxyModelParamsTest {
             "null modelParams must produce the same model_params as no call");
         assertEquals(baseline.toString(), emptyCase.toString(),
             "empty modelParams must produce the same model_params as no call");
+    }
+
+    @Test
+    @DisplayName("unset maxTokens/temperature are deferred to the provider; per-call and annotation values are honored")
+    void sentinelDefaultsDeferToProvider() throws Exception {
+        // Case A: nothing set → neither key on the wire (provider default applies).
+        server.enqueue(stubLlmResponse("ok"));
+        proxy.request().user("hi").generate();
+        JsonNode unset = readModelParams(server.takeRequest());
+        assertFalse(unset.has("max_tokens"),
+            "unset maxTokens must NOT be injected — defer to provider");
+        assertFalse(unset.has("temperature"),
+            "unset temperature must NOT be injected — defer to provider");
+        // NaN must never appear on the wire (would break JSON).
+        assertFalse(unset.toString().contains("NaN"),
+            "NaN must never appear in model_params");
+
+        // Case B: per-call typed setters → both present.
+        server.enqueue(stubLlmResponse("ok"));
+        proxy.request().user("hi").temperature(0.3).maxTokens(2000).generate();
+        JsonNode perCall = readModelParams(server.takeRequest());
+        assertEquals(2000, perCall.get("max_tokens").asInt());
+        assertEquals(0.3, perCall.get("temperature").asDouble(), 1e-9);
+
+        // Case C: explicit annotation values via the 10-arg overload → both present.
+        proxy.configure(client, null, null, null, "", "ctx", 1, false, 1500, 0.2);
+        server.enqueue(stubLlmResponse("ok"));
+        proxy.request().user("hi").generate();
+        JsonNode annotated = readModelParams(server.takeRequest());
+        assertEquals(1500, annotated.get("max_tokens").asInt());
+        assertEquals(0.2, annotated.get("temperature").asDouble(), 1e-9);
+    }
+
+    @Test
+    @DisplayName("agentic loop runs multiple iterations: tool_calls response → tool result fed back → final content (maxIterations=10)")
+    void multiIterationAgenticLoopFeedsToolResultBack() throws Exception {
+        // Default maxIterations is now 10 (parity with Python/TS). With a tool_calls
+        // response followed by a content response, the loop must make TWO LLM calls,
+        // feed the tool result back, and return the final content. With the old
+        // default of 1 this would have stopped after the first call and returned
+        // the (empty) content of the tool_calls response.
+        proxy.configure(client, null, null, null, "", "ctx",
+            io.mcpmesh.MeshLlmDefaults.MAX_ITERATIONS, false);
+
+        // Iteration 1: LLM asks to call a (non-registered) tool.
+        server.enqueue(stubToolCallResponse("call_1", "missing_tool", Map.of("q", "x")));
+        // Iteration 2: LLM produces final content.
+        server.enqueue(stubLlmResponse("final answer"));
+
+        String result = proxy.request().user("do it").generate();
+        assertEquals("final answer", result);
+
+        // Two LLM calls were made.
+        RecordedRequest first = server.takeRequest();
+        RecordedRequest second = server.takeRequest();
+        assertNotNull(first);
+        assertNotNull(second);
+
+        // The second request's messages must include the assistant tool_calls turn
+        // and the fed-back tool result.
+        JsonNode secondBody = mapper.readTree(second.getBody().readUtf8());
+        JsonNode messages = secondBody.get("params").get("arguments").get("request").get("messages");
+        assertNotNull(messages);
+        boolean hasToolResult = false;
+        for (JsonNode m : messages) {
+            if ("tool".equals(m.path("role").asText())) {
+                hasToolResult = true;
+            }
+        }
+        assertTrue(hasToolResult,
+            "second LLM call must include the fed-back tool result message");
     }
 }

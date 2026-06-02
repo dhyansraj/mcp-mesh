@@ -49,8 +49,6 @@ public @interface MeshAgent {
 
     /**
      * Agent version (semver format).
-     *
-     * <p>Override with {@code MCP_MESH_AGENT_VERSION} environment variable.
      */
     String version() default "1.0.0";
 
@@ -85,7 +83,7 @@ public @interface MeshAgent {
     /**
      * Heartbeat interval in seconds.
      *
-     * <p>Override with {@code MCP_MESH_HEARTBEAT_INTERVAL} environment variable.
+     * <p>Override with {@code MCP_MESH_HEALTH_INTERVAL} environment variable.
      */
     int heartbeatInterval() default 0;  // 0 = use Rust core default (5 seconds)
 }

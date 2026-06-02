@@ -90,7 +90,7 @@ public @interface MeshLlm {
      *
      * <p>Each iteration allows the LLM to make tool calls.
      */
-    int maxIterations() default 1;
+    int maxIterations() default MeshLlmDefaults.MAX_ITERATIONS;
 
     /**
      * System prompt for the LLM.
@@ -126,16 +126,22 @@ public @interface MeshLlm {
 
     /**
      * Maximum tokens for LLM response.
+     *
+     * <p>If unset ({@code -1}), the provider's own default is used — no
+     * {@code max_tokens} is sent on the wire.
      */
-    int maxTokens() default 4096;
+    int maxTokens() default MeshLlmDefaults.MAX_TOKENS_UNSET;
 
     /**
      * Temperature for LLM generation.
      *
      * <p>Higher values (0.7-1.0) are more creative,
      * lower values (0.0-0.3) are more deterministic.
+     *
+     * <p>If unset ({@code NaN}), the provider's own default is used — no
+     * {@code temperature} is sent on the wire.
      */
-    double temperature() default 0.7;
+    double temperature() default MeshLlmDefaults.TEMPERATURE_UNSET;
 
     /**
      * Enable parallel tool execution.
