@@ -45,6 +45,8 @@ from .._structured_output_helpers import (
     schema_to_synthetic_tool,
 )
 from ._native_client_helpers import (
+    make_fallback_logger,
+    make_is_available,
     reset_unsupported_kwargs_dedupe,
     resolve_request_timeout,
     warn_unsupported_kwarg_once,
@@ -321,32 +323,11 @@ class _StreamFunctionDelta:
 # ---------------------------------------------------------------------------
 
 
-_IS_AVAILABLE_CACHE: bool | None = None
-
-
-def is_available() -> bool:
-    """True if the ``anthropic`` SDK is importable in this process.
-
-    Result is cached after the first probe — the SDK presence does not
-    change at runtime, and the import-then-immediately-discard pattern was
-    showing up as needless overhead on the dispatch-decision hot path.
-    """
-    global _IS_AVAILABLE_CACHE
-    if _IS_AVAILABLE_CACHE is not None:
-        return _IS_AVAILABLE_CACHE
-    try:
-        import anthropic  # noqa: F401
-    except ImportError:
-        _IS_AVAILABLE_CACHE = False
-        return False
-    _IS_AVAILABLE_CACHE = True
-    return True
-
-
-def _reset_is_available_cache() -> None:
-    """For tests — reset the cached availability probe. NOT for production."""
-    global _IS_AVAILABLE_CACHE
-    _IS_AVAILABLE_CACHE = None
+# is_available() probes whether the ``anthropic`` SDK is importable,
+# caching the result after the first probe (SDK presence is fixed for the
+# process). Built from the shared factory so all three adapters share one
+# implementation; the cache lives in the factory's closure.
+is_available, _reset_is_available_cache = make_is_available("anthropic")
 
 
 def supports_model(model: str) -> bool:
@@ -1315,34 +1296,19 @@ async def complete_stream(
 # Fallback-logging helpers
 # ---------------------------------------------------------------------------
 
+# One-time LiteLLM-fallback notice ("Install `mcp-mesh[anthropic]` ...")
+# emitted from the dispatch sites in helpers.py / claude_handler.py when
+# native dispatch was attempted (the default) but the ``anthropic`` SDK is
+# not importable. ``is_fallback_logged()`` lets callers (notably
+# ``ClaudeHandler.has_native``) skip the call entirely after the first miss.
+#
+# State is the module-level ``_logged_fallback_once`` flag read/written
+# through this module's globals by the factory closures (tests monkeypatch
+# the flag as a module attribute).
 _logged_fallback_once = False
-
-
-def log_fallback_once() -> None:
-    """Emit the LiteLLM-fallback notice exactly once per process.
-
-    Called from the dispatch sites in helpers.py / claude_handler.py when
-    native dispatch was attempted (the default) but the ``anthropic`` SDK
-    is not importable.
-    """
-    global _logged_fallback_once
-    if _logged_fallback_once:
-        return
-    _logged_fallback_once = True
-    logger.info(
-        "Install `mcp-mesh[anthropic]` for native SDK with full feature "
-        "support — falling back to LiteLLM"
-    )
-
-
-def is_fallback_logged() -> bool:
-    """True once :func:`log_fallback_once` has emitted its notice.
-
-    Lets callers (notably ``ClaudeHandler.has_native``) skip the call entirely
-    on the hot path after the first miss — avoids one function-frame per
-    request once we've already published the install nudge.
-    """
-    return _logged_fallback_once
+log_fallback_once, is_fallback_logged, _reset_fallback_logged = make_fallback_logger(
+    "anthropic", logger, module_globals=globals()
+)
 
 
 # Module-level dedupe set for the unsupported-kwarg WARN. WARN once per

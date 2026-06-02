@@ -936,6 +936,37 @@ async def _maybe_retry_synthetic_on_validation_failure(
     return retry_args_str, retry_usage_dict
 
 
+def _build_mesh_usage(usage: Any, model: Any) -> dict:
+    """Extract ``{prompt_tokens, completion_tokens, model}`` from a LiteLLM
+    ``response.usage`` object.
+
+    The ``getattr(..., 0) or 0`` guards coerce both a missing attribute and a
+    ``None`` value to ``0``. Callers keep their own
+    ``if hasattr(response, "usage") and response.usage:`` guard and pass
+    ``response.usage`` here — this helper does not re-check it.
+    """
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+        "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+        "model": model,
+    }
+
+
+def _merge_mesh_usage(a: dict, b: dict) -> dict:
+    """Additively fold the prompt/completion token counts of ``b`` into ``a``
+    and return ``a``.
+
+    Used to accumulate a corrective retry call's tokens into the cumulative
+    ``_mesh_usage`` block so observability captures both calls. Only the
+    token counts are folded; ``a``'s ``model`` is left untouched.
+    """
+    a["prompt_tokens"] = a.get("prompt_tokens", 0) + b.get("prompt_tokens", 0)
+    a["completion_tokens"] = a.get("completion_tokens", 0) + b.get(
+        "completion_tokens", 0
+    )
+    return a
+
+
 def _extract_text_from_message_content(content: Any) -> str:
     """Normalize a LiteLLM message ``content`` field to a plain string.
 
@@ -1451,12 +1482,9 @@ async def _provider_agentic_loop(
                     "content": synthetic_args,
                 }
                 if hasattr(response, "usage") and response.usage:
-                    usage = response.usage
-                    message_dict["_mesh_usage"] = {
-                        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                        "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
-                        "model": effective_model,
-                    }
+                    message_dict["_mesh_usage"] = _build_mesh_usage(
+                        response.usage, effective_model
+                    )
                 # Fold retry usage into the cumulative block so observability
                 # captures the corrective call's tokens.
                 if retry_usage:
@@ -1466,15 +1494,7 @@ async def _provider_agentic_loop(
                             "completion_tokens": 0,
                             "model": effective_model,
                         }
-                    bucket = message_dict["_mesh_usage"]
-                    bucket["prompt_tokens"] = (
-                        bucket.get("prompt_tokens", 0)
-                        + retry_usage.get("prompt_tokens", 0)
-                    )
-                    bucket["completion_tokens"] = (
-                        bucket.get("completion_tokens", 0)
-                        + retry_usage.get("completion_tokens", 0)
-                    )
+                    _merge_mesh_usage(message_dict["_mesh_usage"], retry_usage)
                 return message_dict
 
         if hasattr(message, "tool_calls") and message.tool_calls:
@@ -1571,13 +1591,9 @@ async def _provider_agentic_loop(
                     "content": final_content if final_content else "",
                 }
                 if hasattr(response, "usage") and response.usage:
-                    usage = response.usage
-                    message_dict["_mesh_usage"] = {
-                        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                        "completion_tokens": getattr(usage, "completion_tokens", 0)
-                        or 0,
-                        "model": effective_model,
-                    }
+                    message_dict["_mesh_usage"] = _build_mesh_usage(
+                        response.usage, effective_model
+                    )
 
                 if loop_logger:
                     loop_logger.info(
@@ -1663,12 +1679,9 @@ async def _provider_agentic_loop(
             }
 
             if hasattr(response, "usage") and response.usage:
-                usage = response.usage
-                message_dict["_mesh_usage"] = {
-                    "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                    "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
-                    "model": effective_model,
-                }
+                message_dict["_mesh_usage"] = _build_mesh_usage(
+                    response.usage, effective_model
+                )
 
             if loop_logger:
                 loop_logger.info(
@@ -2688,12 +2701,9 @@ def llm_provider(
                         "content": synthetic_args,
                     }
                     if hasattr(response, "usage") and response.usage:
-                        usage = response.usage
-                        message_dict["_mesh_usage"] = {
-                            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
-                            "model": effective_model,
-                        }
+                        message_dict["_mesh_usage"] = _build_mesh_usage(
+                            response.usage, effective_model
+                        )
                     return message_dict
 
                 # Handle content - it can be a string or list of content blocks
@@ -2822,13 +2832,9 @@ def llm_provider(
 
                 # Issue #311: Include usage metadata for cost tracking
                 if hasattr(response, "usage") and response.usage:
-                    usage = response.usage
-                    message_dict["_mesh_usage"] = {
-                        "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
-                        "completion_tokens": getattr(usage, "completion_tokens", 0)
-                        or 0,
-                        "model": effective_model,
-                    }
+                    message_dict["_mesh_usage"] = _build_mesh_usage(
+                        response.usage, effective_model
+                    )
 
                 logger.info(
                     f"LLM provider {func.__name__} processed request "

@@ -78,9 +78,12 @@ RESPONSE_JSON_SCHEMA_MARKER = "_mesh_gemini_response_json_schema"
 
 
 # One-time guard so the dispatch-status DEBUG log fires exactly once per
-# process. Mirrors ``_logged_fallback_once`` in gemini_native — we
-# deliberately keep the state at module level (not on the handler instance)
-# because mesh constructs a fresh handler per request in some paths.
+# process. Mirrors ``_logged_fallback_once`` in gemini_native. The
+# registry caches a singleton handler per vendor
+# (``ProviderHandlerRegistry._instances``), so an instance-level flag would
+# already dedupe across requests — we keep the state at module level so the
+# dedupe survives even if the singleton is ever rebuilt, and to match the
+# native-client modules' module-level fallback flag.
 _DISPATCH_STATUS_LOGGED = False
 
 
