@@ -545,7 +545,7 @@ impl RegistryClient {
 
         // Log the actual JSON being sent for debugging
         if let Ok(json_str) = serde_json::to_string_pretty(request) {
-            info!("Heartbeat request JSON:\n{}", json_str);
+            debug!("Heartbeat request JSON:\n{}", json_str);
         }
         trace!("Heartbeat request: {:?}", request);
 
@@ -560,7 +560,7 @@ impl RegistryClient {
 
         if status.is_success() {
             let body = response.text().await?;
-            info!("Heartbeat response body:\n{}", body);
+            debug!("Heartbeat response body:\n{}", body);
 
             let parsed: HeartbeatResponse = serde_json::from_str(&body)?;
 
