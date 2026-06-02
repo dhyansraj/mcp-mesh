@@ -479,6 +479,157 @@ func (s *EntService) upsertSchemaEntry(
 	return nil
 }
 
+// syncCapabilities clears and re-creates all capability rows for agentID from
+// the wire `tools` value, within tx. runtime is the schema-entry origin (#547).
+// Behavior is identical to the inline loops it replaces in RegisterAgent and
+// UpdateHeartbeat (same delete-then-recreate, same per-field setters, same
+// upsertSchemaEntry side effects, same error wrapping). It does NOT compute
+// dependency counts (the caller derives those from the resolution results).
+func (s *EntService) syncCapabilities(ctx context.Context, tx *ent.Tx, agentID string, tools interface{}, runtime string) error {
+	toolsArray, ok := tools.([]interface{})
+	if !ok {
+		return nil
+	}
+
+	// Clear existing capabilities for this agent
+	_, err := tx.Capability.Delete().Where(capability.HasAgentWith(agent.IDEQ(agentID))).Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to clear existing capabilities: %w", err)
+	}
+
+	// Add new capabilities
+	for _, tool := range toolsArray {
+		if toolMap, ok := tool.(map[string]interface{}); ok {
+			functionName, _ := toolMap["function_name"].(string)
+			capabilityName, _ := toolMap["capability"].(string)
+			description, _ := toolMap["description"].(string)
+			capVersion := "1.0.0"
+			if v, ok := toolMap["version"].(string); ok && v != "" {
+				capVersion = v
+			}
+
+			tags := []string{}
+			if tagsInterface, ok := toolMap["tags"]; ok {
+				if tagsArray, ok := tagsInterface.([]interface{}); ok {
+					for _, tag := range tagsArray {
+						if tagStr, ok := tag.(string); ok {
+							tags = append(tags, tagStr)
+						}
+					}
+				} else if stringSlice, ok := tagsInterface.([]string); ok {
+					// Handle direct []string case
+					tags = stringSlice
+				}
+			}
+
+			if functionName != "" && capabilityName != "" {
+				capCreate := tx.Capability.Create().
+					SetAgentID(agentID).
+					SetFunctionName(functionName).
+					SetCapability(capabilityName).
+					SetVersion(capVersion).
+					SetNillableDescription(&description).
+					SetTags(tags)
+
+				// Add input_schema if present
+				if inputSchemaInterface, ok := toolMap["inputSchema"]; ok {
+					if inputSchema, ok := inputSchemaInterface.(map[string]interface{}); ok {
+						capCreate = capCreate.SetInputSchema(inputSchema)
+					}
+				}
+
+				// Schema canonical-form storage (issue #547). Producers send
+				// pre-normalized canonical schemas plus their content hash; the
+				// registry dedups via the content-addressed schema_entries table
+				// and stores the hash on the capability for cross-runtime matching.
+				if hashIface, ok := toolMap["inputSchemaHash"].(string); ok && hashIface != "" {
+					if canonical, ok := toolMap["inputSchemaCanonical"].(map[string]interface{}); ok {
+						if err := s.upsertSchemaEntry(ctx, tx, hashIface, canonical, runtime); err != nil {
+							return fmt.Errorf("upsert input schema for %s: %w", functionName, err)
+						}
+						capCreate = capCreate.SetInputSchemaHash(hashIface)
+					}
+				}
+				if hashIface, ok := toolMap["outputSchemaHash"].(string); ok && hashIface != "" {
+					if canonical, ok := toolMap["outputSchemaCanonical"].(map[string]interface{}); ok {
+						if err := s.upsertSchemaEntry(ctx, tx, hashIface, canonical, runtime); err != nil {
+							return fmt.Errorf("upsert output schema for %s: %w", functionName, err)
+						}
+						capCreate = capCreate.SetOutputSchemaHash(hashIface)
+					}
+				}
+				if warningsIface, ok := toolMap["schemaWarnings"]; ok {
+					warnings := []string{}
+					if arr, ok := warningsIface.([]interface{}); ok {
+						for _, w := range arr {
+							if ws, ok := w.(string); ok {
+								warnings = append(warnings, ws)
+							}
+						}
+					} else if arr, ok := warningsIface.([]string); ok {
+						warnings = arr
+					}
+					if len(warnings) > 0 {
+						capCreate = capCreate.SetSchemaWarnings(warnings)
+					}
+				}
+
+				// Add llm_filter if present
+				if llmFilterInterface, ok := toolMap["llm_filter"]; ok {
+					if llmFilter, ok := llmFilterInterface.(map[string]interface{}); ok {
+						capCreate = capCreate.SetLlmFilter(llmFilter)
+					}
+				}
+
+				// Add llm_provider if present (v0.6.1)
+				if llmProviderInterface, ok := toolMap["llm_provider"]; ok {
+					if llmProvider, ok := llmProviderInterface.(map[string]interface{}); ok {
+						capCreate = capCreate.SetLlmProvider(llmProvider)
+					} else if llmProvider, ok := llmProviderInterface.(generated.LLMProvider); ok {
+						// Convert generated.LLMProvider to map for storage
+						providerMap := map[string]interface{}{
+							"capability": llmProvider.Capability,
+						}
+						if llmProvider.Tags != nil {
+							providerMap["tags"] = *llmProvider.Tags
+						}
+						if llmProvider.Version != nil {
+							providerMap["version"] = *llmProvider.Version
+						}
+						if llmProvider.Namespace != nil {
+							providerMap["namespace"] = *llmProvider.Namespace
+						}
+						capCreate = capCreate.SetLlmProvider(providerMap)
+					}
+				}
+
+				// Add kwargs if present
+				if kwargsInterface, ok := toolMap["kwargs"]; ok {
+					if kwargs, ok := kwargsInterface.(map[string]interface{}); ok {
+						capCreate = capCreate.SetKwargs(kwargs)
+					}
+				}
+
+				// Persist dependencies onto the capability row (issue #971
+				// schema browser). The handler already normalizes wire-side
+				// camelCase keys (expectedSchemaHash, matchMode, ...) to
+				// snake_case here; this just plumbs them into the JSON
+				// column so the meshui schemas handler can build the
+				// inverse index of consumers.
+				if depsList := coerceDependencies(toolMap["dependencies"]); len(depsList) > 0 {
+					capCreate = capCreate.SetDependencies(depsList)
+				}
+
+				_, err := capCreate.Save(ctx)
+				if err != nil {
+					return fmt.Errorf("failed to create capability %s: %w", functionName, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // checkEntityOwnership verifies that req's entity_id matches the existing
 // agent's owner. Returns ErrEntityIDMismatch (wrapped) if claimed != stored
 // and stored is non-empty. op is a short caller name for log context.
@@ -635,156 +786,9 @@ func (s *EntService) RegisterAgent(req *AgentRegistrationRequest) (*AgentRegistr
 		}
 
 		// Process tools/capabilities if present
-		totalDeps := 0
 		if tools, ok := req.Metadata["tools"]; ok {
-			if toolsArray, ok := tools.([]interface{}); ok {
-				// Clear existing capabilities for this agent
-				_, err := tx.Capability.Delete().Where(capability.HasAgentWith(agent.IDEQ(req.AgentID))).Exec(ctx)
-				if err != nil {
-					return fmt.Errorf("failed to clear existing capabilities: %w", err)
-				}
-
-				// Add new capabilities
-				for _, tool := range toolsArray {
-					if toolMap, ok := tool.(map[string]interface{}); ok {
-						functionName, _ := toolMap["function_name"].(string)
-						capabilityName, _ := toolMap["capability"].(string)
-						description, _ := toolMap["description"].(string)
-						capVersion := "1.0.0"
-						if v, ok := toolMap["version"].(string); ok && v != "" {
-							capVersion = v
-						}
-
-						tags := []string{}
-						if tagsInterface, ok := toolMap["tags"]; ok {
-							if tagsArray, ok := tagsInterface.([]interface{}); ok {
-								for _, tag := range tagsArray {
-									if tagStr, ok := tag.(string); ok {
-										tags = append(tags, tagStr)
-									}
-								}
-							} else if stringSlice, ok := tagsInterface.([]string); ok {
-								// Handle direct []string case
-								tags = stringSlice
-							}
-						}
-
-						if functionName != "" && capabilityName != "" {
-							capCreate := tx.Capability.Create().
-								SetAgentID(req.AgentID).
-								SetFunctionName(functionName).
-								SetCapability(capabilityName).
-								SetVersion(capVersion).
-								SetNillableDescription(&description).
-								SetTags(tags)
-
-							// Add input_schema if present
-							if inputSchemaInterface, ok := toolMap["inputSchema"]; ok {
-								if inputSchema, ok := inputSchemaInterface.(map[string]interface{}); ok {
-									capCreate = capCreate.SetInputSchema(inputSchema)
-								}
-							}
-
-							// Schema canonical-form storage (issue #547). Producers send
-							// pre-normalized canonical schemas plus their content hash; the
-							// registry dedups via the content-addressed schema_entries table
-							// and stores the hash on the capability for cross-runtime matching.
-							if hashIface, ok := toolMap["inputSchemaHash"].(string); ok && hashIface != "" {
-								if canonical, ok := toolMap["inputSchemaCanonical"].(map[string]interface{}); ok {
-									if err := s.upsertSchemaEntry(ctx, tx, hashIface, canonical, meta.runtime); err != nil {
-										return fmt.Errorf("upsert input schema for %s: %w", functionName, err)
-									}
-									capCreate = capCreate.SetInputSchemaHash(hashIface)
-								}
-							}
-							if hashIface, ok := toolMap["outputSchemaHash"].(string); ok && hashIface != "" {
-								if canonical, ok := toolMap["outputSchemaCanonical"].(map[string]interface{}); ok {
-									if err := s.upsertSchemaEntry(ctx, tx, hashIface, canonical, meta.runtime); err != nil {
-										return fmt.Errorf("upsert output schema for %s: %w", functionName, err)
-									}
-									capCreate = capCreate.SetOutputSchemaHash(hashIface)
-								}
-							}
-							if warningsIface, ok := toolMap["schemaWarnings"]; ok {
-								warnings := []string{}
-								if arr, ok := warningsIface.([]interface{}); ok {
-									for _, w := range arr {
-										if ws, ok := w.(string); ok {
-											warnings = append(warnings, ws)
-										}
-									}
-								} else if arr, ok := warningsIface.([]string); ok {
-									warnings = arr
-								}
-								if len(warnings) > 0 {
-									capCreate = capCreate.SetSchemaWarnings(warnings)
-								}
-							}
-
-							// Add llm_filter if present
-							if llmFilterInterface, ok := toolMap["llm_filter"]; ok {
-								if llmFilter, ok := llmFilterInterface.(map[string]interface{}); ok {
-									capCreate = capCreate.SetLlmFilter(llmFilter)
-								}
-							}
-
-							// Add llm_provider if present (v0.6.1)
-							if llmProviderInterface, ok := toolMap["llm_provider"]; ok {
-								if llmProvider, ok := llmProviderInterface.(map[string]interface{}); ok {
-									capCreate = capCreate.SetLlmProvider(llmProvider)
-								} else if llmProvider, ok := llmProviderInterface.(generated.LLMProvider); ok {
-									// Convert generated.LLMProvider to map for storage
-									providerMap := map[string]interface{}{
-										"capability": llmProvider.Capability,
-									}
-									if llmProvider.Tags != nil {
-										providerMap["tags"] = *llmProvider.Tags
-									}
-									if llmProvider.Version != nil {
-										providerMap["version"] = *llmProvider.Version
-									}
-									if llmProvider.Namespace != nil {
-										providerMap["namespace"] = *llmProvider.Namespace
-									}
-									capCreate = capCreate.SetLlmProvider(providerMap)
-								}
-							}
-
-							// Add kwargs if present
-							if kwargsInterface, ok := toolMap["kwargs"]; ok {
-								if kwargs, ok := kwargsInterface.(map[string]interface{}); ok {
-									capCreate = capCreate.SetKwargs(kwargs)
-								}
-							}
-
-							// Persist dependencies onto the capability row (issue #971
-							// schema browser). The handler already normalizes wire-side
-							// camelCase keys (expectedSchemaHash, matchMode, ...) to
-							// snake_case here; this just plumbs them into the JSON
-							// column so the meshui schemas handler can build the
-							// inverse index of consumers.
-							if depsList := coerceDependencies(toolMap["dependencies"]); len(depsList) > 0 {
-								capCreate = capCreate.SetDependencies(depsList)
-							}
-
-							_, err := capCreate.Save(ctx)
-							if err != nil {
-								return fmt.Errorf("failed to create capability %s: %w", functionName, err)
-							}
-						}
-
-						// Count dependencies
-						if deps, ok := toolMap["dependencies"]; ok {
-							if depsArray, ok := deps.([]interface{}); ok {
-								s.logger.Debug("Function %s has %d dependencies", functionName, len(depsArray))
-								totalDeps += len(depsArray)
-							} else if depsArray, ok := deps.([]map[string]interface{}); ok {
-								s.logger.Debug("Function %s has %d dependencies", functionName, len(depsArray))
-								totalDeps += len(depsArray)
-							}
-						}
-					}
-				}
+			if err := s.syncCapabilities(ctx, tx, req.AgentID, tools, meta.runtime); err != nil {
+				return err
 			}
 		}
 
@@ -1098,7 +1102,7 @@ func (s *EntService) StoreLLMToolResolutions(
 			case string:
 				filterCapability = f
 			case map[string]interface{}:
-				filterCapability = getString(f, "capability")
+				filterCapability = getStringFromMap(f, "capability", "")
 				filterTags = getStringSlice(f, "tags")
 			}
 
@@ -1226,10 +1230,10 @@ func (s *EntService) StoreLLMProviderResolutions(
 		// Handle both map[string]interface{} and generated.LLMProvider types
 		switch p := llmProviderData.(type) {
 		case map[string]interface{}:
-			requiredCapability = getString(p, "capability")
+			requiredCapability = getStringFromMap(p, "capability", "")
 			requiredTags = getStringSlice(p, "tags")
-			requiredVersion = getString(p, "version")
-			requiredNamespace = getString(p, "namespace")
+			requiredVersion = getStringFromMap(p, "version", "")
+			requiredNamespace = getStringFromMap(p, "namespace", "")
 		case generated.LLMProvider:
 			requiredCapability = p.Capability
 			if p.Tags != nil {
@@ -1457,140 +1461,8 @@ func (s *EntService) UpdateHeartbeat(req *HeartbeatRequest) (*HeartbeatResponse,
 
 				// Process tools/capabilities
 				if tools, ok := req.Metadata["tools"]; ok {
-					if toolsArray, ok := tools.([]interface{}); ok {
-						// Clear existing capabilities for this agent
-						_, err := tx.Capability.Delete().Where(capability.HasAgentWith(agent.IDEQ(req.AgentID))).Exec(ctx)
-						if err != nil {
-							return fmt.Errorf("failed to clear existing capabilities: %w", err)
-						}
-
-						// Add new capabilities
-						for _, tool := range toolsArray {
-							if toolMap, ok := tool.(map[string]interface{}); ok {
-								functionName, _ := toolMap["function_name"].(string)
-								capabilityName, _ := toolMap["capability"].(string)
-								description, _ := toolMap["description"].(string)
-								capVersion := "1.0.0"
-								if v, ok := toolMap["version"].(string); ok && v != "" {
-									capVersion = v
-								}
-
-								tags := []string{}
-								if tagsInterface, ok := toolMap["tags"]; ok {
-									if tagsArray, ok := tagsInterface.([]interface{}); ok {
-										for _, tag := range tagsArray {
-											if tagStr, ok := tag.(string); ok {
-												tags = append(tags, tagStr)
-											}
-										}
-									} else if stringSlice, ok := tagsInterface.([]string); ok {
-										tags = stringSlice
-									}
-								}
-
-								if functionName != "" && capabilityName != "" {
-									capCreate := tx.Capability.Create().
-										SetAgentID(req.AgentID).
-										SetFunctionName(functionName).
-										SetCapability(capabilityName).
-										SetVersion(capVersion).
-										SetNillableDescription(&description).
-										SetTags(tags)
-
-									// Add input_schema if present
-									if inputSchemaInterface, ok := toolMap["inputSchema"]; ok {
-										if inputSchema, ok := inputSchemaInterface.(map[string]interface{}); ok {
-											capCreate = capCreate.SetInputSchema(inputSchema)
-										}
-									}
-
-									// Schema canonical-form storage (issue #547). Producers send
-									// pre-normalized canonical schemas plus their content hash; the
-									// registry dedups via the content-addressed schema_entries table
-									// and stores the hash on the capability for cross-runtime matching.
-									if hashIface, ok := toolMap["inputSchemaHash"].(string); ok && hashIface != "" {
-										if canonical, ok := toolMap["inputSchemaCanonical"].(map[string]interface{}); ok {
-											if err := s.upsertSchemaEntry(ctx, tx, hashIface, canonical, meta.runtime); err != nil {
-												return fmt.Errorf("upsert input schema for %s: %w", functionName, err)
-											}
-											capCreate = capCreate.SetInputSchemaHash(hashIface)
-										}
-									}
-									if hashIface, ok := toolMap["outputSchemaHash"].(string); ok && hashIface != "" {
-										if canonical, ok := toolMap["outputSchemaCanonical"].(map[string]interface{}); ok {
-											if err := s.upsertSchemaEntry(ctx, tx, hashIface, canonical, meta.runtime); err != nil {
-												return fmt.Errorf("upsert output schema for %s: %w", functionName, err)
-											}
-											capCreate = capCreate.SetOutputSchemaHash(hashIface)
-										}
-									}
-									if warningsIface, ok := toolMap["schemaWarnings"]; ok {
-										warnings := []string{}
-										if arr, ok := warningsIface.([]interface{}); ok {
-											for _, w := range arr {
-												if ws, ok := w.(string); ok {
-													warnings = append(warnings, ws)
-												}
-											}
-										} else if arr, ok := warningsIface.([]string); ok {
-											warnings = arr
-										}
-										if len(warnings) > 0 {
-											capCreate = capCreate.SetSchemaWarnings(warnings)
-										}
-									}
-
-									// Add llm_filter if present
-									if llmFilterInterface, ok := toolMap["llm_filter"]; ok {
-										if llmFilter, ok := llmFilterInterface.(map[string]interface{}); ok {
-											capCreate = capCreate.SetLlmFilter(llmFilter)
-										}
-									}
-
-									// Add llm_provider if present (v0.6.1)
-									if llmProviderInterface, ok := toolMap["llm_provider"]; ok {
-										if llmProvider, ok := llmProviderInterface.(map[string]interface{}); ok {
-											capCreate = capCreate.SetLlmProvider(llmProvider)
-										} else if llmProvider, ok := llmProviderInterface.(generated.LLMProvider); ok {
-											// Convert generated.LLMProvider to map for storage
-											providerMap := map[string]interface{}{
-												"capability": llmProvider.Capability,
-											}
-											if llmProvider.Tags != nil {
-												providerMap["tags"] = *llmProvider.Tags
-											}
-											if llmProvider.Version != nil {
-												providerMap["version"] = *llmProvider.Version
-											}
-											if llmProvider.Namespace != nil {
-												providerMap["namespace"] = *llmProvider.Namespace
-											}
-											capCreate = capCreate.SetLlmProvider(providerMap)
-										}
-									}
-
-									// Add kwargs if present
-									if kwargsInterface, ok := toolMap["kwargs"]; ok {
-										if kwargs, ok := kwargsInterface.(map[string]interface{}); ok {
-											capCreate = capCreate.SetKwargs(kwargs)
-										}
-									}
-
-									// Persist dependencies onto the capability row (issue
-									// #971 schema browser). Mirrors the register path; the
-									// handler already converted wire camelCase to the
-									// snake_case keys this column stores.
-									if depsList := coerceDependencies(toolMap["dependencies"]); len(depsList) > 0 {
-										capCreate = capCreate.SetDependencies(depsList)
-									}
-
-									_, err := capCreate.Save(ctx)
-									if err != nil {
-										return fmt.Errorf("failed to create capability %s: %w", functionName, err)
-									}
-								}
-							}
-						}
+					if err := s.syncCapabilities(ctx, tx, req.AgentID, tools, meta.runtime); err != nil {
+						return err
 					}
 				}
 
@@ -2442,16 +2314,6 @@ func (s *EntService) IsStatusChangeHooksEnabled() bool {
 }
 
 // Helper functions for extracting data from maps
-
-// getString safely extracts a string from a map
-func getString(data map[string]interface{}, key string) string {
-	if val, ok := data[key]; ok {
-		if str, ok := val.(string); ok {
-			return str
-		}
-	}
-	return ""
-}
 
 // getStringSlice safely extracts a string slice from a map
 func getStringSlice(data map[string]interface{}, key string) []string {
