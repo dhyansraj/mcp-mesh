@@ -13,7 +13,7 @@ import {
   publishTraceSpan,
   createTraceHeaders,
   matchesPropagateHeader,
-  injectTraceContext,
+  injectTraceAndHeaders,
 } from "./tracing.js";
 import { isTimeoutError } from "./timeout-utils.js";
 import { getDispatcher } from "./http-pool.js";
@@ -224,27 +224,54 @@ export function createProxy(
 }
 
 /**
- * Call an MCP tool via HTTP POST.
- *
- * Uses the MCP HTTP Streamable protocol:
- * POST /mcp with JSON-RPC 2.0 payload.
- * Includes distributed tracing: propagates trace context and publishes spans.
+ * Result of {@link buildMcpRequest}: everything both the buffered and streaming
+ * call paths need to issue the outbound `tools/call` request and publish spans.
  */
-export async function callMcpTool(
+interface BuiltMcpRequest {
+  mcpEndpoint: string;
+  bodyStr: string;
+  requestId: string;
+  requestBytes: number;
+  headers: Record<string, string>;
+  effectiveTimeout: number;
+  traceCtx: TraceContext | null;
+  spanId: string | null;
+  startTime: number;
+}
+
+/**
+ * Build the shared MCP `tools/call` request setup used by both the buffered
+ * (`callMcpTool`) and streaming (`streamMcpTool`) paths.
+ *
+ * Handles endpoint normalization, trace-context capture, merged-header build,
+ * fallback trace injection, payload assembly, effective-timeout resolution and
+ * header assembly. The streaming caller passes `opts.progressToken` so the
+ * payload gets `params._meta.progressToken` (the buffered caller omits it).
+ *
+ * Header insertion order is byte-identical to the pre-extraction code:
+ * customHeaders → Content-Type/Accept → trace headers → mergedHeaders →
+ * conditional X-Mesh-Timeout.
+ *
+ * `defaultTimeout` is the per-path fallback applied when the resolved timeout is
+ * non-positive (DEFAULT_CALL_OPTIONS.timeout for buffered,
+ * DEFAULT_CALL_OPTIONS.streamTimeout for stream).
+ */
+function buildMcpRequest(
   endpoint: string,
   toolName: string,
   args: Record<string, unknown> | undefined,
   options: CallOptions,
-  capability: string,
-  extraHeaders?: Record<string, string>
-): Promise<string | MultiContentResult> {
+  extraHeaders: Record<string, string> | undefined,
+  defaultTimeout: number,
+  opts?: { progressToken?: string },
+): BuiltMcpRequest {
   // Ensure endpoint ends with /mcp
   const mcpEndpoint = endpoint.endsWith("/mcp")
     ? endpoint
     : `${endpoint.replace(/\/$/, "")}/mcp`;
 
-  // Tracing: create span for this outgoing proxy call
-  // Use AsyncLocalStorage to get trace context for the current async execution
+  // Tracing: create span for this outgoing proxy call.
+  // Use AsyncLocalStorage to get trace context for the current async execution.
   const traceCtx = getCurrentTraceContext();
   const spanId = traceCtx ? generateSpanId() : null;
   const startTime = Date.now() / 1000;
@@ -260,30 +287,8 @@ export async function callMcpTool(
     }
   }
 
-  // Build arguments with trace context injection via Rust core
-  let argsWithTrace: Record<string, unknown>;
-  if (traceCtx && spanId) {
-    try {
-      const argsJson = JSON.stringify(args ?? {});
-      const headersJson = Object.keys(mergedHeaders).length > 0 ? JSON.stringify(mergedHeaders) : undefined;
-      const injectedJson = injectTraceContext(argsJson, traceCtx.traceId, spanId, headersJson);
-      argsWithTrace = JSON.parse(injectedJson);
-    } catch {
-      // Fallback to manual injection
-      argsWithTrace = { ...(args ?? {}) };
-      argsWithTrace._trace_id = traceCtx.traceId;
-      argsWithTrace._parent_span = spanId;
-      if (Object.keys(mergedHeaders).length > 0) {
-        argsWithTrace._mesh_headers = mergedHeaders;
-      }
-    }
-  } else {
-    argsWithTrace = { ...(args ?? {}) };
-    // Still inject propagated headers even without trace context
-    if (Object.keys(mergedHeaders).length > 0) {
-      argsWithTrace._mesh_headers = mergedHeaders;
-    }
-  }
+  // Build arguments with trace context injection (Rust core, manual fallback)
+  const argsWithTrace = injectTraceAndHeaders(args ?? {}, traceCtx, spanId, mergedHeaders);
 
   const payload = {
     jsonrpc: "2.0",
@@ -292,6 +297,7 @@ export async function callMcpTool(
     params: {
       name: toolName,
       arguments: argsWithTrace,
+      ...(opts?.progressToken ? { _meta: { progressToken: opts.progressToken } } : {}),
     },
   };
 
@@ -306,63 +312,106 @@ export async function callMcpTool(
       effectiveTimeout = meshTimeoutMs;
     }
   }
+  // A partial caller options object (or a caller passing timeout<=0) could leave
+  // this undefined or non-positive — that would cause setTimeout to fire on the
+  // next tick and abort the call immediately. Fall back to the path default.
+  if (typeof effectiveTimeout !== "number" || effectiveTimeout <= 0) {
+    effectiveTimeout = defaultTimeout;
+  }
 
-  let lastError: Error | null = null;
   const bodyStr = JSON.stringify(payload);
   const requestBytes = Buffer.byteLength(bodyStr, "utf8");
+
+  // Build headers: custom headers first, then protocol-required headers override.
+  // FastMCP stateless HTTP requires BOTH content types in Accept (it returns SSE
+  // for streaming responses; missing application/json yields 406 Not Acceptable).
+  const headers: Record<string, string> = {
+    ...(options.customHeaders ?? {}),
+    "Content-Type": "application/json",
+    Accept: "application/json, text/event-stream",
+  };
+  // Propagate trace context (higher priority)
+  if (traceCtx && spanId) {
+    Object.assign(headers, createTraceHeaders(traceCtx.traceId, spanId));
+  }
+  // Inject merged headers (highest priority)
+  for (const [key, value] of Object.entries(mergedHeaders)) {
+    headers[key] = value;
+  }
+  // Set X-Mesh-Timeout for registry proxy (#769). If already propagated, keep it.
+  if (!headers["X-Mesh-Timeout"] && !headers["x-mesh-timeout"]) {
+    const callTimeout = process.env.MCP_MESH_CALL_TIMEOUT || String(Math.floor(options.timeout / 1000));
+    headers["X-Mesh-Timeout"] = callTimeout;
+  }
+
+  return { mcpEndpoint, bodyStr, requestId: payload.id, requestBytes, headers, effectiveTimeout, traceCtx, spanId, startTime };
+}
+
+/**
+ * Wire per-job cancel propagation (#886) onto an outbound AbortController.
+ *
+ * When the handler executing this outbound call is running under a MeshJob
+ * context AND the registry forwards a cancel via POST /jobs/{id}/cancel, fire
+ * the outbound AbortController so in-flight fetch is cancelled instead of
+ * stalling on socket reads. Fire-and-forget — the listener races against fetch
+ * completion / timeout; whichever wins, the others become no-ops
+ * (`controller.abort()` is idempotent and the dangling Promise resolves
+ * immediately once the registry entry is gone).
+ */
+function wireJobCancel(controller: AbortController): void {
+  const jobSnap = currentJob();
+  if (jobSnap?.jobId) {
+    awaitJobCancel(jobSnap.jobId)
+      .then(() => {
+        if (!controller.signal.aborted) {
+          controller.abort();
+        }
+      })
+      .catch(() => {
+        // Defensive: napi rejection here would be unusual (the Rust
+        // implementation only awaits a CancellationToken), but a
+        // runtime shutdown mid-await could surface one. Swallow —
+        // the worst case is that the outbound fetch isn't proactively
+        // aborted, and the existing timeout / fetch-completion path
+        // still applies.
+      });
+  }
+}
+
+/**
+ * Call an MCP tool via HTTP POST.
+ *
+ * Uses the MCP HTTP Streamable protocol:
+ * POST /mcp with JSON-RPC 2.0 payload.
+ * Includes distributed tracing: propagates trace context and publishes spans.
+ */
+export async function callMcpTool(
+  endpoint: string,
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+  options: CallOptions,
+  capability: string,
+  extraHeaders?: Record<string, string>
+): Promise<string | MultiContentResult> {
+  const {
+    mcpEndpoint,
+    bodyStr,
+    requestBytes,
+    headers,
+    effectiveTimeout,
+    traceCtx,
+    spanId,
+    startTime,
+  } = buildMcpRequest(endpoint, toolName, args, options, extraHeaders, DEFAULT_CALL_OPTIONS.timeout);
+
+  let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < options.maxAttempts; attempt++) {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout);
 
-      // Wire per-job cancel propagation (#886). When the handler executing
-      // this outbound call is running under a MeshJob context AND the
-      // registry forwards a cancel via POST /jobs/{id}/cancel, fire the
-      // outbound AbortController so in-flight fetch is cancelled instead
-      // of stalling on socket reads. Fire-and-forget — the listener races
-      // against fetch completion / timeout; whichever wins, the others
-      // become no-ops (`controller.abort()` is idempotent and the dangling
-      // Promise resolves immediately once the registry entry is gone).
-      const jobSnap = currentJob();
-      if (jobSnap?.jobId) {
-        awaitJobCancel(jobSnap.jobId)
-          .then(() => {
-            if (!controller.signal.aborted) {
-              controller.abort();
-            }
-          })
-          .catch(() => {
-            // Defensive: napi rejection here would be unusual (the Rust
-            // implementation only awaits a CancellationToken), but a
-            // runtime shutdown mid-await could surface one. Swallow —
-            // the worst case is that the outbound fetch isn't proactively
-            // aborted, and the existing timeout / fetch-completion path
-            // still applies.
-          });
-      }
-
-      // Build headers: custom headers first, then protocol-required headers override
-      const headers: Record<string, string> = {
-        ...(options.customHeaders ?? {}),
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
-      };
-
-      // Propagate trace context (higher priority)
-      if (traceCtx && spanId) {
-        Object.assign(headers, createTraceHeaders(traceCtx.traceId, spanId));
-      }
-      // Inject merged headers (highest priority)
-      for (const [key, value] of Object.entries(mergedHeaders)) {
-        headers[key] = value;
-      }
-
-      // Set X-Mesh-Timeout for registry proxy (#769). If already propagated, keep it.
-      if (!headers["X-Mesh-Timeout"] && !headers["x-mesh-timeout"]) {
-        const callTimeout = process.env.MCP_MESH_CALL_TIMEOUT || String(Math.floor(options.timeout / 1000));
-        headers["X-Mesh-Timeout"] = callTimeout;
-      }
+      wireJobCancel(controller);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const fetchOptions: Record<string, any> = {
@@ -482,128 +531,38 @@ export async function* streamMcpTool(
   capability: string,
   extraHeaders?: Record<string, string>
 ): AsyncGenerator<string, void, void> {
-  // Ensure endpoint ends with /mcp
-  const mcpEndpoint = endpoint.endsWith("/mcp")
-    ? endpoint
-    : `${endpoint.replace(/\/$/, "")}/mcp`;
-
-  // Tracing: create span for this outgoing proxy stream call
-  const traceCtx = getCurrentTraceContext();
-  const spanId = traceCtx ? generateSpanId() : null;
-  const startTime = Date.now() / 1000;
-
-  // Build merged headers: session propagated + per-call (per-call wins, filtered by allowlist)
-  const propagatedHeaders = getCurrentPropagatedHeaders();
-  const mergedHeaders: Record<string, string> = { ...propagatedHeaders };
-  if (extraHeaders) {
-    for (const [key, value] of Object.entries(extraHeaders)) {
-      if (matchesPropagateHeader(key)) {
-        mergedHeaders[key.toLowerCase()] = value;
-      }
-    }
-  }
-
-  // Build arguments with trace context injection via Rust core
-  let argsWithTrace: Record<string, unknown>;
-  if (traceCtx && spanId) {
-    try {
-      const argsJson = JSON.stringify(args ?? {});
-      const headersJson = Object.keys(mergedHeaders).length > 0 ? JSON.stringify(mergedHeaders) : undefined;
-      const injectedJson = injectTraceContext(argsJson, traceCtx.traceId, spanId, headersJson);
-      argsWithTrace = JSON.parse(injectedJson);
-    } catch {
-      argsWithTrace = { ...(args ?? {}) };
-      argsWithTrace._trace_id = traceCtx.traceId;
-      argsWithTrace._parent_span = spanId;
-      if (Object.keys(mergedHeaders).length > 0) {
-        argsWithTrace._mesh_headers = mergedHeaders;
-      }
-    }
-  } else {
-    argsWithTrace = { ...(args ?? {}) };
-    if (Object.keys(mergedHeaders).length > 0) {
-      argsWithTrace._mesh_headers = mergedHeaders;
-    }
-  }
-
-  // Generate progress token to correlate notifications with this call
+  // Generate progress token to correlate notifications with this call.
+  // The request id comes back from buildMcpRequest (it built the payload) so the
+  // final-result matching below stays in sync with the wire id.
   const progressToken = generateProgressToken();
-  const requestId = generateRequestId();
 
-  const payload = {
-    jsonrpc: "2.0",
-    id: requestId,
-    method: "tools/call",
-    params: {
-      name: toolName,
-      arguments: argsWithTrace,
-      _meta: { progressToken },
-    },
-  };
-
-  // Use X-Mesh-Timeout from propagated headers to override client timeout (#769)
-  let effectiveTimeout = options.timeout;
-  const meshTimeoutStr = mergedHeaders["x-mesh-timeout"];
-  if (meshTimeoutStr) {
-    const meshTimeoutMs = parseInt(meshTimeoutStr, 10) * 1000;
-    if (!isNaN(meshTimeoutMs) && meshTimeoutMs > 0) {
-      effectiveTimeout = meshTimeoutMs;
-    }
-  }
-  // Stream timeout defaults are usually generous (300s) but a partial caller
-  // options object could leave this undefined or non-positive — that would
-  // cause setTimeout to fire on next tick and abort the stream immediately.
-  // Fall back to the buffered call default in that case.
-  if (typeof effectiveTimeout !== "number" || effectiveTimeout <= 0) {
-    effectiveTimeout = DEFAULT_CALL_OPTIONS.streamTimeout!;
-  }
-
-  const bodyStr = JSON.stringify(payload);
-  const requestBytes = Buffer.byteLength(bodyStr, "utf8");
+  const {
+    mcpEndpoint,
+    bodyStr,
+    requestId,
+    requestBytes,
+    headers,
+    effectiveTimeout,
+    traceCtx,
+    spanId,
+    startTime,
+  } = buildMcpRequest(
+    endpoint,
+    toolName,
+    args,
+    options,
+    extraHeaders,
+    DEFAULT_CALL_OPTIONS.streamTimeout,
+    { progressToken },
+  );
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout);
 
-  // Wire per-job cancel propagation (#886). See callMcpTool above for
-  // rationale; same pattern applied to the streaming path so a cancel
-  // arriving mid-stream aborts the SSE reader instead of waiting for
-  // the next chunk / streamTimeout (default 300s).
-  const jobSnap = currentJob();
-  if (jobSnap?.jobId) {
-    awaitJobCancel(jobSnap.jobId)
-      .then(() => {
-        if (!controller.signal.aborted) {
-          controller.abort();
-        }
-      })
-      .catch(() => {
-        // Defensive: napi rejection here would be unusual (the Rust
-        // implementation only awaits a CancellationToken), but a
-        // runtime shutdown mid-await could surface one. Swallow — the
-        // worst case is that the outbound fetch isn't proactively
-        // aborted, and the existing timeout / fetch-completion path
-        // still applies.
-      });
-  }
-
-  // Build headers — FastMCP stateless HTTP requires BOTH content types in
-  // Accept (it returns SSE for streaming responses; missing application/json
-  // here yields 406 Not Acceptable). Matches the buffered callMcpTool path.
-  const headers: Record<string, string> = {
-    ...(options.customHeaders ?? {}),
-    "Content-Type": "application/json",
-    Accept: "application/json, text/event-stream",
-  };
-  if (traceCtx && spanId) {
-    Object.assign(headers, createTraceHeaders(traceCtx.traceId, spanId));
-  }
-  for (const [key, value] of Object.entries(mergedHeaders)) {
-    headers[key] = value;
-  }
-  if (!headers["X-Mesh-Timeout"] && !headers["x-mesh-timeout"]) {
-    const callTimeout = process.env.MCP_MESH_CALL_TIMEOUT || String(Math.floor(options.timeout / 1000));
-    headers["X-Mesh-Timeout"] = callTimeout;
-  }
+  // Wire per-job cancel propagation (#886) — same pattern as callMcpTool so a
+  // cancel arriving mid-stream aborts the SSE reader instead of waiting for the
+  // next chunk / streamTimeout (default 300s).
+  wireJobCancel(controller);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const fetchOptions: Record<string, any> = {
