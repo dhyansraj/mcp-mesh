@@ -1,11 +1,13 @@
 package io.mcpmesh.spring;
 
+import io.mcpmesh.FilterMode;
 import io.mcpmesh.MeshLlm;
 import io.mcpmesh.Selector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Method;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -71,11 +73,11 @@ public class MeshLlmRegistry {
         LlmConfig config = new LlmConfig(
             functionId,
             selector,
-            annotation.maxIterations(),
+            resolveMaxIterations(System.getenv("MESH_LLM_MAX_ITERATIONS"), annotation.maxIterations()),
             annotation.systemPrompt(),
             annotation.contextParam(),
             annotation.filter(),
-            annotation.filterMode().ordinal(),
+            resolveFilterModeOrdinal(System.getenv("MESH_LLM_FILTER_MODE"), annotation.filterMode()),
             annotation.maxTokens(),
             annotation.temperature(),
             annotation.parallelToolCalls()
@@ -117,5 +119,65 @@ public class MeshLlmRegistry {
 
     private String getMethodKey(Method method) {
         return method.getDeclaringClass().getName() + "#" + method.getName();
+    }
+
+    /**
+     * Resolve the effective {@code maxIterations} applying the precedence
+     * ENV &gt; annotation &gt; default.
+     *
+     * <p>Pure function: takes the raw {@code MESH_LLM_MAX_ITERATIONS} value as a
+     * parameter so it is unit-testable without mutating process env.
+     *
+     * @param envVal        raw value of {@code MESH_LLM_MAX_ITERATIONS} (may be null/blank)
+     * @param annotationVal the annotation (or default) value to fall back to
+     * @return the env value if it parses to a positive int; otherwise {@code annotationVal}
+     */
+    static int resolveMaxIterations(String envVal, int annotationVal) {
+        if (envVal == null || envVal.isBlank()) {
+            return annotationVal;
+        }
+        try {
+            int parsed = Integer.parseInt(envVal.trim());
+            if (parsed > 0) {
+                return parsed;
+            }
+            log.warn("MESH_LLM_MAX_ITERATIONS='{}' is not positive; using {}", envVal, annotationVal);
+            return annotationVal;
+        } catch (NumberFormatException e) {
+            log.warn("MESH_LLM_MAX_ITERATIONS='{}' is not a valid integer; using {}", envVal, annotationVal);
+            return annotationVal;
+        }
+    }
+
+    /**
+     * Resolve the effective filter-mode ordinal applying the precedence
+     * ENV &gt; annotation &gt; default.
+     *
+     * <p>Pure function: takes the raw {@code MESH_LLM_FILTER_MODE} value as a
+     * parameter so it is unit-testable without mutating process env. Accepts the
+     * wire vocabulary ({@code all}/{@code best_match}/{@code wildcard},
+     * case-insensitive) — the same vocabulary emitted by MeshAutoConfiguration —
+     * rather than {@link FilterMode#valueOf}.
+     *
+     * @param envVal        raw value of {@code MESH_LLM_FILTER_MODE} (may be null/blank)
+     * @param annotationVal the annotation (or default) FilterMode to fall back to
+     * @return the matching FilterMode ordinal, or {@code annotationVal.ordinal()} if unknown/blank
+     */
+    static int resolveFilterModeOrdinal(String envVal, FilterMode annotationVal) {
+        if (envVal == null || envVal.isBlank()) {
+            return annotationVal.ordinal();
+        }
+        switch (envVal.trim().toLowerCase(Locale.ROOT)) {
+            case "all":
+                return FilterMode.ALL.ordinal();
+            case "best_match":
+                return FilterMode.BEST_MATCH.ordinal();
+            case "wildcard":
+                return FilterMode.WILDCARD.ordinal();
+            default:
+                log.warn("MESH_LLM_FILTER_MODE='{}' is not a recognized mode "
+                    + "(all|best_match|wildcard); using {}", envVal, annotationVal);
+                return annotationVal.ordinal();
+        }
     }
 }

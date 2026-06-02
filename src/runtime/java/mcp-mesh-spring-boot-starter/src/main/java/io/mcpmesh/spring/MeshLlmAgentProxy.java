@@ -2,6 +2,7 @@ package io.mcpmesh.spring;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
+import io.mcpmesh.MeshLlmDefaults;
 import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.core.MeshEvent;
 import io.mcpmesh.spring.media.MediaFetchResult;
@@ -63,9 +64,9 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     // Configuration from @MeshLlm annotation
     private volatile String systemPromptTemplate = "";
     private volatile String contextParamName = "ctx";
-    private volatile int defaultMaxIterations = 1;
-    private volatile int defaultMaxTokens = 4096;
-    private volatile double defaultTemperature = 0.7;
+    private volatile int defaultMaxIterations = MeshLlmDefaults.MAX_ITERATIONS;
+    private volatile int defaultMaxTokens = MeshLlmDefaults.MAX_TOKENS_UNSET;
+    private volatile double defaultTemperature = MeshLlmDefaults.TEMPERATURE_UNSET;
     private volatile boolean parallelToolCalls = false;
 
     private McpHttpClient mcpClient;
@@ -118,7 +119,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         this.dependencyInjector = dependencyInjector;
         this.systemPromptTemplate = systemPrompt != null ? systemPrompt : "";
         this.contextParamName = contextParamName != null ? contextParamName : "ctx";
-        this.defaultMaxIterations = maxIterations > 0 ? maxIterations : 1;
+        this.defaultMaxIterations = maxIterations > 0 ? maxIterations : MeshLlmDefaults.MAX_ITERATIONS;
     }
 
     /**
@@ -141,7 +142,9 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
      *
      * <p>Wires the annotation values through to the wire {@code model_params} so a
      * user writing {@code @MeshLlm(maxTokens=2000, temperature=0.3)} actually sees
-     * those values on the wire instead of the hardcoded 4096 / 0.7 defaults.
+     * those values on the wire. When {@code maxTokens}/{@code temperature} are left
+     * unset (sentinels {@code -1} / {@code NaN}), neither key is injected and the
+     * provider's own default applies.
      */
     public void configure(McpHttpClient mcpClient, McpMeshToolProxyFactory proxyFactory,
                           ToolInvoker toolInvoker, MeshDependencyInjector dependencyInjector,
@@ -592,12 +595,12 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             }
             if (maxTokens != null) {
                 modelParams.put("max_tokens", maxTokens);
-            } else if (!modelParams.containsKey("max_tokens")) {
+            } else if (!modelParams.containsKey("max_tokens") && defaultMaxTokens >= 0) {
                 modelParams.put("max_tokens", defaultMaxTokens);
             }
-            if (temperature != null) {
+            if (temperature != null && !Double.isNaN(temperature)) {
                 modelParams.put("temperature", temperature);
-            } else if (!modelParams.containsKey("temperature")) {
+            } else if (!modelParams.containsKey("temperature") && !Double.isNaN(defaultTemperature)) {
                 modelParams.put("temperature", defaultTemperature);
             }
             if (topP != null) {

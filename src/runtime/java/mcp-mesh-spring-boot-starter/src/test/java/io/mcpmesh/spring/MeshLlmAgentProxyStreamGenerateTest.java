@@ -73,7 +73,9 @@ class MeshLlmAgentProxyStreamGenerateTest {
         client = new McpHttpClient(mapper);
 
         proxy = new MeshLlmAgentProxy("test.streamGenerate");
-        // Defaults: maxTokens=4096, temperature=0.7, parallelToolCalls=false.
+        // The 8-arg overload leaves maxTokens/temperature at the sentinel defaults
+        // (-1 / NaN), so neither key is injected unless a per-call setter supplies one.
+        // parallelToolCalls=false.
         proxy.configure(client, null, null, null, "", "ctx", 1, false);
         proxy.updateProvider(
             server.url("/").toString().replaceAll("/$", ""),
@@ -174,9 +176,10 @@ class MeshLlmAgentProxyStreamGenerateTest {
         assertNotNull(thinking, "thinking_config must be present in wire model_params");
         assertEquals(0, thinking.get("thinking_budget").asInt());
 
-        // Annotation defaults still present
-        assertTrue(modelParams.has("max_tokens"));
-        assertTrue(modelParams.has("temperature"));
+        // With sentinel defaults and no per-call setter, the typed keys are NOT
+        // injected — the provider's own defaults apply (parity with Python/TS).
+        assertFalse(modelParams.has("max_tokens"));
+        assertFalse(modelParams.has("temperature"));
     }
 
     @Test

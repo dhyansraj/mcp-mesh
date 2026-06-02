@@ -1,5 +1,6 @@
 package io.mcpmesh.spring;
 
+import io.mcpmesh.MeshLlmDefaults;
 import io.mcpmesh.core.MeshEvent;
 import io.mcpmesh.spring.media.MediaStore;
 import io.mcpmesh.spring.web.MeshA2APublicUrlCache;
@@ -321,10 +322,12 @@ public class MeshEventProcessor implements SmartLifecycle {
             // Configure with @MeshLlm settings (or defaults)
             String systemPrompt = config != null ? config.systemPrompt() : "";
             String contextParam = config != null ? config.contextParam() : "ctx";
-            int maxIterations = config != null ? config.maxIterations() : 1;
+            int maxIterations = config != null ? config.maxIterations()
+                : MeshLlmRegistry.resolveMaxIterations(
+                    System.getenv("MESH_LLM_MAX_ITERATIONS"), MeshLlmDefaults.MAX_ITERATIONS);
             boolean parallelToolCalls = config != null && config.parallelToolCalls();
-            int maxTokens = config != null ? config.maxTokens() : 4096;
-            double temperature = config != null ? config.temperature() : 0.7;
+            int maxTokens = config != null ? config.maxTokens() : MeshLlmDefaults.MAX_TOKENS_UNSET;
+            double temperature = config != null ? config.temperature() : MeshLlmDefaults.TEMPERATURE_UNSET;
 
             proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations, parallelToolCalls, maxTokens, temperature);
 
@@ -500,10 +503,12 @@ public class MeshEventProcessor implements SmartLifecycle {
             // Configure with @MeshLlm settings (or defaults)
             String systemPrompt = config != null ? config.systemPrompt() : "";
             String contextParam = config != null ? config.contextParam() : "ctx";
-            int maxIterations = config != null ? config.maxIterations() : 1;
+            int maxIterations = config != null ? config.maxIterations()
+                : MeshLlmRegistry.resolveMaxIterations(
+                    System.getenv("MESH_LLM_MAX_ITERATIONS"), MeshLlmDefaults.MAX_ITERATIONS);
             boolean parallelToolCalls = config != null && config.parallelToolCalls();
-            int maxTokens = config != null ? config.maxTokens() : 4096;
-            double temperature = config != null ? config.temperature() : 0.7;
+            int maxTokens = config != null ? config.maxTokens() : MeshLlmDefaults.MAX_TOKENS_UNSET;
+            double temperature = config != null ? config.temperature() : MeshLlmDefaults.TEMPERATURE_UNSET;
 
             proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations, parallelToolCalls, maxTokens, temperature);
 

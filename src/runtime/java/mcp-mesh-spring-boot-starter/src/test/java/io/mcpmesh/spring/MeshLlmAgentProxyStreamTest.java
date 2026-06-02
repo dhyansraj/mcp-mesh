@@ -173,8 +173,9 @@ class MeshLlmAgentProxyStreamTest {
 
         JsonNode modelParams = request.get("model_params");
         assertNotNull(modelParams);
-        assertTrue(modelParams.has("max_tokens"));
-        assertTrue(modelParams.has("temperature"));
+        // Sentinel defaults (-1 / NaN) → neither key injected; provider default applies.
+        assertFalse(modelParams.has("max_tokens"));
+        assertFalse(modelParams.has("temperature"));
     }
 
     @Test
