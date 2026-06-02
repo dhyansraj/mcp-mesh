@@ -13,7 +13,7 @@ otherwise — no module-level state here.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 
 def warn_unsupported_kwarg_once(
@@ -125,3 +125,90 @@ def resolve_request_timeout(
             return None
 
     return chosen
+
+
+def make_is_available(
+    import_name: str,
+) -> tuple[Callable[[], bool], Callable[[], None]]:
+    """Build the ``(is_available, reset)`` pair for a native adapter.
+
+    Each adapter has a structurally-identical ``is_available()`` that probes
+    whether its vendor SDK is importable, caching the result after the first
+    probe — SDK presence does not change at runtime and the
+    import-then-immediately-discard pattern was needless overhead on the
+    dispatch-decision hot path.
+
+    The cache lives in a closure cell here (one per adapter), so each
+    adapter's pair is independent. ``reset`` is a test hook — the adapters
+    expose it module-level as ``_reset_is_available_cache``.
+
+    ``import_name`` is the importable module path. ``__import__`` is used
+    (not ``importlib.import_module``) so the probe issues exactly the same
+    ``__import__(import_name)`` a bare ``import`` statement would — the
+    adapters' tests patch ``builtins.__import__`` and count those calls,
+    and ``importlib.import_module`` would skip the call entirely when the
+    module is already cached in ``sys.modules``.
+    """
+    cache: dict[str, bool] = {}
+
+    def is_available() -> bool:
+        cached = cache.get("value")
+        if cached is not None:
+            return cached
+        try:
+            __import__(import_name)
+        except ImportError:
+            cache["value"] = False
+            return False
+        cache["value"] = True
+        return True
+
+    def reset() -> None:
+        """For tests — reset the cached availability probe. NOT for production."""
+        cache.pop("value", None)
+
+    return is_available, reset
+
+
+def make_fallback_logger(
+    extra_label: str,
+    logger: logging.Logger,
+    *,
+    module_globals: dict[str, Any],
+    flag_name: str = "_logged_fallback_once",
+) -> tuple[Callable[[], None], Callable[[], bool], Callable[[], None]]:
+    """Build the ``(log_fallback_once, is_fallback_logged, reset)`` trio.
+
+    Each adapter emits a one-time INFO nudge ("Install `mcp-mesh[<extra>]`
+    ...") when native dispatch was attempted but the vendor SDK is not
+    importable. The trio dedupes that to once per process.
+
+    State is the module-level ``flag_name`` attribute (default
+    ``_logged_fallback_once``) read/written through ``module_globals`` — the
+    adapters' tests ``monkeypatch.setattr(module, "_logged_fallback_once",
+    ...)`` and expect ``is_fallback_logged()`` to reflect it, which only
+    works if the flag stays a real module attribute (a closure cell would
+    not be visible to the monkeypatch). Pass ``globals()`` from the adapter.
+
+    ``extra_label`` is the pip extra ("anthropic" / "openai" / "gemini")
+    interpolated into the install hint.
+    """
+
+    def log_fallback_once() -> None:
+        if module_globals.get(flag_name):
+            return
+        module_globals[flag_name] = True
+        logger.info(
+            "Install `mcp-mesh[%s]` for native SDK with full feature "
+            "support — falling back to LiteLLM",
+            extra_label,
+        )
+
+    def is_fallback_logged() -> bool:
+        return bool(module_globals.get(flag_name))
+
+    def reset() -> None:
+        """For tests — clear the one-time fallback-log flag. NOT for production."""
+        module_globals[flag_name] = False
+
+    return log_fallback_once, is_fallback_logged, reset

@@ -5,7 +5,7 @@ Function signature analysis for MCP Mesh dependency injection.
 import inspect
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional, get_type_hints
+from typing import Any, Callable, Optional, get_type_hints
 
 from mesh.types import McpMeshTool, MeshJob, MeshLlmAgent
 
@@ -116,6 +116,45 @@ def _is_mesh_job_type(param_type: Any) -> bool:
                 return True
 
     return False
+
+
+def _scan_params(
+    func: Any,
+    predicate: Callable[[Any], bool],
+    *,
+    want: str = "positions",
+) -> list:
+    """Scan a function's typed parameters and collect the ones matching
+    ``predicate``.
+
+    Shared body of the four public ``get_*_positions`` / ``get_*_parameter_names``
+    helpers — same unwrap-and-introspect loop, differing only in the
+    classifier predicate and whether positions (0-indexed) or names are
+    returned (``want="positions"`` or ``want="names"``).
+
+    The broad ``except Exception`` is intentional: any introspection failure
+    (unresolvable forward refs, missing imports, weird callables) is logged
+    at WARNing and yields an empty list so registration can proceed — the
+    function is still invokable as a plain tool, the typed slots just won't
+    bind. Do NOT narrow this.
+    """
+    try:
+        func = _get_original_func(func)
+        type_hints = get_type_hints(func)
+        sig = inspect.signature(func)
+
+        result: list = []
+        for i, param_name in enumerate(sig.parameters.keys()):
+            if param_name not in type_hints:
+                continue
+            if predicate(type_hints[param_name]):
+                result.append(i if want == "positions" else param_name)
+        return result
+
+    except Exception as e:
+        # If we can't analyze the signature, return empty list
+        logger.warning(f"Failed to analyze signature for {func}: {e}")
+        return []
 
 
 @dataclass(frozen=True)
@@ -251,29 +290,7 @@ def get_mesh_agent_positions(func: Any) -> list[int]:
 
         get_mesh_agent_positions(greet) → [1, 2]
     """
-    try:
-        func = _get_original_func(func)
-        # Get type hints for the function
-        type_hints = get_type_hints(func)
-
-        # Get parameter names in order
-        sig = inspect.signature(func)
-        param_names = list(sig.parameters.keys())
-
-        # Find positions of McpMeshTool parameters
-        mesh_positions = []
-        for i, param_name in enumerate(param_names):
-            if param_name in type_hints:
-                param_type = type_hints[param_name]
-                if _is_mesh_tool_type(param_type):
-                    mesh_positions.append(i)
-
-        return mesh_positions
-
-    except Exception as e:
-        # If we can't analyze the signature, return empty list
-        logger.warning(f"Failed to analyze signature for {func}: {e}")
-        return []
+    return _scan_params(func, _is_mesh_tool_type, want="positions")
 
 
 def get_mesh_agent_parameter_names(func: Any) -> list[str]:
@@ -286,23 +303,7 @@ def get_mesh_agent_parameter_names(func: Any) -> list[str]:
     Returns:
         List of parameter names that are McpMeshTool types
     """
-    try:
-        func = _get_original_func(func)
-        type_hints = get_type_hints(func)
-        sig = inspect.signature(func)
-
-        mesh_param_names = []
-        for param_name, param in sig.parameters.items():
-            if param_name in type_hints:
-                param_type = type_hints[param_name]
-                if _is_mesh_tool_type(param_type):
-                    mesh_param_names.append(param_name)
-
-        return mesh_param_names
-
-    except Exception as e:
-        logger.warning(f"Failed to analyze signature for {func}: {e}")
-        return []
+    return _scan_params(func, _is_mesh_tool_type, want="names")
 
 
 def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[bool, str]:
@@ -391,30 +392,7 @@ def get_llm_agent_positions(func: Any) -> list[int]:
 
         get_llm_agent_positions(chat) → [1]
     """
-    try:
-        func = _get_original_func(func)
-        # Get type hints for the function
-        type_hints = get_type_hints(func)
-
-        # Get parameter names in order
-        sig = inspect.signature(func)
-        param_names = list(sig.parameters.keys())
-
-        # Find positions of MeshLlmAgent parameters
-        llm_positions = []
-        for i, param_name in enumerate(param_names):
-            if param_name in type_hints:
-                param_type = type_hints[param_name]
-
-                if _is_mesh_llm_type(param_type):
-                    llm_positions.append(i)
-
-        return llm_positions
-
-    except Exception as e:
-        # If we can't analyze the signature, return empty list
-        logger.warning(f"Failed to analyze signature for {func}: {e}")
-        return []
+    return _scan_params(func, _is_mesh_llm_type, want="positions")
 
 
 def has_llm_agent_parameter(func: Any) -> bool:
@@ -440,22 +418,7 @@ def get_llm_agent_parameter_names(func: Any) -> list[str]:
     Returns:
         List of parameter names that are MeshLlmAgent types
     """
-    try:
-        func = _get_original_func(func)
-        type_hints = get_type_hints(func)
-        sig = inspect.signature(func)
-
-        llm_param_names = []
-        for param_name, param in sig.parameters.items():
-            if param_name in type_hints:
-                param_type = type_hints[param_name]
-                if _is_mesh_llm_type(param_type):
-                    llm_param_names.append(param_name)
-
-        return llm_param_names
-    except Exception as e:
-        logger.warning(f"Failed to analyze signature for {func}: {e}")
-        return []
+    return _scan_params(func, _is_mesh_llm_type, want="names")
 
 
 def get_context_parameter_name(
