@@ -560,17 +560,17 @@ impl AgentRuntime {
 
         // Find new or changed dependencies
         for (key, value) in &new_deps {
-            let changed = match self.topology.dependencies.get(key) {
-                Some(old_value) => {
+            let (changed, is_new) = match self.topology.dependencies.get(key) {
+                Some(old_value) => (
                     old_value.endpoint != value.endpoint
                         || old_value.function_name != value.function_name
-                        || old_value.kwargs != value.kwargs
-                }
-                None => true,
+                        || old_value.kwargs != value.kwargs,
+                    false,
+                ),
+                None => (true, true),
             };
 
             if changed {
-                let is_new = !self.topology.dependencies.contains_key(key);
                 if is_new {
                     info!(
                         "Dependency '{}' at {}:{} available at {} ({})",

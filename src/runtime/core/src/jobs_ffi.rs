@@ -175,7 +175,7 @@ fn job_status_to_str(s: JobStatus) -> &'static str {
 /// - finite `>= 0` and convertible → `Ok(Some(Duration::...))`
 fn parse_ffi_timeout_secs(secs: f64) -> Result<Option<Duration>, String> {
     if secs.is_nan() {
-        return Err(format!("timeout_secs must be a finite number, got NaN"));
+        return Err("timeout_secs must be a finite number, got NaN".to_string());
     }
     if secs.is_infinite() {
         return Err(format!(

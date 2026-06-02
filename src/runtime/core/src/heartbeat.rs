@@ -6,6 +6,7 @@
 
 use std::time::{Duration, Instant};
 use tracing::{debug, info, trace, warn};
+use uuid::Uuid;
 
 use crate::events::HealthStatus;
 use crate::registry::{FastHeartbeatResponse, FastHeartbeatStatus};
@@ -274,13 +275,24 @@ impl HeartbeatStateMachine {
     }
 
     fn calculate_backoff(&self) -> Duration {
-        // Exponential backoff with jitter
+        // Exponential backoff with equal jitter.
         let base = self.config.base_backoff.as_millis() as u64;
         let factor = 2u64.saturating_pow(self.retry_attempt);
         let backoff_ms = base.saturating_mul(factor);
         let max_ms = self.config.max_backoff.as_millis() as u64;
 
-        Duration::from_millis(backoff_ms.min(max_ms))
+        let capped = backoff_ms.min(max_ms);
+        let half = capped / 2;
+        // Equal jitter: half deterministic + up to half random (decorrelates
+        // reconnects so agents don't retry in lockstep on registry recovery).
+        let rand_part = if half > 0 {
+            let bytes = Uuid::new_v4().into_bytes();
+            let r = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+            r % (half + 1)
+        } else {
+            0
+        };
+        Duration::from_millis(half + rand_part)
     }
 }
 
@@ -398,9 +410,39 @@ mod tests {
         sm.retry_attempt = 2;
         let backoff2 = sm.calculate_backoff();
 
-        // Should be exponentially increasing
-        assert!(backoff1 > backoff0);
-        assert!(backoff2 > backoff1);
+        // Should be (non-strictly) increasing — equal jitter floors each
+        // attempt at capped/2, which equals the previous attempt's ceiling, so
+        // adjacent attempts can tie but never invert.
+        assert!(backoff1 >= backoff0);
+        assert!(backoff2 >= backoff1);
+    }
+
+    #[test]
+    fn test_backoff_jitter() {
+        let config = HeartbeatConfig::default();
+        let max_ms = config.max_backoff.as_millis() as u64;
+        let mut sm = HeartbeatStateMachine::new(config);
+        sm.retry_attempt = 2;
+
+        // capped = base(1000) * 2^2 = 4000, floored at capped/2 = 2000.
+        let capped = 4000u64.min(max_ms);
+        let floor = capped / 2;
+
+        let mut values = std::collections::HashSet::new();
+        for _ in 0..20 {
+            let ms = sm.calculate_backoff().as_millis() as u64;
+            assert!(ms <= max_ms, "{} exceeds max_backoff {}", ms, max_ms);
+            assert!(ms <= capped, "{} exceeds capped {}", ms, capped);
+            assert!(ms >= floor, "{} below floor {}", ms, floor);
+            values.insert(ms);
+        }
+
+        // Jitter must produce variation across calls.
+        assert!(
+            values.len() >= 2,
+            "expected jittered backoff to vary, got {:?}",
+            values
+        );
     }
 
     #[test]
