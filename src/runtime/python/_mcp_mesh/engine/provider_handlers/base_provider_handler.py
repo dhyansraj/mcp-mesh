@@ -10,7 +10,7 @@ import logging
 import os
 import threading
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import mcp_mesh_core
 from pydantic import BaseModel
@@ -101,6 +101,72 @@ def _reset_legacy_hint_timeout_dedupe() -> None:
     global _legacy_hint_timeout_deprecation_logged
     with _legacy_hint_timeout_lock:
         _legacy_hint_timeout_deprecation_logged = False
+
+
+# ============================================================================
+# Shared native-dispatch status logging (issue #834)
+# ============================================================================
+#
+# Each handler module owns a module-level ``_DISPATCH_STATUS_LOGGED`` latch and
+# a thin ``_log_dispatch_status_once()`` wrapper that delegates here, passing
+# its own logger + vendor labels. The state and the logger stay per-module so:
+#   - tests can flip ``<module>._DISPATCH_STATUS_LOGGED`` to re-observe the log,
+#   - the DEBUG record is emitted under the handler module's logger name
+#     (``...claude_handler`` / ``...openai_handler`` / ``...gemini_handler``),
+#   - the latch dedupes independently per vendor (Claude logging once does not
+#     suppress OpenAI's log).
+# The rendered message text is byte-identical to the original per-vendor logs.
+
+
+def render_dispatch_status_log(
+    module_logger: logging.Logger,
+    *,
+    vendor_label: str,
+    sdk_display: str,
+    install_extra: str,
+    native_module: Any,
+    version_probe: Callable[[], str],
+) -> None:
+    """Emit the once-per-process native-dispatch status DEBUG log.
+
+    ``module_logger`` is the calling handler module's logger so the record is
+    attributed to that module. ``vendor_label`` is the display name ("Claude"/
+    "OpenAI"/"Gemini"); ``sdk_display`` is the SDK name as it appears in the log
+    ("anthropic"/"openai"/"google-genai"); ``install_extra`` is the pip extra
+    ("anthropic"/"openai"/"gemini"); ``native_module`` exposes ``is_available()``;
+    ``version_probe`` is a zero-arg callable returning the SDK version string.
+
+    The caller is responsible for the once-per-process latch — this function
+    always renders.
+    """
+    env_value = os.getenv("MCP_MESH_NATIVE_LLM", "").strip().lower()
+
+    if env_value in ("0", "false", "no", "off"):
+        module_logger.debug(
+            "%s native dispatch: disabled "
+            "(MCP_MESH_NATIVE_LLM=%s explicitly set; using LiteLLM)",
+            vendor_label,
+            env_value,
+        )
+        return
+
+    if native_module.is_available():
+        version = version_probe()
+        module_logger.debug(
+            "%s native dispatch: enabled (%s SDK %s)",
+            vendor_label,
+            sdk_display,
+            version,
+        )
+    else:
+        module_logger.debug(
+            "%s native dispatch: disabled "
+            "(%s SDK not installed; install mcp-mesh[%s] to enable)",
+            vendor_label,
+            sdk_display,
+            install_extra,
+        )
+
 
 # ============================================================================
 # Shared Media Detection
@@ -404,26 +470,202 @@ class BaseProviderHandler(ABC):
 
         return "{\n" + "\n".join(parts) + "\n}"
 
+    def _build_hint_text(self, sanitized_schema: dict[str, Any]) -> str:
+        """Build the ``OUTPUT FORMAT:`` HINT block for ``apply_structured_output``.
+
+        Returned text starts with leading blank lines so it can be appended
+        directly to existing system message content. Callers that synthesize
+        a fresh system message should ``.strip()`` the result.
+
+        Shared verbatim by Claude and Gemini HINT modes — the rendered text is
+        byte-identical for both vendors.
+        """
+        hint_text = "\n\nOUTPUT FORMAT:\n"
+        hint_text += (
+            "Your FINAL response must be ONLY valid JSON (no markdown, "
+            "no code blocks) with this exact structure:\n"
+        )
+        properties = sanitized_schema.get("properties", {})
+        hint_text += self.build_json_example(properties) + "\n\n"
+        hint_text += (
+            "Return ONLY the JSON object with actual values. Do not "
+            "include the schema definition, markdown formatting, or "
+            "code blocks."
+        )
+        return hint_text
+
+    def apply_prose_hint(
+        self,
+        model_params: dict[str, Any],
+        sanitized_schema: dict[str, Any],
+        output_type_name: Optional[str],
+        *,
+        support_content_blocks: bool,
+        logger: Optional[logging.Logger] = None,
+    ) -> dict[str, Any]:
+        """Inject the OUTPUT FORMAT HINT block into the first system message.
+
+        Shared HINT-mode mechanics for the prompt-injection vendors (Claude,
+        Gemini): append the hint to the first system message (synthesizing one
+        if none exists), stamp the ``_mesh_hint_*`` sentinels read by the
+        agentic loop, and pop ``response_format`` (defense-in-depth — the HINT
+        path must never set it).
+
+        ``support_content_blocks``:
+            True  — tolerate a content-block list on the system message
+                    (post-prompt-cache, Claude): a string concatenates; a list
+                    gets a NEW text block appended; an unknown shape is coerced
+                    to string with a DEBUG log.
+            False — string-only concatenation (Gemini): ``content + hint_text``.
+
+        ``logger``:
+            Optional per-vendor module logger so the HINT-injection DEBUG
+            records are attributed to the calling handler's module
+            (``...claude_handler`` / ``...gemini_handler``) rather than this
+            base module. Defaults to the base module logger when not supplied.
+
+        Vendor-specific side effects (e.g. Gemini's ``set_pending_output_schema``)
+        and the per-vendor INFO log stay at the call site — this method only
+        performs the shared inject/synthesize/stamp/pop work.
+        """
+        log = logger if logger is not None else globals()["logger"]
+        messages = model_params.get("messages", [])
+        hint_text = self._build_hint_text(sanitized_schema)
+        hint_block_inserted = False
+        for msg in messages:
+            if msg.get("role") == "system":
+                base_content = msg.get("content", "")
+                if support_content_blocks:
+                    # Tolerate string OR content-block list (post-prompt-cache).
+                    # A string concatenates; a list gets a NEW text block
+                    # appended so the original blocks' cache_control is preserved.
+                    if isinstance(base_content, str):
+                        msg["content"] = base_content + hint_text
+                    elif isinstance(base_content, list):
+                        msg["content"] = list(base_content) + [
+                            {"type": "text", "text": hint_text}
+                        ]
+                    else:
+                        # Unknown content shape — defensive coerce to string so
+                        # the model still sees the schema. Log so the unexpected
+                        # shape surfaces in debugging.
+                        log.debug(
+                            "%s HINT injection: unexpected system content "
+                            "type %s; coercing to string",
+                            self._native_label(),
+                            type(base_content).__name__,
+                        )
+                        msg["content"] = str(base_content) + hint_text
+                else:
+                    msg["content"] = base_content + hint_text
+                hint_block_inserted = True
+                break
+
+        if not hint_block_inserted:
+            # No system message found — synthesize one containing just the
+            # HINT block. Without this, the _mesh_hint_* flags below would
+            # still be set but the model would never see the schema, every
+            # response would fail validation, and the fallback timeout would
+            # fire on every request.
+            messages.insert(0, {"role": "system", "content": hint_text.strip()})
+            log.debug(
+                "%s HINT mode for '%s': no system message found, "
+                "synthesized one with HINT block",
+                self._native_label(),
+                output_type_name or "Response",
+            )
+            # Keep model_params["messages"] in sync — messages may be a
+            # fresh list reference if the caller passed an empty/missing list.
+            model_params["messages"] = messages
+
+        # Internal flags read by the agentic loop. Prefixed with "_mesh_" so
+        # the loop strips them before calling LiteLLM (these are NOT API params).
+        fallback_timeout = resolve_hint_fallback_timeout()
+        model_params["_mesh_hint_mode"] = True
+        model_params["_mesh_hint_schema"] = sanitized_schema
+        model_params["_mesh_hint_fallback_timeout"] = fallback_timeout
+        model_params["_mesh_hint_output_type_name"] = output_type_name or "Response"
+
+        # Defense-in-depth: never set response_format on the HINT path.
+        model_params.pop("response_format", None)
+
+        return model_params
+
     # ------------------------------------------------------------------
     # Native SDK dispatch (issue #834)
     # ------------------------------------------------------------------
-    # Each subclass that ships a native vendor SDK adapter overrides
-    # ``has_native()`` to gate the dispatch on the relevant SDK actually
-    # being importable. Native dispatch is enabled by default; the
-    # ``MCP_MESH_NATIVE_LLM=0`` env flag is the explicit opt-out.
-    # The default implementation here returns False so the buffered /
-    # streaming call sites in mesh.helpers transparently keep using
-    # LiteLLM for vendors that have not migrated yet.
+    # Native dispatch is driven by ``_native_module()``: a subclass that ships
+    # a native vendor SDK adapter overrides it (plus ``_native_label()``) to
+    # return the imported native module. The base
+    # ``has_native()`` / ``complete()`` / ``complete_stream()`` then operate
+    # against that module's uniform surface (``is_available()``,
+    # ``is_fallback_logged()``, ``log_fallback_once()``, ``complete()``,
+    # ``complete_stream()``). The base default returns ``None`` so the buffered /
+    # streaming call sites in mesh.helpers transparently keep using LiteLLM for
+    # vendors that have not migrated yet.
+    #
+    # Native dispatch is enabled by default; the ``MCP_MESH_NATIVE_LLM=0`` env
+    # flag (also false/no/off) is the explicit opt-out and wins over SDK
+    # availability.
+
+    def _native_module(self):
+        """Return the imported native-SDK adapter module, or None.
+
+        Base default: None — ``has_native()`` stays False and the native
+        ``complete*`` paths raise NotImplementedError. Subclasses that ship a
+        native adapter override this with a one-line lazy import (so the SDK is
+        not imported at module load).
+        """
+        return None
+
+    def _native_label(self) -> str:
+        """Display label for the vendor in the dispatch-status DEBUG log.
+
+        Subclasses override (e.g. "Claude" / "OpenAI" / "Gemini").
+        """
+        return self.vendor
+
+    def _log_dispatch_status(self) -> None:
+        """Emit the once-per-process native-dispatch status DEBUG log.
+
+        Subclasses with a native adapter override this to delegate to their
+        module-level once-latch (so tests can re-arm it and the record is
+        attributed to the handler module's logger). Base default: no-op.
+        """
+        return
 
     def has_native(self) -> bool:
         """Return True if this handler can dispatch via a native vendor SDK.
 
-        Default: False. Override in subclasses that ship a native adapter.
-        Subclass implementations honor ``MCP_MESH_NATIVE_LLM=0`` as an
-        explicit opt-out and return False when the relevant SDK is not
-        importable.
+        Driven by ``_native_module()``: returns False when the subclass has not
+        migrated (module is None). For migrated handlers, honors
+        ``MCP_MESH_NATIVE_LLM`` in {0,false,no,off} as an explicit opt-out that
+        wins over SDK availability, and returns False (with a one-time fallback
+        log) when the SDK is not importable.
         """
-        return False
+        native = self._native_module()
+        if native is None:
+            return False
+
+        # Emit the one-time dispatch-status DEBUG log. Lazy here (vs. at
+        # module/handler init) so it fires when the first dispatch decision
+        # is actually made — the most useful signal for ``--debug`` runs.
+        self._log_dispatch_status()
+
+        flag = os.environ.get("MCP_MESH_NATIVE_LLM", "").strip().lower()
+        # Explicit opt-out wins over SDK availability.
+        if flag in ("0", "false", "no", "off"):
+            return False
+
+        if not native.is_available():
+            # Skip the log call entirely once it has already fired — the
+            # function dedupes internally, but on the no-native hot path
+            # avoiding the call frame altogether is cheaper still.
+            if not native.is_fallback_logged():
+                native.log_fallback_once()
+            return False
+
+        return True
 
     async def complete(
         self,
@@ -434,12 +676,21 @@ class BaseProviderHandler(ABC):
     ) -> Any:
         """Run a buffered completion via the vendor's native SDK.
 
-        Default: NotImplementedError. Subclasses with ``has_native() == True``
-        MUST override this to return a litellm-shaped response object (see
-        ``_mcp_mesh.engine.mesh_llm_agent._MockResponse`` for the shape).
+        Dispatches to ``_native_module().complete(...)``. Subclasses with a
+        native adapter (``_native_module()`` not None) inherit this directly;
+        the base raises NotImplementedError when no native module is wired so
+        the default contract is preserved.
         """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not implement native complete()"
+        native = self._native_module()
+        if native is None:
+            raise NotImplementedError(
+                f"{self.__class__.__name__} does not implement native complete()"
+            )
+        return await native.complete(
+            request_params,
+            model=model,
+            api_key=kwargs.get("api_key"),
+            base_url=kwargs.get("base_url"),
         )
 
     async def complete_stream(
@@ -451,14 +702,23 @@ class BaseProviderHandler(ABC):
     ):
         """Stream a completion via the vendor's native SDK.
 
-        Default: NotImplementedError. Subclasses with ``has_native() == True``
-        MUST override this to return an async iterator yielding chunks
-        matching the litellm streaming shape consumed by
-        ``mesh.helpers._provider_agentic_loop_stream`` and the legacy
-        no-tools branch of ``llm_provider``'s stream tool.
+        ``async def`` but ``return``s (without awaiting) the async generator
+        from ``_native_module().complete_stream(...)``. Callers ``await`` this
+        handler call (which resolves the coroutine to the AG), then
+        ``async for chunk in stream_iter:`` to consume. Subclasses with a
+        native adapter inherit this directly; the base raises
+        NotImplementedError when no native module is wired.
         """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not implement native complete_stream()"
+        native = self._native_module()
+        if native is None:
+            raise NotImplementedError(
+                f"{self.__class__.__name__} does not implement native complete_stream()"
+            )
+        return native.complete_stream(
+            request_params,
+            model=model,
+            api_key=kwargs.get("api_key"),
+            base_url=kwargs.get("base_url"),
         )
 
     def __repr__(self) -> str:
