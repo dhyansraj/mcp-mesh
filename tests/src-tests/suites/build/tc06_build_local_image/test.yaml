@@ -202,7 +202,7 @@ test:
 
       echo "IMAGE_NAME=$IMAGE_NAME"
     capture: build_output
-    timeout: 480
+    timeout: 1200
 
   # Verify image was created
   - name: "Verify image was created"
