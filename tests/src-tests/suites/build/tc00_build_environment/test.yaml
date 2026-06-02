@@ -11,7 +11,7 @@ tags:
   - build
   - image
   - setup
-timeout: 600 # 10 minutes for image build
+timeout: 1500 # bound the whole test above the 1200s build step
 
 test:
   # Clean output directory from previous runs
@@ -66,18 +66,21 @@ test:
     handler: shell
     command: |
       IMAGE_NAME="${config.build.image}"
-      BASE_IMAGE="192.168.10.1:5000/src-build-base:latest"
-      echo "Building image: $IMAGE_NAME"
+      BASE_REPO="192.168.10.1:5000/src-build-base"
+      # Content-addressed tag: any change to Dockerfile.base -> new tag -> rebuild.
+      BASE_TAG=$(sha256sum "${artifacts_path}/Dockerfile.base" | cut -c1-12)
+      BASE_IMAGE="${BASE_REPO}:${BASE_TAG}"
+      echo "Building image: $IMAGE_NAME (base: $BASE_IMAGE)"
 
-      # Ensure the toolchain base exists in the registry; build+push once if missing.
+      # Pull the content-addressed base; build+push only if this exact base is missing.
       if ! docker pull "$BASE_IMAGE" 2>/dev/null; then
-        echo "Base toolchain image not in registry — building once (this is the slow path)..."
+        echo "Base toolchain image $BASE_TAG not in registry — building once (slow path)..."
         docker build -t "$BASE_IMAGE" -f "${artifacts_path}/Dockerfile.base" "${artifacts_path}"
         docker push "$BASE_IMAGE"
       fi
 
-      # Thin build FROM the prebuilt base — no toolchain downloads.
-      docker build -t "$IMAGE_NAME" -f "${artifacts_path}/Dockerfile" "${artifacts_path}"
+      # Thin build FROM the exact content-addressed base.
+      docker build --build-arg BASE_IMAGE="$BASE_IMAGE" -t "$IMAGE_NAME" -f "${artifacts_path}/Dockerfile" "${artifacts_path}"
 
       echo "Build complete: $IMAGE_NAME"
     capture: build_output
