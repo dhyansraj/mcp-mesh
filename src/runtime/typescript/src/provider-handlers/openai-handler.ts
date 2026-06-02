@@ -8,12 +8,10 @@
  * src/runtime/python/_mcp_mesh/engine/provider_handlers/openai_handler.py
  */
 
-import { createDebug } from "../debug.js";
 import type { LlmMessage } from "../types.js";
 import { formatSystemPrompt as coreFormatSystemPrompt } from "@mcpmesh/core";
 import {
-  makeSchemaStrict,
-  sanitizeSchemaForStructuredOutput,
+  applyStrictResponseFormat,
   hasMediaParams,
   defaultDetermineOutputMode,
   prepareRequestBaseline,
@@ -25,8 +23,6 @@ import {
   type OutputMode,
 } from "./provider-handler.js";
 import { ProviderHandlerRegistry } from "./provider-handler-registry.js";
-
-const debug = createDebug("openai-handler");
 
 /**
  * Provider handler for OpenAI models.
@@ -94,21 +90,8 @@ export class OpenAIHandler implements ProviderHandler {
     if (determinedMode === "strict") {
       // Transform schema for OpenAI strict mode
       // OpenAI requires additionalProperties: false and all properties in required
-      const sanitizedSchema = sanitizeSchemaForStructuredOutput(outputSchema.schema);
-      const strictSchema = makeSchemaStrict(sanitizedSchema, { addAllRequired: true });
-
-      // OpenAI structured output format
       // See: https://platform.openai.com/docs/guides/structured-outputs
-      request.responseFormat = {
-        type: "json_schema",
-        jsonSchema: {
-          name: outputSchema.name,
-          schema: strictSchema,
-          strict: true, // Enforce schema compliance
-        },
-      };
-
-      debug(`Using response_format with strict schema: ${outputSchema.name}`);
+      applyStrictResponseFormat(request, outputSchema);
     }
 
     return request;

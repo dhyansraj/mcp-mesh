@@ -309,6 +309,36 @@ export function makeSchemaStrict(
 }
 
 /**
+ * Apply a strict `responseFormat` to a prepared request from an output schema.
+ *
+ * Shared by the OpenAI and Gemini handlers' "strict" branch: sanitize the
+ * schema, make it strict (additionalProperties: false + all-required), and
+ * assign the vendor `json_schema` response format. The Vercel AI SDK
+ * translates this to each vendor's native structured-output format.
+ *
+ * NOTE: GenericHandler deliberately does NOT use this — it passes raw schemas
+ * through without strict transformation.
+ */
+export function applyStrictResponseFormat(
+  request: PreparedRequest,
+  outputSchema: OutputSchema
+): void {
+  const sanitizedSchema = sanitizeSchemaForStructuredOutput(outputSchema.schema);
+  const strictSchema = makeSchemaStrict(sanitizedSchema, { addAllRequired: true });
+
+  request.responseFormat = {
+    type: "json_schema",
+    jsonSchema: {
+      name: outputSchema.name,
+      schema: strictSchema,
+      strict: true, // Enforce schema compliance
+    },
+  };
+
+  debug(`Using response_format with strict schema: ${outputSchema.name}`);
+}
+
+/**
  * Check if any tool schema contains media parameters (x-media-type).
  * Delegates to Rust core.
  *

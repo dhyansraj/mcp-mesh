@@ -400,7 +400,7 @@ export async function callMcpTool(
 
       // Handle SSE streaming response
       if (contentType.includes("text/event-stream")) {
-        const sseResult = await parseSSEResponse(response);
+        const sseResult = await readSSEResponseToContent(response);
         // Estimate response size from content-length header (exact size not available for SSE)
         const sseResponseBytes = contentLength > 0 ? contentLength : undefined;
         // Publish success span
@@ -649,80 +649,49 @@ export async function* streamMcpTool(
     }
 
     reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let streamDone = false;
 
-    while (!streamDone) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    for await (const data of iterateSSEEvents(reader)) {
+      // Parse the JSON-RPC message
+      let msg: {
+        jsonrpc?: string;
+        id?: string | number;
+        method?: string;
+        params?: { progressToken?: string | number; message?: string; data?: string };
+        result?: unknown;
+        error?: { message?: string; code?: number };
+      };
+      try {
+        msg = JSON.parse(data);
+      } catch {
+        // Ignore non-JSON data events (defensive)
+        continue;
+      }
 
-      // Normalize CRLF to LF so the same parser handles either line ending
-      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-
-      // SSE events are separated by blank lines (\n\n)
-      let sep: number;
-      while ((sep = buffer.indexOf("\n\n")) !== -1) {
-        const rawEvent = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
-
-        // Collect data: lines from this event (per spec, multi-line data joined by \n)
-        const dataLines: string[] = [];
-        for (const line of rawEvent.split("\n")) {
-          if (line.startsWith("data: ")) {
-            dataLines.push(line.slice(6));
-          } else if (line.startsWith("data:")) {
-            // Allow "data:" with no space (defensive)
-            dataLines.push(line.slice(5));
+      // Progress notification: yield message if it matches our token
+      if (msg.method === "notifications/progress" && msg.params) {
+        if (msg.params.progressToken === progressToken) {
+          // FastMCP sends ``message``; some implementations may send ``data``
+          const chunk =
+            typeof msg.params.message === "string"
+              ? msg.params.message
+              : typeof msg.params.data === "string"
+                ? msg.params.data
+                : null;
+          if (chunk !== null) {
+            yield chunk;
           }
         }
-        if (dataLines.length === 0) continue;
-        const data = dataLines.join("\n");
-        if (!data) continue;
+        continue;
+      }
 
-        // Parse the JSON-RPC message
-        let msg: {
-          jsonrpc?: string;
-          id?: string | number;
-          method?: string;
-          params?: { progressToken?: string | number; message?: string; data?: string };
-          result?: unknown;
-          error?: { message?: string; code?: number };
-        };
-        try {
-          msg = JSON.parse(data);
-        } catch {
-          // Ignore non-JSON data events (defensive)
-          continue;
+      // Final response for our request: end the stream
+      if (msg.id !== undefined && msg.id === requestId) {
+        if (msg.error) {
+          const em = msg.error.message ?? JSON.stringify(msg.error);
+          throw new Error(`MCP error: ${em}`);
         }
-
-        // Progress notification: yield message if it matches our token
-        if (msg.method === "notifications/progress" && msg.params) {
-          if (msg.params.progressToken === progressToken) {
-            // FastMCP sends ``message``; some implementations may send ``data``
-            const chunk =
-              typeof msg.params.message === "string"
-                ? msg.params.message
-                : typeof msg.params.data === "string"
-                  ? msg.params.data
-                  : null;
-            if (chunk !== null) {
-              yield chunk;
-            }
-          }
-          continue;
-        }
-
-        // Final response for our request: end the stream
-        if (msg.id !== undefined && msg.id === requestId) {
-          if (msg.error) {
-            const em = msg.error.message ?? JSON.stringify(msg.error);
-            throw new Error(`MCP error: ${em}`);
-          }
-          // result arrived — done; do NOT yield the buffered final result
-          streamDone = true;
-          break;
-        }
+        // result arrived — done; do NOT yield the buffered final result
+        break;
       }
     }
   } catch (err) {
@@ -828,9 +797,58 @@ function publishProxySpan(
 }
 
 /**
- * Parse SSE response from MCP HTTP Streamable transport.
+ * Split an SSE byte stream into raw `data:` payload strings.
+ *
+ * Reads from the given reader, normalizes CRLF→LF, separates events on blank
+ * lines (`\n\n`), and joins each event's `data:` lines per the SSE spec.
+ * Empty/data-less events are skipped. Yields one string per event so callers
+ * can JSON-parse and dispatch without re-implementing the framing.
  */
-async function parseSSEResponse(response: Response): Promise<string | MultiContentResult> {
+async function* iterateSSEEvents(
+  reader: ReadableStreamDefaultReader<Uint8Array>
+): AsyncGenerator<string> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    // Normalize CRLF to LF so the same parser handles either line ending
+    buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+
+    // SSE events are separated by blank lines (\n\n)
+    let sep: number;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+
+      // Collect data: lines from this event (per spec, multi-line data joined by \n)
+      const dataLines: string[] = [];
+      for (const line of rawEvent.split("\n")) {
+        if (line.startsWith("data: ")) {
+          dataLines.push(line.slice(6));
+        } else if (line.startsWith("data:")) {
+          // Allow "data:" with no space (defensive)
+          dataLines.push(line.slice(5));
+        }
+      }
+      if (dataLines.length === 0) continue;
+      const data = dataLines.join("\n");
+      if (!data) continue;
+      yield data;
+    }
+  }
+}
+
+/**
+ * Read an SSE response from the MCP HTTP Streamable transport down to its
+ * final content (the JSON-RPC `result`).
+ *
+ * Distinct from `sse.ts`'s `parseSSEResponse` (string→object, Rust-core-backed):
+ * this consumes a whole `Response` body and returns the extracted content.
+ */
+async function readSSEResponseToContent(response: Response): Promise<string | MultiContentResult> {
   const reader = response.body?.getReader();
   if (!reader) {
     throw new Error("No response body");
