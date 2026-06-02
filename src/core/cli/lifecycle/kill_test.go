@@ -397,6 +397,52 @@ func TestKillVerifyFailureLeavesFile(t *testing.T) {
 	}
 }
 
+// TestKillPIDVerify_LiveProcessKilled spawns a real sleep and confirms
+// KillPIDVerify reports death after SIGTERM.
+func TestKillPIDVerify_LiveProcessKilled(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("spawn sleep: %v", err)
+	}
+	go func() { _ = cmd.Wait() }()
+	t.Cleanup(func() { _ = cmd.Process.Kill() })
+
+	if !KillPIDVerify(cmd.Process.Pid, 3*time.Second) {
+		t.Error("expected KillPIDVerify to confirm death")
+	}
+	if IsAlive(cmd.Process.Pid) {
+		t.Error("process should be dead")
+	}
+}
+
+// TestKillPIDVerify_RefusesPID1 confirms the broadcast guard: PID <= 1 returns
+// true without signaling anything.
+func TestKillPIDVerify_RefusesPID1(t *testing.T) {
+	if !KillPIDVerify(1, 100*time.Millisecond) {
+		t.Error("expected KillPIDVerify(1) to return true without signaling")
+	}
+	if !KillPIDVerify(0, 100*time.Millisecond) {
+		t.Error("expected KillPIDVerify(0) to return true without signaling")
+	}
+}
+
+// TestKillPIDVerify_TreatsZombieAsDead confirms KillPIDVerify inherits
+// pollUntilDead's zombie-as-dead semantics via the stub hooks.
+func TestKillPIDVerify_TreatsZombieAsDead(t *testing.T) {
+	prevAlive, prevZombie := processAliveFn, isZombieFn
+	processAliveFn = func(pid int) bool { return true } // never dead by signal 0
+	isZombieFn = func(pid int) (bool, error) { return true, nil }
+	t.Cleanup(func() {
+		processAliveFn = prevAlive
+		isZombieFn = prevZombie
+	})
+
+	if !KillPIDVerify(99999, 100*time.Millisecond) {
+		t.Error("expected KillPIDVerify to treat a zombie PID as dead")
+	}
+}
+
 // TestIsAliveOrGroupAlive_RefusesPID1 guards against accidental broadcast
 // signals: a corrupted .pid file containing 1 must never be reported as
 // "alive" via the group probe, since kill(-1, ...) is POSIX broadcast to

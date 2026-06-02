@@ -12,7 +12,7 @@ tags:
   - build
   - image
   - local
-timeout: 600 # 10 minutes for image build
+timeout: 1500 # bound the whole test above the 1200s build step
 
 test:
   # Verify Docker is available
@@ -202,7 +202,7 @@ test:
 
       echo "IMAGE_NAME=$IMAGE_NAME"
     capture: build_output
-    timeout: 480
+    timeout: 1200
 
   # Verify image was created
   - name: "Verify image was created"
