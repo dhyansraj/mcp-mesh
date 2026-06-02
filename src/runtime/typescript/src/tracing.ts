@@ -156,6 +156,48 @@ export function injectTraceContext(
 }
 
 /**
+ * Inject trace context and propagated headers into a JSON-RPC arguments object,
+ * returning a NEW merged object (callers should assign the result).
+ *
+ * Tries the Rust-core ``injectTraceContext`` first; on any throw, falls back to
+ * manual assignment of ``_trace_id`` / ``_parent_span`` / ``_mesh_headers``.
+ * Rust-first then fallback order is preserved.
+ *
+ * When ``traceCtx``/``spanId`` are absent, only ``_mesh_headers`` is injected
+ * (when there are headers to propagate), matching the existing proxy behavior.
+ */
+export function injectTraceAndHeaders(
+  args: Record<string, unknown>,
+  traceCtx: TraceContext | null,
+  spanId: string | null,
+  headers: Record<string, string>,
+): Record<string, unknown> {
+  const hasHeaders = Object.keys(headers).length > 0;
+  if (traceCtx && spanId) {
+    try {
+      const argsJson = JSON.stringify(args);
+      const headersJson = hasHeaders ? JSON.stringify(headers) : undefined;
+      const injectedJson = injectTraceContext(argsJson, traceCtx.traceId, spanId, headersJson);
+      return JSON.parse(injectedJson) as Record<string, unknown>;
+    } catch {
+      // Fallback to manual injection
+      const merged: Record<string, unknown> = { ...args };
+      merged._trace_id = traceCtx.traceId;
+      merged._parent_span = spanId;
+      if (hasHeaders) {
+        merged._mesh_headers = headers;
+      }
+      return merged;
+    }
+  }
+  const merged: Record<string, unknown> = { ...args };
+  if (hasHeaders) {
+    merged._mesh_headers = headers;
+  }
+  return merged;
+}
+
+/**
  * Parse trace context from HTTP headers.
  *
  * Looks for X-Trace-ID and X-Parent-Span headers (matching Python SDK).
