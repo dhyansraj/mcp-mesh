@@ -30,7 +30,7 @@ use crate::jobs::{
     BatchingHandle, JobController, JobError, JobProxy, SubmitJobArgs,
 };
 use crate::task_backend::{
-    Job, JobEvent, JobEventReceipt, JobStatus, RegistryHttpBackend, TaskBackend,
+    Job, JobEvent, JobEventReceipt, RegistryHttpBackend, TaskBackend,
 };
 
 // =============================================================================
@@ -47,12 +47,8 @@ use crate::task_backend::{
 fn parse_timeout_secs(secs: Option<f64>) -> PyResult<Option<Duration>> {
     match secs {
         None => Ok(None),
-        Some(s) if s.is_nan() || s.is_infinite() || s < 0.0 => Err(PyValueError::new_err(
-            format!("timeout_secs must be non-negative and finite, got {s}"),
-        )),
-        Some(s) => Duration::try_from_secs_f64(s).map(Some).map_err(|e| {
-            PyValueError::new_err(format!("timeout_secs out of range: {e} (got {s})"))
-        }),
+        Some(s) => crate::task_backend::validate_secs_to_duration(s, false)
+            .map_err(PyValueError::new_err),
     }
 }
 
@@ -87,78 +83,10 @@ fn job_error_to_py(err: JobError) -> PyErr {
 /// Convert a [`Job`] to a Python `dict`. Mirrors the Go registry's `Job`
 /// schema field-for-field so application code can index by the same keys it
 /// would see on the wire.
-fn job_to_pydict<'py>(py: Python<'py>, job: Job) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("id", job.id)?;
-    dict.set_item("capability", job.capability)?;
-    dict.set_item("owner_instance_id", job.owner_instance_id)?;
-    dict.set_item("status", job_status_to_str(job.status))?;
-    dict.set_item("progress", job.progress)?;
-    dict.set_item("progress_message", job.progress_message)?;
-    dict.set_item("result", json_value_to_py(py, job.result.unwrap_or(serde_json::Value::Null))?)?;
-    dict.set_item("error", job.error)?;
-    dict.set_item(
-        "submitted_payload",
-        json_value_to_py(py, job.submitted_payload)?,
-    )?;
-    dict.set_item("attempt_count", job.attempt_count)?;
-    dict.set_item("max_retries", job.max_retries)?;
-    dict.set_item("max_duration", job.max_duration)?;
-    dict.set_item("total_deadline", job.total_deadline)?;
-    dict.set_item("lease_expires_at", job.lease_expires_at)?;
-    dict.set_item("last_heartbeat_at", job.last_heartbeat_at)?;
-    dict.set_item("submitted_at", job.submitted_at)?;
-    dict.set_item("submitted_by", job.submitted_by)?;
-    Ok(dict)
-}
-
-fn job_status_to_str(s: JobStatus) -> &'static str {
-    match s {
-        JobStatus::Working => "working",
-        JobStatus::InputRequired => "input_required",
-        JobStatus::Completed => "completed",
-        JobStatus::Failed => "failed",
-        JobStatus::Cancelled => "cancelled",
-    }
-}
-
-/// Convert a `serde_json::Value` to a `Py<PyAny>`. Same shape as
-/// `lib.rs::json_value_to_pyobject` — duplicated here to avoid threading the
-/// helper across module boundaries.
-fn json_value_to_py(py: Python<'_>, val: serde_json::Value) -> PyResult<Py<PyAny>> {
-    match val {
-        serde_json::Value::Null => Ok(py.None()),
-        serde_json::Value::Bool(b) => {
-            let obj: Py<PyAny> = b.into_pyobject(py)?.to_owned().into_any().unbind();
-            Ok(obj)
-        }
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Ok(i.into_pyobject(py)?.into_any().unbind())
-            } else if let Some(u) = n.as_u64() {
-                Ok(u.into_pyobject(py)?.into_any().unbind())
-            } else if let Some(f) = n.as_f64() {
-                Ok(f.into_pyobject(py)?.into_any().unbind())
-            } else {
-                Ok(py.None())
-            }
-        }
-        serde_json::Value::String(s) => Ok(s.into_pyobject(py)?.into_any().unbind()),
-        serde_json::Value::Array(arr) => {
-            let items: Vec<Py<PyAny>> = arr
-                .into_iter()
-                .map(|v| json_value_to_py(py, v))
-                .collect::<PyResult<_>>()?;
-            Ok(PyList::new(py, &items)?.into_any().unbind())
-        }
-        serde_json::Value::Object(map) => {
-            let dict = PyDict::new(py);
-            for (k, v) in map {
-                dict.set_item(k, json_value_to_py(py, v)?)?;
-            }
-            Ok(dict.into_any().unbind())
-        }
-    }
+fn job_to_pydict(py: Python<'_>, job: Job) -> PyResult<Py<PyAny>> {
+    let value = serde_json::to_value(&job)
+        .map_err(|e| PyValueError::new_err(format!("failed to serialize Job: {e}")))?;
+    crate::json_value_to_pyobject(py, &value)
 }
 
 /// Convert a Python object (dict / list / primitive) to a
@@ -177,35 +105,18 @@ fn pyany_to_json(py: Python<'_>, obj: &Bound<'_, PyAny>) -> PyResult<serde_json:
 /// Convert a [`JobEvent`] to a Python `dict`. Field-for-field mirror of
 /// the OpenAPI `JobEvent` schema so application code can index by the
 /// same keys it would see on the wire.
-fn job_event_to_pydict<'py>(py: Python<'py>, ev: JobEvent) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("job_id", ev.job_id)?;
-    dict.set_item("seq", ev.seq)?;
-    dict.set_item("type", ev.event_type)?;
-    dict.set_item(
-        "payload",
-        json_value_to_py(py, ev.payload.unwrap_or(serde_json::Value::Null))?,
-    )?;
-    dict.set_item(
-        "trace_context",
-        json_value_to_py(py, ev.trace_context.unwrap_or(serde_json::Value::Null))?,
-    )?;
-    dict.set_item("posted_by", ev.posted_by)?;
-    dict.set_item("created_at", ev.created_at)?;
-    Ok(dict)
+fn job_event_to_pydict(py: Python<'_>, ev: JobEvent) -> PyResult<Py<PyAny>> {
+    let value = serde_json::to_value(&ev)
+        .map_err(|e| PyValueError::new_err(format!("failed to serialize JobEvent: {e}")))?;
+    crate::json_value_to_pyobject(py, &value)
 }
 
 /// Convert a [`JobEventReceipt`] to a Python `dict`. Mirrors the
 /// `JobEventPostResponse` schema field-for-field.
-fn job_event_receipt_to_pydict<'py>(
-    py: Python<'py>,
-    receipt: JobEventReceipt,
-) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("job_id", receipt.job_id)?;
-    dict.set_item("seq", receipt.seq)?;
-    dict.set_item("created_at", receipt.created_at)?;
-    Ok(dict)
+fn job_event_receipt_to_pydict(py: Python<'_>, receipt: JobEventReceipt) -> PyResult<Py<PyAny>> {
+    let value = serde_json::to_value(&receipt)
+        .map_err(|e| PyValueError::new_err(format!("failed to serialize JobEventReceipt: {e}")))?;
+    crate::json_value_to_pyobject(py, &value)
 }
 
 // =============================================================================
@@ -391,7 +302,7 @@ impl PyJobController {
             let result = inner.recv_event(types, timeout).await.map_err(job_error_to_py)?;
             Python::with_gil(|py| match result {
                 None => Ok::<Py<PyAny>, PyErr>(py.None()),
-                Some(ev) => Ok(job_event_to_pydict(py, ev)?.into_any().unbind()),
+                Some(ev) => job_event_to_pydict(py, ev),
             })
         })
     }
@@ -436,10 +347,7 @@ impl PyJobProxy {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let job = inner.status().await.map_err(job_error_to_py)?;
-            Python::with_gil(|py| {
-                let dict = job_to_pydict(py, job)?;
-                Ok(dict.into_any().unbind())
-            })
+            Python::with_gil(|py| job_to_pydict(py, job))
         })
     }
 
@@ -457,7 +365,7 @@ impl PyJobProxy {
         let timeout = parse_timeout_secs(timeout_secs)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let value = inner.wait(timeout).await.map_err(job_error_to_py)?;
-            Python::with_gil(|py| Ok(json_value_to_py(py, value)?))
+            Python::with_gil(|py| crate::json_value_to_pyobject(py, &value))
         })
     }
 
@@ -498,7 +406,7 @@ impl PyJobProxy {
                 .send_event(event_type, payload_json)
                 .await
                 .map_err(job_error_to_py)?;
-            Python::with_gil(|py| Ok(job_event_receipt_to_pydict(py, receipt)?.unbind()))
+            Python::with_gil(|py| job_event_receipt_to_pydict(py, receipt))
         })
     }
 

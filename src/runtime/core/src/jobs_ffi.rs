@@ -51,7 +51,7 @@ use crate::jobs::{
     BatchingHandle, JobController, JobError, JobProxy, SubmitJobArgs,
 };
 use crate::task_backend::{
-    Job, JobEvent, JobEventReceipt, JobStatus, RegistryHttpBackend, TaskBackend,
+    Job, JobEvent, JobEventReceipt, RegistryHttpBackend, TaskBackend,
 };
 
 // =============================================================================
@@ -124,6 +124,19 @@ unsafe fn write_out_string(out: *mut *mut c_char, value: String) -> i32 {
     }
 }
 
+/// Serialize a value to a JSON string and write it to `out`. On serde
+/// failure, sets the thread-local last-error and returns -1 (no `.unwrap()`
+/// so a serialization bug can't abort the host process).
+unsafe fn write_out_json(out: *mut *mut c_char, value: serde_json::Result<String>) -> i32 {
+    match value {
+        Ok(s) => write_out_string(out, s),
+        Err(e) => {
+            set_last_error(format!("failed to serialize JSON: {}", e));
+            -1
+        }
+    }
+}
+
 /// Build an `Arc<dyn TaskBackend>` from a registry URL. Sets last-error and
 /// returns `None` on transport-construction failure.
 fn backend_from_url(registry_url: &str) -> Option<Arc<dyn TaskBackend>> {
@@ -141,16 +154,6 @@ fn backend_from_url(registry_url: &str) -> Option<Arc<dyn TaskBackend>> {
 fn jobs_set_err(err: JobError) -> i32 {
     set_last_error(err.to_string());
     -1
-}
-
-fn job_status_to_str(s: JobStatus) -> &'static str {
-    match s {
-        JobStatus::Working => "working",
-        JobStatus::InputRequired => "input_required",
-        JobStatus::Completed => "completed",
-        JobStatus::Failed => "failed",
-        JobStatus::Cancelled => "cancelled",
-    }
 }
 
 // Stricter timeout-policy than mesh_job_proxy_wait's predicate (which
@@ -174,74 +177,27 @@ fn job_status_to_str(s: JobStatus) -> &'static str {
 ///   `from_secs_f64` would have aborted the host process)
 /// - finite `>= 0` and convertible → `Ok(Some(Duration::...))`
 fn parse_ffi_timeout_secs(secs: f64) -> Result<Option<Duration>, String> {
-    if secs.is_nan() {
-        return Err("timeout_secs must be a finite number, got NaN".to_string());
-    }
-    if secs.is_infinite() {
-        return Err(format!(
-            "timeout_secs must be a finite number, got {}",
-            secs
-        ));
-    }
-    if secs < 0.0 {
-        return Ok(None);
-    }
-    Duration::try_from_secs_f64(secs)
-        .map(Some)
-        .map_err(|e| format!("timeout_secs out of range: {} (got {})", e, secs))
+    crate::task_backend::validate_secs_to_duration(secs, true)
 }
 
 /// Convert a [`JobEvent`] to a JSON string matching the wire shape that
 /// the Python (`job_event_to_pydict`) and TS (`job_event_to_json`) bindings
 /// expose. Java callers parse this with Jackson on their side.
-fn job_event_to_json_string(ev: JobEvent) -> String {
-    serde_json::json!({
-        "job_id": ev.job_id,
-        "seq": ev.seq,
-        "type": ev.event_type,
-        "payload": ev.payload.unwrap_or(serde_json::Value::Null),
-        "trace_context": ev.trace_context.unwrap_or(serde_json::Value::Null),
-        "posted_by": ev.posted_by,
-        "created_at": ev.created_at,
-    })
-    .to_string()
+fn job_event_to_json_string(ev: JobEvent) -> serde_json::Result<String> {
+    serde_json::to_string(&ev)
 }
 
 /// Convert a [`JobEventReceipt`] to a JSON string matching the wire shape
 /// Python/TS bindings expose.
-fn job_event_receipt_to_json_string(receipt: JobEventReceipt) -> String {
-    serde_json::json!({
-        "job_id": receipt.job_id,
-        "seq": receipt.seq,
-        "created_at": receipt.created_at,
-    })
-    .to_string()
+fn job_event_receipt_to_json_string(receipt: JobEventReceipt) -> serde_json::Result<String> {
+    serde_json::to_string(&receipt)
 }
 
 /// Serialize a [`Job`] row to JSON matching the wire shape Python/TS bindings
 /// expose (and the registry's `Job` schema). Java callers parse this with
 /// Jackson on their side.
-fn job_to_json_string(job: Job) -> String {
-    let value = serde_json::json!({
-        "id": job.id,
-        "capability": job.capability,
-        "owner_instance_id": job.owner_instance_id,
-        "status": job_status_to_str(job.status),
-        "progress": job.progress,
-        "progress_message": job.progress_message,
-        "result": job.result.unwrap_or(serde_json::Value::Null),
-        "error": job.error,
-        "submitted_payload": job.submitted_payload,
-        "attempt_count": job.attempt_count,
-        "max_retries": job.max_retries,
-        "max_duration": job.max_duration,
-        "total_deadline": job.total_deadline,
-        "lease_expires_at": job.lease_expires_at,
-        "last_heartbeat_at": job.last_heartbeat_at,
-        "submitted_at": job.submitted_at,
-        "submitted_by": job.submitted_by,
-    });
-    value.to_string()
+fn job_to_json_string(job: Job) -> serde_json::Result<String> {
+    serde_json::to_string(&job)
 }
 
 // =============================================================================
@@ -631,7 +587,7 @@ pub unsafe extern "C" fn mesh_job_controller_recv_event(
             // checking the out-pointer.
             0
         }
-        Ok(Some(ev)) => write_out_string(out_event_json, job_event_to_json_string(ev)),
+        Ok(Some(ev)) => write_out_json(out_event_json, job_event_to_json_string(ev)),
         Err(JobError::Backend(crate::task_backend::BackendError::NotFound(msg))) => {
             set_last_error(format!("job not found: {}", msg));
             -2
@@ -831,7 +787,7 @@ pub unsafe extern "C" fn mesh_job_proxy_status(
     let inner = handle.inner.clone();
     let result = jobs_runtime().block_on(async move { inner.status().await });
     match result {
-        Ok(job) => write_out_string(out_job_json, job_to_json_string(job)),
+        Ok(job) => write_out_json(out_job_json, job_to_json_string(job)),
         Err(e) => jobs_set_err(e),
     }
 }
@@ -976,7 +932,7 @@ pub unsafe extern "C" fn mesh_job_proxy_send_event(
     let inner = handle.inner.clone();
     let result = jobs_runtime().block_on(async move { inner.send_event(event_type, payload).await });
     match result {
-        Ok(receipt) => write_out_string(out_receipt_json, job_event_receipt_to_json_string(receipt)),
+        Ok(receipt) => write_out_json(out_receipt_json, job_event_receipt_to_json_string(receipt)),
         Err(JobError::JobTerminal(msg)) => {
             set_last_error(format!("job is terminal: {}", msg));
             -3
@@ -1104,19 +1060,16 @@ pub unsafe extern "C" fn mesh_job_proxy_list_events(
         Ok((events, next_after)) => {
             // Build the envelope shape consumed by Java's
             // EventSubscription. snake_case `next_after` keeps the wire
-            // shape consistent with the registry response.
-            let events_values: Vec<serde_json::Value> = events
-                .into_iter()
-                .map(|ev| serde_json::json!({
-                    "job_id": ev.job_id,
-                    "seq": ev.seq,
-                    "type": ev.event_type,
-                    "payload": ev.payload.unwrap_or(serde_json::Value::Null),
-                    "trace_context": ev.trace_context.unwrap_or(serde_json::Value::Null),
-                    "posted_by": ev.posted_by,
-                    "created_at": ev.created_at,
-                }))
-                .collect();
+            // shape consistent with the registry response. Each event is
+            // serialized via serde (single source of truth for the wire
+            // shape — `JobEvent` derives Serialize).
+            let events_values = match serde_json::to_value(&events) {
+                Ok(v) => v,
+                Err(e) => {
+                    set_last_error(format!("failed to serialize events: {}", e));
+                    return -3;
+                }
+            };
             let envelope = serde_json::json!({
                 "events": events_values,
                 "next_after": next_after,
