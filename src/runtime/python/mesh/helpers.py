@@ -1275,6 +1275,92 @@ async def _execute_tool_calls_for_iteration(
     return tool_messages, accumulated_images
 
 
+def _build_iteration_completion_args(
+    effective_model: str,
+    current_messages: list,
+    tools: list,
+    litellm_kwargs: dict,
+    model_params: dict,
+    *,
+    stream: bool = False,
+) -> dict[str, Any]:
+    """Build the per-iteration ``completion_args`` dict.
+
+    Shared by the buffered (:func:`_provider_agentic_loop`) and streaming
+    (:func:`_provider_agentic_loop_stream`) agentic loops. Reproduces the
+    base arg set (model/messages/tools + decorator kwargs + model_params)
+    that both paths construct identically. When ``stream`` is True the
+    streaming-only flags (``stream``/``stream_options`` with
+    ``include_usage``) are layered on top, preserving any caller-provided
+    ``stream_options`` exactly as the streaming loop did inline.
+    """
+    completion_args: dict[str, Any] = {
+        "model": effective_model,
+        "messages": current_messages,
+        "tools": tools,
+        **litellm_kwargs,
+    }
+    if model_params:
+        completion_args.update(model_params)
+
+    if stream:
+        existing_stream_opts = completion_args.get("stream_options") or {}
+        completion_args["stream"] = True
+        completion_args["stream_options"] = {
+            **existing_stream_opts,
+            "include_usage": True,
+        }
+
+    return completion_args
+
+
+async def _dispatch_completion(
+    native_handler: Any,
+    completion_args: dict[str, Any],
+    effective_model: str,
+    litellm_module: Any,
+    *,
+    stream: bool,
+    native_exclude_keys: tuple[str, ...],
+) -> Any:
+    """Dispatch one completion call, native-SDK or LiteLLM.
+
+    Routes through the vendor's native SDK adapter when one is installed
+    (issue #834), otherwise falls back to LiteLLM. ``native_exclude_keys``
+    is the set of ``completion_args`` keys NOT forwarded to the native
+    adapter (the native API takes ``model``/``api_key``/``base_url`` as
+    explicit kwargs, and the streaming path additionally excludes
+    ``stream``/``stream_options``). The buffered path uses the buffered
+    native/LiteLLM calls; the streaming path uses the streaming variants.
+
+    Returns the buffered response object (``stream=False``) or the stream
+    async iterator (``stream=True``), matching what each loop inlined.
+    """
+    if native_handler.has_native():
+        _native_args = {
+            k: v
+            for k, v in completion_args.items()
+            if k not in native_exclude_keys
+        }
+        if stream:
+            return await native_handler.complete_stream(
+                _native_args,
+                model=effective_model,
+                api_key=completion_args.get("api_key"),
+                base_url=completion_args.get("base_url"),
+            )
+        return await native_handler.complete(
+            _native_args,
+            model=effective_model,
+            api_key=completion_args.get("api_key"),
+            base_url=completion_args.get("base_url"),
+        )
+
+    if stream:
+        return await litellm_module.acompletion(**completion_args)
+    return await asyncio.to_thread(litellm_module.completion, **completion_args)
+
+
 async def _provider_agentic_loop(
     effective_model: str,
     messages: list,
@@ -1355,14 +1441,13 @@ async def _provider_agentic_loop(
     while iteration < max_iterations:
         iteration += 1
 
-        completion_args: dict[str, Any] = {
-            "model": effective_model,
-            "messages": current_messages,
-            "tools": tools,
-            **litellm_kwargs,
-        }
-        if model_params:
-            completion_args.update(model_params)
+        completion_args = _build_iteration_completion_args(
+            effective_model,
+            current_messages,
+            tools,
+            litellm_kwargs,
+            model_params,
+        )
 
         # Native dispatch (issue #834, PR 1): route through the vendor's
         # native SDK adapter by default when the SDK is installed.
@@ -1387,22 +1472,14 @@ async def _provider_agentic_loop(
             # would be misread as a caller override and trigger a spurious WARN.
             tools = completion_args["tools"]
 
-        if _native_handler.has_native():
-            _native_args = {
-                k: v
-                for k, v in completion_args.items()
-                if k not in ("model", "api_key", "base_url")
-            }
-            response = await _native_handler.complete(
-                _native_args,
-                model=effective_model,
-                api_key=completion_args.get("api_key"),
-                base_url=completion_args.get("base_url"),
-            )
-        else:
-            response = await asyncio.to_thread(
-                litellm.completion, **completion_args
-            )
+        response = await _dispatch_completion(
+            _native_handler,
+            completion_args,
+            effective_model,
+            litellm,
+            stream=False,
+            native_exclude_keys=("model", "api_key", "base_url"),
+        )
         message = response.choices[0].message
 
         # Synthetic-format-tool recognition (native path, structured output).
@@ -1792,6 +1869,11 @@ async def _provider_agentic_loop_stream(
     # the streaming path needs an equivalent path that handles mid-stream
     # tool_use accumulation, abandons the in-flight stream cleanly, and
     # re-issues the corrective call without breaking partial-text yields.
+    # The corrective call should reuse the shared dispatch/args helpers
+    # (:func:`_build_iteration_completion_args` /
+    # :func:`_dispatch_completion`) to build and route the retry request the
+    # same way the main iteration does — see the buffered loop's
+    # ``retry_template`` construction for the keys to strip.
     # Tracking issue: https://github.com/dhyanraj/mcp-mesh/issues/961.
     import litellm
 
@@ -1840,21 +1922,14 @@ async def _provider_agentic_loop_stream(
     while iteration < max_iterations:
         iteration += 1
 
-        completion_args: dict[str, Any] = {
-            "model": effective_model,
-            "messages": current_messages,
-            "tools": tools,
-            **litellm_kwargs,
-        }
-        if model_params:
-            completion_args.update(model_params)
-
-        existing_stream_opts = completion_args.get("stream_options") or {}
-        completion_args["stream"] = True
-        completion_args["stream_options"] = {
-            **existing_stream_opts,
-            "include_usage": True,
-        }
+        completion_args = _build_iteration_completion_args(
+            effective_model,
+            current_messages,
+            tools,
+            litellm_kwargs,
+            model_params,
+            stream=True,
+        )
 
         # Native dispatch (issue #834, PR 1): route through the vendor's
         # native SDK streaming adapter by default when the SDK is installed.
@@ -1876,27 +1951,20 @@ async def _provider_agentic_loop_stream(
             )
             tools = completion_args["tools"]
 
-        if _native_handler.has_native():
-            _native_args = {
-                k: v
-                for k, v in completion_args.items()
-                if k
-                not in (
-                    "model",
-                    "api_key",
-                    "base_url",
-                    "stream",
-                    "stream_options",
-                )
-            }
-            stream_iter = await _native_handler.complete_stream(
-                _native_args,
-                model=effective_model,
-                api_key=completion_args.get("api_key"),
-                base_url=completion_args.get("base_url"),
-            )
-        else:
-            stream_iter = await litellm.acompletion(**completion_args)
+        stream_iter = await _dispatch_completion(
+            _native_handler,
+            completion_args,
+            effective_model,
+            litellm,
+            stream=True,
+            native_exclude_keys=(
+                "model",
+                "api_key",
+                "base_url",
+                "stream",
+                "stream_options",
+            ),
+        )
 
         chunks: list[Any] = []
         saw_tool_call = False
