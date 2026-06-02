@@ -200,10 +200,11 @@ func (pm *ProcessManager) StartRegistryProcess(port int, dbPath string, metadata
 }
 
 // findBinary searches localPaths in order, then falls back to PATH for each
-// name in pathNames. Returns the first match or an empty string if none found.
+// name in pathNames. A local path matches only if it is a regular, executable
+// file. Returns the first match or an empty string if none found.
 func findBinary(localPaths []string, pathNames ...string) string {
 	for _, path := range localPaths {
-		if _, err := os.Stat(path); err == nil {
+		if fi, err := os.Stat(path); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0111 != 0 {
 			return path
 		}
 	}
