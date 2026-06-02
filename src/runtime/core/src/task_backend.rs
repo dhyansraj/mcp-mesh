@@ -227,7 +227,7 @@ pub struct JobEventPostRequest {
 
 /// Response from `POST /jobs/{id}/events`. `seq` is the server-assigned
 /// per-job monotonic sequence number; `created_at` is Unix epoch seconds.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobEventReceipt {
     pub job_id: String,
     pub seq: i64,
@@ -266,7 +266,7 @@ pub struct JobEventListResponse {
 }
 
 /// Full job record (`Job` schema).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
     pub id: String,
     pub capability: String,
@@ -672,6 +672,43 @@ impl TaskBackend for RegistryHttpBackend {
 }
 
 // =============================================================================
+// Shared helpers
+// =============================================================================
+
+/// Validate a caller-supplied `timeout_secs` (`f64`) and convert it into an
+/// `Option<Duration>`. Shared by the three binding-layer `parse_*timeout_secs`
+/// helpers (`jobs_py.rs`, `jobs_napi.rs`, `jobs_ffi.rs`) so the
+/// NaN/Inf/negative/overflow policy lives in one place.
+///
+/// `Duration::from_secs_f64` panics on negative, NaN, infinite, or
+/// out-of-range inputs; this helper traps those and returns a clean `Err`
+/// string instead so a typo'd literal can't crash the runtime. The final
+/// conversion uses the fallible `try_from_secs_f64` so finite-but-huge values
+/// (e.g. `f64::MAX`) reject cleanly instead of panicking.
+///
+/// `negative_is_none` selects the policy for `secs < 0.0`: the C ABI uses a
+/// negative sentinel to express `Option<Duration>::None` over a boundary that
+/// cannot pass `null` doubles (`true`), whereas the PyO3 / napi helpers treat
+/// negatives as errors (`false`).
+pub(crate) fn validate_secs_to_duration(
+    secs: f64,
+    negative_is_none: bool,
+) -> Result<Option<Duration>, String> {
+    if secs.is_nan() || secs.is_infinite() {
+        return Err(format!("timeout_secs must be a finite number, got {secs}"));
+    }
+    if secs < 0.0 {
+        if negative_is_none {
+            return Ok(None);
+        }
+        return Err(format!("timeout_secs must be non-negative, got {secs}"));
+    }
+    Duration::try_from_secs_f64(secs)
+        .map(Some)
+        .map_err(|e| format!("timeout_secs out of range: {e} (got {secs})"))
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -841,5 +878,207 @@ mod tests {
         let resp: JobEventListResponse = serde_json::from_str(s).unwrap();
         assert!(resp.events.is_empty());
         assert_eq!(resp.next_after, 0);
+    }
+
+    // -------------------------------------------------------------------------
+    // Wire-shape byte-identity guard for the binding-layer serializers.
+    //
+    // The Python / Node(napi) / FFI bindings all route `Job` / `JobEvent` /
+    // `JobEventReceipt` through serde (`to_value` / `to_string`). These tests
+    // pin the serialized shape so a future field/attr change that would alter
+    // the dict/JS-object/JSON the SDKs parse fails here first.
+    // -------------------------------------------------------------------------
+
+    fn full_job() -> Job {
+        Job {
+            id: "j-1".into(),
+            capability: "plan_trip".into(),
+            owner_instance_id: Some("inst-7".into()),
+            status: JobStatus::Working,
+            progress: Some(0.5),
+            progress_message: Some("halfway".into()),
+            result: Some(serde_json::json!({"ok": true})),
+            error: Some("boom".into()),
+            submitted_payload: serde_json::json!({"q": 1}),
+            attempt_count: 2,
+            max_retries: 3,
+            max_duration: Some(120),
+            total_deadline: Some(1_730_000_500),
+            lease_expires_at: Some(1_730_000_100),
+            last_heartbeat_at: Some(1_730_000_050),
+            submitted_at: 1_730_000_000,
+            submitted_by: "client-1".into(),
+        }
+    }
+
+    const JOB_KEYS: [&str; 17] = [
+        "id",
+        "capability",
+        "owner_instance_id",
+        "status",
+        "progress",
+        "progress_message",
+        "result",
+        "error",
+        "submitted_payload",
+        "attempt_count",
+        "max_retries",
+        "max_duration",
+        "total_deadline",
+        "lease_expires_at",
+        "last_heartbeat_at",
+        "submitted_at",
+        "submitted_by",
+    ];
+
+    #[test]
+    fn job_serializes_full_shape() {
+        let v = serde_json::to_value(&full_job()).unwrap();
+        let obj = v.as_object().expect("Job serializes to a JSON object");
+        assert_eq!(obj.len(), JOB_KEYS.len());
+        for k in JOB_KEYS {
+            assert!(obj.contains_key(k), "missing key: {k}");
+        }
+        assert_eq!(obj["id"], serde_json::json!("j-1"));
+        assert_eq!(obj["capability"], serde_json::json!("plan_trip"));
+        assert_eq!(obj["owner_instance_id"], serde_json::json!("inst-7"));
+        assert_eq!(obj["status"], serde_json::json!("working"));
+        assert_eq!(obj["progress"], serde_json::json!(0.5));
+        assert_eq!(obj["progress_message"], serde_json::json!("halfway"));
+        assert_eq!(obj["result"], serde_json::json!({"ok": true}));
+        assert_eq!(obj["error"], serde_json::json!("boom"));
+        assert_eq!(obj["submitted_payload"], serde_json::json!({"q": 1}));
+        assert_eq!(obj["attempt_count"], serde_json::json!(2));
+        assert_eq!(obj["max_retries"], serde_json::json!(3));
+        assert_eq!(obj["max_duration"], serde_json::json!(120));
+        assert_eq!(obj["total_deadline"], serde_json::json!(1_730_000_500i64));
+        assert_eq!(obj["lease_expires_at"], serde_json::json!(1_730_000_100i64));
+        assert_eq!(obj["last_heartbeat_at"], serde_json::json!(1_730_000_050i64));
+        assert_eq!(obj["submitted_at"], serde_json::json!(1_730_000_000i64));
+        assert_eq!(obj["submitted_by"], serde_json::json!("client-1"));
+    }
+
+    #[test]
+    fn job_serializes_minimal_shape() {
+        // All Options None: every key MUST still be present (the Python SDK
+        // indexes strictly, e.g. `snapshot["progress"]`); the Option fields
+        // serialize to `null` (NO `skip_serializing_if`).
+        let job = Job {
+            id: "j-2".into(),
+            capability: "cap".into(),
+            owner_instance_id: None,
+            status: JobStatus::Completed,
+            progress: None,
+            progress_message: None,
+            result: None,
+            error: None,
+            submitted_payload: serde_json::json!({}),
+            attempt_count: 0,
+            max_retries: 0,
+            max_duration: None,
+            total_deadline: None,
+            lease_expires_at: None,
+            last_heartbeat_at: None,
+            submitted_at: 1,
+            submitted_by: "c".into(),
+        };
+        let v = serde_json::to_value(&job).unwrap();
+        let obj = v.as_object().unwrap();
+        assert_eq!(obj.len(), JOB_KEYS.len());
+        for k in JOB_KEYS {
+            assert!(obj.contains_key(k), "missing key: {k}");
+        }
+        // The keep-nulls guarantee: present-as-null, not omitted.
+        for k in [
+            "owner_instance_id",
+            "progress",
+            "progress_message",
+            "result",
+            "error",
+            "max_duration",
+            "total_deadline",
+            "lease_expires_at",
+            "last_heartbeat_at",
+        ] {
+            assert_eq!(obj[k], serde_json::Value::Null, "key {k} should be null");
+        }
+        assert_eq!(obj["status"], serde_json::json!("completed"));
+    }
+
+    #[test]
+    fn job_event_serializes_shape() {
+        // Key is `type` (renamed), not `event_type`. payload/trace_context
+        // present-as-null when None.
+        let ev = JobEvent {
+            job_id: "j-1".into(),
+            seq: 7,
+            event_type: "extend_deadline".into(),
+            payload: None,
+            trace_context: None,
+            posted_by: None,
+            created_at: 1_729_999_500,
+        };
+        let v = serde_json::to_value(&ev).unwrap();
+        let obj = v.as_object().unwrap();
+        assert_eq!(obj.len(), 7);
+        assert!(obj.contains_key("type"));
+        assert!(!obj.contains_key("event_type"));
+        assert_eq!(obj["type"], serde_json::json!("extend_deadline"));
+        assert_eq!(obj["job_id"], serde_json::json!("j-1"));
+        assert_eq!(obj["seq"], serde_json::json!(7));
+        assert_eq!(obj["payload"], serde_json::Value::Null);
+        assert_eq!(obj["trace_context"], serde_json::Value::Null);
+        assert_eq!(obj["posted_by"], serde_json::Value::Null);
+        assert_eq!(obj["created_at"], serde_json::json!(1_729_999_500i64));
+    }
+
+    #[test]
+    fn job_event_receipt_serializes_shape() {
+        let receipt = JobEventReceipt {
+            job_id: "j-1".into(),
+            seq: 3,
+            created_at: 1_729_999_000,
+        };
+        let v = serde_json::to_value(&receipt).unwrap();
+        let obj = v.as_object().unwrap();
+        assert_eq!(obj.len(), 3);
+        assert_eq!(obj["job_id"], serde_json::json!("j-1"));
+        assert_eq!(obj["seq"], serde_json::json!(3));
+        assert_eq!(obj["created_at"], serde_json::json!(1_729_999_000i64));
+    }
+
+    #[test]
+    fn progress_f32_roundtrips() {
+        let mut job = full_job();
+        job.progress = Some(0.5);
+        let v = serde_json::to_value(&job).unwrap();
+        assert_eq!(v["progress"], serde_json::json!(0.5));
+        assert_eq!(v["progress"].as_f64(), Some(0.5));
+    }
+
+    #[test]
+    fn validate_secs_to_duration_edge_cases() {
+        assert_eq!(
+            validate_secs_to_duration(0.0, false).unwrap(),
+            Some(Duration::from_secs(0))
+        );
+        assert_eq!(
+            validate_secs_to_duration(1.5, false).unwrap(),
+            Some(Duration::from_millis(1500))
+        );
+        // Negative: errors when negative_is_none=false, None when true.
+        assert!(validate_secs_to_duration(-1.0, false).is_err());
+        assert_eq!(validate_secs_to_duration(-1.0, true).unwrap(), None);
+        // NaN / Inf always error regardless of negative policy.
+        assert!(validate_secs_to_duration(f64::NAN, false).is_err());
+        assert!(validate_secs_to_duration(f64::NAN, true).is_err());
+        assert!(validate_secs_to_duration(f64::INFINITY, false).is_err());
+        assert!(validate_secs_to_duration(f64::INFINITY, true).is_err());
+        // Finite-but-huge overflows Duration; message must say "out of range".
+        let err = validate_secs_to_duration(f64::MAX, false).expect_err("overflow");
+        assert!(
+            err.contains("out of range"),
+            "expected 'out of range', got: {err}"
+        );
     }
 }

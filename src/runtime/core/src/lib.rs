@@ -399,7 +399,7 @@ fn parse_sse_response_to_dict_py(py: Python<'_>, response_text: &str) -> PyResul
 }
 
 #[cfg(feature = "python")]
-fn json_value_to_pyobject(py: Python<'_>, val: &serde_json::Value) -> PyResult<Py<PyAny>> {
+pub(crate) fn json_value_to_pyobject(py: Python<'_>, val: &serde_json::Value) -> PyResult<Py<PyAny>> {
     use pyo3::types::{PyDict, PyList};
     match val {
         serde_json::Value::Object(map) => {

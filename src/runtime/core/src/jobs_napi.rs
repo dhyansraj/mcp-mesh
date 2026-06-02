@@ -40,7 +40,7 @@ use crate::jobs::{
     BatchingHandle, JobController, JobError, JobProxy, SubmitJobArgs,
 };
 use crate::task_backend::{
-    Job, JobEvent, JobEventReceipt, JobStatus, RegistryHttpBackend, TaskBackend,
+    Job, JobEvent, JobEventReceipt, RegistryHttpBackend, TaskBackend,
 };
 
 // =============================================================================
@@ -67,12 +67,8 @@ fn backend_from_url(registry_url: &str) -> napi::Result<Arc<dyn TaskBackend>> {
 fn parse_timeout_secs(secs: Option<f64>) -> napi::Result<Option<Duration>> {
     match secs {
         None => Ok(None),
-        Some(s) if s.is_nan() || s.is_infinite() || s < 0.0 => Err(Error::from_reason(
-            format!("timeoutSecs must be non-negative and finite, got {s}"),
-        )),
-        Some(s) => Duration::try_from_secs_f64(s)
-            .map(Some)
-            .map_err(|e| Error::from_reason(format!("timeoutSecs out of range: {e} (got {s})"))),
+        Some(s) => crate::task_backend::validate_secs_to_duration(s, false)
+            .map_err(Error::from_reason),
     }
 }
 
@@ -110,61 +106,21 @@ fn job_error_to_napi(err: JobError) -> Error {
 /// mirrors the OpenAPI `JobEvent` schema and the Python `job_event_to_pydict`
 /// helper field-for-field so cross-runtime test fixtures can read either.
 fn job_event_to_json(ev: JobEvent) -> serde_json::Value {
-    serde_json::json!({
-        "job_id": ev.job_id,
-        "seq": ev.seq,
-        "type": ev.event_type,
-        "payload": ev.payload.unwrap_or(serde_json::Value::Null),
-        "trace_context": ev.trace_context.unwrap_or(serde_json::Value::Null),
-        "posted_by": ev.posted_by,
-        "created_at": ev.created_at,
-    })
+    serde_json::to_value(&ev).unwrap_or(serde_json::Value::Null)
 }
 
 /// Convert a [`JobEventReceipt`] into a JSON value the TS layer consumes
 /// as a plain JS object. Mirrors `JobEventPostResponse` field-for-field
 /// (= Python's `job_event_receipt_to_pydict`).
 fn job_event_receipt_to_json(receipt: JobEventReceipt) -> serde_json::Value {
-    serde_json::json!({
-        "job_id": receipt.job_id,
-        "seq": receipt.seq,
-        "created_at": receipt.created_at,
-    })
+    serde_json::to_value(&receipt).unwrap_or(serde_json::Value::Null)
 }
 
 /// Convert a [`Job`] into a JSON value the TS layer can `JSON.parse`-style
 /// consume directly. napi-rs's `serde-json` integration converts to a JS
 /// object on the boundary so the SDK doesn't need a separate parse step.
 fn job_to_json(job: Job) -> serde_json::Value {
-    serde_json::json!({
-        "id": job.id,
-        "capability": job.capability,
-        "owner_instance_id": job.owner_instance_id,
-        "status": job_status_to_str(job.status),
-        "progress": job.progress,
-        "progress_message": job.progress_message,
-        "result": job.result.unwrap_or(serde_json::Value::Null),
-        "error": job.error,
-        "submitted_payload": job.submitted_payload,
-        "attempt_count": job.attempt_count,
-        "max_retries": job.max_retries,
-        "max_duration": job.max_duration,
-        "total_deadline": job.total_deadline,
-        "lease_expires_at": job.lease_expires_at,
-        "last_heartbeat_at": job.last_heartbeat_at,
-        "submitted_at": job.submitted_at,
-        "submitted_by": job.submitted_by,
-    })
-}
-
-fn job_status_to_str(s: JobStatus) -> &'static str {
-    match s {
-        JobStatus::Working => "working",
-        JobStatus::InputRequired => "input_required",
-        JobStatus::Completed => "completed",
-        JobStatus::Failed => "failed",
-        JobStatus::Cancelled => "cancelled",
-    }
+    serde_json::to_value(&job).unwrap_or(serde_json::Value::Null)
 }
 
 // =============================================================================
