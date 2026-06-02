@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -269,28 +268,6 @@ func (pm *ProcessManager) isProcessRunning(info *ProcessInfo) bool {
 	return true
 }
 
-// StartHealthMonitoring starts background health monitoring
-func (pm *ProcessManager) StartHealthMonitoring() {
-	if !pm.monitorPolicy.Enabled {
-		return
-	}
-
-	pm.monitoringTicker = time.NewTicker(pm.monitorPolicy.CheckInterval)
-
-	go func() {
-		for {
-			select {
-			case <-pm.monitoringTicker.C:
-				pm.performHealthChecks()
-			case <-pm.shutdownChan:
-				return
-			}
-		}
-	}()
-
-	pm.logger.Printf("Started health monitoring with %v interval", pm.monitorPolicy.CheckInterval)
-}
-
 // StopHealthMonitoring stops background health monitoring
 func (pm *ProcessManager) StopHealthMonitoring() {
 	if pm.monitoringTicker != nil {
@@ -300,83 +277,6 @@ func (pm *ProcessManager) StopHealthMonitoring() {
 
 	close(pm.shutdownChan)
 	pm.logger.Println("Stopped health monitoring")
-}
-
-// performHealthChecks checks the health of all managed processes
-func (pm *ProcessManager) performHealthChecks() {
-	pm.mutex.Lock()
-	defer pm.mutex.Unlock()
-
-	for name, info := range pm.processes {
-		pm.checkProcessHealth(name, info)
-	}
-
-	// Save state after health checks
-	pm.saveState()
-}
-
-// checkProcessHealth performs health check for a single process
-func (pm *ProcessManager) checkProcessHealth(name string, info *ProcessInfo) {
-	// Check if process is still running
-	if !pm.isProcessRunning(info) {
-		pm.logger.Printf("Process %s is no longer running", name)
-		info.Status = "stopped"
-		info.HealthCheck = "failed"
-		info.ConsecutiveFails++
-		return
-	}
-
-	// Perform registry health check for agents
-	if info.ServiceType == "agent" {
-		if pm.checkAgentRegistryHealth(name) {
-			info.HealthCheck = "healthy"
-			info.LastSeen = time.Now()
-			info.ConsecutiveFails = 0
-		} else {
-			info.HealthCheck = "unhealthy"
-			info.ConsecutiveFails++
-			pm.logger.Printf("Agent %s failed registry health check", name)
-		}
-	} else {
-		// For non-agent processes, just check if running
-		info.HealthCheck = "healthy"
-		info.LastSeen = time.Now()
-		info.ConsecutiveFails = 0
-	}
-}
-
-// checkAgentRegistryHealth checks if an agent is healthy in the registry
-func (pm *ProcessManager) checkAgentRegistryHealth(agentName string) bool {
-	registryURL := pm.config.GetRegistryURL()
-
-	client := newTLSSkipVerifyClient()
-	resp, err := client.Get(registryURL + "/agents")
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-
-	var result struct {
-		Agents []struct {
-			Name     string    `json:"name"`
-			Status   string    `json:"status"`
-			LastSeen time.Time `json:"last_seen"`
-		} `json:"agents"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return false
-	}
-
-	// Check if agent is registered and recently active
-	for _, agent := range result.Agents {
-		if agent.Name == agentName {
-			return agent.Status == "active" &&
-				time.Since(agent.LastSeen) < 2*time.Minute
-		}
-	}
-
-	return false
 }
 
 // saveState persists the current process state to disk
@@ -430,49 +330,5 @@ func (pm *ProcessManager) loadState() error {
 	}
 
 	pm.logger.Printf("Loaded state for %d processes", len(pm.processes))
-	return nil
-}
-
-// restartProcessInternal handles internal process restart logic
-func (pm *ProcessManager) restartProcessInternal(name string, info *ProcessInfo) error {
-	// Stop existing process if still running
-	if info.Process != nil {
-		info.Process.Signal(os.Interrupt)
-		info.Process.Wait()
-	}
-
-	// Start new process
-	cmd := exec.Command("python", info.Command)
-	cmd.Dir = info.WorkingDir
-
-	// Set up process group for proper signal handling (Unix only)
-	platformManager := NewPlatformProcessManager()
-	platformManager.setProcessGroup(cmd)
-
-	// Set environment variables
-	env := os.Environ()
-	for key, value := range info.Environment {
-		env = append(env, fmt.Sprintf("%s=%s", key, value))
-	}
-	cmd.Env = env
-
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to restart process %s: %w", name, err)
-	}
-
-	// Update process info
-	info.Process = cmd.Process
-	info.PID = cmd.Process.Pid
-	info.StartTime = time.Now()
-	info.Status = "running"
-	info.Restarts++
-	info.LastRestart = time.Now()
-	info.LastSeen = time.Now()
-	info.ConsecutiveFails = 0
-
-	pm.logger.Printf("Process %s restarted (PID: %d, Total restarts: %d)", name, info.PID, info.Restarts)
 	return nil
 }

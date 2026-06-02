@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -279,44 +278,19 @@ func killWatcherForAgent(agent string, timeout time.Duration, quiet bool) {
 
 // killProcessByPID is a lightweight TERM-then-KILL helper for PIDs that don't
 // have a corresponding <name>.pid file in the lifecycle layer (specifically
-// watcher meshctl processes). Returns true on confirmed death (including
-// zombie state — see lifecycle.KillVerifyAndCleanup commentary).
+// watcher meshctl processes). It delegates to lifecycle.KillPIDVerify so the
+// kill inherits the zombie-aware death check (a SIGKILLed process that lingers
+// as a zombie is treated as dead) and the PID<=1 broadcast guard. Returns true
+// on confirmed death.
 func killProcessByPID(pid int, timeout time.Duration) bool {
-	if pid <= 1 || !lifecycle.IsAlive(pid) {
-		// pid <= 0: invalid. pid == 1: kill(-1, ...) is POSIX broadcast to
-		// every process the user can signal — refuse rather than translate a
-		// corrupted/tampered <agent>.watcher.pid into a session-wide kill.
-		// Symmetric with the lifecycle.IsAliveOrGroupAlive / signalGroupOrPID
-		// guards on the agent-PID path.
-		if pid == 1 {
-			fmt.Fprintf(os.Stderr, "warning: refusing to signal PID 1 (corrupt watcher.pid?) — kill(-1, ...) would broadcast\n")
-		}
-		return true
+	if pid == 1 {
+		// pid == 1: kill(-1, ...) is POSIX broadcast to every process the user
+		// can signal — warn rather than translate a corrupted/tampered
+		// <agent>.watcher.pid into a session-wide kill. lifecycle.KillPIDVerify
+		// also refuses pid <= 1, but it returns silently; preserve the warning.
+		fmt.Fprintf(os.Stderr, "warning: refusing to signal PID 1 (corrupt watcher.pid?) — kill(-1, ...) would broadcast\n")
 	}
-	// SIGTERM the process group first (the watcher meshctl was started with
-	// Setpgid in forkToBackground, so its group includes the watcher's
-	// agent grandchild). Group signal also helps if the watcher isn't
-	// process-group leader for some reason.
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
-	_ = syscall.Kill(pid, syscall.SIGTERM)
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if !lifecycle.IsAlive(pid) {
-			return true
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	// Force kill if SIGTERM didn't take.
-	_ = syscall.Kill(-pid, syscall.SIGKILL)
-	_ = syscall.Kill(pid, syscall.SIGKILL)
-	deadline = time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if !lifecycle.IsAlive(pid) {
-			return true
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	return !lifecycle.IsAlive(pid)
+	return lifecycle.KillPIDVerify(pid, timeout)
 }
 
 // stopAllAgents stops every agent on disk in parallel, but never touches the

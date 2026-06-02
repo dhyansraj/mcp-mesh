@@ -270,3 +270,19 @@ func KillVerifyAndCleanup(name string, timeout time.Duration) (killed bool, err 
 	_ = os.Remove(groupPath) // best-effort; agent may not have a .group file (services don't)
 	return true, nil
 }
+
+// KillPIDVerify runs TERM -> poll -> KILL -> poll against a bare PID (no
+// PID-file bookkeeping), reusing signalGroupOrPID + pollUntilDead so callers
+// inherit the zombie-aware death check and the PID<=1 broadcast guard. Returns
+// true on confirmed death.
+func KillPIDVerify(pid int, timeout time.Duration) bool {
+	if pid <= 1 {
+		return true
+	}
+	_ = signalGroupOrPID(pid, syscall.SIGTERM)
+	if pollUntilDead(pid, timeout) {
+		return true
+	}
+	_ = signalGroupOrPID(pid, syscall.SIGKILL)
+	return pollUntilDead(pid, 3*time.Second)
+}
