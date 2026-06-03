@@ -113,19 +113,28 @@ test:
     capture: commission_response
     timeout: 60
 
-  # Allow a moment for the producer's stdout to flush after the cancel
-  # event arrives. The producer's marker line is printed inside the
-  # recvEvent loop and the runtime captures stdout to the agent's log.
-  - name: "Wait for producer log to flush"
-    handler: wait
-    seconds: 3
-
-  - name: "Read producer log for the cancelled_gracefully marker"
+  # Poll the producer's agent log until the cancelled_gracefully marker
+  # appears. The producer's marker line is printed inside the recvEvent
+  # loop and the runtime captures stdout to the agent's log
+  # ASYNCHRONOUSLY — under CI load a fixed wait is sometimes too short
+  # (issue #1134). Poll up to ~30s, capturing the matching marker line
+  # as soon as it is present; on timeout dump logs and fail loud.
+  - name: "Poll producer log for the cancelled_gracefully marker"
     handler: shell
     workdir: /workspace
     command: |
-      meshctl logs long-task-provider-java 2>&1 | tail -200 | grep "\[run_until_cancel\] cancelled_gracefully" || true
+      for i in $(seq 1 30); do
+        if meshctl logs long-task-provider-java 2>&1 | grep -qF "[run_until_cancel] cancelled_gracefully"; then
+          meshctl logs long-task-provider-java 2>&1 | tail -200 | grep "\[run_until_cancel\] cancelled_gracefully"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: producer never logged the cancelled_gracefully marker" >&2
+      meshctl logs long-task-provider-java 2>&1 | tail -80 >&2 || true
+      exit 1
     capture: producer_log
+    timeout: 60
 
   # Independent verification: even if the producer didn't observe the
   # synthetic 'cancelled' event in its recvEvent branch (e.g., because
