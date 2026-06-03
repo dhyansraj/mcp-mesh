@@ -382,6 +382,172 @@ public final class MeshSchemaSupport {
     }
 
     /**
+     * Inline every {@code $ref} in a victools-generated schema, returning a
+     * self-contained schema with the root {@code $defs}/{@code definitions} removed.
+     *
+     * <p>The shared {@link #generator()} emits {@code DEFINITIONS_FOR_ALL_OBJECTS}
+     * + {@code NULLABLE_ALWAYS_AS_ANYOF}, i.e. {@code $defs} + {@code $ref} +
+     * {@code anyOf}. Some LLM providers (notably Anthropic hint mode) need a
+     * fully self-contained schema with no {@code $ref} indirection, so this
+     * resolves and inlines each reference in place.
+     *
+     * <p>Behaviour:
+     * <ul>
+     *   <li>Resolves {@code "#/$defs/<Name>"} and {@code "#/definitions/<Name>"}
+     *       pointers against the root {@code $defs}/{@code definitions} map.</li>
+     *   <li>Recurses through {@code properties}, {@code items} (object or array),
+     *       {@code additionalProperties} (when a schema object) and the
+     *       {@code anyOf}/{@code oneOf}/{@code allOf} arrays.</li>
+     *   <li>Deep-copies each resolved definition per inline site, so multiple
+     *       references to the same def never share mutable state.</li>
+     *   <li>Guards cycles: a {@code $ref} that targets a name already on the
+     *       expansion stack collapses to a bounded {@code {"type":"object"}}
+     *       placeholder instead of recursing forever.</li>
+     *   <li>A {@code $ref} node with sibling keys (e.g.
+     *       {@code {"$ref":"...","description":"..."}}) inlines the resolved
+     *       definition, then overlays the sibling keys (excluding {@code $ref}).</li>
+     *   <li>Preserves all other keys verbatim and drops the root
+     *       {@code $defs}/{@code definitions}.</li>
+     * </ul>
+     *
+     * <p>Pure Java; null-safe. {@code null} in returns {@code null} out.
+     *
+     * @param schema victools schema as a Map (possibly null)
+     * @return a self-contained schema Map with refs inlined, or {@code null}
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> inlineRefs(Map<String, Object> schema) {
+        if (schema == null) {
+            return null;
+        }
+        Map<String, Object> defs = new java.util.LinkedHashMap<>();
+        Object dollarDefs = schema.get("$defs");
+        if (dollarDefs instanceof Map<?, ?> m) {
+            defs.putAll((Map<String, Object>) m);
+        }
+        Object plainDefs = schema.get("definitions");
+        if (plainDefs instanceof Map<?, ?> m) {
+            defs.putAll((Map<String, Object>) m);
+        }
+
+        Map<String, Object> result =
+            (Map<String, Object>) inlineNode(schema, defs, new java.util.LinkedHashSet<>());
+        result.remove("$defs");
+        result.remove("definitions");
+        return result;
+    }
+
+    /**
+     * Recursively inline refs within a single JSON-schema node.
+     *
+     * @param node    the node to process (any JSON value)
+     * @param defs    flattened root definition map ($defs + definitions)
+     * @param stack   names currently being expanded (cycle guard)
+     * @return a new, ref-free node (deep copies on inline)
+     */
+    @SuppressWarnings("unchecked")
+    private static Object inlineNode(Object node, Map<String, Object> defs, java.util.Set<String> stack) {
+        if (node instanceof Map<?, ?> mapNode) {
+            Map<String, Object> obj = (Map<String, Object>) mapNode;
+            Object refVal = obj.get("$ref");
+            if (refVal instanceof String ref) {
+                String name = refDefName(ref);
+                if (name != null) {
+                    boolean cycle = stack.contains(name);
+                    boolean dangling = !defs.containsKey(name);
+                    if (cycle || dangling) {
+                        // Cycle (self/recursive type) or dangling ref: emit a
+                        // bounded placeholder so inlining always terminates.
+                        // Recursive response models are rare; termination wins
+                        // over preserving unbounded nesting depth here.
+                        // A dangling ref is a real defect (the def map is missing
+                        // the target) — warn loudly; an expected cycle stays silent.
+                        if (dangling && !cycle) {
+                            log.warn("inlineRefs: unresolved $ref '{}' (no matching def) "
+                                + "— emitting bounded {{\"type\":\"object\"}} placeholder", ref);
+                        }
+                        Map<String, Object> placeholder = new java.util.LinkedHashMap<>();
+                        placeholder.put("type", "object");
+                        // Overlay any sibling keys (description, etc.).
+                        for (Map.Entry<String, Object> e : obj.entrySet()) {
+                            if (!"$ref".equals(e.getKey())) {
+                                placeholder.put(e.getKey(), deepCopy(e.getValue()));
+                            }
+                        }
+                        return placeholder;
+                    }
+                    stack.add(name);
+                    Object resolved = inlineNode(defs.get(name), defs, stack);
+                    stack.remove(name);
+                    // Overlay sibling keys (excluding $ref) on top of the def.
+                    // `resolved`/`merged` is always a freshly-built tree from
+                    // inlineNode (never a shared def), so the in-place put is safe.
+                    if (resolved instanceof Map) {
+                        Map<String, Object> merged = (Map<String, Object>) resolved;
+                        for (Map.Entry<String, Object> e : obj.entrySet()) {
+                            if (!"$ref".equals(e.getKey())) {
+                                merged.put(e.getKey(), deepCopy(e.getValue()));
+                            }
+                        }
+                        return merged;
+                    }
+                    return resolved;
+                }
+                // Unrecognized ref form — fall through and copy verbatim.
+            }
+
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+            for (Map.Entry<String, Object> e : obj.entrySet()) {
+                out.put(e.getKey(), inlineNode(e.getValue(), defs, stack));
+            }
+            return out;
+        }
+        if (node instanceof List<?> listNode) {
+            List<Object> out = new ArrayList<>(listNode.size());
+            for (Object item : listNode) {
+                out.add(inlineNode(item, defs, stack));
+            }
+            return out;
+        }
+        // Scalars are immutable — return as-is.
+        return node;
+    }
+
+    /** Extract {@code <Name>} from {@code "#/$defs/<Name>"} or {@code "#/definitions/<Name>"}. */
+    private static String refDefName(String ref) {
+        if (ref == null) {
+            return null;
+        }
+        if (ref.startsWith("#/$defs/")) {
+            return ref.substring("#/$defs/".length());
+        }
+        if (ref.startsWith("#/definitions/")) {
+            return ref.substring("#/definitions/".length());
+        }
+        return null;
+    }
+
+    /** Deep-copy a JSON-shaped value (Map/List/scalar) so inline sites never share state. */
+    @SuppressWarnings("unchecked")
+    private static Object deepCopy(Object node) {
+        if (node instanceof Map<?, ?> m) {
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+            for (Map.Entry<String, Object> e : ((Map<String, Object>) m).entrySet()) {
+                out.put(e.getKey(), deepCopy(e.getValue()));
+            }
+            return out;
+        }
+        if (node instanceof List<?> l) {
+            List<Object> out = new ArrayList<>(l.size());
+            for (Object item : l) {
+                out.add(deepCopy(item));
+            }
+            return out;
+        }
+        return node;
+    }
+
+    /**
      * Merge a list of warnings into the target list, ignoring null/empty inputs.
      *
      * @param accumulator the list to merge into

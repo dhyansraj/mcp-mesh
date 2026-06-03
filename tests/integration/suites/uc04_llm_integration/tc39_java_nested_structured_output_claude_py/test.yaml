@@ -1,0 +1,178 @@
+# Test Case: Java NESTED Structured Output -> Py Claude Provider
+# Validates #1112 finding 5: the Java response-model schema now routes through
+# the victools generator + MeshSchemaSupport.inlineRefs, producing a richly-nested
+# output_schema. Every existing Java response model in uc04 is FLAT; this exercises
+# the nested-schema path against a real vendor (Claude) structured-output API.
+#
+# Scenario:
+#   - Start Python claude-provider (provides 'llm' capability)
+#   - Start java-analyst-agent (defines NESTED StructuredReport record)
+#   - Call the analyst's structuredReport tool
+#   - Verify Claude ACCEPTED the nested schema and returned a parseable nested object
+#
+# Response-model shape (com.example.analyst.AnalystAgentApplication):
+#   enum Sentiment { POSITIVE, NEUTRAL, NEGATIVE }
+#   record Finding(String title, String detail, int severity)
+#   record ReportMeta(String author, Sentiment sentiment)        // record-of-record + enum
+#   record StructuredReport(String summary, ReportMeta meta,
+#                           List<Finding> findings, String reviewer)  // nullable reviewer
+
+name: "Java NESTED Structured Output - Java Consumer -> Py Claude"
+description: "Verify Java analyst returns a parseable NESTED StructuredReport via Python Claude (validates victools/inlineRefs nested schema, #1112 finding 5)"
+tags:
+  - llm
+  - claude
+  - structured-output
+  - nested-schema
+  - cross-runtime
+  - java
+  - python
+timeout: 420
+
+pre_run:
+  - routine: global.setup_for_python_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+      mcpmesh_version: "${config.packages.sdk_python_version}"
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+
+test:
+  - name: "Copy Python Claude provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/claude-provider /workspace/"
+    capture: copy_provider
+
+  - name: "Copy analyst to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-analyst-agent /workspace/"
+    capture: copy_analyst
+
+  - name: "Create env file for provider"
+    handler: secrets
+    target: /workspace/.env
+
+  - name: "Create env file for analyst"
+    handler: secrets
+    target: /workspace/java-analyst-agent/.env
+
+  - name: "Install Maven dependencies for analyst agent"
+    handler: maven-install
+    path: /workspace/java-analyst-agent
+    timeout: 600
+
+  - name: "Start Python Claude provider"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start claude-provider/main.py --env-file .env -d"
+    capture: start_provider
+
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 10
+
+  - name: "Verify provider is running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: provider_list
+
+  - name: "Start analyst agent"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-analyst-agent --env-file /workspace/java-analyst-agent/.env -d
+    capture: start_analyst
+
+  - name: "Wait for analyst"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for analyst agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "analyst"; then
+          echo "Analyst registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+          echo "$AGENTS"
+        fi
+        sleep 2
+      done
+      echo "WARNING: Analyst not registered within 90s"
+      meshctl list 2>/dev/null || true
+      meshctl logs analyst 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_analyst
+    timeout: 120
+
+  - name: "Wait for dependency resolution"
+    handler: wait
+    seconds: 8
+
+  - name: "Verify all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_all
+
+  - name: "List all tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+
+  - name: "Call structuredReport (nested schema)"
+    handler: shell
+    workdir: /workspace
+    command: 'meshctl call structuredReport ''{"topic": "the reliability of distributed systems"}'''
+    capture: call_report
+    timeout: 120
+
+assertions:
+  # Registration
+  - expr: "${captured.provider_list} contains 'claude-provider'"
+    message: "Python Claude provider should be registered"
+  - expr: "${captured.list_all} contains 'claude-provider'"
+    message: "Claude provider should be registered"
+  - expr: "${captured.list_all} contains 'analyst'"
+    message: "Analyst should be registered"
+  - expr: "${captured.list_tools} contains 'structuredReport'"
+    message: "structuredReport tool should be available"
+
+  # No MCP error envelope / provider schema rejection
+  - expr: "${captured.call_report} not contains '\"isError\":true'"
+    message: "Call must not return an MCP error envelope (provider must accept the nested schema)"
+
+  # Nested structure populated: meta (record-of-record) with author + enum sentiment
+  - expr: "${jq:captured.call_report:.content[0].text | fromjson | .meta | type} == 'object'"
+    message: "meta should be a nested object (record-of-record)"
+  - expr: "${jq:captured.call_report:.content[0].text | fromjson | .meta.author} != ''"
+    message: "meta.author should be populated"
+  - expr: "${jq:captured.call_report:.content[0].text | fromjson | [.meta.sentiment] | inside([\"POSITIVE\",\"NEUTRAL\",\"NEGATIVE\"])} == 'true'"
+    message: "meta.sentiment should be one of the Sentiment enum values"
+
+  # findings: non-empty array of nested records, first element has title/detail/severity
+  - expr: "${jq:captured.call_report:.content[0].text | fromjson | .findings | type} == 'array'"
+    message: "findings should be an array"
+  - expr: "${jq:captured.call_report:.content[0].text | fromjson | .findings | length} > 0"
+    message: "findings should be non-empty"
+  - expr: "${jq:captured.call_report:.content[0].text | fromjson | .findings[0].title} != ''"
+    message: "first finding should have a title"
+  - expr: "${jq:captured.call_report:.content[0].text | fromjson | .findings[0].detail} != ''"
+    message: "first finding should have a detail"
+  - expr: "${jq:captured.call_report:.content[0].text | fromjson | .findings[0].severity | type} == 'number'"
+    message: "first finding should have a numeric severity"
+
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*analyst" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace
