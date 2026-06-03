@@ -106,6 +106,10 @@ public class OpenAiHandler implements LlmProviderHandler {
             outputSchema != null ? outputSchema.name() : "none",
             toolExecutor != null);
 
+        // Effective output mode: honor a consumer-supplied output_mode override
+        // (model_params.output_mode → options), else per-vendor auto-selection.
+        String outputMode = determineOutputMode(outputSchema, LlmProviderHandler.outputModeOverride(options));
+
         // Build and format messages
         List<Message> springMessages = convertMessages(messages);
 
@@ -118,18 +122,23 @@ public class OpenAiHandler implements LlmProviderHandler {
             }
         }
 
-        // Format system prompt with structured output instructions
-        String formattedSystemPrompt = formatSystemPrompt(systemPrompt, tools, outputSchema);
+        // Format system prompt with structured output instructions (effective mode).
+        String formattedSystemPrompt = formatSystemPromptViaCore(systemPrompt, tools, outputSchema, outputMode);
+
+        // OpenAI applies native response_format only for STRICT mode; hint/text
+        // rely on prompt instructions (no response_format), so suppress the
+        // schema for the enforcement path in those modes.
+        OutputSchema enforcedSchema = OUTPUT_MODE_STRICT.equals(outputMode) ? outputSchema : null;
 
         // If toolExecutor is null, use no-execution mode (return tool_calls without executing)
         boolean executeTools = toolExecutor != null;
 
         if (executeTools) {
             // Auto-execution mode: Use ChatClient which handles tool execution automatically
-            return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, outputSchema, messages);
+            return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, enforcedSchema, messages);
         } else {
             // No-execution mode: Use model.call with internalToolExecutionEnabled(false)
-            return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, outputSchema);
+            return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, enforcedSchema);
         }
     }
 

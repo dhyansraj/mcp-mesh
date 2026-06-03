@@ -47,6 +47,16 @@ public interface LlmProviderHandler {
     /** Plain text output for String return types (fastest) */
     String OUTPUT_MODE_TEXT = "text";
 
+    /**
+     * Sentinel for an unset/auto output mode. When the incoming
+     * {@code model_params.output_mode} is unset (or invalid), handlers fall back
+     * to per-vendor auto-selection via {@link #determineOutputMode(OutputSchema)}.
+     */
+    String OUTPUT_MODE_UNSET = "";
+
+    /** Key under which a consumer-supplied output-mode override travels in the options map. */
+    String OPTION_OUTPUT_MODE = "output_mode";
+
     // =========================================================================
     // Core Methods
     // =========================================================================
@@ -164,7 +174,33 @@ public interface LlmProviderHandler {
         List<ToolDefinition> tools,
         OutputSchema outputSchema
     ) {
-        String outputMode = determineOutputMode(outputSchema);
+        return formatSystemPromptViaCore(basePrompt, tools, outputSchema, determineOutputMode(outputSchema));
+    }
+
+    /**
+     * Overload of {@link #formatSystemPromptViaCore(String, List, OutputSchema)}
+     * that uses an explicitly-supplied {@code effectiveOutputMode} instead of
+     * re-running per-vendor auto-selection.
+     *
+     * <p>Used to honor a consumer-supplied {@code output_mode} override: the
+     * caller computes the effective mode once via
+     * {@link #determineOutputMode(OutputSchema, String)} and threads it both here
+     * (prompt construction) and into the structured-output application so both
+     * surfaces agree.
+     *
+     * @param basePrompt          The original system prompt
+     * @param tools               Tool schemas (for tool calling instructions)
+     * @param outputSchema        Schema for structured output (null = plain text)
+     * @param effectiveOutputMode The already-resolved output mode to use
+     * @return Formatted system prompt produced by the Rust core
+     */
+    default String formatSystemPromptViaCore(
+        String basePrompt,
+        List<ToolDefinition> tools,
+        OutputSchema outputSchema,
+        String effectiveOutputMode
+    ) {
+        String outputMode = effectiveOutputMode;
         boolean hasTools = tools != null && !tools.isEmpty();
 
         // Delegate to Rust core
@@ -222,6 +258,51 @@ public interface LlmProviderHandler {
             return OUTPUT_MODE_TEXT;
         }
         return OUTPUT_MODE_STRICT;  // Default to strict for safety
+    }
+
+    /**
+     * Determine the effective output mode, honoring a consumer-supplied override.
+     *
+     * <p>If {@code overrideMode} is a recognized mode
+     * ({@code strict}/{@code hint}/{@code text}) it fully replaces the per-vendor
+     * auto-selection and is returned as-is. Otherwise — unset, blank, or an
+     * unrecognized value — this delegates to {@link #determineOutputMode(OutputSchema)}
+     * so the no-override path stays byte-identical to today's behavior. An
+     * unrecognized (non-blank) value is logged as a warning before falling back.
+     *
+     * @param outputSchema The output schema (null = text mode in auto-selection)
+     * @param overrideMode The incoming {@code model_params.output_mode} (may be null/blank)
+     * @return The effective output mode constant
+     */
+    default String determineOutputMode(OutputSchema outputSchema, String overrideMode) {
+        if (overrideMode == null || overrideMode.isEmpty()) {
+            return determineOutputMode(outputSchema);
+        }
+        switch (overrideMode) {
+            case OUTPUT_MODE_STRICT:
+            case OUTPUT_MODE_HINT:
+            case OUTPUT_MODE_TEXT:
+                return overrideMode;
+            default:
+                LoggerFactory.getLogger(getClass()).warn(
+                    "Ignoring invalid output_mode override '{}' (expected strict|hint|text); "
+                    + "falling back to auto-selection.", overrideMode);
+                return determineOutputMode(outputSchema);
+        }
+    }
+
+    /**
+     * Read the consumer-supplied output-mode override from the options map.
+     *
+     * @param options the generation options (may be null)
+     * @return the raw override string, or {@link #OUTPUT_MODE_UNSET} if absent
+     */
+    static String outputModeOverride(Map<String, Object> options) {
+        if (options == null) {
+            return OUTPUT_MODE_UNSET;
+        }
+        Object v = options.get(OPTION_OUTPUT_MODE);
+        return v != null ? v.toString() : OUTPUT_MODE_UNSET;
     }
 
     // =========================================================================

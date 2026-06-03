@@ -192,6 +192,42 @@ def has_media_params(tool_schemas: Optional[list[dict[str, Any]]]) -> bool:
 
 
 # ============================================================================
+# Shared structured-output override validation (finding #6)
+# ============================================================================
+
+_VALID_OUTPUT_MODES = ("strict", "hint", "text")
+
+
+def normalize_output_mode_override(
+    output_mode: Optional[str],
+    *,
+    vendor_label: str,
+    handler_logger: logging.Logger,
+) -> Optional[str]:
+    """Validate a consumer-supplied ``output_mode`` override.
+
+    Returns the override lower-cased when it is one of ``strict`` / ``hint`` /
+    ``text``. Returns ``None`` when the override is unset (auto-selection) OR
+    when it is an invalid value — in the invalid case a one-line WARNING is
+    emitted (per finding #6: invalid → ignore + auto + log a warning) so the
+    caller transparently falls back to its per-vendor auto path.
+    """
+    if output_mode is None:
+        return None
+    normalized = str(output_mode).strip().lower()
+    if normalized in _VALID_OUTPUT_MODES:
+        return normalized
+    handler_logger.warning(
+        "%s: ignoring invalid output_mode override %r "
+        "(expected one of %s); falling back to auto-selection.",
+        vendor_label,
+        output_mode,
+        ", ".join(_VALID_OUTPUT_MODES),
+    )
+    return None
+
+
+# ============================================================================
 # Shared Schema Utilities
 # ============================================================================
 
@@ -383,6 +419,7 @@ class BaseProviderHandler(ABC):
         *,
         streaming: bool = False,
         model: Optional[str] = None,
+        output_mode: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         Apply vendor-specific structured output handling to model params.
@@ -409,6 +446,13 @@ class BaseProviderHandler(ABC):
                 model-gate their structured-output strategy (e.g. Claude's
                 ``output_config`` branch). Default None preserves backward
                 compatibility — handlers that ignore the model are unaffected.
+            output_mode: Consumer-supplied structured-output mode override
+                ("strict" / "hint" / "text"). When set and valid it replaces the
+                handler's per-vendor auto-selection; an invalid value is ignored
+                (auto-selection runs) with a warning. Default None preserves the
+                auto behavior. The base implementation ignores this argument —
+                vendor handlers that honor the override do so in their own
+                ``apply_structured_output``.
 
         Returns:
             Modified model_params with structured output settings applied

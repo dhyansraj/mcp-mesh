@@ -324,8 +324,9 @@ public class MeshEventProcessor implements SmartLifecycle {
             boolean parallelToolCalls = config != null && config.parallelToolCalls();
             int maxTokens = config != null ? config.maxTokens() : MeshLlmDefaults.MAX_TOKENS_UNSET;
             double temperature = config != null ? config.temperature() : MeshLlmDefaults.TEMPERATURE_UNSET;
+            String outputMode = config != null ? config.outputMode() : MeshLlmDefaults.OUTPUT_MODE_UNSET;
 
-            proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations, parallelToolCalls, maxTokens, temperature);
+            proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations, parallelToolCalls, maxTokens, temperature, outputMode);
 
             // Wire MediaStore for multimodal support
             wireMediaStore(proxy);
@@ -505,8 +506,9 @@ public class MeshEventProcessor implements SmartLifecycle {
             boolean parallelToolCalls = config != null && config.parallelToolCalls();
             int maxTokens = config != null ? config.maxTokens() : MeshLlmDefaults.MAX_TOKENS_UNSET;
             double temperature = config != null ? config.temperature() : MeshLlmDefaults.TEMPERATURE_UNSET;
+            String outputMode = config != null ? config.outputMode() : MeshLlmDefaults.OUTPUT_MODE_UNSET;
 
-            proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations, parallelToolCalls, maxTokens, temperature);
+            proxy.configure(mcpClient, proxyFactory, toolInvoker, injector, systemPrompt, contextParam, maxIterations, parallelToolCalls, maxTokens, temperature, outputMode);
 
             // Wire MediaStore for multimodal support
             wireMediaStore(proxy);

@@ -190,6 +190,65 @@ class TestMeshLlmDecoratorConfiguration:
         assert agent_data.config["system_prompt_file"] == "prompts/chat.jinja2"
 
 
+class TestMeshLlmDecoratorOutputMode:
+    """Test the documented ``output_mode`` parameter (finding #6)."""
+
+    def setup_method(self):
+        DecoratorRegistry._mesh_llm_agents = {}
+
+    def test_default_output_mode_is_none(self):
+        """Omitted output_mode → None (provider auto-selects, no regression)."""
+
+        @mesh.llm(provider={"capability": "llm"}, filter={"capability": "document"})
+        def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
+            return llm(message)
+
+        agent_data = next(iter(DecoratorRegistry.get_mesh_llm_agents().values()))
+        assert agent_data.config["output_mode"] is None
+
+    @pytest.mark.parametrize("mode", ["strict", "hint", "text"])
+    def test_valid_output_mode_accepted_and_stored(self, mode):
+        """A valid output_mode flows into the config."""
+
+        @mesh.llm(
+            provider={"capability": "llm"},
+            filter={"capability": "document"},
+            output_mode=mode,
+        )
+        def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
+            return llm(message)
+
+        agent_data = next(iter(DecoratorRegistry.get_mesh_llm_agents().values()))
+        assert agent_data.config["output_mode"] == mode
+
+    def test_invalid_output_mode_raises_value_error(self):
+        """An invalid output_mode raises a clear ValueError at decoration time."""
+        with pytest.raises(ValueError, match="output_mode"):
+
+            @mesh.llm(
+                provider={"capability": "llm"},
+                filter={"capability": "document"},
+                output_mode="bogus",
+            )
+            def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
+                return llm(message)
+
+    def test_explicit_param_wins_over_kwargs(self):
+        """The explicit param is authoritative; the kwargs path is not
+        double-passed when the explicit param is set."""
+
+        @mesh.llm(
+            provider={"capability": "llm"},
+            filter={"capability": "document"},
+            output_mode="hint",
+        )
+        def chat(message: str, llm: mesh.MeshLlmAgent = None) -> ChatResponse:
+            return llm(message)
+
+        agent_data = next(iter(DecoratorRegistry.get_mesh_llm_agents().values()))
+        assert agent_data.config["output_mode"] == "hint"
+
+
 class TestMeshLlmDecoratorOutputTypeExtraction:
     """Test extraction of output type from return annotation."""
 

@@ -1,0 +1,20 @@
+{
+  "name": "hint-override-consumer-ts",
+  "version": "1.0.0",
+  "description": "MCP Mesh consumer forcing outputMode=hint against an OpenAI provider",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts"
+  },
+  "dependencies": {
+    "@mcpmesh/sdk": "^2.3.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}

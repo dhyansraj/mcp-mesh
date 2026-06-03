@@ -931,6 +931,15 @@ class MeshLlmAgent:
                     if self.model:
                         model_params["model"] = self.model
 
+                    # Finding #6: Forward the consumer's structured-output mode
+                    # override to the provider ONLY when explicitly set. The
+                    # provider's apply_structured_output honors it over its
+                    # per-vendor auto-selection; omitting it (None) preserves the
+                    # provider's auto behavior. Stripped from the request before
+                    # reaching LiteLLM by _prepare_provider_request.
+                    if self.output_mode:
+                        model_params["output_mode"] = self.output_mode
+
                     # Issue #459: Include output_schema for provider to apply vendor-specific handling
                     # (e.g., OpenAI needs response_format, not prompt-based JSON instructions)
                     if self.output_type is not str and hasattr(
@@ -1343,6 +1352,10 @@ class MeshLlmAgent:
         }
         if self.model:
             model_params["model"] = self.model
+        # Finding #6: forward the consumer's structured-output mode override
+        # to the provider only when explicitly set (mirrors __call__).
+        if self.output_mode:
+            model_params["output_mode"] = self.output_mode
         if self.output_type is not str and hasattr(
             self.output_type, "model_json_schema"
         ):

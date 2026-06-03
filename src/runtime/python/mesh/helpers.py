@@ -2541,6 +2541,12 @@ def llm_provider(
             output_schema = model_params_copy.pop("output_schema", None)
             output_type_name = model_params_copy.pop("output_type_name", None)
 
+            # Finding #6: consumer-supplied structured-output mode override.
+            # Popped here so it never leaks into completion_args / LiteLLM; the
+            # handler's apply_structured_output honors a valid value over its
+            # per-vendor auto-selection. None preserves the auto behavior.
+            output_mode_override = model_params_copy.pop("output_mode", None)
+
             # Source-of-truth for messages downstream. Defaults to the
             # request's messages; ``apply_structured_output`` may swap in a
             # NEW list (Claude native synthetic-format path builds an
@@ -2557,6 +2563,7 @@ def llm_provider(
                     model_params_copy,
                     streaming=streaming,
                     model=effective_model,
+                    output_mode=output_mode_override,
                 )
                 # Pull back the (possibly-replaced) messages list before
                 # popping the key off the model_params dict — the native

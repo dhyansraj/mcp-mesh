@@ -267,3 +267,105 @@ describe("MeshDelegatedProvider.streamComplete() — modelParams escape hatch", 
     expect(modelParams.model).toBe("anthropic/claude-sonnet-4-5");
   });
 });
+
+// ----------------------------------------------------------------------------
+// output_mode override on the wire — issue #1112
+// ----------------------------------------------------------------------------
+
+describe("MeshDelegatedProvider — output_mode override on the wire (#1112)", () => {
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  function mockJsonResponse(body: object): Response {
+    return {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: {
+        get: (name: string) =>
+          name.toLowerCase() === "content-type" ? "application/json" : null,
+      },
+      text: async () => JSON.stringify(body),
+      json: async () => body,
+    } as unknown as Response;
+  }
+
+  function mcpToolResponse(payload: object) {
+    return {
+      jsonrpc: "2.0",
+      id: 1,
+      result: { content: [{ type: "text", text: JSON.stringify(payload) }] },
+    };
+  }
+
+  const STUB_COMPLETION = { role: "assistant", content: "ok" };
+
+  async function captureComplete(
+    options: Parameters<MeshDelegatedProvider["complete"]>[3]
+  ): Promise<Record<string, unknown> | undefined> {
+    let capturedBody: string | undefined;
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      capturedBody = init.body as string;
+      return mockJsonResponse(mcpToolResponse(STUB_COMPLETION));
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const provider = new MeshDelegatedProvider(ENDPOINT, FN_BUFFERED, false);
+    const messages: LlmMessage[] = [{ role: "user", content: "hi" }];
+    await provider.complete("anthropic/claude-sonnet-4-5", messages, undefined, options);
+
+    const body = JSON.parse(capturedBody!);
+    return body.params.arguments.request.model_params as Record<string, unknown> | undefined;
+  }
+
+  it("includes model_params.output_mode when outputMode is explicitly set", async () => {
+    const modelParams = await captureComplete({ outputMode: "strict" });
+    expect(modelParams?.output_mode).toBe("strict");
+  });
+
+  it("omits model_params.output_mode when outputMode is unset (default path)", async () => {
+    const modelParams = await captureComplete({ maxOutputTokens: 128 });
+    expect(modelParams).toBeDefined();
+    expect("output_mode" in (modelParams ?? {})).toBe(false);
+  });
+
+  it("typed outputMode beats escape-hatch modelParams.output_mode", async () => {
+    const modelParams = await captureComplete({
+      outputMode: "hint",
+      modelParams: { output_mode: "strict" },
+    });
+    expect(modelParams?.output_mode).toBe("hint");
+  });
+
+  it("streamComplete includes output_mode when explicitly set", async () => {
+    let capturedBody: string | undefined;
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      capturedBody = init.body as string;
+      const body = JSON.parse(capturedBody);
+      const reqId = body.id as string;
+      return makeMockResponse([
+        sseEvent({ jsonrpc: "2.0", id: reqId, result: { content: [{ type: "text", text: "" }] } }),
+      ]);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const provider = new MeshDelegatedProvider(ENDPOINT, FN_STREAM, false);
+    const messages: LlmMessage[] = [{ role: "user", content: "hi" }];
+    const gen = provider.streamComplete("anthropic/claude-sonnet-4-5", messages, undefined, {
+      outputMode: "text",
+    });
+    for await (const _ of gen) { /* drain */ }
+
+    const body = JSON.parse(capturedBody!);
+    const modelParams = body.params.arguments.request.model_params as Record<string, unknown>;
+    expect(modelParams.output_mode).toBe("text");
+  });
+});

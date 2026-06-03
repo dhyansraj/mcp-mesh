@@ -151,4 +151,22 @@ public @interface MeshLlm {
      * Default is false (sequential execution).
      */
     boolean parallelToolCalls() default false;
+
+    /**
+     * Structured-output mode the provider should apply for this consumer.
+     *
+     * <p>Allowed values:
+     * <ul>
+     *   <li>{@code "strict"} — schema-enforced structured output
+     *       (response_format / responseSchema / native output_format).</li>
+     *   <li>{@code "hint"} — prompt-based JSON instructions.</li>
+     *   <li>{@code "text"} — plain text, no structured-output enforcement.</li>
+     * </ul>
+     *
+     * <p>If unset ({@link MeshLlmDefaults#OUTPUT_MODE_UNSET}), the provider
+     * auto-selects the mode per vendor/schema (its existing behavior) and no
+     * {@code output_mode} is sent on the wire. An invalid value is ignored and
+     * treated as unset.
+     */
+    String outputMode() default MeshLlmDefaults.OUTPUT_MODE_UNSET;
 }

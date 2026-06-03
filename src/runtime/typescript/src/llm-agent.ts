@@ -135,6 +135,9 @@ export interface LlmProvider {
       modelParams?: Record<string, unknown>;
       // Issue #1116: cap for the provider-managed agentic loop.
       maxIterations?: number;
+      // Issue #1112: consumer-supplied output_mode override (only when the user
+      // explicitly set it). Undefined = auto (provider's per-vendor selection).
+      outputMode?: LlmOutputMode;
     }
   ): Promise<LlmCompletionResponse>;
 }
@@ -175,6 +178,7 @@ export class MeshDelegatedProvider implements LlmProvider {
           outputSchema?: { schema: Record<string, unknown>; name: string };
           modelParams?: Record<string, unknown>;
           maxIterations?: number;
+          outputMode?: LlmOutputMode;
         }
       | undefined
   ): { request: Record<string, unknown>; args: Record<string, unknown> } {
@@ -209,6 +213,13 @@ export class MeshDelegatedProvider implements LlmProvider {
     // takes precedence over any escape-hatch modelParams.max_iterations above.
     if (options?.maxIterations !== undefined) {
       modelParams.max_iterations = options.maxIterations;
+    }
+    // Issue #1112: forward the consumer-supplied output_mode override ONLY when
+    // the user explicitly set it (undefined = auto = provider's per-vendor
+    // selection; omitting keeps the provider byte-identical to today). Typed
+    // field, so it takes precedence over any escape-hatch modelParams.output_mode.
+    if (options?.outputMode !== undefined) {
+      modelParams.output_mode = options.outputMode;
     }
 
     const request: Record<string, unknown> = {
@@ -245,6 +256,8 @@ export class MeshDelegatedProvider implements LlmProvider {
       modelParams?: Record<string, unknown>;
       // Issue #1116: cap for the provider-managed agentic loop.
       maxIterations?: number;
+      // Issue #1112: consumer-supplied output_mode override (explicit only).
+      outputMode?: LlmOutputMode;
     }
   ): Promise<LlmCompletionResponse> {
     // Build MeshLlmRequest structure (matches Python claude_provider schema).
@@ -376,6 +389,8 @@ export class MeshDelegatedProvider implements LlmProvider {
       modelParams?: Record<string, unknown>;
       // Issue #1116: cap for the provider-managed agentic loop.
       maxIterations?: number;
+      // Issue #1112: consumer-supplied output_mode override (explicit only).
+      outputMode?: LlmOutputMode;
     }
   ): AsyncGenerator<string, void, void> {
     // Build MeshLlmRequest body — same shape as complete().
@@ -639,6 +654,9 @@ export class MeshLlmAgent<T = string> {
           modelParams: context.options?.modelParams,
           // Issue #1116: forward the resolved provider-managed loop cap.
           maxIterations,
+          // Issue #1112: forward the RAW (possibly-undefined) output_mode so the
+          // provider honors an explicit override; unset stays auto.
+          outputMode: this.config.outputMode,
         }
       );
 
@@ -837,6 +855,9 @@ export class MeshLlmAgent<T = string> {
         modelParams: context.options?.modelParams,
         // Issue #1116: forward the resolved provider-managed loop cap.
         maxIterations,
+        // Issue #1112: forward the RAW (possibly-undefined) output_mode so the
+        // provider honors an explicit override; unset stays auto.
+        outputMode: this.config.outputMode,
       },
     );
   }

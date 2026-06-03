@@ -125,6 +125,19 @@ public class GeminiHandler implements LlmProviderHandler {
         // If toolExecutor is null, use no-execution mode (return tool_calls without executing)
         boolean executeTools = toolExecutor != null;
 
+        // Effective output mode: honor a consumer-supplied output_mode override
+        // (model_params.output_mode → options), else per-vendor auto-selection
+        // (HINT for any schema). Gemini Java has no native structured-output path
+        // (responseSchema + tools is rejected by the API), so STRICT is not
+        // supportable here — fall back to HINT with a warning rather than fail.
+        String requestedMode = determineOutputMode(outputSchema, LlmProviderHandler.outputModeOverride(options));
+        String outputMode = requestedMode;
+        if (OUTPUT_MODE_STRICT.equals(requestedMode)) {
+            log.warn("GeminiHandler: output_mode='strict' requested but Gemini Java cannot enforce "
+                + "native structured output alongside tools; falling back to HINT (prompt-based).");
+            outputMode = OUTPUT_MODE_HINT;
+        }
+
         // Build and format messages
         List<Message> springMessages = convertMessages(messages);
 
@@ -137,8 +150,10 @@ public class GeminiHandler implements LlmProviderHandler {
             }
         }
 
-        // Format system prompt (brief note only - response_format handles schema)
-        String formattedSystemPrompt = formatSystemPrompt(systemPrompt, tools, outputSchema);
+        // Format system prompt with the effective mode. TEXT mode suppresses the
+        // schema so no JSON instructions are injected.
+        OutputSchema promptSchema = OUTPUT_MODE_TEXT.equals(outputMode) ? null : outputSchema;
+        String formattedSystemPrompt = formatSystemPromptViaCore(systemPrompt, tools, promptSchema, outputMode);
 
         if (executeTools) {
             // Auto-execution mode: Use ChatClient which handles tool execution automatically

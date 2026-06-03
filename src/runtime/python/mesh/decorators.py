@@ -2466,6 +2466,7 @@ def llm(
     response_model: type | None = None,
     context_param: str | None = None,
     parallel_tool_calls: bool = False,
+    output_mode: str | None = None,
     **kwargs: Any,
 ) -> Callable[[T], T]:
     """
@@ -2522,6 +2523,12 @@ def llm(
                         ``outputSchema`` regardless.
         context_param: Function parameter name to auto-extract template context from
         parallel_tool_calls: Encourage the LLM to emit independent tool_calls in parallel
+        output_mode: Optional structured-output mode forwarded to the provider.
+                     One of "strict" (vendor-native schema enforcement, e.g.
+                     response_format / responseSchema), "hint" (schema embedded
+                     in the prompt instead of native enforcement), or "text" (no
+                     schema enforcement). When omitted (None), the provider
+                     auto-selects per vendor and schema (current behavior).
         **kwargs: Additional model parameters forwarded to the provider as defaults
                   (e.g., temperature=0.7, max_tokens=2048)
 
@@ -2553,6 +2560,20 @@ def llm(
             f"(got {type(provider).__name__}). Direct LLM mode was removed in v2.\n"
             f"  Use: @mesh.llm(provider={{'capability': 'llm', 'tags': ['+claude']}}, ...)\n"
             f"  Migrate from: @mesh.llm(provider='claude', model='...', api_key='...')"
+        )
+
+    # The explicit ``output_mode`` param is authoritative over any value passed
+    # through ``**kwargs`` (kept for back-compat with the pre-promotion path).
+    # Take the explicit param when set, else fall back to the kwargs value so a
+    # single source feeds the LLMConfig without double-passing.
+    if output_mode is None:
+        output_mode = kwargs.pop("output_mode", None)
+    else:
+        kwargs.pop("output_mode", None)
+    if output_mode is not None and output_mode not in ("strict", "hint", "text"):
+        raise ValueError(
+            f"@mesh.llm: 'output_mode' must be 'strict', 'hint', or 'text', "
+            f"got {output_mode!r}."
         )
 
     def decorator(func: T) -> T:
@@ -2636,6 +2657,7 @@ def llm(
             "template_path": template_path,
             "context_param": context_param,
             "parallel_tool_calls": parallel_tool_calls,
+            "output_mode": output_mode,
         }
         resolved_config.update(kwargs)
 
