@@ -625,7 +625,50 @@ public class MeshToolWrapper implements McpToolHandler {
             return dispatchAsJob(cleanArgs, jobIdHeader, deadlineSecs);
         }
 
-        // Build full argument array
+        // Build full argument array (MCP params + deps + LLM agents + a2a client)
+        Object[] fullArgs = buildFullArgs(cleanArgs);
+
+        // Phase B MeshJob substrate: fill MeshJob slot for non-job paths.
+        // - Consumer side (method has dependencies + jobSubmitter set): inject submitter.
+        // - Otherwise (incl. task=true called sync): inject null.
+        if (meshJobParamIndex != null) {
+            fullArgs[meshJobParamIndex] = jobSubmitter.get(); // null when no submitter wired
+        }
+
+        // Invoke the method
+        Object result;
+        try {
+            result = method.invoke(bean, fullArgs);
+        } catch (InvocationTargetException e) {
+            // Unwrap to get the actual exception
+            Throwable cause = e.getCause();
+            log.error("Tool execution failed for {}: {}", funcId, cause.getMessage(), cause);
+            if (cause instanceof Exception) {
+                throw (Exception) cause;
+            }
+            throw new RuntimeException(cause);
+        } catch (IllegalAccessException e) {
+            log.error("Access denied for {}: {}", funcId, e.getMessage());
+            throw new RuntimeException("Method access denied: " + e.getMessage(), e);
+        }
+
+        // Handle async results (CompletableFuture)
+        result = awaitIfFuture(result);
+
+        return result;
+    }
+
+    /**
+     * Build the full argument array for the user method: MCP parameters,
+     * the @A2AConsumer-injected A2AClient slot, McpMeshTool dependencies,
+     * and MeshLlmAgent dependencies (with template-context wiring).
+     *
+     * <p>The MeshJob slot ({@link #meshJobParamIndex}) is intentionally
+     * left untouched here — the caller fills it (submitter, controller, or
+     * null) depending on the invocation path. Array index assignment is
+     * order-independent, so collecting the rest of the fills here is safe.
+     */
+    private Object[] buildFullArgs(Map<String, Object> cleanArgs) throws Exception {
         Object[] fullArgs = new Object[method.getParameterCount()];
 
         // Fill MCP parameters
@@ -638,14 +681,6 @@ public class MeshToolWrapper implements McpToolHandler {
 
             // Convert value to target type
             fullArgs[param.position()] = convertValue(value, param.type());
-        }
-
-        // Phase B MeshJob substrate: fill MeshJob slot for non-job paths.
-        // - Consumer side (method has dependencies + jobSubmitter set): inject submitter.
-        // - Otherwise (incl. task=true called sync): inject null.
-        if (meshJobParamIndex != null) {
-            MeshJobSubmitter submitter = jobSubmitter.get();
-            fullArgs[meshJobParamIndex] = submitter; // null when no submitter wired
         }
 
         // Issue #923: fill the @A2AConsumer-injected A2AClient slot, if any.
@@ -697,41 +732,29 @@ public class MeshToolWrapper implements McpToolHandler {
             fullArgs[paramPos] = agent;
         }
 
-        // Invoke the method
-        Object result;
-        try {
-            result = method.invoke(bean, fullArgs);
-        } catch (InvocationTargetException e) {
-            // Unwrap to get the actual exception
-            Throwable cause = e.getCause();
-            log.error("Tool execution failed for {}: {}", funcId, cause.getMessage(), cause);
-            if (cause instanceof Exception) {
-                throw (Exception) cause;
-            }
-            throw new RuntimeException(cause);
-        } catch (IllegalAccessException e) {
-            log.error("Access denied for {}: {}", funcId, e.getMessage());
-            throw new RuntimeException("Method access denied: " + e.getMessage(), e);
-        }
+        return fullArgs;
+    }
 
-        // Handle async results (CompletableFuture)
+    /**
+     * Await a {@link CompletableFuture} result with the async timeout,
+     * unwrapping execution/interruption failures to match the synchronous
+     * invocation's exception contract. Non-future results pass through.
+     */
+    private static Object awaitIfFuture(Object result) throws Exception {
         if (result instanceof CompletableFuture<?> future) {
             try {
-                result = future.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                return future.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             } catch (TimeoutException e) {
                 throw new RuntimeException("Async operation timed out after " + ASYNC_TIMEOUT_SECONDS + " seconds");
             } catch (ExecutionException e) {
                 Throwable cause = e.getCause();
-                if (cause instanceof Exception) {
-                    throw (Exception) cause;
-                }
+                if (cause instanceof Exception ex) throw ex;
                 throw new RuntimeException(cause);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new RuntimeException("Async operation interrupted", e);
             }
         }
-
         return result;
     }
 
@@ -771,41 +794,9 @@ public class MeshToolWrapper implements McpToolHandler {
      * </ul>
      */
     private Object dispatchAsJob(Map<String, Object> cleanArgs, String jobId, Long deadlineSecs) throws Exception {
-        // Build full args with the controller injected at the MeshJob slot
-        Object[] fullArgs = new Object[method.getParameterCount()];
-        for (ParamInfo param : mcpParams) {
-            Object value = cleanArgs.get(param.name());
-            if (value == null && param.required()) {
-                throw new IllegalArgumentException("Missing required parameter: " + param.name());
-            }
-            fullArgs[param.position()] = convertValue(value, param.type());
-        }
-        // Fill McpMeshTool dependencies and LLM agents (mirrors the
-        // non-job path; needed so a task=true method that ALSO has deps
-        // / LLM agents sees them populated)
-        for (int i = 0; i < meshToolPositions.size(); i++) {
-            int paramPos = meshToolPositions.get(i);
-            McpMeshTool proxy = injectedDeps.get(i);
-            fullArgs[paramPos] = proxy;
-        }
-        for (int i = 0; i < llmAgentPositions.size(); i++) {
-            int paramPos = llmAgentPositions.get(i);
-            MeshLlmAgent agent = injectedLlmAgents.get(i);
-            if (agent instanceof MeshLlmAgentProxy proxy) {
-                Map<String, Object> context = extractContextForTemplate(proxy.getContextParamName(), cleanArgs);
-                if (context != null) {
-                    proxy.setInvocationContext(context);
-                }
-            }
-            fullArgs[paramPos] = agent;
-        }
-
-        // Issue #923: same A2AClient injection as the non-job path —
-        // needed so a task=true @A2AConsumer method (e.g. report bridge)
-        // receives the cached client when dispatched as a job.
-        if (a2aClientParamIndex != null) {
-            fullArgs[a2aClientParamIndex] = a2aClient.get();
-        }
+        // Build full args (MCP params + deps + LLM agents + a2a client);
+        // the MeshJob slot is filled below with the controller or null.
+        Object[] fullArgs = buildFullArgs(cleanArgs);
 
         // Decide whether we can build a JobController: we need a slot
         // index AND both binding fields. If any piece is missing the
@@ -967,20 +958,7 @@ public class MeshToolWrapper implements McpToolHandler {
         } catch (IllegalAccessException e) {
             throw new RuntimeException("Method access denied: " + e.getMessage(), e);
         }
-        if (result instanceof CompletableFuture<?> future) {
-            try {
-                result = future.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            } catch (TimeoutException e) {
-                throw new RuntimeException("Async operation timed out after " + ASYNC_TIMEOUT_SECONDS + " seconds");
-            } catch (ExecutionException e) {
-                Throwable cause = e.getCause();
-                if (cause instanceof Exception ex) throw ex;
-                throw new RuntimeException(cause);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException("Async operation interrupted", e);
-            }
-        }
+        result = awaitIfFuture(result);
         return result;
     }
 
