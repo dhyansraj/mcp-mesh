@@ -1,6 +1,10 @@
 package io.mcpmesh.ai.handlers;
 
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.tool.ToolCallback;
@@ -306,6 +310,94 @@ public interface LlmProviderHandler {
     }
 
     // =========================================================================
+    // Shared Message Assembly
+    // =========================================================================
+
+    /**
+     * Prefix prepended to a previous assistant turn when flattening the message
+     * history into a single user-content string.
+     *
+     * <p>Vendors override this where their convention differs (e.g. Gemini uses
+     * {@code "[Previous Response]\n"}).
+     *
+     * @return The assistant-turn prefix literal (including its trailing newline)
+     */
+    default String previousResponsePrefix() {
+        return "[Previous Assistant Response]\n";
+    }
+
+    /**
+     * Extract the non-system messages from a Spring AI message list, preserving order.
+     *
+     * @param messages The full message list (may contain system messages)
+     * @return A new list containing only the non-system messages
+     */
+    default List<Message> extractNonSystemMessages(List<Message> messages) {
+        List<Message> nonSystemMessages = new ArrayList<>();
+        for (Message msg : messages) {
+            if (!(msg instanceof SystemMessage)) {
+                nonSystemMessages.add(msg);
+            }
+        }
+        return nonSystemMessages;
+    }
+
+    /**
+     * Flatten the non-system messages into a single user-content string.
+     *
+     * <p>User turns are appended verbatim; assistant turns are prefixed with
+     * {@link #previousResponsePrefix()}. Turns are newline-joined.
+     *
+     * @param messages The message list (system messages are ignored)
+     * @return The assembled user-content string
+     */
+    default String buildUserContent(List<Message> messages) {
+        StringBuilder userContent = new StringBuilder();
+        for (Message msg : extractNonSystemMessages(messages)) {
+            if (msg instanceof UserMessage um) {
+                if (userContent.length() > 0) userContent.append("\n");
+                userContent.append(um.getText());
+            } else if (msg instanceof AssistantMessage am) {
+                if (userContent.length() > 0) userContent.append("\n");
+                userContent.append(previousResponsePrefix()).append(am.getText());
+            }
+        }
+        return userContent.toString();
+    }
+
+    /**
+     * Replace the first system message with the formatted system prompt, dropping
+     * any additional system messages. If the input contained no system message,
+     * the formatted prompt is prepended.
+     *
+     * <p>No-op replacement occurs when {@code formattedSystemPrompt} is null/empty:
+     * any existing system messages are simply dropped and nothing is prepended.
+     *
+     * @param messages              The full message list
+     * @param formattedSystemPrompt The formatted system prompt (may be null/empty)
+     * @return A new list with the system message replaced/prepended
+     */
+    default List<Message> replaceSystemMessage(List<Message> messages, String formattedSystemPrompt) {
+        List<Message> messagesWithFormattedSystem = new ArrayList<>();
+        boolean addedSystem = false;
+        for (Message msg : messages) {
+            if (msg instanceof SystemMessage) {
+                if (!addedSystem && formattedSystemPrompt != null && !formattedSystemPrompt.isEmpty()) {
+                    messagesWithFormattedSystem.add(new SystemMessage(formattedSystemPrompt));
+                    addedSystem = true;
+                }
+            } else {
+                messagesWithFormattedSystem.add(msg);
+            }
+        }
+        // Add system prompt at beginning if not already added
+        if (!addedSystem && formattedSystemPrompt != null && !formattedSystemPrompt.isEmpty()) {
+            messagesWithFormattedSystem.add(0, new SystemMessage(formattedSystemPrompt));
+        }
+        return messagesWithFormattedSystem;
+    }
+
+    // =========================================================================
     // Capability Methods
     // =========================================================================
 
@@ -340,6 +432,13 @@ public interface LlmProviderHandler {
     /** Shared ObjectMapper for tool callback serialization. */
     static final tools.jackson.databind.ObjectMapper TOOL_CALLBACK_MAPPER = new tools.jackson.databind.ObjectMapper();
 
+    /** Vendor hook to transform a tool's input JSON schema before it is attached
+     *  to the Spring AI tool callback. Default: identity. Gemini overrides to
+     *  upper-case JSON-schema type values. */
+    default Map<String, Object> transformToolInputSchema(Map<String, Object> schema) {
+        return schema;
+    }
+
     /**
      * Create ToolCallbacks for schema only (no execution).
      *
@@ -360,7 +459,7 @@ public interface LlmProviderHandler {
             String inputSchemaJson = null;
             if (tool.inputSchema() != null && !tool.inputSchema().isEmpty()) {
                 try {
-                    inputSchemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(tool.inputSchema());
+                    inputSchemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(transformToolInputSchema(tool.inputSchema()));
                 } catch (Exception e) {
                     LoggerFactory.getLogger(getClass()).warn("Failed to serialize inputSchema for {}: {}", tool.name(), e.getMessage());
                 }
@@ -407,7 +506,7 @@ public interface LlmProviderHandler {
         String inputSchemaJson = null;
         if (tool.inputSchema() != null && !tool.inputSchema().isEmpty()) {
             try {
-                inputSchemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(tool.inputSchema());
+                inputSchemaJson = TOOL_CALLBACK_MAPPER.writeValueAsString(transformToolInputSchema(tool.inputSchema()));
             } catch (Exception e) {
                 LoggerFactory.getLogger(getClass()).warn("Failed to serialize inputSchema for {}: {}", tool.name(), e.getMessage());
             }
