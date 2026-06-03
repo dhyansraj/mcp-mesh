@@ -14,8 +14,9 @@ import java.lang.annotation.Target;
  * AND carries the upstream A2A configuration.
  *
  * <p>The Spring starter reads these fields at boot, constructs an
- * {@link A2AClient} per unique {@code (url, skillId, auth, timeout)}
- * tuple, and injects the cached client at the method's
+ * {@link A2AClient} per unique {@code (url, skillId, auth, timeout,
+ * pollIntervalMs, pollIntervalMaxMs)} tuple, and injects the cached
+ * client at the method's
  * {@link A2AClient} parameter slot at invoke time. Mirrors Python's
  * {@code @mesh.a2a_consumer(url=..., a2a_skill_id=..., auth=...)}
  * decorator (issue #913) so Java, Python, and the upcoming TypeScript
@@ -119,4 +120,17 @@ public @interface A2AConsumer {
      * {@link A2AClient}. Default 30. Must be {@code > 0}.
      */
     int timeoutSeconds() default 30;
+
+    /**
+     * Optional: initial backoff (milliseconds) between {@code tasks/get}
+     * polls while a task is non-terminal on the constructed
+     * {@link A2AClient}. Default 500. Must be {@code > 0}.
+     */
+    long pollIntervalMs() default 500;
+
+    /**
+     * Optional: cap (milliseconds) on the exponential poll backoff on the
+     * constructed {@link A2AClient}. Default 2000. Must be {@code > 0}.
+     */
+    long pollIntervalMaxMs() default 2000;
 }

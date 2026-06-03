@@ -27,7 +27,8 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Issue #923: scans Spring beans for {@code @A2AConsumer} methods,
  * constructs an {@link A2AClient} per unique
- * {@code (url, skillId, auth, timeoutSeconds)} tuple, and records a
+ * {@code (url, skillId, auth, timeoutSeconds, pollIntervalMs,
+ * pollIntervalMaxMs)} tuple, and records a
  * per-method binding so {@link MeshToolWrapper} can inject the cached
  * client at the method's {@link A2AClient} parameter slot at invoke
  * time.
@@ -136,6 +137,20 @@ public class A2AConsumerBeanPostProcessor implements BeanPostProcessor, Ordered 
                     + ": timeoutSeconds must be > 0 (got " + timeoutSeconds + ")");
         }
 
+        long pollIntervalMs = annotation.pollIntervalMs();
+        if (pollIntervalMs <= 0) {
+            throw new BeanInitializationException(
+                "@A2AConsumer on " + targetClass.getName() + "#" + method.getName()
+                    + ": pollIntervalMs must be > 0 (got " + pollIntervalMs + ")");
+        }
+
+        long pollIntervalMaxMs = annotation.pollIntervalMaxMs();
+        if (pollIntervalMaxMs <= 0) {
+            throw new BeanInitializationException(
+                "@A2AConsumer on " + targetClass.getName() + "#" + method.getName()
+                    + ": pollIntervalMaxMs must be > 0 (got " + pollIntervalMaxMs + ")");
+        }
+
         // Resolve Spring property placeholders so users can write
         // @A2AConsumer(url = "${weather.a2a.url}") and have the property
         // value (env-overridable) flow into the underlying URL.
@@ -186,12 +201,15 @@ public class A2AConsumerBeanPostProcessor implements BeanPostProcessor, Ordered 
             : hasToken ? AuthSpec.literal(authToken)
             : AuthSpec.none();
 
-        A2AClientKey key = new A2AClientKey(resolvedUrl, skillId, authSpec, timeoutSeconds);
+        A2AClientKey key = new A2AClientKey(
+            resolvedUrl, skillId, authSpec, timeoutSeconds, pollIntervalMs, pollIntervalMaxMs);
         A2AClient client = clientCache.computeIfAbsent(key, k -> {
             A2ABearer bearer = k.auth().toBearer();
-            A2AClient created = new A2AClient(k.url(), k.skillId(), bearer, Duration.ofSeconds(k.timeoutSeconds()));
-            log.info("@A2AConsumer: constructed A2AClient(url={}, skillId={}, auth={}, timeoutSeconds={})",
-                k.url(), k.skillId(), k.auth(), k.timeoutSeconds());
+            A2AClient created = new A2AClient(k.url(), k.skillId(), bearer,
+                Duration.ofSeconds(k.timeoutSeconds()), k.pollIntervalMs(), k.pollIntervalMaxMs());
+            log.info("@A2AConsumer: constructed A2AClient(url={}, skillId={}, auth={}, timeoutSeconds={}, "
+                    + "pollIntervalMs={}, pollIntervalMaxMs={})",
+                k.url(), k.skillId(), k.auth(), k.timeoutSeconds(), k.pollIntervalMs(), k.pollIntervalMaxMs());
             return created;
         });
 
@@ -279,7 +297,8 @@ public class A2AConsumerBeanPostProcessor implements BeanPostProcessor, Ordered 
      * timeoutSeconds)} tuples share the same client instance — the
      * Java HTTP connection pool is amortised across them.
      */
-    public record A2AClientKey(String url, String skillId, AuthSpec auth, int timeoutSeconds) {
+    public record A2AClientKey(String url, String skillId, AuthSpec auth, int timeoutSeconds,
+                               long pollIntervalMs, long pollIntervalMaxMs) {
         public A2AClientKey {
             Objects.requireNonNull(url, "url");
             Objects.requireNonNull(auth, "auth");

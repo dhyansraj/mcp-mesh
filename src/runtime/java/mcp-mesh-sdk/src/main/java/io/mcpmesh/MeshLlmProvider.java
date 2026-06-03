@@ -66,9 +66,10 @@ public @interface MeshLlmProvider {
     /**
      * Tags for filtering.
      *
-     * <p>Other agents can prefer specific providers via tags.
+     * <p>Other agents can prefer specific providers via tags. Defaults to
+     * no tags.
      */
-    String[] tags() default {"llm", "provider"};
+    String[] tags() default {};
 
     /**
      * Capability version (semver format).

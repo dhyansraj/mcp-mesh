@@ -97,6 +97,21 @@ public final class A2AClient implements AutoCloseable {
     }
 
     public A2AClient(String url, String skillId, A2ABearer auth, Duration defaultTimeout) {
+        this(url, skillId, auth, defaultTimeout, DEFAULT_POLL_INTERVAL_MS, DEFAULT_POLL_INTERVAL_MAX_MS);
+    }
+
+    /**
+     * Full constructor letting the caller override the poll backoff knobs.
+     *
+     * @param pollIntervalMs    initial backoff (ms) between {@code tasks/get}
+     *                          polls; falls back to {@link #DEFAULT_POLL_INTERVAL_MS}
+     *                          when {@code <= 0}.
+     * @param pollIntervalMaxMs cap (ms) on the exponential poll backoff;
+     *                          falls back to {@link #DEFAULT_POLL_INTERVAL_MAX_MS}
+     *                          when {@code <= 0}.
+     */
+    public A2AClient(String url, String skillId, A2ABearer auth, Duration defaultTimeout,
+                     long pollIntervalMs, long pollIntervalMaxMs) {
         if (url == null || url.isEmpty()) {
             throw new IllegalArgumentException("A2AClient: url must be non-empty");
         }
@@ -115,8 +130,8 @@ public final class A2AClient implements AutoCloseable {
         this.auth = auth;
         this.defaultTimeout = defaultTimeout;
         this.objectMapper = MeshObjectMappers.create();
-        this.pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
-        this.pollIntervalMaxMs = DEFAULT_POLL_INTERVAL_MAX_MS;
+        this.pollIntervalMs = pollIntervalMs > 0 ? pollIntervalMs : DEFAULT_POLL_INTERVAL_MS;
+        this.pollIntervalMaxMs = pollIntervalMaxMs > 0 ? pollIntervalMaxMs : DEFAULT_POLL_INTERVAL_MAX_MS;
         // connectTimeout is the TCP-handshake budget; the per-call
         // request timeout is set on each HttpRequest below using the
         // user-supplied or default deadline.
