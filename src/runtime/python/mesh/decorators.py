@@ -2031,6 +2031,8 @@ def a2a_consumer(
     version: str = "1.0.0",
     description: str | None = None,
     timeout: float = 30.0,
+    poll_interval: float = 0.5,
+    poll_interval_max: float = 2.0,
     **kwargs: Any,
 ) -> Callable[[T], T]:
     """Bridge an external A2A v1.0 endpoint into a mesh capability (issue #908).
@@ -2074,6 +2076,11 @@ def a2a_consumer(
         timeout: Default timeout (seconds) for ``A2AClient.send`` calls
             issued by this decorator. Per-call ``send(..., timeout=...)``
             overrides the default.
+        poll_interval: Initial backoff (seconds) between ``tasks/get``
+            polls while a task is non-terminal. Must be > 0. Default
+            ``0.5``.
+        poll_interval_max: Cap (seconds) on the exponential poll backoff.
+            Must be > 0. Default ``2.0``.
         **kwargs: Additional metadata stamped onto the underlying
             ``@mesh.tool`` registration (passed through unchanged).
 
@@ -2134,6 +2141,14 @@ def a2a_consumer(
         raise ValueError("@mesh.a2a_consumer: 'description' must be a string or None")
     if not isinstance(timeout, (int, float)) or timeout <= 0:
         raise ValueError("@mesh.a2a_consumer: 'timeout' must be a positive number")
+    if not isinstance(poll_interval, (int, float)) or poll_interval <= 0:
+        raise ValueError(
+            "@mesh.a2a_consumer: 'poll_interval' must be a positive number"
+        )
+    if not isinstance(poll_interval_max, (int, float)) or poll_interval_max <= 0:
+        raise ValueError(
+            "@mesh.a2a_consumer: 'poll_interval_max' must be a positive number"
+        )
 
     final_skill_id = a2a_skill_id if a2a_skill_id else capability
     user_tags = list(tags) if tags is not None else []
@@ -2165,6 +2180,8 @@ def a2a_consumer(
             skill_id=final_skill_id,
             auth=auth,
             timeout_default=float(timeout),
+            poll_interval=float(poll_interval),
+            poll_interval_max=float(poll_interval_max),
         )
 
         # Detect whether the user function declares the ``_a2a`` parameter.
