@@ -709,15 +709,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
                     for (Map<String, Object> toolCall : toolCalls) {
                         ParsedToolCall parsed = parseToolCall(toolCall);
-                        futures.add(CompletableFuture.supplyAsync(() -> {
-                            log.debug("Executing tool: {} with args: {}", parsed.toolName(), parsed.toolArgs());
-                            String toolResult = executeToolCall(parsed.toolName(), parsed.toolArgs());
-                            return Map.<String, Object>of(
-                                "role", "tool",
-                                "tool_call_id", parsed.toolId(),
-                                "content", toolResult
-                            );
-                        }));
+                        futures.add(CompletableFuture.supplyAsync(() -> buildToolResultMessage(parsed)));
                     }
 
                     // Wait for all tools to complete and add results
@@ -729,19 +721,23 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                     // Sequential execution (default)
                     for (Map<String, Object> toolCall : toolCalls) {
                         ParsedToolCall parsed = parseToolCall(toolCall);
-                        log.debug("Executing tool: {} with args: {}", parsed.toolName(), parsed.toolArgs());
-                        String toolResult = executeToolCall(parsed.toolName(), parsed.toolArgs());
-                        llmMessages.add(Map.of(
-                            "role", "tool",
-                            "tool_call_id", parsed.toolId(),
-                            "content", toolResult
-                        ));
+                        llmMessages.add(buildToolResultMessage(parsed));
                     }
                 }
             }
 
             log.warn("Max iterations ({}) reached for LLM agent {}", maxIterations, functionId);
             return extractLastAssistantContent(llmMessages);
+        }
+
+        private Map<String, Object> buildToolResultMessage(ParsedToolCall parsed) {
+            log.debug("Executing tool: {} with args: {}", parsed.toolName(), parsed.toolArgs());
+            String toolResult = executeToolCall(parsed.toolName(), parsed.toolArgs());
+            return Map.of(
+                "role", "tool",
+                "tool_call_id", parsed.toolId(),
+                "content", toolResult
+            );
         }
 
         private String renderSystemPrompt() {
