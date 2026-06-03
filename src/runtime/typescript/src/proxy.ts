@@ -472,6 +472,18 @@ export async function callMcpTool(
         throw new Error(`MCP error: ${errorMsg}`);
       }
 
+      // Surface tool-level errors. An MCP CallToolResult with isError === true
+      // carries the failure message in its content; the JSON-RPC envelope above
+      // is success in that case. Throw so callers (LLM provider, tool proxy)
+      // re-wrap it instead of returning the error text as a successful result.
+      const innerResult = result.result;
+      if (innerResult && typeof innerResult === "object" && (innerResult as Record<string, unknown>).isError === true) {
+        const toolErr = extractContent(innerResult);
+        const toolErrMsg = typeof toolErr === "string" ? toolErr : JSON.stringify(toolErr);
+        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, toolErrMsg, "error", requestBytes, responseBytes);
+        throw new Error(`MCP tool error: ${toolErrMsg}`);
+      }
+
       // Extract content from result
       const content = extractContent(result.result);
       // Publish success span
