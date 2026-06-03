@@ -1,6 +1,5 @@
 package io.mcpmesh.ai.handlers;
 
-import io.mcpmesh.core.MeshCoreBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -81,45 +80,7 @@ public class GeminiHandler implements LlmProviderHandler {
             String basePrompt,
             List<ToolDefinition> tools,
             OutputSchema outputSchema) {
-
-        String outputMode = determineOutputMode(outputSchema);
-        boolean hasTools = tools != null && !tools.isEmpty();
-
-        // Delegate to Rust core
-        String schemaJson = null;
-        String schemaName = null;
-        if (outputSchema != null) {
-            schemaName = outputSchema.name();
-            try {
-                schemaJson = MAPPER.writeValueAsString(outputSchema.schema());
-            } catch (Exception e) {
-                log.warn("Failed to serialize schema for Rust core: {}", e.getMessage());
-            }
-        }
-
-        boolean hasMediaParams = false;
-        if (tools != null) {
-            for (ToolDefinition tool : tools) {
-                if (tool.inputSchema() != null) {
-                    try {
-                        String toolSchemaJson = MAPPER.writeValueAsString(tool.inputSchema());
-                        try {
-                            if (MeshCoreBridge.detectMediaParams(toolSchemaJson)) {
-                                hasMediaParams = true;
-                                break;
-                            }
-                        } catch (UnsatisfiedLinkError e) {
-                            // Native library unavailable (e.g., CI) — safe default
-                        }
-                    } catch (Exception e) {
-                        log.warn("Failed to serialize tool schema for media params detection: {}", e.getMessage());
-                    }
-                }
-            }
-        }
-
-        return MeshCoreBridge.formatSystemPrompt(
-            "gemini", basePrompt, hasTools, hasMediaParams, schemaJson, schemaName, outputMode);
+        return formatSystemPromptViaCore(basePrompt, tools, outputSchema);
     }
 
     // =========================================================================
