@@ -459,3 +459,37 @@ describe("ResponseParseError", () => {
     expect(error.name).toBe("ResponseParseError");
   });
 });
+
+describe("single-value-as-array leniency (hint-mode drift, #1142)", () => {
+  const schema = z.object({
+    summary: z.string(),
+    insights: z.array(z.string()),
+  });
+
+  it("should coerce a scalar string into a single-element array", () => {
+    const parser = new ResponseParser(schema);
+    const result = parser.parse('{"summary": "ok", "insights": "only-one"}');
+    expect(result).toEqual({ summary: "ok", insights: ["only-one"] });
+  });
+
+  it("should leave a well-shaped array unchanged (no-op for strict output)", () => {
+    const parser = new ResponseParser(schema);
+    const result = parser.parse('{"summary": "ok", "insights": ["a", "b"]}');
+    expect(result).toEqual({ summary: "ok", insights: ["a", "b"] });
+  });
+
+  it("should coerce a scalar for an optional array field", () => {
+    const optionalSchema = z.object({
+      tags: z.array(z.string()).optional(),
+    });
+    const parser = new ResponseParser(optionalSchema);
+    const result = parser.parse('{"tags": "urgent"}');
+    expect(result).toEqual({ tags: ["urgent"] });
+  });
+
+  it("should not touch non-array scalar fields", () => {
+    const parser = new ResponseParser(schema);
+    const result = parser.parse('{"summary": "ok", "insights": ["a"]}');
+    expect(result).toEqual({ summary: "ok", insights: ["a"] });
+  });
+});

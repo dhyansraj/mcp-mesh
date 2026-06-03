@@ -92,6 +92,14 @@ export class ResponseParser<T = string> {
       );
     }
 
+    // Single-value-as-array leniency for hint-mode drift (issue #1142).
+    // Under output_mode=hint the provider embeds the schema in the prompt but
+    // does not enforce it natively, so the LLM can emit a scalar where the schema
+    // declares an array (e.g. "insights": "x" instead of ["x"]). Wrap such scalars
+    // in a single-element array before Zod validation. No-op for well-shaped
+    // (strict) output where the value is already an array.
+    parsed = this.coerceScalarArrayFields(parsed);
+
     // Validate with Zod schema
     const result = this.schema.safeParse(parsed);
     if (!result.success) {
@@ -106,6 +114,60 @@ export class ResponseParser<T = string> {
     }
 
     return result.data;
+  }
+
+  /**
+   * Wrap scalar values in a single-element array for array-typed schema fields.
+   *
+   * Scoped to structured-output response-model parsing. Derives the JSON Schema
+   * from the Zod schema and, for any top-level property of type `array` whose
+   * received value is a non-array, non-null scalar, wraps it in `[value]`. All
+   * other values pass through unchanged, so well-shaped (strict) output where the
+   * value is already an array is unaffected.
+   */
+  private coerceScalarArrayFields(parsed: unknown): unknown {
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      !this.schema
+    ) {
+      return parsed;
+    }
+
+    let jsonSchema: Record<string, unknown>;
+    try {
+      jsonSchema = zodToJsonSchema(this.schema, {
+        $refStrategy: "none",
+      }) as Record<string, unknown>;
+    } catch {
+      // If schema introspection fails, leave the data untouched and let Zod decide.
+      return parsed;
+    }
+
+    const properties = jsonSchema.properties as
+      | Record<string, { type?: string }>
+      | undefined;
+    if (!properties) {
+      return parsed;
+    }
+
+    const obj = parsed as Record<string, unknown>;
+    let result: Record<string, unknown> | null = null;
+    for (const [key, prop] of Object.entries(properties)) {
+      if (prop?.type !== "array") continue;
+      if (!(key in obj)) continue;
+      const value = obj[key];
+      if (value === null || value === undefined || Array.isArray(value)) {
+        continue;
+      }
+      if (result === null) {
+        result = { ...obj };
+      }
+      result[key] = [value];
+    }
+
+    return result ?? parsed;
   }
 
   /**
