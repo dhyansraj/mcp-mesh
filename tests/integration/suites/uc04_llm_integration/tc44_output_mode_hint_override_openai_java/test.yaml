@@ -1,0 +1,299 @@
+# Test Case: @MeshLlm(outputMode="hint") consumer override -> Java OpenAI provider
+# Issue #1112 finding #6: a Java @MeshLlm consumer sets outputMode="hint", which
+# OVERRIDES the OpenAI provider's auto-selected STRICT. The point of this tc is
+# the CONSUMER-side Java wire-send of the override plus the OpenAI provider
+# honoring it.
+# Provider runtime under test: JAVA OpenAI provider (java-gpt-provider).
+#
+# DEDICATED SINGLE-@MeshLlm CONSUMER (issue #1141 workaround):
+# This tc uses a PURPOSE-BUILT minimal Java consumer (hint-override-java) that
+# declares EXACTLY ONE @MeshLlm function (analyzeHint, outputMode="hint"). It does
+# NOT reuse the shared 5-@MeshLlm analyst (llm-mesh-agent).
+#
+# WHY: a confirmed PRE-EXISTING bug (#1141, unrelated to output_mode) makes
+# per-funcId LLM-provider proxies bind UNRELIABLY when one agent declares MANY
+# @MeshLlm functions. On the shared analyst (5 @MeshLlm tools) analyzeHint's proxy
+# frequently never bound, so the override call returned the LOCAL fallback sentinel
+# and the override was never exercised. A dedicated agent with ONE @MeshLlm
+# function is the NORMAL case: its proxy binds reliably (first attempt or two),
+# sidestepping #1141 entirely and letting tc44 cleanly prove finding #6 end-to-end.
+#
+# The single analyzeHint tool mirrors the working analyst `analyze` provider wiring
+# (providerSelector=@Selector(capability="llm"), filter=@Selector(tags={data,tools}),
+# filterMode=ALL) so it resolves the SAME Java OpenAI provider (java-gpt-provider).
+# The ONLY behavioral difference is outputMode="hint".
+#
+# RESPONSE MODEL IS ALL-SCALAR (CountryInfo: country/capital/population, all String),
+# mirroring tc42's Python CountryInfo. This is DELIBERATE: under hint mode there is
+# no native schema enforcement, so a loosely-shaped field (e.g. List<String>) can be
+# returned as a JSON string and trip Java's strict Jackson deserialization — a
+# SEPARATE, orthogonal hint-mode robustness gap tracked as #1142. All-scalar fields
+# are reliably shaped in hint mode, so tc44 proves ONLY the thing under test (is the
+# consumer override honored end-to-end) without colliding with #1142.
+#
+# NOTE on the provider-side marker: the Java provider handler does not emit a
+# reliably-present INFO "output_mode='hint'" marker at default log level (unlike
+# the Python OpenAI handler). Per the project LLM-test convention this tc relies
+# on the structural-output assertions (typed all-scalar CountryInfo fields
+# populated + no error envelope) to prove the override was honored, and SKIPS the
+# log-marker assertion.
+#
+# FALSE-POSITIVE GUARD: analyzeHint falls back to a LOCAL sentinel
+# CountryInfo(country="UNAVAILABLE", capital="UNAVAILABLE", ...) when its @MeshLlm
+# provider dependency is unresolved (llm.isAvailable()==false). CountryInfo has no
+# `source` field, so the unmistakable fallback marker is country=="UNAVAILABLE". The
+# anti-fallback assertions below reject that sentinel so a non-binding proxy fails
+# the test loud rather than passing structurally.
+#
+# READINESS — poll the actual call, NOT a proxy log marker: make the analyzeHint
+# call ITSELF the readiness loop, retrying `meshctl call analyzeHint` until the
+# response is non-fallback (country != "UNAVAILABLE"), capturing that final real
+# response for the assertions (same poll-the-call robustness principle as #1134).
+# With a single-@MeshLlm agent the proxy binds within the first attempt or two.
+#
+# WHY NOT gate on dependencies_total/dependencies_resolved: a Java @MeshLlm
+# provider dependency is bound via the event-driven LLM-proxy path and is NOT
+# reflected in the registry's dependencies_total/dependencies_resolved columns
+# (those count @MeshTool capability deps). For this agent those columns are
+# structurally always 0/0, so a dep-count gate would time out deterministically
+# and a dep-count assertion would fail a genuine success.
+
+name: "Output Mode HINT Override - OpenAI Java Provider"
+description: "Dedicated single-@MeshLlm Java consumer @MeshLlm(outputMode='hint') overrides OpenAI strict on a Java provider; still valid all-scalar structured output (CountryInfo)"
+tags:
+  - llm
+  - openai
+  - structured-output
+  - cross-runtime
+  - java
+  - output-mode-override
+  - hint
+timeout: 480
+pre_run:
+  - routine: global.setup_for_java_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+test:
+  - name: "Copy Java OpenAI (gpt) provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-gpt-provider /workspace/"
+    capture: copy_provider
+  - name: "Copy employee service to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/java-employee-service /workspace/"
+    capture: copy_employee
+  - name: "Copy dedicated single-@MeshLlm hint-override consumer to workspace"
+    handler: shell
+    command: "cp -r /artifacts/hint-override-java /workspace/"
+    capture: copy_consumer
+  - name: "Create env file for Java gpt provider"
+    handler: secrets
+    target: /workspace/java-gpt-provider/.env
+  - name: "Install Maven dependencies for gpt provider"
+    handler: maven-install
+    path: /workspace/java-gpt-provider
+    timeout: 600
+  - name: "Install Maven dependencies for employee service"
+    handler: maven-install
+    path: /workspace/java-employee-service
+    timeout: 600
+  - name: "Install Maven dependencies for hint-override consumer"
+    handler: maven-install
+    path: /workspace/hint-override-java
+    timeout: 600
+  - name: "Start Java gpt provider"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-gpt-provider --env MCP_MESH_HTTP_PORT=0 --env-file /workspace/java-gpt-provider/.env -d
+    capture: start_provider
+  - name: "Wait for gpt-provider to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for gpt-provider agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "gpt-provider"; then
+          echo "gpt-provider registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+          echo "$AGENTS"
+        fi
+        sleep 2
+      done
+      echo "WARNING: gpt-provider not registered within 90s"
+      meshctl list 2>/dev/null || true
+      meshctl logs java-gpt-provider 2>/dev/null | tail -50 || true
+      exit 1
+    capture: wait_provider
+    timeout: 120
+  - name: "Verify provider is running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: provider_list
+  - name: "Start employee service"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/java-employee-service --env MCP_MESH_HTTP_PORT=0 -d
+    capture: start_employee
+  - name: "Wait for employee service"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for employee-service agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "employee-service"; then
+          echo "Employee service registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+          echo "$AGENTS"
+        fi
+        sleep 2
+      done
+      echo "WARNING: Employee service not registered within 90s"
+      meshctl list 2>/dev/null || true
+      meshctl logs employee-service 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_employee
+    timeout: 120
+  - name: "Start dedicated hint-override consumer"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl start /workspace/hint-override-java --env MCP_MESH_HTTP_PORT=0 -d
+    capture: start_consumer
+  - name: "Wait for hint-override consumer to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for hint-override-java agent..."
+      for i in $(seq 1 45); do
+        AGENTS=$(meshctl list 2>/dev/null || echo "")
+        if echo "$AGENTS" | grep -q "hint-override-java"; then
+          echo "hint-override-java registered after $((i*2))s"
+          exit 0
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+          echo "Still waiting... ($((i*2))s)"
+          echo "$AGENTS"
+        fi
+        sleep 2
+      done
+      echo "WARNING: hint-override-java not registered within 90s"
+      meshctl list 2>/dev/null || true
+      meshctl logs hint-override-java 2>/dev/null | tail -20 || true
+      exit 1
+    capture: wait_consumer
+    timeout: 120
+  - name: "Verify all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: list_all
+  - name: "List all tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list --tools"
+    capture: list_tools
+  - name: "Call analyzeHint, retry until non-fallback (poll the actual call)"
+    # ROBUST READINESS: do NOT gate on a proxy log marker. Make the analyzeHint
+    # override call ITSELF the readiness loop — call the exact capability under
+    # test and retry until it returns a real provider response (country !=
+    # "UNAVAILABLE"). With the dedicated single-@MeshLlm consumer the proxy binds
+    # reliably within the first attempt or two (no #1141 multi-funcId race).
+    #
+    # ALL-SCALAR REQUEST: ask for the capital + population of France so the model
+    # returns a deterministic-ish CountryInfo (all-String fields) that is reliably
+    # shaped under hint mode.
+    #
+    # STEP BUDGET: each iteration is one `meshctl call` (agentic loop, ~5-7s) plus
+    # a 5s sleep -> ~12s worst case per attempt. 10 attempts ~= 120s worst case;
+    # the final failure branch then emits the diagnostic log tail. timeout: 180
+    # comfortably exceeds 10*12s + diagnostic margin, so the loop can run ALL
+    # attempts AND print its `meshctl logs` tail before the step timeout fires.
+    #
+    # The FINAL non-fallback response is captured into call_analyze_hint, which all
+    # the anti-fallback + structural assertions below read.
+    handler: shell
+    workdir: /workspace
+    command: |
+      # Diagnostics go to STDERR so the captured STDOUT holds ONLY the raw JSON
+      # `meshctl call` response (jq assertions parse it directly). On success the
+      # lone STDOUT line is `echo "$RESP"`.
+      echo "Polling analyzeHint until non-fallback (proxy for THIS funcId bound)..." >&2
+      ARGS='{"ctx": {"query": "Give me the capital and approximate population of France."}}'
+      RESP=""
+      for i in $(seq 1 10); do
+        RESP=$(meshctl call analyzeHint "$ARGS" 2>/dev/null || echo "")
+        COUNTRY=$(echo "$RESP" | jq -r '.content[0].text | fromjson | .country' 2>/dev/null || echo "")
+        if [ -n "$COUNTRY" ] && [ "$COUNTRY" != "UNAVAILABLE" ] && [ "$COUNTRY" != "null" ]; then
+          echo "analyzeHint returned non-fallback response (country='$COUNTRY') after attempt $i" >&2
+          echo "$RESP"
+          exit 0
+        fi
+        echo "Attempt $i: country='$COUNTRY' (fallback or unparsed), retrying in 5s..." >&2
+        sleep 5
+      done
+      echo "ERROR: analyzeHint still returned the LOCAL fallback sentinel after 10 attempts" >&2
+      echo "Last response:" >&2
+      echo "$RESP" >&2
+      echo "--- hint-override-java logs (tail) ---" >&2
+      meshctl logs hint-override-java 2>/dev/null | tail -80 >&2 || true
+      exit 1
+    capture: call_analyze_hint
+    timeout: 180
+assertions:
+  # --- agents/tools registered ---
+  - expr: "${captured.provider_list} contains 'gpt-provider'"
+    message: "Java OpenAI gpt-provider should be registered"
+  - expr: "${captured.list_all} contains 'employee-service'"
+    message: "Employee service should be registered"
+  - expr: "${captured.list_all} contains 'hint-override-java'"
+    message: "Dedicated hint-override consumer should be registered"
+  - expr: "${captured.list_tools} contains 'analyzeHint'"
+    message: "analyzeHint tool should be available"
+  # --- no MCP error envelope ---
+  - expr: "${captured.call_analyze_hint} not contains '\"isError\":true'"
+    message: "HINT call should not return an MCP error envelope"
+  - expr: "${captured.call_analyze_hint} not contains '\"isError\": true'"
+    message: "HINT call should not return an MCP error envelope (spaced form)"
+  # --- reject the LOCAL FALLBACK sentinel (analyzeHint's fallbackAnalysis) ---
+  # The fallback sets country="UNAVAILABLE" / capital="UNAVAILABLE". If EITHER
+  # matches we are NOT exercising the OpenAI provider under forced HINT — the
+  # override was never sent. These MUST fail the test rather than pass structurally.
+  - expr: "${jq:captured.call_analyze_hint:.content[0].text | fromjson | .country} != 'UNAVAILABLE'"
+    message: "HINT response must come from the mesh LLM provider, not the local fallback (country != 'UNAVAILABLE')"
+  - expr: "${jq:captured.call_analyze_hint:.content[0].text | fromjson | .capital} != 'UNAVAILABLE'"
+    message: "HINT capital must not be the fallback 'UNAVAILABLE' sentinel"
+  - expr: "${jq:captured.call_analyze_hint:.content[0].text | fromjson | .population} not contains 'LLM provider not connected'"
+    message: "HINT population must not be the fallback 'LLM provider not connected' sentinel"
+  # --- valid structured output: typed all-scalar CountryInfo fields populated by the provider ---
+  - expr: "${jq:captured.call_analyze_hint:.content[0].text | fromjson | .country} != ''"
+    message: "HINT analysis should return a non-empty country (typed scalar field populated)"
+  - expr: "${jq:captured.call_analyze_hint:.content[0].text | fromjson | .country} is string"
+    message: "HINT analysis country must be a string"
+  - expr: "${jq:captured.call_analyze_hint:.content[0].text | fromjson | .capital} != ''"
+    message: "HINT analysis should return a non-empty capital (typed scalar field populated)"
+  - expr: "${jq:captured.call_analyze_hint:.content[0].text | fromjson | .capital} is string"
+    message: "HINT analysis capital must be a string"
+  - expr: "${jq:captured.call_analyze_hint:.content[0].text | fromjson | .population} != ''"
+    message: "HINT analysis should return a non-empty population (typed scalar field populated)"
+post_run:
+  - handler: shell
+    workdir: /workspace
+    command: |
+      meshctl stop 2>/dev/null || true
+      pkill -f "spring-boot:run" 2>/dev/null || true
+      pkill -f "java.*gpt-provider" 2>/dev/null || true
+      pkill -f "java.*employee" 2>/dev/null || true
+      pkill -f "java.*hint-override" 2>/dev/null || true
+    ignore_errors: true
+  - routine: global.cleanup_workspace

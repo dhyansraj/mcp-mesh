@@ -158,6 +158,7 @@ class GenericHandler(BaseProviderHandler):
         *,
         streaming: bool = False,
         model: Optional[str] = None,
+        output_mode: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         Apply structured output for generic vendors.
@@ -170,6 +171,9 @@ class GenericHandler(BaseProviderHandler):
             output_type_name: Name of the output type
             model_params: Current model parameters dict
             streaming: Accepted for API symmetry; no-op for the generic handler.
+            output_mode: Accepted for API symmetry (finding #6). The generic
+                handler never enforces a schema (no native primitive can be
+                assumed for unknown vendors), so the override is inert here.
 
         Returns:
             Unmodified model_params (no response_format added)

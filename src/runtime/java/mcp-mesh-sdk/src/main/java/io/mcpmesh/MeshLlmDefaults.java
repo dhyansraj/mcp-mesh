@@ -35,6 +35,33 @@ public final class MeshLlmDefaults {
      */
     public static final double TEMPERATURE_UNSET = Double.NaN;
 
+    /**
+     * Sentinel for an unset {@code outputMode}. When {@code outputMode} equals
+     * this value, no {@code output_mode} is sent on the wire and the provider
+     * auto-selects the structured-output mode per vendor/schema (today's
+     * behavior — zero regression).
+     */
+    public static final String OUTPUT_MODE_UNSET = "";
+
+    /**
+     * {@code outputMode} requesting strict, schema-enforced structured output
+     * (OpenAI response_format, Gemini responseSchema, Anthropic native
+     * output_format / strict).
+     */
+    public static final String OUTPUT_MODE_STRICT = "strict";
+
+    /**
+     * {@code outputMode} requesting prompt-based JSON-hint structured output
+     * (schema instructions injected into the system prompt).
+     */
+    public static final String OUTPUT_MODE_HINT = "hint";
+
+    /**
+     * {@code outputMode} requesting plain text output (no structured-output
+     * enforcement).
+     */
+    public static final String OUTPUT_MODE_TEXT = "text";
+
     private MeshLlmDefaults() {
     }
 }

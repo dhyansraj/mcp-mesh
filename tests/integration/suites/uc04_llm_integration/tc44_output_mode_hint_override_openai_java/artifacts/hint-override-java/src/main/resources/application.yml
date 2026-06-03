@@ -1,0 +1,34 @@
+# MCP Mesh Hint-Override Java Agent Configuration (tc44)
+#
+# Overridable via environment variables:
+#   MCP_MESH_REGISTRY_URL - Registry URL
+#   MCP_MESH_HTTP_PORT    - Agent HTTP port
+#   MCP_MESH_AGENT_NAME   - Agent name
+
+spring:
+  application:
+    name: hint-override-java
+  freemarker:
+    template-loader-path: classpath:/prompts/
+    suffix: .ftl
+
+server:
+  port: ${MCP_MESH_HTTP_PORT:9044}
+
+mesh:
+  registry:
+    url: ${MCP_MESH_REGISTRY_URL:http://localhost:8000}
+  agent:
+    name: ${MCP_MESH_AGENT_NAME:hint-override-java}
+    namespace: ${MCP_MESH_NAMESPACE:default}
+  llm:
+    # Capability-only default; the single @MeshLlm annotation selects the provider.
+    default-provider:
+      capability: llm
+    max-iterations: 5
+    timeout: 30000
+
+logging:
+  level:
+    io.mcpmesh: DEBUG
+    com.example: DEBUG

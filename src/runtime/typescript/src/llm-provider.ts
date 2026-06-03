@@ -540,6 +540,13 @@ export function llmProvider(config: LlmProviderConfig): {
     const resolvedMaxIterations = resolveMaxIterations(modelParams.max_iterations);
     delete modelParams.max_iterations;
 
+    // Issue #1112: extract the consumer-supplied output_mode override. Strip it
+    // from modelParams so it never leaks to the vendor LLM API. Validity is
+    // checked against the known modes; an invalid value is ignored (auto + warn)
+    // below where the effective mode is decided.
+    const outputModeOverrideRaw = modelParams.output_mode;
+    delete modelParams.output_mode;
+
     // Build OutputSchema object for handler (prompt formatting) - generateObject uses it directly
     const outputSchemaObj = outputSchema ? {
       schema: outputSchema,
@@ -574,7 +581,27 @@ export function llmProvider(config: LlmProviderConfig): {
 
     // Determine output mode early (needed for system prompt formatting and prepareRequest)
     const hasTools = request.tools && request.tools.length > 0;
-    const outputMode = handler.determineOutputMode(outputSchemaObj);
+    // Issue #1112: a consumer-supplied output_mode override fully replaces the
+    // provider's auto per-vendor selection. Override wins when present + valid
+    // (one of strict/hint/text); invalid → ignore + warn + auto. When the consumer
+    // omits it (unset), this is byte-identical to today's determineOutputMode().
+    const autoOutputMode = handler.determineOutputMode(outputSchemaObj);
+    let outputMode = autoOutputMode;
+    if (outputModeOverrideRaw !== undefined && outputModeOverrideRaw !== null) {
+      if (
+        outputModeOverrideRaw === "strict" ||
+        outputModeOverrideRaw === "hint" ||
+        outputModeOverrideRaw === "text"
+      ) {
+        outputMode = outputModeOverrideRaw;
+        debug(`Output mode override from consumer: '${outputMode}' (replaces auto '${autoOutputMode}')`);
+      } else {
+        debug(
+          `Ignoring invalid output_mode override '${String(outputModeOverrideRaw)}' ` +
+            `(expected strict/hint/text); falling back to auto '${autoOutputMode}'`
+        );
+      }
+    }
 
     // When tools are present with structured output, we use generateText() with two strategies:
     // 1. HINT mode instructions in the system prompt (DECISION GUIDE + JSON schema + field
@@ -607,6 +634,31 @@ export function llmProvider(config: LlmProviderConfig): {
       }
       return msg;
     });
+
+    // Synthesize a system message when the consumer supplied none but the
+    // hint-mode structured-output instructions still need to reach the model.
+    // In hint mode there is no native response_format backstop (that's
+    // strict-only), so without a system message the schema/JSON instructions
+    // would be silently dropped and the model returns prose — breaking the
+    // consumer's ResponseParser ("Could not extract JSON from response"). We
+    // build it via the same formatSystemPrompt call used for the augment
+    // branch, with an empty base prompt, so it is identical to what augmenting
+    // an empty system message would produce. Gated to hint mode + schema:
+    // strict has the response_format backstop, text has no schema instructions,
+    // and the no-schema case is a no-op — all unchanged.
+    const hasSystemMessage = formattedMessages.some(msg => msg.role === "system");
+    if (!hasSystemMessage && promptOutputMode === "hint" && outputSchemaObj) {
+      const synthesizedContent = handler.formatSystemPrompt(
+        "",
+        request.tools ?? null,  // ToolSchema[] format (OpenAI function calling)
+        outputSchemaObj,
+        promptOutputMode
+      );
+      if (synthesizedContent) {
+        debug(`Synthesized system prompt (${promptOutputMode} mode, no consumer system message): ${synthesizedContent.substring(0, 200)}...`);
+        formattedMessages.unshift({ role: "system", content: synthesizedContent });
+      }
+    }
 
     // Import generateText from ai package
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

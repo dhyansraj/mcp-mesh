@@ -201,7 +201,9 @@ public class AnthropicHandler implements LlmProviderHandler {
             outputSchema != null ? outputSchema.name() : "none",
             toolExecutor != null);
 
-        String outputMode = determineOutputMode(outputSchema);
+        // Effective output mode: honor a consumer-supplied output_mode override
+        // (model_params.output_mode → options), else per-vendor auto-selection.
+        String outputMode = determineOutputMode(outputSchema, LlmProviderHandler.outputModeOverride(options));
         log.debug("AnthropicHandler: Using output mode: {}", outputMode);
 
         // If toolExecutor is null, use no-execution mode (return tool_calls without executing)
@@ -219,15 +221,24 @@ public class AnthropicHandler implements LlmProviderHandler {
             }
         }
 
-        // Format system prompt with structured output instructions
-        String formattedSystemPrompt = formatSystemPrompt(systemPrompt, tools, outputSchema);
+        // Format system prompt with structured output instructions (using the
+        // effective mode so the prompt agrees with the applied enforcement).
+        String formattedSystemPrompt = formatSystemPromptViaCore(systemPrompt, tools, outputSchema, outputMode);
+
+        // Effective schema for native enforcement: strict mode applies
+        // output_format; hint/text rely on prompt instructions only (no native
+        // enforcement), so suppress the schema for the application path.
+        OutputSchema enforcedSchema = OUTPUT_MODE_STRICT.equals(outputMode) ? outputSchema : null;
+        // Tools/prompt hint passed through for the hint-fallback path.
+        List<ToolDefinition> hintTools = tools;
+        OutputSchema hintSchema = OUTPUT_MODE_TEXT.equals(outputMode) ? null : outputSchema;
 
         if (executeTools) {
             // Auto-execution mode: Use ChatClient which handles tool execution automatically
-            return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, outputSchema);
+            return generateWithToolsAutoExecute(model, springMessages, tools, toolExecutor, formattedSystemPrompt, enforcedSchema, hintSchema, hintTools);
         } else {
             // No-execution mode: Use model.call with internalToolExecutionEnabled(false)
-            return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, outputSchema);
+            return generateWithToolsNoExecute(model, springMessages, tools, formattedSystemPrompt, enforcedSchema, hintSchema, hintTools);
         }
     }
 
@@ -240,7 +251,9 @@ public class AnthropicHandler implements LlmProviderHandler {
             List<ToolDefinition> tools,
             ToolExecutorCallback toolExecutor,
             String formattedSystemPrompt,
-            OutputSchema outputSchema) {
+            OutputSchema outputSchema,
+            OutputSchema hintSchema,
+            List<ToolDefinition> hintTools) {
 
         // Convert tools to Spring AI ToolCallback objects
         List<ToolCallback> toolCallbacks = new ArrayList<>();
@@ -317,7 +330,7 @@ public class AnthropicHandler implements LlmProviderHandler {
                     outputSchema.name(), e.getMessage());
 
                 // Rebuild request without output_format, using HINT-mode system prompt
-                String hintSystemPrompt = formatSystemPromptForHintFallback(formattedSystemPrompt, outputSchema, tools);
+                String hintSystemPrompt = formatSystemPromptForHintFallback(formattedSystemPrompt, hintSchema, hintTools);
 
                 ChatClient.ChatClientRequestSpec retrySpec = chatClient.prompt();
                 if (hintSystemPrompt != null && !hintSystemPrompt.isEmpty()) {
@@ -354,7 +367,9 @@ public class AnthropicHandler implements LlmProviderHandler {
             List<Message> springMessages,
             List<ToolDefinition> tools,
             String formattedSystemPrompt,
-            OutputSchema outputSchema) {
+            OutputSchema outputSchema,
+            OutputSchema hintSchema,
+            List<ToolDefinition> hintTools) {
 
         // Replace system message with formatted one
         List<Message> messagesWithFormattedSystem = new ArrayList<>();
@@ -427,7 +442,7 @@ public class AnthropicHandler implements LlmProviderHandler {
                     outputSchema.name(), e.getMessage());
 
                 // Rebuild with HINT-mode detailed instructions
-                String hintSystemPrompt = formatSystemPromptForHintFallback(formattedSystemPrompt, outputSchema, tools);
+                String hintSystemPrompt = formatSystemPromptForHintFallback(formattedSystemPrompt, hintSchema, hintTools);
 
                 // Rebuild messages with hint system prompt
                 List<Message> hintMessages = new ArrayList<>();

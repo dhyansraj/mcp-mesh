@@ -70,6 +70,7 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
     private volatile int defaultMaxTokens = MeshLlmDefaults.MAX_TOKENS_UNSET;
     private volatile double defaultTemperature = MeshLlmDefaults.TEMPERATURE_UNSET;
     private volatile boolean parallelToolCalls = false;
+    private volatile String defaultOutputMode = MeshLlmDefaults.OUTPUT_MODE_UNSET;
 
     private McpHttpClient mcpClient;
     private McpMeshToolProxyFactory proxyFactory;
@@ -156,6 +157,29 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         this.defaultMaxTokens = maxTokens;
         this.defaultTemperature = temperature;
         log.info("@MeshLlm defaults for {}: maxTokens={}, temperature={}", functionId, maxTokens, temperature);
+    }
+
+    /**
+     * Configure the proxy with dependencies, parallel tool calls option,
+     * {@code maxTokens}/{@code temperature} defaults, and the {@code @MeshLlm}
+     * {@code outputMode}.
+     *
+     * <p>Wires the annotation's {@code outputMode} through to the wire
+     * {@code model_params.output_mode} so the provider honors the consumer's
+     * requested structured-output mode. When {@code outputMode} is left unset
+     * ({@link MeshLlmDefaults#OUTPUT_MODE_UNSET}), no {@code output_mode} key is
+     * injected and the provider auto-selects per vendor/schema (zero regression).
+     */
+    public void configure(McpHttpClient mcpClient, McpMeshToolProxyFactory proxyFactory,
+                          ToolInvoker toolInvoker, MeshDependencyInjector dependencyInjector,
+                          String systemPrompt, String contextParamName, int maxIterations,
+                          boolean parallelToolCalls, int maxTokens, double temperature,
+                          String outputMode) {
+        configure(mcpClient, proxyFactory, toolInvoker, dependencyInjector, systemPrompt, contextParamName, maxIterations, parallelToolCalls, maxTokens, temperature);
+        this.defaultOutputMode = outputMode != null ? outputMode : MeshLlmDefaults.OUTPUT_MODE_UNSET;
+        if (!this.defaultOutputMode.isEmpty()) {
+            log.info("@MeshLlm outputMode for {}: {}", functionId, this.defaultOutputMode);
+        }
     }
 
     /**
@@ -613,6 +637,14 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             }
             if (parallelToolCalls && !modelParams.containsKey("parallel_tool_calls")) {
                 modelParams.put("parallel_tool_calls", true);
+            }
+            // output_mode (issue #1112): inject the annotation's resolved mode only
+            // when explicitly set (non-UNSET) AND the escape-hatch modelParams did
+            // not already supply it. Unset → key omitted → provider auto-selects
+            // per vendor/schema (zero regression).
+            if (defaultOutputMode != null && !defaultOutputMode.isEmpty()
+                    && !modelParams.containsKey("output_mode")) {
+                modelParams.put("output_mode", defaultOutputMode);
             }
             return modelParams;
         }

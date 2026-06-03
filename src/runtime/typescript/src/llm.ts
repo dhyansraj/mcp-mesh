@@ -242,7 +242,11 @@ export function llm<
     stop: config.stop,
     inputSchema: JSON.stringify(zodToJsonSchema(config.parameters, { $refStrategy: "none" })),
     returnSchema: config.responseModel ?? config.returns,
-    outputMode: config.outputMode ?? "hint",
+    // Issue #1112: preserve the RAW user value (undefined when unset). The "hint"
+    // default is applied only at the consumer-local schema-hint read site
+    // (MeshLlmAgent.run, llm-agent.ts). Coercing here would make "unset" look
+    // explicit and leak a defaulted output_mode onto the wire (provider regression).
+    outputMode: config.outputMode,
     parallelToolCalls: config.parallelToolCalls ?? false,
     execute: config.execute as LlmToolConfig["execute"],
   };

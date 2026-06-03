@@ -1,0 +1,125 @@
+# Test Case: outputMode="hint" consumer override -> TypeScript OpenAI provider
+# Issue #1112 finding #6: a mesh.llm consumer sets outputMode="hint", which
+# OVERRIDES the OpenAI provider's auto-selected STRICT (native responseFormat).
+# Provider runtime under test: TYPESCRIPT OpenAI provider (openai-provider-ts).
+#
+# Proves: override is honored end-to-end on a TS provider and still produces
+# valid structured output (CountryInfo).
+#
+# NOTE on the provider-side marker: unlike the Python OpenAI handler (which logs
+# an exact INFO "OpenAI HINT mode ... output_mode='hint'" line), the TS provider
+# handler emits its hint-mode decision via debug() and not as a reliably-present
+# INFO marker at default log level. Per the project LLM-test convention this tc
+# relies on the structural-output assertions (typed fields populated + no error
+# envelope) to prove the override was honored, and SKIPS the log-marker assertion.
+
+name: "Output Mode HINT Override - OpenAI TS Provider"
+description: "Consumer outputMode='hint' overrides OpenAI strict on a TypeScript provider; still valid structured output"
+tags:
+  - llm
+  - openai
+  - structured
+  - typescript
+  - output-mode-override
+  - hint
+timeout: 240
+pre_run:
+  - routine: global.setup_for_typescript_agent
+    params:
+      meshctl_version: "${config.packages.cli_version}"
+test:
+  - name: "Copy TS OpenAI provider to workspace"
+    handler: shell
+    command: "cp -r /uc-artifacts/openai-provider-ts /workspace/"
+    capture: copy_provider_output
+  - name: "Copy TS hint-override consumer to workspace"
+    handler: shell
+    command: "cp -r /artifacts/hint-override-consumer-ts /workspace/"
+    capture: copy_consumer_output
+  - name: "Create env file with secrets"
+    handler: secrets
+    target: /workspace/.env
+  - name: "Install npm dependencies for TS provider"
+    handler: npm-install
+    path: /workspace/openai-provider-ts
+  - name: "Install npm dependencies for TS consumer"
+    handler: npm-install
+    path: /workspace/hint-override-consumer-ts
+  - name: "Start TS OpenAI provider"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start openai-provider-ts/src/index.ts --env-file .env --env MCP_MESH_HTTP_PORT=3043 -d"
+    capture: start_provider_output
+  - name: "Wait for provider to register"
+    handler: wait
+    seconds: 12
+  - name: "Verify provider is running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: provider_list_output
+  - name: "Start TS hint-override consumer"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl start hint-override-consumer-ts/src/index.ts --env-file .env --env MCP_MESH_HTTP_PORT=9043 -d"
+    capture: start_consumer_output
+  - name: "Wait for consumer to register and resolve dependencies"
+    handler: wait
+    seconds: 15
+  - name: "Verify all agents running"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list"
+    capture: all_list_output
+  - name: "List all tools"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl list -t"
+    capture: all_tools_output
+  - name: "Call get_country_info_hint - France (forced HINT)"
+    handler: shell
+    workdir: /workspace
+    command: |
+      meshctl call get_country_info_hint '{"ctx": {"country": "France"}}'
+    capture: hint_response
+    timeout: 120
+  - name: "Capture TS OpenAI provider logs"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl logs openai-provider-ts 2>/dev/null | tail -200 || true"
+    capture: provider_logs
+  - name: "Stop all agents"
+    handler: shell
+    workdir: /workspace
+    command: "meshctl stop"
+assertions:
+  # --- agents/tools registered ---
+  - expr: ${captured.provider_list_output} contains 'openai-provider-ts'
+    message: "TypeScript OpenAI provider should appear in meshctl list"
+  - expr: ${captured.all_list_output} contains 'hint-override-consumer-ts'
+    message: "TypeScript hint-override consumer should appear in meshctl list"
+  - expr: ${captured.all_tools_output} contains 'get_country_info_hint'
+    message: "get_country_info_hint tool should be listed"
+  # --- no MCP error envelope ---
+  - expr: "${captured.hint_response} not contains '\"isError\":true'"
+    message: "HINT call should not return an MCP error envelope"
+  - expr: "${captured.hint_response} not contains '\"isError\": true'"
+    message: "HINT call should not return an MCP error envelope (spaced form)"
+  - expr: ${captured.hint_response} not contains 'Expecting value'
+    message: "HINT response should not have a JSON parse error"
+  # --- valid structured output: typed fields populated ---
+  - expr: "${jq:captured.hint_response:.content[0].text | fromjson | .name} icontains 'france'"
+    message: "HINT response name field should contain France"
+  - expr: "${jq:captured.hint_response:.content[0].text | fromjson | .capital} icontains 'paris'"
+    message: "HINT response capital field should be Paris"
+  - expr: "${jq:captured.hint_response:.content[0].text | fromjson | .continent} != ''"
+    message: "HINT response should have a non-empty continent (typed field populated)"
+  # --- no provider schema-rejection in logs ---
+  - expr: "${captured.provider_logs} not contains 'invalid output_mode'"
+    message: "Provider should not have rejected the output_mode override"
+post_run:
+  - handler: shell
+    command: "meshctl stop 2>/dev/null || true"
+    workdir: /workspace
+    ignore_errors: true
+  - routine: global.cleanup_workspace

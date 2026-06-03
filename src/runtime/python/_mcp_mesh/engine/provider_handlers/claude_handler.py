@@ -41,6 +41,7 @@ from .base_provider_handler import (
     BaseProviderHandler,
     has_media_params,
     make_schema_strict,
+    normalize_output_mode_override,
     render_dispatch_status_log,
     sanitize_schema_for_structured_output,
 )
@@ -393,6 +394,7 @@ class ClaudeHandler(BaseProviderHandler):
         *,
         streaming: bool = False,
         model: str | None = None,
+        output_mode: str | None = None,
     ) -> dict[str, Any]:
         """
         Apply Claude-specific structured output for mesh delegation.
@@ -443,12 +445,75 @@ class ClaudeHandler(BaseProviderHandler):
                 ``anthropic/claude-sonnet-4-6``). Used to gate the native
                 ``output_config`` branch — Sonnet 4.5+ / Opus 4.1+ accept the
                 primitive; older models route to synthetic-tool injection.
+            output_mode: Consumer-supplied structured-output mode override
+                (finding #6). When set and valid it fully replaces the
+                capability resolver's auto-selection, mapping onto Claude's
+                EXISTING mode branches:
+
+                - ``"strict"`` → Claude's native server-enforced
+                  ``output_config.format`` branch (Sonnet 4.5+ / Opus 4.1+ on
+                  the native SDK). When the model/SDK cannot server-enforce a
+                  schema (older model, no native SDK), Claude has no
+                  server-side primitive, so it falls back to its safe auto
+                  default (synthetic-tool / HINT) with a warning — mirroring
+                  Gemini's strict-fallback.
+                - ``"hint"`` → prose HINT (schema embedded in the system
+                  prompt). This is Claude's usual auto choice on the LiteLLM /
+                  older-model paths.
+                - ``"text"`` → no schema enforcement (no ``response_format``,
+                  no synthetic tool, no HINT; all structured-output sentinels
+                  cleared).
+
+                Invalid override → ignored (warning logged) + auto-selection.
+                None/unset → identical to today's resolver-driven auto behavior
+                (no regression).
 
         Returns:
             Modified model_params with mode-specific flags + injected
             system prompt
         """
         sanitized_schema = sanitize_schema_for_structured_output(output_schema)
+
+        normalized = normalize_output_mode_override(
+            output_mode, vendor_label="Claude", handler_logger=logger
+        )
+
+        if normalized == "text":
+            # No schema enforcement: emit plain text. Drop response_format and
+            # clear every structured-output sentinel so neither the HINT path,
+            # the synthetic-tool path, nor output_config is engaged.
+            model_params.pop("response_format", None)
+            _clear_structured_output_sentinels(
+                model_params,
+                *_HINT_SENTINELS,
+                *_SYNTHETIC_SENTINELS,
+                *_OUTPUT_CONFIG_SENTINELS,
+            )
+            logger.info(
+                "Claude TEXT mode for '%s' (output_mode='text' override; "
+                "no schema enforcement)",
+                output_type_name or "Response",
+            )
+            return model_params
+
+        if normalized == "hint":
+            # Prose HINT: schema in prompt, response_format dropped. The shared
+            # base helper performs the inject/synthesize/stamp work and pops
+            # response_format; Claude uses ``support_content_blocks=True`` so the
+            # post-prompt-cache content-block list shape is tolerated.
+            self.apply_prose_hint(
+                model_params,
+                sanitized_schema,
+                output_type_name,
+                support_content_blocks=True,
+                logger=logger,
+            )
+            logger.info(
+                "Claude HINT mode for '%s' (output_mode='hint' override; "
+                "schema in prompt, response_format dropped)",
+                output_type_name or "Response",
+            )
+            return model_params
 
         # Centralized mode selection (RFC #1100). The resolver owns the full
         # decision:
@@ -475,6 +540,25 @@ class ClaudeHandler(BaseProviderHandler):
             has_native=self.has_native(),
             streaming=streaming,
         )
+
+        if normalized == "strict" and (
+            caps.structured_output != StructuredOutputMode.OUTPUT_CONFIG
+        ):
+            # OUTPUT_CONFIG is Claude's only server-enforced ("strict")
+            # structured-output primitive, and the resolver only selects it for
+            # capable models (Sonnet 4.5+ / Opus 4.1+) on the native SDK. When
+            # it is unavailable (older model, no native SDK), Claude cannot
+            # server-enforce a schema, so fall back to its safe auto default
+            # (synthetic-tool / HINT) with a warning rather than hard-failing —
+            # mirroring Gemini's strict-fallback.
+            logger.warning(
+                "Claude: output_mode='strict' requested for '%s' but the "
+                "model/SDK do not support server-enforced output_config "
+                "(requires Sonnet 4.5+ / Opus 4.1+ on the native anthropic "
+                "SDK); falling back to the safe default (%s).",
+                output_type_name or "Response",
+                caps.structured_output,
+            )
 
         if caps.structured_output == StructuredOutputMode.OUTPUT_CONFIG:
             # Sonnet 4.5+ / Opus 4.1+ accept Anthropic's first-class

@@ -38,6 +38,7 @@ from .base_provider_handler import (
     BaseProviderHandler,
     has_media_params,
     make_schema_strict,
+    normalize_output_mode_override,
     render_dispatch_status_log,
     sanitize_schema_for_structured_output,
 )
@@ -399,6 +400,7 @@ class GeminiHandler(BaseProviderHandler):
         *,
         streaming: bool = False,
         model: str | None = None,
+        output_mode: str | None = None,
     ) -> dict[str, Any]:
         """
         Apply Gemini-specific structured output for mesh delegation.
@@ -424,8 +426,38 @@ class GeminiHandler(BaseProviderHandler):
         With the kill-switch set, the resolver returns PROSE_HINT and the path
         below is byte-identical to the pre-#1102 default (HINT injected,
         response_format popped).
+
+        OUTPUT_MODE OVERRIDE (finding #6): a valid consumer ``output_mode`` fully
+        replaces the resolver-based auto-selection:
+
+        - ``"strict"`` → server-enforced ``response_json_schema`` when the model
+          / SDK qualify (Gemini-3+, google-genai >= 1.22); otherwise Gemini
+          cannot enforce a schema alongside tools without tripping the
+          ``response_schema`` + tools infinite-loop bug, so it falls back to its
+          safe default (HINT) with a warning.
+        - ``"hint"``   → prose HINT (the resolver's default for tools).
+        - ``"text"``   → no schema enforcement (no response_format, no HINT).
+
+        Invalid override → ignored (warning) + auto-selection.
         """
         sanitized_schema = sanitize_schema_for_structured_output(output_schema)
+        normalized = normalize_output_mode_override(
+            output_mode, vendor_label="Gemini", handler_logger=logger
+        )
+
+        if normalized == "text":
+            # No schema enforcement: emit plain text. Clear any pending schema
+            # state and drop response_format so neither the HINT path nor the
+            # native primitive is engaged.
+            clear_pending_output_schema()
+            model_params.pop("response_format", None)
+            model_params.pop(RESPONSE_JSON_SCHEMA_MARKER, None)
+            logger.info(
+                "Gemini TEXT mode for '%s' (output_mode='text' override; "
+                "no schema enforcement)",
+                output_type_name or "Response",
+            )
+            return model_params
 
         # Mode selection (RFC #1100 follow-up). DEFAULT ON: when the model /
         # SDK qualify (Gemini-3+, google-genai >= 1.22), the resolver returns
@@ -446,7 +478,32 @@ class GeminiHandler(BaseProviderHandler):
             ),
         )
 
-        if caps.structured_output == StructuredOutputMode.RESPONSE_JSON_SCHEMA:
+        # Override resolution. "strict" demands the native server-enforced
+        # primitive; "hint" demands prose HINT. When no override is set the
+        # resolver's auto decision stands (no regression).
+        if normalized == "strict":
+            if caps.structured_output != StructuredOutputMode.RESPONSE_JSON_SCHEMA:
+                # Gemini cannot safely enforce a schema alongside tools unless
+                # the Gemini-3 ``response_json_schema`` primitive is available;
+                # the legacy ``response_schema`` + tools combo infinite-loops.
+                # Fall back to the safe default (HINT) with a warning rather
+                # than hard-failing the request.
+                logger.warning(
+                    "Gemini: output_mode='strict' requested for '%s' but the "
+                    "model/SDK do not support server-enforced response_json_schema "
+                    "with tools (requires Gemini-3+ and google-genai >= 1.22); "
+                    "falling back to HINT mode.",
+                    output_type_name or "Response",
+                )
+                effective_mode = StructuredOutputMode.PROSE_HINT
+            else:
+                effective_mode = StructuredOutputMode.RESPONSE_JSON_SCHEMA
+        elif normalized == "hint":
+            effective_mode = StructuredOutputMode.PROSE_HINT
+        else:
+            effective_mode = caps.structured_output
+
+        if effective_mode == StructuredOutputMode.RESPONSE_JSON_SCHEMA:
             # Server-enforced structured output WITH tools. Do NOT set
             # _mesh_hint_mode, do NOT pop response_format. Stamp the marker and
             # carry the strict schema in response_format (the adapter reads it

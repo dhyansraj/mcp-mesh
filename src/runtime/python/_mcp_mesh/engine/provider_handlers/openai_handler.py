@@ -15,7 +15,10 @@ from pydantic import BaseModel
 from .base_provider_handler import (
     BaseProviderHandler,
     has_media_params,
+    make_schema_strict,
+    normalize_output_mode_override,
     render_dispatch_status_log,
+    sanitize_schema_for_structured_output,
 )
 
 logger = logging.getLogger(__name__)
@@ -220,6 +223,85 @@ class OpenAIHandler(BaseProviderHandler):
             schema_name,
             output_mode,
         )
+
+    def apply_structured_output(
+        self,
+        output_schema: dict[str, Any],
+        output_type_name: Optional[str],
+        model_params: dict[str, Any],
+        *,
+        streaming: bool = False,
+        model: Optional[str] = None,
+        output_mode: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        Apply OpenAI structured output for mesh delegation.
+
+        AUTO (output_mode unset/None): RESPONSE_FORMAT_STRICT — native
+        ``response_format`` with ``strict: true`` (identical to the base
+        behavior used before finding #6). This is the no-regression default.
+
+        OVERRIDE (finding #6): when the consumer supplies a valid ``output_mode``
+        it fully replaces auto-selection, mapping onto the same per-mode
+        behaviors already used elsewhere:
+
+        - ``"strict"`` → native ``response_format`` (same as AUTO).
+        - ``"hint"``   → embed the schema in the system prompt (prose HINT) and
+          drop ``response_format`` — the shared ``apply_prose_hint`` stamps the
+          ``_mesh_hint_*`` sentinels the agentic loop already understands.
+        - ``"text"``   → no schema enforcement (no ``response_format``, no HINT).
+
+        Invalid override → ignored (warning logged) + AUTO.
+        """
+        normalized = normalize_output_mode_override(
+            output_mode, vendor_label="OpenAI", handler_logger=logger
+        )
+
+        if normalized == "hint":
+            sanitized_schema = sanitize_schema_for_structured_output(output_schema)
+            self.apply_prose_hint(
+                model_params,
+                sanitized_schema,
+                output_type_name,
+                support_content_blocks=False,
+                logger=logger,
+            )
+            logger.info(
+                "OpenAI HINT mode for '%s' (output_mode='hint' override; "
+                "schema in prompt, response_format dropped)",
+                output_type_name or "Response",
+            )
+            return model_params
+
+        if normalized == "text":
+            # No schema enforcement: strip any response_format that a prior code
+            # path may have set; emit plain text.
+            model_params.pop("response_format", None)
+            logger.info(
+                "OpenAI TEXT mode for '%s' (output_mode='text' override; "
+                "no schema enforcement)",
+                output_type_name or "Response",
+            )
+            return model_params
+
+        # normalized in ("strict", None) → native response_format (AUTO default).
+        sanitized_schema = sanitize_schema_for_structured_output(output_schema)
+        strict_schema = make_schema_strict(sanitized_schema, add_all_required=True)
+        model_params["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": output_type_name or "Response",
+                "schema": strict_schema,
+                "strict": True,
+            },
+        }
+        if normalized == "strict":
+            logger.info(
+                "OpenAI STRICT mode for '%s' (output_mode='strict' override; "
+                "native response_format)",
+                output_type_name or "Response",
+            )
+        return model_params
 
     def get_vendor_capabilities(self) -> dict[str, bool]:
         """

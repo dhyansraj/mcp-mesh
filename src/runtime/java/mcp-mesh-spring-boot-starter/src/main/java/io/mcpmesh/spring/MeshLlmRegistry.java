@@ -2,6 +2,7 @@ package io.mcpmesh.spring;
 
 import io.mcpmesh.FilterMode;
 import io.mcpmesh.MeshLlm;
+import io.mcpmesh.MeshLlmDefaults;
 import io.mcpmesh.Selector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,7 +35,8 @@ public class MeshLlmRegistry {
         int filterMode,
         int maxTokens,
         double temperature,
-        boolean parallelToolCalls
+        boolean parallelToolCalls,
+        String outputMode
     ) {}
 
     // Registry: functionId -> LlmConfig
@@ -80,7 +82,8 @@ public class MeshLlmRegistry {
             resolveFilterModeOrdinal(System.getenv("MESH_LLM_FILTER_MODE"), annotation.filterMode()),
             annotation.maxTokens(),
             annotation.temperature(),
-            annotation.parallelToolCalls()
+            annotation.parallelToolCalls(),
+            resolveOutputMode(annotation.outputMode(), functionId)
         );
 
         configsByFunctionId.put(functionId, config);
@@ -119,6 +122,37 @@ public class MeshLlmRegistry {
 
     private String getMethodKey(Method method) {
         return method.getDeclaringClass().getName() + "#" + method.getName();
+    }
+
+    /**
+     * Validate the annotation's {@code outputMode}.
+     *
+     * <p>Returns the value unchanged when it is unset
+     * ({@link MeshLlmDefaults#OUTPUT_MODE_UNSET}) or one of the recognized modes
+     * ({@code strict}/{@code hint}/{@code text}). An unrecognized value is logged
+     * as a warning and treated as unset so the provider falls back to its
+     * per-vendor auto-selection (zero regression).
+     *
+     * <p>Pure function (functionId is for the warning only) so it is unit-testable.
+     *
+     * @param annotationVal the raw {@code @MeshLlm(outputMode=...)} value
+     * @param functionId    the function id for diagnostics
+     * @return the validated mode, or {@link MeshLlmDefaults#OUTPUT_MODE_UNSET} if invalid
+     */
+    static String resolveOutputMode(String annotationVal, String functionId) {
+        if (annotationVal == null || annotationVal.isEmpty()) {
+            return MeshLlmDefaults.OUTPUT_MODE_UNSET;
+        }
+        switch (annotationVal) {
+            case MeshLlmDefaults.OUTPUT_MODE_STRICT:
+            case MeshLlmDefaults.OUTPUT_MODE_HINT:
+            case MeshLlmDefaults.OUTPUT_MODE_TEXT:
+                return annotationVal;
+            default:
+                log.warn("@MeshLlm(outputMode=\"{}\") on {} is not a recognized mode "
+                    + "(strict|hint|text); ignoring — provider auto-selects.", annotationVal, functionId);
+                return MeshLlmDefaults.OUTPUT_MODE_UNSET;
+        }
     }
 
     /**

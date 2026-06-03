@@ -1,6 +1,7 @@
 package io.mcpmesh.spring;
 
 import io.mcpmesh.FilterMode;
+import io.mcpmesh.MeshLlmDefaults;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -71,5 +72,28 @@ class MeshLlmRegistryEnvResolutionTest {
             MeshLlmRegistry.resolveFilterModeOrdinal(null, FilterMode.BEST_MATCH));
         assertEquals(FilterMode.BEST_MATCH.ordinal(),
             MeshLlmRegistry.resolveFilterModeOrdinal("  ", FilterMode.BEST_MATCH));
+    }
+
+    @Test
+    @DisplayName("resolveOutputMode: valid modes are returned verbatim")
+    void outputModeValidReturned() {
+        assertEquals("strict", MeshLlmRegistry.resolveOutputMode("strict", "fn"));
+        assertEquals("hint", MeshLlmRegistry.resolveOutputMode("hint", "fn"));
+        assertEquals("text", MeshLlmRegistry.resolveOutputMode("text", "fn"));
+    }
+
+    @Test
+    @DisplayName("resolveOutputMode: unset (null/empty) stays unset")
+    void outputModeUnsetStaysUnset() {
+        assertEquals(MeshLlmDefaults.OUTPUT_MODE_UNSET, MeshLlmRegistry.resolveOutputMode(null, "fn"));
+        assertEquals(MeshLlmDefaults.OUTPUT_MODE_UNSET, MeshLlmRegistry.resolveOutputMode("", "fn"));
+    }
+
+    @Test
+    @DisplayName("resolveOutputMode: invalid value is ignored → unset (warns)")
+    void outputModeInvalidFallsBackToUnset() {
+        assertEquals(MeshLlmDefaults.OUTPUT_MODE_UNSET, MeshLlmRegistry.resolveOutputMode("bogus", "fn"));
+        // case-sensitive
+        assertEquals(MeshLlmDefaults.OUTPUT_MODE_UNSET, MeshLlmRegistry.resolveOutputMode("STRICT", "fn"));
     }
 }

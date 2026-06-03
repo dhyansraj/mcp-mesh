@@ -344,6 +344,17 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             Object ptc = modelParams.remove("parallel_tool_calls");
             parallelToolCalls = Boolean.TRUE.equals(ptc) || "true".equals(String.valueOf(ptc));
         }
+
+        // Extract consumer-supplied output_mode override (issue #1112). When absent
+        // or invalid the handler falls back to per-vendor auto-selection (zero
+        // regression). Threaded to handlers via the options map.
+        Map<String, Object> handlerOptions = new LinkedHashMap<>();
+        if (modelParams != null) {
+            Object om = modelParams.get("output_mode");
+            if (om != null && !String.valueOf(om).isEmpty()) {
+                handlerOptions.put(LlmProviderHandler.OPTION_OUTPUT_MODE, String.valueOf(om));
+            }
+        }
         if (parallelToolCalls) {
             log.info("Provider parallel tool calls enabled — tools will execute concurrently via CompletableFuture");
         }
@@ -381,7 +392,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                     // Format system prompt with output schema
                     OutputSchema outputSchema = parseOutputSchema(outputSchemaData, outputTypeName);
                     LlmProviderHandler.LlmResponse llmResponse = generateWithOutputSchemaFull(
-                        handler, model, messages, outputSchema);
+                        handler, model, messages, outputSchema, handlerOptions);
                     response.put("content", llmResponse.content());
                     response.put("tool_calls", List.of());
                     usageMeta = llmResponse.usage();
@@ -418,7 +429,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                     for (int iteration = 0; iteration < maxIterations; iteration++) {
                         // Call LLM WITHOUT auto-execution (toolExecutor=null returns tool_calls)
                         LlmProviderHandler.LlmResponse llmResponse = handler.generateWithTools(
-                            model, currentMessages, toolDefs, null, outputSchema, Map.of()
+                            model, currentMessages, toolDefs, null, outputSchema, handlerOptions
                         );
 
                         if (llmResponse.toolCalls() == null || llmResponse.toolCalls().isEmpty()) {
@@ -510,7 +521,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                         toolEndpoints, config.provider(), mediaStore);
 
                     LlmProviderHandler.LlmResponse llmResponse = handler.generateWithTools(
-                        model, messages, toolDefs, executorCallback, outputSchema, Map.of()
+                        model, messages, toolDefs, executorCallback, outputSchema, handlerOptions
                     );
 
                     response.put("content", llmResponse.content());
@@ -521,7 +532,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
                     log.debug("Using tool-aware generation with {} tools (no auto-execution)", cleanTools.size());
 
                     LlmProviderHandler.LlmResponse llmResponse = generateWithToolsNoExecution(
-                        handler, model, messages, toolDefs, outputSchema
+                        handler, model, messages, toolDefs, outputSchema, handlerOptions
                     );
 
                     response.put("content", llmResponse.content());
@@ -610,12 +621,13 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             LlmProviderHandler handler,
             ChatModel model,
             List<Map<String, Object>> messages,
-            OutputSchema outputSchema) {
+            OutputSchema outputSchema,
+            Map<String, Object> options) {
 
         // Delegate to handler which has proper vendor-specific response_format
         // Pass empty tools list and null executor (no tool execution needed)
         return handler.generateWithTools(
-            model, messages, List.of(), null, outputSchema, Map.of()
+            model, messages, List.of(), null, outputSchema, options
         );
     }
 
@@ -638,7 +650,8 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
             ChatModel model,
             List<Map<String, Object>> messages,
             List<ToolDefinition> toolDefs,
-            OutputSchema outputSchema) {
+            OutputSchema outputSchema,
+            Map<String, Object> options) {
 
         // Delegate to handler which has proper vendor-specific options (response_format for OpenAI/Gemini)
         // The handler's generateWithTools() already handles:
@@ -652,7 +665,7 @@ public class MeshLlmProviderProcessor implements BeanPostProcessor, ApplicationC
 
         log.debug("Delegating to handler.generateWithTools() with {} tools (no execution)", toolDefs.size());
 
-        return handler.generateWithTools(model, messages, toolDefs, null, outputSchema, Map.of());
+        return handler.generateWithTools(model, messages, toolDefs, null, outputSchema, options);
     }
     /**
      * Extract _mesh_endpoint from tool definitions and build endpoint map.
