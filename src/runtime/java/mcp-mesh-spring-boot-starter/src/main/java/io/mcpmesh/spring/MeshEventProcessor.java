@@ -168,16 +168,21 @@ public class MeshEventProcessor implements SmartLifecycle {
         log.info("Agent registered with mesh: {}", event.getAgentId());
     }
 
-    private void handleDependencyAvailable(MeshEvent event) {
-        log.info("Dependency available: {} at {} (requestingFunction={}, depIndex={})",
-            event.getCapability(), event.getEndpoint(),
-            event.getRequestingFunction(), event.getDepIndex());
+    private void updateWrapperDep(MeshEvent event, boolean available) {
+        if (available) {
+            log.info("Dependency available: {} at {} (requestingFunction={}, depIndex={})",
+                event.getCapability(), event.getEndpoint(),
+                event.getRequestingFunction(), event.getDepIndex());
+        } else {
+            log.info("Dependency unavailable: {} (requestingFunction={}, depIndex={})",
+                event.getCapability(), event.getRequestingFunction(), event.getDepIndex());
+        }
 
         // Update legacy injector
         injector.updateToolDependency(
             event.getCapability(),
-            event.getEndpoint(),
-            event.getFunctionName()
+            available ? event.getEndpoint() : null,
+            available ? event.getFunctionName() : null
         );
 
         // Update wrapper registry with composite key
@@ -186,33 +191,24 @@ public class MeshEventProcessor implements SmartLifecycle {
                 event.getRequestingFunction(),
                 event.getDepIndex()
             );
-            wrapperRegistry.updateDependency(
-                compositeKey,
-                event.getEndpoint(),
-                event.getFunctionName()
-            );
+            if (available) {
+                wrapperRegistry.updateDependency(
+                    compositeKey,
+                    event.getEndpoint(),
+                    event.getFunctionName()
+                );
+            } else {
+                wrapperRegistry.markDependencyUnavailable(compositeKey);
+            }
         }
     }
 
+    private void handleDependencyAvailable(MeshEvent event) {
+        updateWrapperDep(event, true);
+    }
+
     private void handleDependencyUnavailable(MeshEvent event) {
-        log.info("Dependency unavailable: {} (requestingFunction={}, depIndex={})",
-            event.getCapability(), event.getRequestingFunction(), event.getDepIndex());
-
-        // Update legacy injector
-        injector.updateToolDependency(
-            event.getCapability(),
-            null,
-            null
-        );
-
-        // Mark wrapper dependency as unavailable
-        if (event.getRequestingFunction() != null && event.getDepIndex() != null) {
-            String compositeKey = MeshToolWrapperRegistry.buildDependencyKey(
-                event.getRequestingFunction(),
-                event.getDepIndex()
-            );
-            wrapperRegistry.markDependencyUnavailable(compositeKey);
-        }
+        updateWrapperDep(event, false);
     }
 
     private void handleLlmToolsUpdated(MeshEvent event) {
