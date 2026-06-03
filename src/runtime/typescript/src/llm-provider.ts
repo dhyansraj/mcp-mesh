@@ -193,6 +193,49 @@ export function extractModelName(model: string): string {
   return model;
 }
 
+/**
+ * Coerce an arbitrary value to a positive integer iteration cap, or undefined
+ * when it is unset/invalid (NaN, non-finite, <= 0, or floors to 0). Floors
+ * BEFORE the > 0 check so fractional values in (0,1) are rejected, not zeroed.
+ * Single source of truth for max-iterations normalization.
+ */
+export function sanitizeMaxIterations(value: unknown): number | undefined {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/**
+ * Parse MESH_LLM_MAX_ITERATIONS into a positive integer, or undefined when
+ * unset/empty/invalid. Single source of truth for env parsing of the cap.
+ */
+export function envMaxIterations(): number | undefined {
+  return sanitizeMaxIterations(process.env.MESH_LLM_MAX_ITERATIONS);
+}
+
+/**
+ * Issue #1116: resolve the provider-managed agentic-loop cap.
+ *
+ * Precedence: consumer-forwarded ``model_params.max_iterations`` →
+ * ``MESH_LLM_MAX_ITERATIONS`` env → default 10. Invalid inputs (NaN, <= 0,
+ * non-finite, non-numeric, fractional <1) fall back to 10. Fractional values
+ * are floored BEFORE the >0 check, so e.g. 0.5 → 0 → default (not a zero cap).
+ * Matches Python parity in ``mesh/helpers.py``.
+ *
+ * Note: a *present* paramValue (even if invalid) never falls through to the
+ * env branch — invalid param → default. The env branch is consulted only when
+ * the param is ABSENT. For TS consumers this means the provider-host env only
+ * applies when the consumer does not forward a cap: run()/stream() always
+ * forward one, so provider-side MESH_LLM_MAX_ITERATIONS primarily affects
+ * non-forwarding / other-language / raw callers.
+ */
+export function resolveMaxIterations(paramValue: unknown): number {
+  const DEFAULT = 10;
+  if (paramValue !== undefined) {
+    return sanitizeMaxIterations(paramValue) ?? DEFAULT;
+  }
+  return envMaxIterations() ?? DEFAULT;
+}
+
 // ============================================================================
 // Vercel AI SDK Integration
 // ============================================================================
@@ -492,6 +535,11 @@ export function llmProvider(config: LlmProviderConfig): {
       debug("🔀 Provider parallel tool calls enabled — tools will execute concurrently via Promise.all()");
     }
 
+    // Resolve provider-managed loop cap. Precedence: model_params.max_iterations
+    // (consumer-forwarded) → MESH_LLM_MAX_ITERATIONS env → default 10.
+    const resolvedMaxIterations = resolveMaxIterations(modelParams.max_iterations);
+    delete modelParams.max_iterations;
+
     // Build OutputSchema object for handler (prompt formatting) - generateObject uses it directly
     const outputSchemaObj = outputSchema ? {
       schema: outputSchema,
@@ -735,8 +783,8 @@ export function llmProvider(config: LlmProviderConfig): {
       if (useMaxSteps) {
         // Gemini: let AI SDK manage the agentic loop via maxSteps.
         // AI SDK preserves thought_signature across turns automatically.
-        requestOptions.maxSteps = 10;
-        debug(`Gemini provider-managed loop via maxSteps=10 (AI SDK preserves thought_signature)`);
+        requestOptions.maxSteps = resolvedMaxIterations;
+        debug(`Gemini provider-managed loop via maxSteps=${resolvedMaxIterations} (AI SDK preserves thought_signature)`);
       }
       // Note: for non-Gemini vendors, maxSteps is NOT set. We manage
       // the agentic loop manually so that providerOptions (including
@@ -864,7 +912,7 @@ export function llmProvider(config: LlmProviderConfig): {
       // (including response_format for structured output) is applied on
       // EVERY LLM call, not just the first one.
       let iteration = 0;
-      const maxIterations = 10;
+      const maxIterations = resolvedMaxIterations;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let currentMessages: any[] = [...convertedMessages];
 
