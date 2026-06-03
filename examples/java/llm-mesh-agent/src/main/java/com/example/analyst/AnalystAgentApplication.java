@@ -168,6 +168,82 @@ public class AnalystAgentApplication {
     }
 
     /**
+     * Generate a NESTED structured report using LLM with mesh delegation.
+     *
+     * <p>Unlike {@link #analyze}, whose {@link AnalysisResult} is flat
+     * (primitives + {@code List<String>}), this endpoint returns a deeply
+     * nested {@link StructuredReport}: a record-of-record ({@link ReportMeta}),
+     * a {@code List} of nested records ({@link Finding}), an enum
+     * ({@link Sentiment}), and a nullable field. This exercises the
+     * victools schema generator + {@code MeshSchemaSupport.inlineRefs}
+     * flattening path against real vendor structured-output APIs.
+     *
+     * <p>No tools are needed; the LLM is asked for a small fixed-shape report
+     * so assertions can be structural.
+     *
+     * @param topic Topic to produce a structured report about
+     * @param llm   Injected LLM agent proxy (delegates to mesh provider)
+     * @return Nested structured report
+     */
+    @MeshLlm(
+        providerSelector = @Selector(capability = "llm"),
+        maxIterations = 1,
+        systemPrompt = "You are a report generator. Produce a concise structured report "
+            + "with a summary, metadata (author and overall sentiment), and a short "
+            + "list of findings (each with a title, a detail, and a severity 1-5).",
+        maxTokens = 2048,
+        temperature = 0.3
+    )
+    @MeshTool(
+        capability = "structuredReport",
+        description = "Generate a nested structured report using mesh LLM",
+        tags = {"report", "llm", "java", "structured"}
+    )
+    public StructuredReport structuredReport(
+        @Param(value = "topic", description = "Topic for the report") String topic,
+        MeshLlmAgent llm
+    ) {
+        log.info("Generating structured report for topic: {}", topic);
+
+        if (llm == null || !llm.isAvailable()) {
+            log.warn("LLM provider not available, returning fallback report");
+            return fallbackReport();
+        }
+
+        try {
+            StructuredReport result = llm.request()
+                .user("Produce a structured report about: " + topic
+                    + ". Include a one-sentence summary, metadata with an author name and an "
+                    + "overall sentiment (POSITIVE, NEUTRAL, or NEGATIVE), and 2 to 3 findings, "
+                    + "each with a title, a detail, and a severity from 1 to 5.")
+                .maxTokens(2048)
+                .temperature(0.3)
+                .generate(StructuredReport.class);
+
+            var meta = llm.request().lastMeta();
+            if (meta != null) {
+                log.info("Report generation completed: {} iterations, {}ms latency",
+                    meta.iterations(), meta.latencyMs());
+            }
+
+            return result;
+
+        } catch (Exception e) {
+            log.error("Report generation failed: {}", e.getMessage(), e);
+            return fallbackReport();
+        }
+    }
+
+    private StructuredReport fallbackReport() {
+        return new StructuredReport(
+            "Report unavailable - LLM provider not connected",
+            new ReportMeta("system", Sentiment.NEUTRAL),
+            List.of(new Finding("LLM unavailable", "Please check mesh connectivity", 5)),
+            null
+        );
+    }
+
+    /**
      * Simple chat endpoint using mesh LLM with fluent builder.
      *
      * <p>Demonstrates the fluent builder for simple text generation.
@@ -343,5 +419,57 @@ public class AnalystAgentApplication {
         String response,
         String timestamp,
         String source
+    ) {}
+
+    /**
+     * Overall sentiment of a structured report.
+     *
+     * <p>An enum field forces victools to emit an {@code enum} constraint in
+     * the generated schema, which {@code MeshSchemaSupport.inlineRefs} must
+     * preserve through ref-flattening.
+     */
+    public enum Sentiment {
+        POSITIVE,
+        NEUTRAL,
+        NEGATIVE
+    }
+
+    /**
+     * A single finding within a structured report (a nested record).
+     */
+    public record Finding(
+        String title,
+        String detail,
+        int severity
+    ) {}
+
+    /**
+     * Report metadata (a record nested inside {@link StructuredReport}).
+     *
+     * <p>Exercises the record-of-record path: victools emits this as a
+     * {@code $ref}/{@code $defs} entry that {@code inlineRefs} must flatten.
+     */
+    public record ReportMeta(
+        String author,
+        Sentiment sentiment
+    ) {}
+
+    /**
+     * Deeply NESTED structured report record.
+     *
+     * <p>Exercises the constructs that {@code MeshSchemaSupport.inlineRefs}
+     * flattens, end-to-end against real vendor structured-output APIs:
+     * <ul>
+     *   <li>{@code meta} - a nested record ({@link ReportMeta}) containing an enum</li>
+     *   <li>{@code findings} - a {@code List} of nested records ({@link Finding})</li>
+     *   <li>{@code reviewer} - a nullable/optional field (victools should emit
+     *       {@code anyOf:[{...},{type:null}]} for a non-primitive nullable)</li>
+     * </ul>
+     */
+    public record StructuredReport(
+        String summary,
+        ReportMeta meta,
+        List<Finding> findings,
+        String reviewer
     ) {}
 }

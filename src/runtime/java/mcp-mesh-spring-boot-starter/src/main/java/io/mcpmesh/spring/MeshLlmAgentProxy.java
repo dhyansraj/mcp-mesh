@@ -1,6 +1,8 @@
 package io.mcpmesh.spring;
 
 import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.MeshLlmDefaults;
 import io.mcpmesh.core.MeshObjectMappers;
@@ -898,109 +900,27 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
         /**
          * Build JSON schema from the response type class.
          *
-         * <p>This generates a JSON Schema object that can be passed to LLM providers
-         * via model_params.output_schema. The provider handler converts this to
-         * vendor-specific structured output format (e.g., response_format for OpenAI/Gemini).
-         *
-         * <p>Uses reflection to inspect record components or class fields.
+         * <p>Routes through the shared victools generator ({@link MeshSchemaSupport#generator()})
+         * — the same generator used for tool input schemas — so the response-model
+         * schema sent to LLM providers via {@code model_params.output_schema} is
+         * richly nested (full {@code properties}/{@code items}/{@code anyOf} expansion),
+         * not the shallow hand-rolled shape. The victools output carries
+         * {@code $defs}/{@code $ref}; {@link MeshSchemaSupport#inlineRefs(Map)}
+         * inlines them so every vendor — including Anthropic hint mode — receives a
+         * self-contained schema.
          *
          * @param type the response type class
          * @return JSON schema as a Map, or null if schema cannot be built
          */
         private Map<String, Object> buildJsonSchema(Class<?> type) {
-            Map<String, Object> schema = new LinkedHashMap<>();
-            schema.put("type", "object");
-
-            Map<String, Object> properties = new LinkedHashMap<>();
-            List<String> required = new ArrayList<>();
-
-            // Handle records - use getGenericType() to preserve parameterized types
-            if (type.isRecord()) {
-                var components = type.getRecordComponents();
-                for (var comp : components) {
-                    properties.put(comp.getName(), getJsonSchemaType(comp.getGenericType()));
-                    required.add(comp.getName());
-                }
-            } else {
-                // Handle regular classes - use declared fields with generic types
-                var fields = type.getDeclaredFields();
-                for (var field : fields) {
-                    if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) continue;
-                    properties.put(field.getName(), getJsonSchemaType(field.getGenericType()));
-                    required.add(field.getName());
-                }
-            }
-
-            schema.put("properties", properties);
-            schema.put("required", required);
-            return schema;
-        }
-
-        /**
-         * Get JSON schema type for a given Java type.
-         *
-         * <p>Handles both raw classes and parameterized types (e.g., List&lt;String&gt;).
-         * For collections, extracts the element type from the generic parameter.
-         *
-         * @param type the Java type (Class or ParameterizedType)
-         * @return JSON schema type object
-         */
-        private Map<String, Object> getJsonSchemaType(java.lang.reflect.Type type) {
-            Map<String, Object> schemaType = new LinkedHashMap<>();
-
-            // Handle parameterized types (e.g., List<String>, Map<String, Object>)
-            if (type instanceof java.lang.reflect.ParameterizedType pt) {
-                Class<?> rawType = (Class<?>) pt.getRawType();
-
-                if (java.util.Collection.class.isAssignableFrom(rawType)) {
-                    schemaType.put("type", "array");
-                    // Get the element type from the generic parameter
-                    java.lang.reflect.Type[] typeArgs = pt.getActualTypeArguments();
-                    if (typeArgs.length > 0) {
-                        schemaType.put("items", getJsonSchemaType(typeArgs[0]));
-                    } else {
-                        schemaType.put("items", Map.of("type", "object"));
-                    }
-                    return schemaType;
-                } else if (java.util.Map.class.isAssignableFrom(rawType)) {
-                    schemaType.put("type", "object");
-                    return schemaType;
-                }
-                // Fall through to handle rawType as a regular class
-                type = rawType;
-            }
-
-            // Handle raw class types
-            if (type instanceof Class<?> clazz) {
-                if (clazz == String.class) {
-                    schemaType.put("type", "string");
-                } else if (clazz == int.class || clazz == Integer.class ||
-                           clazz == long.class || clazz == Long.class) {
-                    schemaType.put("type", "integer");
-                } else if (clazz == double.class || clazz == Double.class ||
-                           clazz == float.class || clazz == Float.class) {
-                    schemaType.put("type", "number");
-                } else if (clazz == boolean.class || clazz == Boolean.class) {
-                    schemaType.put("type", "boolean");
-                } else if (clazz.isArray()) {
-                    schemaType.put("type", "array");
-                    Class<?> componentType = clazz.getComponentType();
-                    schemaType.put("items", getJsonSchemaType(componentType));
-                } else if (java.util.Collection.class.isAssignableFrom(clazz)) {
-                    // Raw collection without type parameter - default to object
-                    schemaType.put("type", "array");
-                    schemaType.put("items", Map.of("type", "object"));
-                } else if (java.util.Map.class.isAssignableFrom(clazz)) {
-                    schemaType.put("type", "object");
-                } else {
-                    schemaType.put("type", "object");
-                }
-            } else {
-                // Unknown type - default to object
-                schemaType.put("type", "object");
-            }
-
-            return schemaType;
+            JsonNode node = MeshSchemaSupport.generator().generateSchema(type);
+            // Rewrite victools' bare "#" root self-reference into "#/$defs/<TypeName>"
+            // (mirrors the tool-schema path) so inlineRefs' cycle guard can collapse
+            // it to a bounded placeholder instead of leaving a non-self-contained "#".
+            node = MeshSchemaSupport.rewriteRootSelfRefs(node, type);
+            Map<String, Object> schema =
+                objectMapper.convertValue(node, new TypeReference<Map<String, Object>>() {});
+            return MeshSchemaSupport.inlineRefs(schema);
         }
     }
 
