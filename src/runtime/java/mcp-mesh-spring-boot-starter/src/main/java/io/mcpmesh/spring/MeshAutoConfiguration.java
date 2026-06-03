@@ -72,8 +72,22 @@ public class MeshAutoConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(MeshAutoConfiguration.class);
 
+    private static final String A2A_DEPS_TOOL = "__mesh_a2a_deps";
+    private static final String DEPENDS_ON_DEPS_TOOL = "__mesh_depends_on_deps";
+    private static final String ROUTE_DEPS_TOOL = "__mesh_route_deps";
+
     @Autowired
     private ApplicationContext applicationContext;
+
+    private static AgentSpec.ToolSpec syntheticDepsTool(
+            String name, String description, List<AgentSpec.DependencySpec> deps) {
+        AgentSpec.ToolSpec tool = new AgentSpec.ToolSpec();
+        tool.setFunctionName(name);
+        tool.setCapability(name);
+        tool.setDescription(description);
+        tool.setDependencies(deps);
+        return tool;
+    }
 
     @Bean
     @ConditionalOnMissingBean
@@ -934,12 +948,8 @@ public class MeshAutoConfiguration {
         if (deps.isEmpty()) {
             return;
         }
-        AgentSpec.ToolSpec syntheticTool = new AgentSpec.ToolSpec();
-        syntheticTool.setFunctionName("__mesh_a2a_deps");
-        syntheticTool.setCapability("__mesh_a2a_deps");
-        syntheticTool.setDescription("Synthetic tool for @MeshA2A dependency resolution");
-        syntheticTool.setDependencies(deps);
-        tools.add(syntheticTool);
+        tools.add(syntheticDepsTool(A2A_DEPS_TOOL,
+            "Synthetic tool for @MeshA2A dependency resolution", deps));
         log.info("Added {} @MeshA2A dependencies to agent registration", deps.size());
     }
 
@@ -1019,12 +1029,8 @@ public class MeshAutoConfiguration {
             return;
         }
 
-        AgentSpec.ToolSpec syntheticTool = new AgentSpec.ToolSpec();
-        syntheticTool.setFunctionName("__mesh_depends_on_deps");
-        syntheticTool.setCapability("__mesh_depends_on_deps");
-        syntheticTool.setDescription("Synthetic tool for @MeshDependsOn dependency resolution");
-        syntheticTool.setDependencies(deps);
-        tools.add(syntheticTool);
+        tools.add(syntheticDepsTool(DEPENDS_ON_DEPS_TOOL,
+            "Synthetic tool for @MeshDependsOn dependency resolution", deps));
         log.info("Added {} @MeshDependsOn dependencies to agent registration", deps.size());
     }
 
@@ -1193,13 +1199,8 @@ public class MeshAutoConfiguration {
         }
 
         // Create synthetic tool for route dependencies
-        AgentSpec.ToolSpec routeDepsTool = new AgentSpec.ToolSpec();
-        routeDepsTool.setFunctionName("__mesh_route_deps");
-        routeDepsTool.setCapability("__mesh_route_deps");
-        routeDepsTool.setDescription("Synthetic tool for @MeshRoute dependency resolution");
-        routeDepsTool.setDependencies(routeDeps);
-
-        tools.add(routeDepsTool);
+        tools.add(syntheticDepsTool(ROUTE_DEPS_TOOL,
+            "Synthetic tool for @MeshRoute dependency resolution", routeDeps));
 
         log.info("Added {} @MeshRoute dependencies to agent registration", routeDeps.size());
     }
