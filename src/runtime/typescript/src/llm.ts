@@ -44,6 +44,7 @@ import type {
   LlmOutputMode,
 } from "./types.js";
 import { MeshLlmAgent, createLlmToolProxy } from "./llm-agent.js";
+import { envMaxIterations } from "./llm-provider.js";
 import { debug } from "./debug.js";
 import { generateTraceId, generateSpanId, publishTraceSpan, matchesPropagateHeader } from "./tracing.js";
 import type { TraceContext } from "./tracing.js";
@@ -443,9 +444,7 @@ export function buildLlmAgentSpecs(): Array<{
       process.env.MESH_LLM_FILTER_MODE || config.filterMode;
 
     // MESH_LLM_MAX_ITERATIONS: Override max iterations
-    const resolvedMaxIterations = process.env.MESH_LLM_MAX_ITERATIONS
-      ? parseInt(process.env.MESH_LLM_MAX_ITERATIONS, 10)
-      : config.maxIterations;
+    const resolvedMaxIterations = envMaxIterations() ?? config.maxIterations;
 
     specs.push({
       functionId: config.functionId,

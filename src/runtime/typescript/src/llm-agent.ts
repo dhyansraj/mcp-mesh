@@ -63,6 +63,7 @@ import {
   type MultiContentResult,
 } from "./proxy.js";
 import { isTimeoutError } from "./timeout-utils.js";
+import { envMaxIterations, sanitizeMaxIterations } from "./llm-provider.js";
 
 /**
  * Configuration for MeshLlmAgent.
@@ -132,6 +133,8 @@ export interface LlmProvider {
       // Issue #1019: escape-hatch for vendor-specific kwargs not exposed by the
       // typed option surface (e.g., thinking_config, output_config, reasoning_effort).
       modelParams?: Record<string, unknown>;
+      // Issue #1116: cap for the provider-managed agentic loop.
+      maxIterations?: number;
     }
   ): Promise<LlmCompletionResponse>;
 }
@@ -171,6 +174,7 @@ export class MeshDelegatedProvider implements LlmProvider {
           stop?: string[];
           outputSchema?: { schema: Record<string, unknown>; name: string };
           modelParams?: Record<string, unknown>;
+          maxIterations?: number;
         }
       | undefined
   ): { request: Record<string, unknown>; args: Record<string, unknown> } {
@@ -200,6 +204,11 @@ export class MeshDelegatedProvider implements LlmProvider {
     // but the provider's agentic loop needs it to decide parallel vs sequential execution.
     if (this.parallelToolCalls) {
       modelParams.parallel_tool_calls = true;
+    }
+    // Issue #1116: forward the provider-managed loop cap. Typed field, so it
+    // takes precedence over any escape-hatch modelParams.max_iterations above.
+    if (options?.maxIterations !== undefined) {
+      modelParams.max_iterations = options.maxIterations;
     }
 
     const request: Record<string, unknown> = {
@@ -234,6 +243,8 @@ export class MeshDelegatedProvider implements LlmProvider {
       // Issue #1019: escape-hatch for vendor-specific kwargs not exposed by the
       // typed option surface (e.g., thinking_config, output_config, reasoning_effort).
       modelParams?: Record<string, unknown>;
+      // Issue #1116: cap for the provider-managed agentic loop.
+      maxIterations?: number;
     }
   ): Promise<LlmCompletionResponse> {
     // Build MeshLlmRequest structure (matches Python claude_provider schema).
@@ -363,6 +374,8 @@ export class MeshDelegatedProvider implements LlmProvider {
       // Issue #1019: escape-hatch for vendor-specific kwargs not exposed by the
       // typed option surface (e.g., thinking_config, output_config, reasoning_effort).
       modelParams?: Record<string, unknown>;
+      // Issue #1116: cap for the provider-managed agentic loop.
+      maxIterations?: number;
     }
   ): AsyncGenerator<string, void, void> {
     // Build MeshLlmRequest body — same shape as complete().
@@ -588,10 +601,9 @@ export class MeshLlmAgent<T = string> {
 
     // Get effective options (runtime options > MESH_LLM_* env > config)
     const maxIterations =
-      context.options?.maxIterations ??
-      (process.env.MESH_LLM_MAX_ITERATIONS
-        ? parseInt(process.env.MESH_LLM_MAX_ITERATIONS, 10)
-        : this.config.maxIterations);
+      sanitizeMaxIterations(context.options?.maxIterations) ??
+      envMaxIterations() ??
+      this.config.maxIterations;
     const maxTokens = context.options?.maxOutputTokens ?? this.config.maxOutputTokens;
     const temperature = context.options?.temperature ?? this.config.temperature;
 
@@ -625,6 +637,8 @@ export class MeshLlmAgent<T = string> {
           outputSchema,
           // Issue #1019: forward caller-supplied escape-hatch kwargs
           modelParams: context.options?.modelParams,
+          // Issue #1116: forward the resolved provider-managed loop cap.
+          maxIterations,
         }
       );
 
@@ -788,6 +802,10 @@ export class MeshLlmAgent<T = string> {
     });
 
     // Effective options (runtime > env > config)
+    const maxIterations =
+      sanitizeMaxIterations(context.options?.maxIterations) ??
+      envMaxIterations() ??
+      this.config.maxIterations;
     const maxTokens = context.options?.maxOutputTokens ?? this.config.maxOutputTokens;
     const temperature = context.options?.temperature ?? this.config.temperature;
 
@@ -817,6 +835,8 @@ export class MeshLlmAgent<T = string> {
         outputSchema,
         // Issue #1019: forward caller-supplied escape-hatch kwargs
         modelParams: context.options?.modelParams,
+        // Issue #1116: forward the resolved provider-managed loop cap.
+        maxIterations,
       },
     );
   }
