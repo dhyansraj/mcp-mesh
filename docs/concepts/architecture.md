@@ -216,7 +216,7 @@ Designed for containers and Kubernetes.
 
 ## Multimodal Pipeline
 
-MCP Mesh v2.3.0 adds a media pipeline that lets tools produce and LLMs consume binary content:
+MCP Mesh v2.4.0 adds a media pipeline that lets tools produce and LLMs consume binary content:
 
 ```
 Tool produces media

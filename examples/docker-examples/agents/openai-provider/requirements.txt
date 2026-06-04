@@ -1,5 +1,5 @@
 # MCP Mesh SDK
-mcp-mesh>=2.3.0
+mcp-mesh>=2.4.0
 
 # FastMCP for MCP server
 fastmcp>=3.0.0,<4.0.0
