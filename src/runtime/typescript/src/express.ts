@@ -378,8 +378,15 @@ export class MeshExpress {
             break;
 
           case "registry_disconnected":
+            // #1131: Log only — RETAIN resolved dependencies on a registry
+            // (control-plane) blip. Already-resolved dependency endpoints are
+            // data-plane: direct agent→agent connections that stay valid while
+            // the registry is unreachable. Clearing them here would permanently
+            // sever those connections, since the Rust core never resets topology
+            // and its diff gate re-emits only CHANGED deps on reconnect (so the
+            // unchanged, still-valid ones would never come back). Matches the
+            // cross-runtime reference behavior (MeshAgent, Python, Java).
             console.warn(`Disconnected from registry: ${event.reason}`);
-            registry.clearAllDependencies();
             break;
 
           case "shutdown":
