@@ -6,7 +6,6 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
@@ -164,25 +163,8 @@ public class OpenAiHandler implements LlmProviderHandler {
             log.debug("Created {} tool callbacks for ChatClient", toolCallbacks.size());
         }
 
-        // Extract non-system messages for user content
-        List<Message> nonSystemMessages = new ArrayList<>();
-        for (Message msg : springMessages) {
-            if (!(msg instanceof SystemMessage)) {
-                nonSystemMessages.add(msg);
-            }
-        }
-
-        // Build user content from remaining messages
-        StringBuilder userContent = new StringBuilder();
-        for (Message msg : nonSystemMessages) {
-            if (msg instanceof UserMessage um) {
-                if (userContent.length() > 0) userContent.append("\n");
-                userContent.append(um.getText());
-            } else if (msg instanceof AssistantMessage am) {
-                if (userContent.length() > 0) userContent.append("\n");
-                userContent.append("[Previous Assistant Response]\n").append(am.getText());
-            }
-        }
+        // Build user content from non-system messages
+        String userContent = buildUserContent(springMessages);
 
         // Use ChatClient with tools
         ChatClient chatClient = ChatClient.create(model);
@@ -194,7 +176,7 @@ public class OpenAiHandler implements LlmProviderHandler {
         }
 
         // Add user content
-        requestSpec.user(userContent.toString());
+        requestSpec.user(userContent);
 
         // Add tools if present - Spring AI handles tool execution automatically
         if (!toolCallbacks.isEmpty()) {
@@ -253,22 +235,7 @@ public class OpenAiHandler implements LlmProviderHandler {
             OutputSchema outputSchema) {
 
         // Replace system message with formatted one
-        List<Message> messagesWithFormattedSystem = new ArrayList<>();
-        boolean addedSystem = false;
-        for (Message msg : springMessages) {
-            if (msg instanceof SystemMessage) {
-                if (!addedSystem && formattedSystemPrompt != null && !formattedSystemPrompt.isEmpty()) {
-                    messagesWithFormattedSystem.add(new SystemMessage(formattedSystemPrompt));
-                    addedSystem = true;
-                }
-            } else {
-                messagesWithFormattedSystem.add(msg);
-            }
-        }
-        // Add system prompt at beginning if not already added
-        if (!addedSystem && formattedSystemPrompt != null && !formattedSystemPrompt.isEmpty()) {
-            messagesWithFormattedSystem.add(0, new SystemMessage(formattedSystemPrompt));
-        }
+        List<Message> messagesWithFormattedSystem = replaceSystemMessage(springMessages, formattedSystemPrompt);
 
         // Create tool callbacks for schema only (no execution)
         List<ToolCallback> toolCallbacks = createToolCallbacksForSchema(tools);

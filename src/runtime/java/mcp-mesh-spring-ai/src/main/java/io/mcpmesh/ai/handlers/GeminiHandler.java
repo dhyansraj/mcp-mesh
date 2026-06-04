@@ -6,19 +6,16 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.ai.google.genai.GoogleGenAiChatOptions;
 import org.springframework.ai.vertexai.gemini.VertexAiGeminiChatModel;
 import org.springframework.ai.vertexai.gemini.VertexAiGeminiChatOptions;
 
 import java.util.*;
-import java.util.function.Function;
 
 /**
  * LLM provider handler for Google Gemini models.
@@ -53,6 +50,12 @@ public class GeminiHandler implements LlmProviderHandler {
     @Override
     public String[] getAliases() {
         return new String[]{"google"};
+    }
+
+    /** Gemini uses a shorter previous-turn prefix than the Anthropic/OpenAI default. */
+    @Override
+    public String previousResponsePrefix() {
+        return "[Previous Response]\n";
     }
 
     // =========================================================================
@@ -185,25 +188,8 @@ public class GeminiHandler implements LlmProviderHandler {
             log.debug("Created {} tool callbacks for ChatClient", toolCallbacks.size());
         }
 
-        // Extract non-system messages
-        List<Message> nonSystemMessages = new ArrayList<>();
-        for (Message msg : springMessages) {
-            if (!(msg instanceof SystemMessage)) {
-                nonSystemMessages.add(msg);
-            }
-        }
-
-        // Build user content from remaining messages
-        StringBuilder userContent = new StringBuilder();
-        for (Message msg : nonSystemMessages) {
-            if (msg instanceof UserMessage um) {
-                if (userContent.length() > 0) userContent.append("\n");
-                userContent.append(um.getText());
-            } else if (msg instanceof AssistantMessage am) {
-                if (userContent.length() > 0) userContent.append("\n");
-                userContent.append("[Previous Response]\n").append(am.getText());
-            }
-        }
+        // Build user content from non-system messages
+        String userContent = buildUserContent(springMessages);
 
         // Use ChatClient with tools
         ChatClient chatClient = ChatClient.create(model);
@@ -215,7 +201,7 @@ public class GeminiHandler implements LlmProviderHandler {
         }
 
         // Add user content
-        requestSpec.user(userContent.toString());
+        requestSpec.user(userContent);
 
         // Add tools if present
         if (!toolCallbacks.isEmpty()) {
@@ -251,22 +237,7 @@ public class GeminiHandler implements LlmProviderHandler {
             OutputSchema outputSchema) {
 
         // Replace system message with formatted one
-        List<Message> messagesWithFormattedSystem = new ArrayList<>();
-        boolean addedSystem = false;
-        for (Message msg : springMessages) {
-            if (msg instanceof SystemMessage) {
-                if (!addedSystem && formattedSystemPrompt != null && !formattedSystemPrompt.isEmpty()) {
-                    messagesWithFormattedSystem.add(new SystemMessage(formattedSystemPrompt));
-                    addedSystem = true;
-                }
-            } else {
-                messagesWithFormattedSystem.add(msg);
-            }
-        }
-        // Add system prompt at beginning if not already added
-        if (!addedSystem && formattedSystemPrompt != null && !formattedSystemPrompt.isEmpty()) {
-            messagesWithFormattedSystem.add(0, new SystemMessage(formattedSystemPrompt));
-        }
+        List<Message> messagesWithFormattedSystem = replaceSystemMessage(springMessages, formattedSystemPrompt);
 
         // Create tool callbacks for schema only (no execution)
         List<ToolCallback> toolCallbacks = createToolCallbacksForSchema(tools);
@@ -432,49 +403,12 @@ public class GeminiHandler implements LlmProviderHandler {
     }
 
     /**
-     * Create ToolCallbacks for schema only (no execution).
-     *
-     * <p>Overrides the default to apply Gemini-specific uppercase type conversion.
+     * Apply Gemini-specific uppercase type conversion to a tool's input schema
+     * before it is serialized and attached to the Spring AI tool callback.
      */
     @Override
-    public List<ToolCallback> createToolCallbacksForSchema(List<ToolDefinition> tools) {
-        List<ToolCallback> callbacks = new ArrayList<>();
-        if (tools == null) return callbacks;
-
-        for (ToolDefinition tool : tools) {
-            // Create a dummy function that should never be called
-            java.util.function.Function<Map<String, Object>, String> dummyFunction = args -> {
-                log.warn("Tool {} was unexpectedly called - this shouldn't happen!", tool.name());
-                return "{\"error\": \"Tool execution not supported in provider mode\"}";
-            };
-
-            // Convert inputSchema Map to JSON string with uppercase types for Gemini
-            String inputSchemaJson = null;
-            if (tool.inputSchema() != null && !tool.inputSchema().isEmpty()) {
-                try {
-                    Map<String, Object> convertedSchema = convertSchemaTypesToUpperCase(tool.inputSchema());
-                    inputSchemaJson = MAPPER
-                        .writeValueAsString(convertedSchema);
-                    log.debug("Converted tool schema for {}: {}", tool.name(), inputSchemaJson);
-                } catch (Exception e) {
-                    log.warn("Failed to serialize inputSchema for {}: {}", tool.name(), e.getMessage());
-                }
-            }
-
-            @SuppressWarnings("unchecked")
-            var builder = FunctionToolCallback
-                .builder(tool.name(), dummyFunction)
-                .description(tool.description() != null ? tool.description() : "No description")
-                .inputType((Class<Map<String, Object>>) (Class<?>) Map.class);
-
-            if (inputSchemaJson != null) {
-                builder.inputSchema(inputSchemaJson);
-            }
-
-            callbacks.add(builder.build());
-        }
-
-        return callbacks;
+    public Map<String, Object> transformToolInputSchema(Map<String, Object> schema) {
+        return convertSchemaTypesToUpperCase(schema);
     }
 
     /**
@@ -555,53 +489,6 @@ public class GeminiHandler implements LlmProviderHandler {
         }
 
         return result;
-    }
-
-    /**
-     * Create a Spring AI ToolCallback from our ToolDefinition.
-     *
-     * <p>Overrides the default to apply Gemini-specific uppercase type conversion.
-     */
-    @Override
-    public ToolCallback createToolCallback(ToolDefinition tool, ToolExecutorCallback toolExecutor) {
-        Function<Map<String, Object>, String> toolFunction = args -> {
-            try {
-                String argsJson = args != null ? MAPPER
-                    .writeValueAsString(args) : "{}";
-                return toolExecutor.execute(tool.name(), argsJson);
-            } catch (Exception e) {
-                log.error("Tool execution failed: {}", tool.name(), e);
-                try {
-                    return TOOL_CALLBACK_MAPPER.writeValueAsString(Map.of("error", "Tool execution failed: " + tool.name()));
-                } catch (Exception ignored) {
-                    return "{\"error\": \"tool execution failed\"}";
-                }
-            }
-        };
-
-        // Convert inputSchema with uppercase types for Gemini API compatibility
-        String inputSchemaJson = null;
-        if (tool.inputSchema() != null && !tool.inputSchema().isEmpty()) {
-            try {
-                Map<String, Object> convertedSchema = convertSchemaTypesToUpperCase(tool.inputSchema());
-                inputSchemaJson = MAPPER
-                    .writeValueAsString(convertedSchema);
-            } catch (Exception e) {
-                log.warn("Failed to serialize inputSchema for {}: {}", tool.name(), e.getMessage());
-            }
-        }
-
-        @SuppressWarnings("unchecked")
-        var builder = FunctionToolCallback
-            .builder(tool.name(), toolFunction)
-            .description(tool.description() != null ? tool.description() : "No description")
-            .inputType((Class<Map<String, Object>>) (Class<?>) Map.class);
-
-        if (inputSchemaJson != null) {
-            builder.inputSchema(inputSchemaJson);
-        }
-
-        return builder.build();
     }
 
     @Override

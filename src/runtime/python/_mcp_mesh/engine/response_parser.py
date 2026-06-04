@@ -7,7 +7,8 @@ Separated from MeshLlmAgent for better testability and reusability.
 
 import json
 import logging
-from typing import Any, TypeVar
+import typing
+from typing import Any, TypeVar, Union
 
 import mcp_mesh_core
 from pydantic import BaseModel, ValidationError
@@ -150,6 +151,55 @@ class ResponseParser:
                 raise ResponseParseError(f"Invalid JSON response: {e}")
 
     @staticmethod
+    def _is_list_annotation(annotation: Any) -> bool:
+        """
+        Return True if the field annotation is (or optionally wraps) a list/sequence.
+
+        Handles ``list[...]``, ``List[...]`` and ``Optional[list[...]]`` /
+        ``Union[list[...], None]``. Conservative by design: only annotations that
+        clearly denote a list participate in scalar-to-array coercion.
+        """
+        origin = typing.get_origin(annotation)
+        if origin is list:
+            return True
+        if origin is Union:
+            return any(
+                ResponseParser._is_list_annotation(arg)
+                for arg in typing.get_args(annotation)
+                if arg is not type(None)
+            )
+        return False
+
+    @staticmethod
+    def _coerce_scalar_list_fields(
+        response_data: dict[str, Any], output_type: type[T]
+    ) -> dict[str, Any]:
+        """
+        Wrap scalar values in a single-element list for list-typed model fields.
+
+        Scoped to structured-output response-model parsing. Only fields whose
+        annotation is a list (see :meth:`_is_list_annotation`) and whose received
+        value is a non-list, non-None scalar are coerced. All other values pass
+        through unchanged, so well-shaped (strict) output is unaffected.
+        """
+        coerced: dict[str, Any] | None = None
+        for field_name, field_info in output_type.model_fields.items():
+            if field_name not in response_data:
+                continue
+            value = response_data[field_name]
+            if value is None or isinstance(value, (list, tuple)):
+                continue
+            if ResponseParser._is_list_annotation(field_info.annotation):
+                if coerced is None:
+                    coerced = dict(response_data)
+                logger.debug(
+                    f"📦 Coercing scalar to single-element list for "
+                    f"'{field_name}' (hint-mode drift)"
+                )
+                coerced[field_name] = [value]
+        return coerced if coerced is not None else response_data
+
+    @staticmethod
     def _validate_and_create(response_data: Any, output_type: type[T]) -> T:
         """
         Validate data against Pydantic model and create instance.
@@ -226,6 +276,17 @@ class ResponseParser:
                             f"for {output_type.__name__}"
                         )
                         response_data = sole_value
+
+            # Single-value-as-array leniency for hint-mode drift (issue #1142).
+            # Under output_mode=hint the provider embeds the schema in the prompt
+            # but does not enforce it natively, so the LLM can emit a scalar where
+            # the schema declares a list (e.g. "insights": "x" instead of ["x"]).
+            # Wrap such scalars in a single-element list before Pydantic validation.
+            # No-op for well-shaped (strict) output where the value is already a list.
+            if isinstance(response_data, dict):
+                response_data = ResponseParser._coerce_scalar_list_fields(
+                    response_data, output_type
+                )
 
             parsed = output_type(**response_data)
             logger.debug(f"✅ Response parsed successfully: {parsed}")

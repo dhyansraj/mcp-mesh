@@ -2,8 +2,10 @@ package io.mcpmesh.spring;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import io.mcpmesh.MeshLlmDefaults;
 import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.core.MeshEvent;
@@ -58,6 +60,22 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
     private static final Logger log = LoggerFactory.getLogger(MeshLlmAgentProxy.class);
     private static final ObjectMapper objectMapper = MeshObjectMappers.create();
+
+    /**
+     * Lenient mapper used ONLY for deserializing structured-output responses into a
+     * user-supplied response model (the {@code generate(Class)} path).
+     *
+     * <p>Under {@code output_mode=hint}, the provider embeds the response schema in the
+     * prompt but does not enforce it natively, so the LLM may emit loosely-shaped JSON —
+     * most commonly a scalar where the schema declares a list (e.g. {@code "insights": "x"}
+     * instead of {@code ["x"]}). {@link DeserializationFeature#ACCEPT_SINGLE_VALUE_AS_ARRAY}
+     * coerces that single-value-as-array drift. This is a no-op for well-shaped (strict)
+     * output and is intentionally scoped to response-model parsing only — it must NOT be
+     * applied to the wire/tool-callback mappers above.
+     */
+    private static final ObjectMapper responseModelMapper = JsonMapper.builder()
+        .enable(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY)
+        .build();
 
     private final String functionId;
     private final List<ToolInfo> availableTools = new CopyOnWriteArrayList<>();
@@ -478,12 +496,12 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
             String response = generate();
 
             try {
-                return objectMapper.readValue(response, responseType);
+                return responseModelMapper.readValue(response, responseType);
             } catch (JacksonException e) {
                 String jsonContent = extractJsonFromResponse(response);
                 if (jsonContent != null) {
                     try {
-                        return objectMapper.readValue(jsonContent, responseType);
+                        return responseModelMapper.readValue(jsonContent, responseType);
                     } catch (JacksonException e2) {
                         log.warn("Failed to parse extracted JSON: {}", e2.getMessage());
                     }

@@ -768,11 +768,6 @@ impl AgentRuntime {
                     function_id, tracked.function_name, tracked.endpoint
                 );
 
-                // Store the tracking info first (no PyO3 involvement)
-                self.topology
-                    .llm_providers
-                    .insert(function_id.clone(), tracked.clone());
-
                 // Create LlmProviderInfo and send event
                 let provider_info = LlmProviderInfo {
                     function_id: function_id.clone(),
@@ -783,10 +778,30 @@ impl AgentRuntime {
                     vendor: provider.vendor.clone(),
                     kwargs: kwargs_json,
                 };
-                let _ = self
+
+                // Send the event BEFORE recording it in topology. If the send
+                // fails (channel dropped), we leave the function_id out of
+                // `llm_providers` so the diff gate re-emits on the next
+                // heartbeat (self-healing) instead of permanently suppressing
+                // re-emission and leaving the @MeshLlm proxy unbound.
+                if let Err(e) = self
                     .event_tx
                     .send(MeshEvent::llm_provider_available(provider_info))
-                    .await;
+                    .await
+                {
+                    warn!(
+                        "Failed to emit LLM_PROVIDER_AVAILABLE for function '{}': {}; \
+                         will retry on next heartbeat",
+                        function_id, e
+                    );
+                    continue;
+                }
+
+                // Store the tracking info only after a successful send so the
+                // diff gate treats this provider as "seen".
+                self.topology
+                    .llm_providers
+                    .insert(function_id.clone(), tracked.clone());
             }
         }
     }
