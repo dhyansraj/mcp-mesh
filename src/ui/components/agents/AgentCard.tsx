@@ -30,9 +30,8 @@ function getDepsColor(resolved: number, total: number): string {
 // extend this check too.
 function hasAnyAgentBadge(agent: Agent): boolean {
   if (agent.a2a_producer || agent.a2a_consumer) return true;
-  return Boolean(
-    agent.capabilities?.some((c) => c.function_name?.startsWith("__mesh_job_")),
-  );
+  // MeshJob badge fires only for real task=true producers (see AgentBadges).
+  return Boolean(agent.capabilities?.some((c) => c.task === true));
 }
 
 export function AgentCard({ agent }: AgentCardProps) {

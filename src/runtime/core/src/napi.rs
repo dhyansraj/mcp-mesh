@@ -182,10 +182,19 @@ pub struct JsToolSpec {
     pub llm_filter: Option<String>,
     /// LLM provider specification (for mesh delegation) - serialized JSON string
     pub llm_provider: Option<String>,
+    /// True if this tool was declared task=true — a long-running MeshJob
+    /// producer. Threaded into the capability kwargs so the registry can
+    /// surface a per-capability `task` flag (Python/Java already do this).
+    pub task: Option<bool>,
 }
 
 impl From<JsToolSpec> for RustToolSpec {
     fn from(js: JsToolSpec) -> Self {
+        // Mirror Python/Java: carry `task` inside the capability kwargs JSON
+        // so the registry persists it and ListAgents can surface it.
+        let kwargs = js
+            .task
+            .map(|t| serde_json::json!({ "task": t }).to_string());
         RustToolSpec::new(
             js.function_name,
             js.capability,
@@ -202,7 +211,7 @@ impl From<JsToolSpec> for RustToolSpec {
             js.schema_warnings,
             js.llm_filter,
             js.llm_provider,
-            None, // kwargs - not needed for TypeScript
+            kwargs,
         )
     }
 }
@@ -1145,6 +1154,7 @@ mod tests {
                 schema_warnings: None,
                 llm_filter: Some(r#"[{"capability": "calculator"}]"#.to_string()),
                 llm_provider: Some(r#"{"capability": "llm"}"#.to_string()),
+                task: None,
             }],
             llm_agents: Some(vec![JsLlmAgentSpec {
                 function_id: "assist".to_string(),

@@ -45,6 +45,9 @@ export interface Capability {
   tags?: string[];
   llm_filter?: LLMToolFilter;
   llm_provider?: LLMProvider;
+  // True when this tool was declared task=True — a long-running MeshJob
+  // producer. Surfaced by the registry from the stored capability kwargs.
+  task?: boolean;
 }
 
 export interface DependencyResolution {

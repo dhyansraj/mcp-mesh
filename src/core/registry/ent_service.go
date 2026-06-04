@@ -1706,6 +1706,14 @@ func (s *EntService) ListAgents(params *AgentQueryParams) (*generated.AgentsList
 				capInfo.LlmProvider = convertToLLMProvider(cap.LlmProvider)
 			}
 
+			// Surface task=True only when the stored kwargs holds boolean true.
+			// Python dumps task:false for ordinary tools, so presence is not
+			// enough — the UI's MeshJob badge must light up exclusively for
+			// real @mesh.tool(task=True) producers.
+			if t, ok := cap.Kwargs["task"].(bool); ok && t {
+				capInfo.Task = &t
+			}
+
 			capabilities = append(capabilities, capInfo)
 		}
 		agentInfo.Capabilities = capabilities
