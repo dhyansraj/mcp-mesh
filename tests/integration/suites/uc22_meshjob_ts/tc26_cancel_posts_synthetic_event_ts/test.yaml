@@ -93,15 +93,18 @@ test:
     handler: shell
     workdir: /workspace
     command: |
+      MARKER="[run_until_cancel] cancelled_gracefully"
+      LOGS=""
       for i in $(seq 1 30); do
-        if meshctl logs long-task-provider-ts 2>&1 | grep -qF "[run_until_cancel] cancelled_gracefully"; then
-          meshctl logs long-task-provider-ts 2>&1 | tail -200 | grep "\[run_until_cancel\] cancelled_gracefully"
+        LOGS="$(meshctl logs long-task-provider-ts 2>&1)"
+        if echo "$LOGS" | grep -qF "$MARKER"; then
+          echo "$LOGS" | grep -F "$MARKER"
           exit 0
         fi
         sleep 1
       done
       echo "ERROR: producer never logged the cancelled_gracefully marker" >&2
-      meshctl logs long-task-provider-ts 2>&1 | tail -80 >&2 || true
+      echo "$LOGS" | tail -80 >&2 || true
       exit 1
     capture: producer_log
     timeout: 60
