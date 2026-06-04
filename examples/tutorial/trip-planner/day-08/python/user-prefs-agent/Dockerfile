@@ -1,5 +1,5 @@
 # Dockerfile for user-prefs-agent MCP Mesh agent
-FROM mcpmesh/python-runtime:2.3.0
+FROM mcpmesh/python-runtime:2.4.0
 
 WORKDIR /app
 

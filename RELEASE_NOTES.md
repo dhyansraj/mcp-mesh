@@ -1,6 +1,43 @@
 # MCP Mesh Release Notes
 
-[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.3.0...HEAD)
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.4.0...HEAD)
+
+[Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.3.0...v2.4.0)
+
+## v2.4.0 (2026-06-04)
+
+LLM contract maturity across the polyglot trilogy — `response_model`, server-enforced structured output, and Java `@mesh.llm` parity.
+
+v2.3 completed the MeshJob lifecycle surface; v2.4 turns to the `@mesh.llm` contract. The schema the model is asked to emit is now cleanly separable from a tool's own return type, structured output is enforced natively by the provider instead of a brittle re-prompt fallback, and Java's `@mesh.llm` reaches feature parity with Python and TypeScript. Spring users also gain richer dependency injection.
+
+### 🧬 `response_model` on `@mesh.llm` (#1096, #1097, #1098)
+
+Separate the structured shape the LLM produces from the tool's declared output type. Python `@mesh.llm(..., response_model=Model)` and TypeScript `responseModel:` land the feature; the Java response-model-vs-tool-output separation is documented for the upcoming SDK port.
+
+### 🔒 Server-enforced structured output (#1100, #1101, #1102, #1103, #1107)
+
+A version-aware provider capability registry dispatches each request to the right native primitive instead of a generic fallback path. Claude streaming honors a server-enforced `output_config`, and Gemini 3 uses native structured output even alongside tool calls (default-ON) — removing the re-prompt round-trips the generic path required.
+
+### ☕ Java `@mesh.llm` parity (#1118, #1139, #1140, #1143)
+
+Java's `@mesh.llm` aligns with the Python/TS contract: nested response-model schemas (via victools with a `$ref` inliner), consumer `output_mode` override, empty-`@MeshLlmProvider` default tags, and exposed A2A polling knobs.
+
+### 🌱 Spring dependency injection (#1087, #1090, #1091)
+
+`@MeshDependsOn` enables component-level mesh DI, `@MeshRoute` / `@MeshA2A` capabilities support constructor injection, and schema-matching now applies to `@MeshA2A` dependencies.
+
+### 🛡️ Resilience, CLI & dashboard
+
+- **Registry outages no longer drop resolved dependencies** (#1145). The registry is the control plane; already-resolved agent→agent endpoints are the data plane and stay live through a registry blip, refreshing on reconnect only if their hash changed — consistent across all runtimes.
+- **`meshctl call` gains `--header` / `-H`** for custom request headers (#1099).
+- **Accurate MeshJob badge** (#1147): the dashboard now keys on the real `task=True` capability flag instead of the framework job-control tools present on every agent, so only true job producers are tagged. Ships with grid-view default and sidebar polish.
+- **Rust core**: reconnect-backoff jitter avoids thundering-herd reconnects, and job serialization is unified across language bindings (#1119, #1120).
+
+### 🧹 Internals
+
+Extensive cross-runtime refactoring — provider-handler consolidation, agentic-loop extraction, and registry / meshctl dedup (#1113–#1117) — plus typed heartbeat kwargs and hardened DI diagnostics (#1105, #1111). No user-facing behavior change.
+
+---
 
 [Full Changelog](https://github.com/dhyansraj/mcp-mesh/compare/v2.2.4...v2.3.0)
 
