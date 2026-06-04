@@ -11,14 +11,12 @@ interface AgentBadgesProps {
   dense?: boolean;
 }
 
-// Issue #970: framework-internal MeshJob capabilities are prefixed with
-// __mesh_job_ — same convention as the CLI's isFrameworkInternalTool
-// (src/core/cli/list.go:2023). No backend signal is needed; presence of any
-// such capability marks the agent as MeshJob-capable.
+// An agent is MeshJob-capable only when it owns a REAL task=true producer.
+// The registry surfaces a per-capability `task` flag (from the stored kwargs);
+// the universal framework `__mesh_job_*` helper tools are present on every
+// agent and carry no `task` flag, so they no longer light up this badge.
 function hasMeshJob(agent: Agent): boolean {
-  return Boolean(
-    agent.capabilities?.some((c) => c.function_name?.startsWith("__mesh_job_")),
-  );
+  return Boolean(agent.capabilities?.some((c) => c.task === true));
 }
 
 export function AgentBadges({ agent, dense }: AgentBadgesProps) {

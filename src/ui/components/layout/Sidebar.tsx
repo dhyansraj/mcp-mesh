@@ -8,11 +8,11 @@ import { useMesh } from "@/lib/mesh-context";
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Agents", href: "/agents", icon: Bot },
-  { name: "Jobs", href: "/jobs", icon: Briefcase },
-  { name: "Schemas", href: "/schemas", icon: FileJson },
   { name: "Topology", href: "/topology", icon: Network },
   { name: "Traffic", href: "/traffic", icon: BarChart3 },
   { name: "Live", href: "/live", icon: Radio },
+  { name: "Jobs", href: "/jobs", icon: Briefcase },
+  { name: "Schemas", href: "/schemas", icon: FileJson },
 ];
 
 export function Sidebar() {
@@ -41,6 +41,23 @@ export function Sidebar() {
   useEffect(() => {
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  // Mesh UI build version (same-origin meshui server endpoint, not the proxied registry)
+  const [uiVersion, setUiVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${getBasePath()}/api/ui-health`, { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data?.version) setUiVersion(data.version);
+      })
+      .catch(() => {
+        /* never throw — leave version hidden */
+      });
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -97,6 +114,11 @@ export function Sidebar() {
             {connected ? "Connected" : "Reconnecting..."}
           </span>
         </div>
+        {uiVersion && (
+          <div className="mt-2 text-xs text-muted-foreground">
+            mesh {/^\d/.test(uiVersion) ? "v" : ""}{uiVersion}
+          </div>
+        )}
       </div>
     </aside>
   );

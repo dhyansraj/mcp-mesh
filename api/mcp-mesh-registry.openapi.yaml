@@ -2216,6 +2216,10 @@ components:
           description: |
             LLM provider specification if this capability uses mesh delegation.
             Contains capability, tags, version, namespace for provider matching.
+        task:
+          type: boolean
+          example: true
+          description: "True if this tool was declared task=True — a long-running MeshJob producer"
 
     # Dependency resolution schema
     DependencyResolutionInfo:

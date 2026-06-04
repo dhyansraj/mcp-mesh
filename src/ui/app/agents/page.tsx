@@ -15,7 +15,7 @@ export default function AgentsPage() {
   // entry can't crash the page.
   const [view, setView] = useLocalStorage<"list" | "grid">(
     "mesh.ui.agents.view",
-    "list",
+    "grid",
     (v): v is "list" | "grid" => v === "list" || v === "grid",
   );
 

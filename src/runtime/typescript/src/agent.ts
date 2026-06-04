@@ -1434,6 +1434,10 @@ export class MeshAgent {
           // LLM filter/provider as JSON strings (matches Python format)
           llmFilter,
           llmProvider,
+          // MeshJob producer flag — threaded into capability kwargs by the
+          // Rust core so the registry surfaces a per-capability `task` flag
+          // (Python/Java already do this). Only set when explicitly true.
+          task: meta.task === true ? true : undefined,
         };
       }
     );
