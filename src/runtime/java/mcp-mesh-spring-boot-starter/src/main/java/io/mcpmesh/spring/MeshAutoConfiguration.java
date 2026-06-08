@@ -926,6 +926,43 @@ public class MeshAutoConfiguration {
         // was registered. Producer flag is set inside applyA2ASurfaces above.
         spec.setA2aConsumer(!a2aConsumerBeanPostProcessor.bindings().isEmpty());
 
+        // Flip agent_type to "api" for a NAMED route-only agent. The unnamed
+        // path already gets agent_type="api" from buildConsumerAgentSpec, but a
+        // named @MeshAgent that only exposes @MeshRoute surfaces (no real
+        // @MeshTool capabilities) takes buildBaseAgentSpec and would otherwise
+        // stay at the AgentSpec default "mcp_agent" — mislabeling it as an MCP
+        // agent in the dashboard. This mirrors Python, whose API pipeline
+        // decides agent_type="api" independently of whether a name was set.
+        //
+        // Guard: only flip when still the default "mcp_agent" so an A2A agent
+        // (already flipped to "a2a" above) or any explicit type is preserved.
+        // Do NOT rely on the a2a flip having succeeded: applyA2ASurfaces sets
+        // "a2a" inside a try block that swallows a serialization exception and
+        // leaves agent_type at "mcp_agent". So make a2a precedence explicit by
+        // checking the SAME signal applyA2ASurfaces keys on (hasSurfaces()) —
+        // an A2A producer is never mislabeled "api" even if that serialize threw.
+        // Reuse the same signals the consumer-only path relies on:
+        //   - routes: MeshRouteRegistry.hasRoutes()
+        //   - a2a surfaces: MeshA2ARegistry.hasSurfaces()
+        //   - "no real tools": no ToolSpec whose function name is a genuine user
+        //     @MeshTool. Framework job-control tools and synthetic dependency
+        //     surfaces all carry the "__mesh_" prefix, so a user tool is any
+        //     spec whose functionName does not start with that prefix.
+        if ("mcp_agent".equals(spec.getAgentType())) {
+            MeshRouteRegistry routeRegistry = routeRegistryProvider.getIfAvailable();
+            boolean hasRoutes = routeRegistry != null && routeRegistry.hasRoutes();
+            MeshA2ARegistry a2aRegistry = a2aRegistryProvider.getIfAvailable();
+            boolean hasA2aSurfaces = a2aRegistry != null && a2aRegistry.hasSurfaces();
+            boolean hasRealTools = spec.getTools().stream()
+                .map(AgentSpec.ToolSpec::getFunctionName)
+                .anyMatch(name -> name != null && !name.startsWith("__mesh_"));
+            if (hasRoutes && !hasRealTools && !hasA2aSurfaces) {
+                spec.setAgentType("api");
+                log.info("@MeshRoute (route-only, named): agent_type=api "
+                    + "(no @MeshTool capabilities — matches unnamed consumer path)");
+            }
+        }
+
         log.info("Agent spec finalized for '{}' with {} tool(s)",
             spec.getName(), spec.getTools().size());
     }
