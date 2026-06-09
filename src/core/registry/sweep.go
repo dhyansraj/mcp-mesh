@@ -240,6 +240,8 @@ type sweepResult struct {
 	schemasPurged    int
 	jobsReset        int // orphan jobs returned to the pool for re-claim
 	jobsExhausted    int // orphan jobs that ran out of retries (status=failed)
+	jobsLeaseReset   int // expired-lease jobs returned to the pool for re-claim
+	jobsLeaseFailed  int // expired-lease jobs that ran out of retries (status=failed)
 	jobsDeadlined    int // total_deadline-exceeded jobs (status=failed)
 	jobEventsPurged  int // JobEvent rows GC'd for terminal jobs past retention
 }
@@ -260,12 +262,14 @@ func (s *SweepJob) tick(ctx context.Context) {
 
 	if s.logger != nil {
 		anyWork := res.agentsPurged > 0 || res.eventsPurged > 0 || res.schemasPurged > 0 ||
-			res.jobsReset > 0 || res.jobsExhausted > 0 || res.jobsDeadlined > 0 ||
+			res.jobsReset > 0 || res.jobsExhausted > 0 ||
+			res.jobsLeaseReset > 0 || res.jobsLeaseFailed > 0 || res.jobsDeadlined > 0 ||
 			res.jobEventsPurged > 0
 		if anyWork {
-			s.logger.Info("sweep: purged %d agents, %d events, %d orphan schemas; jobs: %d reset, %d exhausted, %d deadlined, %d job_events purged (took %s)",
+			s.logger.Info("sweep: purged %d agents, %d events, %d orphan schemas; jobs: %d reset, %d exhausted, %d lease-reset, %d lease-failed, %d deadlined, %d job_events purged (took %s)",
 				res.agentsPurged, res.eventsPurged, res.schemasPurged,
-				res.jobsReset, res.jobsExhausted, res.jobsDeadlined, res.jobEventsPurged, took)
+				res.jobsReset, res.jobsExhausted, res.jobsLeaseReset, res.jobsLeaseFailed,
+				res.jobsDeadlined, res.jobEventsPurged, took)
 		} else {
 			s.logger.Debug("sweep: nothing to purge (took %s)", took)
 		}
@@ -280,9 +284,12 @@ func (s *SweepJob) tick(ctx context.Context) {
 //  1. Stale-agent purge (existing #837 behaviour).
 //  2. Orphan-job reroute — runs after agent purge so jobs whose owner was
 //     just deleted in step 1 are picked up in the same tick.
-//  3. Total-deadline expiry — independent of agent liveness.
-//  4. Event cap enforcement.
-//  5. Orphan schema_entry purge.
+//  3. Expired-lease reclaim — runs after the orphan reroute (which clears
+//     the lease on the rows it resets) so only leases held by a still-live
+//     owner are considered.
+//  4. Total-deadline expiry — independent of agent liveness.
+//  5. Event cap enforcement.
+//  6. Orphan schema_entry purge.
 func (s *SweepJob) runOnce(ctx context.Context) (sweepResult, error) {
 	var res sweepResult
 	now := s.clock()
@@ -311,6 +318,22 @@ func (s *SweepJob) runOnce(ctx context.Context) (sweepResult, error) {
 		res.jobsExhausted = exhausted
 		if err != nil {
 			return res, fmt.Errorf("reset orphaned jobs: %w", err)
+		}
+
+		// Expired-lease reclaim — catches the case the orphan reroute
+		// can't: an owner whose agent row keeps heartbeating (healthy)
+		// but whose handler is wedged and never completes the job.
+		// Accepted /jobs/batch deltas extend the lease, so only jobs
+		// with no accepted delta inside the lease window are reclaimed
+		// — producers must post progress within the window or size
+		// max_duration to the handler's real runtime (the SDKs do not
+		// auto-heartbeat during execution). NULL leases (legacy /
+		// unclaimed rows) are never touched.
+		leaseReset, leaseFailed, err := s.service.ReclaimExpiredLeaseJobs(ctx)
+		res.jobsLeaseReset = leaseReset
+		res.jobsLeaseFailed = leaseFailed
+		if err != nil {
+			return res, fmt.Errorf("reclaim expired-lease jobs: %w", err)
 		}
 
 		// total_deadline expiry is opt-in (column is NULL by default per
