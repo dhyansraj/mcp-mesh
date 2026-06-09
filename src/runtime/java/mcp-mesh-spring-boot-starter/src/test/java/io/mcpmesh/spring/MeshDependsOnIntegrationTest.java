@@ -458,6 +458,20 @@ class MeshDependsOnIntegrationTest {
                 assertThat(hasSynthetic)
                     .as("synthetic __mesh_depends_on_deps tool must be present")
                     .isTrue();
+
+                // Issue #1158: a tag-less dependency must keep the JSON-array
+                // default — an empty string would fail the Rust core's JSON
+                // parse and degrade to "no tag constraint".
+                AgentSpec.DependencySpec dep = spec.getTools().stream()
+                    .filter(t -> "__mesh_depends_on_deps".equals(t.getCapability()))
+                    .flatMap(t -> t.getDependencies().stream())
+                    .filter(d -> "test_cap".equals(d.getCapability()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError(
+                        "test_cap dependency missing from __mesh_depends_on_deps tool"));
+                assertThat(dep.getTags())
+                    .as("empty tags must serialise as the JSON-array default '[]'")
+                    .isEqualTo("[]");
             });
     }
 
@@ -636,11 +650,13 @@ class MeshDependsOnIntegrationTest {
                     .isEqualTo("subset");
                 // Nit1: tags/version on the annotation must propagate into the
                 // synthetic dependency spec — same serialisation as the
-                // @MeshRoute / @MeshA2A paths (comma-joined tag list, version
-                // string copied through verbatim).
+                // @MeshRoute / @MeshA2A paths (JSON-array string, version
+                // string copied through verbatim). Issue #1158: the Rust core
+                // JSON-parses this field; comma-joined strings silently
+                // degrade to "no tag constraint".
                 assertThat(dep.getTags())
-                    .as("tags from @MeshDependency must serialise as comma-joined string")
-                    .isEqualTo("v2,beta");
+                    .as("tags from @MeshDependency must serialise as a JSON-array string")
+                    .isEqualTo("[\"v2\",\"beta\"]");
                 assertThat(dep.getVersion())
                     .as("version constraint must propagate verbatim")
                     .isEqualTo(">=1.0");
