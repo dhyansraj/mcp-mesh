@@ -202,6 +202,8 @@ public class MeshToolRegistry {
                 try {
                     depSpec.setTags(jsonMapper.writeValueAsString(dep.tags()));
                 } catch (Exception e) {
+                    log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
+                        dep.capability(), e.getMessage());
                     depSpec.setTags("[]");
                 }
                 depSpec.setVersion(dep.version());

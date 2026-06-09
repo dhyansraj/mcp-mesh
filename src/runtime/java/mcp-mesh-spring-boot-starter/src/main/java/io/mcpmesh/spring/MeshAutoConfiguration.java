@@ -1,6 +1,7 @@
 package io.mcpmesh.spring;
 
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import io.mcpmesh.core.MeshObjectMappers;
 import io.mcpmesh.MeshAgent;
 import io.mcpmesh.Selector;
@@ -1017,6 +1018,7 @@ public class MeshAutoConfiguration {
         // doesn't need a registry-resolved dependency to call its own tool.
         Set<String> seenCapabilities = collectKnownCapabilities(tools, true);
         List<AgentSpec.DependencySpec> deps = new ArrayList<>();
+        var jsonMapper = JsonMapper.builder().build();
         // Issue #547 Phase 4: cluster-wide strict knob promotes WARN→BLOCK on
         // the consumer side too. Same source-of-truth as MeshRouteRegistry.
         boolean clusterStrict = io.mcpmesh.spring.MeshSchemaSupport.clusterStrictEnabled();
@@ -1043,7 +1045,16 @@ public class MeshAutoConfiguration {
                 AgentSpec.DependencySpec agentDep = new AgentSpec.DependencySpec();
                 agentDep.setCapability(capability);
                 if (dep.tags().length > 0) {
-                    agentDep.setTags(String.join(",", dep.tags()));
+                    // Issue #1158: tags is contractually a JSON-array string
+                    // (the Rust core JSON-parses it; a comma-joined string
+                    // silently degrades to "no tag constraint").
+                    try {
+                        agentDep.setTags(jsonMapper.writeValueAsString(dep.tags()));
+                    } catch (Exception e) {
+                        log.warn("Failed to serialize tags for dependency '{}' — registering with no tag constraint: {}",
+                            capability, e.getMessage());
+                        agentDep.setTags("[]");
+                    }
                 }
                 if (dep.version() != null && !dep.version().isEmpty()) {
                     agentDep.setVersion(dep.version());
