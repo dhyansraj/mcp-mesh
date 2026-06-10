@@ -754,16 +754,35 @@ async def _handle_dependency_change(
         logger.info(f"Registered dependency: {dep_key}")
         return
 
-    # Fallback: capability-based matching (backward compatibility)
+    # Fallback: capability-based matching (backward compatibility — only
+    # reachable when the Rust core event lacks requesting_function/dep_index,
+    # i.e. older Rust cores).
     if not available:
-        # Dependency became unavailable - unregister it
-        if hasattr(injector, "_dependencies"):
-            keys_to_remove = [
-                key for key in injector._dependencies.keys() if capability in key
-            ]
-            for dep_key in keys_to_remove:
-                await injector.unregister_dependency(dep_key)
-                logger.info(f"Unregistered dependency: {dep_key}")
+        # Dependency became unavailable - unregister it. Map the capability
+        # to exact (func_id, dep_index) pairs via DecoratorRegistry metadata,
+        # mirroring the registration fallback below. The previous substring
+        # match against injector keys ("capability in key") was normally a
+        # no-op (keys are "{module}.{qualname}:dep_{N}", which never contain
+        # the capability) and over-matched when the capability happened to
+        # be a substring of an unrelated tool's qualname (issue #1162 LOW-6).
+        for tool_name, decorated_func in mesh_tools.items():
+            tool_metadata = decorated_func.metadata or {}
+            dependencies = tool_metadata.get("dependencies", [])
+            for idx, dep_info in enumerate(dependencies):
+                if dep_info.get("capability") == capability:
+                    func = decorated_func.function
+                    func_id = f"{func.__module__}.{func.__qualname__}"
+                    dep_key = f"{func_id}:dep_{idx}"
+                    # Only unregister (and log) slots that are actually
+                    # registered — a declared-but-never-resolved slot is a
+                    # no-op and logging "Unregistered" for it is misleading.
+                    if injector.get_dependency(dep_key) is None:
+                        logger.debug(
+                            f"Skipping unregister for {dep_key}: not registered"
+                        )
+                        continue
+                    await injector.unregister_dependency(dep_key)
+                    logger.info(f"Unregistered dependency: {dep_key}")
         return
 
     # Dependency is available - create proxy and register
@@ -1010,16 +1029,25 @@ def _start_claim_dispatchers_on_heartbeat_loop(context: dict[str, Any]) -> list:
 
 
 async def _stop_claim_dispatchers(dispatchers: list) -> None:
-    """Best-effort shutdown of claim dispatchers started by the heartbeat loop."""
-    for d in dispatchers:
-        try:
-            await d.stop()
-        except Exception as e:
-            logger.warning(
-                "heartbeat: error stopping claim dispatcher for capability=%s: %s",
-                getattr(d, "capability", "?"),
-                e,
-            )
+    """Best-effort shutdown of claim dispatchers started by the heartbeat loop.
+
+    All dispatchers stop concurrently under ONE shared drain budget (see
+    :func:`_mcp_mesh.engine.claim_dispatcher.stop_dispatchers`) so the
+    Rust core shutdown (registry unregister) sequenced after this in
+    ``rust_heartbeat_task``'s ``finally`` block isn't starved by N
+    stacked 30s drains past the SIGTERM grace period. Never raises
+    (short of outer cancellation).
+    """
+    if not dispatchers:
+        return
+    try:
+        from ...engine.claim_dispatcher import stop_dispatchers
+
+        await stop_dispatchers(dispatchers)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning("heartbeat: error stopping claim dispatchers: %s", e)
 
 
 async def rust_heartbeat_task(heartbeat_config: dict[str, Any]) -> None:
