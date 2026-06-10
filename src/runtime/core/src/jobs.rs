@@ -8,7 +8,7 @@
 //! v1"). TODO(phase 2/3): SQLite backing for crash-survival across replica
 //! restarts.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
@@ -77,16 +77,15 @@ pub struct JobCancelled;
 /// collapse to the latest; terminal deltas are kept as-is and replace any
 /// pending progress for that job.
 ///
-/// `terminal` tracks job ids that have already been flushed via
-/// `flush_terminal` so any racing `update_progress` for the same job is
-/// dropped on the floor. This preserves the "no progress after terminal"
-/// invariant even when the mutex is briefly released between the queue
-/// drain and the backend submit (see `JobController::flush_terminal`):
-/// without this guard a concurrent `update_progress` could re-enqueue a
-/// progress delta AFTER the terminal had already left the queue, and the
-/// next batching-tick flush would push that progress to the registry —
-/// where it would either silently overwrite the terminal status or get
-/// rejected as a not_owner / illegal-transition delta.
+/// The "no progress after terminal" sentinel does NOT live here: it is a
+/// per-[`JobController`] flag (`JobController::terminal`) checked under
+/// this queue's mutex. Keeping it per-controller (instead of a
+/// process-lived `HashSet<String>` inside the queue) matters on the
+/// claim-worker path, where ONE queue is shared across every
+/// `JobController` the worker constructs — a queue-resident set would
+/// retain one string per completed job for the life of the process
+/// (issue #1166 LOW), and would also wrongly block progress from a NEW
+/// controller that re-claims a previously completed `job_id`.
 ///
 /// Public so the FFI layer (and language SDKs that wrap the producer-side
 /// pipeline directly) can construct one. Fields are private so callers can't
@@ -95,48 +94,20 @@ pub struct JobCancelled;
 #[derive(Default)]
 pub struct CoalescingQueue {
     pending: HashMap<String, JobDelta>,
-    /// Job ids that have already had a terminal delta dispatched. Any
-    /// further `enqueue` for these ids is silently dropped. The set is
-    /// process-lived (deliberate): once a job is terminal, it should
-    /// stay terminal for the rest of this controller's lifetime — the
-    /// JobController is single-use anyway (constructed per inbound
-    /// dispatch in `job_dispatch.maybe_dispatch_as_job`).
-    terminal: HashSet<String>,
 }
 
 impl CoalescingQueue {
     fn enqueue(&mut self, delta: JobDelta) {
-        let id = delta.id.clone();
-        if self.terminal.contains(&id) {
-            // Late progress after a terminal flush — drop it. Logged at
-            // debug because this is the *expected* path when an
-            // application thread fires one last update_progress while
-            // the controller is already shutting down; only operators
-            // tracing missing progress events care.
-            debug!(
-                "CoalescingQueue: dropping post-terminal delta for job {}",
-                id
-            );
-            return;
-        }
         // Terminal deltas always replace anything pending for that id;
         // progress-only deltas also replace prior pending progress for the
-        // same id (coalesce). Same insert behavior either way.
-        self.pending.insert(id, delta);
+        // same id (coalesce). Same insert behavior either way. The
+        // post-terminal drop guard lives in `JobController::update_progress`
+        // (checked under this queue's lock).
+        self.pending.insert(delta.id.clone(), delta);
     }
 
     fn drain(&mut self) -> Vec<JobDelta> {
         std::mem::take(&mut self.pending).into_values().collect()
-    }
-
-    /// Mark `job_id` as having been terminally flushed. Subsequent
-    /// `enqueue` calls for the same id are silently dropped. Idempotent.
-    fn mark_terminal(&mut self, job_id: &str) {
-        self.terminal.insert(job_id.to_string());
-        // Defensive: also evict any pending non-terminal entry for this
-        // id. Callers (`JobController::flush_terminal`) already remove
-        // explicitly, but doing it here keeps the invariant local.
-        self.pending.remove(job_id);
     }
 
     fn len(&self) -> usize {
@@ -277,6 +248,14 @@ pub struct JobController {
     instance_id: String,
     backend: Arc<dyn TaskBackend>,
     queue: Arc<Mutex<CoalescingQueue>>,
+    /// Set once `complete` / `fail` / `release_lease` has dispatched a
+    /// terminal for this controller's job. Shared across `Clone`s of the
+    /// same instance. Checked (under the queue mutex) by
+    /// `update_progress` so a racing late progress delta can't land in
+    /// the queue after the terminal left it — per-controller rather than
+    /// queue-resident so the shared claim-worker queue doesn't accumulate
+    /// one entry per completed job forever (issue #1166 LOW).
+    terminal: Arc<std::sync::atomic::AtomicBool>,
     /// Last event seq returned by `recv_event` on this controller (or any
     /// of its `Clone`s). `0` means no events consumed yet — the next
     /// `recv_event` will return the first event in the job's event log.
@@ -307,6 +286,7 @@ impl JobController {
             instance_id: instance_id.into(),
             backend,
             queue,
+            terminal: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_seen_seq: Arc::new(AtomicI64::new(0)),
             recv_event_lock: Arc::new(Mutex::new(())),
         }
@@ -322,6 +302,24 @@ impl JobController {
     pub async fn update_progress(&self, progress: f32, message: Option<String>) {
         let delta = JobDelta::progress(self.job_id.clone(), progress, message);
         let mut q = self.queue.lock().await;
+        // Check the terminal sentinel UNDER the queue lock: flush_terminal
+        // sets it (and evicts pending) while holding the same lock, so a
+        // racing late progress delta can never land in the queue after the
+        // terminal left it (would push stale progress to the registry on
+        // the next batching tick — silently overwriting the terminal status
+        // or getting rejected as not_owner / illegal-transition).
+        if self.terminal.load(Ordering::SeqCst) {
+            // Late progress after a terminal flush — drop it. Logged at
+            // debug because this is the *expected* path when an
+            // application thread fires one last update_progress while
+            // the controller is already shutting down; only operators
+            // tracing missing progress events care.
+            debug!(
+                "JobController: dropping post-terminal progress delta for job {}",
+                self.job_id
+            );
+            return;
+        }
         q.enqueue(delta);
     }
 
@@ -341,15 +339,14 @@ impl JobController {
     }
 
     async fn flush_terminal(&self, mut delta: JobDelta) -> Result<(), JobError> {
-        // Mark the job terminal in the queue BEFORE dropping the lock —
-        // this both removes any pending non-terminal delta (the terminal
-        // supersedes it) and slams the door on any racing
-        // `update_progress` that lands while the backend submit is in
-        // flight. Without the sentinel, a concurrent progress update
+        // Set the per-controller terminal sentinel and evict the pending
+        // entry BEFORE dropping the lock — this slams the door on any
+        // racing `update_progress` that lands while the backend submit is
+        // in flight. Without the sentinel, a concurrent progress update
         // after we'd released the lock would land in the queue and the
         // next batching-tick flush would push stale progress AFTER a
-        // terminal status was already on the wire (see CoalescingQueue
-        // docs for the invariant).
+        // terminal status was already on the wire. (`update_progress`
+        // checks the sentinel under this same lock.)
         //
         // BEFORE we drop the pending entry, harvest its `progress_message`
         // and `progress` (if any) and fold them into the terminal delta —
@@ -369,7 +366,8 @@ impl JobController {
                     delta.progress = pending.progress;
                 }
             }
-            q.mark_terminal(&self.job_id);
+            self.terminal.store(true, Ordering::SeqCst);
+            q.pending.remove(&self.job_id);
         }
         self.backend
             .submit_batch(&self.instance_id, vec![delta])
@@ -381,9 +379,12 @@ impl JobController {
     /// controller. Exposed so per-language SDKs can tell whether a
     /// returning user function still needs an auto-`complete` (the
     /// "if the user forgot, finish the job for them" path).
+    ///
+    /// Per-controller (shared across `Clone`s) — a NEW controller for the
+    /// same `job_id` (e.g. a re-claim) starts non-terminal. Kept `async`
+    /// for binding-surface stability even though the read is lock-free.
     pub async fn is_terminal(&self) -> bool {
-        let q = self.queue.lock().await;
-        q.terminal.contains(&self.job_id)
+        self.terminal.load(Ordering::SeqCst)
     }
 
     /// Whether the cancel token bound to this controller's job in the
@@ -438,10 +439,12 @@ impl JobController {
         // Mark terminal locally first to mirror the flush_terminal pattern
         // (#880): prevents any racing update_progress from re-enqueuing a
         // delta that would land at the registry after we've released
-        // ownership.
+        // ownership. Sentinel set + pending eviction under the queue lock,
+        // same as flush_terminal.
         {
             let mut q = self.queue.lock().await;
-            q.mark_terminal(&self.job_id);
+            self.terminal.store(true, Ordering::SeqCst);
+            q.pending.remove(&self.job_id);
         }
         let resp = self
             .backend
@@ -943,14 +946,18 @@ where
 
 /// Drop guard that unregisters the job from [`crate::cancel_registry`]
 /// when scope exits — including the panic-unwind path. Pairs with the
-/// `register_active_job` call at the top of [`run_as_job`].
+/// `register_active_job` call at the top of [`run_as_job`]. Carries the
+/// registration generation so only THIS scope's registration is torn
+/// down — a different registration for the same `job_id` (nested
+/// dispatch, re-claimed attempt) is never disturbed (issue #1166 MED-4).
 struct CancelRegistryGuard {
     job_id: String,
+    generation: u64,
 }
 
 impl Drop for CancelRegistryGuard {
     fn drop(&mut self) {
-        cancel_registry::unregister_active_job(&self.job_id);
+        cancel_registry::unregister_active_job(&self.job_id, self.generation);
     }
 }
 
@@ -971,9 +978,10 @@ pub async fn run_as_job<F, T>(ctx: JobContext, body: F) -> T
 where
     F: Future<Output = T>,
 {
-    cancel_registry::register_active_job(&ctx.job_id, ctx.cancel_token.clone());
+    let generation = cancel_registry::register_active_job(&ctx.job_id, ctx.cancel_token.clone());
     let _guard = CancelRegistryGuard {
         job_id: ctx.job_id.clone(),
+        generation,
     };
     job_context::with_job(ctx, body).await
 }
@@ -1684,6 +1692,68 @@ mod tests {
         let (_, deltas) = backend.last_batch().unwrap();
         assert_eq!(deltas.len(), 1);
         assert!(deltas[0].is_terminal());
+    }
+
+    /// Issue #1166 LOW: the terminal sentinel is per-controller, not
+    /// queue-resident. On the claim-worker path one queue is shared
+    /// across all controllers — a queue-lived `HashSet<job_id>` would
+    /// (a) retain one string per completed job forever and (b) wrongly
+    /// block progress from a NEW controller that re-claims a previously
+    /// completed job_id. A fresh controller for the same job_id on the
+    /// same shared queue must be able to enqueue progress.
+    #[tokio::test]
+    async fn terminal_guard_is_per_controller_not_shared_queue() {
+        let backend = MockBackend::new();
+        let queue = new_coalescing_queue();
+        let resp = backend
+            .create_job(CreateJobRequest {
+                capability: "cap".into(),
+                submitted_payload: serde_json::json!({}),
+                submitted_by: "inst-1".into(),
+                max_retries: None,
+                max_duration: None,
+                total_deadline: None,
+                owner_instance_id: None,
+            })
+            .await
+            .unwrap();
+
+        let first_attempt = JobController::new(
+            resp.id.clone(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            queue.clone(),
+        );
+        first_attempt
+            .complete(serde_json::json!({"done": true}))
+            .await
+            .unwrap();
+        assert!(first_attempt.is_terminal().await);
+
+        // Same job_id re-claimed: a NEW controller on the SAME queue.
+        let second_attempt = JobController::new(
+            resp.id.clone(),
+            "inst-1".to_string(),
+            backend.clone() as Arc<dyn TaskBackend>,
+            queue.clone(),
+        );
+        assert!(
+            !second_attempt.is_terminal().await,
+            "fresh controller must start non-terminal"
+        );
+        second_attempt.update_progress(0.5, Some("retry".into())).await;
+        {
+            let q = queue.lock().await;
+            assert_eq!(
+                q.len(),
+                1,
+                "fresh controller's progress must reach the shared queue"
+            );
+        }
+
+        // The first controller's clone still drops late progress.
+        let clone_of_first = first_attempt.clone();
+        assert!(clone_of_first.is_terminal().await);
     }
 
     #[tokio::test]

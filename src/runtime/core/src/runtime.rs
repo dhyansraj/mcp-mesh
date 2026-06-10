@@ -259,6 +259,17 @@ impl AgentRuntime {
                             }
                         }
                     }
+                    // A shutdown that arrived during the backoff consumed
+                    // the one-shot signal from the capacity-1 channel — the
+                    // next iteration's try_recv would find nothing. Skip the
+                    // heartbeat so the loop-top is_shutting_down() check runs
+                    // the normal shutdown path (unregister + shutdown event)
+                    // instead of re-registering (issue #1166 MED-1). The
+                    // Wait arm doesn't need this: it does no state-mutating
+                    // work after its select.
+                    if self.state_machine.is_shutting_down() {
+                        continue;
+                    }
                     // After backoff, try full registration
                     self.send_full_heartbeat().await;
                 }
@@ -609,16 +620,32 @@ impl AgentRuntime {
             }
         }
 
-        // Update local topology and emit events (no lock needed)
+        // Update local topology and emit events (no lock needed).
+        //
+        // Send each event BEFORE recording the change in the topology map.
+        // If the send fails (channel dropped/full receiver gone), leaving
+        // the topology unchanged means the diff gate re-detects the change
+        // on the next heartbeat and re-emits (self-healing) — recording it
+        // anyway would permanently suppress re-emission (a lost
+        // DEPENDENCY_AVAILABLE would leave the consumer proxy unbound
+        // forever). Mirrors `process_llm_providers_changes`.
         for (key, value) in removed {
-            let _ = self
+            if let Err(e) = self
                 .event_tx
                 .send(MeshEvent::dependency_unavailable(
                     value.capability.clone(),
                     key.requesting_function.clone(),
                     key.dep_index,
                 ))
-                .await;
+                .await
+            {
+                warn!(
+                    "Failed to emit DEPENDENCY_UNAVAILABLE for '{}' at {}:{}: {}; \
+                     will retry on next heartbeat",
+                    value.capability, key.requesting_function, key.dep_index, e
+                );
+                continue;
+            }
             self.topology.dependencies.remove(&key);
         }
 
@@ -644,7 +671,14 @@ impl AgentRuntime {
                     value.kwargs.clone(),
                 )
             };
-            let _ = self.event_tx.send(event).await;
+            if let Err(e) = self.event_tx.send(event).await {
+                warn!(
+                    "Failed to emit dependency event for '{}' at {}:{}: {}; \
+                     will retry on next heartbeat",
+                    value.capability, key.requesting_function, key.dep_index, e
+                );
+                continue;
+            }
 
             self.topology.dependencies.insert(key, value);
         }
@@ -706,14 +740,25 @@ impl AgentRuntime {
                     tool_infos.len()
                 );
 
-                // Emit event
-                let _ = self
+                // Send the event BEFORE recording it in topology — same
+                // self-healing pattern as `process_llm_providers_changes`
+                // and `process_dependency_changes`: a failed send leaves
+                // the diff gate primed to re-emit on the next heartbeat.
+                if let Err(e) = self
                     .event_tx
                     .send(MeshEvent::llm_tools_updated(
                         function_id.clone(),
                         tool_infos.clone(),
                     ))
-                    .await;
+                    .await
+                {
+                    warn!(
+                        "Failed to emit LLM_TOOLS_UPDATED for function '{}': {}; \
+                         will retry on next heartbeat",
+                        function_id, e
+                    );
+                    continue;
+                }
 
                 self.topology
                     .llm_tools
@@ -816,5 +861,123 @@ mod tests {
         let config = RuntimeConfig::default();
         assert_eq!(config.event_buffer_size, 100);
         assert_eq!(config.heartbeat.interval, Duration::from_secs(5));
+    }
+
+    /// Issue #1166 MED-1 regression: a shutdown that arrives during the
+    /// Retry arm's backoff must terminate the runtime — even when the
+    /// registry recovers at exactly that heartbeat. Before the fix, the
+    /// Retry arm consumed the one-shot shutdown signal, then sent the
+    /// heartbeat anyway; the success overwrote ShuttingDown with Healthy
+    /// and the agent re-registered and ran forever.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_during_retry_backoff_is_not_swallowed() {
+        use crate::events::EventType;
+        use crate::spec::AgentSpec;
+
+        let mut server = mockito::Server::new_async().await;
+
+        // First full heartbeat fails -> with missed_threshold=1 the state
+        // machine enters Reconnecting and the run loop hits the Retry arm.
+        let fail = server
+            .mock("POST", "/heartbeat")
+            .with_status(500)
+            .expect(1)
+            .create_async()
+            .await;
+        // Registry "recovers": any subsequent heartbeat would succeed.
+        // It must never be hit — the shutdown arrives during the backoff.
+        let recover = server
+            .mock("POST", "/heartbeat")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"status":"success","message":"ok","agent_id":"shutdown-retry-agent"}"#)
+            .create_async()
+            .await;
+        // Graceful unregister during shutdown.
+        let unregister = server
+            .mock("DELETE", "/agents/shutdown-retry-agent")
+            .with_status(204)
+            .create_async()
+            .await;
+
+        let spec = AgentSpec::new(
+            "shutdown-retry-agent".to_string(),
+            server.url(),
+            "1.0.0".to_string(),
+            "".to_string(),
+            8080,
+            "localhost".to_string(),
+            "default".to_string(),
+            None,
+            None,
+            None,
+            None,
+            1, // heartbeat_interval (secs)
+            None,
+        );
+        let config = RuntimeConfig {
+            heartbeat: HeartbeatConfig {
+                interval: Duration::from_secs(1),
+                max_retries: 5,
+                // After one failure retry_attempt=1 -> capped at
+                // max_backoff=2s, equal jitter floors at 1s. The shutdown
+                // below lands ~300ms in, well inside the backoff window.
+                base_backoff: Duration::from_secs(2),
+                max_backoff: Duration::from_secs(2),
+                missed_threshold: 1,
+            },
+            event_buffer_size: 100,
+        };
+
+        let (event_tx, mut event_rx) = mpsc::channel(100);
+        let (shutdown_tx, shutdown_rx) = mpsc::channel(1);
+        let (_command_tx, command_rx) = mpsc::channel(10);
+        let shared_state = Arc::new(RwLock::new(HandleState::default()));
+
+        let runtime = AgentRuntime::new(
+            spec,
+            config,
+            event_tx,
+            shared_state,
+            shutdown_rx,
+            command_rx,
+        )
+        .await
+        .expect("runtime construction should succeed");
+
+        let join = tokio::spawn(runtime.run());
+
+        // Let the first heartbeat fail and the Retry backoff begin, then
+        // request shutdown mid-backoff.
+        sleep(Duration::from_millis(300)).await;
+        shutdown_tx.send(()).await.expect("shutdown signal");
+
+        // The runtime must exit promptly (backoff floor is 1s; allow 5s).
+        tokio::time::timeout(Duration::from_secs(5), join)
+            .await
+            .expect("runtime did not exit after shutdown during retry backoff")
+            .expect("runtime task panicked");
+
+        // Collect emitted events: must include shutdown, must NOT include
+        // a (re-)registration.
+        let mut saw_shutdown = false;
+        while let Ok(event) = event_rx.try_recv() {
+            assert_ne!(
+                event.event_type,
+                EventType::AgentRegistered,
+                "agent must not re-register after shutdown was requested"
+            );
+            if event.event_type == EventType::Shutdown {
+                saw_shutdown = true;
+            }
+        }
+        assert!(saw_shutdown, "shutdown event must be emitted to the caller");
+
+        fail.assert_async().await;
+        assert!(
+            !recover.matched_async().await,
+            "no heartbeat may be sent after shutdown arrived during backoff"
+        );
+        unregister.assert_async().await;
     }
 }

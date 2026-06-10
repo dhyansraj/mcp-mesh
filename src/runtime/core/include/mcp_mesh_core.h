@@ -61,6 +61,16 @@ typedef struct JobProxyHandle JobProxyHandle;
 // This struct holds all resources needed to interact with the agent runtime.
 // It must be freed with `mesh_free_handle` when no longer needed.
 //
+// Lifetime: the raw pointer handed to C is `Arc`-managed
+// (`Arc::into_raw` in `mesh_start_agent`). Every accessor takes a
+// temporary strong reference for the duration of the call (see
+// `handle_guard`), and `mesh_free_handle` releases the creation
+// reference — so freeing while another thread is still inside
+// `mesh_next_event` / `mesh_report_health` / etc. defers the actual
+// drop until the last in-flight call returns instead of yanking the
+// memory out from under it (use-after-free under the "safe from any
+// thread" contract).
+//
 // Note: This struct is intentionally NOT `#[repr(C)]` to keep its internals
 // opaque to C consumers. The FFI functions work with raw pointers.
 typedef struct MeshAgentHandle MeshAgentHandle;
@@ -89,7 +99,7 @@ struct MeshAgentHandle *mesh_start_agent(const char *spec_json);
 //
 // # Safety
 // * `handle` must be a valid handle from `mesh_start_agent`
-void mesh_shutdown(struct MeshAgentHandle *handle);
+void mesh_shutdown(const struct MeshAgentHandle *handle);
 
 // Free agent handle and associated resources.
 //
@@ -97,14 +107,41 @@ void mesh_shutdown(struct MeshAgentHandle *handle);
 // and wait briefly (up to 2 seconds) for the agent to unregister from
 // the registry before dropping resources.
 //
+// Also drains queued trace spans (up to 2 seconds, equivalent to
+// `mesh_flush_spans(2000)`) so spans published during the agent's final
+// moments are not lost.
+//
+// Safe to call while other threads are still inside `mesh_*` accessors
+// on the same handle (including a `mesh_next_event` parked on an
+// infinite timeout): the handle is reference-counted, so this releases
+// the creation reference and the underlying resources are dropped when
+// the last in-flight call returns. A parked infinite `mesh_next_event`
+// unparks on its own — the graceful shutdown triggered here makes the
+// runtime emit the shutdown event and then exit, closing the event
+// channel, so the parked caller observes the shutdown event (or channel
+// close → NULL) and returns. Only if the runtime is wedged and never
+// processes the shutdown signal does a parked infinite wait keep the
+// resources alive (a leak, not a crash).
+//
 // # Safety
 // * `handle` must be a valid handle from `mesh_start_agent` or NULL
-// * After this call, `handle` is invalid and must not be used
+// * After this call, `handle` is invalid and must not be passed to any
+//   `mesh_*` function (calls already in flight are safe; new calls are
+//   not)
 void mesh_free_handle(struct MeshAgentHandle *handle);
 
 // Get next event from agent runtime.
 //
-// Blocks until event available or timeout.
+// Blocks until event available or timeout. The timeout covers the FULL
+// wait, including acquisition of the internal receiver lock — a
+// `timeout_ms = 0` (non-blocking) or finite-timeout call returns within
+// its budget even while another thread is parked in an infinite
+// `mesh_next_event` wait on the same handle.
+//
+// Each event is delivered to exactly ONE caller: the receiver is a
+// shared single-consumer queue, not a broadcast. With multiple
+// concurrent callers, an event goes to whichever caller dequeues it
+// first.
 //
 // # Arguments
 // * `handle` - Agent handle
@@ -116,7 +153,7 @@ void mesh_free_handle(struct MeshAgentHandle *handle);
 // # Safety
 // * `handle` must be a valid handle from `mesh_start_agent`
 // * The returned string must be freed with `mesh_free_string`
-char *mesh_next_event(struct MeshAgentHandle *handle, int64_t timeout_ms);
+char *mesh_next_event(const struct MeshAgentHandle *handle, int64_t timeout_ms);
 
 // Check if agent is still running.
 //
@@ -142,7 +179,7 @@ int32_t mesh_is_running(const struct MeshAgentHandle *handle);
 // # Safety
 // * `handle` must be a valid handle from `mesh_start_agent`
 // * `status` must be a valid null-terminated C string
-int32_t mesh_report_health(struct MeshAgentHandle *handle, const char *status);
+int32_t mesh_report_health(const struct MeshAgentHandle *handle, const char *status);
 
 // Update the HTTP port after auto-detection.
 //
@@ -159,7 +196,7 @@ int32_t mesh_report_health(struct MeshAgentHandle *handle, const char *status);
 //
 // # Safety
 // * `handle` must be a valid handle from `mesh_start_agent`
-int32_t mesh_update_port(struct MeshAgentHandle *handle, int32_t port);
+int32_t mesh_update_port(const struct MeshAgentHandle *handle, int32_t port);
 
 // Get last error message.
 //
@@ -296,18 +333,40 @@ int32_t mesh_is_trace_publisher_available(void);
 
 // Publish a trace span to Redis.
 //
-// Non-blocking (from the caller's perspective) - returns after queuing the span.
-// Silently handles failures to never break agent operations.
+// Non-blocking (from the caller's perspective) - returns after queuing the span
+// onto a bounded in-process queue drained by the tracing runtime, which
+// performs the actual Redis XADD asynchronously. Silently handles failures
+// to never break agent operations; on queue overflow the span is dropped
+// (counted, logged periodically).
 //
 // # Arguments
 // * `span_json` - JSON string containing span data (all values should be strings)
 //
 // # Returns
-// 1 on success (queued), 0 on failure
+// 1 on success (queued), 0 on failure (not initialized, invalid input,
+// or queue full)
 //
 // # Safety
 // * `span_json` must be a valid null-terminated C string
 int32_t mesh_publish_span(const char *span_json);
+
+// Flush queued trace spans.
+//
+// Blocks until every span queued via `mesh_publish_span` before this
+// call has been published to Redis (or dropped on a publish error), or
+// until `timeout_ms` elapses. `mesh_free_handle` calls this
+// automatically with a 2-second budget so an agent's final spans are not
+// lost at teardown; embedders that need a different budget (or that
+// publish spans after freeing the handle) can call it directly.
+//
+// # Arguments
+// * `timeout_ms` - Maximum time to wait in milliseconds; negative values
+//   are treated as 0
+//
+// # Returns
+// 1 if the queue fully drained (or the publisher was never initialized),
+// 0 on timeout
+int32_t mesh_flush_spans(int64_t timeout_ms);
 
 // Extract JSON from LLM response text.
 //

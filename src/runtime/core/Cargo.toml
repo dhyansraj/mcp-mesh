@@ -2,6 +2,11 @@
 name = "mcp-mesh-core"
 version = "2.4.0"
 edition = "2021"
+# MSRV. CI builds with moving stable (dtolnay/rust-toolchain@stable);
+# this floor documents the newest stdlib API the crate relies on
+# (u64::is_multiple_of, stabilized in 1.87) so older toolchains fail
+# with a clear error instead of a confusing method-not-found.
+rust-version = "1.87"
 description = "Rust core runtime for MCP Mesh agents"
 license = "MIT"
 authors = ["MCP Mesh Team"]
@@ -52,8 +57,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 
-# Redis for distributed tracing
-redis = { version = "0.32.7", features = ["tokio-comp"] }
+# Redis for distributed tracing. `connection-manager` provides the
+# crate's blessed reconnecting wrapper (`aio::ConnectionManager`): one
+# multiplexed connection created at init, cloned per publish, with
+# automatic background reconnect when a command fails — instead of a
+# fresh TCP dial + handshake per span (issue #1166 MED-3).
+redis = { version = "0.32.7", features = ["tokio-comp", "connection-manager"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -631,20 +631,23 @@ pub fn with_job_async_py<'py>(
     // that as a real cancel and abort the user task immediately. By
     // registering here — synchronously, before any asyncio scheduling
     // happens — the watcher always observes a live entry.
-    cancel_registry::register_active_job(&job_id, ctx.cancel_token.clone());
+    let generation = cancel_registry::register_active_job(&job_id, ctx.cancel_token.clone());
     // Panic-safe RAII: cleanup runs whether the body completes normally,
     // returns Err, or panics. Mirrors `CancelRegistryGuard` in
-    // `jobs.rs::run_as_job`.
+    // `jobs.rs::run_as_job`. Carries the registration generation so only
+    // THIS registration is torn down (issue #1166 MED-4).
     struct CleanupGuard {
         job_id: String,
+        generation: u64,
     }
     impl Drop for CleanupGuard {
         fn drop(&mut self) {
-            cancel_registry::unregister_active_job(&self.job_id);
+            cancel_registry::unregister_active_job(&self.job_id, self.generation);
         }
     }
     let guard = CleanupGuard {
         job_id: job_id.clone(),
+        generation,
     };
 
     // Convert the Python awaitable to a Rust future. Per pyo3-async-runtimes
@@ -666,21 +669,22 @@ pub fn with_job_async_py<'py>(
         // future's lifetime (not this synchronous function's stack frame).
         let _guard = guard;
         // `run_as_job` binds the task-local JobContext for Rust-side
-        // futures inside the body. It will also re-register the cancel
-        // token (idempotent — `register_active_job` overwrites existing
-        // entries with the same `job_id` + same `cancel_token` clone, so
-        // semantics are unchanged) and install its own drop guard. The
-        // outer guard above is what closes the race window between this
-        // function returning and the body being polled.
+        // futures inside the body. It also registers a SECOND cancel-
+        // registry frame for the same job_id (a clone of the same
+        // `cancel_token`, so cancels propagate through either frame) and
+        // installs its own drop guard. The outer registration above is
+        // what closes the race window between this function returning and
+        // the body being polled.
         //
-        // Duplicate-registration note: the outer `register_active_job`
-        // above creates a `JobCancelState` whose `ended` notify token is
-        // silently dropped when `run_as_job`'s inner registration
-        // overwrites the entry. This is safe because the `cancel_token`
-        // is a clone sharing state, so cancels still propagate; only the
-        // `ended` token instance is replaced, and any awaiter that grabbed
-        // the inner entry's `ended` token is still notified when this
-        // outer drop guard fires (via the registry entry being removed).
+        // Duplicate-registration note (issue #1166 MED-4): the registry
+        // stacks registrations per job_id — the inner `run_as_job` frame
+        // sits on top of the outer one; nothing is displaced and no
+        // `ended` token is dropped unfired. Each frame's `ended` fires at
+        // its own unregister: the inner frame's when `run_as_job`'s guard
+        // drops (body finished), the outer frame's microseconds later
+        // when the guard above drops. A Python `await_job_cancel(job_id)`
+        // watcher that snapshotted EITHER frame therefore wakes on
+        // natural end.
         run_as_job(ctx, async move {
             // Awaiting `fut` yields a `PyResult<Py<PyAny>>` — propagate
             // both the success value and any Python exception verbatim.

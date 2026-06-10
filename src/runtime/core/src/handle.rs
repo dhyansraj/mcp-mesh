@@ -199,6 +199,38 @@ impl AgentHandle {
         state.shutdown_requested
     }
 
+    /// Get current dependency endpoints (async version).
+    ///
+    /// Use this — not the `*_internal` variant — when calling from an
+    /// async context (e.g. napi-rs async methods): `blocking_read()`
+    /// panics when invoked within an async execution context. Mirrors
+    /// the `shutdown_async` / `update_tools_async` pattern.
+    pub async fn get_dependencies_async(&self) -> HashMap<String, String> {
+        let state = self.state.read().await;
+        state.dependencies.clone()
+    }
+
+    /// Get current agent health status (async version).
+    /// See [`Self::get_dependencies_async`] for when to use this.
+    pub async fn get_status_async(&self) -> HealthStatus {
+        let state = self.state.read().await;
+        state.health_status
+    }
+
+    /// Get the agent ID assigned by the registry (async version).
+    /// See [`Self::get_dependencies_async`] for when to use this.
+    pub async fn get_agent_id_async(&self) -> Option<String> {
+        let state = self.state.read().await;
+        state.agent_id.clone()
+    }
+
+    /// Check if shutdown has been requested (async version).
+    /// See [`Self::get_dependencies_async`] for when to use this.
+    pub async fn is_shutdown_requested_async(&self) -> bool {
+        let state = self.state.read().await;
+        state.shutdown_requested
+    }
+
     /// Request graceful shutdown of the agent runtime.
     pub fn shutdown_internal(&self) {
         // Set shutdown flag
@@ -333,6 +365,45 @@ mod tests {
             .unwrap();
 
         drop(event_tx);
+    }
+
+    /// Issue #1166 MED-2: the async accessors must be callable from
+    /// within a tokio runtime. The `*_internal` variants use
+    /// `blocking_read()`, which panics in an async execution context —
+    /// these `.await`-based variants are what async bindings (napi)
+    /// must call.
+    #[tokio::test]
+    async fn test_async_accessors_work_in_async_context() {
+        let (_event_tx, event_rx) = mpsc::channel(10);
+        let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
+        let (command_tx, _command_rx) = mpsc::channel(10);
+        let state = Arc::new(RwLock::new(HandleState::default()));
+
+        let handle = AgentHandle::new(event_rx, state.clone(), shutdown_tx, command_tx);
+
+        {
+            let mut s = state.write().await;
+            s.agent_id = Some("async-agent".to_string());
+            s.dependencies
+                .insert("date-service".to_string(), "http://localhost:9001".to_string());
+            s.health_status = HealthStatus::Degraded;
+        }
+
+        assert_eq!(
+            handle.get_agent_id_async().await,
+            Some("async-agent".to_string())
+        );
+        let deps = handle.get_dependencies_async().await;
+        assert_eq!(deps.len(), 1);
+        assert_eq!(
+            deps.get("date-service").map(String::as_str),
+            Some("http://localhost:9001")
+        );
+        assert_eq!(handle.get_status_async().await, HealthStatus::Degraded);
+        assert!(!handle.is_shutdown_requested_async().await);
+
+        handle.shutdown_async().await;
+        assert!(handle.is_shutdown_requested_async().await);
     }
 
     #[test]

@@ -97,16 +97,29 @@ pub mod napi;
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 
+// Imports below are gated to the binding features that use them
+// (start_agent_internal for python|typescript, the pymodule for python)
+// so feature combos without bindings (e.g. ffi-only) build warning-free.
+#[cfg(any(feature = "python", feature = "typescript"))]
 use std::sync::Arc;
+#[cfg(any(feature = "python", feature = "typescript"))]
 use std::thread;
+#[cfg(any(feature = "python", feature = "typescript"))]
 use tokio::sync::RwLock;
+#[cfg(any(feature = "python", feature = "typescript"))]
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+#[cfg(feature = "python")]
 use events::{EventType, HealthStatus, LlmToolInfo, MeshEvent};
+#[cfg(any(feature = "python", feature = "typescript"))]
 use handle::{AgentHandle, HandleState};
+#[cfg(any(feature = "python", feature = "typescript"))]
 use runtime::RuntimeConfig;
-use spec::{AgentSpec, DependencySpec, LlmAgentSpec, ToolSpec};
+#[cfg(any(feature = "python", feature = "typescript"))]
+use spec::AgentSpec;
+#[cfg(feature = "python")]
+use spec::{DependencySpec, LlmAgentSpec, ToolSpec};
 
 /// Initialize logging with tracing.
 ///
@@ -137,15 +150,38 @@ pub fn init_logging() {
 #[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (spec))]
-fn start_agent_py(_py: Python<'_>, spec: AgentSpec) -> PyResult<AgentHandle> {
+fn start_agent_py(py: Python<'_>, spec: AgentSpec) -> PyResult<AgentHandle> {
     init_logging();
-    start_agent_internal(spec).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
+    // Detach from the interpreter: construction is synchronous and
+    // `AgentRuntime::new` can perform real network I/O (TLS resolution
+    // against Vault/SPIRE when no config was pre-cached by prepare_tls).
+    // Running it attached would freeze every other Python thread for the
+    // duration of those calls.
+    py.detach(|| start_agent_internal(spec))
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
 }
 
 /// Internal agent start function (language-agnostic).
 ///
-/// This is the core implementation used by both Python bindings and FFI.
-pub fn start_agent_internal(spec: AgentSpec) -> Result<AgentHandle, String> {
+/// This is the core implementation shared by the Python (pyo3) and
+/// TypeScript (napi) bindings, which both call it from synchronous,
+/// non-async contexts. The C ABI (`mesh_start_agent`) has its own
+/// equivalent in `ffi.rs`.
+///
+/// Must NOT be called from inside a tokio runtime: it creates its own
+/// runtime and `block_on`s it, which would panic in an async context —
+/// guarded below so callers get an `Err` instead of a panic.
+#[cfg(any(feature = "python", feature = "typescript"))]
+pub(crate) fn start_agent_internal(spec: AgentSpec) -> Result<AgentHandle, String> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(
+            "start_agent_internal called from within a tokio runtime; it creates its own \
+             runtime and blocks on it, which is not allowed in an async context — call it \
+             from a non-async thread"
+                .to_string(),
+        );
+    }
+
     info!("Starting agent '{}' with Rust core", spec.name);
 
     // Create runtime config from spec
@@ -157,51 +193,43 @@ pub fn start_agent_internal(spec: AgentSpec) -> Result<AgentHandle, String> {
         ..Default::default()
     };
 
-    // We need to spawn a tokio runtime in a background thread
-    // because Python's asyncio and tokio don't mix well in the same thread
-    let (event_rx, shared_state, shutdown_tx, command_tx) = {
-        // Create channels that will be used by both the spawned thread and the handle
-        let (event_tx, event_rx) = tokio::sync::mpsc::channel(config.event_buffer_size);
-        let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
-        let (command_tx, command_rx) = tokio::sync::mpsc::channel::<runtime::RuntimeCommand>(10);
-        let shared_state = Arc::new(RwLock::new(HandleState::default()));
+    // Create channels that will be used by both the spawned thread and the handle
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel(config.event_buffer_size);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
+    let (command_tx, command_rx) = tokio::sync::mpsc::channel::<runtime::RuntimeCommand>(10);
+    let shared_state = Arc::new(RwLock::new(HandleState::default()));
 
-        let spec_clone = spec.clone();
-        let config_clone = config.clone();
-        let event_tx_clone = event_tx;
-        let shared_state_clone = shared_state.clone();
+    // Construct the runtime SYNCHRONOUSLY so initialization errors (TLS
+    // resolution, registry-client construction) propagate to the caller
+    // as a Python/JS exception instead of being logged inside the spawned
+    // thread while a healthy-looking handle is returned (issue #1166 LOW
+    // — mirrors the C-ABI `mesh_start_agent` fix).
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
+    let agent_runtime = rt
+        .block_on(runtime::AgentRuntime::new(
+            spec,
+            config,
+            event_tx,
+            shared_state.clone(),
+            shutdown_rx,
+            command_rx,
+        ))
+        .map_err(|e| format!("Failed to create agent runtime: {}", e))?;
 
-        // Spawn background thread with tokio runtime
-        thread::spawn(move || {
-            // Initialize Python in this thread to allow PyO3 object creation
-            #[cfg(feature = "python")]
-            {
-                // Ensure Python is attached to this thread for PyO3 operations
-                pyo3::Python::attach(|_| {});
-            }
+    // Run the heartbeat loop on a background thread with its own tokio
+    // runtime because Python's asyncio and tokio don't mix well in the
+    // same thread.
+    thread::spawn(move || {
+        // Initialize Python in this thread to allow PyO3 object creation
+        #[cfg(feature = "python")]
+        {
+            // Ensure Python is attached to this thread for PyO3 operations
+            pyo3::Python::attach(|_| {});
+        }
 
-            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-            rt.block_on(async {
-                match runtime::AgentRuntime::new(
-                    spec_clone,
-                    config_clone,
-                    event_tx_clone,
-                    shared_state_clone,
-                    shutdown_rx,
-                    command_rx,
-                ).await {
-                    Ok(agent_runtime) => {
-                        agent_runtime.run().await;
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to create agent runtime: {}", e);
-                    }
-                }
-            });
-        });
-
-        (event_rx, shared_state, shutdown_tx, command_tx)
-    };
+        rt.block_on(agent_runtime.run());
+    });
 
     // Create the handle
     let handle = AgentHandle::new(event_rx, shared_state, shutdown_tx, command_tx);
@@ -462,13 +490,19 @@ fn call_tool_py(
     let args = args_json.map(|s| s.to_string());
     let headers = headers_json.map(|s| s.to_string());
 
-    pyo3_async_runtimes::tokio::get_runtime().block_on(py.allow_threads(|| async {
-        mcp_client::call_tool(
-            &endpoint, &tool_name,
-            args.as_deref(), headers.as_deref(),
-            timeout_ms, max_retries,
-        ).await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
-    }))
+    // Detach around the ENTIRE block_on: the previous
+    // `block_on(py.allow_threads(|| async ...))` shape only released the
+    // GIL while constructing the future, then ran the HTTP call with the
+    // GIL held — blocking every Python thread for up to timeout_ms.
+    py.detach(|| {
+        pyo3_async_runtimes::tokio::get_runtime().block_on(async {
+            mcp_client::call_tool(
+                &endpoint, &tool_name,
+                args.as_deref(), headers.as_deref(),
+                timeout_ms, max_retries,
+            ).await.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
+        })
+    })
 }
 
 // =============================================================================

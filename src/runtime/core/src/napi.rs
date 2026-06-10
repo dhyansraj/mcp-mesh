@@ -377,31 +377,36 @@ impl JsAgentHandle {
     /// Get current dependency endpoints.
     ///
     /// Returns an object mapping capability names to endpoint URLs.
+    ///
+    /// NB: these accessors run inside napi's tokio runtime, so they must
+    /// use the `*_async` handle variants — the `*_internal` ones call
+    /// `blocking_read()`, which panics in an async execution context
+    /// (issue #1166 MED-2).
     #[napi]
     pub async fn get_dependencies(&self) -> Result<HashMap<String, String>> {
         let handle = self.inner.lock().await;
-        Ok(handle.get_dependencies_internal())
+        Ok(handle.get_dependencies_async().await)
     }
 
     /// Get current agent health status.
     #[napi]
     pub async fn get_status(&self) -> Result<String> {
         let handle = self.inner.lock().await;
-        Ok(handle.get_status_internal().as_api_str().to_string())
+        Ok(handle.get_status_async().await.as_api_str().to_string())
     }
 
     /// Get the agent ID assigned by the registry.
     #[napi]
     pub async fn get_agent_id(&self) -> Result<Option<String>> {
         let handle = self.inner.lock().await;
-        Ok(handle.get_agent_id_internal())
+        Ok(handle.get_agent_id_async().await)
     }
 
     /// Check if shutdown has been requested.
     #[napi]
     pub async fn is_shutdown_requested(&self) -> Result<bool> {
         let handle = self.inner.lock().await;
-        Ok(handle.is_shutdown_requested_internal())
+        Ok(handle.is_shutdown_requested_async().await)
     }
 
     /// Request graceful shutdown of the agent runtime.
@@ -473,6 +478,15 @@ impl JsAgentHandle {
 /// - Periodic heartbeats
 /// - Topology change detection
 /// - Event streaming
+///
+/// NOTE: construction is synchronous and runs on the calling JS thread
+/// (normally the Node main thread). TLS resolution inside
+/// `AgentRuntime::new` short-circuits to the config cached by
+/// `prepare_tls` — the TS SDK calls `prepareTls()` before `startAgent()`
+/// in all three boot paths (agent.ts, api-runtime.ts, express.ts), so no
+/// Vault/SPIRE network I/O happens here. If a future caller skips
+/// `prepare_tls` while a network credential provider is configured,
+/// `TlsConfig::resolve` would block this thread on that I/O.
 #[napi]
 pub fn start_agent(spec: JsAgentSpec) -> Result<JsAgentHandle> {
     crate::init_logging();
