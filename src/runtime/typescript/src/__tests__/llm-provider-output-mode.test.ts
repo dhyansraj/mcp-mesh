@@ -28,6 +28,7 @@ vi.mock("ai", () => ({
   generateObject: (opts: unknown) => generateObjectMock(opts),
   jsonSchema: (schema: Record<string, unknown>) => schema,
   tool: (config: unknown) => config,
+  stepCountIs: (n: number) => ({ steps }: { steps: unknown[] }) => steps.length === n,
 }));
 
 // Keep tracing inert/deterministic (publishTraceSpan is best-effort anyway).

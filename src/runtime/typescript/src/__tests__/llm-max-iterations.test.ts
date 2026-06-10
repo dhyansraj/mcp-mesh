@@ -111,18 +111,20 @@ describe("resolveMaxIterations — provider loop cap resolution", () => {
     expect(resolveMaxIterations(undefined)).toBe(10);
   });
 
-  // Parity (#1116): the Gemini AI-SDK-managed loop sets
-  // `requestOptions.maxSteps = resolvedMaxIterations`, the SAME value the
-  // manual provider-managed loop uses as its cap. We assert the resolution
-  // the Gemini path consumes here rather than the wired `maxSteps`, since
-  // observing the latter would require a full `vi.mock("ai")` generateText
-  // harness that this file deliberately does not build.
-  it("Gemini maxSteps path consumes the forwarded resolved cap", () => {
+  // Parity (#1116/#1160): the Gemini AI-SDK-managed loop wires
+  // `stopWhen: stepCountIs(resolvedMaxIterations)` — AI SDK v6 removed
+  // `maxSteps`, whose default-stepCountIs(1) replacement caused the empty
+  // assistant message regression (#1160). The actual generateText option
+  // wiring is asserted in llm-provider-stopwhen.test.ts, and the multi-step
+  // loop behavior (tool call → follow-up text) in
+  // llm-provider-multistep.test.ts. Here we only assert the resolution the
+  // Gemini path consumes.
+  it("Gemini stopWhen path consumes the forwarded resolved cap", () => {
     delete process.env.MESH_LLM_MAX_ITERATIONS;
     expect(resolveMaxIterations(25)).toBe(25);
   });
 
-  it("Gemini maxSteps path falls back to 10 when the cap is absent", () => {
+  it("Gemini stopWhen path falls back to 10 when the cap is absent", () => {
     delete process.env.MESH_LLM_MAX_ITERATIONS;
     expect(resolveMaxIterations(undefined)).toBe(10);
   });
