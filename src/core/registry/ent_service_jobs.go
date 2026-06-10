@@ -20,6 +20,7 @@ import (
 	"mcp-mesh/src/core/ent/capability"
 	"mcp-mesh/src/core/ent/job"
 	"mcp-mesh/src/core/ent/jobevent"
+	"mcp-mesh/src/core/ent/predicate"
 	"mcp-mesh/src/core/registry/generated"
 )
 
@@ -41,6 +42,18 @@ const defaultClaimLeaseSeconds = 300
 // most one row is claimed per round-trip — long contention loops would
 // indicate a runaway and should fail fast rather than spin.
 const claimMaxAttempts = 8
+
+// leaseWindowFor returns the lease window for a job: `max_duration` when
+// set and positive, else the 300s claim default. Shared by ClaimNextJob
+// (initial lease at claim time) and ApplyJobDeltas (extension on each
+// accepted delta) so the two derivations cannot drift.
+func leaseWindowFor(j *ent.Job) time.Duration {
+	secs := defaultClaimLeaseSeconds
+	if j.MaxDuration != nil && *j.MaxDuration > 0 {
+		secs = *j.MaxDuration
+	}
+	return time.Duration(secs) * time.Second
+}
 
 // CreateJob persists a new job row. Caller is responsible for generating
 // the ID (UUID) and applying defaults; this method does the mechanical
@@ -260,9 +273,21 @@ const (
 // spec (see MESHJOB_DESIGN.org > "Producer-side flow" Tick step). Returns
 // the number of accepted deltas plus a per-delta rejection list.
 //
-// Lease semantics: any accepted delta refreshes `last_heartbeat_at` (the
-// batch itself counts as a lease extension), matching the design's
-// "POST /jobs/batch → progress + heartbeat (lease extension)" comment.
+// Lease semantics: any accepted non-terminal delta refreshes
+// `last_heartbeat_at` AND extends `lease_expires_at` to now + the job's
+// lease window (max_duration when set, else the 300s claim default — see
+// leaseWindowFor), implementing the design's "POST /jobs/batch → progress
+// + heartbeat (lease extension)" comment. A handler that keeps posting
+// deltas is therefore never reclaimed by the expired-lease sweep, no
+// matter how long it runs. Terminal deltas skip the extension (the sweep
+// ignores terminal rows). Rejected deltas (not_owner / already_terminal /
+// invalid_status / not_found) never touch the lease.
+//
+// NOTE: the SDKs do NOT auto-heartbeat while a handler runs — the
+// runtime's batching tick only flushes deltas the handler actually posted
+// (see src/runtime/core/src/jobs.rs flush_once, which early-returns on an
+// empty queue). A handler that stays silent past its lease window relies
+// entirely on max_duration being sized to its real runtime.
 func (s *EntService) ApplyJobDeltas(ctx context.Context, instanceID string, deltas []JobDeltaInput) (int, []JobDeltaRejection, error) {
 	if instanceID == "" {
 		return 0, nil, fmt.Errorf("ApplyJobDeltas: instance_id is required")
@@ -305,7 +330,26 @@ func (s *EntService) ApplyJobDeltas(ctx context.Context, instanceID string, delt
 			newStatus = &st
 		}
 
-		upd := s.entDB.Job.UpdateOneID(d.ID).SetLastHeartbeatAt(now)
+		// Guarded write: the owner/terminal checks above ran on an
+		// unguarded read, so re-assert both in the UPDATE's WHERE clause.
+		// If the row changed in between (sweep reclaim cleared the owner,
+		// a peer re-claimed, or a concurrent cancel made it terminal) the
+		// predicate fails with Affected=0 and the delta is rejected —
+		// crucially, without extending a lease this instance no longer
+		// holds.
+		upd := s.entDB.Job.Update().
+			Where(
+				job.IDEQ(d.ID),
+				job.OwnerInstanceIDEQ(instanceID),
+				job.StatusNotIn(job.StatusCompleted, job.StatusFailed, job.StatusCancelled),
+			).
+			SetLastHeartbeatAt(now)
+		if newStatus == nil || !isTerminalStatus(*newStatus) {
+			// The accepted delta doubles as a lease extension (see the
+			// doc comment). Terminal transitions skip it — the sweep
+			// never reclaims terminal rows, so the lease is dead weight.
+			upd = upd.SetLeaseExpiresAt(now.Add(leaseWindowFor(j)))
+		}
 		if d.Progress != nil {
 			upd = upd.SetProgress(*d.Progress)
 		}
@@ -325,8 +369,33 @@ func (s *EntService) ApplyJobDeltas(ctx context.Context, instanceID string, delt
 			}
 		}
 
-		if _, err := upd.Save(ctx); err != nil {
+		affected, err := upd.Save(ctx)
+		if err != nil {
 			return accepted, rejections, fmt.Errorf("update job %s: %w", d.ID, err)
+		}
+		if affected == 0 {
+			// Lost a race between the read and the guarded write. Re-read
+			// once to classify: still ours but now terminal → terminal
+			// rejection; row deleted in between → not_found; anything
+			// else → not_owner.
+			reason := JobDeltaRejectionNotOwner
+			cur, rerr := s.entDB.Job.Query().Where(job.IDEQ(d.ID)).Only(ctx)
+			switch {
+			case rerr == nil:
+				if cur.OwnerInstanceID != nil && *cur.OwnerInstanceID == instanceID &&
+					isTerminalStatus(cur.Status) {
+					reason = JobDeltaRejectionAlreadyTerminal
+				}
+			case ent.IsNotFound(rerr):
+				reason = JobDeltaRejectionNotFound
+			default:
+				// Transient error on the classifying re-read — keep the
+				// conservative not_owner rejection rather than failing the
+				// whole batch, but surface the error.
+				s.logger.Warning("ApplyJobDeltas: classify re-read for job %s failed, rejecting as %s: %v", d.ID, reason, rerr)
+			}
+			rejections = append(rejections, JobDeltaRejection{ID: d.ID, Reason: reason})
+			continue
 		}
 		accepted++
 	}
@@ -401,11 +470,7 @@ func (s *EntService) ClaimNextJob(ctx context.Context, capability, instanceID st
 			return nil, nil
 		}
 
-		leaseSeconds := defaultClaimLeaseSeconds
-		if candidate.MaxDuration != nil && *candidate.MaxDuration > 0 {
-			leaseSeconds = *candidate.MaxDuration
-		}
-		leaseExpires := now.Add(time.Duration(leaseSeconds) * time.Second)
+		leaseExpires := now.Add(leaseWindowFor(candidate))
 
 		// Guarded update: only succeed if owner is still NULL. Concurrent
 		// claimers race here; exactly one wins, the rest see Affected=0.
@@ -829,6 +894,120 @@ func (s *EntService) ResetOrphanedJobs(ctx context.Context) (reset, exhausted in
 			return reset, exhausted, fmt.Errorf("reset orphan job %s: %w", j.ID, uerr)
 		}
 		reset++
+	}
+	return reset, exhausted, nil
+}
+
+// ReclaimExpiredLeaseJobs handles the lease-expiry phase of the registry
+// sweep. It catches the failure mode the orphan reroute can't: an owner
+// whose agent row keeps heartbeating (status=healthy) but whose handler is
+// wedged and never completes the job. Without this phase such a job would
+// stay status=working forever.
+//
+// What keeps a healthy job's lease alive: every accepted non-terminal
+// /jobs/batch delta extends lease_expires_at by the job's lease window
+// (see ApplyJobDeltas / leaseWindowFor), so a handler posting progress is
+// never reclaimed regardless of runtime. The SDKs do NOT auto-heartbeat
+// during handler execution, however — the runtime batching tick only
+// flushes deltas the handler actually posted. Producers whose handlers can
+// run silently (no progress posts) past the 300s default MUST set
+// max_duration sized to the real runtime; otherwise this phase reclaims
+// the still-running job, and its eventual completion delta is rejected
+// not_owner.
+//
+// For every working job whose lease_expires_at has passed, the job is
+// either:
+//
+//   - reset to claimable (owner=NULL, lease cleared, last_heartbeat_at
+//     cleared) when attempt_count <= max_retries — identical field-reset
+//     semantics to ResetOrphanedJobs so expired-lease and orphan reroutes
+//     behave the same. attempt_count is NOT incremented here; the claim
+//     itself counts as the attempt (see ClaimNextJob's AddAttemptCount(1)).
+//
+//   - marked failed (status=failed, error="lease expired: no completion
+//     within lease window") when attempt_count > max_retries — mirrors the
+//     orphan-sweep budget-exhaustion path.
+//
+// Jobs with a NULL lease_expires_at (legacy rows / unclaimed jobs) are
+// never touched — the candidate predicate requires a non-NULL, expired
+// lease.
+//
+// Race-safety vs. a legitimate in-flight completion: candidates are
+// scanned outside any transaction, then each row is mutated via a guarded
+// UPDATE (same discipline as ClaimNextJob) conditional on the row still
+// being status=working with the SAME expired lease we observed. If the
+// owner completed/failed the job in between (status changed), released it
+// (lease cleared), or it was re-claimed with a fresh lease, the guard
+// predicate fails, Affected=0, and we skip the row without counting it.
+//
+// What this phase does NOT provide: execution fencing. After a reclaim the
+// original handler may still be running. When the job is re-claimed — in a
+// single-replica deployment necessarily by the SAME owner_instance_id —
+// deltas from BOTH the original and the new execution pass the owner check
+// and are accepted interleaved. Registry state stays consistent (the first
+// terminal delta wins; later ones are rejected already_terminal) but the
+// handler itself runs twice concurrently, which matters for non-idempotent
+// work. Reclaim is a liveness mechanism, not a mutual-exclusion one.
+func (s *EntService) ReclaimExpiredLeaseJobs(ctx context.Context) (reset, exhausted int, err error) {
+	now := time.Now().UTC()
+
+	candidates, err := s.entDB.Client.Job.Query().
+		Where(
+			job.StatusEQ(job.StatusWorking),
+			job.LeaseExpiresAtNotNil(),
+			job.LeaseExpiresAtLT(now),
+		).
+		All(ctx)
+	if err != nil {
+		return 0, 0, fmt.Errorf("query expired-lease candidates: %w", err)
+	}
+	if len(candidates) == 0 {
+		return 0, 0, nil
+	}
+
+	for _, j := range candidates {
+		if j.LeaseExpiresAt == nil {
+			continue // defensive; predicate already excludes NULL leases
+		}
+
+		// Guard predicate shared by both branches: the row must still be
+		// working AND still carry the exact expired lease we observed.
+		guard := []predicate.Job{
+			job.IDEQ(j.ID),
+			job.StatusEQ(job.StatusWorking),
+			job.LeaseExpiresAtEQ(*j.LeaseExpiresAt),
+		}
+
+		if j.AttemptCount > j.MaxRetries {
+			affected, uerr := s.entDB.Client.Job.Update().
+				Where(guard...).
+				SetStatus(job.StatusFailed).
+				SetError("lease expired: no completion within lease window").
+				ClearLeaseExpiresAt().
+				ClearOwnerInstanceID().
+				SetLastHeartbeatAt(now).
+				Save(ctx)
+			if uerr != nil {
+				return reset, exhausted, fmt.Errorf("mark lease-expired job %s failed: %w", j.ID, uerr)
+			}
+			if affected > 0 {
+				exhausted++
+			}
+			continue
+		}
+
+		affected, uerr := s.entDB.Client.Job.Update().
+			Where(guard...).
+			ClearOwnerInstanceID().
+			ClearLeaseExpiresAt().
+			ClearLastHeartbeatAt().
+			Save(ctx)
+		if uerr != nil {
+			return reset, exhausted, fmt.Errorf("reset lease-expired job %s: %w", j.ID, uerr)
+		}
+		if affected > 0 {
+			reset++
+		}
 	}
 	return reset, exhausted, nil
 }

@@ -217,6 +217,105 @@ func TestSubmitJobBatch_RejectsAlreadyTerminal(t *testing.T) {
 	assert.Equal(t, JobDeltaRejectionAlreadyTerminal, br.Rejected[0].Reason)
 }
 
+// TestSubmitJobBatch_AcceptedDeltaExtendsLease pins the lease-extension
+// contract on the batch endpoint: every accepted non-terminal delta moves
+// lease_expires_at forward to now + the job's lease window (max_duration
+// when set, else the 300s claim default), while rejected and terminal
+// deltas leave the lease alone.
+func TestSubmitJobBatch_AcceptedDeltaExtendsLease(t *testing.T) {
+	srv, service, cleanup := newJobsEndpointTestEnvWithService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	owner := "producer-a"
+	jobDefault := seedJob(t, service, "job-lease-default", "render", &owner)
+	jobCustom := seedJob(t, service, "job-lease-custom", "render", &owner, withMaxDuration(600))
+
+	// Seed near-expiry leases so "moved forward" is unambiguous.
+	soon := time.Now().UTC().Add(10 * time.Second)
+	for _, id := range []string{jobDefault.ID, jobCustom.ID} {
+		_, err := service.entDB.Job.UpdateOneID(id).SetLeaseExpiresAt(soon).Save(ctx)
+		require.NoError(t, err)
+	}
+
+	progress := float32(0.5)
+	body, _ := json.Marshal(generated.JobBatchRequest{
+		InstanceId: owner,
+		Deltas: []generated.JobDelta{
+			{Id: jobDefault.ID, Progress: &progress},
+			{Id: jobCustom.ID, Progress: &progress},
+		},
+	})
+	resp, err := http.Post(srv.URL+"/jobs/batch", "application/json", bytes.NewReader(body))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var br generated.JobBatchResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&br))
+	require.Equal(t, 2, br.Accepted)
+	require.Empty(t, br.Rejected)
+
+	// Default window: extension lands ~300s out — comfortably past the
+	// seeded near-expiry lease (loose lower bound to avoid flakes).
+	d, err := service.GetJob(ctx, jobDefault.ID)
+	require.NoError(t, err)
+	require.NotNil(t, d.LeaseExpiresAt, "accepted delta must extend the lease")
+	assert.True(t, d.LeaseExpiresAt.After(soon.Add(4*time.Minute)),
+		"default-window lease should be ~300s out, got %v (seeded %v)", d.LeaseExpiresAt, soon)
+
+	// max_duration window: extension must use the job's 600s window, not
+	// the 300s default — same derivation as the claim-time lease.
+	cJob, err := service.GetJob(ctx, jobCustom.ID)
+	require.NoError(t, err)
+	require.NotNil(t, cJob.LeaseExpiresAt)
+	assert.True(t, cJob.LeaseExpiresAt.After(soon.Add(8*time.Minute)),
+		"max_duration lease should be ~600s out, got %v (seeded %v)", cJob.LeaseExpiresAt, soon)
+	assert.True(t, cJob.LeaseExpiresAt.After(*d.LeaseExpiresAt),
+		"max_duration window must beat the default window")
+
+	// Rejected (not_owner) delta must NOT touch the lease.
+	leaseBefore := *d.LeaseExpiresAt
+	body2, _ := json.Marshal(generated.JobBatchRequest{
+		InstanceId: "producer-b",
+		Deltas:     []generated.JobDelta{{Id: jobDefault.ID, Progress: &progress}},
+	})
+	resp2, err := http.Post(srv.URL+"/jobs/batch", "application/json", bytes.NewReader(body2))
+	require.NoError(t, err)
+	defer resp2.Body.Close()
+	var br2 generated.JobBatchResponse
+	require.NoError(t, json.NewDecoder(resp2.Body).Decode(&br2))
+	require.Equal(t, 0, br2.Accepted)
+
+	d2, err := service.GetJob(ctx, jobDefault.ID)
+	require.NoError(t, err)
+	require.NotNil(t, d2.LeaseExpiresAt)
+	assert.Equal(t, leaseBefore.Unix(), d2.LeaseExpiresAt.Unix(),
+		"rejected delta must not extend the lease")
+
+	// Terminal delta is accepted but skips the extension — the sweep
+	// never reclaims terminal rows, so the lease is dead weight.
+	customLeaseBefore := *cJob.LeaseExpiresAt
+	completed := generated.JobStatus("completed")
+	body3, _ := json.Marshal(generated.JobBatchRequest{
+		InstanceId: owner,
+		Deltas:     []generated.JobDelta{{Id: jobCustom.ID, Status: &completed}},
+	})
+	resp3, err := http.Post(srv.URL+"/jobs/batch", "application/json", bytes.NewReader(body3))
+	require.NoError(t, err)
+	defer resp3.Body.Close()
+	var br3 generated.JobBatchResponse
+	require.NoError(t, json.NewDecoder(resp3.Body).Decode(&br3))
+	require.Equal(t, 1, br3.Accepted)
+
+	c3, err := service.GetJob(ctx, jobCustom.ID)
+	require.NoError(t, err)
+	assert.Equal(t, job.StatusCompleted, c3.Status)
+	require.NotNil(t, c3.LeaseExpiresAt)
+	assert.Equal(t, customLeaseBefore.Unix(), c3.LeaseExpiresAt.Unix(),
+		"terminal delta must not extend the lease")
+}
+
 func TestSubmitJobBatch_ValidationErrors(t *testing.T) {
 	srv, _, cleanup := newJobsEndpointTestEnvWithService(t)
 	defer cleanup()

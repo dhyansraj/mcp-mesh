@@ -29,9 +29,10 @@ import (
 
 // cancelForwardTimeout is the wall-clock cap on the registry → owner
 // HTTP forward in CancelJob. Short on purpose: if the owner doesn't ack
-// quickly we proceed to mark the row cancelled regardless. The
-// heartbeat/lease + sweep loop guarantees correctness even when the
-// forward is dropped.
+// quickly we proceed to mark the row cancelled regardless. The row is
+// already terminal at that point, so a dropped forward only means the
+// owner keeps executing until its next /jobs/batch delta is rejected
+// as already_terminal — registry-side state stays correct either way.
 const cancelForwardTimeout = 5 * time.Second
 
 // cancelEventGraceDefault is the wall-clock pause between posting the
@@ -311,6 +312,10 @@ func (h *EntBusinessLogicHandlers) GetJob(c *gin.Context, jobId string) {
 // Accepts a coalesced batch of per-job deltas from a single producer
 // instance. Each delta is applied independently — partial success is the
 // spec; rejections are surfaced per-id with a stable reason code.
+//
+// Every accepted non-terminal delta extends the job's lease (see
+// ApplyJobDeltas), so this endpoint doubles as the producer's heartbeat
+// against the expired-lease sweep.
 func (h *EntBusinessLogicHandlers) SubmitJobBatch(c *gin.Context) {
 	var req generated.JobBatchRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -391,6 +396,14 @@ func (h *EntBusinessLogicHandlers) SubmitJobBatch(c *gin.Context) {
 // Single-claim per round-trip (see Resolved Decisions). Race-free across
 // concurrent claimers via guarded UPDATE inside the service layer; "no
 // work available" is a 200 with claimed=[] (not an error).
+//
+// Honesty note on re-claims after a lease reclaim: claiming a job whose
+// previous lease expired does NOT fence out the previous execution. If the
+// same instance re-claims (the only possibility in a single-replica
+// deployment), deltas from the original still-running handler pass the
+// owner check and are accepted alongside the new execution's. State stays
+// consistent — the first terminal delta wins — but the handler may run
+// twice concurrently. See ReclaimExpiredLeaseJobs.
 func (h *EntBusinessLogicHandlers) ClaimJobs(c *gin.Context) {
 	var req generated.ClaimJobsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -531,7 +544,8 @@ func (h *EntBusinessLogicHandlers) ReleaseJob(c *gin.Context, jobId string) {
 // Three scenarios per the design:
 //   - Owned (alive): registry forwards cancel to the owner replica's HTTP
 //     endpoint, then marks the row cancelled regardless of forward outcome
-//     (best-effort forward; lease/sweep guarantees eventual correctness).
+//     (best-effort forward; the row is terminal regardless, so registry
+//     state is correct even when the forward is dropped).
 //   - Unowned (orphan / pre-claim): registry directly marks cancelled.
 //   - Already terminal: 409 Conflict.
 //
@@ -635,8 +649,10 @@ func (h *EntBusinessLogicHandlers) CancelJob(c *gin.Context, jobId string) {
 	}
 
 	// Best-effort owner notification. Errors are logged but never affect
-	// the response — the registry row is the source of truth, and the
-	// owner's lease will time out even if the forward never lands.
+	// the response — the registry row is the source of truth (already
+	// terminal=cancelled), so a missed forward only means the owner keeps
+	// working until its next /jobs/batch delta is rejected as
+	// already_terminal.
 	resp := generated.CancelJobResponse{
 		Status:                generated.JobStatus(string(updated.Status)),
 		ForwardedToInstanceId: prevOwner,
@@ -649,8 +665,9 @@ func (h *EntBusinessLogicHandlers) CancelJob(c *gin.Context, jobId string) {
 
 // forwardCancelToOwner POSTs the cancel to the owner agent's HTTP endpoint
 // best-effort. Any failure (agent unknown, unreachable, non-2xx) is logged
-// and swallowed: the registry row already shows status=cancelled, and the
-// owner's lease will expire if the message is missed.
+// and swallowed: the registry row already shows status=cancelled, and a
+// missed forward only delays the owner noticing via its next rejected
+// /jobs/batch delta.
 //
 // Scheme handling: when the agent registered an entity_id (i.e. presented
 // a TLS client cert at registration time) we dial https with the registry's

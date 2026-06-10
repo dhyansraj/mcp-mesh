@@ -1,9 +1,9 @@
 package registry
 
 // Tests for the job-related sweep extensions wired in alongside the #837
-// stale-agent sweep machinery: orphan-job reroute and total_deadline
-// expiry. Reuses newSweepTestEnv from sweep_test.go for the same
-// in-memory Ent + mock-clock setup.
+// stale-agent sweep machinery: orphan-job reroute, expired-lease reclaim,
+// and total_deadline expiry. Reuses newSweepTestEnv from sweep_test.go
+// for the same in-memory Ent + mock-clock setup.
 
 import (
 	"context"
@@ -279,6 +279,366 @@ func TestSweep_ResetOrphanedJobs_ReleasesUnknownOwnerPinnedJob(t *testing.T) {
 	}
 	if got.OwnerInstanceID != nil {
 		t.Errorf("expected owner cleared, got %v", *got.OwnerInstanceID)
+	}
+}
+
+// TestSweep_ReclaimExpiredLeaseJobs_ResetsRetryable verifies that a
+// working job whose CURRENT lease has genuinely expired — no accepted
+// delta inside the lease window (any accepted delta would have extended
+// the lease via ApplyJobDeltas), owner agent still healthy and
+// heartbeating (so the orphan reroute does NOT act) — is reset to
+// claimable with the exact same field semantics as the orphan reset:
+// owner cleared, lease cleared, last_heartbeat_at cleared, attempt_count
+// untouched.
+//
+// Lease times are seeded relative to real time.Now() because
+// ReclaimExpiredLeaseJobs (like ExpireDeadlinedJobs) compares against
+// time.Now().UTC() internally, not the injected sweep clock.
+func TestSweep_ReclaimExpiredLeaseJobs_ResetsRetryable(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Healthy, recently-updated owner — neither purgeStaleAgents nor the
+	// orphan reroute will touch this job; only the lease phase can.
+	seedAgent(t, client, "wedged-owner", agent.StatusHealthy, now)
+	owner := "wedged-owner"
+	j := seedJobRow(t, client, "job-lease-retry", "render", &owner, job.StatusWorking, 1, 3, now.Add(-10*time.Minute))
+
+	// Expired lease, UTC-pinned to match the production comparison path.
+	// last_heartbeat_at is OLDER than the lease — the only state an
+	// expired lease can legitimately coexist with, since every accepted
+	// delta now refreshes heartbeat AND lease together. A silent wedged
+	// handler produces exactly this row.
+	if _, err := client.Job.UpdateOneID(j.ID).
+		SetLeaseExpiresAt(time.Now().UTC().Add(-5 * time.Minute)).
+		SetLastHeartbeatAt(time.Now().UTC().Add(-10 * time.Minute)).
+		Save(ctx); err != nil {
+		t.Fatalf("seed lease: %v", err)
+	}
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsReset != 0 || res.jobsExhausted != 0 {
+		t.Fatalf("setup: expected orphan phase to skip live owner, got reset=%d exhausted=%d", res.jobsReset, res.jobsExhausted)
+	}
+	if res.jobsLeaseReset != 1 {
+		t.Errorf("expected 1 lease-expired job reset, got %d", res.jobsLeaseReset)
+	}
+	if res.jobsLeaseFailed != 0 {
+		t.Errorf("expected 0 lease-expired jobs failed, got %d", res.jobsLeaseFailed)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusWorking {
+		t.Errorf("expected status=working (claimable) after lease reclaim, got %s", got.Status)
+	}
+	if got.OwnerInstanceID != nil {
+		t.Errorf("expected owner cleared, got %v", *got.OwnerInstanceID)
+	}
+	if got.LeaseExpiresAt != nil {
+		t.Errorf("expected lease cleared, got %v", got.LeaseExpiresAt)
+	}
+	if got.LastHeartbeatAt != nil {
+		t.Errorf("expected last_heartbeat_at cleared, got %v", got.LastHeartbeatAt)
+	}
+	// attempt_count must NOT be incremented here — claim path increments
+	// when the next replica picks the job up. Mirrors the orphan reset.
+	if got.AttemptCount != 1 {
+		t.Errorf("expected attempt_count unchanged at 1 (claim increments, not lease reclaim), got %d", got.AttemptCount)
+	}
+}
+
+// TestSweep_ReclaimExpiredLeaseJobs_MarksExhausted verifies that an
+// expired-lease job whose attempt_count has exceeded max_retries is
+// moved to status=failed with the lease-expired error rather than being
+// recycled.
+func TestSweep_ReclaimExpiredLeaseJobs_MarksExhausted(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "wedged-owner-2", agent.StatusHealthy, now)
+	owner := "wedged-owner-2"
+	// attempt_count=4, max_retries=3 → strictly exceeded → exhausted.
+	j := seedJobRow(t, client, "job-lease-exhausted", "render", &owner, job.StatusWorking, 4, 3, now.Add(-10*time.Minute))
+
+	if _, err := client.Job.UpdateOneID(j.ID).
+		SetLeaseExpiresAt(time.Now().UTC().Add(-5 * time.Minute)).
+		Save(ctx); err != nil {
+		t.Fatalf("seed lease: %v", err)
+	}
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsLeaseReset != 0 {
+		t.Errorf("expected 0 lease-expired jobs reset, got %d", res.jobsLeaseReset)
+	}
+	if res.jobsLeaseFailed != 1 {
+		t.Errorf("expected 1 lease-expired job failed, got %d", res.jobsLeaseFailed)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusFailed {
+		t.Errorf("expected status=failed, got %s", got.Status)
+	}
+	if got.Error == nil || *got.Error != "lease expired: no completion within lease window" {
+		t.Errorf("expected error 'lease expired: no completion within lease window', got %v", got.Error)
+	}
+	if got.OwnerInstanceID != nil {
+		t.Errorf("expected owner cleared on exhausted, got %v", *got.OwnerInstanceID)
+	}
+	if got.LeaseExpiresAt != nil {
+		t.Errorf("expected lease cleared on exhausted, got %v", got.LeaseExpiresAt)
+	}
+}
+
+// TestSweep_ReclaimExpiredLeaseJobs_UnexpiredLeaseUntouched verifies
+// that a working job whose lease is still in the future is NOT touched
+// by the lease phase — healthy in-flight jobs see no behavior change.
+func TestSweep_ReclaimExpiredLeaseJobs_UnexpiredLeaseUntouched(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "inflight-owner", agent.StatusHealthy, now)
+	owner := "inflight-owner"
+	j := seedJobRow(t, client, "job-lease-live", "render", &owner, job.StatusWorking, 1, 3, now.Add(-1*time.Minute))
+
+	if _, err := client.Job.UpdateOneID(j.ID).
+		SetLeaseExpiresAt(time.Now().UTC().Add(10 * time.Minute)).
+		Save(ctx); err != nil {
+		t.Fatalf("seed lease: %v", err)
+	}
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsLeaseReset != 0 || res.jobsLeaseFailed != 0 {
+		t.Errorf("expected no lease action for unexpired lease, got reset=%d failed=%d", res.jobsLeaseReset, res.jobsLeaseFailed)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusWorking {
+		t.Errorf("expected status=working preserved, got %s", got.Status)
+	}
+	if got.OwnerInstanceID == nil || *got.OwnerInstanceID != owner {
+		t.Errorf("expected owner preserved, got %v", got.OwnerInstanceID)
+	}
+	if got.LeaseExpiresAt == nil {
+		t.Errorf("expected lease preserved, got nil")
+	}
+}
+
+// TestSweep_ReclaimExpiredLeaseJobs_NullLeaseUntouched verifies that a
+// working job with a NULL lease_expires_at (legacy rows, or rows pinned
+// at create time that were never claimed) is never touched by the lease
+// phase.
+func TestSweep_ReclaimExpiredLeaseJobs_NullLeaseUntouched(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, _, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "null-lease-owner", agent.StatusHealthy, now)
+	owner := "null-lease-owner"
+	// No lease set at all — seedJobRow leaves lease_expires_at NULL.
+	j := seedJobRow(t, client, "job-lease-null", "render", &owner, job.StatusWorking, 1, 3, now.Add(-10*time.Minute))
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsLeaseReset != 0 || res.jobsLeaseFailed != 0 {
+		t.Errorf("expected no lease action for NULL lease, got reset=%d failed=%d", res.jobsLeaseReset, res.jobsLeaseFailed)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusWorking {
+		t.Errorf("expected status=working preserved, got %s", got.Status)
+	}
+	if got.OwnerInstanceID == nil || *got.OwnerInstanceID != owner {
+		t.Errorf("expected owner preserved, got %v", got.OwnerInstanceID)
+	}
+}
+
+// TestSweep_ReclaimExpiredLeaseJobs_DeltaExtendedLeaseUntouched verifies
+// the lease-extension contract end to end: a job whose claim-time lease
+// has lapsed but whose owner posted an accepted /jobs/batch delta is NOT
+// reclaimed — ApplyJobDeltas extended lease_expires_at, so the sweep sees
+// a fresh lease and skips the row. Without the extension this job would
+// be reclaimed mid-execution and its eventual completion rejected
+// not_owner.
+func TestSweep_ReclaimExpiredLeaseJobs_DeltaExtendedLeaseUntouched(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, service, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "chatty-owner", agent.StatusHealthy, now)
+	owner := "chatty-owner"
+	j := seedJobRow(t, client, "job-lease-extended", "render", &owner, job.StatusWorking, 1, 3, now.Add(-10*time.Minute))
+
+	// Claim-time lease already lapsed — without the delta below the sweep
+	// would reclaim this row.
+	staleLease := time.Now().UTC().Add(-5 * time.Minute)
+	if _, err := client.Job.UpdateOneID(j.ID).
+		SetLeaseExpiresAt(staleLease).
+		Save(ctx); err != nil {
+		t.Fatalf("seed lease: %v", err)
+	}
+
+	// Owner posts a progress delta: the accepted delta must extend the
+	// lease (now + 300s default window — the job has no max_duration).
+	progress := 0.5
+	accepted, rejected, err := service.ApplyJobDeltas(ctx, owner, []JobDeltaInput{{ID: j.ID, Progress: &progress}})
+	if err != nil {
+		t.Fatalf("ApplyJobDeltas: %v", err)
+	}
+	if accepted != 1 || len(rejected) != 0 {
+		t.Fatalf("expected delta accepted, got accepted=%d rejected=%v", accepted, rejected)
+	}
+
+	mid, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job after delta: %v", err)
+	}
+	if mid.LeaseExpiresAt == nil {
+		t.Fatalf("expected lease extended by accepted delta, got nil")
+	}
+	if !mid.LeaseExpiresAt.After(time.Now().UTC()) {
+		t.Fatalf("expected lease extended into the future, got %v", mid.LeaseExpiresAt)
+	}
+
+	res, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+	if res.jobsLeaseReset != 0 || res.jobsLeaseFailed != 0 {
+		t.Errorf("expected no lease action for delta-extended lease, got reset=%d failed=%d", res.jobsLeaseReset, res.jobsLeaseFailed)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusWorking {
+		t.Errorf("expected status=working preserved, got %s", got.Status)
+	}
+	if got.OwnerInstanceID == nil || *got.OwnerInstanceID != owner {
+		t.Errorf("expected owner preserved after extension, got %v", got.OwnerInstanceID)
+	}
+	if got.LeaseExpiresAt == nil {
+		t.Errorf("expected extended lease preserved, got nil")
+	}
+}
+
+// TestSweep_ReclaimExpiredLeaseJobs_InputRequiredResumeExtendsLease covers
+// the input_required round trip: a job pauses in input_required longer
+// than its lease window (the paused row is never touched — the lease
+// phase only targets status=working), then resumes via an accepted
+// status=working delta. The resume delta must extend the stale claim-time
+// lease so the freshly resumed job is not instantly reclaimed on the next
+// sweep tick.
+func TestSweep_ReclaimExpiredLeaseJobs_InputRequiredResumeExtendsLease(t *testing.T) {
+	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)
+	cfg := SweepConfig{Retention: 1 * time.Hour}
+	client, service, sweep, cleanup := newSweepTestEnv(t, cfg, now)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	seedAgent(t, client, "paused-owner", agent.StatusHealthy, now)
+	owner := "paused-owner"
+	j := seedJobRow(t, client, "job-input-required", "render", &owner, job.StatusInputRequired, 1, 3, now.Add(-30*time.Minute))
+
+	// Claim-time lease that lapsed while the job sat in input_required.
+	if _, err := client.Job.UpdateOneID(j.ID).
+		SetLeaseExpiresAt(time.Now().UTC().Add(-20 * time.Minute)).
+		Save(ctx); err != nil {
+		t.Fatalf("seed lease: %v", err)
+	}
+
+	// Tick 1: the paused job must NOT be reclaimed despite the expired
+	// lease — input_required is not status=working.
+	res1, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce (paused): %v", err)
+	}
+	if res1.jobsLeaseReset != 0 || res1.jobsLeaseFailed != 0 {
+		t.Fatalf("expected paused job untouched, got reset=%d failed=%d", res1.jobsLeaseReset, res1.jobsLeaseFailed)
+	}
+
+	// Resume: owner posts status=working. The accepted delta must extend
+	// the long-expired lease in the same write.
+	st := string(job.StatusWorking)
+	accepted, rejected, err := service.ApplyJobDeltas(ctx, owner, []JobDeltaInput{{ID: j.ID, Status: &st}})
+	if err != nil {
+		t.Fatalf("ApplyJobDeltas (resume): %v", err)
+	}
+	if accepted != 1 || len(rejected) != 0 {
+		t.Fatalf("expected resume delta accepted, got accepted=%d rejected=%v", accepted, rejected)
+	}
+
+	mid, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job after resume: %v", err)
+	}
+	if mid.Status != job.StatusWorking {
+		t.Fatalf("expected status=working after resume, got %s", mid.Status)
+	}
+	if mid.LeaseExpiresAt == nil || !mid.LeaseExpiresAt.After(time.Now().UTC()) {
+		t.Fatalf("expected resume delta to extend lease into the future, got %v", mid.LeaseExpiresAt)
+	}
+
+	// Tick 2: the resumed job carries a fresh lease — must be untouched.
+	res2, err := sweep.runOnce(ctx)
+	if err != nil {
+		t.Fatalf("runOnce (resumed): %v", err)
+	}
+	if res2.jobsLeaseReset != 0 || res2.jobsLeaseFailed != 0 {
+		t.Errorf("expected resumed job untouched, got reset=%d failed=%d", res2.jobsLeaseReset, res2.jobsLeaseFailed)
+	}
+
+	got, err := client.Job.Get(ctx, j.ID)
+	if err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	if got.Status != job.StatusWorking {
+		t.Errorf("expected status=working preserved, got %s", got.Status)
+	}
+	if got.OwnerInstanceID == nil || *got.OwnerInstanceID != owner {
+		t.Errorf("expected owner preserved through resume, got %v", got.OwnerInstanceID)
 	}
 }
 
