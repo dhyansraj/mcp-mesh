@@ -328,11 +328,41 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
     Returns:
         List of McpMeshTool parameter positions to inject into
     """
-    sig = inspect.signature(func)
+    # Consistent view (#1162 MED-1): ``mesh_positions`` (and the MeshJob
+    # analysis below) index the ORIGINAL function's parameter space —
+    # ``get_mesh_agent_positions`` peels back to it via
+    # ``_get_original_func`` (follows ``__wrapped__``). The param count
+    # MUST come from that SAME view: positions and the param list they
+    # index have to move together. Decorators like ``@mesh.a2a_consumer``
+    # rewrite the wrapper's ``__signature__`` to hide framework-bound
+    # params (e.g. ``_a2a``), so ``inspect.signature(func)`` can be
+    # SHORTER than the position space. Pre-fix, mixing the two views
+    # injected into the WRONG slot — ``(_a2a, db: McpMeshTool, y)``:
+    # original-space position 1 indexed the wrapper param list
+    # ``['db', 'y']`` and landed the proxy in ``y`` — or raised
+    # IndexError outright (``(_a2a, job: MeshJob)``: position 1 against
+    # a 1-param wrapper view).
+    from .signature_analyzer import _get_original_func
+
+    try:
+        sig = inspect.signature(_get_original_func(func))
+    except (TypeError, ValueError):
+        sig = inspect.signature(func)
     params = list(sig.parameters.values())
     param_count = len(params)
     mesh_positions = get_mesh_agent_positions(func)
     func_name = f"{func.__module__}.{func.__qualname__}"
+
+    # Detect ``__signature__``-hidden params structurally (count comparison
+    # only — dependency binding stays strictly positional, never by name).
+    # A wrapper that advertises FEWER params than the original is hiding a
+    # framework-bound slot (e.g. the a2a_consumer ``_a2a`` client); the
+    # untyped single-parameter heuristic must not target such a slot.
+    try:
+        visible_count = len(inspect.signature(func).parameters)
+    except (TypeError, ValueError):
+        visible_count = param_count
+    has_hidden_params = visible_count < param_count
 
     # Detect whether the function declares any MeshJob param. The unified
     # positional injection path handles those alongside McpMeshTool slots,
@@ -359,8 +389,10 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
             )
         return []
 
-    # Single parameter rule: inject regardless of typing
-    if param_count == 1:
+    # Single parameter rule: inject regardless of typing. Only applies when
+    # no params are hidden — a hidden single param is framework-bound by the
+    # hiding decorator itself, never an injection target.
+    if param_count == 1 and not has_hidden_params:
         if not mesh_positions:
             if has_mesh_job_param:
                 # The single parameter is a MeshJob — the unified injection
@@ -376,10 +408,12 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
             )
         return [0]  # Inject into the single parameter
 
-    # Multiple parameters rule: only inject into McpMeshTool typed parameters
-    if param_count > 1:
+    # Multiple parameters rule: only inject into McpMeshTool typed
+    # parameters. Functions with hidden params route here too (even at
+    # param_count == 1) so the typed-only rule governs them.
+    if param_count > 1 or has_hidden_params:
         if not mesh_positions:
-            if not has_mesh_job_param:
+            if dependencies and not has_mesh_job_param:
                 logger.warning(
                     f"⚠️ Function '{func_name}' has {param_count} parameters but none are "
                     f"typed as McpMeshTool. Skipping injection of {len(dependencies)} dependencies. "
@@ -453,8 +487,26 @@ def _prepare_injection_kwargs(
     log.debug(f"{tp}🔧 Tool '{func.__name__}' called with kwargs={arg_keys}")
     log.debug(f"{tp}🔧 Tool '{func.__name__}' args: {format_log_value(kwargs)}")
 
-    # Build final kwargs with injected dependencies
-    sig = inspect.signature(func)
+    # Build final kwargs with injected dependencies.
+    #
+    # Consistent view (#1162 MED-1): every position used below —
+    # ``mesh_positions`` (from :func:`get_mesh_agent_positions`) and the
+    # MeshJob index (from :func:`analyze_mesh_job_signature`) — indexes the
+    # ORIGINAL function's parameter space (both follow ``__wrapped__`` via
+    # ``_get_original_func``). The param-name list MUST come from that SAME
+    # view: decorators like ``@mesh.a2a_consumer`` rewrite the wrapper's
+    # ``__signature__`` to hide framework-bound params (e.g. ``_a2a``), so
+    # ``inspect.signature(func)`` can be SHORTER — indexing it with an
+    # original-derived position raised IndexError or silently injected into
+    # the WRONG parameter. The resulting kwargs are keyed by ORIGINAL param
+    # names, which is correct because hiding wrappers (a2a_consumer bridge,
+    # @mesh.llm wrappers) forward ``**kwargs`` verbatim to the original.
+    from .signature_analyzer import _get_original_func
+
+    try:
+        sig = inspect.signature(_get_original_func(func))
+    except (TypeError, ValueError):
+        sig = inspect.signature(func)
     params = list(sig.parameters.keys())
     final_kwargs = kwargs.copy()
 
@@ -485,20 +537,11 @@ def _prepare_injection_kwargs(
     if len(eligible_positions) > len(dependencies):
         try:
             untouched_positions = eligible_positions[len(dependencies):]
-            # Positions are derived from the resolved/original signature
-            # (via ``analyze_mesh_job_signature``, which follows the
-            # ``__wrapped__``/``_mesh_original_func`` chain), which may have
-            # MORE params than the wrapper ``sig`` when a decorator (e.g.
-            # @mesh.a2a_consumer) rewrites ``__signature__`` to hide an
-            # injected param. Name the slots from that SAME original signature
-            # so positions line up — and bounds-guard regardless.
-            from .signature_analyzer import _get_original_func
-
-            diag_params = list(
-                inspect.signature(_get_original_func(func)).parameters.values()
-            )
+            # ``params`` above is resolved from the same original signature
+            # the positions came from (#1105), so positions line up — but
+            # bounds-guard regardless.
             untouched_param_names = [
-                diag_params[pos].name if pos < len(diag_params) else f"<arg {pos}>"
+                params[pos] if pos < len(params) else f"<arg {pos}>"
                 for pos in untouched_positions
             ]
             log.warning(
@@ -551,6 +594,22 @@ def _prepare_injection_kwargs(
             break
 
         dep_name = dependencies[dep_index]
+
+        # Defensive bounds guard: positions are derived from the same
+        # original signature as ``params`` above, so this should never
+        # trigger — but a decorator chain we don't model could still skew
+        # the views. Skip this one injection rather than crash dispatch;
+        # remaining deps keep their own positional slots.
+        if position >= len(params):
+            log.warning(
+                f"{tp}⚠️ Injection position {position} for dependency "
+                f"'{dep_name}' (dep_index={dep_index}) on '{func.__name__}' "
+                f"is out of bounds for its {len(params)}-parameter signature "
+                f"{params}. Skipping this injection — check for decorators "
+                f"that rewrite __signature__ without setting __wrapped__."
+            )
+            continue
+
         param_name = params[position]
 
         # Skip if user explicitly passed a value — preserves the

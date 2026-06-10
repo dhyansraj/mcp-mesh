@@ -1211,3 +1211,244 @@ class TestUnifiedPositionalInjection:
             and "will remain None" in r.message
             for r in caplog.records
         )
+
+
+class TestHiddenWrapperParamFunctionalInjection:
+    """Regression for #1162 MED-1 (functional sibling of #1104/#1105).
+
+    Decorators like ``@mesh.a2a_consumer`` rewrite the wrapper's
+    ``__signature__`` to hide a framework-bound param (``_a2a``) while
+    ``__wrapped__`` still points at the original function. Injection
+    positions are derived from the ORIGINAL signature, so the param-name
+    list they index must come from that SAME view — pre-fix, the
+    functional path indexed the SHORTER wrapper signature, raising
+    IndexError or injecting the proxy into the WRONG parameter.
+
+    Mesh deps bind strictly by POSITION (deliberate design); these tests
+    assert the positions resolve against a consistent view, never that
+    names are matched.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _registry_url(self, monkeypatch):
+        # MeshJob slots need MCP_MESH_REGISTRY_URL to construct a
+        # MeshJobSubmitter.
+        monkeypatch.setenv("MCP_MESH_REGISTRY_URL", "http://registry.local:8000")
+
+    # Sentinel standing in for the A2AClient the bridge binds itself.
+    _CLIENT = object()
+
+    @classmethod
+    def _make_bridge(cls, original):
+        """Mimic the @mesh.a2a_consumer bridge: forward **kwargs to the
+        original, bind ``_a2a`` when the caller didn't, and hide ``_a2a``
+        from the advertised signature (decorators.py:2221-2226)."""
+        from functools import wraps as _wraps
+
+        @_wraps(original)
+        async def bridge(*args, **call_kwargs):
+            if "_a2a" not in call_kwargs:
+                call_kwargs["_a2a"] = cls._CLIENT
+            return await original(*args, **call_kwargs)
+
+        user_sig = inspect.signature(original)
+        cleaned = [p for n, p in user_sig.parameters.items() if n != "_a2a"]
+        bridge.__signature__ = user_sig.replace(parameters=cleaned)
+        return bridge
+
+    @pytest.mark.asyncio
+    async def test_a2a_consumer_dependency_injects_into_db(self):
+        """`(_a2a, db)` with dependencies=['db_cap']: the proxy must land
+        in ``db`` (original position 1), the bridge must still bind its
+        own client into ``_a2a``, and dispatch must not raise."""
+        from mesh.types import McpMeshTool
+
+        async def original(_a2a=None, db: McpMeshTool = None):
+            return (_a2a, db)
+
+        bridge = self._make_bridge(original)
+        injector = DependencyInjector()
+        wrapper = injector.create_injection_wrapper(bridge, ["db_cap"])
+
+        proxy = MagicMock(name="db_proxy")
+        wrapper._mesh_update_dependency(0, proxy)
+
+        a2a, db = await wrapper()
+
+        assert db is proxy
+        # The hidden slot stays bridge-bound — the proxy must NOT have
+        # displaced the client at position 0.
+        assert a2a is self._CLIENT
+
+    @pytest.mark.asyncio
+    async def test_a2a_consumer_proxy_lands_in_db_not_y(self):
+        """`(_a2a, db, y)`: pre-fix the wrapper-view list ['db', 'y']
+        indexed with original position 1 put the proxy into ``y`` and left
+        ``db`` None. The proxy must land in ``db``; ``y`` keeps the
+        caller's value."""
+        from mesh.types import McpMeshTool
+
+        async def original(_a2a=None, db: McpMeshTool = None, y: str = ""):
+            return (_a2a, db, y)
+
+        bridge = self._make_bridge(original)
+        injector = DependencyInjector()
+        wrapper = injector.create_injection_wrapper(bridge, ["db_cap"])
+
+        proxy = MagicMock(name="db_proxy")
+        wrapper._mesh_update_dependency(0, proxy)
+
+        a2a, db, y = await wrapper(y="hello")
+
+        assert db is proxy
+        assert y == "hello"
+        assert a2a is self._CLIENT
+
+    @pytest.mark.asyncio
+    async def test_multiple_deps_pair_by_declaration_order_not_name(self):
+        """DESIGN PIN: deps pair with params by declaration order
+        (position), NEVER by name — name-matching must fail this test.
+
+        The params are named ADVERSARIALLY: the FIRST McpMeshTool param
+        is named ``cap_b`` and the SECOND is named ``cap_a``, while
+        ``dependencies=["cap_a", "cap_b"]``. Declaration-order pairing
+        puts the cap_a proxy in the first typed slot (param ``cap_b``)
+        and the cap_b proxy in the second (param ``cap_a``). Any future
+        dependency-name<->parameter-name matcher produces the exact
+        OPPOSITE pairing and must fail here loudly.
+        """
+        from mesh.types import McpMeshTool
+
+        async def original(
+            _a2a=None, cap_b: McpMeshTool = None, cap_a: McpMeshTool = None
+        ):
+            # Slots returned in DECLARATION order: (hidden, first, second).
+            return (_a2a, cap_b, cap_a)
+
+        bridge = self._make_bridge(original)
+        injector = DependencyInjector()
+        wrapper = injector.create_injection_wrapper(bridge, ["cap_a", "cap_b"])
+
+        proxy_a = MagicMock(name="cap_a_proxy")
+        proxy_b = MagicMock(name="cap_b_proxy")
+        wrapper._mesh_update_dependency(0, proxy_a)  # dependency "cap_a"
+        wrapper._mesh_update_dependency(1, proxy_b)  # dependency "cap_b"
+
+        a2a, first_slot, second_slot = await wrapper()
+
+        # deps pair with params by declaration order (position), NEVER by
+        # name — name-matching must fail this test: it would route
+        # proxy_a into the param NAMED ``cap_a`` (the second slot).
+        assert first_slot is proxy_a  # param named cap_b ← dep[0] "cap_a"
+        assert second_slot is proxy_b  # param named cap_a ← dep[1] "cap_b"
+        assert a2a is self._CLIENT
+
+    @pytest.mark.asyncio
+    async def test_a2a_consumer_meshjob_dep_no_indexerror(self):
+        """`(_a2a, job: MeshJob)` with one dependency: the MeshJob position
+        (1, original view) exceeded the 1-param wrapper view pre-fix →
+        IndexError on every invocation. Must inject a MeshJobSubmitter."""
+        from mesh import MeshJob
+        from _mcp_mesh.engine.mesh_job_submitter import MeshJobSubmitter
+
+        async def original(_a2a=None, job: MeshJob = None):
+            return (_a2a, job)
+
+        bridge = self._make_bridge(original)
+        injector = DependencyInjector()
+        wrapper = injector.create_injection_wrapper(bridge, ["jobs.run"])
+
+        a2a, job = await wrapper()
+
+        assert isinstance(job, MeshJobSubmitter)
+        assert job.capability == "jobs.run"
+        assert a2a is self._CLIENT
+
+    def test_strategy_counts_original_view_for_hidden_param_wrapper(self):
+        """analyze_injection_strategy on the bridge must classify by the
+        ORIGINAL signature: `(_a2a, db)` is two params, McpMeshTool at
+        original position 1 — not 'single param, position 0'."""
+        from mesh.types import McpMeshTool
+
+        async def original(_a2a=None, db: McpMeshTool = None):
+            return (_a2a, db)
+
+        bridge = self._make_bridge(original)
+
+        assert analyze_injection_strategy(bridge, ["db_cap"]) == [1]
+
+    def test_strategy_hidden_single_param_stays_silent(self, caplog):
+        """`(_a2a)`-only with zero deps: the single-param 'inject
+        regardless of typing' heuristic must NOT fire for a hidden,
+        framework-bound slot — no injection target, no warning (matches
+        pre-fix behavior the __signature__ hiding was added for)."""
+
+        async def original(_a2a=None):
+            return _a2a
+
+        bridge = self._make_bridge(original)
+
+        with caplog.at_level(logging.WARNING):
+            result = analyze_injection_strategy(bridge, [])
+
+        assert result == []
+        assert not caplog.records
+
+    def test_bounds_guard_skips_out_of_range_position(self, caplog):
+        """Defensive guard: a position beyond the resolved param list must
+        log a warning and skip that one injection — no crash, and other
+        deps still inject into their own positional slots."""
+        import logging as _log
+        from mesh.types import McpMeshTool
+        from _mcp_mesh.engine.dependency_injector import _prepare_injection_kwargs
+
+        async def f(a: str, db: McpMeshTool = None):
+            return db
+
+        proxy0 = MagicMock(name="proxy0")
+        with caplog.at_level(logging.WARNING):
+            final_kwargs, count = _prepare_injection_kwargs(
+                f,
+                {},
+                [1, 7],  # position 7 is synthetic skew — out of bounds
+                ["cap0", "cap1"],
+                [proxy0, MagicMock(name="proxy1")],
+                lambda _key: None,
+                _log.getLogger("test"),
+            )
+
+        assert final_kwargs["db"] is proxy0
+        assert count == 1
+        assert any(
+            "out of bounds" in r.message and "'cap1'" in r.message
+            for r in caplog.records
+        )
+
+    def test_plain_mesh_tool_positional_injection_unchanged(self):
+        """Common-path guard: a plain function (no __signature__ rewrite)
+        injects exactly as before — wrapper and original views are the
+        same view."""
+        from mesh.types import McpMeshTool
+
+        def f(a: str, db: McpMeshTool = None):
+            return (a, db)
+
+        injector = DependencyInjector()
+        wrapper = injector.create_injection_wrapper(f, ["db_cap"])
+
+        proxy = MagicMock(name="db_proxy")
+        wrapper._mesh_update_dependency(0, proxy)
+
+        a, db = wrapper("x")
+
+        assert a == "x"
+        assert db is proxy
+
+    def test_plain_single_param_heuristic_unchanged(self):
+        """The untyped single-parameter heuristic still applies to plain
+        functions (no hidden params): position 0 is selected."""
+
+        def f(anything):
+            return anything
+
+        assert analyze_injection_strategy(f, ["dep1"]) == [0]
