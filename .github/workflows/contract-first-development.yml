@@ -36,7 +36,6 @@ on:
 env:
   GO_VERSION: "1.21"
   PYTHON_VERSION: "3.12"
-  NODE_VERSION: "20"
 
 jobs:
   # Step 1: Validate OpenAPI Specification
@@ -82,11 +81,6 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
@@ -97,9 +91,8 @@ jobs:
           # Install Go code generator (pinned to match local version)
           go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.5.1
 
-          # Install Python code generator (pinned to match local version)
-          npm install -g @openapitools/openapi-generator-cli@2.13.0
-          openapi-generator-cli version-manager set 7.13.0
+          # Note: openapi-generator-cli is no longer needed - Python client
+          # generation was removed (registry communication handled by Rust core)
 
           # Install additional Python dependencies for validation
           pip install openapi-spec-validator jsonschema pyyaml
@@ -213,8 +206,6 @@ jobs:
 
           # Code generation tools (pinned to match local versions)
           go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.5.1
-          npm install -g @openapitools/openapi-generator-cli@2.13.0
-          openapi-generator-cli version-manager set 7.13.0
 
           # Python validation tools (for OpenAPI spec validation)
           pip install openapi-spec-validator jsonschema pyyaml
