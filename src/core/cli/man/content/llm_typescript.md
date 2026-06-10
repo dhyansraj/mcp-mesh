@@ -287,19 +287,21 @@ needed.
 
    ```bash
    gcloud auth application-default login
-   export GOOGLE_VERTEX_PROJECT=my-gcp-project
-   export GOOGLE_VERTEX_LOCATION=us-central1
+   export GOOGLE_CLOUD_PROJECT=my-gcp-project
+   export GOOGLE_CLOUD_LOCATION=us-central1
    ```
 
    **Service account** (CI / prod):
 
    ```bash
    export GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json
-   export GOOGLE_VERTEX_PROJECT=my-gcp-project
-   export GOOGLE_VERTEX_LOCATION=us-central1
+   export GOOGLE_CLOUD_PROJECT=my-gcp-project
+   export GOOGLE_CLOUD_LOCATION=us-central1
    ```
 
-   `GOOGLE_VERTEX_LOCATION` defaults to `us-central1` if unset.
+   Both vars are required — there is no default location and the project is
+   not auto-discovered from ADC. Common location values: `us-central1`,
+   `global`.
 
 2. Use the `vertex_ai/*` model prefix:
 
@@ -331,8 +333,8 @@ model: "vertex_ai/gemini-2.5-flash"
 export GOOGLE_GENERATIVE_AI_API_KEY=AIza...
 # after:
 gcloud auth application-default login
-export GOOGLE_VERTEX_PROJECT=my-gcp-project
-export GOOGLE_VERTEX_LOCATION=us-central1
+export GOOGLE_CLOUD_PROJECT=my-gcp-project
+export GOOGLE_CLOUD_LOCATION=us-central1
 ```
 
 No other code changes required.

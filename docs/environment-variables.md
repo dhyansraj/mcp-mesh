@@ -467,7 +467,7 @@ tools); only the auth transport and env var names differ.
 | Runtime    | SDK            | Project env var                              | Location env var                             |
 | ---------- | -------------- | -------------------------------------------- | -------------------------------------------- |
 | Python     | LiteLLM        | `VERTEXAI_PROJECT`                           | `VERTEXAI_LOCATION`                          |
-| TypeScript | Vercel AI SDK  | `GOOGLE_VERTEX_PROJECT`                      | `GOOGLE_VERTEX_LOCATION`                     |
+| TypeScript | Vercel AI SDK  | `GOOGLE_CLOUD_PROJECT`                       | `GOOGLE_CLOUD_LOCATION`                      |
 | Java       | Spring AI      | `SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID`<br/>(or set `spring.ai.vertex.ai.gemini.project-id`) | `SPRING_AI_VERTEX_AI_GEMINI_LOCATION`<br/>(or set `spring.ai.vertex.ai.gemini.location`) |
 
 `GOOGLE_APPLICATION_CREDENTIALS` (or `gcloud auth application-default login`)
@@ -521,9 +521,10 @@ agent.addLlmProvider({
 ```
 
 `@ai-sdk/google-vertex` is bundled with `@mcpmesh/sdk` — no extra install.
-Auth uses Google ADC. Both `GOOGLE_VERTEX_PROJECT` and `GOOGLE_VERTEX_LOCATION`
-are required — the SDK throws a `LoadSettingError` on the first call if
-either is unset (no project auto-discovery from ADC, no default location).
+Auth uses Google ADC. Both `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION`
+are required — the underlying SDK fails with a `LoadSettingError` on the first
+call if either is unset (no project auto-discovery from ADC, no default
+location).
 Common location values: `us-central1`, `global`.
 
 #### Java — `@MeshLlmProvider` with the Vertex AI starter

@@ -58,10 +58,13 @@ const VENDOR_PROVIDERS: Record<string, string> = {
  * Mapping from vendor name to the export name in the provider module.
  * Most providers export a function with the same name as the vendor,
  * but some (like gemini) use a different name (google).
+ *
+ * Note: vertex_ai is NOT listed here — it bypasses the default-instance
+ * lookup entirely and is constructed via createVertex() in loadProvider()
+ * with explicitly resolved project/location (issue #1181).
  */
 const VENDOR_EXPORTS: Record<string, string> = {
   gemini: "google", // @ai-sdk/google exports 'google', not 'gemini'
-  vertex_ai: "vertex", // @ai-sdk/google-vertex exports 'vertex'
 };
 
 /**
@@ -119,29 +122,60 @@ function normalizeEnvVars(vendor: string): void {
       debug("Set GOOGLE_API_KEY from GOOGLE_GENERATIVE_AI_API_KEY");
     }
   } else if (vendor === "vertex_ai") {
-    // Vercel AI SDK's @ai-sdk/google-vertex reads:
-    //   GOOGLE_VERTEX_PROJECT  - GCP project ID
-    //   GOOGLE_VERTEX_LOCATION - GCP region (e.g., us-central1)
-    //   GOOGLE_APPLICATION_CREDENTIALS - path to service-account JSON (or rely on
-    //                                    gcloud user ADC / GCE/GKE workload identity)
-    // We don't auto-copy from any other env var because the Python (LiteLLM) and
-    // Vercel SDK conventions diverge (VERTEXAI_PROJECT vs GOOGLE_VERTEX_PROJECT) —
-    // each runtime follows its own ecosystem's naming.
-    if (!process.env.GOOGLE_VERTEX_PROJECT) {
+    // Vertex AI settings (issue #1181). The mesh contract (#834) uses
+    // GOOGLE_CLOUD_PROJECT / GOOGLE_CLOUD_LOCATION (honored by the Python
+    // runtime); @ai-sdk/google-vertex natively reads GOOGLE_VERTEX_PROJECT /
+    // GOOGLE_VERTEX_LOCATION. We accept BOTH names per setting (vendor-specific
+    // name wins) and pass the resolved values explicitly to createVertex() in
+    // loadProvider(). Credentials (GOOGLE_APPLICATION_CREDENTIALS, or gcloud
+    // user ADC / GCE/GKE workload identity) are read by google-auth-library
+    // directly and need no mapping.
+    if (!process.env.GOOGLE_VERTEX_PROJECT && !process.env.GOOGLE_CLOUD_PROJECT) {
       debug(
-        "vertex_ai vendor selected but GOOGLE_VERTEX_PROJECT is not set — " +
-        "@ai-sdk/google-vertex will throw a LoadSettingError on the first call " +
-        "(the SDK requires the env var; it does not auto-discover from ADC)"
+        "vertex_ai vendor selected but neither GOOGLE_VERTEX_PROJECT nor " +
+        "GOOGLE_CLOUD_PROJECT is set — @ai-sdk/google-vertex will throw a " +
+        "LoadSettingError on the first call " +
+        "(the SDK requires a project; it does not auto-discover from ADC)"
       );
     }
-    if (!process.env.GOOGLE_VERTEX_LOCATION) {
+    if (!process.env.GOOGLE_VERTEX_LOCATION && !process.env.GOOGLE_CLOUD_LOCATION) {
       debug(
-        "vertex_ai vendor selected but GOOGLE_VERTEX_LOCATION is not set — " +
-        "@ai-sdk/google-vertex will throw a LoadSettingError on the first call " +
+        "vertex_ai vendor selected but neither GOOGLE_VERTEX_LOCATION nor " +
+        "GOOGLE_CLOUD_LOCATION is set — @ai-sdk/google-vertex will throw a " +
+        "LoadSettingError on the first call " +
         "(the SDK has no default location; set e.g. 'us-central1' or 'global')"
       );
     }
   }
+}
+
+/**
+ * Resolve Vertex AI provider settings from the environment (issue #1181).
+ *
+ * Accepts both the @ai-sdk/google-vertex native names (GOOGLE_VERTEX_PROJECT /
+ * GOOGLE_VERTEX_LOCATION) and the mesh-standard names (GOOGLE_CLOUD_PROJECT /
+ * GOOGLE_CLOUD_LOCATION, per #834). The vendor-specific name wins when both
+ * are set; an empty string counts as unset (falls through to the other name).
+ * Settings that resolve to nothing are omitted; createVertex() then falls
+ * back to the SDK's own GOOGLE_VERTEX_* env lookup, which throws a clear
+ * LoadSettingError when the var is absent — but accepts an empty string
+ * (producing a malformed baseURL), since the SDK's loadSetting only rejects
+ * undefined. Omission therefore yields a clean error only when the
+ * GOOGLE_VERTEX_* var is truly unset, not when it is set to "".
+ */
+export function resolveVertexSettings(): { project?: string; location?: string } {
+  const settings: { project?: string; location?: string } = {};
+  const project =
+    process.env.GOOGLE_VERTEX_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
+  const location =
+    process.env.GOOGLE_VERTEX_LOCATION || process.env.GOOGLE_CLOUD_LOCATION;
+  if (project) {
+    settings.project = project;
+  }
+  if (location) {
+    settings.location = location;
+  }
+  return settings;
 }
 
 /**
@@ -264,6 +298,26 @@ export async function loadProvider(
       string,
       unknown
     >;
+
+    // vertex_ai: always construct via the factory with explicitly resolved
+    // settings instead of the default `vertex` instance, whose env lookups
+    // (GOOGLE_VERTEX_PROJECT/GOOGLE_VERTEX_LOCATION) miss the mesh-standard
+    // GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_LOCATION contract (#834, #1181).
+    if (vendor === "vertex_ai") {
+      const createVertex = providerModule.createVertex as
+        | ((options?: { project?: string; location?: string }) => (modelId: string) => unknown)
+        | undefined;
+      if (typeof createVertex !== "function") {
+        debug(`Provider ${vendor} does not export createVertex`);
+        return null;
+      }
+      const settings = resolveVertexSettings();
+      debug(
+        `Creating Vertex AI provider via createVertex ` +
+          `(project=${settings.project ?? "<unset>"}, location=${settings.location ?? "<unset>"})`
+      );
+      return createVertex(settings);
+    }
 
     // Get the export name (may differ from vendor name, e.g., gemini -> google)
     const exportName = VENDOR_EXPORTS[vendor] ?? vendor;

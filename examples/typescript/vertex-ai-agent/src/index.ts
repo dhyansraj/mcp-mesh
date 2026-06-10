@@ -6,7 +6,7 @@
  *
  * The only differences from a Gemini AI Studio agent are:
  *   - model prefix:   "vertex_ai/<model>"   (vs "gemini/<model>")
- *   - auth env vars:  GOOGLE_VERTEX_PROJECT + GOOGLE_VERTEX_LOCATION + ADC
+ *   - auth env vars:  GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_LOCATION + ADC
  *                     (vs GOOGLE_GENERATIVE_AI_API_KEY)
  *
  * Mesh-side prompt shaping (HINT-mode for tool calls, STRICT-mode for
