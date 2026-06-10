@@ -449,9 +449,24 @@ export async function callMcpTool(
 
       // Handle SSE streaming response
       if (contentType.includes("text/event-stream")) {
-        const sseResult = await readSSEResponseToContent(response);
         // Estimate response size from content-length header (exact size not available for SSE)
         const sseResponseBytes = contentLength > 0 ? contentLength : undefined;
+        let sseResult: string | MultiContentResult;
+        try {
+          sseResult = await readSSEResponseToContent(response);
+        } catch (sseErr) {
+          // Mirror the JSON path below: JSON-RPC errors and tool-level errors
+          // (CallToolResult.isError) thrown by the SSE reader record an error
+          // span instead of a success span. Aborts (timeout or job-cancel
+          // firing mid-read) are deliberately NOT published here — the outer
+          // catch owns abort/timeout accounting, and publishing in both
+          // places would emit two spans with the same spanId.
+          if (!isTimeoutError(sseErr)) {
+            const sseErrMsg = sseErr instanceof Error ? sseErr.message : String(sseErr);
+            publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, sseErrMsg, "error", requestBytes, sseResponseBytes);
+          }
+          throw sseErr;
+        }
         // Publish success span
         publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, true, null, typeof sseResult, requestBytes, sseResponseBytes);
         return sseResult;
@@ -476,10 +491,8 @@ export async function callMcpTool(
       // carries the failure message in its content; the JSON-RPC envelope above
       // is success in that case. Throw so callers (LLM provider, tool proxy)
       // re-wrap it instead of returning the error text as a successful result.
-      const innerResult = result.result;
-      if (innerResult && typeof innerResult === "object" && (innerResult as Record<string, unknown>).isError === true) {
-        const toolErr = extractContent(innerResult);
-        const toolErrMsg = typeof toolErr === "string" ? toolErr : JSON.stringify(toolErr);
+      const toolErrMsg = toolErrorMessage(result.result);
+      if (toolErrMsg !== null) {
         publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, toolErrMsg, "error", requestBytes, responseBytes);
         throw new Error(`MCP tool error: ${toolErrMsg}`);
       }
@@ -498,7 +511,9 @@ export async function callMcpTool(
         throw new Error(`MCP call timed out after ${effectiveTimeout}ms`);
       }
 
-      // Retry on network errors
+      // Retry everything else (network, HTTP, protocol, and tool-level
+      // errors) until attempts are exhausted; only the abort/timeout case
+      // above is non-retryable.
       if (attempt < options.maxAttempts - 1) {
         await sleep(options.retryDelay * Math.pow(options.retryBackoff, attempt));
         continue;
@@ -661,6 +676,13 @@ export async function* streamMcpTool(
           const em = msg.error.message ?? JSON.stringify(msg.error);
           throw new Error(`MCP error: ${em}`);
         }
+        // Surface tool-level errors on the final result (mirrors callMcpTool):
+        // a producer tool that throws mid-stream ends with isError === true
+        // and must not look like a clean end-of-stream.
+        const streamToolErrMsg = toolErrorMessage(msg.result);
+        if (streamToolErrMsg !== null) {
+          throw new Error(`MCP tool error: ${streamToolErrMsg}`);
+        }
         // result arrived — done; do NOT yield the buffered final result
         break;
       }
@@ -813,6 +835,21 @@ async function* iterateSSEEvents(
 }
 
 /**
+ * Extract the failure message from an MCP CallToolResult with
+ * ``isError === true``, or return null when the result is not a tool-level
+ * error. Shared by callMcpTool's JSON and SSE paths (and streamMcpTool's
+ * final-result handling) so every transport surfaces tool errors with the
+ * exact same `MCP tool error: …` shape — they can't drift apart.
+ */
+function toolErrorMessage(innerResult: unknown): string | null {
+  if (innerResult && typeof innerResult === "object" && (innerResult as Record<string, unknown>).isError === true) {
+    const toolErr = extractContent(innerResult);
+    return typeof toolErr === "string" ? toolErr : JSON.stringify(toolErr);
+  }
+  return null;
+}
+
+/**
  * Read an SSE response from the MCP HTTP Streamable transport down to its
  * final content (the JSON-RPC `result`).
  *
@@ -844,21 +881,32 @@ async function readSSEResponseToContent(response: Response): Promise<string | Mu
         const data = line.slice(6);
         if (data === "[DONE]") continue;
 
+        let event: unknown;
         try {
-          const event = JSON.parse(data);
-
-          // Handle JSON-RPC response
-          const jsonRpcEvent = event as { result?: unknown; error?: { message?: string } };
-          if (jsonRpcEvent.result) {
-            result = extractContent(jsonRpcEvent.result);
-          } else if (jsonRpcEvent.error) {
-            throw new Error(
-              `MCP error: ${jsonRpcEvent.error.message ?? JSON.stringify(jsonRpcEvent.error)}`
-            );
-          }
-        } catch (e) {
+          event = JSON.parse(data);
+        } catch {
           // Ignore parse errors for non-JSON data events
-          if (!(e instanceof SyntaxError)) throw e;
+          continue;
+        }
+
+        // Handle JSON-RPC response — mirror callMcpTool's JSON path exactly so
+        // callers can't distinguish transports: protocol-level error first,
+        // then tool-level isError, then content extraction.
+        const jsonRpcEvent = event as { result?: unknown; error?: { message?: string } };
+        if (jsonRpcEvent.error) {
+          throw new Error(
+            `MCP error: ${jsonRpcEvent.error.message ?? JSON.stringify(jsonRpcEvent.error)}`
+          );
+        }
+        // Key-presence (not truthiness) so legitimately falsy results
+        // (null, "", 0) are extracted just like the JSON path does. Events
+        // without a `result` key (e.g. notifications) are skipped.
+        if (event && typeof event === "object" && "result" in event) {
+          const toolErrMsg = toolErrorMessage(jsonRpcEvent.result);
+          if (toolErrMsg !== null) {
+            throw new Error(`MCP tool error: ${toolErrMsg}`);
+          }
+          result = extractContent(jsonRpcEvent.result);
         }
       }
     }

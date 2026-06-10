@@ -206,6 +206,35 @@ describe("streamMcpTool", () => {
     await expect(collect()).rejects.toThrow(/tool blew up/);
   });
 
+  it("throws when the final result carries a tool-level error (isError: true)", async () => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(init.body as string);
+      return makeMockResponse([
+        sseEvent({
+          jsonrpc: "2.0",
+          method: "notifications/progress",
+          params: { progressToken: body.params._meta.progressToken, progress: 1, message: "partial" },
+        }),
+        sseEvent({
+          jsonrpc: "2.0",
+          id: body.id,
+          result: { isError: true, content: [{ type: "text", text: "tool exploded mid-stream" }] },
+        }),
+      ]);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const collect = async () => {
+      const out: string[] = [];
+      for await (const chunk of streamMcpTool(ENDPOINT, TOOL, undefined, DEFAULT_CALL_OPTIONS, CAPABILITY)) {
+        out.push(chunk);
+      }
+      return out;
+    };
+
+    await expect(collect()).rejects.toThrow("MCP tool error: tool exploded mid-stream");
+  });
+
   it("throws on non-2xx HTTP response", async () => {
     const fetchMock = vi.fn(async () => {
       return {
