@@ -678,6 +678,7 @@ export function llmProvider(config: LlmProviderConfig): {
           parameters?: Record<string, unknown>;
         }
       >;
+      stopWhen?: (options: { steps: unknown[] }) => boolean | PromiseLike<boolean>;
       maxOutputTokens?: number;
       temperature?: number;
       topP?: number;
@@ -699,9 +700,10 @@ export function llmProvider(config: LlmProviderConfig): {
 
     // Convert tools to Vercel AI SDK format using the tool() helper
     // Import jsonSchema and tool from ai package for proper schema handling
-    const { jsonSchema, tool: aiTool } = aiModule as {
+    const { jsonSchema, tool: aiTool, stepCountIs } = aiModule as {
       jsonSchema: (schema: Record<string, unknown>) => unknown;
       tool: (config: { description?: string; inputSchema: unknown; execute?: (args: unknown) => Promise<unknown> }) => unknown;
+      stepCountIs: (stepCount: number) => (options: { steps: unknown[] }) => boolean | PromiseLike<boolean>;
     };
 
     // Extract _mesh_endpoint from tool schemas for provider-side execution.
@@ -719,14 +721,17 @@ export function llmProvider(config: LlmProviderConfig): {
       }
     }
     const hasToolEndpoints = Object.keys(toolEndpoints).length > 0;
-    // Gemini: use AI SDK's maxSteps with execute functions instead of manual loop.
-    // The manual loop drops Gemini's thought_signature from assistant messages,
-    // causing 400 errors in multi-turn tool conversations. AI SDK preserves it.
+    // Gemini: use the AI SDK's built-in agentic loop (stopWhen + execute
+    // functions) instead of the manual loop. The manual loop drops Gemini's
+    // thought_signature from assistant messages, causing 400 errors in
+    // multi-turn tool conversations. AI SDK preserves it.
     // Claude/OpenAI keep the manual loop (they need response_format on every call).
     // vertex_ai is the same Gemini model on the wire, so it gets the same treatment.
+    // Note: `useMaxSteps` is a historical name — AI SDK v6 removed `maxSteps`;
+    // this flag now drives `stopWhen: stepCountIs(n)` (the v6 loop control).
     const useMaxSteps = hasToolEndpoints && (vendor === "gemini" || vendor === "google" || vendor === "vertex_ai");
     if (hasToolEndpoints) {
-      debug(`Provider-managed loop: ${Object.keys(toolEndpoints).length} tools with endpoints${useMaxSteps ? " (Gemini maxSteps mode)" : ""}`);
+      debug(`Provider-managed loop: ${Object.keys(toolEndpoints).length} tools with endpoints${useMaxSteps ? " (Gemini SDK-managed stopWhen mode)" : ""}`);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -752,7 +757,7 @@ export function llmProvider(config: LlmProviderConfig): {
         const toolName = tool.function.name;
 
         if (useMaxSteps) {
-          // Gemini: use execute functions + maxSteps (AI SDK preserves thought_signature)
+          // Gemini: use execute functions + stopWhen (AI SDK preserves thought_signature)
           const toolEndpoint = toolEndpoints[toolName];
           vercelTools[toolName] = aiTool({
             description: tool.function.description ?? "",
@@ -782,7 +787,7 @@ export function llmProvider(config: LlmProviderConfig): {
               }
             },
           });
-          debug(`Tool '${toolName}' vercelTool created (with execute for Gemini maxSteps)`);
+          debug(`Tool '${toolName}' vercelTool created (with execute for Gemini SDK-managed loop)`);
         } else {
           // Claude/OpenAI or no endpoints: schema only (manual loop or consumer handles)
           vercelTools[toolName] = aiTool({
@@ -819,7 +824,7 @@ export function llmProvider(config: LlmProviderConfig): {
       model: unknown;
       messages: any; // VercelCoreMessage[] - Vercel AI SDK validates at runtime
       tools?: Record<string, any>;
-      maxSteps?: number;
+      stopWhen?: (options: { steps: unknown[] }) => boolean | PromiseLike<boolean>;
       maxOutputTokens?: number;
       temperature?: number;
       topP?: number;
@@ -833,12 +838,15 @@ export function llmProvider(config: LlmProviderConfig): {
     if (vercelTools && Object.keys(vercelTools).length > 0) {
       requestOptions.tools = vercelTools;
       if (useMaxSteps) {
-        // Gemini: let AI SDK manage the agentic loop via maxSteps.
+        // Gemini: let AI SDK manage the agentic loop via stopWhen.
+        // AI SDK v6 removed `maxSteps`; without stopWhen the default is
+        // stepCountIs(1), which would stop right after the tool-call step
+        // and return an empty assistant message (#1160).
         // AI SDK preserves thought_signature across turns automatically.
-        requestOptions.maxSteps = resolvedMaxIterations;
-        debug(`Gemini provider-managed loop via maxSteps=${resolvedMaxIterations} (AI SDK preserves thought_signature)`);
+        requestOptions.stopWhen = stepCountIs(resolvedMaxIterations);
+        debug(`Gemini provider-managed loop via stopWhen=stepCountIs(${resolvedMaxIterations}) (AI SDK preserves thought_signature)`);
       }
-      // Note: for non-Gemini vendors, maxSteps is NOT set. We manage
+      // Note: for non-Gemini vendors, stopWhen is NOT set. We manage
       // the agentic loop manually so that providerOptions (including
       // response_format) is applied on every LLM call, not just the first.
     }
@@ -960,9 +968,9 @@ export function llmProvider(config: LlmProviderConfig): {
       resultUsage = objectResult.usage;
     } else if (hasToolEndpoints && !useMaxSteps) {
       // Provider-managed agentic loop: execute tools internally.
-      // Unlike AI SDK's maxSteps, this manual loop ensures providerOptions
-      // (including response_format for structured output) is applied on
-      // EVERY LLM call, not just the first one.
+      // Unlike the AI SDK's stopWhen-managed loop, this manual loop ensures
+      // providerOptions (including response_format for structured output) is
+      // applied on EVERY LLM call, not just the first one.
       let iteration = 0;
       const maxIterations = resolvedMaxIterations;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -976,7 +984,7 @@ export function llmProvider(config: LlmProviderConfig): {
           ...requestOptions,
           messages: currentMessages,
         };
-        // Do NOT set maxSteps — we manage the loop manually
+        // Do NOT set stopWhen — we manage the loop manually
 
         const result = await generateText(iterRequest);
 
@@ -1166,7 +1174,7 @@ export function llmProvider(config: LlmProviderConfig): {
       }
     } else {
       // generateText path covers:
-      // 1. Gemini maxSteps: AI SDK manages the tool loop (execute functions + maxSteps)
+      // 1. Gemini SDK-managed loop: AI SDK runs the tool loop (execute functions + stopWhen)
       // 2. No tool endpoints: consumer-managed tools or plain text
       const result = await generateText(requestOptions);
 
@@ -1185,8 +1193,8 @@ export function llmProvider(config: LlmProviderConfig): {
       };
 
       // Include tool_calls for consumer-managed execution only.
-      // When hasToolEndpoints is true (Gemini maxSteps), tools were already
-      // executed by AI SDK via execute functions — don't return tool_calls.
+      // When hasToolEndpoints is true (Gemini SDK-managed loop), tools were
+      // already executed by AI SDK via execute functions — don't return tool_calls.
       if (!hasToolEndpoints && result.toolCalls && result.toolCalls.length > 0) {
         response.tool_calls = convertToolCalls(result.toolCalls);
       }
