@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"mcp-mesh/src/core/cli/lifecycle"
 	"mcp-mesh/src/core/tlsutil"
 )
 
@@ -177,14 +178,56 @@ type PythonProcessFile struct {
 	LastUpdated   string                 `json:"last_updated"`
 }
 
-// GetRunningProcesses returns information about running MCP Mesh processes
-func GetRunningProcesses() ([]ProcessInfo, error) {
+// processesFilePath returns the path to ~/.mcp-mesh/processes.json.
+func processesFilePath() (string, error) {
 	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(homeDir, ".mcp-mesh", "processes.json"), nil
+}
+
+// withProcessesLock serializes read-modify-write cycles on processes.json via
+// a dedicated flock (processes.json.lock). The lock is advisory but every
+// writer in this codebase goes through it, which covers both intra-process
+// concurrency (reaper goroutines + parallel shutdown kills) and cross-process
+// concurrency (multiple meshctl invocations).
+//
+// A dedicated lock file is used instead of the global lifecycle.lock to keep
+// processes.json in its own lock domain: lifecycle.lock serializes deps
+// register/unregister cycles, and sharing it would couple process-list updates
+// to that traffic — and would invite a same-goroutine flock re-acquisition
+// (flock is not reentrant) if a future caller ever touched processes.json
+// while already holding the lifecycle lock. No such call chain exists today;
+// this is isolation, not a fix for a current deadlock.
+func withProcessesLock(fn func() error) error {
+	processFile, err := processesFilePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(processFile), 0755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(processFile+".lock", os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return fn()
+}
+
+// readProcessesLocked reads and parses processes.json WITHOUT filtering dead
+// PIDs. Caller must hold the processes lock.
+func readProcessesLocked() ([]ProcessInfo, error) {
+	processFile, err := processesFilePath()
 	if err != nil {
 		return nil, err
 	}
-
-	processFile := filepath.Join(homeDir, ".mcp-mesh", "processes.json")
+	homeDir := filepath.Dir(filepath.Dir(processFile))
 
 	// One-time migration from legacy path (~/.mcp_mesh/ -> ~/.mcp-mesh/)
 	if _, err := os.Stat(processFile); os.IsNotExist(err) {
@@ -202,7 +245,7 @@ func GetRunningProcesses() ([]ProcessInfo, error) {
 	data, err := os.ReadFile(processFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []ProcessInfo{}, nil
+			return nil, nil
 		}
 		return nil, err
 	}
@@ -210,89 +253,152 @@ func GetRunningProcesses() ([]ProcessInfo, error) {
 	// Try to parse as Go format first (simple array)
 	var processes []ProcessInfo
 	if err := json.Unmarshal(data, &processes); err == nil {
+		return processes, nil
+	}
+
+	// Try to parse as Python format (complex structure)
+	var pythonFile PythonProcessFile
+	if err := json.Unmarshal(data, &pythonFile); err == nil {
+		// Return empty list when using Python format — the Python processes
+		// are managed differently and we don't want to interfere.
+		return nil, nil
+	}
+
+	// Both formats failed — the file is corrupt (e.g., a torn write from a
+	// pre-atomic-rename version). Quarantine the corrupt content for
+	// post-mortem (overwriting any previous quarantine) and reset the file to
+	// an empty list, so the warning fires exactly once instead of on every
+	// subsequent read.
+	corruptPath := processFile + ".corrupt"
+	if renameErr := os.Rename(processFile, corruptPath); renameErr == nil {
+		_ = saveProcessesLocked([]ProcessInfo{})
+		fmt.Fprintf(os.Stderr, "Warning: %s is not valid JSON; quarantined to %s and reset to an empty list\n", processFile, corruptPath)
+	} else {
+		fmt.Fprintf(os.Stderr, "Warning: %s is not valid JSON; treating process list as empty (quarantine failed: %v)\n", processFile, renameErr)
+	}
+	return nil, nil
+}
+
+// saveProcessesLocked writes processes.json atomically (temp file + rename) so
+// readers never observe a torn write. Caller must hold the processes lock.
+func saveProcessesLocked(processes []ProcessInfo) error {
+	processFile, err := processesFilePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(processFile), 0755); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(processes, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(processFile), ".processes-*.json")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	// CreateTemp creates 0600; match the historical 0644 mode before rename.
+	if err := os.Chmod(tmpPath, 0644); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, processFile); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
+// GetRunningProcesses returns information about running MCP Mesh processes.
+// Dead PIDs are filtered out and the pruned list is persisted back.
+func GetRunningProcesses() ([]ProcessInfo, error) {
+	var alive []ProcessInfo
+	err := withProcessesLock(func() error {
+		processes, err := readProcessesLocked()
+		if err != nil {
+			return err
+		}
+
 		// Filter out dead processes
-		var alive []ProcessInfo
 		for _, proc := range processes {
 			if IsProcessAlive(proc.PID) {
 				alive = append(alive, proc)
 			}
 		}
 
-		// Save the filtered list back
+		// Save the filtered list back (best-effort — the read result is
+		// still valid even if the prune fails to persist).
 		if len(alive) != len(processes) {
-			SaveRunningProcesses(alive)
+			_ = saveProcessesLocked(alive)
 		}
-
-		return alive, nil
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	// Try to parse as Python format (complex structure)
-	var pythonFile PythonProcessFile
-	if err := json.Unmarshal(data, &pythonFile); err == nil {
-		// For now, return empty list when using Python format
-		// The Python processes are managed differently and we don't want to interfere
-		return []ProcessInfo{}, nil
+	if alive == nil {
+		alive = []ProcessInfo{}
 	}
-
-	// If both formats fail, return empty list
-	return []ProcessInfo{}, nil
+	return alive, nil
 }
 
 // SaveRunningProcesses saves the list of running processes
 func SaveRunningProcesses(processes []ProcessInfo) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-
-	mcpDir := filepath.Join(homeDir, ".mcp-mesh")
-	if err := os.MkdirAll(mcpDir, 0755); err != nil {
-		return err
-	}
-
-	processFile := filepath.Join(mcpDir, "processes.json")
-	data, err := json.MarshalIndent(processes, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(processFile, data, 0644)
+	return withProcessesLock(func() error {
+		return saveProcessesLocked(processes)
+	})
 }
 
 // AddRunningProcess adds a process to the running processes list
 func AddRunningProcess(proc ProcessInfo) error {
-	processes, err := GetRunningProcesses()
-	if err != nil {
-		return err
-	}
-
-	// Remove any existing entry with the same PID
-	var filtered []ProcessInfo
-	for _, p := range processes {
-		if p.PID != proc.PID {
-			filtered = append(filtered, p)
+	return withProcessesLock(func() error {
+		processes, err := readProcessesLocked()
+		if err != nil {
+			return err
 		}
-	}
 
-	filtered = append(filtered, proc)
-	return SaveRunningProcesses(filtered)
+		// Remove any existing entry with the same PID
+		var filtered []ProcessInfo
+		for _, p := range processes {
+			if p.PID != proc.PID {
+				filtered = append(filtered, p)
+			}
+		}
+
+		filtered = append(filtered, proc)
+		return saveProcessesLocked(filtered)
+	})
 }
 
 // RemoveRunningProcess removes a process from the running processes list
 func RemoveRunningProcess(pid int) error {
-	processes, err := GetRunningProcesses()
-	if err != nil {
-		return err
-	}
-
-	var filtered []ProcessInfo
-	for _, p := range processes {
-		if p.PID != pid {
-			filtered = append(filtered, p)
+	return withProcessesLock(func() error {
+		processes, err := readProcessesLocked()
+		if err != nil {
+			return err
 		}
-	}
 
-	return SaveRunningProcesses(filtered)
+		var filtered []ProcessInfo
+		for _, p := range processes {
+			if p.PID != pid {
+				filtered = append(filtered, p)
+			}
+		}
+
+		return saveProcessesLocked(filtered)
+	})
 }
 
 // IsProcessAlive checks if a process is still running.
@@ -319,45 +425,26 @@ func IsProcessAlive(pid int) bool {
 	return !isProcessZombie(pid)
 }
 
-// KillProcess attempts to gracefully kill a process
+// KillProcess attempts to gracefully kill a process: SIGTERM first, then a
+// verified SIGKILL if the process doesn't exit within timeout.
+//
+// Delegates to lifecycle.KillPIDVerify so this legacy entry point inherits the
+// hardened kill semantics used by `meshctl stop`:
+//   - signals the whole process group (negative PID) with single-PID fallback,
+//     so children spawned by the agent die too (bug class #1033);
+//   - honors the caller's FULL timeout for the graceful phase (previously the
+//     timeout was silently capped at 5s, ignoring --shutdown-timeout);
+//   - verifies death after SIGKILL (zombie-aware poll) instead of
+//     fire-and-forget, returning an error if the process refuses to die.
 func KillProcess(pid int, timeout time.Duration) error {
 	if !IsProcessAlive(pid) {
 		return nil // Already dead
 	}
 
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return err
+	if !lifecycle.KillPIDVerify(pid, timeout) {
+		return fmt.Errorf("process %d still alive after SIGKILL", pid)
 	}
-
-	// Try graceful shutdown first (SIGINT for Python processes)
-	if err := process.Signal(os.Interrupt); err != nil {
-		// If SIGINT fails, try SIGTERM
-		if err := process.Signal(syscall.SIGTERM); err != nil {
-			return err
-		}
-	}
-
-	// For FastAPI agents, use shorter timeout and more frequent checks
-	// Most FastAPI agents terminate within 1-2 seconds
-	effectiveTimeout := timeout
-	if effectiveTimeout > 5*time.Second {
-		effectiveTimeout = 5 * time.Second // Cap at 5 seconds for responsive agents
-	}
-
-	// Wait for graceful shutdown with more frequent checks
-	deadline := time.Now().Add(effectiveTimeout)
-	checkInterval := 50 * time.Millisecond // Check every 50ms instead of 100ms
-
-	for time.Now().Before(deadline) {
-		if !IsProcessAlive(pid) {
-			return nil // Process terminated gracefully
-		}
-		time.Sleep(checkInterval)
-	}
-
-	// Force kill if graceful shutdown failed
-	return process.Signal(syscall.SIGKILL)
+	return nil
 }
 
 // StartPythonAgent starts a Python agent process

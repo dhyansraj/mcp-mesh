@@ -66,18 +66,6 @@ type RegistryConfig struct {
 	AdminPort                int    // admin API port — from MCP_MESH_ADMIN_PORT (0 = disabled)
 }
 
-// ResponseCache provides caching functionality matching Python implementation
-type ResponseCache struct {
-	cache   map[string]CacheEntry
-	ttl     time.Duration
-	enabled bool
-}
-
-type CacheEntry struct {
-	Data      interface{}
-	Timestamp time.Time
-}
-
 // AgentRegistrationRequest matches Python RegisterAgentRequest exactly
 type AgentRegistrationRequest struct {
 	AgentID   string                 `json:"agent_id" binding:"required"`
@@ -249,7 +237,6 @@ type HeartbeatResponse struct {
 type EntService struct {
 	entDB       *database.EntDatabase
 	config      *RegistryConfig
-	cache       *ResponseCache
 	validator   *AgentRegistrationValidator
 	logger      *logger.Logger
 	hookManager *AgentStatusChangeHookManager
@@ -269,12 +256,6 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 		}
 	}
 
-	cache := &ResponseCache{
-		cache:   make(map[string]CacheEntry),
-		ttl:     time.Duration(config.CacheTTL) * time.Second,
-		enabled: config.EnableResponseCache,
-	}
-
 	// Initialize status change hook manager
 	hookManager := NewAgentStatusChangeHookManager(logger, true) // Enable hooks by default
 
@@ -285,7 +266,6 @@ func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *
 	service := &EntService{
 		entDB:       entDB,
 		config:      config,
-		cache:       cache,
 		validator:   NewAgentRegistrationValidator(),
 		logger:      logger,
 		hookManager: hookManager,
@@ -993,6 +973,16 @@ func (s *EntService) StoreDependencyResolutions(
 // All three need to be flipped together when an agent goes offline so that
 // consumer-side state stays consistent before the FK-driven SetNull leaves
 // the rows dangling with status=available.
+//
+// Called from unregisterAgentAttempt (graceful shutdown) and from the health
+// monitor's unhealthy transition (after its optimistic update wins). The sweep
+// job performs its own equivalent flip inside the purge transaction. The
+// reverse transition needs no special handling here: when a provider comes
+// back, its register/heartbeat creates a "register"/status-change registry
+// event, consumers' HEAD heartbeats detect the topology change and trigger a
+// full POST heartbeat, and StoreDependencyResolutions /
+// StoreLLMToolResolutions / StoreLLMProviderResolutions delete-and-recreate
+// the consumer's rows with status=available.
 func (s *EntService) UpdateDependencyStatusOnAgentOffline(ctx context.Context, agentID string) error {
 	if _, err := s.entDB.DependencyResolution.Update().
 		Where(dependencyresolution.ProviderAgentIDEQ(agentID)).
@@ -1847,8 +1837,7 @@ func (s *EntService) Health() map[string]interface{} {
 			}
 			return "sqlite"
 		}(),
-		"cache_enabled": s.cache.enabled,
-		"stats":         stats,
+		"stats": stats,
 	}
 }
 
@@ -2119,6 +2108,15 @@ func (s *EntService) unregisterAgentAttempt(ctx context.Context, agentID string)
 	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	// Flip all resolution rows that point at this provider to unavailable so
+	// consumer-side state stays consistent immediately rather than waiting for
+	// the sweep job's purge (up to retention window later). Best-effort: the
+	// unregister itself already committed; a failure here is logged and the
+	// sweep will eventually fix the rows.
+	if err := s.UpdateDependencyStatusOnAgentOffline(ctx, agentID); err != nil {
+		s.logger.Warning("Failed to mark resolutions unavailable for unregistered agent %s: %v", agentID, err)
 	}
 
 	s.logger.Info("Created unregister event and marked agent %s as unhealthy (graceful shutdown)", agentID)

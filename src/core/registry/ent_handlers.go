@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"mcp-mesh/src/core/ent"
 	"mcp-mesh/src/core/ent/agent"
 	"mcp-mesh/src/core/registry/generated"
 )
@@ -871,16 +871,18 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 			proxyTimeout = time.Duration(secs) * time.Second
 		}
 	}
+	// http.Client is cheap to build per request; the expensive part (the
+	// Transport with its connection pool + TLS material) is shared. Plain
+	// HTTP rides http.DefaultTransport's pool; HTTPS uses the cached mTLS
+	// transport below. Client.Timeout covers the full exchange including the
+	// streamed body, preserving the X-Mesh-Timeout cap.
 	client := &http.Client{
 		Timeout: proxyTimeout,
 	}
 
 	// Configure TLS transport for HTTPS targets (mTLS proxy support).
-	// Hostname verification is intentionally skipped because --tls-auto
-	// generates certs with SANs for 127.0.0.1/::1 only, while agents in
-	// K8s bind to pod IPs.  We still verify the peer cert chain against
-	// our mesh CA so only certs issued by the same CA are accepted.
-	// Target legitimacy is already enforced by isRegisteredAgentEndpoint().
+	// The transport is built once and cached; it is rebuilt automatically if
+	// the CA/cert/key files change on disk (mtime/size check per request).
 	if scheme == "https" {
 		// Require the full mTLS bundle for HTTPS proxy calls.
 		caPath := os.Getenv("MCP_MESH_TLS_CA")
@@ -895,9 +897,9 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 			return
 		}
 
-		caCert, err := os.ReadFile(caPath)
+		transport, err := getProxyTLSTransport(caPath, certPath, keyPath)
 		if err != nil {
-			log.Printf("ERROR: failed to read CA cert %s: %v", caPath, err)
+			log.Printf("ERROR: %v", err)
 			// Sanitize response: full detail (paths, OS errors) stays in server log only (#794).
 			c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
 				Error:     "Proxy TLS misconfiguration",
@@ -905,48 +907,7 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 			})
 			return
 		}
-		caCertPool := x509.NewCertPool()
-		if !caCertPool.AppendCertsFromPEM(caCert) {
-			log.Printf("ERROR: failed to parse CA cert from %s (empty or malformed PEM)", caPath)
-			// Sanitize response: full detail stays in server log only (#794).
-			c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
-				Error:     "Proxy TLS misconfiguration",
-				Timestamp: time.Now().UTC(),
-			})
-			return
-		}
-
-		clientCert, err := tls.LoadX509KeyPair(certPath, keyPath)
-		if err != nil {
-			log.Printf("ERROR: failed to load client cert/key (%s, %s): %v", certPath, keyPath, err)
-			// Sanitize response: full detail (paths, OS errors) stays in server log only (#794).
-			c.JSON(http.StatusInternalServerError, generated.ErrorResponse{
-				Error:     "Proxy TLS misconfiguration",
-				Timestamp: time.Now().UTC(),
-			})
-			return
-		}
-
-		// Skip hostname check but verify the cert chain against our CA.
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
-			Certificates:      []tls.Certificate{clientCert},
-			VerifyConnection: func(cs tls.ConnectionState) error {
-				if len(cs.PeerCertificates) == 0 {
-					return fmt.Errorf("no peer certificates presented")
-				}
-				opts := x509.VerifyOptions{
-					Roots:         caCertPool,
-					Intermediates: x509.NewCertPool(),
-				}
-				for _, cert := range cs.PeerCertificates[1:] {
-					opts.Intermediates.AddCert(cert)
-				}
-				_, err := cs.PeerCertificates[0].Verify(opts)
-				return err
-			},
-		}
-		client.Transport = &http.Transport{TLSClientConfig: tlsConfig}
+		client.Transport = transport
 	}
 
 	resp, err := client.Do(proxyReq)
@@ -959,25 +920,152 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 	}
 	defer resp.Body.Close()
 
-	// Read response body
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, generated.ErrorResponse{
-			Error:     fmt.Sprintf("Failed to read response from agent: %v", err),
-			Timestamp: time.Now().UTC(),
-		})
-		return
-	}
-
-	// Copy response headers
+	// Copy response headers (Add, not Set, to preserve multi-value headers).
 	for key, values := range resp.Header {
 		for _, value := range values {
-			c.Header(key, value)
+			c.Writer.Header().Add(key, value)
 		}
 	}
+	c.Status(resp.StatusCode)
 
-	// Return the response with the same status code
-	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), body)
+	// Stream the body instead of buffering it whole: large tool results don't
+	// balloon registry memory, and SSE responses reach the client as they are
+	// produced. Flush after every chunk so streamed (SSE) responses aren't
+	// held back by the response writer's buffer; gin's ResponseWriter
+	// implements http.Flusher.
+	buf := make([]byte, 32*1024)
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := c.Writer.Write(buf[:n]); werr != nil {
+				// Client went away — nothing useful left to do.
+				return
+			}
+			c.Writer.Flush()
+		}
+		if rerr != nil {
+			if rerr != io.EOF {
+				log.Printf("WARNING: proxy stream from %s ended early: %v", targetURL, rerr)
+			}
+			return
+		}
+	}
+}
+
+// proxyTLSCacheEntry holds the cached mTLS transport for the proxy along with
+// the on-disk identity (path + mtime + size) of the material it was built
+// from, so cert rotation is picked up without restarting the registry.
+type proxyTLSCacheEntry struct {
+	transport *http.Transport
+	caPath    string
+	certPath  string
+	keyPath   string
+	caStamp   fileStamp
+	certStamp fileStamp
+	keyStamp  fileStamp
+}
+
+type fileStamp struct {
+	modTime time.Time
+	size    int64
+}
+
+var (
+	proxyTLSCacheMu sync.Mutex
+	proxyTLSCache   *proxyTLSCacheEntry
+)
+
+func stampFile(path string) (fileStamp, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fileStamp{}, err
+	}
+	return fileStamp{modTime: fi.ModTime(), size: fi.Size()}, nil
+}
+
+// getProxyTLSTransport returns the shared mTLS transport for /proxy/* HTTPS
+// calls, building it on first use and rebuilding it if any of the CA, cert,
+// or key files change (path or content stamp). The per-request cost is three
+// os.Stat calls instead of reading + parsing the full PEM material.
+//
+// Hostname verification is intentionally skipped because --tls-auto generates
+// certs with SANs for 127.0.0.1/::1 only, while agents in K8s bind to pod
+// IPs. We still verify the peer cert chain against our mesh CA so only certs
+// issued by the same CA are accepted. Target legitimacy is already enforced
+// by isRegisteredAgentEndpoint().
+func getProxyTLSTransport(caPath, certPath, keyPath string) (*http.Transport, error) {
+	caStamp, err := stampFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat CA cert %s: %w", caPath, err)
+	}
+	certStamp, err := stampFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat client cert %s: %w", certPath, err)
+	}
+	keyStamp, err := stampFile(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat client key %s: %w", keyPath, err)
+	}
+
+	proxyTLSCacheMu.Lock()
+	defer proxyTLSCacheMu.Unlock()
+
+	if e := proxyTLSCache; e != nil &&
+		e.caPath == caPath && e.certPath == certPath && e.keyPath == keyPath &&
+		e.caStamp == caStamp && e.certStamp == certStamp && e.keyStamp == keyStamp {
+		return e.transport, nil
+	}
+
+	caCert, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CA cert %s: %w", caPath, err)
+	}
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to parse CA cert from %s (empty or malformed PEM)", caPath)
+	}
+
+	clientCert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load client cert/key (%s, %s): %w", certPath, keyPath, err)
+	}
+
+	// Skip hostname check but verify the cert chain against our CA.
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: true,
+		Certificates:       []tls.Certificate{clientCert},
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("no peer certificates presented")
+			}
+			opts := x509.VerifyOptions{
+				Roots:         caCertPool,
+				Intermediates: x509.NewCertPool(),
+			}
+			for _, cert := range cs.PeerCertificates[1:] {
+				opts.Intermediates.AddCert(cert)
+			}
+			_, err := cs.PeerCertificates[0].Verify(opts)
+			return err
+		},
+	}
+
+	// Close idle connections of the transport we're replacing so a rotation
+	// doesn't leave stale TLS sessions pooled forever.
+	if proxyTLSCache != nil && proxyTLSCache.transport != nil {
+		proxyTLSCache.transport.CloseIdleConnections()
+	}
+
+	proxyTLSCache = &proxyTLSCacheEntry{
+		transport: &http.Transport{TLSClientConfig: tlsConfig},
+		caPath:    caPath,
+		certPath:  certPath,
+		keyPath:   keyPath,
+		caStamp:   caStamp,
+		certStamp: certStamp,
+		keyStamp:  keyStamp,
+	}
+	return proxyTLSCache.transport, nil
 }
 
 // isRegisteredAgentEndpoint checks if the given host:port is a registered agent.
@@ -993,39 +1081,60 @@ func (h *EntBusinessLogicHandlers) isRegisteredAgentEndpoint(ctx context.Context
 	}
 
 	host := parts[0]
+	portInt, err := strconv.Atoi(parts[1])
+	if err != nil || portInt <= 0 {
+		return false, "", "", nil // Invalid port
+	}
 
-	// Query all agents and check if any matches this endpoint
-	params := &AgentQueryParams{}
-	resp, err := h.entService.ListAgents(params)
+	// Narrow query instead of loading ALL agents with four eager edges per
+	// proxy call: only agents on the requested port whose HTTP host, ID, or
+	// name matches the requested host can possibly satisfy the checks below.
+	candidates, err := h.entService.entDB.Client.Agent.
+		Query().
+		Where(
+			agent.HTTPPortEQ(portInt),
+			agent.HTTPHostNEQ(""),
+			agent.Or(
+				agent.HTTPHostEQ(host),
+				agent.IDEQ(host),
+				agent.NameEQ(host),
+			),
+		).
+		All(ctx)
 	if err != nil {
 		return false, "", "", err
 	}
 
-	port := parts[1]
+	// Prefer the direct host:port match, mirroring the historical behavior of
+	// "exact endpoint match wins over ID/Name fallback".
+	//
+	// Scheme derivation matches ListAgents: https when the agent registered
+	// with a TLS entity identity, http otherwise.
+	schemeFor := func(a *ent.Agent) string {
+		if a.EntityID != nil && *a.EntityID != "" {
+			return "https"
+		}
+		return "http"
+	}
+	for _, a := range candidates {
+		if a.HTTPHost == host {
+			return true, schemeFor(a), fmt.Sprintf("%s:%d", a.HTTPHost, a.HTTPPort), nil
+		}
+	}
 
-	for _, agent := range resp.Agents {
-		// Parse the registered endpoint URL for accurate host:port matching
-		if agent.Endpoint != "" {
-			parsedEP, err := url.Parse(agent.Endpoint)
-			if err == nil {
-				// Direct host:port match against parsed endpoint
-				if parsedEP.Host == hostPort {
-					return true, parsedEP.Scheme, parsedEP.Host, nil
-				}
-				// Match by agent ID (primary: callers use full agent IDs like "fortuna-abc12345").
-				// Also match by agent Name as a fallback for future base-name proxying
-				// (e.g., /proxy/fortuna:8080 -> any replica named "fortuna") and to stay
-				// backward-compatible with old SDK versions that sent Name == ID.
-				//
-				// Matching by Name as a fallback is intentional — it routes to an
-				// arbitrary replica when multiple share a base name. The registry
-				// proxy is a dev/test convenience and replica targeting is not a
-				// dev concern; to target a specific replica, port-forward to it
-				// directly.
-				if (agent.Id == host || agent.Name == host) && parsedEP.Port() == port {
-					return true, parsedEP.Scheme, parsedEP.Host, nil
-				}
-			}
+	// Match by agent ID (primary: callers use full agent IDs like "fortuna-abc12345").
+	// Also match by agent Name as a fallback for future base-name proxying
+	// (e.g., /proxy/fortuna:8080 -> any replica named "fortuna") and to stay
+	// backward-compatible with old SDK versions that sent Name == ID.
+	//
+	// Matching by Name as a fallback is intentional — it routes to an
+	// arbitrary replica when multiple share a base name. The registry
+	// proxy is a dev/test convenience and replica targeting is not a
+	// dev concern; to target a specific replica, port-forward to it
+	// directly.
+	for _, a := range candidates {
+		if a.ID == host || a.Name == host {
+			return true, schemeFor(a), fmt.Sprintf("%s:%d", a.HTTPHost, a.HTTPPort), nil
 		}
 	}
 
