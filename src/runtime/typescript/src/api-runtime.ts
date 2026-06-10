@@ -41,6 +41,10 @@ import {
   type JsDependencySpec,
 } from "@mcpmesh/core";
 
+import {
+  MAX_CONSECUTIVE_NEXT_EVENT_FAILURES,
+  NEXT_EVENT_BACKOFF_CAP_MS,
+} from "./config.js";
 import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { createProxy } from "./proxy.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
@@ -104,6 +108,14 @@ class ApiRuntime {
   private starting = false;
   private scheduledStart = false;
   private shutdownRequested = false;
+  /**
+   * Memoized in-flight (or completed) teardown. `shutdown()` is
+   * idempotent: the first caller creates this promise and every later
+   * caller — user code, the signal handler, a second signal — awaits
+   * the SAME teardown instead of racing a concurrent napi
+   * `handle.shutdown()`.
+   */
+  private shutdownPromise: Promise<void> | null = null;
   /**
    * PR #938 W2: race-flag for `pushSurfacesUpdate()` calls that arrive
    * AFTER `start()` has been scheduled but BEFORE `this.handle` is set.
@@ -288,22 +300,67 @@ class ApiRuntime {
 
   /**
    * Run the event loop to handle mesh events.
+   *
+   * Resilience (issue #1163 MED-1): the loop must outlive individual
+   * failures. A throw from an event handler (e.g. a malformed event
+   * hitting a non-null assertion) is logged and the loop continues; a
+   * `nextEvent()` rejection (e.g. a transient napi failure) backs off
+   * exponentially (capped) and retries. Only the "shutdown" event — or
+   * the handle being torn down — exits the loop.
    */
   private async runEventLoop(): Promise<void> {
     if (!this.handle) return;
 
     const registry = RouteRegistry.getInstance();
+    let consecutiveNextEventFailures = 0;
 
     while (true) {
+      // Check if handle was nulled during shutdown
+      if (!this.handle) {
+        console.log("API runtime event loop: handle nulled, exiting");
+        return;
+      }
+
+      let event: Awaited<ReturnType<JsAgentHandle["nextEvent"]>>;
       try {
-        // Check if handle was nulled during shutdown
-        if (!this.handle) {
-          console.log("API runtime event loop: handle nulled, exiting");
+        event = await this.handle.nextEvent();
+        consecutiveNextEventFailures = 0;
+      } catch (err) {
+        // Explicit shutdown() racing a failing nextEvent(): exit
+        // promptly instead of burning more backoff cycles.
+        if (!this.handle || this.shutdownRequested) {
+          console.log("API runtime event loop: shutdown requested, exiting");
           return;
         }
+        consecutiveNextEventFailures++;
+        // Ceiling (~60s of continuous failure — see the constant's doc
+        // in config.ts): a permanently broken handle must not retry
+        // forever, keeping the process alive via the backoff timer.
+        if (
+          consecutiveNextEventFailures >= MAX_CONSECUTIVE_NEXT_EVENT_FAILURES
+        ) {
+          console.error(
+            `API runtime event loop: terminating after ${consecutiveNextEventFailures} ` +
+              `consecutive nextEvent() failures; dependency topology is ` +
+              `frozen for the remainder of the process:`,
+            err
+          );
+          return;
+        }
+        const backoffMs = Math.min(
+          100 * 2 ** (consecutiveNextEventFailures - 1),
+          NEXT_EVENT_BACKOFF_CAP_MS
+        );
+        console.error(
+          `API runtime event loop: nextEvent() failed ` +
+            `(consecutive=${consecutiveNextEventFailures}), retrying in ${backoffMs}ms:`,
+          err
+        );
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        continue;
+      }
 
-        const event = await this.handle.nextEvent();
-
+      try {
         switch (event.eventType) {
           case "agent_registered":
             console.log(`API service registered: ${event.agentId}`);
@@ -359,8 +416,13 @@ class ApiRuntime {
             break;
         }
       } catch (err) {
-        console.error("API runtime event loop error:", err);
-        break;
+        // Per-event isolation: a bad event (or a bug in one handler)
+        // must not kill dependency-event processing for the process
+        // lifetime. Log and keep consuming events.
+        console.error(
+          `API runtime event loop: error handling event '${event.eventType}':`,
+          err
+        );
       }
     }
   }
@@ -442,30 +504,47 @@ class ApiRuntime {
   /**
    * Install signal handlers for graceful shutdown.
    *
-   * Calls handle.shutdown() directly to trigger Rust core unregistration.
-   * This causes nextEvent() to return with a "shutdown" event, breaking
-   * the event loop cleanly.
+   * Runs the full `shutdown()` sequence (issue #1163 MED-2) — registry
+   * unregister via `handle.shutdown()` (which also resolves the event
+   * loop's `nextEvent()` with a "shutdown" event) plus TLS cleanup —
+   * bounded by a force-exit timer so a hang cannot wedge the process
+   * past its SIGTERM grace.
    */
   private installSignalHandlers(): void {
+    const SIGNAL_SHUTDOWN_TIMEOUT_MS = 10_000;
+    // Dedupe repeated signals locally. This must NOT key off
+    // `shutdownRequested` (set by shutdown() itself): a signal arriving
+    // while a user-initiated shutdown() is in flight must still arm the
+    // force-exit timer and exit the process when that same (memoized)
+    // shutdown completes.
+    let signalHandled = false;
     const shutdownHandler = (signal: string) => {
-      if (this.shutdownRequested) return;
-      this.shutdownRequested = true;
+      if (signalHandled) return;
+      signalHandled = true;
 
       console.log(`\nReceived ${signal}, shutting down ${this.serviceId}...`);
 
-      // Call shutdown directly - this triggers Rust core to unregister
-      // and send a shutdown event that breaks the event loop
-      if (this.handle) {
-        this.handle.shutdown().then(() => {
-          console.log(`API runtime ${this.serviceId} unregistered from registry`);
-          process.exit(0);
-        }).catch((err) => {
-          console.error("Error during API runtime shutdown:", err);
-          process.exit(1);
-        });
-      } else {
+      // Deliberately ref'd (no unref): both completion paths below
+      // clearTimeout and process.exit synchronously, so the timer never
+      // delays a successful exit — but it must keep a wedged shutdown's
+      // otherwise-empty event loop alive long enough to emit the loud
+      // exit(1) diagnostic instead of silently exiting 0.
+      const forceExitTimer = setTimeout(() => {
+        console.error(
+          `API runtime shutdown did not complete within ${SIGNAL_SHUTDOWN_TIMEOUT_MS}ms; forcing exit`
+        );
+        process.exit(1);
+      }, SIGNAL_SHUTDOWN_TIMEOUT_MS);
+
+      this.shutdown().then(() => {
+        clearTimeout(forceExitTimer);
+        console.log(`API runtime ${this.serviceId} shut down cleanly`);
         process.exit(0);
-      }
+      }).catch((err) => {
+        clearTimeout(forceExitTimer);
+        console.error("Error during API runtime shutdown:", err);
+        process.exit(1);
+      });
     };
 
     process.on("SIGINT", () => shutdownHandler("SIGINT"));
@@ -474,13 +553,24 @@ class ApiRuntime {
 
   /**
    * Shutdown the API runtime gracefully.
+   *
+   * Idempotent and re-entrant: the first call runs the teardown; every
+   * later call (user code, the signal handler, a double signal) returns
+   * the SAME promise. The memo is never cleared: shutdown is terminal,
+   * and re-running a half-torn-down cleanup after a failure would be
+   * worse than surfacing the original rejection to every caller.
    */
-  async shutdown(): Promise<void> {
-    if (this.handle) {
-      await this.handle.shutdown();
-      this.handle = null;
-    }
-    cleanupTls();
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shutdownRequested = true;
+    this.shutdownPromise = (async () => {
+      if (this.handle) {
+        await this.handle.shutdown();
+        this.handle = null;
+      }
+      cleanupTls();
+    })();
+    return this.shutdownPromise;
   }
 
   /**

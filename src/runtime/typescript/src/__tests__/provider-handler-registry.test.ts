@@ -8,10 +8,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { ProviderHandler, VendorCapabilities, OutputMode, PreparedRequest } from "../provider-handlers/provider-handler.js";
 import { ProviderHandlerRegistry } from "../provider-handlers/provider-handler-registry.js";
 import { ClaudeHandler } from "../provider-handlers/claude-handler.js";
+import { GeminiHandler } from "../provider-handlers/gemini-handler.js";
 
 // Import handlers to register them (side effect registration)
 import "../provider-handlers/openai-handler.js";
-import "../provider-handlers/gemini-handler.js";
 import "../provider-handlers/generic-handler.js";
 
 describe("ProviderHandlerRegistry", () => {
@@ -46,6 +46,24 @@ describe("ProviderHandlerRegistry", () => {
       expect(handler.constructor.name).toBe("GeminiHandler");
     });
 
+    it("should return GeminiHandler for google vendor (#1163 MED-4)", () => {
+      // "google" is a first-class model prefix (VENDOR_PROVIDERS,
+      // llm-provider guards, media/resolver) and must map to the Gemini
+      // handler, not fall through to GenericHandler.
+      const handler = ProviderHandlerRegistry.getHandler("google");
+
+      expect(handler).toBeDefined();
+      expect(handler).toBeInstanceOf(GeminiHandler);
+      expect(handler.vendor).toBe("google");
+    });
+
+    it("should return GeminiHandler for vertex_ai vendor", () => {
+      const handler = ProviderHandlerRegistry.getHandler("vertex_ai");
+
+      expect(handler).toBeDefined();
+      expect(handler).toBeInstanceOf(GeminiHandler);
+    });
+
     it("should return GenericHandler for unknown vendor", () => {
       const handler = ProviderHandlerRegistry.getHandler("unknown");
 
@@ -72,6 +90,16 @@ describe("ProviderHandlerRegistry", () => {
 
       expect(handler).toBeDefined();
       expect(handler.constructor.name).toBe("GenericHandler");
+    });
+
+    it("should pass the requested vendor into the fallback GenericHandler (#1163 MED-4)", () => {
+      // The fallback used to be constructed with no args, hard-wiring
+      // vendor "unknown" — losing vendor-aware prompt shaping for
+      // unregistered-but-known vendors.
+      const handler = ProviderHandlerRegistry.getHandler("cohere");
+
+      expect(handler.constructor.name).toBe("GenericHandler");
+      expect(handler.vendor).toBe("cohere");
     });
 
     it("should normalize vendor name to lowercase", () => {

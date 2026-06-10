@@ -31,7 +31,13 @@ import type {
   NormalizedDependency,
   LlmProviderConfig,
 } from "./types.js";
-import { resolveConfig, generateAgentIdSuffix, findAvailablePort } from "./config.js";
+import {
+  resolveConfig,
+  generateAgentIdSuffix,
+  findAvailablePort,
+  MAX_CONSECUTIVE_NEXT_EVENT_FAILURES,
+  NEXT_EVENT_BACKOFF_CAP_MS,
+} from "./config.js";
 import { enrichSchemaWithMediaTypes } from "./media-param.js";
 import { createProxy, normalizeDependency, runWithTraceContext, runWithPropagatedHeaders, PROXY_DISPATCH_META } from "./proxy.js";
 import {
@@ -41,7 +47,11 @@ import {
   spliceJobController,
 } from "./inbound-job-dispatch.js";
 import { MeshJobSubmitter } from "./mesh-job-submitter.js";
-import { ClaimDispatcher, type ClaimHandler } from "./claim-dispatcher.js";
+import {
+  ClaimDispatcher,
+  stopDispatchers,
+  type ClaimHandler,
+} from "./claim-dispatcher.js";
 import { registerJobHelperTools, type HelperToolMeta } from "./jobs-helper-tools.js";
 import { registerCancelRoute } from "./jobs-cancel-route.js";
 import {
@@ -120,9 +130,22 @@ export function __getWorkerToolMap(): Map<string, (...args: unknown[]) => unknow
   return _workerToolMap;
 }
 
-// Internal: pending agent for auto-start
+// Internal: pending agent for auto-start. The slot holds at most one
+// agent awaiting its auto-start tick; it is consumed (cleared) when the
+// scheduled nextTick fires.
 let pendingAgent: MeshAgent | null = null;
 let autoStartScheduled = false;
+
+// Issue #1163 LOW-6 guard: name of the agent constructed in the CURRENT
+// synchronous chunk. Two constructions in one chunk meant the second
+// silently overwrote `pendingAgent` before the auto-start tick fired —
+// the first agent never started and nobody noticed. The constructor now
+// throws while this guard is set. The guard auto-releases on the first
+// microtask: in real Node the auto-start nextTick drains BEFORE any
+// microtask continuation, so the guard window fully covers the
+// pre-consumption danger zone, while sequential constructions across
+// async boundaries (e.g. one agent per test in a harness) stay allowed.
+let constructionGuardName: string | null = null;
 
 // Schedule auto-start after module loading completes
 function scheduleAutoStart(): void {
@@ -130,8 +153,14 @@ function scheduleAutoStart(): void {
   autoStartScheduled = true;
 
   process.nextTick(() => {
-    if (pendingAgent) {
-      pendingAgent._autoStart().catch((err) => {
+    // Consume the slot and re-arm the scheduler BEFORE starting, so a
+    // later (post-start) construction gets its own auto-start tick
+    // instead of being silently dropped.
+    const agent = pendingAgent;
+    pendingAgent = null;
+    autoStartScheduled = false;
+    if (agent) {
+      agent._autoStart().catch((err) => {
         console.error("MCP Mesh auto-start failed:", err);
         process.exit(1);
       });
@@ -149,6 +178,14 @@ function scheduleAutoStart(): void {
  * - Dependency injection for tool functions
  */
 export class MeshAgent {
+  /**
+   * Hard cap on the signal-path shutdown sequence. Must exceed the
+   * dispatcher drain hard-cap (30s drain + 10s grace, see
+   * `stopDispatchers`) so a clean drain isn't cut short; the extra 5s
+   * covers pool/A2A teardown and the registry unregister.
+   */
+  private static readonly SIGNAL_SHUTDOWN_TIMEOUT_MS = 45_000;
+
   private server: FastMCP;
   private config: ResolvedAgentConfig;
   private agentId: string;
@@ -164,6 +201,14 @@ export class MeshAgent {
   private started = false;
   private tracingEnabled = false;
   private shutdownRequested = false;
+  /**
+   * Memoized in-flight (or completed) teardown. `shutdown()` is
+   * idempotent: the first caller creates this promise and every later
+   * caller — user code, the signal handler, a second signal — awaits
+   * the SAME teardown instead of racing a concurrent one (double
+   * dispatcher drain, double napi `handle.shutdown()`).
+   */
+  private shutdownPromise: Promise<void> | null = null;
 
   /**
    * Resolved dependencies: composite key -> proxy
@@ -256,7 +301,24 @@ export class MeshAgent {
     // Generate unique agent ID with suffix (e.g., "calculator-a1b2c3d4")
     this.agentId = `${this.config.name}-${generateAgentIdSuffix()}`;
 
-    // Register as pending agent for auto-start
+    // Register as pending agent for auto-start. Throw if another agent
+    // was already constructed in this synchronous chunk — the previous
+    // behavior overwrote the slot and the earlier agent silently never
+    // started (issue #1163 LOW-6). Only one MeshAgent per process is
+    // supported (it owns the FastMCP HTTP server, registry heartbeat,
+    // and process-wide signal handlers).
+    if (constructionGuardName !== null) {
+      throw new Error(
+        `Only one MeshAgent may be constructed per process: agent ` +
+          `'${constructionGuardName}' is already pending auto-start. ` +
+          `Register all tools on a single MeshAgent instead of constructing ` +
+          `'${this.config.name}' as a second agent.`,
+      );
+    }
+    constructionGuardName = this.config.name;
+    queueMicrotask(() => {
+      constructionGuardName = null;
+    });
     pendingAgent = this;
     scheduleAutoStart();
   }
@@ -1253,38 +1315,57 @@ export class MeshAgent {
    * Install signal handlers for graceful shutdown.
    * Ensures agent unregisters from registry on SIGINT/SIGTERM.
    *
-   * Calls handle.shutdown() directly to trigger Rust core unregistration.
-   * This causes nextEvent() to return with a "shutdown" event, breaking
-   * the event loop cleanly. The shutdown is async but we don't await it
-   * in the signal handler - the event loop handles the exit.
+   * Runs the FULL `shutdown()` sequence (issue #1163 MED-2): claim
+   * dispatchers drain their in-flight jobs (concurrently, under one
+   * shared budget — see `stopDispatchers`), A2A clients / HTTP pool /
+   * tool-worker pool close, and `handle.shutdown()` unregisters from
+   * the registry (which also resolves the event loop's `nextEvent()`
+   * with a "shutdown" event, ending it cleanly).
+   *
+   * The whole sequence is bounded by a force-exit timer so a hang in
+   * any cleanup step cannot wedge the process past its SIGTERM grace.
    */
   private installSignalHandlers(): void {
+    // Dedupe repeated signals locally. This must NOT key off
+    // `shutdownRequested` (set by shutdown() itself): a signal arriving
+    // while a user-initiated shutdown() is draining must still arm the
+    // force-exit timer and exit the process when that same (memoized)
+    // shutdown completes.
+    let signalHandled = false;
     const shutdownHandler = (signal: string) => {
-      if (this.shutdownRequested) return;
-      this.shutdownRequested = true;
+      if (signalHandled) return;
+      signalHandled = true;
 
       console.log(
         `\nReceived ${signal}, shutting down agent ${this.agentId}...`
       );
 
-      // Close HTTPS proxy if it exists
-      if (this.httpsProxy) {
-        this.httpsProxy.close();
-      }
+      // Bounded overall shutdown: the dispatcher drain phase is already
+      // hard-capped (30s drain + 10s grace shared across dispatchers);
+      // this timer covers everything else (pool/A2A close, registry
+      // unregister) so a hang anywhere cannot block exit forever.
+      //
+      // Deliberately ref'd (no unref): both completion paths below
+      // clearTimeout and process.exit synchronously, so the timer never
+      // delays a successful exit — but it must keep a wedged shutdown's
+      // otherwise-empty event loop alive long enough to emit the loud
+      // exit(1) diagnostic instead of silently exiting 0.
+      const forceExitTimer = setTimeout(() => {
+        console.error(
+          `Shutdown did not complete within ${MeshAgent.SIGNAL_SHUTDOWN_TIMEOUT_MS}ms; forcing exit`
+        );
+        process.exit(1);
+      }, MeshAgent.SIGNAL_SHUTDOWN_TIMEOUT_MS);
 
-      // Call shutdown directly - this triggers Rust core to unregister
-      // and send a shutdown event that breaks the event loop
-      if (this.handle) {
-        this.handle.shutdown().then(() => {
-          console.log(`Agent ${this.agentId} unregistered from registry`);
-          process.exit(0);
-        }).catch((err) => {
-          console.error("Error during shutdown:", err);
-          process.exit(1);
-        });
-      } else {
+      this.shutdown().then(() => {
+        clearTimeout(forceExitTimer);
+        console.log(`Agent ${this.agentId} shut down cleanly`);
         process.exit(0);
-      }
+      }).catch((err) => {
+        clearTimeout(forceExitTimer);
+        console.error("Error during shutdown:", err);
+        process.exit(1);
+      });
     };
 
     process.on("SIGINT", () => shutdownHandler("SIGINT"));
@@ -1504,14 +1585,69 @@ export class MeshAgent {
 
   /**
    * Run the event loop to handle mesh events.
+   *
+   * Resilience (issue #1163 MED-1): the loop must outlive individual
+   * failures. A throw from an event handler (e.g. a malformed event
+   * hitting a non-null assertion) is logged and the loop continues; a
+   * `nextEvent()` rejection (e.g. a transient napi failure) backs off
+   * exponentially (capped) and retries. Only the "shutdown" event — or
+   * the handle being torn down — exits the loop. Previously a single
+   * throw broke the loop permanently, freezing dependency-topology
+   * updates for the process lifetime while the agent kept serving.
    */
   private async runEventLoop(): Promise<void> {
     if (!this.handle) return;
 
-    while (true) {
-      try {
-        const event = await this.handle.nextEvent();
+    let consecutiveNextEventFailures = 0;
 
+    while (true) {
+      // Handle is nulled by shutdown(); exit cleanly instead of
+      // spinning on a dead reference.
+      if (!this.handle) {
+        console.log("Event loop: handle closed, exiting");
+        return;
+      }
+
+      let event: Awaited<ReturnType<JsAgentHandle["nextEvent"]>>;
+      try {
+        event = await this.handle.nextEvent();
+        consecutiveNextEventFailures = 0;
+      } catch (err) {
+        // Explicit shutdown() racing a failing nextEvent(): exit
+        // promptly instead of burning more backoff cycles.
+        if (!this.handle || this.shutdownRequested) {
+          console.log("Event loop: shutdown requested, exiting");
+          return;
+        }
+        consecutiveNextEventFailures++;
+        // Ceiling (~60s of continuous failure — see the constant's doc
+        // in config.ts): a permanently broken handle must not retry
+        // forever, keeping the process alive via the backoff timer.
+        if (
+          consecutiveNextEventFailures >= MAX_CONSECUTIVE_NEXT_EVENT_FAILURES
+        ) {
+          console.error(
+            `Event loop: terminating after ${consecutiveNextEventFailures} ` +
+              `consecutive nextEvent() failures; dependency topology is ` +
+              `frozen for the remainder of the process:`,
+            err
+          );
+          return;
+        }
+        const backoffMs = Math.min(
+          100 * 2 ** (consecutiveNextEventFailures - 1),
+          NEXT_EVENT_BACKOFF_CAP_MS
+        );
+        console.error(
+          `Event loop: nextEvent() failed (consecutive=${consecutiveNextEventFailures}), ` +
+            `retrying in ${backoffMs}ms:`,
+          err
+        );
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        continue;
+      }
+
+      try {
         switch (event.eventType) {
           case "agent_registered":
             console.log(`Agent registered with ID: ${event.agentId}`);
@@ -1608,8 +1744,13 @@ export class MeshAgent {
             break;
         }
       } catch (err) {
-        console.error("Event loop error:", err);
-        break;
+        // Per-event isolation: a bad event (or a bug in one handler)
+        // must not kill dependency-event processing for the process
+        // lifetime. Log and keep consuming events.
+        console.error(
+          `Event loop: error handling event '${event.eventType}':`,
+          err
+        );
       }
     }
   }
@@ -1763,49 +1904,75 @@ export class MeshAgent {
 
   /**
    * Shutdown the agent gracefully.
+   *
+   * Idempotent and re-entrant: the first call runs the teardown; every
+   * later call (user code, the signal handler, a double signal) returns
+   * the SAME promise — later calls' `opts` are ignored. The memo is
+   * never cleared: shutdown is terminal, and re-running a half-torn-down
+   * cleanup after a failure would be worse than surfacing the original
+   * rejection to every caller.
    */
-  async shutdown(): Promise<void> {
-    // Phase 1 MeshJob substrate: stop claim dispatchers first so
-    // they don't pull a fresh job mid-shutdown.
-    for (const d of this._claimDispatchers) {
+  shutdown(opts?: {
+    /** Shared in-flight-handler drain window for claim dispatchers. */
+    drainTimeoutMs?: number;
+    /** Headroom on top of the drain window before drains are abandoned. */
+    drainGraceMs?: number;
+  }): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shutdownRequested = true;
+    this.shutdownPromise = (async () => {
+      // Phase 1 MeshJob substrate: stop claim dispatchers first so they
+      // don't pull a fresh job mid-shutdown. Issue #1173: all dispatchers
+      // drain CONCURRENTLY under one shared, hard-capped budget — never
+      // N×30s sequential — and a hanging drain is abandoned with a
+      // warning so the registry unregister below always runs.
+      await stopDispatchers(
+        this._claimDispatchers,
+        opts?.drainTimeoutMs,
+        opts?.drainGraceMs,
+      );
+      this._claimDispatchers = [];
+      // Issue #917: mark all cached A2AClients closed so any in-flight
+      // user code raises cleanly instead of reusing a torn-down instance.
+      // Close in parallel so one slow client doesn't block the others —
+      // the undici Agent pool is shared via closeHttpPool() below.
+      const closePromises = Array.from(this._a2aClients.values()).map(
+        (client) =>
+          client.close().catch((err) => {
+            console.warn("[mesh-a2a] Error closing A2AClient:", err);
+            return null;
+          }),
+      );
+      await Promise.allSettled(closePromises);
+      this._a2aClients.clear();
       try {
-        await d.stop();
+        await closeHttpPool();
       } catch (err) {
-        console.warn(`[mesh-jobs] error stopping claim dispatcher:`, err);
+        console.warn("Error closing HTTP pool:", err);
       }
-    }
-    this._claimDispatchers = [];
-    // Issue #917: mark all cached A2AClients closed so any in-flight
-    // user code raises cleanly instead of reusing a torn-down instance.
-    // Close in parallel so one slow client doesn't block the others —
-    // the undici Agent pool is shared via closeHttpPool() below.
-    const closePromises = Array.from(this._a2aClients.values()).map((client) =>
-      client.close().catch((err) => {
-        console.warn("[mesh-a2a] Error closing A2AClient:", err);
-        return null;
-      }),
-    );
-    await Promise.allSettled(closePromises);
-    this._a2aClients.clear();
-    try {
-      await closeHttpPool();
-    } catch (err) {
-      console.warn("Error closing HTTP pool:", err);
-    }
-    try {
-      await closePool();
-    } catch (err) {
-      console.warn("Error closing tool worker pool:", err);
-    }
-    if (this.httpsProxy) {
-      this.httpsProxy.close();
-      this.httpsProxy = undefined;
-    }
-    if (this.handle) {
-      await this.handle.shutdown();
-      this.handle = null;
-    }
-    cleanupTls();
+      try {
+        await closePool();
+      } catch (err) {
+        console.warn("Error closing tool worker pool:", err);
+      }
+      if (this.httpsProxy) {
+        try {
+          this.httpsProxy.close();
+        } catch (err) {
+          console.warn("Error closing HTTPS proxy:", err);
+        }
+        this.httpsProxy = undefined;
+      }
+      // Registry unregister runs regardless of how the cleanup steps above
+      // fared — every prior step is guarded so a drain/close failure can't
+      // leave a stale registration behind.
+      if (this.handle) {
+        await this.handle.shutdown();
+        this.handle = null;
+      }
+      cleanupTls();
+    })();
+    return this.shutdownPromise;
   }
 }
 

@@ -44,6 +44,15 @@ const _POLL_BASE_MS = 500;
 const _POLL_MAX_MS = 5000;
 const _MAX_CONCURRENT_DISPATCHES = 4;
 const _CONSECUTIVE_FAILURES_ERROR_THRESHOLD = 5;
+/** Default per-dispatcher in-flight-handler drain window (see stop()). */
+const _STOP_DRAIN_TIMEOUT_MS = 30_000;
+/**
+ * Headroom on top of the shared drain budget in `stopDispatchers` for
+ * per-dispatcher bookkeeping (poll-loop stop, keep-alive pool close)
+ * before the whole phase is abandoned. Mirrors Python's
+ * `_STOP_BUDGET_GRACE_SECS` in `_mcp_mesh/engine/claim_dispatcher.py`.
+ */
+const _STOP_BUDGET_GRACE_MS = 10_000;
 
 /**
  * Handler signature: the user's `task=true` execute function as
@@ -162,7 +171,7 @@ export class ClaimDispatcher {
    *   forever. Caller is free to override (e.g. tests pass `0` for an
    *   immediate close).
    */
-  async stop(timeoutMs: number = 30_000): Promise<void> {
+  async stop(timeoutMs: number = _STOP_DRAIN_TIMEOUT_MS): Promise<void> {
     this._stopped = true;
     // Wake any waiters so the loop can observe the stop signal.
     while (this._permitWaiters.length) this._permitWaiters.shift()!();
@@ -546,5 +555,65 @@ export class ClaimDispatcher {
       const handle = setTimeout(wake, ms);
       this._sleepWaiters.push(wake);
     });
+  }
+}
+
+/**
+ * Stop multiple dispatchers concurrently under ONE shared drain budget
+ * (issue #1173 — mirrors Python's `stop_dispatchers` in
+ * `_mcp_mesh/engine/claim_dispatcher.py`).
+ *
+ * Every dispatcher drains against the SAME `drainTimeoutMs` window — the
+ * `stop()` calls run in parallel — so N dispatchers with in-flight jobs
+ * cost roughly one drain window of wall time, not N stacked windows.
+ * Sequential 30s drains would starve whatever the caller sequences after
+ * this (registry unregister via `handle.shutdown()`, pool teardown) past
+ * a typical SIGTERM grace period (K8s default 30s), getting the process
+ * SIGKILLed before unregister runs.
+ *
+ * The whole phase is additionally hard-capped at `drainTimeoutMs +
+ * graceMs`: past that, the remaining `stop()` calls are abandoned with a
+ * warning. Never rejects — a wedged dispatcher must not prevent the
+ * registry cleanup that callers run after this.
+ *
+ * @param dispatchers - Dispatchers to stop.
+ * @param drainTimeoutMs - Shared in-flight-handler drain window, passed
+ *   to every `stop()` call. Defaults to 30s.
+ * @param graceMs - Headroom on top of `drainTimeoutMs` for per-dispatcher
+ *   bookkeeping before the phase is abandoned wholesale. Defaults to 10s.
+ */
+export async function stopDispatchers(
+  dispatchers: ClaimDispatcher[],
+  drainTimeoutMs: number = _STOP_DRAIN_TIMEOUT_MS,
+  graceMs: number = _STOP_BUDGET_GRACE_MS,
+): Promise<void> {
+  if (dispatchers.length === 0) return;
+
+  // ClaimDispatcher.stop() is documented never-throws, but guard anyway —
+  // one failing stop must not reject the gather and skip its peers.
+  const stops = dispatchers.map((d) =>
+    d.stop(drainTimeoutMs).catch((err) => {
+      console.warn(
+        `[mesh-claim] error stopping dispatcher capability=${d.capability}:`,
+        err,
+      );
+    }),
+  );
+
+  let budgetTimer: ReturnType<typeof setTimeout> | null = null;
+  const budget = new Promise<"timeout">((resolve) => {
+    budgetTimer = setTimeout(() => resolve("timeout"), drainTimeoutMs + graceMs);
+  });
+  try {
+    const outcome = await Promise.race([Promise.allSettled(stops), budget]);
+    if (outcome === "timeout") {
+      console.warn(
+        `[mesh-claim] shutdown of ${dispatchers.length} dispatcher(s) exceeded ` +
+          `the shared budget (${drainTimeoutMs}ms drain + ${graceMs}ms grace); ` +
+          `abandoning remaining drains so shutdown can proceed to registry cleanup`,
+      );
+    }
+  } finally {
+    if (budgetTimer) clearTimeout(budgetTimer);
   }
 }
