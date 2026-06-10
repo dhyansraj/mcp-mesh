@@ -1,0 +1,9 @@
+MCP Mesh Registry has been deployed!
+
+To check the status:
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "mcp-mesh-registry.name" . }}
+
+To access the registry:
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "mcp-mesh-registry.fullname" . }} {{ .Values.registry.port }}:{{ .Values.registry.port }}
+
+Then visit: http://localhost:{{ .Values.registry.port }}/health

@@ -61,10 +61,29 @@ The following table lists the configurable parameters of the MCP Mesh Registry c
 | `registry.database.port`           | External database port                            | `5432`                |
 | `registry.database.name`           | Database name                                     | `"mcp_mesh"`          |
 | `registry.database.username`       | Database username                                 | `""`                  |
-| `registry.database.password`       | Database password                                 | `""`                  |
-| `registry.database.existingSecret` | Existing secret for DB credentials                | `""`                  |
+| `registry.database.password`       | Database password (URL-encoded into the DSN)      | `""`                  |
+| `registry.database.sslmode`        | PostgreSQL SSL mode: `disable`, `require`, `verify-ca`, `verify-full` | `"disable"` |
+| `registry.database.tls.caSecret`   | Secret with CA cert for `verify-ca`/`verify-full` (mounted, added to DSN as `sslrootcert`) | `""` |
+| `registry.database.tls.caKey`      | Key of the CA cert in the secret                  | `"ca.crt"`            |
+| `registry.database.existingSecret` | Existing secret with the DB password (injected via `$(DATABASE_PASSWORD)`; must be URL-safe) | `""` |
 | `registry.logging.level`           | Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | `"INFO"`              |
 | `registry.logging.format`          | Log format (json or text)                         | `"json"`              |
+
+### Redis Configuration
+
+`registry.redis.*` is the single source of truth for the registry's Redis
+endpoint: session storage and distributed-trace streaming share the derived
+`REDIS_URL`.
+
+| Parameter                                  | Description                                                              | Default            |
+| ------------------------------------------ | ------------------------------------------------------------------------ | ------------------ |
+| `registry.redis.enabled`                   | Enable Redis (session storage + trace stream)                            | `true`             |
+| `registry.redis.host`                      | Redis host                                                               | See values.yaml    |
+| `registry.redis.port`                      | Redis port                                                               | `6379`             |
+| `registry.redis.password`                  | AUTH password; moves `REDIS_URL` into the chart secret, URL-encoded      | `""`               |
+| `registry.redis.existingSecret`            | Existing secret with the password (injected via `$(REDIS_PASSWORD)`; must be URL-safe) | `""` |
+| `registry.redis.existingSecretPasswordKey` | Key of the password in the existing secret                               | `"redis-password"` |
+| `registry.redis.tls.enabled`               | Use `rediss://` (pair with `serviceTLS.redis.*` for CA/client certs)     | `false`            |
 
 ### Persistence
 
@@ -140,16 +159,67 @@ registry:
     password: supersecret
 ```
 
+### External Managed Datastores (TLS + auth)
+
+```yaml
+registry:
+  database:
+    type: postgres
+    host: mydb.example.com
+    port: 5432
+    name: mcpmesh
+    username: mcp_user
+    password: "s3cret!" # URL-encoded automatically
+    sslmode: verify-full
+    tls:
+      caSecret: pg-ca # secret containing the server CA certificate
+      caKey: ca.crt
+  redis:
+    host: myredis.example.com
+    port: 6380
+    password: "redis-secret" # renders rediss://:<encoded>@host:port into the chart secret
+    tls:
+      enabled: true
+```
+
+With `registry.redis.password` set, `REDIS_URL` is rendered into the chart
+secret instead of the configmap. To source the Redis password from an existing
+secret instead:
+
+```yaml
+registry:
+  redis:
+    host: myredis.example.com
+    existingSecret: my-redis-secret
+    existingSecretPasswordKey: redis-password
+    tls:
+      enabled: true
+```
+
+Note: with `existingSecret`, the password is injected via Kubernetes
+`$(REDIS_PASSWORD)` expansion without URL-encoding, so it must be URL-safe.
+
 ### Using Existing Secret for Database
 
 ```yaml
 registry:
   database:
     type: postgres
+    host: mydb.example.com
+    port: 5432
+    name: mcpmesh
+    username: mcp_user # username comes from values, only the password from the secret
     existingSecret: my-db-secret
-    existingSecretUsernameKey: username
     existingSecretPasswordKey: password
+    sslmode: verify-full # sslmode and tls.* apply in this mode too
+    tls:
+      caSecret: pg-ca
 ```
+
+In this mode `DATABASE_URL` is composed in the pod via Kubernetes
+`$(DATABASE_PASSWORD)` expansion from the existing secret, so the password is
+never templated into a chart-managed resource. It is not URL-encoded either,
+so it must be URL-safe.
 
 ### Enabling TLS
 

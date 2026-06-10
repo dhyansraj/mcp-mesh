@@ -97,17 +97,22 @@ mcp-mesh-registry:
       format: "json"
       debug: "true"
 
-    # Redis configuration (optional session storage)
+    # Redis configuration — single source of truth for the registry's Redis
+    # endpoint. Session storage and the distributed-trace stream share the
+    # derived REDIS_URL. For external/managed Redis, the registry subchart
+    # also supports registry.redis.password (or existingSecret) and
+    # registry.redis.tls.enabled (renders rediss://).
     redis:
       enabled: true
       host: "mcp-core-mcp-mesh-redis"
       port: 6379
 
     # Observability configuration - matches k8s examples
+    # (stream/consumer settings only; the Redis endpoint comes from
+    # registry.redis above)
     observability:
       distributedTracing:
         enabled: true
-        redisUrl: "redis://mcp-core-mcp-mesh-redis:6379"
         exporterType: "otlp"
         telemetryProtocol: "grpc"
         batchSize: "100"

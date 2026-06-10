@@ -1,3 +1,4 @@
+{{- include "mcp-mesh-registry.validateNoDeprecatedRedisUrl" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -17,6 +18,9 @@ data:
   {{- if eq .Values.registry.database.type "sqlite" }}
   DATABASE_PATH: {{ .Values.registry.database.path | quote }}
   {{- else }}
+  {{- /* Silent invocation so an invalid sslmode fails in every mode,
+         including database.existingSecret. */}}
+  {{- $_ := include "mcp-mesh-registry.databaseSSLMode" . }}
   DATABASE_HOST: {{ .Values.registry.database.host | quote }}
   DATABASE_PORT: {{ .Values.registry.database.port | quote }}
   DATABASE_NAME: {{ .Values.registry.database.name | quote }}
@@ -83,6 +87,8 @@ data:
 
   # Redis configuration for session/trace storage
   {{- if .Values.registry.redis.enabled }}
-  REDIS_URL: {{ printf "redis://%s:%v" .Values.registry.redis.host (.Values.registry.redis.port | default 6379) | quote }}
+  {{- if and (not .Values.registry.redis.password) (not .Values.registry.redis.existingSecret) }}
+  REDIS_URL: {{ include "mcp-mesh-registry.redisURL" . | quote }}
+  {{- end }}
   MCP_MESH_REDIS_TRACE_PUBLISHING: "true"
   {{- end }}

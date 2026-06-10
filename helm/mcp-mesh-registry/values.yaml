@@ -108,7 +108,19 @@ registry:
     name: "mcpmesh" # Matches working examples
     username: "mcpmesh" # Matches working examples
     password: ""
-    # Use existing secret for database credentials
+    # PostgreSQL SSL mode: disable, require, verify-ca, verify-full
+    sslmode: "disable"
+    # TLS material for verify-ca / verify-full against managed databases
+    tls:
+      # Secret containing the CA certificate used to verify the server.
+      # Mounted at /etc/service-tls/postgres and appended to the DSN as sslrootcert.
+      caSecret: ""
+      caKey: "ca.crt"
+    # Use existing secret for the database password. In this mode DATABASE_URL
+    # is composed in the pod via $(DATABASE_PASSWORD) expansion, so the
+    # password is never templated — but it is not URL-encoded either, so it
+    # must be URL-safe. sslmode and tls.* above apply in this mode too; the
+    # username comes from registry.database.username.
     existingSecret: ""
     # Keys in the secret
     existingSecretUsernameKey: "username"
@@ -190,11 +202,25 @@ registry:
     # Exporter type: console (default), otlp (for Tempo/Jaeger), json
     exporterType: "otlp"
 
-  # Redis configuration for trace streaming (registry reads from mesh:trace stream)
+  # Redis configuration — single source of truth for the registry's Redis
+  # endpoint. One REDIS_URL serves both session storage and the distributed
+  # trace stream (registry reads from mesh:trace).
   redis:
     enabled: true
     host: "mcp-core-mcp-mesh-redis"
     port: 6379
+    # AUTH password. When set, REDIS_URL is rendered into the chart secret
+    # (instead of the configmap) with the password URL-encoded.
+    password: ""
+    # Or take the password from an existing secret. NOTE: in this mode the
+    # password is interpolated into REDIS_URL via $(REDIS_PASSWORD) expansion
+    # without encoding, so it must be URL-safe.
+    existingSecret: ""
+    existingSecretPasswordKey: "redis-password"
+    tls:
+      # Render rediss:// instead of redis://. Pair with serviceTLS.redis.*
+      # below to mount CA / client certificates.
+      enabled: false
 
     # CORS configuration
     cors:
