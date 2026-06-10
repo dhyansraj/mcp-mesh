@@ -1120,6 +1120,21 @@ class TestJobsCancelRouteStep:
 # ===========================================================================
 
 
+async def _wait_until(predicate, timeout: float = 5.0, interval: float = 0.01):
+    """Poll ``predicate`` until truthy or ``timeout`` elapses (#1176).
+
+    Event-driven replacement for fixed ``asyncio.sleep`` windows around
+    dispatcher activity — fixed sleeps race slow CI schedulers. Returns
+    True if the predicate became truthy within the deadline.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(interval)
+    return predicate()
+
+
 class TestPythonClaimDispatcher:
     """The pure-Python claim dispatcher loop."""
 
@@ -1180,8 +1195,8 @@ class TestPythonClaimDispatcher:
         d._claim_once = fake_claim_once  # type: ignore[assignment]
 
         d.start()
-        # Give the dispatch task time to run handler.
-        await asyncio.sleep(0.1)
+        # Event-driven wait for the dispatch task to run the handler.
+        await _wait_until(lambda: len(invoked) == 1)
         await d.stop()
 
         assert len(invoked) == 1
@@ -1215,7 +1230,8 @@ class TestPythonClaimDispatcher:
         d = PythonClaimDispatcher("cap", "inst", "http://r", handler)
         d._claim_once = fake_claim_once  # type: ignore[assignment]
         d.start()
-        await asyncio.sleep(0.1)
+        # Event-driven wait for both dispatch tasks to run.
+        await _wait_until(lambda: len(invoked) == 2)
         await d.stop()
 
         # Both jobs dispatched.
@@ -1365,9 +1381,13 @@ class TestClaimSemaphoreGating:
         d._claim_once = fake_claim_once  # type: ignore[assignment]
 
         d.start()
-        # Give the loop time to hit the semaphore wall. With max=4 it
-        # should claim exactly 4 jobs and then block on the next acquire.
-        await asyncio.sleep(0.2)
+        # Event-driven wait until the loop hits the semaphore wall: with
+        # max=4 it should claim exactly 4 jobs and then block on the next
+        # acquire. A short settle window after the wall is reached gives a
+        # buggy (non-gating) loop the chance to over-claim — the negative
+        # assertion below can't be event-driven.
+        await _wait_until(lambda: len(in_flight) == 4 and call_count["n"] == 4)
+        await asyncio.sleep(0.05)
 
         # Exactly 4 in-flight dispatches (the cap). The 5th iteration
         # MUST be parked at the semaphore acquire, NOT at _claim_once.
@@ -1385,11 +1405,10 @@ class TestClaimSemaphoreGating:
         # Release one permit by completing one handler. The loop should
         # now claim and dispatch a 5th job.
         gate.set()
-        # Give the loop time to observe the freed permit and claim/dispatch
-        # the remaining work.
-        await asyncio.sleep(0.3)
+        # Event-driven wait for the loop to observe the freed permit and
+        # resume claiming.
+        await _wait_until(lambda: call_count["n"] >= 5)
 
-        # All ten jobs should have been claimed and run by now.
         assert call_count["n"] >= 5, (
             f"loop should have resumed claiming after permit freed; "
             f"got call_count={call_count['n']}"
@@ -1413,12 +1432,14 @@ class TestClaimSemaphoreGating:
 
         d = PythonClaimDispatcher("cap", "inst", "http://r", handler)
 
-        # Stub out the terminal-fail report so we don't need a registry.
-        # The fail() path imports ``mcp_mesh_core.JobController`` which
-        # may not be present on the test machine; the dispatcher already
-        # swallows exceptions there, so this just keeps the test quiet.
+        # Stub the terminal-fail report seam so the raising handler does
+        # NOT construct a real JobController and POST to the bogus registry
+        # host while the dispatch permit is held (#1176). Pre-seam, all 4
+        # permits could park inside DNS resolution and starve jobs 4-5.
         async def noop_fail(*a, **kw):
             pass
+
+        d._report_terminal_fail = noop_fail  # type: ignore[assignment]
 
         # Hand out 6 jobs, one at a time.
         call_count = {"n": 0}
@@ -1433,7 +1454,8 @@ class TestClaimSemaphoreGating:
         d._claim_once = fake_claim_once  # type: ignore[assignment]
 
         d.start()
-        await asyncio.sleep(0.2)
+        # Event-driven wait (not a fixed sleep): all six handlers must run.
+        await _wait_until(lambda: invoked["n"] == 6)
         await d.stop()
 
         # All six handlers should have been invoked despite each raising:

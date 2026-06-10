@@ -308,13 +308,20 @@ func TestKillVerifyLiveProcessKilled(t *testing.T) {
 
 	// Spawn a real `sleep` so SIGTERM actually does something.
 	// Reap from a goroutine so the kernel can drop the PID entry — otherwise
-	// signal(0) keeps reporting alive on the zombie.
+	// signal(0) keeps reporting alive on the zombie. Synchronize on the reap
+	// before asserting IsAlive: KillVerifyAndCleanup treats zombies as dead,
+	// but IsAlive reports zombies as alive, so without the sync the assert
+	// races the reaper goroutine (#1176).
 	cmd := exec.Command("sleep", "30")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("spawn sleep: %v", err)
 	}
-	go func() { _ = cmd.Wait() }()
+	waitDone := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(waitDone)
+	}()
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
 	g := NewGroupID()
@@ -331,6 +338,11 @@ func TestKillVerifyLiveProcessKilled(t *testing.T) {
 	}
 	if _, err := os.Stat(PIDFile("sleeper")); !os.IsNotExist(err) {
 		t.Errorf("pid file should be removed")
+	}
+	select {
+	case <-waitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("sleep was not reaped after KillVerifyAndCleanup")
 	}
 	if IsAlive(cmd.Process.Pid) {
 		t.Error("process should be dead")
@@ -352,7 +364,13 @@ func TestKillVerifyKILLFallback(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Skipf("bash not available: %v", err)
 	}
-	go func() { _ = cmd.Wait() }()
+	// Reap-synchronized: IsAlive reports zombies as alive, so the assert
+	// below must wait for the reaper goroutine (#1176).
+	waitDone := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(waitDone)
+	}()
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
 	g := NewGroupID()
@@ -367,6 +385,11 @@ func TestKillVerifyKILLFallback(t *testing.T) {
 	}
 	if !killed {
 		t.Error("expected killed=true")
+	}
+	select {
+	case <-waitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("process was not reaped after KILL fallback")
 	}
 	if IsAlive(cmd.Process.Pid) {
 		t.Error("process should be dead after KILL fallback")
@@ -399,17 +422,31 @@ func TestKillVerifyFailureLeavesFile(t *testing.T) {
 
 // TestKillPIDVerify_LiveProcessKilled spawns a real sleep and confirms
 // KillPIDVerify reports death after SIGTERM.
+//
+// Reap-synchronized (#1176): KillPIDVerify's poll treats zombies as dead and
+// returns within microseconds of SIGTERM, but IsAlive (signal-0 probe) reports
+// zombies as ALIVE — so the assert must wait for the reaper goroutine to run,
+// otherwise it races the scheduler.
 func TestKillPIDVerify_LiveProcessKilled(t *testing.T) {
 	cmd := exec.Command("sleep", "30")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("spawn sleep: %v", err)
 	}
-	go func() { _ = cmd.Wait() }()
+	waitDone := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(waitDone)
+	}()
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
 
 	if !KillPIDVerify(cmd.Process.Pid, 3*time.Second) {
 		t.Error("expected KillPIDVerify to confirm death")
+	}
+	select {
+	case <-waitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("sleep was not reaped after KillPIDVerify")
 	}
 	if IsAlive(cmd.Process.Pid) {
 		t.Error("process should be dead")

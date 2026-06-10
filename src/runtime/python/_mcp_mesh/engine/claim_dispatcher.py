@@ -261,19 +261,27 @@ class PythonClaimDispatcher:
                 self.capability,
                 e,
             )
-            # Best-effort: report failure to registry so the job doesn't
-            # stay "working" until lease expiry. Failures here are
-            # logged and swallowed — the registry's stale-agent sweep is
-            # the ultimate backstop.
-            try:
-                from mcp_mesh_core import JobController as _JobController
+            await self._report_terminal_fail(job_id, e)
 
-                ctrl = _JobController(job_id, self.instance_id, self.registry_url)
-                await ctrl.fail(str(e))
-            except Exception as inner:
-                logger.debug(
-                    "claim_dispatcher: terminal-fail report failed: %s", inner
-                )
+    async def _report_terminal_fail(self, job_id: str, error: Exception) -> None:
+        """Best-effort: report failure to registry so the job doesn't
+        stay "working" until lease expiry. Failures here are logged and
+        swallowed — the registry's stale-agent sweep is the ultimate
+        backstop.
+
+        Injectable seam (#1176): unit tests stub this method so a raising
+        handler doesn't construct a real ``JobController`` and POST to the
+        registry while the dispatch permit is held.
+        """
+        try:
+            from mcp_mesh_core import JobController as _JobController
+
+            ctrl = _JobController(job_id, self.instance_id, self.registry_url)
+            await ctrl.fail(str(error))
+        except Exception as inner:
+            logger.debug(
+                "claim_dispatcher: terminal-fail report failed: %s", inner
+            )
 
     async def _run_loop(self) -> None:
         """Main loop: gate, poll, claim, dispatch, backoff.
