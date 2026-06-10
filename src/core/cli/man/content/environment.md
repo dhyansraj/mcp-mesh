@@ -186,14 +186,14 @@ needed. Auth is via Google ADC.
 
 | Scenario                                            | Required env vars                                                                |
 | --------------------------------------------------- | -------------------------------------------------------------------------------- |
-| User ADC (`gcloud auth application-default login`)  | `GOOGLE_VERTEX_PROJECT`, `GOOGLE_VERTEX_LOCATION`                                |
-| Service account JSON                                | `GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json`, `GOOGLE_VERTEX_PROJECT`, `GOOGLE_VERTEX_LOCATION` |
-| Workload Identity (GKE pods)                        | `GOOGLE_VERTEX_PROJECT`, `GOOGLE_VERTEX_LOCATION`                                |
+| User ADC (`gcloud auth application-default login`)  | `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`                                  |
+| Service account JSON                                | `GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` |
+| Workload Identity (GKE pods)                        | `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`                                  |
 
-Both `GOOGLE_VERTEX_PROJECT` and `GOOGLE_VERTEX_LOCATION` are required by
-`@ai-sdk/google-vertex` — the SDK throws a `LoadSettingError` on the first
-call if either is unset (it does not auto-discover the project from ADC and
-has no default location). Common location values: `us-central1`, `global`.
+Both `GOOGLE_CLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` are required — the
+underlying `@ai-sdk/google-vertex` SDK fails with a `LoadSettingError` on the
+first call if either is unset (it does not auto-discover the project from ADC
+and has no default location). Common location values: `us-central1`, `global`.
 
 #### Java (Spring AI)
 

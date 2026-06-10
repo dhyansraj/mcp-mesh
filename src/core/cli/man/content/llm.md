@@ -195,7 +195,7 @@ For Vertex AI:
 **Per-language env var names** (each runtime follows its ecosystem's convention):
 
 - **Python (LiteLLM)**: `VERTEXAI_PROJECT`, `VERTEXAI_LOCATION`
-- **TypeScript (Vercel AI SDK)**: `GOOGLE_VERTEX_PROJECT`, `GOOGLE_VERTEX_LOCATION`
+- **TypeScript (Vercel AI SDK)**: `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`
 - **Java (Spring AI)**: `SPRING_AI_VERTEX_AI_GEMINI_PROJECT_ID`,
   `SPRING_AI_VERTEX_AI_GEMINI_LOCATION`
 

@@ -30,8 +30,8 @@ cd examples/typescript/vertex-ai-agent
 npm install
 
 # Required: project + location for Vercel SDK's @ai-sdk/google-vertex.
-export GOOGLE_VERTEX_PROJECT=my-gcp-project
-export GOOGLE_VERTEX_LOCATION=us-central1
+export GOOGLE_CLOUD_PROJECT=my-gcp-project
+export GOOGLE_CLOUD_LOCATION=us-central1
 
 # Start the registry in another terminal first, then:
 npm start
@@ -65,7 +65,7 @@ model: "gemini/gemini-2.5-flash"   // was: "vertex_ai/gemini-2.5-flash"
 ```
 
 ```bash
-export GOOGLE_GENERATIVE_AI_API_KEY=AIza...   # instead of ADC + GOOGLE_VERTEX_*
+export GOOGLE_GENERATIVE_AI_API_KEY=AIza...   # instead of ADC + GOOGLE_CLOUD_*
 ```
 
 No other code changes required.
@@ -77,7 +77,7 @@ Each runtime follows its own ecosystem's naming convention for Vertex AI:
 | Runtime              | SDK            | Project                | Location               |
 | -------------------- | -------------- | ---------------------- | ---------------------- |
 | Python               | LiteLLM        | `VERTEXAI_PROJECT`     | `VERTEXAI_LOCATION`    |
-| **TypeScript (this)** | **Vercel AI SDK** | `GOOGLE_VERTEX_PROJECT`| `GOOGLE_VERTEX_LOCATION` |
+| **TypeScript (this)** | **Vercel AI SDK** | `GOOGLE_CLOUD_PROJECT` | `GOOGLE_CLOUD_LOCATION`  |
 | Java                 | Spring AI      | `spring.ai.vertex.ai.gemini.project-id` | `spring.ai.vertex.ai.gemini.location` |
 
 `GOOGLE_APPLICATION_CREDENTIALS` (or `gcloud auth application-default login`)
