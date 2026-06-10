@@ -12,11 +12,11 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 use tracing::{debug, error, info, warn};
 
 use crate::config::is_tracing_enabled;
@@ -49,8 +49,14 @@ pub(crate) fn take_last_error() -> Option<String> {
 /// Note: This struct is intentionally NOT `#[repr(C)]` to keep its internals
 /// opaque to C consumers. The FFI functions work with raw pointers.
 pub struct MeshAgentHandle {
-    /// Channel to receive events from the runtime
-    event_rx: mpsc::Receiver<MeshEvent>,
+    /// Channel to receive events from the runtime. Behind a tokio Mutex
+    /// (like the Python/napi handles) so `mesh_next_event` can take
+    /// `*const` like every other accessor — the previous `&mut *handle`
+    /// could overlap with concurrent `&*handle` borrows from
+    /// `mesh_report_health` / `mesh_shutdown` / `mesh_is_running` under
+    /// the "safe from any thread" contract, which is formal aliasing UB
+    /// (issue #1166 LOW).
+    event_rx: Mutex<mpsc::Receiver<MeshEvent>>,
     /// Channel to signal shutdown to the runtime
     shutdown_tx: mpsc::Sender<()>,
     /// Channel to send commands to the runtime (e.g., update tools)
@@ -170,7 +176,7 @@ pub unsafe extern "C" fn mesh_start_agent(spec_json: *const c_char) -> *mut Mesh
 
     // Create the handle
     let handle = Box::new(MeshAgentHandle {
-        event_rx,
+        event_rx: Mutex::new(event_rx),
         shutdown_tx,
         command_tx,
         runtime,
@@ -192,7 +198,7 @@ pub unsafe extern "C" fn mesh_start_agent(spec_json: *const c_char) -> *mut Mesh
 /// # Safety
 /// * `handle` must be a valid handle from `mesh_start_agent`
 #[no_mangle]
-pub unsafe extern "C" fn mesh_shutdown(handle: *mut MeshAgentHandle) {
+pub unsafe extern "C" fn mesh_shutdown(handle: *const MeshAgentHandle) {
     if handle.is_null() {
         return;
     }
@@ -216,6 +222,10 @@ pub unsafe extern "C" fn mesh_shutdown(handle: *mut MeshAgentHandle) {
 /// and wait briefly (up to 2 seconds) for the agent to unregister from
 /// the registry before dropping resources.
 ///
+/// Also drains queued trace spans (up to 2 seconds, equivalent to
+/// `mesh_flush_spans(2000)`) so spans published during the agent's final
+/// moments are not lost.
+///
 /// # Safety
 /// * `handle` must be a valid handle from `mesh_start_agent` or NULL
 /// * After this call, `handle` is invalid and must not be used
@@ -230,17 +240,53 @@ pub unsafe extern "C" fn mesh_free_handle(handle: *mut MeshAgentHandle) {
     // Take ownership
     let handle = Box::from_raw(handle);
 
-    // If still running, trigger graceful shutdown and wait briefly
+    // If still running, trigger graceful shutdown and wait (bounded) for
+    // the runtime to finish unregistering before dropping it.
     if handle.is_running() {
         warn!("FFI: Agent still running during free, triggering graceful shutdown");
 
         // Send shutdown signal
         let _ = handle.shutdown_tx.try_send(());
 
-        // Wait briefly for graceful termination (up to 2 seconds)
-        handle.runtime.block_on(async {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+        // Wait up to 2 seconds for the shutdown event. The runtime's run
+        // loop sends the registry DELETE (unregister) BEFORE emitting the
+        // shutdown event, so observing the event means the unregister
+        // attempt completed — dropping the tokio runtime earlier would
+        // abort the in-flight DELETE and leave a stale registry entry
+        // until the heartbeat timeout (issue #1166 LOW).
+        let waited = handle.runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                let mut rx = handle.event_rx.lock().await;
+                loop {
+                    match rx.recv().await {
+                        Some(event)
+                            if event.event_type == crate::events::EventType::Shutdown =>
+                        {
+                            break;
+                        }
+                        // Drain unrelated events queued before shutdown.
+                        Some(_) => continue,
+                        // Channel closed: the runtime task is already gone.
+                        None => break,
+                    }
+                }
+            })
+            .await
         });
+        if waited.is_err() {
+            warn!("FFI: graceful shutdown did not complete within 2s; dropping runtime");
+        }
+    }
+
+    // Drain queued trace spans (bounded). The span queue is process-global
+    // and outlives this handle, but for the common one-agent-per-process
+    // embedder this is the last mesh_* call before exit — without a drain
+    // here, spans queued via mesh_publish_span during the agent's final
+    // moments (often the diagnostically critical ones) would be silently
+    // lost when the process exits. No-op if the publisher was never
+    // initialized. Embedders can also call mesh_flush_spans directly.
+    if !flush_span_queue(Duration::from_secs(2)) {
+        warn!("FFI: trace span queue did not drain within 2s; some spans may be lost");
     }
 
     // Mark as stopped
@@ -256,7 +302,16 @@ pub unsafe extern "C" fn mesh_free_handle(handle: *mut MeshAgentHandle) {
 
 /// Get next event from agent runtime.
 ///
-/// Blocks until event available or timeout.
+/// Blocks until event available or timeout. The timeout covers the FULL
+/// wait, including acquisition of the internal receiver lock — a
+/// `timeout_ms = 0` (non-blocking) or finite-timeout call returns within
+/// its budget even while another thread is parked in an infinite
+/// `mesh_next_event` wait on the same handle.
+///
+/// Each event is delivered to exactly ONE caller: the receiver is a
+/// shared single-consumer queue, not a broadcast. With multiple
+/// concurrent callers, an event goes to whichever caller dequeues it
+/// first.
 ///
 /// # Arguments
 /// * `handle` - Agent handle
@@ -270,7 +325,7 @@ pub unsafe extern "C" fn mesh_free_handle(handle: *mut MeshAgentHandle) {
 /// * The returned string must be freed with `mesh_free_string`
 #[no_mangle]
 pub unsafe extern "C" fn mesh_next_event(
-    handle: *mut MeshAgentHandle,
+    handle: *const MeshAgentHandle,
     timeout_ms: i64,
 ) -> *mut c_char {
     if handle.is_null() {
@@ -278,32 +333,48 @@ pub unsafe extern "C" fn mesh_next_event(
         return ptr::null_mut();
     }
 
-    let handle = &mut *handle;
+    let handle = &*handle;
 
     if !handle.is_running() {
         return ptr::null_mut();
     }
 
-    // Receive event with timeout
-    let event = handle.runtime.block_on(async {
-        if timeout_ms < 0 {
-            // Infinite wait
-            handle.event_rx.recv().await
-        } else if timeout_ms == 0 {
-            // Non-blocking
-            match handle.event_rx.try_recv() {
-                Ok(event) => Some(event),
-                Err(_) => None,
-            }
-        } else {
-            // Timeout
-            let duration = Duration::from_millis(timeout_ms as u64);
-            tokio::time::timeout(duration, handle.event_rx.recv())
-                .await
-                .ok()
-                .flatten()
+    // Receive event with timeout. The receiver lives behind a tokio Mutex
+    // so this function can share the handle (`&*handle`) with concurrent
+    // accessors instead of taking `&mut` (aliasing UB under the
+    // "safe from any thread" contract).
+    //
+    // The lock acquisition MUST sit inside the timeout: another caller may
+    // hold the receiver in an infinite recv(), and wrapping only recv()
+    // would turn a bounded call into an unbounded one (it would park on
+    // `.lock()` first).
+    let event = if timeout_ms == 0 {
+        // Non-blocking: if the receiver is held by another caller, no
+        // event is available to *this* caller right now — report
+        // timeout instead of waiting for the lock.
+        match handle.event_rx.try_lock() {
+            Ok(mut event_rx) => event_rx.try_recv().ok(),
+            Err(_) => None,
         }
-    });
+    } else if timeout_ms < 0 {
+        // Infinite wait
+        handle.runtime.block_on(async {
+            let mut event_rx = handle.event_rx.lock().await;
+            event_rx.recv().await
+        })
+    } else {
+        // Bounded wait covering lock + recv
+        let duration = Duration::from_millis(timeout_ms as u64);
+        handle.runtime.block_on(async {
+            tokio::time::timeout(duration, async {
+                let mut event_rx = handle.event_rx.lock().await;
+                event_rx.recv().await
+            })
+            .await
+            .ok()
+            .flatten()
+        })
+    };
 
     match event {
         Some(event) => {
@@ -376,7 +447,7 @@ pub unsafe extern "C" fn mesh_is_running(handle: *const MeshAgentHandle) -> i32 
 /// * `status` must be a valid null-terminated C string
 #[no_mangle]
 pub unsafe extern "C" fn mesh_report_health(
-    handle: *mut MeshAgentHandle,
+    handle: *const MeshAgentHandle,
     status: *const c_char,
 ) -> i32 {
     if handle.is_null() {
@@ -439,7 +510,7 @@ pub unsafe extern "C" fn mesh_report_health(
 /// * `handle` must be a valid handle from `mesh_start_agent`
 #[no_mangle]
 pub unsafe extern "C" fn mesh_update_port(
-    handle: *mut MeshAgentHandle,
+    handle: *const MeshAgentHandle,
     port: i32,
 ) -> i32 {
     if handle.is_null() {
@@ -791,6 +862,84 @@ pub extern "C" fn mesh_is_tracing_enabled() -> i32 {
     if is_tracing_enabled() { 1 } else { 0 }
 }
 
+/// Bounded queue between `mesh_publish_span` (caller thread) and the
+/// tracing runtime's drain task. Sized for bursts; on overflow spans are
+/// dropped with a counter (tracing must never block or break agent
+/// operations).
+const SPAN_QUEUE_CAPACITY: usize = 1024;
+
+/// Message on the span queue: a span to publish, or a flush marker whose
+/// ack fires once every message enqueued before it has been processed
+/// (the drain task consumes the queue in FIFO order).
+enum SpanQueueMsg {
+    Span(std::collections::HashMap<String, String>),
+    Flush(tokio::sync::oneshot::Sender<()>),
+}
+
+/// Sender side of the span queue. Initialized by
+/// `mesh_init_trace_publisher` on success; `None` (unset) means the
+/// publisher was never initialized and `mesh_publish_span` returns 0.
+static SPAN_QUEUE: std::sync::OnceLock<mpsc::Sender<SpanQueueMsg>> = std::sync::OnceLock::new();
+
+/// Spans dropped because the queue was full. Logged periodically from
+/// the enqueue path.
+static DROPPED_SPANS: AtomicU64 = AtomicU64::new(0);
+
+/// Initialize the span queue and spawn its drain task on the tracing
+/// runtime. Idempotent — subsequent calls return the existing sender.
+fn ensure_span_queue() -> &'static mpsc::Sender<SpanQueueMsg> {
+    SPAN_QUEUE.get_or_init(|| {
+        let (tx, mut rx) = mpsc::channel::<SpanQueueMsg>(SPAN_QUEUE_CAPACITY);
+        get_tracing_runtime().spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                match msg {
+                    SpanQueueMsg::Span(span) => {
+                        // Failures are already logged (debug) inside
+                        // publish_span; never break the drain loop on a
+                        // bad span.
+                        let _ = tracing_publish::publish_span(span).await;
+                    }
+                    SpanQueueMsg::Flush(ack) => {
+                        // FIFO: everything enqueued before this marker has
+                        // been processed — wake the flusher (receiver may
+                        // have given up on timeout; ignore send errors).
+                        let _ = ack.send(());
+                    }
+                }
+            }
+        });
+        tx
+    })
+}
+
+/// Drain the span queue: block until every span enqueued via
+/// `mesh_publish_span` before this call has been handed to Redis (or
+/// failed), or until `timeout` elapses.
+///
+/// Returns true if the queue fully drained (or was never armed — nothing
+/// queued means nothing to lose), false on timeout.
+fn flush_span_queue(timeout: Duration) -> bool {
+    let Some(queue) = SPAN_QUEUE.get() else {
+        // Publisher never initialized: the queue doesn't exist, so no
+        // span can be pending. Don't arm it just to flush nothing.
+        return true;
+    };
+
+    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+    get_tracing_runtime().block_on(async {
+        tokio::time::timeout(timeout, async {
+            if queue.send(SpanQueueMsg::Flush(ack_tx)).await.is_err() {
+                // Drain task gone (runtime tearing down) — nothing more
+                // can be flushed; treat as drained-as-far-as-possible.
+                return;
+            }
+            let _ = ack_rx.await;
+        })
+        .await
+        .is_ok()
+    })
+}
+
 /// Initialize the trace publisher.
 ///
 /// Must be called before `mesh_publish_span`. Connects to Redis.
@@ -805,6 +954,8 @@ pub extern "C" fn mesh_init_trace_publisher() -> i32 {
     });
 
     if result {
+        // Arm the non-blocking publish path (queue + drain task).
+        let _ = ensure_span_queue();
         info!("FFI: Trace publisher initialized successfully");
         1
     } else {
@@ -829,14 +980,18 @@ pub extern "C" fn mesh_is_trace_publisher_available() -> i32 {
 
 /// Publish a trace span to Redis.
 ///
-/// Non-blocking (from the caller's perspective) - returns after queuing the span.
-/// Silently handles failures to never break agent operations.
+/// Non-blocking (from the caller's perspective) - returns after queuing the span
+/// onto a bounded in-process queue drained by the tracing runtime, which
+/// performs the actual Redis XADD asynchronously. Silently handles failures
+/// to never break agent operations; on queue overflow the span is dropped
+/// (counted, logged periodically).
 ///
 /// # Arguments
 /// * `span_json` - JSON string containing span data (all values should be strings)
 ///
 /// # Returns
-/// 1 on success (queued), 0 on failure
+/// 1 on success (queued), 0 on failure (not initialized, invalid input,
+/// or queue full)
 ///
 /// # Safety
 /// * `span_json` must be a valid null-terminated C string
@@ -864,17 +1019,60 @@ pub unsafe extern "C" fn mesh_publish_span(span_json: *const c_char) -> i32 {
         }
     };
 
-    // Publish to Redis
-    let rt = get_tracing_runtime();
-    let result = rt.block_on(async {
-        tracing_publish::publish_span(span_data).await
-    });
+    // Enqueue for the tracing runtime's drain task. The queue only exists
+    // after a successful mesh_init_trace_publisher — without it there's
+    // nothing to publish to, so fail fast (matches the previous behavior
+    // of publish_span returning false when uninitialized).
+    let Some(queue) = SPAN_QUEUE.get() else {
+        debug!("FFI: mesh_publish_span called before mesh_init_trace_publisher");
+        return 0;
+    };
 
-    if result {
-        debug!("FFI: Trace span published successfully");
+    match queue.try_send(SpanQueueMsg::Span(span_data)) {
+        Ok(()) => 1,
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            let dropped = DROPPED_SPANS.fetch_add(1, Ordering::Relaxed) + 1;
+            // Log periodically rather than per drop — overflow happens in
+            // bursts and per-span logging would amplify the load.
+            // (`u64::is_multiple_of` needs Rust >= 1.87 — see
+            // `rust-version` in Cargo.toml.)
+            if dropped == 1 || dropped.is_multiple_of(100) {
+                warn!(
+                    "FFI: trace span queue full; dropped {} spans so far",
+                    dropped
+                );
+            }
+            0
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            debug!("FFI: trace span queue closed");
+            0
+        }
+    }
+}
+
+/// Flush queued trace spans.
+///
+/// Blocks until every span queued via `mesh_publish_span` before this
+/// call has been published to Redis (or dropped on a publish error), or
+/// until `timeout_ms` elapses. `mesh_free_handle` calls this
+/// automatically with a 2-second budget so an agent's final spans are not
+/// lost at teardown; embedders that need a different budget (or that
+/// publish spans after freeing the handle) can call it directly.
+///
+/// # Arguments
+/// * `timeout_ms` - Maximum time to wait in milliseconds; negative values
+///   are treated as 0
+///
+/// # Returns
+/// 1 if the queue fully drained (or the publisher was never initialized),
+/// 0 on timeout
+#[no_mangle]
+pub extern "C" fn mesh_flush_spans(timeout_ms: i64) -> i32 {
+    let timeout = Duration::from_millis(timeout_ms.max(0) as u64);
+    if flush_span_queue(timeout) {
         1
     } else {
-        debug!("FFI: Failed to publish trace span");
         0
     }
 }
@@ -2419,6 +2617,144 @@ mod tests {
             // Should return 0 for invalid JSON
             assert_eq!(mesh_publish_span(invalid.as_ptr()), 0);
         }
+    }
+
+    /// Issue #1166 MED-3 + span-drain follow-up: ONE lifecycle test for
+    /// the process-global span queue. SPAN_QUEUE / TRACING_RUNTIME / the
+    /// tracing_publish PUBLISHER singleton are all process-wide, and a
+    /// OnceLock'd queue can never be unarmed again — so every assertion
+    /// that touches the queue lives in this single test fn (splitting
+    /// them up would create order-dependent tests). No other test in this
+    /// crate depends on the queue being UNarmed: the other
+    /// mesh_publish_span tests fail on null/invalid JSON before reaching
+    /// the queue.
+    ///
+    /// Covers:
+    /// * `mesh_publish_span` enqueues and returns 1 immediately — the
+    ///   Redis XADD happens on the tracing runtime's drain task;
+    /// * `mesh_flush_spans` blocks until previously queued spans reached
+    ///   the (fake) Redis server;
+    /// * `mesh_free_handle` drains the queue, so spans published right
+    ///   before teardown are not lost.
+    ///
+    /// NB: mutates process env (REDIS_URL, tracing flag); the suite runs
+    /// with --test-threads=1 like the other env-mutating tests.
+    #[test]
+    fn test_mesh_span_queue_lifecycle_publish_flush_free() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        // Fake RESP server that records every byte it reads and answers
+        // each command with "+PONG" (parses as the reply to everything
+        // this test triggers: PING, CLIENT SETINFO, XADD-as-String — see
+        // the sibling test in tracing_publish.rs for the pipelining
+        // details).
+        let server_rt = tokio::runtime::Runtime::new().unwrap();
+        let received: Arc<std::sync::Mutex<Vec<u8>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let received_srv = received.clone();
+        let addr = server_rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind fake redis");
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                loop {
+                    let Ok((mut sock, _)) = listener.accept().await else {
+                        break;
+                    };
+                    let received = received_srv.clone();
+                    tokio::spawn(async move {
+                        let mut buf = [0u8; 8192];
+                        loop {
+                            match sock.read(&mut buf).await {
+                                Ok(0) | Err(_) => break,
+                                Ok(n) => {
+                                    received.lock().unwrap().extend_from_slice(&buf[..n]);
+                                    let req = String::from_utf8_lossy(&buf[..n]);
+                                    let ncmds = req
+                                        .split("\r\n")
+                                        .filter(|line| line.starts_with('*'))
+                                        .count()
+                                        .max(1);
+                                    let resp = "+PONG\r\n".repeat(ncmds);
+                                    if sock.write_all(resp.as_bytes()).await.is_err() {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+            addr
+        });
+
+        // publish_span awaits the XADD reply before completing, and the
+        // flush ack fires only after all prior queue entries completed —
+        // so once a flush returns, the server has read every span.
+        let count_xadds = || {
+            let buf = received.lock().unwrap();
+            String::from_utf8_lossy(&buf).matches("XADD").count()
+        };
+
+        std::env::set_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED", "true");
+        std::env::set_var("REDIS_URL", format!("redis://{}", addr));
+
+        assert_eq!(
+            mesh_init_trace_publisher(),
+            1,
+            "init must succeed against the fake server"
+        );
+
+        // Non-blocking enqueue path: valid spans are accepted (1) right
+        // away; Redis I/O happens on the drain task.
+        for i in 0..3 {
+            let span =
+                CString::new(format!(r#"{{"span_id":"s{}","name":"test"}}"#, i)).unwrap();
+            assert_eq!(
+                unsafe { mesh_publish_span(span.as_ptr()) },
+                1,
+                "span {} must be queued without blocking",
+                i
+            );
+        }
+
+        assert_eq!(mesh_flush_spans(5_000), 1, "flush must drain within budget");
+        assert_eq!(count_xadds(), 3, "server must have all pre-flush spans");
+
+        // Spans queued just before teardown must survive mesh_free_handle
+        // (the final spans of an agent's life are exactly what an
+        // embedder loses without the teardown drain).
+        for i in 3..5 {
+            let span =
+                CString::new(format!(r#"{{"span_id":"s{}","name":"test"}}"#, i)).unwrap();
+            assert_eq!(unsafe { mesh_publish_span(span.as_ptr()) }, 1);
+        }
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (_event_tx, event_rx) = mpsc::channel::<MeshEvent>(4);
+        let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
+        let (command_tx, _command_rx) = mpsc::channel(1);
+        let handle = Box::new(MeshAgentHandle {
+            event_rx: Mutex::new(event_rx),
+            shutdown_tx,
+            command_tx,
+            runtime,
+            // Already stopped: free skips the graceful-shutdown wait and
+            // exercises exactly the teardown drain.
+            is_running: AtomicBool::new(false),
+            agent_id: None,
+            shared_state: Arc::new(tokio::sync::RwLock::new(HandleState::default())),
+        });
+        unsafe { mesh_free_handle(Box::into_raw(handle)) };
+        assert_eq!(
+            count_xadds(),
+            5,
+            "mesh_free_handle must drain spans queued before teardown"
+        );
+
+        std::env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
+        std::env::remove_var("REDIS_URL");
     }
 
     #[test]

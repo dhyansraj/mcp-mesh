@@ -187,7 +187,7 @@ impl HeartbeatStateMachine {
                 // Registry doesn't know us, need to re-register
                 warn!("Agent unknown to registry, re-registering");
                 self.registered = false;
-                self.state = HeartbeatState::Unregistered;
+                self.transition(HeartbeatState::Unregistered);
                 HeartbeatAction::SendFull
             }
             FastHeartbeatStatus::RegistryError | FastHeartbeatStatus::NetworkError => {
@@ -199,7 +199,7 @@ impl HeartbeatStateMachine {
                 );
 
                 if self.consecutive_failures >= self.config.missed_threshold {
-                    self.state = HeartbeatState::Reconnecting;
+                    self.transition(HeartbeatState::Reconnecting);
                     self.retry_attempt = 0;
                 }
 
@@ -217,11 +217,11 @@ impl HeartbeatStateMachine {
         self.registered = true;
         self.heartbeat_count += 1;
 
-        self.state = match self.health_status {
+        self.transition(match self.health_status {
             HealthStatus::Healthy => HeartbeatState::Healthy,
             HealthStatus::Degraded => HeartbeatState::Degraded,
             HealthStatus::Unhealthy => HeartbeatState::Degraded,
-        };
+        });
     }
 
     /// Process a full heartbeat failure.
@@ -231,8 +231,28 @@ impl HeartbeatStateMachine {
         self.retry_attempt += 1;
 
         if self.consecutive_failures >= self.config.missed_threshold {
-            self.state = HeartbeatState::Reconnecting;
+            self.transition(HeartbeatState::Reconnecting);
         }
+    }
+
+    /// Transition to a new state, preserving `ShuttingDown`.
+    ///
+    /// `ShuttingDown` is sticky: once `shutdown()` runs, no heartbeat
+    /// outcome may overwrite it. Without this, a full heartbeat that
+    /// succeeds after a shutdown request (e.g. the Retry arm's
+    /// post-backoff heartbeat in `AgentRuntime::run`) would flip the
+    /// state back to Healthy/Degraded — and since the one-shot shutdown
+    /// signal was already consumed from the capacity-1 channel, the
+    /// agent would re-register and run forever (issue #1166).
+    fn transition(&mut self, new_state: HeartbeatState) {
+        if self.state == HeartbeatState::ShuttingDown {
+            debug!(
+                "Ignoring heartbeat state transition to {:?} during shutdown",
+                new_state
+            );
+            return;
+        }
+        self.state = new_state;
     }
 
     /// Request shutdown.
@@ -450,6 +470,55 @@ mod tests {
         let mut sm = HeartbeatStateMachine::new(HeartbeatConfig::default());
         sm.shutdown();
 
+        assert!(sm.is_shutting_down());
+        assert_eq!(sm.next_action(), HeartbeatAction::None);
+    }
+
+    /// Issue #1166 MED-1: a full-heartbeat success landing after a
+    /// shutdown request must NOT overwrite ShuttingDown with Healthy.
+    #[test]
+    fn test_shutdown_preserved_across_full_heartbeat_success() {
+        let mut sm = HeartbeatStateMachine::new(HeartbeatConfig::default());
+        sm.on_full_heartbeat_success();
+        sm.shutdown();
+
+        sm.on_full_heartbeat_success();
+        assert!(sm.is_shutting_down(), "success must not clear ShuttingDown");
+        assert_eq!(sm.next_action(), HeartbeatAction::None);
+    }
+
+    /// ShuttingDown is sticky across failures too — Reconnecting must
+    /// not replace it (would re-enter the Retry arm forever).
+    #[test]
+    fn test_shutdown_preserved_across_full_heartbeat_failure() {
+        let config = HeartbeatConfig {
+            missed_threshold: 1,
+            ..Default::default()
+        };
+        let mut sm = HeartbeatStateMachine::new(config);
+        sm.shutdown();
+
+        sm.on_full_heartbeat_failure("boom");
+        assert!(sm.is_shutting_down(), "failure must not clear ShuttingDown");
+        assert_eq!(sm.next_action(), HeartbeatAction::None);
+    }
+
+    /// Fast-heartbeat outcomes (AgentUnknown -> Unregistered, errors ->
+    /// Reconnecting) must also preserve ShuttingDown.
+    #[test]
+    fn test_shutdown_preserved_across_fast_heartbeat_results() {
+        let config = HeartbeatConfig {
+            missed_threshold: 1,
+            ..Default::default()
+        };
+        let mut sm = HeartbeatStateMachine::new(config);
+        sm.on_full_heartbeat_success();
+        sm.shutdown();
+
+        let _ = sm.on_fast_heartbeat_result(fhb(FastHeartbeatStatus::AgentUnknown));
+        assert!(sm.is_shutting_down());
+
+        let _ = sm.on_fast_heartbeat_result(fhb(FastHeartbeatStatus::NetworkError));
         assert!(sm.is_shutting_down());
         assert_eq!(sm.next_action(), HeartbeatAction::None);
     }

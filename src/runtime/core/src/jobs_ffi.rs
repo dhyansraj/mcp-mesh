@@ -1504,12 +1504,12 @@ mod tests {
             "await-cancel-natural-{}",
             uuid::Uuid::new_v4().simple()
         );
-        cancel_registry::register_active_job(&job_id, CancellationToken::new());
+        let generation = cancel_registry::register_active_job(&job_id, CancellationToken::new());
 
         let job_id_for_thread = job_id.clone();
         let unregisterer = thread::spawn(move || {
             thread::sleep(Duration::from_millis(50));
-            cancel_registry::unregister_active_job(&job_id_for_thread);
+            cancel_registry::unregister_active_job(&job_id_for_thread, generation);
         });
 
         let id_c = CString::new(job_id).unwrap();
@@ -1534,7 +1534,7 @@ mod tests {
 
         // Registered, not cancelled → 0 (and the probe must not fire it).
         let token = CancellationToken::new();
-        cancel_registry::register_active_job(&job_id, token.clone());
+        let generation = cancel_registry::register_active_job(&job_id, token.clone());
         assert_eq!(unsafe { mesh_job_cancel_fired(id_c.as_ptr()) }, 0);
         assert!(!token.is_cancelled(), "probe must be read-only");
 
@@ -1543,8 +1543,16 @@ mod tests {
         assert_eq!(unsafe { mesh_job_cancel_fired(id_c.as_ptr()) }, 1);
 
         // Natural teardown (unregister) → back to 0.
-        cancel_registry::unregister_active_job(&job_id);
+        cancel_registry::unregister_active_job(&job_id, generation);
         assert_eq!(unsafe { mesh_job_cancel_fired(id_c.as_ptr()) }, 0);
+
+        // Re-claim under the same id: a fresh registration must NOT look
+        // cancelled (issue #1166 MED-4 — stacked registrations keep
+        // per-frame tokens; a new frame starts un-fired).
+        let retoken = CancellationToken::new();
+        let regen = cancel_registry::register_active_job(&job_id, retoken);
+        assert_eq!(unsafe { mesh_job_cancel_fired(id_c.as_ptr()) }, 0);
+        cancel_registry::unregister_active_job(&job_id, regen);
     }
 
     /// Null pointer must be rejected with `-1` via the last-error slot,
