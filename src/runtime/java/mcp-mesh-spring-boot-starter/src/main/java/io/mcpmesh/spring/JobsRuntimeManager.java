@@ -361,6 +361,21 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             cf.cancel(true);
             throw new RuntimeException("Async operation timed out after " + timeoutSecs
                 + " seconds (claim-path budget for capability '" + capability + "')");
+        } catch (java.util.concurrent.ExecutionException ee) {
+            // Unwrap to the user exception (mirrors MeshToolWrapper.awaitIfFuture
+            // and the InvocationTargetException handling in invokeViaReflection) —
+            // the @MeshTool(retryOn=...) whitelist matches with cls.isInstance(cause)
+            // in ClaimDispatcher.handleRetryOrFail, so a wrapped ExecutionException
+            // would never match the user's declared exception types.
+            Throwable cause = ee.getCause();
+            if (cause instanceof Exception ex) throw ex;
+            throw new RuntimeException(cause);
+        } catch (InterruptedException ie) {
+            // Restore the interrupt flag — the dispatcher's terminal handler
+            // swallows the exception, so the flag is the only signal the
+            // dispatch thread retains (mirrors MeshToolWrapper.awaitIfFuture).
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Async operation interrupted", ie);
         }
     }
 

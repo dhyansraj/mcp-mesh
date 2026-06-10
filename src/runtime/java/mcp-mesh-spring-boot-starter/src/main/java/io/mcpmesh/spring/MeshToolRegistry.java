@@ -90,9 +90,22 @@ public class MeshToolRegistry {
         if (existing != null) {
             Method existingMethod = existing.method();
             if (existingMethod.equals(method)) {
+                // Deliberately tolerant of a DIFFERENT bean instance here:
+                // prototype-scoped beans and Spring context refresh re-run the
+                // post-processor with NEW instances of the same class —
+                // requiring bean identity would falsely boot-fail those paths.
+                // Last-registered wins; logged at info (not debug) so the
+                // replacement is visible when two live instances genuinely
+                // compete (#1164 review follow-up).
                 tools.put(capability, metadata);
-                log.debug("Mesh tool '{}' re-registered for the same method {} — refreshed bean instance",
-                    capability, method);
+                if (existing.bean() != bean) {
+                    log.info("Mesh tool '{}' re-registered for the same method {} with a new bean "
+                        + "instance — last registration wins (prototype scope / context refresh)",
+                        capability, method);
+                } else {
+                    log.debug("Mesh tool '{}' re-registered for the same method {} — idempotent refresh",
+                        capability, method);
+                }
                 return;
             }
             Method mostDerived = mostDerivedOverride(existingMethod, method);

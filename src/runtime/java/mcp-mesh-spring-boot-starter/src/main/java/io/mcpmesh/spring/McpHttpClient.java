@@ -1045,19 +1045,19 @@ public class McpHttpClient {
                 requestBuilder.header(entry.getKey(), entry.getValue());
             }
 
-            // Determine effective timeout — same logic as callTool() (#769)
-            int effectiveTimeoutSecs = 300;
+            // Determine effective timeout — same logic as callTool() (#769).
+            // Issue #1164 LOW (review follow-up): shared parseTimeoutSecs so
+            // fractional budgets parse and invalid values warn instead of
+            // silently defaulting (handles non-positive values too).
+            int effectiveTimeoutSecs;
             String existingTimeout = mergedHeaders.get("x-mesh-timeout");
             if (existingTimeout == null) existingTimeout = mergedHeaders.get("X-Mesh-Timeout");
             if (existingTimeout == null) {
-                String callTimeout = System.getenv("MCP_MESH_CALL_TIMEOUT");
-                if (callTimeout != null && !callTimeout.isEmpty()) {
-                    try { effectiveTimeoutSecs = Integer.parseInt(callTimeout); } catch (NumberFormatException e) {}
-                }
+                effectiveTimeoutSecs = parseTimeoutSecs(
+                    System.getenv("MCP_MESH_CALL_TIMEOUT"), "MCP_MESH_CALL_TIMEOUT env var", 300);
             } else {
-                try { effectiveTimeoutSecs = Integer.parseInt(existingTimeout); } catch (NumberFormatException e) {}
+                effectiveTimeoutSecs = parseTimeoutSecs(existingTimeout, "X-Mesh-Timeout header", 300);
             }
-            if (effectiveTimeoutSecs <= 0) effectiveTimeoutSecs = 300;
 
             if (!mergedHeaders.containsKey("x-mesh-timeout") && !mergedHeaders.containsKey("X-Mesh-Timeout")) {
                 requestBuilder.header("X-Mesh-Timeout", String.valueOf(effectiveTimeoutSecs));

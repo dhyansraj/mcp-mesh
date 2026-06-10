@@ -65,6 +65,18 @@ class MeshToolInheritanceScanTest {
         }
     }
 
+    /**
+     * Override that re-declares {@code @MeshTool} but NOT {@code @Param}
+     * (#1164 review follow-up) — the param metadata stays on the base.
+     */
+    public static class DerivedNoParamCalc extends BaseCalc {
+        @Override
+        @MeshTool(capability = "calc", description = "derived calc no param")
+        public String calc(String x) {
+            return "derivedNoParam:" + x;
+        }
+    }
+
     /** Fully-annotated interface contract (default method); bare impl class. */
     public interface PricerContract {
         @MeshTool(capability = "price", description = "prices a sku")
@@ -175,6 +187,37 @@ class MeshToolInheritanceScanTest {
             "the most-derived @MeshTool declaration must win");
         assertEquals(DerivedCalc.class, meta.method().getDeclaringClass());
         assertEquals("derived:7", meta.method().invoke(meta.bean(), "7"));
+    }
+
+    @Test
+    @DisplayName("override re-declares @MeshTool without @Param → boots, ancestor @Param schema kept, override values win")
+    void redeclaredMeshToolWithoutParamKeepsAncestorSchema() throws Exception {
+        // Previously the override's bare declaration was registered (it
+        // declares @MeshTool), dropping the base @Param metadata — the
+        // wrapper then boot-failed with "must have @Param annotation".
+        MeshToolRegistry registry = new MeshToolRegistry();
+        DerivedNoParamCalc bean = new DerivedNoParamCalc();
+
+        assertDoesNotThrow(() -> processor(registry).postProcessAfterInitialization(bean, "calc"),
+            "re-declared @MeshTool without @Param must fall back to the param-annotated ancestor");
+
+        assertEquals(1, registry.getAllTools().size());
+        MeshToolRegistry.ToolMetadata meta = registry.getTool("calc");
+        assertNotNull(meta);
+        // The override's @MeshTool values still apply (annotation resolved
+        // from the most-derived declaration)...
+        assertEquals("derived calc no param", meta.description(),
+            "the override's @MeshTool values must win");
+        // ...but the param-annotated ancestor is the schema source.
+        assertEquals(BaseCalc.class, meta.method().getDeclaringClass(),
+            "the param-annotated ancestor declaration must be the registration target");
+        Map<String, Object> schema = meta.inputSchema();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> props = (Map<String, Object>) schema.get("properties");
+        assertTrue(props.containsKey("x"),
+            "@Param metadata from the base declaration must be preserved. Got: " + props);
+        // Method.invoke dispatches virtually — the override still runs.
+        assertEquals("derivedNoParam:9", meta.method().invoke(meta.bean(), "9"));
     }
 
     @Test

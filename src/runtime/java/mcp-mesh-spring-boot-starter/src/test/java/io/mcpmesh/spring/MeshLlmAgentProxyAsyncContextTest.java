@@ -8,6 +8,7 @@ import io.mcpmesh.types.MeshLlmAgent;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -50,6 +51,9 @@ class MeshLlmAgentProxyAsyncContextTest {
     private ObjectMapper mapper;
     private MeshLlmAgentProxy proxy;
 
+    /** Original MeshTlsConfig.cached value, restored in {@link #restoreTlsConfig()}. */
+    private static Object originalTlsConfig;
+
     @BeforeAll
     static void initTlsConfig() throws Exception {
         // Pre-seed MeshTlsConfig.cached so tests don't hit native FFI
@@ -60,7 +64,17 @@ class MeshLlmAgentProxyAsyncContextTest {
 
         Field cachedField = MeshTlsConfig.class.getDeclaredField("cached");
         cachedField.setAccessible(true);
+        originalTlsConfig = cachedField.get(null);
         cachedField.set(null, disabled);
+    }
+
+    @AfterAll
+    static void restoreTlsConfig() throws Exception {
+        // The cached field is process-wide static state — restore it so later
+        // test classes in the same JVM see whatever was there before.
+        Field cachedField = MeshTlsConfig.class.getDeclaredField("cached");
+        cachedField.setAccessible(true);
+        cachedField.set(null, originalTlsConfig);
     }
 
     @BeforeEach
