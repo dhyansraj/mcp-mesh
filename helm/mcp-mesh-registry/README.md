@@ -65,7 +65,9 @@ The following table lists the configurable parameters of the MCP Mesh Registry c
 | `registry.database.sslmode`        | PostgreSQL SSL mode: `disable`, `require`, `verify-ca`, `verify-full` | `"disable"` |
 | `registry.database.tls.caSecret`   | Secret with CA cert for `verify-ca`/`verify-full` (mounted, added to DSN as `sslrootcert`) | `""` |
 | `registry.database.tls.caKey`      | Key of the CA cert in the secret                  | `"ca.crt"`            |
-| `registry.database.existingSecret` | Existing secret with the DB password (injected via `$(DATABASE_PASSWORD)`; must be URL-safe) | `""` |
+| `registry.database.existingSecret` | Existing secret with the DB credentials (see modes below)                     | `""` |
+| `registry.database.existingSecretUrlKey` | Key in the existing secret holding a complete `postgres://` DSN, consumed directly (no composition, no URL-safety requirement). Empty = password-only mode | `""` |
+| `registry.database.existingSecretPasswordKey` | Key in the existing secret holding the password (injected via `$(DATABASE_PASSWORD)`; must be URL-safe) | `"password"` |
 | `registry.logging.level`           | Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) | `"INFO"`              |
 | `registry.logging.format`          | Log format (json or text)                         | `"json"`              |
 
@@ -81,8 +83,9 @@ endpoint: session storage and distributed-trace streaming share the derived
 | `registry.redis.host`                      | Redis host                                                               | See values.yaml    |
 | `registry.redis.port`                      | Redis port                                                               | `6379`             |
 | `registry.redis.password`                  | AUTH password; moves `REDIS_URL` into the chart secret, URL-encoded      | `""`               |
-| `registry.redis.existingSecret`            | Existing secret with the password (injected via `$(REDIS_PASSWORD)`; must be URL-safe) | `""` |
-| `registry.redis.existingSecretPasswordKey` | Key of the password in the existing secret                               | `"redis-password"` |
+| `registry.redis.existingSecret`            | Existing secret with the Redis credentials                                | `""` |
+| `registry.redis.existingSecretUrlKey`      | Key in the existing secret holding a complete `redis://`/`rediss://` URL, consumed directly (no composition, no URL-safety requirement). Empty = password-only mode | `""` |
+| `registry.redis.existingSecretPasswordKey` | Key of the password in the existing secret (injected via `$(REDIS_PASSWORD)`; must be URL-safe) | `"redis-password"` |
 | `registry.redis.tls.enabled`               | Use `rediss://` (pair with `serviceTLS.redis.*` for CA/client certs)     | `false`            |
 
 ### Persistence
@@ -183,8 +186,18 @@ registry:
 ```
 
 With `registry.redis.password` set, `REDIS_URL` is rendered into the chart
-secret instead of the configmap. To source the Redis password from an existing
-secret instead:
+secret instead of the configmap. To source Redis credentials from an existing
+secret instead, prefer a complete URL — it is consumed directly via
+`secretKeyRef`, so the password never needs to be URL-safe:
+
+```yaml
+registry:
+  redis:
+    existingSecret: my-redis-secret
+    existingSecretUrlKey: redis-url # key holding rediss://:<password>@host:port
+```
+
+If the secret only carries the password, fall back to composition:
 
 ```yaml
 registry:
@@ -196,10 +209,28 @@ registry:
       enabled: true
 ```
 
-Note: with `existingSecret`, the password is injected via Kubernetes
+Note: in password-only mode the password is injected via Kubernetes
 `$(REDIS_PASSWORD)` expansion without URL-encoding, so it must be URL-safe.
 
 ### Using Existing Secret for Database
+
+Preferred: store a complete DSN in the secret. It is consumed directly via
+`secretKeyRef` — nothing is composed, so the password never needs to be
+URL-safe. Encode `sslmode` (and `sslrootcert`, if any) in the DSN itself;
+`tls.caSecret` still mounts the CA at `/etc/service-tls/postgres` for the DSN
+to reference.
+
+```yaml
+registry:
+  database:
+    type: postgres
+    host: mydb.example.com # still drives the wait-for-db init container
+    port: 5432
+    existingSecret: my-db-secret
+    existingSecretUrlKey: database-url # key holding postgres://user:pass@host:5432/db?sslmode=verify-full
+```
+
+If the secret only carries the password, fall back to in-pod composition:
 
 ```yaml
 registry:
@@ -216,7 +247,7 @@ registry:
       caSecret: pg-ca
 ```
 
-In this mode `DATABASE_URL` is composed in the pod via Kubernetes
+In password-only mode `DATABASE_URL` is composed in the pod via Kubernetes
 `$(DATABASE_PASSWORD)` expansion from the existing secret, so the password is
 never templated into a chart-managed resource. It is not URL-encoded either,
 so it must be URL-safe.

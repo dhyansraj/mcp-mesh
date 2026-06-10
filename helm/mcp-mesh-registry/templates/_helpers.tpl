@@ -101,11 +101,13 @@ deployment composes the DSN via $(DATABASE_PASSWORD) instead).
 {{- end }}
 
 {{/*
-PostgreSQL DSN for the database.existingSecret mode: the password is supplied
-at runtime via Kubernetes $(DATABASE_PASSWORD) expansion (the secretKeyRef env
-must be rendered before this one), so it is never templated. The password is
-not URL-encoded in this mode and must be URL-safe. The username comes from
-registry.database.username.
+PostgreSQL DSN for the database.existingSecret password-only mode (fallback
+when no existingSecretUrlKey is set — with a urlKey the deployment consumes
+the full DSN from the secret directly and nothing is composed): the password
+is supplied at runtime via Kubernetes $(DATABASE_PASSWORD) expansion (the
+secretKeyRef env must be rendered before this one), so it is never templated.
+The password is not URL-encoded in this mode and must be URL-safe. The
+username comes from registry.database.username.
 */}}
 {{- define "mcp-mesh-registry.composedDatabaseURL" -}}
 {{- $db := .Values.registry.database -}}
@@ -124,7 +126,8 @@ Redis scheme: rediss when registry.redis.tls.enabled, redis otherwise.
 Redis URL built from registry.redis.* — the single source of truth for the
 registry's Redis endpoint (session storage and trace stream share REDIS_URL).
 An inline password is URL-encoded. Not used when an existing secret supplies
-the password (the deployment composes the URL via $(REDIS_PASSWORD)).
+the password (the deployment composes the URL via $(REDIS_PASSWORD)) or a
+full URL (consumed directly via existingSecretUrlKey).
 */}}
 {{- define "mcp-mesh-registry.redisURL" -}}
 {{- $redis := .Values.registry.redis -}}

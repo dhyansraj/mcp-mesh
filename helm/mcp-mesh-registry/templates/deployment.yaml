@@ -110,6 +110,16 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             {{- if and (ne .Values.registry.database.type "sqlite") .Values.registry.database.existingSecret }}
+            {{- if and (eq .Values.registry.database.type "postgres") .Values.registry.database.existingSecretUrlKey }}
+            {{- /* Full DSN from the existing secret, consumed directly — no
+                   composition, so the credentials need no URL-safety. The DSN
+                   must carry its own sslmode/sslrootcert params. */}}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.registry.database.existingSecret }}
+                  key: {{ .Values.registry.database.existingSecretUrlKey }}
+            {{- else }}
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -121,6 +131,7 @@ spec:
                    existing secret is not URL-encoded and must be URL-safe. */}}
             - name: DATABASE_URL
               value: {{ include "mcp-mesh-registry.composedDatabaseURL" . | quote }}
+            {{- end }}
             {{- end }}
             {{- else if ne .Values.registry.database.type "sqlite" }}
             - name: DATABASE_PASSWORD
@@ -153,6 +164,15 @@ spec:
             {{- end }}
             {{- if .Values.registry.redis.enabled }}
             {{- if .Values.registry.redis.existingSecret }}
+            {{- if .Values.registry.redis.existingSecretUrlKey }}
+            {{- /* Full URL from the existing secret, consumed directly — no
+                   composition, so the password needs no URL-safety. */}}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.registry.redis.existingSecret }}
+                  key: {{ .Values.registry.redis.existingSecretUrlKey }}
+            {{- else }}
             {{- /* Password from the existing secret must be URL-safe: it is
                    interpolated into REDIS_URL via $(REDIS_PASSWORD) without
                    URL-encoding. */}}
@@ -163,6 +183,7 @@ spec:
                   key: {{ .Values.registry.redis.existingSecretPasswordKey | default "redis-password" }}
             - name: REDIS_URL
               value: {{ printf "%s://:$(REDIS_PASSWORD)@%s:%v" (include "mcp-mesh-registry.redisScheme" .) .Values.registry.redis.host (.Values.registry.redis.port | default 6379) | quote }}
+            {{- end }}
             {{- else if .Values.registry.redis.password }}
             - name: REDIS_URL
               valueFrom:
