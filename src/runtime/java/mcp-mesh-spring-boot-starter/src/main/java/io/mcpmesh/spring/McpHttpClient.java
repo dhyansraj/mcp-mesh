@@ -116,9 +116,30 @@ public class McpHttpClient {
     private static final java.util.concurrent.ConcurrentMap<String, JobCancelWatcher>
         ACTIVE_WATCHERS = new java.util.concurrent.ConcurrentHashMap<>();
 
-    private static final class JobCancelWatcher {
-        private final java.util.List<Runnable> subscribers =
-            new java.util.concurrent.CopyOnWriteArrayList<>();
+    // Package-private (not private) so the fire/subscribe race contract is
+    // unit-testable without the native watcher thread (issue #1164 LOW).
+    static final class JobCancelWatcher {
+        /** Guarded by {@code this} — along with {@link #fired}. */
+        private final java.util.List<Runnable> subscribers = new java.util.ArrayList<>();
+        /**
+         * Issue #1164 LOW: set once the cancel token has fired and the
+         * subscriber snapshot was taken. A subscribe() that races with the
+         * firing (previously: CopyOnWriteArrayList iteration snapshot missed
+         * late additions) now runs its runnable immediately instead of never —
+         * otherwise the in-flight call would run to its read timeout despite
+         * the job being cancelled.
+         *
+         * <p>Only a GENUINE cancel sets this. The watcher's await also wakes
+         * on natural job end ({@link #completeNaturally()}); marking that
+         * fired too would make a call subscribing in the wake→remove window
+         * cancel itself even though the job completed normally — flipping the
+         * failure mode from "slow" to "kills a healthy call" (#1164 review).
+         */
+        private boolean fired = false;
+
+        /** Test seam — does NOT spawn the native watcher thread. */
+        JobCancelWatcher() {
+        }
 
         JobCancelWatcher(String jobId) {
             // `self` capture lets us use ConcurrentHashMap.remove(K, V)
@@ -128,17 +149,26 @@ public class McpHttpClient {
             final JobCancelWatcher self = this;
             java.util.concurrent.CompletableFuture.runAsync(() -> {
                 try {
-                    MeshCore.load().mesh_await_job_cancel(jobId);
-                    // Token fired (cancel) OR job unregistered (natural
-                    // end). Either way, run all subscribers; on the
-                    // natural-end path the call.cancel() invocations are
-                    // no-ops because the calls have already completed.
-                    for (Runnable r : subscribers) {
-                        try {
-                            r.run();
-                        } catch (Exception swallow) {
-                            log.debug("Subscriber threw: {}", swallow.toString());
-                        }
+                    MeshCore core = MeshCore.load();
+                    core.mesh_await_job_cancel(jobId);
+                    // The await wakes on BOTH explicit cancel and natural job
+                    // end without saying which. Distinguish via the read-only
+                    // cancel-state probe: on explicit cancel the registry
+                    // entry is still present with its token fired; on natural
+                    // end the entry was already removed. Only a genuine
+                    // cancel may abort subscribers — a natural-end wake must
+                    // leave still-in-flight calls (async work outliving the
+                    // handler) untouched.
+                    //
+                    // Residual race (documented, accepted): a genuine cancel
+                    // whose run_as_job scope tears down before the probe runs
+                    // is classified as natural end — its in-flight calls then
+                    // run to their read timeout (slow, but never cancels
+                    // healthy work).
+                    if (isCancelFired(core, jobId)) {
+                        self.fireSubscribers();
+                    } else {
+                        self.completeNaturally();
                     }
                 } catch (Exception e) {
                     // Swallow Exception — Errors propagate (let the JVM
@@ -151,8 +181,87 @@ public class McpHttpClient {
             }, JOB_CANCEL_WATCHER_EXECUTOR);
         }
 
-        void subscribe(Runnable r) { subscribers.add(r); }
-        void unsubscribe(Runnable r) { subscribers.remove(r); }
+        /**
+         * Probe whether the wake was a genuine cancel. Degrades to "natural
+         * end" when the native library predates {@code mesh_job_cancel_fired}
+         * (custom MESH_NATIVE_LIB_PATH builds): cancelled jobs' in-flight
+         * calls then run to their read timeout instead of aborting — slow,
+         * but never cancels healthy work.
+         */
+        private static boolean isCancelFired(MeshCore core, String jobId) {
+            try {
+                return core.mesh_job_cancel_fired(jobId) == 1;
+            } catch (UnsatisfiedLinkError | Exception t) {
+                // UnsatisfiedLinkError = old native lib without the symbol;
+                // other Errors (OOM/StackOverflow) propagate per the
+                // watcher's convention above.
+                log.debug("mesh_job_cancel_fired probe unavailable for {} ({}); "
+                    + "treating wake as natural end", jobId, t.toString());
+                return false;
+            }
+        }
+
+        /** Mark fired (genuine cancel) and run every current subscriber (each isolated). */
+        void fireSubscribers() {
+            java.util.List<Runnable> snapshot;
+            synchronized (this) {
+                fired = true;
+                snapshot = new java.util.ArrayList<>(subscribers);
+                subscribers.clear();
+            }
+            for (Runnable r : snapshot) {
+                runIsolated(r);
+            }
+        }
+
+        /**
+         * Natural-end wake: the job finished without cancel. Discard the
+         * current subscribers WITHOUT running them — any still-in-flight
+         * outbound calls (async work that outlives the handler) are healthy
+         * and must complete normally. {@link #fired} stays false so a
+         * subscribe racing this wake registers as a no-op on a dead watcher
+         * instead of cancelling itself immediately.
+         */
+        void completeNaturally() {
+            synchronized (this) {
+                subscribers.clear();
+            }
+        }
+
+        /**
+         * Register a cancel runnable. When the token has ALREADY fired, the
+         * runnable runs immediately on the calling thread (it races with the
+         * caller's subsequent {@code call.execute()}, exactly like the normal
+         * fired path).
+         */
+        void subscribe(Runnable r) {
+            boolean runNow;
+            synchronized (this) {
+                if (fired) {
+                    runNow = true;
+                } else {
+                    subscribers.add(r);
+                    runNow = false;
+                }
+            }
+            if (runNow) {
+                runIsolated(r);
+            }
+        }
+
+        void unsubscribe(Runnable r) {
+            synchronized (this) {
+                subscribers.remove(r);
+            }
+        }
+
+        private static void runIsolated(Runnable r) {
+            try {
+                r.run();
+            } catch (Exception swallow) {
+                log.debug("Subscriber threw: {}", swallow.toString());
+            }
+        }
     }
 
     private final OkHttpClient httpClient;
@@ -253,6 +362,35 @@ public class McpHttpClient {
                 watcher.unsubscribe(subscriber);
             }
         }
+    }
+
+    /**
+     * Parse a timeout value (seconds) the same way the inbound
+     * {@link MeshToolWrapper} path does: as a double, rounding (not
+     * truncating) so fractional budgets like {@code "2.5"} survive, with a
+     * floor of 1s. Non-finite, non-positive, or unparseable values fall back
+     * to {@code defaultSecs} with a warning (issue #1164 LOW — previously an
+     * empty {@code catch} silently defaulted).
+     *
+     * @param raw         raw value (may be null/empty)
+     * @param source      human-readable source label for the warning
+     * @param defaultSecs fallback when raw is absent or invalid
+     * @return effective timeout in whole seconds (>= 1)
+     */
+    static int parseTimeoutSecs(String raw, String source, int defaultSecs) {
+        if (raw == null || raw.trim().isEmpty()) {
+            return defaultSecs;
+        }
+        try {
+            double secs = Double.parseDouble(raw.trim());
+            if (Double.isFinite(secs) && secs > 0) {
+                return (int) Math.min(Integer.MAX_VALUE, Math.max(1L, Math.round(secs)));
+            }
+            log.warn("Non-positive {} value '{}' — using default {}s", source, raw, defaultSecs);
+        } catch (NumberFormatException e) {
+            log.warn("Invalid {} value '{}' — using default {}s", source, raw, defaultSecs);
+        }
+        return defaultSecs;
     }
 
     /**
@@ -406,20 +544,19 @@ public class McpHttpClient {
                 requestBuilder.header(entry.getKey(), entry.getValue());
             }
 
-            // Determine effective timeout from X-Mesh-Timeout (propagated) or default (#769)
-            int effectiveTimeoutSecs = 300; // default
+            // Determine effective timeout from X-Mesh-Timeout (propagated) or default (#769).
+            // Issue #1164 LOW: parse as double (the inbound MeshToolWrapper path accepts
+            // fractional budgets like "2.5") and log on parse failure instead of silently
+            // falling back to the 300s default.
+            int effectiveTimeoutSecs;
             String existingTimeout = mergedHeaders.get("x-mesh-timeout");
             if (existingTimeout == null) existingTimeout = mergedHeaders.get("X-Mesh-Timeout");
             if (existingTimeout == null) {
-                String callTimeout = System.getenv("MCP_MESH_CALL_TIMEOUT");
-                if (callTimeout != null && !callTimeout.isEmpty()) {
-                    try { effectiveTimeoutSecs = Integer.parseInt(callTimeout); } catch (NumberFormatException e) {}
-                }
+                effectiveTimeoutSecs = parseTimeoutSecs(
+                    System.getenv("MCP_MESH_CALL_TIMEOUT"), "MCP_MESH_CALL_TIMEOUT env var", 300);
             } else {
-                try { effectiveTimeoutSecs = Integer.parseInt(existingTimeout); } catch (NumberFormatException e) {}
+                effectiveTimeoutSecs = parseTimeoutSecs(existingTimeout, "X-Mesh-Timeout header", 300);
             }
-            // Guard against negative/zero
-            if (effectiveTimeoutSecs <= 0) effectiveTimeoutSecs = 300;
 
             // Set X-Mesh-Timeout on the outgoing request if not already propagated
             if (!mergedHeaders.containsKey("x-mesh-timeout") && !mergedHeaders.containsKey("X-Mesh-Timeout")) {

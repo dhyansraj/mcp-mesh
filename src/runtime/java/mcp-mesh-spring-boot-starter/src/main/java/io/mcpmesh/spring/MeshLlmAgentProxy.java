@@ -12,6 +12,7 @@ import io.mcpmesh.core.MeshEvent;
 import io.mcpmesh.spring.media.MediaFetchResult;
 import io.mcpmesh.spring.media.MediaResolver;
 import io.mcpmesh.spring.media.MediaStore;
+import io.mcpmesh.spring.tracing.TraceContext;
 import io.mcpmesh.types.McpMeshTool;
 import io.mcpmesh.types.MeshLlmAgent;
 import io.mcpmesh.types.MeshToolCallException;
@@ -219,6 +220,42 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
     private void clearInvocationContext() {
         invocationContext.remove();
+    }
+
+    /**
+     * Issue #1164 MED-4: capture the caller thread's per-request context and
+     * restore it inside an async task running on a pool thread.
+     *
+     * <p>{@code CompletableFuture.supplyAsync(this::generate)} previously ran
+     * with empty ThreadLocals on the pool thread: the invocation context
+     * ({@code ${ctx.*}} template variables set by {@link MeshToolWrapper} on
+     * the servlet thread) read null, and {@link TraceContext} was empty — so
+     * outbound calls carried neither trace headers nor propagated headers
+     * (X-Mesh-Job-Id, X-Mesh-Timeout, allowlisted auth).
+     *
+     * <p>The returned supplier layers {@link TraceContext#wrapSupplier} (trace
+     * info + propagated headers, with restore-previous semantics) and a
+     * capture/restore of this proxy's {@code invocationContext} ThreadLocal,
+     * with a finally that clears it so pool threads aren't polluted.
+     */
+    private <T> java.util.function.Supplier<T> withCallerContext(java.util.function.Supplier<T> inner) {
+        Map<String, Object> capturedCtx = invocationContext.get();
+        java.util.function.Supplier<T> traced = TraceContext.wrapSupplier(inner);
+        return () -> {
+            Map<String, Object> previous = invocationContext.get();
+            if (capturedCtx != null) {
+                invocationContext.set(capturedCtx);
+            }
+            try {
+                return traced.get();
+            } finally {
+                if (previous != null) {
+                    invocationContext.set(previous);
+                } else {
+                    invocationContext.remove();
+                }
+            }
+        };
     }
 
     public void updateProvider(String endpoint, String functionName, String provider) {
@@ -512,12 +549,14 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
 
         @Override
         public CompletableFuture<String> generateAsync() {
-            return CompletableFuture.supplyAsync(this::generate);
+            // Issue #1164 MED-4: propagate caller-thread context (trace +
+            // propagated headers + invocation context) onto the pool thread.
+            return CompletableFuture.supplyAsync(withCallerContext(this::generate));
         }
 
         @Override
         public <T> CompletableFuture<T> generateAsync(Class<T> responseType) {
-            return CompletableFuture.supplyAsync(() -> generate(responseType));
+            return CompletableFuture.supplyAsync(withCallerContext(() -> generate(responseType)));
         }
 
         @Override
@@ -682,9 +721,15 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 }
             }
 
-            // 2. Convert builder messages to LLM format
+            // 2. Convert builder messages to LLM format.
+            // LinkedHashMap instead of Map.of: Message.content() can be null for
+            // assistant turns that only carried tool_calls (Map.of throws NPE on
+            // null values) — mirrors streamGenerate (issue #1164 MED-3).
             for (Message msg : messages) {
-                llmMessages.add(Map.of("role", msg.role(), "content", msg.content()));
+                Map<String, Object> entry = new LinkedHashMap<>(2);
+                entry.put("role", msg.role());
+                entry.put("content", msg.content());
+                llmMessages.add(entry);
             }
 
             // 2.5. Resolve media URIs and attach to the last user message
@@ -755,13 +800,19 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
                 log.info("LLM requested {} tool calls", toolCalls.size());
 
                 if (parallelToolCalls && toolCalls.size() > 1) {
-                    // Parallel execution via CompletableFuture
+                    // Parallel execution via CompletableFuture.
+                    // Issue #1164 MED-4: wrap each task with TraceContext so
+                    // parallel tool calls carry trace headers AND propagated
+                    // headers (X-Mesh-Job-Id, X-Mesh-Timeout, allowlisted auth)
+                    // on outbound calls — matching the sequential branch, which
+                    // runs on the caller thread and inherits them implicitly.
                     log.info("Executing {} tool calls in parallel", toolCalls.size());
                     List<CompletableFuture<Map<String, Object>>> futures = new ArrayList<>();
 
                     for (Map<String, Object> toolCall : toolCalls) {
                         ParsedToolCall parsed = parseToolCall(toolCall);
-                        futures.add(CompletableFuture.supplyAsync(() -> buildToolResultMessage(parsed)));
+                        futures.add(CompletableFuture.supplyAsync(
+                            TraceContext.wrapSupplier(() -> buildToolResultMessage(parsed))));
                     }
 
                     // Wait for all tools to complete and add results
@@ -1253,13 +1304,24 @@ public class MeshLlmAgentProxy implements MeshLlmAgent {
      * @param message   Human-readable error description
      * @return JSON error string
      */
-    private String buildErrorResponse(String errorType, String toolName, String message) {
-        // Escape quotes in message to ensure valid JSON
-        String safeMessage = message != null ? message.replace("\"", "'").replace("\\", "\\\\") : "Unknown error";
-        return String.format(
-            "{\"error\":{\"type\":\"%s\",\"tool\":\"%s\",\"message\":\"%s\"}}",
-            errorType, toolName, safeMessage
-        );
+    // Package-private static for tests (issue #1164 LOW).
+    static String buildErrorResponse(String errorType, String toolName, String message) {
+        // Issue #1164 LOW: serialize with Jackson — the previous hand-rolled
+        // escaping missed newlines/control chars, producing invalid JSON for
+        // exception messages containing them.
+        Map<String, Object> error = new LinkedHashMap<>();
+        error.put("type", errorType);
+        error.put("tool", toolName);
+        error.put("message", message != null ? message : "Unknown error");
+        Map<String, Object> wrapper = new LinkedHashMap<>();
+        wrapper.put("error", error);
+        try {
+            return objectMapper.writeValueAsString(wrapper);
+        } catch (Exception e) {
+            log.warn("Failed to serialize error response ({} / {}): {}", errorType, toolName, e.getMessage());
+            return "{\"error\":{\"type\":\"serialization_error\",\"tool\":\"unknown\","
+                + "\"message\":\"failed to serialize error response\"}}";
+        }
     }
 
     /**

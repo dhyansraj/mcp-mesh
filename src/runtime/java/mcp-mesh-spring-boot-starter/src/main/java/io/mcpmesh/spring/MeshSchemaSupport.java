@@ -106,6 +106,222 @@ public final class MeshSchemaSupport {
     }
 
     /**
+     * Build the MCP input schema for a {@code @MeshTool} method from its
+     * {@code @Param}-annotated parameters.
+     *
+     * <p>Issue #1164 MED-2: this is the SINGLE source of truth for tool input
+     * schemas — both the MCP-served schema ({@link MeshToolWrapper}) and the
+     * heartbeat catalog ({@link MeshToolRegistry}) call this method, so the
+     * registry-advertised {@code input_schema} / {@code input_schema_hash}
+     * always represents the schema the MCP server actually serves. Previously
+     * the registry hand-rolled a shallow {@code {"type": ...}} per parameter
+     * (POJO → bare {@code {"type":"object"}}, {@code List<Foo>} → bare
+     * {@code {"type":"array"}}), so heartbeat-derived consumers (cross-runtime
+     * schema matching #547, llm_tools definitions) saw an impoverished shape
+     * that diverged from the served one.
+     *
+     * <p>Per-parameter schemas come from the shared victools {@link #generator()}
+     * (full nesting, {@code required}, {@code anyOf} nullability). Each
+     * parameter's {@code $defs} block is hoisted to the root schema so the
+     * composed document's {@code #/$defs/...} pointers stay resolvable; name
+     * collisions between structurally different defs (same simple name,
+     * different package) are disambiguated with a numeric suffix.
+     *
+     * <p>Parameters without {@code @Param} (injectable types: {@code McpMeshTool},
+     * {@code MeshLlmAgent}, {@code MeshJob}, {@code A2AClient}) are excluded by
+     * construction. {@code @MediaParam} contributes {@code x-media-type} and a
+     * media-note description suffix (kept from the legacy registry builder).
+     *
+     * @param method the {@code @MeshTool}-annotated method
+     * @return the composed input schema ({@code type/properties/required/$defs})
+     */
+    public static Map<String, Object> buildToolInputSchema(java.lang.reflect.Method method) {
+        Map<String, Object> schema = new java.util.LinkedHashMap<>();
+        schema.put("type", "object");
+
+        Map<String, Object> properties = new java.util.LinkedHashMap<>();
+        List<String> required = new ArrayList<>();
+        Map<String, Object> rootDefs = new java.util.LinkedHashMap<>();
+
+        java.lang.reflect.Parameter[] params = method.getParameters();
+        java.lang.reflect.Type[] genericTypes = method.getGenericParameterTypes();
+
+        for (int i = 0; i < params.length; i++) {
+            io.mcpmesh.Param paramAnn = params[i].getAnnotation(io.mcpmesh.Param.class);
+            if (paramAnn == null) {
+                continue; // injectable / non-MCP parameter
+            }
+
+            Map<String, Object> propSchema = generateParameterSchema(genericTypes[i]);
+            hoistDefs(propSchema, rootDefs);
+
+            // @Param description WINS over a victools-derived one (Jackson
+            // @JsonClassDescription on the parameter type, etc.) — the
+            // user's per-parameter annotation is the more specific intent,
+            // and the legacy heartbeat builder always used @Param here, so
+            // letting the type-derived text shadow it would silently change
+            // registry-advertised descriptions (#1164 review follow-up).
+            // When @Param carries no description, the derived one is kept.
+            if (!paramAnn.description().isEmpty()) {
+                propSchema.put("description", paramAnn.description());
+            }
+
+            io.mcpmesh.MediaParam mediaParamAnn = params[i].getAnnotation(io.mcpmesh.MediaParam.class);
+            if (mediaParamAnn != null) {
+                propSchema.put("x-media-type", mediaParamAnn.value());
+                String existingDesc = String.valueOf(propSchema.getOrDefault("description", ""));
+                String mediaNote = "(accepts media URI: " + mediaParamAnn.value() + ")";
+                if (!existingDesc.contains(mediaNote)) {
+                    propSchema.put("description", (existingDesc + " " + mediaNote).trim());
+                }
+            }
+
+            properties.put(paramAnn.value(), propSchema);
+            if (paramAnn.required()) {
+                required.add(paramAnn.value());
+            }
+        }
+
+        schema.put("properties", properties);
+        if (!required.isEmpty()) {
+            schema.put("required", required);
+        }
+        if (!rootDefs.isEmpty()) {
+            schema.put("$defs", rootDefs);
+        }
+        return schema;
+    }
+
+    /**
+     * Generate the victools schema for one parameter type as a mutable Map.
+     * Bare {@code "#"} root self-refs (recursive parameter types) are rewritten
+     * to a named {@code $defs} entry first — embedding a bare {@code "#"} into
+     * the composed tool schema would re-point it at the wrong root.
+     * Falls back to {@code {"type":"object"}} on generation failure.
+     */
+    private static Map<String, Object> generateParameterSchema(java.lang.reflect.Type type) {
+        try {
+            JsonNode node = SCHEMA_GENERATOR.generateSchema(type);
+            node = rewriteRootSelfRefs(node, rawClassOf(type));
+            Map<String, Object> map = JSON.convertValue(
+                node, new tools.jackson.core.type.TypeReference<Map<String, Object>>() {});
+            if (map != null) {
+                return map;
+            }
+        } catch (Exception e) {
+            log.warn("Failed to generate JSON Schema for tool parameter type {}: {}", type, e.getMessage());
+        }
+        Map<String, Object> fallback = new java.util.LinkedHashMap<>();
+        fallback.put("type", "object");
+        return fallback;
+    }
+
+    /** Erased class of a reflective Type (for $defs naming); Object.class fallback. */
+    private static Class<?> rawClassOf(java.lang.reflect.Type type) {
+        if (type instanceof Class<?> c) {
+            return c;
+        }
+        if (type instanceof java.lang.reflect.ParameterizedType pt
+                && pt.getRawType() instanceof Class<?> raw) {
+            return raw;
+        }
+        return Object.class;
+    }
+
+    /**
+     * Hoist a property schema's {@code $defs} block into the composed root
+     * schema's defs map, in place. Structurally identical defs are reused;
+     * same-name-different-body collisions get a numeric-suffix rename, with
+     * every {@code #/$defs/<name>} pointer inside the property subtree (and
+     * its own def bodies) rewritten to the disambiguated name.
+     *
+     * <p>Collision detection iterates to a FIXPOINT over post-rename bodies
+     * (#1164 review follow-up): a def whose body only diverges from the root
+     * entry AFTER a nested ref is renamed (e.g. two same-named {@code Wrap}
+     * defs referencing two different same-named {@code Item} defs) must also
+     * be disambiguated. A single pre-rename comparison pass judged such defs
+     * structurally equal, dropped the second one via putIfAbsent, and silently
+     * served the WRONG nested subtree (the renamed {@code Item_2} def was
+     * hoisted but orphaned). Each iteration compares the candidate body with
+     * all renames-so-far applied; every iteration adds at least one rename, so
+     * the loop is bounded by the def count.
+     */
+    @SuppressWarnings("unchecked")
+    private static void hoistDefs(Map<String, Object> propSchema, Map<String, Object> rootDefs) {
+        Object defsObj = propSchema.remove("$defs");
+        if (!(defsObj instanceof Map)) {
+            return;
+        }
+        Map<String, Object> propDefs = (Map<String, Object>) defsObj;
+
+        Map<String, String> renames = new java.util.LinkedHashMap<>();
+        while (true) {
+            Map<String, String> newRenames = new java.util.LinkedHashMap<>();
+            for (Map.Entry<String, Object> e : propDefs.entrySet()) {
+                String name = e.getKey();
+                if (renames.containsKey(name) || !rootDefs.containsKey(name)) {
+                    continue;
+                }
+                // Compare what WOULD be stored: the body with all renames
+                // decided so far applied (on a copy — the in-place rewrite
+                // happens once, below, after the rename set is final).
+                Object candidateBody = deepCopy(e.getValue());
+                if (!renames.isEmpty()) {
+                    renameDefsRefs(candidateBody, renames);
+                }
+                if (!rootDefs.get(name).equals(candidateBody)) {
+                    int suffix = 2;
+                    String candidate = name + "_" + suffix;
+                    while (rootDefs.containsKey(candidate) || propDefs.containsKey(candidate)
+                            || renames.containsValue(candidate)) {
+                        candidate = name + "_" + (++suffix);
+                    }
+                    newRenames.put(name, candidate);
+                    log.debug("$defs name collision on '{}' while composing tool input schema — "
+                        + "disambiguated to '{}'", name, candidate);
+                }
+            }
+            if (newRenames.isEmpty()) {
+                break;
+            }
+            renames.putAll(newRenames);
+        }
+        if (!renames.isEmpty()) {
+            renameDefsRefs(propSchema, renames);
+            for (Object defBody : propDefs.values()) {
+                renameDefsRefs(defBody, renames);
+            }
+        }
+        for (Map.Entry<String, Object> e : propDefs.entrySet()) {
+            String target = renames.getOrDefault(e.getKey(), e.getKey());
+            rootDefs.putIfAbsent(target, e.getValue());
+        }
+    }
+
+    /** Rewrite {@code "#/$defs/<old>"} pointers per the rename map, in place. */
+    @SuppressWarnings("unchecked")
+    private static void renameDefsRefs(Object node, Map<String, String> renames) {
+        if (node instanceof Map<?, ?> m) {
+            Map<String, Object> obj = (Map<String, Object>) m;
+            Object ref = obj.get("$ref");
+            if (ref instanceof String s && s.startsWith("#/$defs/")) {
+                String name = s.substring("#/$defs/".length());
+                String renamed = renames.get(name);
+                if (renamed != null) {
+                    obj.put("$ref", "#/$defs/" + renamed);
+                }
+            }
+            for (Object v : obj.values()) {
+                renameDefsRefs(v, renames);
+            }
+        } else if (node instanceof List<?> l) {
+            for (Object item : l) {
+                renameDefsRefs(item, renames);
+            }
+        }
+    }
+
+    /**
      * Generate a raw JSON Schema for a Java class as a JSON string.
      *
      * @param type the class to introspect
@@ -165,8 +381,21 @@ public final class MeshSchemaSupport {
         }
 
         // Build the body: root content minus $defs, with `#` refs rewritten to
-        // `#/$defs/<TypeName>`.
+        // `#/$defs/<TypeName>`. Issue #1164 LOW: a pre-existing $defs entry with
+        // the same simple name (another package's type) must NOT be shadowed —
+        // its internal refs point at the old body. Disambiguate the new root
+        // def with a numeric suffix instead.
         String defName = type.getSimpleName();
+        if (existingDefs != null && existingDefs.has(defName)) {
+            int suffix = 2;
+            String candidate = defName + "_" + suffix;
+            while (existingDefs.has(candidate)) {
+                candidate = defName + "_" + (++suffix);
+            }
+            log.debug("rewriteRootSelfRefs: $defs already contains '{}' — "
+                + "disambiguating root self-ref def to '{}'", defName, candidate);
+            defName = candidate;
+        }
         ObjectNode body = JSON.createObjectNode();
         Iterator<Map.Entry<String, JsonNode>> fields = rootObj.properties().iterator();
         while (fields.hasNext()) {

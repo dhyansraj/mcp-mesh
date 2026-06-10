@@ -323,7 +323,7 @@ public final class JobsRuntimeManager implements SmartLifecycle {
         try {
             Object result = method.invoke(bean, fullArgs);
             if (result instanceof java.util.concurrent.CompletableFuture<?> cf) {
-                result = cf.get();
+                result = awaitFutureWithJobBudget(cf, meta.capability());
             }
             return result;
         } catch (InvocationTargetException ite) {
@@ -332,6 +332,45 @@ public final class JobsRuntimeManager implements SmartLifecycle {
             throw new RuntimeException(cause);
         }
     }
+
+    /**
+     * Issue #1164 MED-5: claim-path symmetry with the inbound wrapper's
+     * bounded async await. The claim path previously called {@code cf.get()}
+     * with no timeout — a never-completing future would pin a dispatch
+     * thread forever. Bound the await to the job's actual budget
+     * ({@code max_duration} from the claim, surfaced via the
+     * {@link io.mcpmesh.JobContext} snapshot the dispatcher binds around
+     * this handler), falling back to a generous ceiling when the job has no
+     * deadline (jobs are unlimited-by-default per the registry contract, so
+     * the fallback is a leak backstop, not a policy timeout). The timed-out
+     * future is cancelled, which frees the dispatch thread, cancels
+     * dependent stages, and turns a late {@code complete()} into a no-op —
+     * {@code CompletableFuture.cancel} does NOT interrupt the thread
+     * computing the value ({@code mayInterruptIfRunning} has no effect per
+     * its javadoc), so orphaned producer-side work runs to completion in
+     * the background.
+     */
+    static Object awaitFutureWithJobBudget(
+            java.util.concurrent.CompletableFuture<?> cf, String capability) throws Exception {
+        io.mcpmesh.JobContext.Snapshot job = io.mcpmesh.JobContext.current();
+        Long budget = job != null ? job.deadlineSecsRemaining : null;
+        long timeoutSecs = (budget != null && budget > 0) ? budget : NO_DEADLINE_AWAIT_CEILING_SECS;
+        try {
+            return cf.get(timeoutSecs, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException te) {
+            cf.cancel(true);
+            throw new RuntimeException("Async operation timed out after " + timeoutSecs
+                + " seconds (claim-path budget for capability '" + capability + "')");
+        }
+    }
+
+    /**
+     * Await ceiling for claim-dispatched jobs with no {@code max_duration}.
+     * 24h — large enough to never strangle a legitimate long-running job,
+     * small enough that a leaked never-completing future eventually frees
+     * its dispatch thread.
+     */
+    static final long NO_DEADLINE_AWAIT_CEILING_SECS = 86_400L;
 
     /** Best-effort scalar coercion — identical to MeshToolWrapper's fast path. */
     private static Object coerce(Object val, Class<?> target) {
@@ -358,12 +397,18 @@ public final class JobsRuntimeManager implements SmartLifecycle {
     }
 
     private MeshToolWrapper lookupWrapperForMethod(MeshToolRegistry.ToolMetadata meta) {
-        // Wrappers are keyed by funcId == className.methodName
-        String funcId = meta.bean().getClass().getName() + "." + meta.method().getName();
+        // Wrappers are keyed by funcId == targetClassName.methodName.
+        // Unwrap AOP proxies the same way MeshToolBeanPostProcessor does when
+        // constructing the wrapper key, so Spring-proxied beans
+        // (Foo$$SpringCGLIB$$0) hit the primary lookup (issue #1164 MED-1).
+        String funcId = org.springframework.aop.support.AopUtils.getTargetClass(meta.bean()).getName()
+            + "." + meta.method().getName();
         MeshToolWrapper wrapper = wrapperRegistry.getWrapper(funcId);
         if (wrapper == null) {
-            // Fall back via method name (covers CGLIB-proxied beans where
-            // the class name diverges from the user's source class).
+            // Fall back via method name (defensive — covers any residual
+            // key divergence between registration and lookup).
+            log.debug("Wrapper lookup miss for funcId={}; falling back to method-name lookup '{}'",
+                funcId, meta.method().getName());
             wrapper = wrapperRegistry.getWrapperByMethodName(meta.method().getName());
         }
         return wrapper;
