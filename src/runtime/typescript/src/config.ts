@@ -17,6 +17,24 @@ import {
 } from "@mcpmesh/core";
 
 /**
+ * Hard cap on the exponential backoff between `nextEvent()` retries in
+ * the mesh event loops (MeshAgent, ApiRuntime, MeshExpress).
+ */
+export const NEXT_EVENT_BACKOFF_CAP_MS = 5_000;
+
+/**
+ * Consecutive `nextEvent()` failure ceiling for the mesh event loops.
+ *
+ * The backoff ramps 100ms → 3.2s over the first 6 failures (~6.3s of
+ * sleep), then sits at the 5s cap; terminating on failure #18 means
+ * 11 more sleeps at the cap (~55s), so the loop tolerates roughly
+ * 60 seconds of CONTINUOUS failure before giving up. A permanently
+ * broken handle must not retry forever — the ref'd backoff timers
+ * would keep an otherwise-finished process alive indefinitely.
+ */
+export const MAX_CONSECUTIVE_NEXT_EVENT_FAILURES = 18;
+
+/**
  * Find an available port by binding to port 0 and getting the OS-assigned port.
  * This is used when port=0 is specified to auto-assign a port.
  */

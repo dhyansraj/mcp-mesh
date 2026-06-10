@@ -21,6 +21,18 @@ const debug = createDebug("provider-handler-registry");
  */
 export type ProviderHandlerConstructor = new () => ProviderHandler;
 
+/**
+ * Constructor type for the fallback handler (issue #1163 MED-4): the
+ * registry passes the requested vendor through so an unregistered vendor
+ * still gets vendor-aware prompt shaping (the Rust core's
+ * formatSystemPrompt branches on the vendor string). A plain
+ * `new () => ProviderHandler` is assignable here, so existing fallback
+ * classes keep working.
+ */
+export type FallbackHandlerConstructor = new (
+  vendor?: string
+) => ProviderHandler;
+
 // ============================================================================
 // Registry Singleton
 // ============================================================================
@@ -57,7 +69,7 @@ export class ProviderHandlerRegistry {
   private static instances: Map<string, ProviderHandler> = new Map();
 
   /** Fallback handler class (set by generic-handler.ts) */
-  private static fallbackHandlerClass: ProviderHandlerConstructor | null = null;
+  private static fallbackHandlerClass: FallbackHandlerConstructor | null = null;
 
   /**
    * Register a custom provider handler.
@@ -94,7 +106,7 @@ export class ProviderHandlerRegistry {
    *
    * @param handlerClass - Fallback handler class
    */
-  static setFallbackHandler(handlerClass: ProviderHandlerConstructor): void {
+  static setFallbackHandler(handlerClass: FallbackHandlerConstructor): void {
     this.fallbackHandlerClass = handlerClass;
     debug(`Set fallback handler: ${handlerClass.name}`);
   }
@@ -157,7 +169,10 @@ export class ProviderHandlerRegistry {
         debug(`Using GenericHandler for unknown vendor`);
       }
 
-      handler = new this.fallbackHandlerClass();
+      // Pass the requested vendor through (issue #1163 MED-4) so the
+      // fallback handler's prompt shaping is vendor-aware instead of
+      // hard-wired to "unknown".
+      handler = new this.fallbackHandlerClass(normalizedVendor);
     }
 
     // Cache the instance

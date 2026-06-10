@@ -52,7 +52,13 @@ import {
 } from "@mcpmesh/core";
 
 import type { AgentConfig, ResolvedAgentConfig } from "./types.js";
-import { resolveConfig, generateAgentIdSuffix, findAvailablePort } from "./config.js";
+import {
+  resolveConfig,
+  generateAgentIdSuffix,
+  findAvailablePort,
+  MAX_CONSECUTIVE_NEXT_EVENT_FAILURES,
+  NEXT_EVENT_BACKOFF_CAP_MS,
+} from "./config.js";
 import { createProxy } from "./proxy.js";
 import { RouteRegistry, type RouteMetadata } from "./route.js";
 import { initTracing, type AgentMetadata } from "./tracing.js";
@@ -140,6 +146,24 @@ export class MeshExpress {
   private server: Server | null = null;
   private started = false;
   private shutdownRequested = false;
+  /**
+   * Memoized in-flight (or completed) teardown. `shutdown()` is
+   * idempotent: the first caller creates this promise and every later
+   * caller — user code, the signal handler, a second signal — awaits
+   * the SAME teardown instead of racing a concurrent napi
+   * `handle.shutdown()` / `server.close()`.
+   */
+  private shutdownPromise: Promise<void> | null = null;
+  /**
+   * This instance's own SIGINT/SIGTERM handler references, kept so
+   * shutdown() can `process.off` them — otherwise sequential instances
+   * in one process accumulate stale handlers whose memoized (already
+   * resolved) shutdown() would `process.exit(0)` on the next signal.
+   */
+  private signalHandlers: {
+    sigint: () => void;
+    sigterm: () => void;
+  } | null = null;
 
   constructor(app: Application, config: MeshExpressConfig) {
     this.app = app;
@@ -228,16 +252,22 @@ export class MeshExpress {
 
   /**
    * Start the Express HTTP server.
+   *
+   * Issue #1163 MED-3: uses `await import("node:https")` — `require()`
+   * is not defined in an ESM package ("type": "module"), so the TLS
+   * path previously threw a ReferenceError at startup. Mirrors the
+   * MCP-agent path in agent.ts.
    */
-  private startServer(): Promise<void> {
+  private async startServer(): Promise<void> {
+    const bindHost = process.env.HOST ?? "0.0.0.0";
+
+    // Use HTTPS when TLS is enabled
+    const tlsOpts = getTlsOptions();
+    const https = tlsOpts ? await import("node:https") : null;
+
     return new Promise((resolve, reject) => {
       try {
-        const bindHost = process.env.HOST ?? "0.0.0.0";
-
-        // Use HTTPS when TLS is enabled
-        const tlsOpts = getTlsOptions();
-        if (tlsOpts) {
-          const https = require("node:https");
+        if (tlsOpts && https) {
           const serverOpts = {
             ...tlsOpts,
             requestCert: true,
@@ -321,16 +351,68 @@ export class MeshExpress {
 
   /**
    * Run the event loop to handle mesh events.
+   *
+   * Resilience (issue #1163 MED-1): the loop must outlive individual
+   * failures. A throw from an event handler (e.g. a malformed event
+   * hitting a non-null assertion) is logged and the loop continues; a
+   * `nextEvent()` rejection (e.g. a transient napi failure) backs off
+   * exponentially (capped) and retries. Only the "shutdown" event — or
+   * the handle being torn down — exits the loop.
    */
   private async runEventLoop(): Promise<void> {
     if (!this.handle) return;
 
     const registry = RouteRegistry.getInstance();
+    let consecutiveNextEventFailures = 0;
 
     while (true) {
-      try {
-        const event = await this.handle.nextEvent();
+      // Handle is nulled by shutdown(); exit cleanly instead of
+      // spinning on a dead reference.
+      if (!this.handle) {
+        console.log("Event loop: handle closed, exiting");
+        return;
+      }
 
+      let event: Awaited<ReturnType<JsAgentHandle["nextEvent"]>>;
+      try {
+        event = await this.handle.nextEvent();
+        consecutiveNextEventFailures = 0;
+      } catch (err) {
+        // Explicit shutdown() racing a failing nextEvent(): exit
+        // promptly instead of burning more backoff cycles.
+        if (!this.handle || this.shutdownRequested) {
+          console.log("Event loop: shutdown requested, exiting");
+          return;
+        }
+        consecutiveNextEventFailures++;
+        // Ceiling (~60s of continuous failure — see the constant's doc
+        // in config.ts): a permanently broken handle must not retry
+        // forever, keeping the process alive via the backoff timer.
+        if (
+          consecutiveNextEventFailures >= MAX_CONSECUTIVE_NEXT_EVENT_FAILURES
+        ) {
+          console.error(
+            `Event loop: terminating after ${consecutiveNextEventFailures} ` +
+              `consecutive nextEvent() failures; dependency topology is ` +
+              `frozen for the remainder of the process:`,
+            err
+          );
+          return;
+        }
+        const backoffMs = Math.min(
+          100 * 2 ** (consecutiveNextEventFailures - 1),
+          NEXT_EVENT_BACKOFF_CAP_MS
+        );
+        console.error(
+          `Event loop: nextEvent() failed (consecutive=${consecutiveNextEventFailures}), ` +
+            `retrying in ${backoffMs}ms:`,
+          err
+        );
+        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        continue;
+      }
+
+      try {
         switch (event.eventType) {
           case "agent_registered":
             console.log(`Service registered with ID: ${event.agentId}`);
@@ -397,8 +479,13 @@ export class MeshExpress {
             break;
         }
       } catch (err) {
-        console.error("Event loop error:", err);
-        break;
+        // Per-event isolation: a bad event (or a bug in one handler)
+        // must not kill dependency-event processing for the process
+        // lifetime. Log and keep consuming events.
+        console.error(
+          `Event loop: error handling event '${event.eventType}':`,
+          err
+        );
       }
     }
   }
@@ -489,25 +576,56 @@ export class MeshExpress {
    * the event loop cleanly.
    */
   private installSignalHandlers(): void {
+    const SIGNAL_SHUTDOWN_TIMEOUT_MS = 10_000;
+    // Dedupe repeated signals locally. This must NOT key off
+    // `shutdownRequested` (set by shutdown() itself): a signal arriving
+    // while a user-initiated shutdown() is in flight must still arm the
+    // force-exit timer and exit the process when that same (memoized)
+    // shutdown completes.
+    let signalHandled = false;
     const shutdownHandler = (signal: string) => {
-      if (this.shutdownRequested) return;
-      this.shutdownRequested = true;
+      if (signalHandled) return;
+      signalHandled = true;
 
       console.log(
         `\nReceived ${signal}, shutting down service ${this.serviceId}...`
       );
 
+      // Bounded overall shutdown (issue #1163 MED-2 consistency): a
+      // hang anywhere in the cleanup sequence (e.g. server.close()
+      // waiting on open connections) cannot wedge the process past its
+      // SIGTERM grace.
+      //
+      // Deliberately ref'd (no unref): both completion paths below
+      // clearTimeout and process.exit synchronously, so the timer never
+      // delays a successful exit — but it must keep a wedged shutdown's
+      // otherwise-empty event loop alive long enough to emit the loud
+      // exit(1) diagnostic instead of silently exiting 0.
+      const forceExitTimer = setTimeout(() => {
+        console.error(
+          `Shutdown did not complete within ${SIGNAL_SHUTDOWN_TIMEOUT_MS}ms; forcing exit`
+        );
+        process.exit(1);
+      }, SIGNAL_SHUTDOWN_TIMEOUT_MS);
+
       this.shutdown().then(() => {
+        clearTimeout(forceExitTimer);
         console.log(`Service ${this.serviceId} shut down cleanly`);
         process.exit(0);
       }).catch((err) => {
+        clearTimeout(forceExitTimer);
         console.error("Error during shutdown:", err);
         process.exit(1);
       });
     };
 
-    process.on("SIGINT", () => shutdownHandler("SIGINT"));
-    process.on("SIGTERM", () => shutdownHandler("SIGTERM"));
+    // Keep named references so shutdown() can remove exactly these
+    // listeners (anonymous arrows can't be process.off'd).
+    const sigint = () => shutdownHandler("SIGINT");
+    const sigterm = () => shutdownHandler("SIGTERM");
+    this.signalHandlers = { sigint, sigterm };
+    process.on("SIGINT", sigint);
+    process.on("SIGTERM", sigterm);
   }
 
   /**
@@ -547,20 +665,41 @@ export class MeshExpress {
 
   /**
    * Shutdown the service gracefully.
+   *
+   * Idempotent and re-entrant: the first call runs the teardown; every
+   * later call (user code, the signal handler, a double signal) returns
+   * the SAME promise. The memo is never cleared: shutdown is terminal,
+   * and re-running a half-torn-down cleanup after a failure would be
+   * worse than surfacing the original rejection to every caller.
    */
-  async shutdown(): Promise<void> {
-    if (this.handle) {
-      await this.handle.shutdown();
-      this.handle = null;
-    }
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shutdownRequested = true;
+    this.shutdownPromise = (async () => {
+      if (this.handle) {
+        await this.handle.shutdown();
+        this.handle = null;
+      }
 
-    if (this.server) {
-      await new Promise<void>((resolve) => {
-        this.server!.close(() => resolve());
-      });
-      this.server = null;
-    }
-    cleanupTls();
+      if (this.server) {
+        await new Promise<void>((resolve) => {
+          this.server!.close(() => resolve());
+        });
+        this.server = null;
+      }
+      cleanupTls();
+      // Remove this instance's own signal listeners LAST: during the
+      // teardown above a signal must still reach the handler (it arms
+      // the force-exit timer). Leaving them installed would let a later
+      // instance's signal hit this already-resolved shutdown() and
+      // process.exit(0) prematurely.
+      if (this.signalHandlers) {
+        process.off("SIGINT", this.signalHandlers.sigint);
+        process.off("SIGTERM", this.signalHandlers.sigterm);
+        this.signalHandlers = null;
+      }
+    })();
+    return this.shutdownPromise;
   }
 }
 

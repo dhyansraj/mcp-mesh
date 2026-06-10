@@ -407,10 +407,17 @@ export async function callMcpTool(
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < options.maxAttempts; attempt++) {
+    // Abort timer covers the WHOLE attempt — connect, headers, AND body
+    // read — and is cleared in `finally` (issue #1163 LOW-5). Previously
+    // it was cleared right after `fetch` resolved, so (a) a fetch
+    // rejection leaked one armed timer per retry for the rest of the
+    // timeout window, and (b) the body read (response.text() / SSE) was
+    // unbounded by the call timeout. Keeping the controller armed until
+    // the body is consumed makes an over-deadline body read abort and
+    // surface through the existing isTimeoutError path below.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), effectiveTimeout);
-
       wireJobCancel(controller);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -428,8 +435,6 @@ export async function callMcpTool(
       }
 
       const response = await fetch(mcpEndpoint, fetchOptions as RequestInit);
-
-      clearTimeout(timeoutId);
 
       if (!response.ok) {
         throw new Error(
@@ -518,6 +523,8 @@ export async function callMcpTool(
         await sleep(options.retryDelay * Math.pow(options.retryBackoff, attempt));
         continue;
       }
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

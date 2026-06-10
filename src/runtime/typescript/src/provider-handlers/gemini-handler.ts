@@ -166,3 +166,10 @@ ProviderHandlerRegistry.register("gemini", GeminiHandler);
 // only the auth/transport differs (IAM via @ai-sdk/google-vertex vs API key via
 // @ai-sdk/google). Mirrors Python's GeminiHandler registry alias.
 ProviderHandlerRegistry.register("vertex_ai", GeminiHandler);
+
+// Also register under "google" (issue #1163 MED-4) — "google" is a first-class
+// model prefix throughout the runtime (VENDOR_PROVIDERS, the useMaxSteps /
+// skipResponseFormat guards in llm-provider.ts, media/resolver.ts) and is the
+// handler's own `vendor` field. Without this alias, getHandler("google") fell
+// through to the GenericHandler and lost Gemini-specific prompt shaping.
+ProviderHandlerRegistry.register("google", GeminiHandler);

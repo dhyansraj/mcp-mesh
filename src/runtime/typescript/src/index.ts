@@ -352,6 +352,7 @@ export {
 } from "./inbound-job-dispatch.js";
 export {
   ClaimDispatcher,
+  stopDispatchers,
   type ClaimHandler,
 } from "./claim-dispatcher.js";
 export { registerJobHelperTools } from "./jobs-helper-tools.js";
