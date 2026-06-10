@@ -30,7 +30,12 @@ public class MeshRuntime implements SmartLifecycle {
     private final ObjectMapper objectMapper;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
-    private MeshHandle handle;
+    // Volatile + local-snapshot access pattern: stop() nulls this field
+    // concurrently with accessors (nextEvent on the event-loop thread, health
+    // reporting, etc.). Each accessor snapshots the field once, so it either
+    // sees null (runtime stopped) or a MeshHandle whose own closed-guard makes
+    // any post-close call safe (issue #1179).
+    private volatile MeshHandle handle;
     private volatile int pendingPort = -1;
 
     public MeshRuntime(AgentSpec agentSpec) {
@@ -90,13 +95,16 @@ public class MeshRuntime implements SmartLifecycle {
     public void stop() {
         if (running.compareAndSet(true, false)) {
             log.info("Stopping MCP Mesh runtime");
-            if (handle != null) {
+            MeshHandle h = handle;
+            // Null the field BEFORE closing so concurrent accessors snapshot
+            // null instead of a handle that is about to be (or being) closed.
+            handle = null;
+            if (h != null) {
                 try {
-                    handle.close();
+                    h.close();
                 } catch (Exception e) {
                     log.warn("Error closing mesh handle", e);
                 }
-                handle = null;
             }
             MeshTlsConfig.cleanupTls();
             log.info("MCP Mesh runtime stopped");
@@ -105,7 +113,8 @@ public class MeshRuntime implements SmartLifecycle {
 
     @Override
     public boolean isRunning() {
-        return running.get() && handle != null && handle.isRunning();
+        MeshHandle h = handle;
+        return running.get() && h != null && h.isRunning();
     }
 
     @Override
@@ -122,10 +131,14 @@ public class MeshRuntime implements SmartLifecycle {
      * @return The next event, or null on timeout
      */
     public MeshEvent nextEvent(long timeoutMs) {
-        if (handle == null || !isRunning()) {
+        // Snapshot once: stop() may null the field at any point. The snapshot
+        // stays safe to call even if stop() closes it concurrently — a closed
+        // MeshHandle returns Optional.empty() from nextEvent.
+        MeshHandle h = handle;
+        if (h == null || !running.get() || !h.isRunning()) {
             return null;
         }
-        return handle.nextEvent(timeoutMs).orElse(null);
+        return h.nextEvent(timeoutMs).orElse(null);
     }
 
     /**
@@ -134,8 +147,9 @@ public class MeshRuntime implements SmartLifecycle {
      * @param status Health status: "healthy", "degraded", or "unhealthy"
      */
     public void reportHealth(String status) {
-        if (handle != null && isRunning()) {
-            handle.reportHealth(status);
+        MeshHandle h = handle;
+        if (h != null && running.get() && h.isRunning()) {
+            h.reportHealth(status);
         }
     }
 
@@ -150,8 +164,9 @@ public class MeshRuntime implements SmartLifecycle {
      * @return true if the update was sent successfully
      */
     public boolean updatePort(int port) {
-        if (handle != null && isRunning()) {
-            return handle.updatePort(port);
+        MeshHandle h = handle;
+        if (h != null && running.get() && h.isRunning()) {
+            return h.updatePort(port);
         }
         // Runtime not started yet — save for application during start()
         log.info("Runtime not yet started. Saving port {} for deferred update", port);
@@ -163,8 +178,9 @@ public class MeshRuntime implements SmartLifecycle {
      * Request graceful shutdown.
      */
     public void shutdown() {
-        if (handle != null) {
-            handle.shutdown();
+        MeshHandle h = handle;
+        if (h != null) {
+            h.shutdown();
         }
     }
 
