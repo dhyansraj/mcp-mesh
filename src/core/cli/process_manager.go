@@ -183,10 +183,33 @@ func (pm *ProcessManager) UntrackProcess(name string) bool {
 	return false
 }
 
-// GetProcess returns information about a managed process
+// clone returns a deep copy of the ProcessInfo so callers can't mutate (or
+// race on) the manager's shared state through the returned pointer. The
+// Process handle is intentionally shared: *os.Process is safe for concurrent
+// Signal/Kill calls and cloning it is not meaningful.
+func (info *ProcessInfo) clone() *ProcessInfo {
+	c := *info
+	if info.Environment != nil {
+		c.Environment = make(map[string]string, len(info.Environment))
+		for k, v := range info.Environment {
+			c.Environment[k] = v
+		}
+	}
+	if info.Metadata != nil {
+		c.Metadata = make(map[string]interface{}, len(info.Metadata))
+		for k, v := range info.Metadata {
+			c.Metadata[k] = v
+		}
+	}
+	return &c
+}
+
+// GetProcess returns a deep copy of a managed process's info. The write lock
+// is required (not RLock) because updateProcessStatus mutates the shared
+// struct (Status/LastSeen/HealthCheck/Process).
 func (pm *ProcessManager) GetProcess(name string) (*ProcessInfo, bool) {
-	pm.mutex.RLock()
-	defer pm.mutex.RUnlock()
+	pm.mutex.Lock()
+	defer pm.mutex.Unlock()
 
 	info, exists := pm.processes[name]
 	if !exists {
@@ -196,19 +219,20 @@ func (pm *ProcessManager) GetProcess(name string) (*ProcessInfo, bool) {
 	// Update process status
 	pm.updateProcessStatus(info)
 
-	return info, true
+	return info.clone(), true
 }
 
-// GetAllProcesses returns all managed processes
+// GetAllProcesses returns deep copies of all managed processes. The write
+// lock is required (not RLock) because updateProcessStatus mutates the shared
+// structs; the copies mean concurrent callers never alias manager state.
 func (pm *ProcessManager) GetAllProcesses() map[string]*ProcessInfo {
-	pm.mutex.RLock()
-	defer pm.mutex.RUnlock()
+	pm.mutex.Lock()
+	defer pm.mutex.Unlock()
 
-	// Create a copy to avoid race conditions
-	result := make(map[string]*ProcessInfo)
+	result := make(map[string]*ProcessInfo, len(pm.processes))
 	for name, info := range pm.processes {
 		pm.updateProcessStatus(info)
-		result[name] = info
+		result[name] = info.clone()
 	}
 
 	return result
@@ -236,7 +260,8 @@ func (pm *ProcessManager) cleanupDeadProcesses() []string {
 	return removed
 }
 
-// updateProcessStatus updates the status of a process
+// updateProcessStatus updates the status of a process.
+// Caller must hold pm.mutex (write lock) — this mutates the shared struct.
 func (pm *ProcessManager) updateProcessStatus(info *ProcessInfo) {
 	if info.Process == nil {
 		// Try to find process by PID if we don't have a handle

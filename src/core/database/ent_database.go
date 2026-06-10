@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -257,7 +258,9 @@ func (db *EntDatabase) Transaction(ctx context.Context, fn func(*ent.Tx) error) 
 
 	if err := fn(tx); err != nil {
 		if rerr := tx.Rollback(); rerr != nil {
-			return fmt.Errorf("rolling back transaction: %w", rerr)
+			// Preserve the original error — it explains WHY we rolled back —
+			// alongside the rollback failure.
+			return errors.Join(err, fmt.Errorf("rolling back transaction: %w", rerr))
 		}
 		return err
 	}
@@ -291,7 +294,9 @@ func (db *EntDatabase) TransactionWithOptions(ctx context.Context, opts *sql.TxO
 
 	if err := fn(tx); err != nil {
 		if rerr := tx.Rollback(); rerr != nil {
-			return fmt.Errorf("rolling back transaction: %w", rerr)
+			// Preserve the original error — it explains WHY we rolled back —
+			// alongside the rollback failure.
+			return errors.Join(err, fmt.Errorf("rolling back transaction: %w", rerr))
 		}
 		return err
 	}

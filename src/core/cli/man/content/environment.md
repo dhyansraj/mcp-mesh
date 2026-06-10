@@ -419,6 +419,8 @@ export MCP_MESH_PROXY_TIMEOUT=60
 export MCP_MESH_CALL_TIMEOUT=300
 ```
 
+Streamed responses (e.g., SSE) routed through the registry proxy are bounded by the same call timeout — the proxy ends the exchange when it elapses, even mid-stream. Send a larger `X-Mesh-Timeout` header (or raise `MCP_MESH_PROXY_TIMEOUT`) for long-lived streams.
+
 ## MeshJob event channel
 
 Tunables for the MeshJob event injection + stream subscription surface

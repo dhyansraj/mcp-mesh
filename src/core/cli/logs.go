@@ -256,6 +256,18 @@ func readLogTailOnly(file *os.File, tailLines int) error {
 }
 
 func followLog(file *os.File, logPath string, tailLines int, sinceTime, untilTime *time.Time) error {
+	return followLogTo(os.Stdout, file, logPath, tailLines, sinceTime, untilTime, nil)
+}
+
+// followLogTo implements `logs -f` with tail -F semantics: when the watched
+// file is rotated away (RotateLogs renames it and a fresh file is created at
+// the same path), the follower drains what's left of the old file, reopens
+// logPath, and continues streaming from the new file instead of blocking
+// forever on the renamed inode.
+//
+// out receives the streamed lines; done (optional, may be nil) stops the
+// follower — both exist so tests can drive the loop deterministically.
+func followLogTo(out io.Writer, file *os.File, logPath string, tailLines int, sinceTime, untilTime *time.Time, done <-chan struct{}) error {
 	// First, print existing content (respecting tail)
 	if tailLines != 0 {
 		if err := readLog(file, tailLines, sinceTime, untilTime); err != nil {
@@ -279,49 +291,116 @@ func followLog(file *os.File, logPath string, tailLines int, sinceTime, untilTim
 		return fmt.Errorf("failed to watch log file: %w", err)
 	}
 
-	reader := bufio.NewReader(file)
+	// currentFile tracks the file we're streaming from; it diverges from the
+	// caller-owned `file` after a rotation. Close our reopened handle on exit
+	// (the caller's defer covers the original).
+	currentFile := file
+	defer func() {
+		if currentFile != file {
+			currentFile.Close()
+		}
+	}()
+
+	reader := bufio.NewReader(currentFile)
 
 	// Track last known timestamp for continuation lines
 	var lastKnownTime *time.Time
 
+	// emitNewLines drains complete lines from reader, applying time filters.
+	emitNewLines := func() {
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				break
+			}
+			line = strings.TrimSuffix(line, "\n")
+
+			// Apply time filters
+			if sinceTime != nil || untilTime != nil {
+				lineTime := parseLogTimestamp(line)
+				if lineTime != nil {
+					lastKnownTime = lineTime
+				}
+				effectiveTime := lineTime
+				if effectiveTime == nil {
+					effectiveTime = lastKnownTime
+				}
+				if effectiveTime != nil {
+					if sinceTime != nil && effectiveTime.Before(*sinceTime) {
+						continue
+					}
+					if untilTime != nil && effectiveTime.After(*untilTime) {
+						continue
+					}
+				}
+			}
+
+			fmt.Fprintln(out, line)
+		}
+	}
+
+	// reopenAfterRotation waits for a new file to appear at logPath (tail -F
+	// semantics: wait indefinitely, the agent may take a while to restart),
+	// then swaps the reader over to it and re-arms the watch.
+	reopenAfterRotation := func() error {
+		// Drain anything still buffered/readable from the rotated-away file.
+		emitNewLines()
+
+		var newFile *os.File
+		for {
+			f, err := os.Open(logPath)
+			if err == nil {
+				newFile = f
+				break
+			}
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("failed to reopen log after rotation: %w", err)
+			}
+			select {
+			case <-done:
+				return nil
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+
+		if currentFile != file {
+			currentFile.Close()
+		}
+		currentFile = newFile
+		reader = bufio.NewReader(currentFile)
+
+		// Re-arm the watch on the new inode. Remove is best-effort — the old
+		// watch may already be gone along with the renamed file.
+		_ = watcher.Remove(logPath)
+		if err := watcher.Add(logPath); err != nil {
+			return fmt.Errorf("failed to re-watch log file after rotation: %w", err)
+		}
+
+		// Emit anything already written to the fresh file before the watch
+		// was re-armed.
+		emitNewLines()
+		return nil
+	}
+
 	// Watch for changes
 	for {
 		select {
+		case <-done:
+			return nil
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return nil
 			}
-			if event.Op&fsnotify.Write == fsnotify.Write {
-				// Read new content
-				for {
-					line, err := reader.ReadString('\n')
-					if err != nil {
-						break
-					}
-					line = strings.TrimSuffix(line, "\n")
-
-					// Apply time filters
-					if sinceTime != nil || untilTime != nil {
-						lineTime := parseLogTimestamp(line)
-						if lineTime != nil {
-							lastKnownTime = lineTime
-						}
-						effectiveTime := lineTime
-						if effectiveTime == nil {
-							effectiveTime = lastKnownTime
-						}
-						if effectiveTime != nil {
-							if sinceTime != nil && effectiveTime.Before(*sinceTime) {
-								continue
-							}
-							if untilTime != nil && effectiveTime.After(*untilTime) {
-								continue
-							}
-						}
-					}
-
-					fmt.Println(line)
+			if event.Op&(fsnotify.Rename|fsnotify.Remove) != 0 {
+				// Log rotation: RotateLogs renames the file and a new one is
+				// created at the same path. Follow the path, not the inode.
+				if err := reopenAfterRotation(); err != nil {
+					return err
 				}
+				continue
+			}
+			if event.Op&fsnotify.Write == fsnotify.Write {
+				emitNewLines()
 			}
 		case err, ok := <-watcher.Errors:
 			if !ok {

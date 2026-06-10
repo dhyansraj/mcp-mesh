@@ -233,6 +233,11 @@ func buildAgentEnvironment(cmd *cobra.Command, registryURL string, config *CLICo
 // .group files and register registry/UI deps).
 func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, config *CLIConfig, locallyStartedRegistryPID int, groupID lifecycle.GroupID) error {
 	var agentCmds []*exec.Cmd
+	// agentCmdNames parallels agentCmds: the declared agent name resolved via
+	// extractAgentName (same resolution the detach path uses), so foreground
+	// PID files / process records carry the registered name instead of a
+	// filename-derived guess (#920/#1109 family).
+	var agentCmdNames []string
 	var watchers []*AgentWatcher
 	workingDir, _ := cmd.Flags().GetString("working-dir")
 	user, _ := cmd.Flags().GetString("user")
@@ -401,6 +406,7 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 		} else {
 			// For foreground mode, we'll start the process later
 			agentCmds = append(agentCmds, agentCmd)
+			agentCmdNames = append(agentCmdNames, extractAgentName(absPath))
 		}
 	}
 
@@ -414,7 +420,7 @@ func startAgentsWithEnv(agentPaths []string, env []string, cmd *cobra.Command, c
 
 	// If running in foreground, start agents and wait
 	if len(agentCmds) > 0 || len(watchers) > 0 {
-		return runAgentsInForeground(agentCmds, watchers, cmd, config, locallyStartedRegistryPID, groupID, uiEnabled)
+		return runAgentsInForeground(agentCmds, agentCmdNames, watchers, cmd, config, locallyStartedRegistryPID, groupID, uiEnabled)
 	}
 
 	return nil
@@ -445,7 +451,7 @@ func registerInvocationDeps(group lifecycle.GroupID, agents []string, uiEnabled,
 	}
 }
 
-func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd *cobra.Command, config *CLIConfig, locallyStartedRegistryPID int, groupID lifecycle.GroupID, uiEnabled bool) error {
+func runAgentsInForeground(agentCmds []*exec.Cmd, agentCmdNames []string, watchers []*AgentWatcher, cmd *cobra.Command, config *CLIConfig, locallyStartedRegistryPID int, groupID lifecycle.GroupID, uiEnabled bool) error {
 	// Setup signal handling
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -478,13 +484,13 @@ func runAgentsInForeground(agentCmds []*exec.Cmd, watchers []*AgentWatcher, cmd 
 			return fmt.Errorf("failed to start agent: %w", err)
 		}
 
+		// Use the declared agent name resolved at command-build time (same
+		// extractAgentName resolution as the detach path) so stop/logs find
+		// the agent under its registered name. Index fallback only guards a
+		// caller passing mismatched slices.
 		agentName := fmt.Sprintf("agent-%d", i)
-		for _, arg := range agentCmd.Args {
-			if strings.HasSuffix(arg, ".py") {
-				agentName = filepath.Base(arg)
-				agentName = strings.TrimSuffix(agentName, ".py")
-				break
-			}
+		if i < len(agentCmdNames) && agentCmdNames[i] != "" {
+			agentName = agentCmdNames[i]
 		}
 		trackedNames = append(trackedNames, agentName)
 		localAgentPIDsMu.Lock()
