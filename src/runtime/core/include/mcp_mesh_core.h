@@ -61,6 +61,16 @@ typedef struct JobProxyHandle JobProxyHandle;
 // This struct holds all resources needed to interact with the agent runtime.
 // It must be freed with `mesh_free_handle` when no longer needed.
 //
+// Lifetime: the raw pointer handed to C is `Arc`-managed
+// (`Arc::into_raw` in `mesh_start_agent`). Every accessor takes a
+// temporary strong reference for the duration of the call (see
+// `handle_guard`), and `mesh_free_handle` releases the creation
+// reference — so freeing while another thread is still inside
+// `mesh_next_event` / `mesh_report_health` / etc. defers the actual
+// drop until the last in-flight call returns instead of yanking the
+// memory out from under it (use-after-free under the "safe from any
+// thread" contract).
+//
 // Note: This struct is intentionally NOT `#[repr(C)]` to keep its internals
 // opaque to C consumers. The FFI functions work with raw pointers.
 typedef struct MeshAgentHandle MeshAgentHandle;
@@ -101,9 +111,23 @@ void mesh_shutdown(const struct MeshAgentHandle *handle);
 // `mesh_flush_spans(2000)`) so spans published during the agent's final
 // moments are not lost.
 //
+// Safe to call while other threads are still inside `mesh_*` accessors
+// on the same handle (including a `mesh_next_event` parked on an
+// infinite timeout): the handle is reference-counted, so this releases
+// the creation reference and the underlying resources are dropped when
+// the last in-flight call returns. A parked infinite `mesh_next_event`
+// unparks on its own — the graceful shutdown triggered here makes the
+// runtime emit the shutdown event and then exit, closing the event
+// channel, so the parked caller observes the shutdown event (or channel
+// close → NULL) and returns. Only if the runtime is wedged and never
+// processes the shutdown signal does a parked infinite wait keep the
+// resources alive (a leak, not a crash).
+//
 // # Safety
 // * `handle` must be a valid handle from `mesh_start_agent` or NULL
-// * After this call, `handle` is invalid and must not be used
+// * After this call, `handle` is invalid and must not be passed to any
+//   `mesh_*` function (calls already in flight are safe; new calls are
+//   not)
 void mesh_free_handle(struct MeshAgentHandle *handle);
 
 // Get next event from agent runtime.

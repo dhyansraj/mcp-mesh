@@ -46,6 +46,16 @@ pub(crate) fn take_last_error() -> Option<String> {
 /// This struct holds all resources needed to interact with the agent runtime.
 /// It must be freed with `mesh_free_handle` when no longer needed.
 ///
+/// Lifetime: the raw pointer handed to C is `Arc`-managed
+/// (`Arc::into_raw` in `mesh_start_agent`). Every accessor takes a
+/// temporary strong reference for the duration of the call (see
+/// `handle_guard`), and `mesh_free_handle` releases the creation
+/// reference — so freeing while another thread is still inside
+/// `mesh_next_event` / `mesh_report_health` / etc. defers the actual
+/// drop until the last in-flight call returns instead of yanking the
+/// memory out from under it (use-after-free under the "safe from any
+/// thread" contract).
+///
 /// Note: This struct is intentionally NOT `#[repr(C)]` to keep its internals
 /// opaque to C consumers. The FFI functions work with raw pointers.
 pub struct MeshAgentHandle {
@@ -81,6 +91,23 @@ impl MeshAgentHandle {
     pub fn mark_stopped(&self) {
         self.is_running.store(false, Ordering::SeqCst);
     }
+}
+
+/// Take a temporary strong reference to the handle for the duration of
+/// one FFI call.
+///
+/// The returned `Arc` keeps the handle (and its tokio runtime) alive even
+/// if `mesh_free_handle` runs concurrently on another thread — the memory
+/// is released only when the last in-flight call drops its guard.
+///
+/// # Safety
+/// `ptr` must be a non-null pointer obtained from `mesh_start_agent` that
+/// has not yet been passed to `mesh_free_handle`. (Calls that *start*
+/// after free are still undefined behavior — the contract is unchanged;
+/// this guard only protects calls already in flight when free happens.)
+unsafe fn handle_guard(ptr: *const MeshAgentHandle) -> Arc<MeshAgentHandle> {
+    Arc::increment_strong_count(ptr);
+    Arc::from_raw(ptr)
 }
 
 /// Library version string.
@@ -174,8 +201,10 @@ pub unsafe extern "C" fn mesh_start_agent(spec_json: *const c_char) -> *mut Mesh
         agent_runtime.run().await;
     });
 
-    // Create the handle
-    let handle = Box::new(MeshAgentHandle {
+    // Create the handle. Arc-managed (not Box) so concurrent in-flight
+    // accessors each hold a strong reference via `handle_guard` and
+    // `mesh_free_handle` cannot free the memory out from under them.
+    let handle = Arc::new(MeshAgentHandle {
         event_rx: Mutex::new(event_rx),
         shutdown_tx,
         command_tx,
@@ -187,7 +216,7 @@ pub unsafe extern "C" fn mesh_start_agent(spec_json: *const c_char) -> *mut Mesh
 
     info!("FFI: Agent '{}' started successfully", spec.name);
 
-    Box::into_raw(handle)
+    Arc::into_raw(handle) as *mut MeshAgentHandle
 }
 
 /// Request graceful shutdown of agent.
@@ -203,7 +232,7 @@ pub unsafe extern "C" fn mesh_shutdown(handle: *const MeshAgentHandle) {
         return;
     }
 
-    let handle = &*handle;
+    let handle = handle_guard(handle);
 
     if !handle.is_running() {
         debug!("FFI: Agent already shut down");
@@ -226,9 +255,23 @@ pub unsafe extern "C" fn mesh_shutdown(handle: *const MeshAgentHandle) {
 /// `mesh_flush_spans(2000)`) so spans published during the agent's final
 /// moments are not lost.
 ///
+/// Safe to call while other threads are still inside `mesh_*` accessors
+/// on the same handle (including a `mesh_next_event` parked on an
+/// infinite timeout): the handle is reference-counted, so this releases
+/// the creation reference and the underlying resources are dropped when
+/// the last in-flight call returns. A parked infinite `mesh_next_event`
+/// unparks on its own — the graceful shutdown triggered here makes the
+/// runtime emit the shutdown event and then exit, closing the event
+/// channel, so the parked caller observes the shutdown event (or channel
+/// close → NULL) and returns. Only if the runtime is wedged and never
+/// processes the shutdown signal does a parked infinite wait keep the
+/// resources alive (a leak, not a crash).
+///
 /// # Safety
 /// * `handle` must be a valid handle from `mesh_start_agent` or NULL
-/// * After this call, `handle` is invalid and must not be used
+/// * After this call, `handle` is invalid and must not be passed to any
+///   `mesh_*` function (calls already in flight are safe; new calls are
+///   not)
 #[no_mangle]
 pub unsafe extern "C" fn mesh_free_handle(handle: *mut MeshAgentHandle) {
     if handle.is_null() {
@@ -237,8 +280,10 @@ pub unsafe extern "C" fn mesh_free_handle(handle: *mut MeshAgentHandle) {
 
     info!("FFI: Freeing agent handle");
 
-    // Take ownership
-    let handle = Box::from_raw(handle);
+    // Take back the creation reference from mesh_start_agent. In-flight
+    // accessors hold their own strong counts (handle_guard), so dropping
+    // this one frees the memory only when no call is mid-execution.
+    let handle = Arc::from_raw(handle as *const MeshAgentHandle);
 
     // If still running, trigger graceful shutdown and wait (bounded) for
     // the runtime to finish unregistering before dropping it.
@@ -292,7 +337,8 @@ pub unsafe extern "C" fn mesh_free_handle(handle: *mut MeshAgentHandle) {
     // Mark as stopped
     handle.mark_stopped();
 
-    // The runtime and channels will be dropped automatically
+    // Release the creation reference. The runtime and channels drop here
+    // if no accessor is in flight, otherwise when the last guard drops.
     drop(handle);
 }
 
@@ -333,7 +379,7 @@ pub unsafe extern "C" fn mesh_next_event(
         return ptr::null_mut();
     }
 
-    let handle = &*handle;
+    let handle = handle_guard(handle);
 
     if !handle.is_running() {
         return ptr::null_mut();
@@ -421,7 +467,7 @@ pub unsafe extern "C" fn mesh_is_running(handle: *const MeshAgentHandle) -> i32 
         return 0;
     }
 
-    let handle = &*handle;
+    let handle = handle_guard(handle);
     if handle.is_running() {
         1
     } else {
@@ -482,7 +528,7 @@ pub unsafe extern "C" fn mesh_report_health(
     };
 
     // Update health status in shared state
-    let handle = &*handle;
+    let handle = handle_guard(handle);
     handle.runtime.block_on(async {
         let mut state = handle.shared_state.write().await;
         state.health_status = health_status;
@@ -523,7 +569,7 @@ pub unsafe extern "C" fn mesh_update_port(
         return -1;
     }
 
-    let handle = &*handle;
+    let handle = handle_guard(handle);
 
     match handle.command_tx.try_send(crate::runtime::RuntimeCommand::UpdatePort(port as u16)) {
         Ok(_) => {
@@ -2735,7 +2781,9 @@ mod tests {
         let (_event_tx, event_rx) = mpsc::channel::<MeshEvent>(4);
         let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
         let (command_tx, _command_rx) = mpsc::channel(1);
-        let handle = Box::new(MeshAgentHandle {
+        // Arc (not Box): mesh_free_handle reclaims via Arc::from_raw,
+        // matching what mesh_start_agent hands out.
+        let handle = Arc::new(MeshAgentHandle {
             event_rx: Mutex::new(event_rx),
             shutdown_tx,
             command_tx,
@@ -2746,7 +2794,7 @@ mod tests {
             agent_id: None,
             shared_state: Arc::new(tokio::sync::RwLock::new(HandleState::default())),
         });
-        unsafe { mesh_free_handle(Box::into_raw(handle)) };
+        unsafe { mesh_free_handle(Arc::into_raw(handle) as *mut MeshAgentHandle) };
         assert_eq!(
             count_xadds(),
             5,
@@ -2755,6 +2803,58 @@ mod tests {
 
         std::env::remove_var("MCP_MESH_DISTRIBUTED_TRACING_ENABLED");
         std::env::remove_var("REDIS_URL");
+    }
+
+    /// Freeing the handle while another thread sits parked in an
+    /// infinite-timeout `mesh_next_event` must not crash (the
+    /// use-after-free this would have been with a Box-owned handle), and
+    /// the parked caller must unpark cleanly once the event channel
+    /// closes. With a wedged runtime (no shutdown event ever emitted —
+    /// the test holds the event sender), free's bounded 2s wait times
+    /// out, free returns, and the parked caller returns NULL when the
+    /// sender finally drops.
+    #[test]
+    fn test_free_handle_while_next_event_parked() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (event_tx, event_rx) = mpsc::channel::<MeshEvent>(4);
+        let (shutdown_tx, _shutdown_rx) = mpsc::channel(1);
+        let (command_tx, _command_rx) = mpsc::channel(1);
+        let handle = Arc::new(MeshAgentHandle {
+            event_rx: Mutex::new(event_rx),
+            shutdown_tx,
+            command_tx,
+            runtime,
+            is_running: AtomicBool::new(true),
+            agent_id: None,
+            shared_state: Arc::new(tokio::sync::RwLock::new(HandleState::default())),
+        });
+        let ptr = Arc::into_raw(handle) as *mut MeshAgentHandle;
+
+        // Park a caller in an infinite wait. Its handle_guard keeps the
+        // handle alive across the concurrent free below.
+        let ptr_addr = ptr as usize;
+        let parked = std::thread::spawn(move || {
+            let result =
+                unsafe { mesh_next_event(ptr_addr as *const MeshAgentHandle, -1) };
+            result.is_null()
+        });
+
+        // Give the thread time to actually park inside recv().
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!parked.is_finished(), "caller must be parked before free");
+
+        // Free while parked. The graceful-shutdown wait can't get the
+        // receiver lock (the parked caller holds it) and no shutdown
+        // event ever arrives, so this returns after its 2s budget —
+        // dropping the creation reference but NOT the memory.
+        unsafe { mesh_free_handle(ptr) };
+
+        // The parked caller is still alive and still parked; dropping the
+        // last sender closes the channel and unparks it with None → NULL.
+        assert!(!parked.is_finished(), "parked caller must survive free");
+        drop(event_tx);
+        let got_null = parked.join().expect("parked mesh_next_event must not crash");
+        assert!(got_null, "parked caller must observe channel close as NULL");
     }
 
     #[test]

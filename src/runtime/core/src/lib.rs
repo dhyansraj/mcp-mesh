@@ -97,16 +97,29 @@ pub mod napi;
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 
+// Imports below are gated to the binding features that use them
+// (start_agent_internal for python|typescript, the pymodule for python)
+// so feature combos without bindings (e.g. ffi-only) build warning-free.
+#[cfg(any(feature = "python", feature = "typescript"))]
 use std::sync::Arc;
+#[cfg(any(feature = "python", feature = "typescript"))]
 use std::thread;
+#[cfg(any(feature = "python", feature = "typescript"))]
 use tokio::sync::RwLock;
+#[cfg(any(feature = "python", feature = "typescript"))]
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+#[cfg(feature = "python")]
 use events::{EventType, HealthStatus, LlmToolInfo, MeshEvent};
+#[cfg(any(feature = "python", feature = "typescript"))]
 use handle::{AgentHandle, HandleState};
+#[cfg(any(feature = "python", feature = "typescript"))]
 use runtime::RuntimeConfig;
-use spec::{AgentSpec, DependencySpec, LlmAgentSpec, ToolSpec};
+#[cfg(any(feature = "python", feature = "typescript"))]
+use spec::AgentSpec;
+#[cfg(feature = "python")]
+use spec::{DependencySpec, LlmAgentSpec, ToolSpec};
 
 /// Initialize logging with tracing.
 ///
@@ -150,8 +163,25 @@ fn start_agent_py(py: Python<'_>, spec: AgentSpec) -> PyResult<AgentHandle> {
 
 /// Internal agent start function (language-agnostic).
 ///
-/// This is the core implementation used by both Python bindings and FFI.
-pub fn start_agent_internal(spec: AgentSpec) -> Result<AgentHandle, String> {
+/// This is the core implementation shared by the Python (pyo3) and
+/// TypeScript (napi) bindings, which both call it from synchronous,
+/// non-async contexts. The C ABI (`mesh_start_agent`) has its own
+/// equivalent in `ffi.rs`.
+///
+/// Must NOT be called from inside a tokio runtime: it creates its own
+/// runtime and `block_on`s it, which would panic in an async context —
+/// guarded below so callers get an `Err` instead of a panic.
+#[cfg(any(feature = "python", feature = "typescript"))]
+pub(crate) fn start_agent_internal(spec: AgentSpec) -> Result<AgentHandle, String> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err(
+            "start_agent_internal called from within a tokio runtime; it creates its own \
+             runtime and blocks on it, which is not allowed in an async context — call it \
+             from a non-async thread"
+                .to_string(),
+        );
+    }
+
     info!("Starting agent '{}' with Rust core", spec.name);
 
     // Create runtime config from spec

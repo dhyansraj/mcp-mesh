@@ -490,18 +490,25 @@ mod tests {
 
     #[test]
     fn active_job_count_reflects_registrations() {
-        // Don't make absolute assertions about the count (other tests run
-        // in parallel) — just check delta within this test's lifetime.
-        let baseline = active_job_count();
+        // The registry is process-global and other tests register/
+        // unregister concurrently, so NO baseline comparison is safe: a
+        // `count >= baseline + 2` snapshot races concurrent unregisters
+        // (the baseline may include jobs that vanish before our assert).
+        // The only race-free assertion is the lower bound guaranteed by
+        // our own live registrations.
         let id1 = unique_id("count-1");
         let id2 = unique_id("count-2");
 
         let gen1 = register_active_job(&id1, CancellationToken::new());
         let gen2 = register_active_job(&id2, CancellationToken::new());
-        assert!(active_job_count() >= baseline + 2);
+        // Our two jobs are registered right now, so the global map holds
+        // at least 2 entries regardless of what parallel tests do.
+        assert!(active_job_count() >= 2);
 
         unregister_active_job(&id1, gen1);
         unregister_active_job(&id2, gen2);
+        assert!(get_state(&id1).is_none(), "id1 must be gone after unregister");
+        assert!(get_state(&id2).is_none(), "id2 must be gone after unregister");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
