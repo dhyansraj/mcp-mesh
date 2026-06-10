@@ -154,6 +154,16 @@ export class MeshExpress {
    * `handle.shutdown()` / `server.close()`.
    */
   private shutdownPromise: Promise<void> | null = null;
+  /**
+   * This instance's own SIGINT/SIGTERM handler references, kept so
+   * shutdown() can `process.off` them — otherwise sequential instances
+   * in one process accumulate stale handlers whose memoized (already
+   * resolved) shutdown() would `process.exit(0)` on the next signal.
+   */
+  private signalHandlers: {
+    sigint: () => void;
+    sigterm: () => void;
+  } | null = null;
 
   constructor(app: Application, config: MeshExpressConfig) {
     this.app = app;
@@ -609,8 +619,13 @@ export class MeshExpress {
       });
     };
 
-    process.on("SIGINT", () => shutdownHandler("SIGINT"));
-    process.on("SIGTERM", () => shutdownHandler("SIGTERM"));
+    // Keep named references so shutdown() can remove exactly these
+    // listeners (anonymous arrows can't be process.off'd).
+    const sigint = () => shutdownHandler("SIGINT");
+    const sigterm = () => shutdownHandler("SIGTERM");
+    this.signalHandlers = { sigint, sigterm };
+    process.on("SIGINT", sigint);
+    process.on("SIGTERM", sigterm);
   }
 
   /**
@@ -673,6 +688,16 @@ export class MeshExpress {
         this.server = null;
       }
       cleanupTls();
+      // Remove this instance's own signal listeners LAST: during the
+      // teardown above a signal must still reach the handler (it arms
+      // the force-exit timer). Leaving them installed would let a later
+      // instance's signal hit this already-resolved shutdown() and
+      // process.exit(0) prematurely.
+      if (this.signalHandlers) {
+        process.off("SIGINT", this.signalHandlers.sigint);
+        process.off("SIGTERM", this.signalHandlers.sigterm);
+        this.signalHandlers = null;
+      }
     })();
     return this.shutdownPromise;
   }

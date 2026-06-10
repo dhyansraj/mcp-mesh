@@ -209,6 +209,18 @@ export class MeshAgent {
    * dispatcher drain, double napi `handle.shutdown()`).
    */
   private shutdownPromise: Promise<void> | null = null;
+  /**
+   * This agent's own SIGINT/SIGTERM handler references, kept so
+   * shutdown() can `process.off` them. Without removal, sequential
+   * MeshAgent instances in one process (legal across async chunk
+   * boundaries) accumulate stale handlers whose memoized — already
+   * resolved — shutdown() would `process.exit(0)` immediately on the
+   * next signal, cutting short the LIVE agent's drain.
+   */
+  private signalHandlers: {
+    sigint: () => void;
+    sigterm: () => void;
+  } | null = null;
 
   /**
    * Resolved dependencies: composite key -> proxy
@@ -1368,8 +1380,13 @@ export class MeshAgent {
       });
     };
 
-    process.on("SIGINT", () => shutdownHandler("SIGINT"));
-    process.on("SIGTERM", () => shutdownHandler("SIGTERM"));
+    // Keep named references so shutdown() can remove exactly these
+    // listeners (anonymous arrows can't be process.off'd).
+    const sigint = () => shutdownHandler("SIGINT");
+    const sigterm = () => shutdownHandler("SIGTERM");
+    this.signalHandlers = { sigint, sigterm };
+    process.on("SIGINT", sigint);
+    process.on("SIGTERM", sigterm);
   }
 
   /**
@@ -1956,12 +1973,17 @@ export class MeshAgent {
         console.warn("Error closing tool worker pool:", err);
       }
       if (this.httpsProxy) {
-        try {
-          this.httpsProxy.close();
-        } catch (err) {
-          console.warn("Error closing HTTPS proxy:", err);
-        }
+        // Await the close callback so the TLS listener's port is
+        // actually released by the time shutdown() resolves (mirrors
+        // MeshExpress.shutdown()'s server.close handling).
+        const proxy = this.httpsProxy;
         this.httpsProxy = undefined;
+        await new Promise<void>((resolve) => {
+          proxy.close((err) => {
+            if (err) console.warn("Error closing HTTPS proxy:", err);
+            resolve();
+          });
+        });
       }
       // Registry unregister runs regardless of how the cleanup steps above
       // fared — every prior step is guarded so a drain/close failure can't
@@ -1971,6 +1993,16 @@ export class MeshAgent {
         this.handle = null;
       }
       cleanupTls();
+      // Remove this agent's own signal listeners LAST: during the drain
+      // above a signal must still reach the handler (it arms the
+      // force-exit timer and exits when this memoized teardown settles).
+      // Leaving them installed would let a LATER agent's signal hit this
+      // already-resolved shutdown() and process.exit(0) prematurely.
+      if (this.signalHandlers) {
+        process.off("SIGINT", this.signalHandlers.sigint);
+        process.off("SIGTERM", this.signalHandlers.sigterm);
+        this.signalHandlers = null;
+      }
     })();
     return this.shutdownPromise;
   }

@@ -38,7 +38,12 @@ beforeEach(() => {
     });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Drain the next-tick queue BEFORE restoring the spy: the constructor
+  // schedules the auto-start callback via process.nextTick, and vitest
+  // runs afterEach before that tick fires for sync test bodies. Restoring
+  // first would let the REAL _autoStart run against the FastMCP stub.
+  await new Promise(process.nextTick);
   if (autoStartSpy) {
     autoStartSpy.mockRestore();
     autoStartSpy = null;

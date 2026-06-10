@@ -117,6 +117,16 @@ class ApiRuntime {
    */
   private shutdownPromise: Promise<void> | null = null;
   /**
+   * This runtime's own SIGINT/SIGTERM handler references, kept so
+   * shutdown() can `process.off` them — otherwise sequential runtimes
+   * in one process accumulate stale handlers whose memoized (already
+   * resolved) shutdown() would `process.exit(0)` on the next signal.
+   */
+  private signalHandlers: {
+    sigint: () => void;
+    sigterm: () => void;
+  } | null = null;
+  /**
    * PR #938 W2: race-flag for `pushSurfacesUpdate()` calls that arrive
    * AFTER `start()` has been scheduled but BEFORE `this.handle` is set.
    * `start()` does async work (TLS prep, tracing init) between
@@ -547,8 +557,13 @@ class ApiRuntime {
       });
     };
 
-    process.on("SIGINT", () => shutdownHandler("SIGINT"));
-    process.on("SIGTERM", () => shutdownHandler("SIGTERM"));
+    // Keep named references so shutdown() can remove exactly these
+    // listeners (anonymous arrows can't be process.off'd).
+    const sigint = () => shutdownHandler("SIGINT");
+    const sigterm = () => shutdownHandler("SIGTERM");
+    this.signalHandlers = { sigint, sigterm };
+    process.on("SIGINT", sigint);
+    process.on("SIGTERM", sigterm);
   }
 
   /**
@@ -569,6 +584,16 @@ class ApiRuntime {
         this.handle = null;
       }
       cleanupTls();
+      // Remove this runtime's own signal listeners LAST: during the
+      // teardown above a signal must still reach the handler (it arms
+      // the force-exit timer). Leaving them installed would let a later
+      // runtime's signal hit this already-resolved shutdown() and
+      // process.exit(0) prematurely.
+      if (this.signalHandlers) {
+        process.off("SIGINT", this.signalHandlers.sigint);
+        process.off("SIGTERM", this.signalHandlers.sigterm);
+        this.signalHandlers = null;
+      }
     })();
     return this.shutdownPromise;
   }
