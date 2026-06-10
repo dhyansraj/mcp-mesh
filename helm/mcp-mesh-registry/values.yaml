@@ -108,9 +108,37 @@ registry:
     name: "mcpmesh" # Matches working examples
     username: "mcpmesh" # Matches working examples
     password: ""
-    # Use existing secret for database credentials
+    # PostgreSQL SSL mode: disable, require, verify-ca, verify-full
+    sslmode: "disable"
+    # TLS material for verify-ca / verify-full against managed databases
+    tls:
+      # Secret containing the CA certificate used to verify the server.
+      # Mounted at /etc/service-tls/postgres and appended to the DSN as sslrootcert.
+      caSecret: ""
+      caKey: "ca.crt"
+    # Use an existing secret for the database credentials. Two modes:
+    #
+    # 1. Full DSN (preferred, postgres only): set existingSecretUrlKey to the
+    #    key holding a complete postgres:// URL. DATABASE_URL is consumed
+    #    directly via secretKeyRef — no composition, so the password needs no
+    #    URL-safety and sslmode/tls.* above are NOT applied (encode sslmode /
+    #    sslrootcert in the DSN itself; tls.caSecret still mounts the CA at
+    #    /etc/service-tls/postgres for the DSN to reference).
+    #
+    # 2. Password only (fallback): leave existingSecretUrlKey empty and point
+    #    existingSecretPasswordKey at the password. DATABASE_URL is composed
+    #    in the pod via $(DATABASE_PASSWORD) expansion, so the password is
+    #    never templated — but it is not URL-encoded either, so it must be
+    #    URL-safe. sslmode and tls.* apply; the username comes from
+    #    registry.database.username.
+    #
+    # In both modes registry.database.{host,port,name,username} still feed the
+    # configmap and the wait-for-db init container.
     existingSecret: ""
-    # Keys in the secret
+    # Key holding a complete DSN in the existing secret (mode 1). Empty
+    # selects mode 2. The chart's own Secret uses "database-url" for this.
+    existingSecretUrlKey: ""
+    # Keys in the secret (mode 2)
     existingSecretUsernameKey: "username"
     existingSecretPasswordKey: "password"
 
@@ -190,11 +218,34 @@ registry:
     # Exporter type: console (default), otlp (for Tempo/Jaeger), json
     exporterType: "otlp"
 
-  # Redis configuration for trace streaming (registry reads from mesh:trace stream)
+  # Redis configuration — single source of truth for the registry's Redis
+  # endpoint. One REDIS_URL serves both session storage and the distributed
+  # trace stream (registry reads from mesh:trace).
   redis:
     enabled: true
     host: "mcp-core-mcp-mesh-redis"
     port: 6379
+    # AUTH password. When set, REDIS_URL is rendered into the chart secret
+    # (instead of the configmap) with the password URL-encoded.
+    password: ""
+    # Or take credentials from an existing secret. Two modes:
+    # 1. Full URL (preferred): set existingSecretUrlKey to the key holding a
+    #    complete redis:// or rediss:// URL, consumed directly via
+    #    secretKeyRef — no composition, no URL-safety requirement. host/port/
+    #    tls.enabled below are NOT applied to the URL (put the scheme in it);
+    #    serviceTLS.redis.* cert mounts still apply.
+    # 2. Password only (fallback): leave existingSecretUrlKey empty. The
+    #    password is interpolated into REDIS_URL via $(REDIS_PASSWORD)
+    #    expansion without encoding, so it must be URL-safe.
+    existingSecret: ""
+    # Key holding a complete Redis URL in the existing secret (mode 1).
+    # Empty selects mode 2. The chart's own Secret uses "redis-url" for this.
+    existingSecretUrlKey: ""
+    existingSecretPasswordKey: "redis-password"
+    tls:
+      # Render rediss:// instead of redis://. Pair with serviceTLS.redis.*
+      # below to mount CA / client certificates.
+      enabled: false
 
     # CORS configuration
     cors:

@@ -84,11 +84,15 @@ flowchart TB
 # In mcp-mesh-core values
 mcp-mesh-registry:
   registry:
+    # Single Redis endpoint — session storage and trace streaming share it
+    redis:
+      enabled: true
+      host: "mcp-core-mcp-mesh-redis"
+      port: 6379
     observability:
       distributedTracing:
         enabled: true
-        redisUrl: "redis://mcp-core-mcp-mesh-redis:6379"
-        telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
+      telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
 ```
 
 ## Troubleshooting

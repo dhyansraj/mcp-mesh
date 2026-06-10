@@ -29,7 +29,7 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- if not .Values.registry.database.existingSecret }}
+        {{- if include "mcp-mesh-registry.secretEnabled" . }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- end }}
         prometheus.io/scrape: "true"
@@ -110,11 +110,29 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             {{- if and (ne .Values.registry.database.type "sqlite") .Values.registry.database.existingSecret }}
+            {{- if and (eq .Values.registry.database.type "postgres") .Values.registry.database.existingSecretUrlKey }}
+            {{- /* Full DSN from the existing secret, consumed directly — no
+                   composition, so the credentials need no URL-safety. The DSN
+                   must carry its own sslmode/sslrootcert params. */}}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.registry.database.existingSecret }}
+                  key: {{ .Values.registry.database.existingSecretUrlKey }}
+            {{- else }}
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.registry.database.existingSecret }}
                   key: {{ .Values.registry.database.existingSecretPasswordKey }}
+            {{- if eq .Values.registry.database.type "postgres" }}
+            {{- /* Composed via $(DATABASE_PASSWORD) expansion — DATABASE_PASSWORD
+                   must be rendered above this entry. The password from the
+                   existing secret is not URL-encoded and must be URL-safe. */}}
+            - name: DATABASE_URL
+              value: {{ include "mcp-mesh-registry.composedDatabaseURL" . | quote }}
+            {{- end }}
+            {{- end }}
             {{- else if ne .Values.registry.database.type "sqlite" }}
             - name: DATABASE_PASSWORD
               valueFrom:
@@ -142,6 +160,36 @@ spec:
                 secretKeyRef:
                   name: {{ include "mcp-mesh-registry.fullname" . }}-secret
                   key: auth-tokens
+            {{- end }}
+            {{- end }}
+            {{- if .Values.registry.redis.enabled }}
+            {{- if .Values.registry.redis.existingSecret }}
+            {{- if .Values.registry.redis.existingSecretUrlKey }}
+            {{- /* Full URL from the existing secret, consumed directly — no
+                   composition, so the password needs no URL-safety. */}}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.registry.redis.existingSecret }}
+                  key: {{ .Values.registry.redis.existingSecretUrlKey }}
+            {{- else }}
+            {{- /* Password from the existing secret must be URL-safe: it is
+                   interpolated into REDIS_URL via $(REDIS_PASSWORD) without
+                   URL-encoding. */}}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.registry.redis.existingSecret }}
+                  key: {{ .Values.registry.redis.existingSecretPasswordKey | default "redis-password" }}
+            - name: REDIS_URL
+              value: {{ printf "%s://:$(REDIS_PASSWORD)@%s:%v" (include "mcp-mesh-registry.redisScheme" .) .Values.registry.redis.host (.Values.registry.redis.port | default 6379) | quote }}
+            {{- end }}
+            {{- else if .Values.registry.redis.password }}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mcp-mesh-registry.fullname" . }}-secret
+                  key: redis-url
             {{- end }}
             {{- end }}
             {{- with .Values.env }}
@@ -243,6 +291,11 @@ spec:
               mountPath: /run/spire/agent/sockets
               readOnly: true
             {{- end }}
+            {{- if .Values.registry.database.tls.caSecret }}
+            - name: tls-postgres
+              mountPath: /etc/service-tls/postgres
+              readOnly: true
+            {{- end }}
             {{- if .Values.serviceTLS.redis.secretName }}
             - name: tls-redis
               mountPath: /etc/service-tls/redis
@@ -294,6 +347,12 @@ spec:
           hostPath:
             path: /run/spire/agent/sockets
             type: DirectoryOrCreate
+        {{- end }}
+        {{- if .Values.registry.database.tls.caSecret }}
+        - name: tls-postgres
+          secret:
+            secretName: {{ .Values.registry.database.tls.caSecret }}
+            defaultMode: 0400
         {{- end }}
         {{- if .Values.serviceTLS.redis.secretName }}
         - name: tls-redis
