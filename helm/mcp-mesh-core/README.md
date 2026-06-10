@@ -68,19 +68,68 @@ tempo:
 
 ### Database Configuration
 
+Datastore endpoints and credentials are declared once under `global.*` and
+inherited by every consumer: the registry, the UI (when enabled), and the
+bundled PostgreSQL provisioning. Per-subchart values (e.g.
+`mcp-mesh-registry.registry.database.host`) override the global for that
+component only.
+
 ```yaml
 # values.yaml
-mcp-mesh-postgres:
+global:
   postgres:
-    database: "mcpmesh"
+    name: "mcpmesh"
     username: "mcpmesh"
-    password: "mcpmesh123" # Change in production
+    password: "change-me" # Change in production
 
+mcp-mesh-postgres:
   persistence:
     enabled: true
     size: 20Gi
     storageClass: "fast-ssd"
 ```
+
+### External managed datastores
+
+To use a managed PostgreSQL/Redis (RDS, Cloud SQL, ElastiCache, ...), disable
+the bundled subcharts and point `global.*` at the managed endpoints — every
+consumer inherits them, no per-subchart overrides needed:
+
+```yaml
+# values.yaml
+postgres:
+  enabled: false
+redis:
+  enabled: false
+
+global:
+  postgres:
+    host: "mydb.abc123.us-east-1.rds.amazonaws.com"
+    port: 5432
+    name: "mcpmesh"
+    username: "mcpmesh"
+    sslmode: "require"
+    # Credential from an existing secret: either a key holding a full
+    # postgres:// DSN (existingSecretUrlKey) or just the password
+    existingSecret: "pg-credentials"
+    existingSecretPasswordKey: "password"
+  redis:
+    host: "myredis.abc123.cache.amazonaws.com"
+    port: 6379
+    tls:
+      enabled: true # rediss://
+    existingSecret: "redis-credentials"
+    existingSecretPasswordKey: "redis-password"
+```
+
+```bash
+helm install mcp-core ./mcp-mesh-core -n mcp-mesh -f values.yaml
+```
+
+The separate `mcp-mesh-agent` chart is standalone (not an umbrella subchart),
+so Helm does not propagate these globals to it automatically — pass the same
+`global.redis` values (e.g. the same values file) to each agent release to
+point its trace publishing at the managed Redis.
 
 ### Registry Configuration
 
@@ -88,14 +137,6 @@ mcp-mesh-postgres:
 # values.yaml
 mcp-mesh-registry:
   registry:
-    database:
-      type: "postgres"
-      host: "mcp-mesh-core-mcp-mesh-postgres"
-      port: 5432
-      name: "mcpmesh"
-      username: "mcpmesh"
-      password: "mcpmesh123"
-
     logging:
       level: "DEBUG"
       format: "json"
@@ -162,6 +203,8 @@ Note: This will delete all data in PostgreSQL. Back up data before uninstalling.
 | Key                | Type   | Default      | Description                          |
 | ------------------ | ------ | ------------ | ------------------------------------ |
 | `global.namespace` | string | `"mcp-mesh"` | Namespace for all components         |
+| `global.postgres.*` | object | bundled postgres | PostgreSQL endpoint/credentials inherited by all consumers (`host`, `port`, `name`, `username`, `password`, `sslmode`, `existingSecret`, `existingSecretUrlKey`, `existingSecretPasswordKey`, `tls.caSecret`, `tls.caKey`) |
+| `global.redis.*`   | object | bundled redis | Redis endpoint/credentials inherited by all consumers (`host`, `port`, `password`, `existingSecret`, `existingSecretUrlKey`, `existingSecretPasswordKey`, `tls.enabled`) |
 | `postgres.enabled` | bool   | `true`       | Enable PostgreSQL deployment         |
 | `redis.enabled`    | bool   | `true`       | Enable Redis deployment              |
 | `registry.enabled` | bool   | `true`       | Enable Registry deployment           |

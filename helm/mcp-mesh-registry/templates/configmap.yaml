@@ -1,4 +1,6 @@
 {{- include "mcp-mesh-registry.validateNoDeprecatedRedisUrl" . -}}
+{{- $db := include "mcp-mesh-registry.databaseSettings" . | fromJson -}}
+{{- $redis := include "mcp-mesh-registry.redisSettings" . | fromJson -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -21,10 +23,10 @@ data:
   {{- /* Silent invocation so an invalid sslmode fails in every mode,
          including database.existingSecret. */}}
   {{- $_ := include "mcp-mesh-registry.databaseSSLMode" . }}
-  DATABASE_HOST: {{ .Values.registry.database.host | quote }}
-  DATABASE_PORT: {{ .Values.registry.database.port | quote }}
-  DATABASE_NAME: {{ .Values.registry.database.name | quote }}
-  DATABASE_USERNAME: {{ .Values.registry.database.username | quote }}
+  DATABASE_HOST: {{ $db.host | quote }}
+  DATABASE_PORT: {{ $db.port | int | quote }}
+  DATABASE_NAME: {{ $db.name | quote }}
+  DATABASE_USERNAME: {{ $db.username | quote }}
   {{- end }}
 
   # Registry server configuration - matches working K8s examples
@@ -87,7 +89,7 @@ data:
 
   # Redis configuration for session/trace storage
   {{- if .Values.registry.redis.enabled }}
-  {{- if and (not .Values.registry.redis.password) (not .Values.registry.redis.existingSecret) }}
+  {{- if and (not $redis.password) (not $redis.existingSecret) }}
   REDIS_URL: {{ include "mcp-mesh-registry.redisURL" . | quote }}
   {{- end }}
   MCP_MESH_REDIS_TRACE_PUBLISHING: "true"

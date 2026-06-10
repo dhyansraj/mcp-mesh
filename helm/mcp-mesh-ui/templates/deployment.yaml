@@ -1,3 +1,8 @@
+{{- $gpg := include "mcp-mesh-ui.globalPostgres" . | fromJson -}}
+{{- $gredis := include "mcp-mesh-ui.globalRedis" . | fromJson -}}
+{{- $dbExisting := include "mcp-mesh-ui.databaseExistingSecret" . -}}
+{{- $redisExisting := include "mcp-mesh-ui.redisExistingSecret" . -}}
+{{- $pgCaSecret := ($gpg.tls | default dict).caSecret | default "" -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -14,7 +19,9 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if include "mcp-mesh-ui.secretEnabled" . }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
       labels:
         {{- include "mcp-mesh-ui.selectorLabels" . | nindent 8 }}
     spec:
@@ -37,6 +44,48 @@ spec:
               containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
           env:
+            {{- if $dbExisting }}
+            {{- if $gpg.existingSecretUrlKey }}
+            {{- /* Full DSN from the existing secret, consumed directly — no
+                   composition, so the credentials need no URL-safety. The DSN
+                   must carry its own sslmode/sslrootcert params. */}}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $dbExisting }}
+                  key: {{ $gpg.existingSecretUrlKey }}
+            {{- else }}
+            {{- /* Composed via $(DATABASE_PASSWORD) expansion — DATABASE_PASSWORD
+                   must be rendered above this entry. */}}
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $dbExisting }}
+                  key: {{ $gpg.existingSecretPasswordKey | default "password" }}
+            - name: DATABASE_URL
+              value: {{ include "mcp-mesh-ui.composedDatabaseURL" . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $redisExisting }}
+            {{- if $gredis.existingSecretUrlKey }}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $redisExisting }}
+                  key: {{ $gredis.existingSecretUrlKey }}
+            {{- else }}
+            {{- /* Password from the existing secret must be URL-safe: it is
+                   interpolated into REDIS_URL via $(REDIS_PASSWORD) without
+                   URL-encoding. */}}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $redisExisting }}
+                  key: {{ $gredis.existingSecretPasswordKey | default "redis-password" }}
+            - name: REDIS_URL
+              value: {{ include "mcp-mesh-ui.composedRedisURL" . | quote }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.ui.tls.registry.secretName }}
             - name: MCP_MESH_REGISTRY_TLS_CA
               value: /etc/service-tls/registry/{{ .Values.ui.tls.registry.caKey }}
@@ -104,8 +153,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "mcp-mesh-ui.fullname" . }}-config
+            {{- if include "mcp-mesh-ui.secretEnabled" . }}
             - secretRef:
                 name: {{ include "mcp-mesh-ui.fullname" . }}-secret
+            {{- end }}
           livenessProbe:
             httpGet:
               path: {{ .Values.ui.basePath }}/api/ui-health
@@ -121,6 +172,11 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if $pgCaSecret }}
+            - name: tls-postgres
+              mountPath: /etc/service-tls/postgres
+              readOnly: true
+            {{- end }}
             {{- if .Values.ui.tls.registry.secretName }}
             - name: tls-registry
               mountPath: /etc/service-tls/registry
@@ -146,6 +202,12 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if $pgCaSecret }}
+        - name: tls-postgres
+          secret:
+            secretName: {{ $pgCaSecret }}
+            defaultMode: 0440
+        {{- end }}
         {{- if .Values.ui.tls.registry.secretName }}
         - name: tls-registry
           secret:

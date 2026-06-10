@@ -8,6 +8,22 @@ global:
   # Override this if you installed mcp-mesh-core with a different release name
   # Example: helm install my-core mcp-mesh-core ... → set coreReleaseName: "my-core"
   coreReleaseName: "mcp-core"
+  # Shared Redis endpoint for trace publishing — same shape as the
+  # mcp-mesh-core umbrella's global.redis, so the umbrella's datastore values
+  # file can be reused for agent releases (this chart is standalone, not an
+  # umbrella subchart, so helm does not propagate the umbrella's globals
+  # automatically). Used when agent.observability.distributedTracing.redisUrl
+  # is unset. With password/existingSecret set, REDIS_URL is sourced from a
+  # Secret instead of the chart configmap.
+  # redis:
+  #   host: "my-redis.example.com"
+  #   port: 6379
+  #   password: ""
+  #   existingSecret: ""
+  #   existingSecretUrlKey: ""       # key holding a full redis:// URL
+  #   existingSecretPasswordKey: ""  # default: redis-password
+  #   tls:
+  #     enabled: true                # renders rediss://
 
 replicaCount: 1
 
@@ -203,7 +219,11 @@ agent:
   observability:
     distributedTracing:
       enabled: true
-      redisUrl: "redis://mcp-core-mcp-mesh-redis:6379"
+      # Full Redis URL for trace publishing. Empty inherits global.redis.*
+      # (see the global block above); an explicit value here always wins.
+      # When neither is set, the chart default applies:
+      #   redis://mcp-core-mcp-mesh-redis:6379
+      redisUrl: ""
     telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
     tracing:
       enabled: true

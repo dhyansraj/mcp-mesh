@@ -96,26 +96,29 @@ registry:
   # Port for the registry service (matches working examples)
   port: 8000
 
-  # Database configuration
+  # Database configuration. Each connection field below inherits
+  # global.postgres.* when left empty here (the mcp-mesh-core umbrella shares
+  # one global.postgres block with every datastore consumer); explicit values
+  # here always win. Chart defaults apply when neither layer sets a field.
   database:
     # Database path (for SQLite)
     path: "/data/registry.db"
     # Database type (sqlite, postgres, mysql)
     type: "postgres" # Default to postgres like working examples
     # For external databases (postgres/mysql)
-    host: "mcp-mesh-postgres" # Matches working examples
-    port: 5432
-    name: "mcpmesh" # Matches working examples
-    username: "mcpmesh" # Matches working examples
+    host: "" # default: mcp-mesh-postgres
+    port: null # default: 5432
+    name: "" # default: mcpmesh
+    username: "" # default: mcpmesh
     password: ""
     # PostgreSQL SSL mode: disable, require, verify-ca, verify-full
-    sslmode: "disable"
+    sslmode: "" # default: disable
     # TLS material for verify-ca / verify-full against managed databases
     tls:
       # Secret containing the CA certificate used to verify the server.
       # Mounted at /etc/service-tls/postgres and appended to the DSN as sslrootcert.
       caSecret: ""
-      caKey: "ca.crt"
+      caKey: "" # default: ca.crt
     # Use an existing secret for the database credentials. Two modes:
     #
     # 1. Full DSN (preferred, postgres only): set existingSecretUrlKey to the
@@ -140,7 +143,7 @@ registry:
     existingSecretUrlKey: ""
     # Keys in the secret (mode 2)
     existingSecretUsernameKey: "username"
-    existingSecretPasswordKey: "password"
+    existingSecretPasswordKey: "" # default: password
 
   # Logging configuration (matches K8s examples)
   logging:
@@ -220,11 +223,12 @@ registry:
 
   # Redis configuration — single source of truth for the registry's Redis
   # endpoint. One REDIS_URL serves both session storage and the distributed
-  # trace stream (registry reads from mesh:trace).
+  # trace stream (registry reads from mesh:trace). Each connection field
+  # inherits global.redis.* when left empty here; explicit values win.
   redis:
     enabled: true
-    host: "mcp-core-mcp-mesh-redis"
-    port: 6379
+    host: "" # default: mcp-core-mcp-mesh-redis
+    port: null # default: 6379
     # AUTH password. When set, REDIS_URL is rendered into the chart secret
     # (instead of the configmap) with the password URL-encoded.
     password: ""
@@ -241,11 +245,11 @@ registry:
     # Key holding a complete Redis URL in the existing secret (mode 1).
     # Empty selects mode 2. The chart's own Secret uses "redis-url" for this.
     existingSecretUrlKey: ""
-    existingSecretPasswordKey: "redis-password"
-    tls:
-      # Render rediss:// instead of redis://. Pair with serviceTLS.redis.*
-      # below to mount CA / client certificates.
-      enabled: false
+    existingSecretPasswordKey: "" # default: redis-password
+    # tls.enabled: true renders rediss:// instead of redis:// (default false;
+    # inherits global.redis.tls.enabled when not set here). Pair with
+    # serviceTLS.redis.* below to mount CA / client certificates.
+    tls: {}
 
     # CORS configuration
     cors:

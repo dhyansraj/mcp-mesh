@@ -50,3 +50,20 @@ Selector labels
 app.kubernetes.io/name: {{ include "mcp-mesh-redis.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Reject global.redis credentials while this bundled chart renders: this chart
+starts redis-server without AUTH (no requirepass plumbing), so a
+global.redis.password / global.redis.existingSecret credential renders into
+every consumer's REDIS_URL but the bundled server would reject (or ignore)
+it — a silent runtime auth failure. This chart only renders when it is
+enabled (redis.enabled in the mcp-mesh-core umbrella), so the guard fires
+exactly on the broken combination. Invoked unconditionally from the
+deployment.
+*/}}
+{{- define "mcp-mesh-redis.validateCredentialSource" -}}
+{{- $g := dig "redis" (dict) (.Values.global | default dict) | default dict -}}
+{{- if or $g.password $g.existingSecret -}}
+{{- fail "global.redis.password / global.redis.existingSecret cannot be combined with the bundled Redis chart: it runs without AUTH, so the credential every consumer connects with can never work. Disable the bundled subchart (redis.enabled=false) and point global.redis at an external Redis, or drop the global.redis credentials" -}}
+{{- end -}}
+{{- end }}

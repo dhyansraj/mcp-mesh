@@ -1,9 +1,12 @@
 # PostgreSQL configuration for MCP Mesh
 postgres:
-  # Database configuration
-  database: "mcpmesh"
-  username: "mcpmesh"
-  password: "mcpmesh123"
+  # Database / credentials provisioned at first start. Each field inherits
+  # global.postgres.{name,username,password} when left empty here (so the
+  # mcp-mesh-core umbrella provisions the bundled database with the same
+  # credentials every consumer connects with); explicit values win.
+  database: "" # default: mcpmesh (inherits global.postgres.name)
+  username: "" # default: mcpmesh (inherits global.postgres.username)
+  password: "" # default: mcpmesh123 (inherits global.postgres.password)
 
   # PostgreSQL configuration
   postgresqlDataDir: "/var/lib/postgresql/data/pgdata"

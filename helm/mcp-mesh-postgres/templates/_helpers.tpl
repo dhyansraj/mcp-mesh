@@ -50,3 +50,40 @@ Selector labels
 app.kubernetes.io/name: {{ include "mcp-mesh-postgres.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Provisioned database / credentials. Precedence per field: explicit
+postgres.* > global.postgres.* (the mcp-mesh-core umbrella shares one
+global.postgres block, so the bundled database is provisioned with the same
+credentials every consumer connects with) > chart default.
+*/}}
+{{- define "mcp-mesh-postgres.database" -}}
+{{- $g := dig "postgres" (dict) (.Values.global | default dict) | default dict -}}
+{{- coalesce .Values.postgres.database $g.name "mcpmesh" -}}
+{{- end }}
+
+{{- define "mcp-mesh-postgres.username" -}}
+{{- $g := dig "postgres" (dict) (.Values.global | default dict) | default dict -}}
+{{- coalesce .Values.postgres.username $g.username "mcpmesh" -}}
+{{- end }}
+
+{{- define "mcp-mesh-postgres.password" -}}
+{{- $g := dig "postgres" (dict) (.Values.global | default dict) | default dict -}}
+{{- coalesce .Values.postgres.password $g.password "mcpmesh123" -}}
+{{- end }}
+
+{{/*
+Reject global.postgres.existingSecret while this bundled chart renders:
+provisioning can only use the inline/default password (there is no secret
+plumbing here), while every consumer would read its credential from the
+external secret — a silent runtime auth failure. This chart only renders
+when it is enabled (postgres.enabled in the mcp-mesh-core umbrella), so the
+guard fires exactly on the broken combination. Invoked unconditionally from
+the statefulset.
+*/}}
+{{- define "mcp-mesh-postgres.validateCredentialSource" -}}
+{{- $g := dig "postgres" (dict) (.Values.global | default dict) | default dict -}}
+{{- if $g.existingSecret -}}
+{{- fail "global.postgres.existingSecret cannot be combined with the bundled PostgreSQL chart: provisioning would use the inline/default password while consumers read credentials from the external secret. Disable the bundled subchart (postgres.enabled=false) to use an external database, or drop global.postgres.existingSecret and use inline global.postgres credentials" -}}
+{{- end -}}
+{{- end }}

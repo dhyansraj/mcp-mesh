@@ -51,6 +51,10 @@ The following table lists the configurable parameters of the MCP Mesh Registry c
 
 ### Registry Configuration
 
+Each `registry.database.*` connection field inherits `global.postgres.*` when
+left unset (the `mcp-mesh-core` umbrella shares one `global.postgres` block
+with every datastore consumer); an explicit value here always wins.
+
 | Parameter                          | Description                                       | Default               |
 | ---------------------------------- | ------------------------------------------------- | --------------------- |
 | `registry.host`                    | Registry host address                             | `"0.0.0.0"`           |
@@ -75,7 +79,8 @@ The following table lists the configurable parameters of the MCP Mesh Registry c
 
 `registry.redis.*` is the single source of truth for the registry's Redis
 endpoint: session storage and distributed-trace streaming share the derived
-`REDIS_URL`.
+`REDIS_URL`. Each connection field inherits `global.redis.*` when left unset
+here; an explicit value always wins.
 
 | Parameter                                  | Description                                                              | Default            |
 | ------------------------------------------ | ------------------------------------------------------------------------ | ------------------ |

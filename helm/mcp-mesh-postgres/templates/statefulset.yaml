@@ -1,3 +1,4 @@
+{{- include "mcp-mesh-postgres.validateCredentialSource" . -}}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -35,11 +36,11 @@ spec:
               protocol: TCP
           env:
             - name: POSTGRES_DB
-              value: {{ .Values.postgres.database | quote }}
+              value: {{ include "mcp-mesh-postgres.database" . | quote }}
             - name: POSTGRES_USER
-              value: {{ .Values.postgres.username | quote }}
+              value: {{ include "mcp-mesh-postgres.username" . | quote }}
             - name: POSTGRES_PASSWORD
-              value: {{ .Values.postgres.password | quote }}
+              value: {{ include "mcp-mesh-postgres.password" . | quote }}
             - name: PGDATA
               value: {{ .Values.postgres.postgresqlDataDir | quote }}
             {{- with .Values.extraEnvVars }}
@@ -50,7 +51,7 @@ spec:
               command:
                 - /bin/sh
                 - -c
-                - exec pg_isready -U "{{ .Values.postgres.username }}" -d "{{ .Values.postgres.database }}" -h 127.0.0.1 -p 5432
+                - exec pg_isready -U "{{ include "mcp-mesh-postgres.username" . }}" -d "{{ include "mcp-mesh-postgres.database" . }}" -h 127.0.0.1 -p 5432
             initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
             timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
@@ -60,7 +61,7 @@ spec:
               command:
                 - /bin/sh
                 - -c
-                - exec pg_isready -U "{{ .Values.postgres.username }}" -d "{{ .Values.postgres.database }}" -h 127.0.0.1 -p 5432
+                - exec pg_isready -U "{{ include "mcp-mesh-postgres.username" . }}" -d "{{ include "mcp-mesh-postgres.database" . }}" -h 127.0.0.1 -p 5432
             initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
             timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
@@ -70,7 +71,7 @@ spec:
               command:
                 - /bin/sh
                 - -c
-                - exec pg_isready -U "{{ .Values.postgres.username }}" -d "{{ .Values.postgres.database }}" -h 127.0.0.1 -p 5432
+                - exec pg_isready -U "{{ include "mcp-mesh-postgres.username" . }}" -d "{{ include "mcp-mesh-postgres.database" . }}" -h 127.0.0.1 -p 5432
             initialDelaySeconds: {{ .Values.startupProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.startupProbe.periodSeconds }}
             timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}

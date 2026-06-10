@@ -27,12 +27,21 @@ ui:
   #   proxy_pass http://ui-service:3080;  (NOT http://ui-service:3080/)
   basePath: "/ops/dashboard"
   database:
-    # Override with a read-only database credential for production
-    url: "postgresql://mcp_mesh_readonly:changeme@mcp-mesh-postgres:5432/mcp_mesh_registry?sslmode=disable"
+    # Full PostgreSQL DSN. When empty, the URL is composed from
+    # global.postgres.* (the mcp-mesh-core umbrella shares one block with
+    # every datastore consumer — host/port/name/username/password/sslmode,
+    # existingSecret modes included); an explicit value here always wins.
+    # When neither is set, the chart default applies:
+    #   postgresql://mcp_mesh_readonly:changeme@mcp-mesh-postgres:5432/mcp_mesh_registry?sslmode=disable
+    # Override with a read-only database credential for production.
+    url: ""
   tracing:
     enabled: true
   redis:
-    url: "redis://mcp-mesh-redis:6379"
+    # Full Redis URL. When empty, composed from global.redis.* (rediss:// when
+    # global.redis.tls.enabled); an explicit value here always wins. When
+    # neither is set, the chart default applies: redis://mcp-mesh-redis:6379
+    url: ""
   tempo:
     url: "http://mcp-mesh-tempo:3200"
     telemetryEndpoint: "mcp-mesh-tempo:4317"

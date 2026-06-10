@@ -1,4 +1,6 @@
 {{- /* Render deployment — always enabled when image.repository is set */ -}}
+{{- $redisSource := include "mcp-mesh-agent.redisURLSource" . -}}
+{{- $gredis := include "mcp-mesh-agent.globalRedis" . | fromJson -}}
 {{- if .Values.image.repository -}}
 apiVersion: apps/v1
 kind: Deployment
@@ -24,7 +26,7 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- if .Values.secrets }}
+        {{- if or .Values.secrets (eq $redisSource "secret") }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
@@ -140,6 +142,34 @@ spec:
             # Python environment variables
             - name: PYTHONUNBUFFERED
               value: "1"
+            {{- end }}
+            {{- if eq $redisSource "secret" }}
+            {{- /* Inline global.redis.password: the composed URL carries the
+                   credential, so it lives in the chart Secret. */}}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mcp-mesh-agent.fullname" . }}-secret
+                  key: redis-url
+            {{- else if eq $redisSource "existing-url" }}
+            {{- /* Full URL from the existing secret, consumed directly — no
+                   composition, so the password needs no URL-safety. */}}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $gredis.existingSecret }}
+                  key: {{ $gredis.existingSecretUrlKey }}
+            {{- else if eq $redisSource "existing-password" }}
+            {{- /* Password from the existing secret must be URL-safe: it is
+                   interpolated into REDIS_URL via $(REDIS_PASSWORD) without
+                   URL-encoding. */}}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $gredis.existingSecret }}
+                  key: {{ $gredis.existingSecretPasswordKey | default "redis-password" }}
+            - name: REDIS_URL
+              value: {{ include "mcp-mesh-agent.composedRedisURL" . | quote }}
             {{- end }}
             {{- if .Values.mesh.tls.vault.tokenSecret }}
             - name: VAULT_TOKEN
