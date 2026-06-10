@@ -810,6 +810,26 @@ public interface MeshCore {
     int mesh_await_job_cancel(String jobId);
 
     /**
+     * Read-only probe: has the cancel token for {@code jobId} fired?
+     *
+     * <p>{@link #mesh_await_job_cancel} resolves on BOTH explicit cancel and
+     * natural job end without telling the caller which happened. Callers that
+     * must distinguish (the outbound-call cancel watcher in
+     * {@code McpHttpClient} — a natural-end wake must NOT abort still-healthy
+     * in-flight calls) call this immediately after the await returns: on
+     * explicit cancel the registry entry is still present with its token
+     * fired (returns 1); on natural end the entry was already removed
+     * (returns 0). Never fires the token itself, so it is safe to call in
+     * races with a re-claim of the same job id.
+     *
+     * @param jobId the job ID to probe
+     * @return 1 if an entry is registered and its cancel token has fired,
+     *         0 otherwise (not registered, or registered but not cancelled),
+     *         -1 on invalid input (see {@link #mesh_last_error})
+     */
+    int mesh_job_cancel_fired(String jobId);
+
+    /**
      * Callback type for {@link MeshCore#mesh_run_as_job}. The callback is
      * invoked synchronously from the FFI runtime's block_on; its int return
      * value propagates as mesh_run_as_job's return value.

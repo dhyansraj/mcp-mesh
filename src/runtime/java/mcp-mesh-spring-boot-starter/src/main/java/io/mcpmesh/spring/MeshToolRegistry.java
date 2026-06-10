@@ -1,8 +1,6 @@
 package io.mcpmesh.spring;
 
-import io.mcpmesh.MediaParam;
 import io.mcpmesh.MeshTool;
-import io.mcpmesh.Param;
 import io.mcpmesh.SchemaMode;
 import io.mcpmesh.Selector;
 import io.mcpmesh.a2a.A2AConsumer;
@@ -10,10 +8,11 @@ import io.mcpmesh.core.AgentSpec;
 import io.mcpmesh.core.MeshCoreBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.BridgeMethodResolver;
+import org.springframework.util.ClassUtils;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.lang.reflect.Method;
-import java.lang.reflect.Parameter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -71,9 +70,112 @@ public class MeshToolRegistry {
             method
         );
 
-        tools.put(capability, metadata);
+        // Issue #1164 LOW: duplicate capability names previously overwrote
+        // last-wins, silently shadowing one tool with another. Fail fast at
+        // boot with a descriptive error (mirrors the
+        // MeshCapabilityBeanRegistrar.mergeDependency conflict style).
+        // Tolerated as idempotent refreshes instead of conflicts:
+        //   - the SAME method (prototype-scoped bean instantiated more than
+        //     once, context refresh in the same JVM);
+        //   - an OVERRIDE PAIR on the SAME bean instance — one method
+        //     overrides the other in a class hierarchy (incl. generic
+        //     bridges). External scanners may legitimately register both the
+        //     superclass declaration and the subclass override of one logical
+        //     tool; the most-derived declaration wins (#1164 review
+        //     follow-up). The bean-identity guard keeps SIBLING beans honest:
+        //     a BaseCalc bean AND a DerivedCalc bean sharing a capability are
+        //     two tools, not one — without the guard the subclass bean
+        //     silently masked the base bean.
+        ToolMetadata existing = tools.putIfAbsent(capability, metadata);
+        if (existing != null) {
+            Method existingMethod = existing.method();
+            if (existingMethod.equals(method)) {
+                // Deliberately tolerant of a DIFFERENT bean instance here:
+                // prototype-scoped beans and Spring context refresh re-run the
+                // post-processor with NEW instances of the same class —
+                // requiring bean identity would falsely boot-fail those paths.
+                // Last-registered wins; logged at info (not debug) so the
+                // replacement is visible when two live instances genuinely
+                // compete (#1164 review follow-up).
+                tools.put(capability, metadata);
+                if (existing.bean() != bean) {
+                    log.info("Mesh tool '{}' re-registered for the same method {} with a new bean "
+                        + "instance — last registration wins (prototype scope / context refresh)",
+                        capability, method);
+                } else {
+                    log.debug("Mesh tool '{}' re-registered for the same method {} — idempotent refresh",
+                        capability, method);
+                }
+                return;
+            }
+            Method mostDerived = mostDerivedOverride(existingMethod, method);
+            if (mostDerived != null && existing.bean() == bean) {
+                if (mostDerived.equals(BridgeMethodResolver.findBridgedMethod(method))) {
+                    tools.put(capability, metadata);
+                    log.debug("Mesh tool '{}': {} overrides previously registered {} — most-derived wins",
+                        capability, method, existingMethod);
+                } else {
+                    log.debug("Mesh tool '{}': keeping already-registered override {} over base declaration {}",
+                        capability, existingMethod, method);
+                }
+                return;
+            }
+            String hint = mostDerived != null
+                ? "The methods form an override pair but belong to two different bean "
+                    + "instances — register only one of the beans."
+                : "Capability names must be unique within an agent — rename one of "
+                    + "the tools or remove the duplicate.";
+            throw new IllegalStateException(String.format(
+                "Duplicate @MeshTool capability '%s': already registered by %s.%s, "
+                    + "declared again by %s.%s. %s",
+                capability,
+                existing.method().getDeclaringClass().getName(), existing.method().getName(),
+                method.getDeclaringClass().getName(), method.getName(),
+                hint));
+        }
+
         log.info("Registered mesh tool: {} ({}, task={}, retryOn={})",
             capability, method, annotation.task(), annotation.retryOn().length);
+    }
+
+    /**
+     * Detect whether two distinct {@link Method} objects describe ONE logical
+     * tool — i.e. one overrides the other within a class hierarchy. Returns
+     * the most-derived declaration (bridge-resolved), or {@code null} when
+     * the methods are genuinely distinct (the caller then raises the
+     * duplicate-capability boot error).
+     *
+     * <p>Handles generic overrides: a base declaration like
+     * {@code T handle(T)} resolved against the subclass yields the bridge
+     * {@code handle(Object)}, which {@link BridgeMethodResolver} maps back to
+     * the user-declared {@code handle(String)} override.
+     */
+    private static Method mostDerivedOverride(Method a, Method b) {
+        Method ra = BridgeMethodResolver.findBridgedMethod(a);
+        Method rb = BridgeMethodResolver.findBridgedMethod(b);
+        if (!ra.getName().equals(rb.getName())) {
+            return null;
+        }
+        Class<?> da = ra.getDeclaringClass();
+        Class<?> db = rb.getDeclaringClass();
+        Method derived;
+        Method base;
+        if (da.equals(db)) {
+            return null;
+        } else if (da.isAssignableFrom(db)) {
+            derived = rb;
+            base = ra;
+        } else if (db.isAssignableFrom(da)) {
+            derived = ra;
+            base = rb;
+        } else {
+            return null;
+        }
+        // Same logical method iff resolving the base declaration against the
+        // derived class (then un-bridging) lands on the derived declaration.
+        Method resolved = BridgeMethodResolver.findBridgedMethod(
+            ClassUtils.getMostSpecificMethod(base, derived.getDeclaringClass()));
+        return resolved.equals(derived) ? derived : null;
     }
 
     // Phase B MeshJob substrate: synthetic tool specs registered outside
@@ -399,65 +501,18 @@ public class MeshToolRegistry {
         target.setMatchMode(effectiveMode == SchemaMode.STRICT ? "strict" : "subset");
     }
 
+    /**
+     * Issue #1164 MED-2: delegate to the shared victools-backed builder in
+     * {@link MeshSchemaSupport} — the SAME method {@link MeshToolWrapper} uses
+     * for the MCP-served schema — so the heartbeat-advertised
+     * {@code input_schema} / {@code input_schema_canonical} /
+     * {@code input_schema_hash} can never drift from what the MCP server
+     * actually serves. (The previous hand-rolled builder emitted bare
+     * {@code {"type":"object"}} for POJO params and {@code {"type":"array"}}
+     * for {@code List<Foo>} — no properties, no items, no required.)
+     */
     private Map<String, Object> extractInputSchema(Method method) {
-        Map<String, Object> schema = new LinkedHashMap<>();
-        schema.put("type", "object");
-
-        Map<String, Object> properties = new LinkedHashMap<>();
-        List<String> required = new ArrayList<>();
-
-        for (Parameter param : method.getParameters()) {
-            Param paramAnn = param.getAnnotation(Param.class);
-            if (paramAnn != null) {
-                Map<String, Object> propSchema = new LinkedHashMap<>();
-                propSchema.put("type", getJsonType(param.getType()));
-
-                if (!paramAnn.description().isEmpty()) {
-                    propSchema.put("description", paramAnn.description());
-                }
-
-                MediaParam mediaParamAnn = param.getAnnotation(MediaParam.class);
-                if (mediaParamAnn != null) {
-                    propSchema.put("x-media-type", mediaParamAnn.value());
-                    String existingDesc = (String) propSchema.getOrDefault("description", "");
-                    String mediaNote = "(accepts media URI: " + mediaParamAnn.value() + ")";
-                    if (!existingDesc.contains(mediaNote)) {
-                        propSchema.put("description", (existingDesc + " " + mediaNote).trim());
-                    }
-                }
-
-                properties.put(paramAnn.value(), propSchema);
-
-                if (paramAnn.required()) {
-                    required.add(paramAnn.value());
-                }
-            }
-        }
-
-        schema.put("properties", properties);
-        if (!required.isEmpty()) {
-            schema.put("required", required);
-        }
-
-        return schema;
-    }
-
-    private String getJsonType(Class<?> type) {
-        if (type == String.class) {
-            return "string";
-        } else if (type == int.class || type == Integer.class ||
-                   type == long.class || type == Long.class) {
-            return "integer";
-        } else if (type == double.class || type == Double.class ||
-                   type == float.class || type == Float.class) {
-            return "number";
-        } else if (type == boolean.class || type == Boolean.class) {
-            return "boolean";
-        } else if (type.isArray() || List.class.isAssignableFrom(type)) {
-            return "array";
-        } else {
-            return "object";
-        }
+        return MeshSchemaSupport.buildToolInputSchema(method);
     }
 
     /**

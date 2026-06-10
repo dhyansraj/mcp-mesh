@@ -1265,7 +1265,8 @@ public class MeshAutoConfiguration {
      * @param llmRegistry  LLM registry with @MeshLlm configs
      * @param objectMapper Jackson ObjectMapper for JSON serialization
      */
-    private void enrichToolsWithLlmProvider(
+    // Package-private static for tests (issue #1164 MED-1) — no instance state used.
+    static void enrichToolsWithLlmProvider(
             List<AgentSpec.ToolSpec> tools,
             MeshToolRegistry toolRegistry,
             MeshLlmRegistry llmRegistry,
@@ -1278,12 +1279,27 @@ public class MeshAutoConfiguration {
                 continue;
             }
 
-            // Build funcId in the format used by MeshLlmRegistry
-            String funcId = meta.bean().getClass().getName() + "." + meta.method().getName();
+            // Build funcId in the format used by MeshLlmRegistry. Use
+            // AopUtils.getTargetClass — the same unwrap MeshLlmBeanPostProcessor
+            // applies at registration time — so Spring-proxied beans
+            // (@Transactional/@Async/@Validated, runtime class Foo$$SpringCGLIB$$0)
+            // still resolve their @MeshLlm config (issue #1164 MED-1).
+            String funcId = org.springframework.aop.support.AopUtils.getTargetClass(meta.bean()).getName()
+                + "." + meta.method().getName();
 
             // Look up @MeshLlm config
             MeshLlmRegistry.LlmConfig llmConfig = llmRegistry.getByFunctionId(funcId);
             if (llmConfig == null) {
+                // Normal for tools without @MeshLlm; a lookup miss for a method
+                // that IS annotated means the registration/lookup keys diverged
+                // again — surface it loudly instead of silently skipping.
+                if (org.springframework.core.annotation.AnnotationUtils
+                        .findAnnotation(meta.method(), io.mcpmesh.MeshLlm.class) != null) {
+                    log.warn("@MeshLlm config lookup miss for tool '{}' (funcId={}): the method is "
+                        + "annotated but no registered config matched — llm_provider enrichment "
+                        + "skipped. Registration/lookup key mismatch; report as a bug.",
+                        toolSpec.getCapability(), funcId);
+                }
                 continue;
             }
 

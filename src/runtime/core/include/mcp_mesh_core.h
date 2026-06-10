@@ -1002,6 +1002,34 @@ int32_t mesh_cancel_active_job(const char *job_id);
 // `job_id_ptr` must be a valid C string for the duration of this call.
 int32_t mesh_await_job_cancel(const char *job_id_ptr);
 
+// Read-only probe: has the cancel token for `job_id` fired?
+//
+// `mesh_await_job_cancel` resolves on BOTH explicit cancel and natural
+// job end without telling the caller which one happened. Callers that
+// must distinguish (the Java SDK's outbound-call cancel watcher — a
+// natural-end wake must NOT abort still-healthy in-flight calls) probe
+// this immediately after the await returns:
+//
+// - explicit cancel: the registry entry is still present (teardown
+//   happens later, when the surrounding `run_as_job` scope ends) with
+//   its cancel token fired → returns `1`;
+// - natural end: `unregister_active_job` already removed the entry →
+//   returns `0`;
+// - re-claimed job under the same id: a fresh entry with an un-fired
+//   token → returns `0` (correct — the new attempt was not cancelled).
+//
+// Unlike `mesh_cancel_active_job` this NEVER fires the token, so it is
+// safe to call in races with a re-claim of the same job id.
+//
+// # Returns
+// `1` if an entry is registered for `job_id` and its cancel token has
+// fired, `0` otherwise (not registered, or registered but not
+// cancelled), `-1` on a NULL/invalid `job_id_ptr`.
+//
+// # Safety
+// `job_id_ptr` must be a valid C string for the duration of this call.
+int32_t mesh_job_cancel_fired(const char *job_id_ptr);
+
 // Run a Java-provided callback inside a fresh [`crate::jobs::run_as_job`]
 // scope so the cancel-registry entry under the snapshot's `job_id` is
 // bound for the duration of the callback (allowing

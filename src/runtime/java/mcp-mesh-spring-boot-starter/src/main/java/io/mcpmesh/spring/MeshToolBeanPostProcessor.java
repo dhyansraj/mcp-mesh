@@ -8,13 +8,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;
+import org.springframework.core.MethodIntrospector;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.AnnotationUtils;
-import org.springframework.util.ReflectionUtils;
 
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Bean post-processor that scans beans for {@code @MeshTool} annotations.
@@ -86,33 +87,179 @@ public class MeshToolBeanPostProcessor implements BeanPostProcessor, Ordered {
         // Get the target class (unwrap CGLIB proxies)
         Class<?> targetClass = AopUtils.getTargetClass(bean);
 
-        // Check all methods for @MeshTool annotation
-        ReflectionUtils.doWithMethods(targetClass, method -> {
-            MeshTool annotation = AnnotationUtils.findAnnotation(method, MeshTool.class);
-            if (annotation != null) {
-                log.debug("Found @MeshTool on {}.{}", targetClass.getSimpleName(), method.getName());
+        // Select @MeshTool methods, one entry per LOGICAL method. A bare
+        // ReflectionUtils.doWithMethods walk (no MethodFilter) visited an
+        // overridden/inherited @MeshTool method MULTIPLE times — once per
+        // declaring class in the hierarchy, plus generic bridge methods —
+        // and each visit re-registered the same capability, tripping the
+        // duplicate-capability boot error (#1164 review). MethodIntrospector
+        // dedups via getMostSpecificMethod + BridgeMethodResolver: superclass
+        // declarations and bridges collapse onto the single most-derived
+        // user-declared Method, which is also the right invocation target.
+        Map<Method, MeshTool> annotatedMethods = MethodIntrospector.selectMethods(targetClass,
+            (MethodIntrospector.MetadataLookup<MeshTool>) method ->
+                AnnotationUtils.findAnnotation(method, MeshTool.class));
 
-                // Issue #895: retryOn requires task=true (no controller without it,
-                // so release-and-retry has no meaning). The Throwable-subclass
-                // bound is enforced at compile-time by the annotation field
-                // type (Class<? extends Throwable>), so no runtime check needed.
-                Class<? extends Throwable>[] retryOn = annotation.retryOn();
-                if (retryOn.length > 0 && !annotation.task()) {
-                    throw new IllegalStateException(
-                        "@MeshTool(retryOn = ...) on '" + targetClass.getName() +
-                        "#" + method.getName() + "' requires task = true; " +
-                        "remove retryOn or set task = true.");
-                }
+        annotatedMethods.forEach((specificMethod, annotation) -> {
+            Method method = selectRegistrationTarget(specificMethod);
+            log.debug("Found @MeshTool on {}.{} (registering declaration {})",
+                targetClass.getSimpleName(), specificMethod.getName(), method);
 
-                // Register with legacy registry (for agent spec generation)
-                registry.registerTool(bean, method, annotation);
-
-                // Create wrapper for MCP SDK integration
-                createAndRegisterWrapper(bean, targetClass, method, annotation);
+            // Issue #895: retryOn requires task=true (no controller without it,
+            // so release-and-retry has no meaning). The Throwable-subclass
+            // bound is enforced at compile-time by the annotation field
+            // type (Class<? extends Throwable>), so no runtime check needed.
+            Class<? extends Throwable>[] retryOn = annotation.retryOn();
+            if (retryOn.length > 0 && !annotation.task()) {
+                throw new IllegalStateException(
+                    "@MeshTool(retryOn = ...) on '" + targetClass.getName() +
+                    "#" + method.getName() + "' requires task = true; " +
+                    "remove retryOn or set task = true.");
             }
+
+            // Register with legacy registry (for agent spec generation)
+            registry.registerTool(bean, method, annotation);
+
+            // Create wrapper for MCP SDK integration
+            createAndRegisterWrapper(bean, targetClass, method, annotation);
         });
 
         return bean;
+    }
+
+    /**
+     * Choose the {@link Method} object to register for one logical tool.
+     *
+     * <p>Usually the most-derived declaration ({@code specificMethod}, as
+     * selected by {@link MethodIntrospector}). EXCEPT: parameter annotations
+     * are not inherited in Java, so when the override declares neither
+     * {@code @MeshTool} nor any {@code @Param} itself, the metadata lives on
+     * an ancestor declaration with the same signature (the common
+     * "fully-annotated abstract contract, bare subclass implementation"
+     * pattern) — register that ancestor instead. {@code Method.invoke}
+     * dispatches virtually, so the subclass override still runs either way;
+     * what this choice controls is which declaration's {@code @Param} /
+     * schema metadata describes the tool.
+     *
+     * <p>Ancestors include INTERFACES, not just superclasses (#1164 review
+     * follow-up): an annotated default/abstract interface method implemented
+     * bare in a class is the same contract pattern, and
+     * {@link org.springframework.core.annotation.AnnotationUtils#findAnnotation}
+     * already discovers the {@code @MeshTool} through the interface — only
+     * the {@code @Param} metadata lookup was superclass-only, boot-failing
+     * with "must have @Param annotation". Superclasses are searched first
+     * (mirroring Java's class-beats-interface resolution), then the
+     * interface hierarchies of every class in the chain.
+     *
+     * <p>An override that RE-DECLARES {@code @MeshTool} but no {@code @Param}
+     * (#1164 review follow-up) is the same pattern with a twist: the schema
+     * metadata still lives on the ancestor declaration, so registering the
+     * override would boot-fail in {@link MeshToolWrapper} with "must have
+     * {@code @Param} annotation" (or register an empty schema for
+     * injectable-only signatures). The param-annotated ancestor is preferred
+     * as the registration target; the override's {@code @MeshTool} values
+     * still apply because the caller resolves the annotation from the
+     * most-derived declaration before this selection runs.
+     *
+     * <p>Generic specializations (the override's parameter types differ from
+     * the generic ancestor's erasure) always register the most-derived
+     * declaration — the specialized types are what the schema must describe.
+     * Annotate {@code @Param} on the specialized override in that case.
+     */
+    private static Method selectRegistrationTarget(Method specificMethod) {
+        if (hasAnyParamAnnotation(specificMethod)) {
+            return specificMethod;
+        }
+        // No @Param on the most-derived declaration. When it re-declares
+        // @MeshTool itself, only an ancestor that carries @Param is worth
+        // switching to; when it declares nothing, any ancestor with tool
+        // metadata is the schema source.
+        boolean redeclaresMeshTool = specificMethod.isAnnotationPresent(MeshTool.class);
+        java.util.function.Predicate<Method> carriesMetadata = redeclaresMeshTool
+            ? MeshToolBeanPostProcessor::hasAnyParamAnnotation
+            : m -> m.isAnnotationPresent(MeshTool.class) || hasAnyParamAnnotation(m);
+        Method ancestor = findAncestorDeclaration(specificMethod, carriesMetadata);
+        if (ancestor == null) {
+            return specificMethod;
+        }
+        if (redeclaresMeshTool) {
+            log.warn("@MeshTool re-declared on override {} without @Param annotations — "
+                + "registering ancestor declaration {} as the schema source (the override's "
+                + "@MeshTool values still apply). Annotate @Param on the override to make "
+                + "it the schema source.", specificMethod, ancestor);
+        }
+        return ancestor;
+    }
+
+    /** Same-signature ancestor declaration matching {@code carriesMetadata}, or null. */
+    private static Method findAncestorDeclaration(
+            Method specificMethod, java.util.function.Predicate<Method> carriesMetadata) {
+        Class<?> declaring = specificMethod.getDeclaringClass();
+        for (Class<?> c = declaring.getSuperclass(); c != null && c != Object.class;
+                c = c.getSuperclass()) {
+            Method ancestor = matchingDeclaration(c, specificMethod, carriesMetadata);
+            if (ancestor != null) {
+                return ancestor;
+            }
+        }
+        java.util.Set<Class<?>> visited = new java.util.HashSet<>();
+        for (Class<?> c = declaring; c != null && c != Object.class; c = c.getSuperclass()) {
+            for (Class<?> iface : c.getInterfaces()) {
+                Method ancestor = searchInterfaceHierarchy(iface, specificMethod, visited, carriesMetadata);
+                if (ancestor != null) {
+                    return ancestor;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Depth-first walk of one interface and its super-interfaces. */
+    private static Method searchInterfaceHierarchy(
+            Class<?> iface, Method specificMethod, java.util.Set<Class<?>> visited,
+            java.util.function.Predicate<Method> carriesMetadata) {
+        if (!visited.add(iface)) {
+            return null;
+        }
+        Method declaration = matchingDeclaration(iface, specificMethod, carriesMetadata);
+        if (declaration != null) {
+            return declaration;
+        }
+        for (Class<?> superIface : iface.getInterfaces()) {
+            Method found = searchInterfaceHierarchy(superIface, specificMethod, visited, carriesMetadata);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The same-signature declaration on {@code type} when it satisfies
+     * {@code carriesMetadata}; {@code null} when absent or bare (generic
+     * specializations have no same-signature ancestor).
+     */
+    private static Method matchingDeclaration(
+            Class<?> type, Method specificMethod, java.util.function.Predicate<Method> carriesMetadata) {
+        try {
+            Method declaration = type.getDeclaredMethod(
+                specificMethod.getName(), specificMethod.getParameterTypes());
+            if (carriesMetadata.test(declaration)) {
+                return declaration;
+            }
+        } catch (NoSuchMethodException ignored) {
+            // No same-signature declaration on this ancestor.
+        }
+        return null;
+    }
+
+    private static boolean hasAnyParamAnnotation(Method method) {
+        for (java.lang.reflect.Parameter p : method.getParameters()) {
+            if (p.isAnnotationPresent(io.mcpmesh.Param.class)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

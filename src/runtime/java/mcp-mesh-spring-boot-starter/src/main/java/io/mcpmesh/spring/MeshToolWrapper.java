@@ -1,7 +1,5 @@
 package io.mcpmesh.spring;
 
-import tools.jackson.databind.JsonNode;
-import com.github.victools.jsonschema.generator.SchemaGenerator;
 import tools.jackson.databind.ObjectMapper;
 import io.mcpmesh.JobContext;
 import io.mcpmesh.JobController;
@@ -54,8 +52,28 @@ import java.util.concurrent.atomic.AtomicReferenceArray;
 public class MeshToolWrapper implements McpToolHandler {
 
     private static final Logger log = LoggerFactory.getLogger(MeshToolWrapper.class);
-    private static final long ASYNC_TIMEOUT_SECONDS = 30;
-    private static final SchemaGenerator SCHEMA_GENERATOR = MeshSchemaSupport.generator();
+    /**
+     * Default await budget for {@link CompletableFuture}-returning tools when
+     * the inbound request carries no {@code X-Mesh-Timeout} budget. When the
+     * header IS present, its value bounds the await instead (issue #1164 MED-5).
+     */
+    static final long ASYNC_TIMEOUT_SECONDS = 30;
+    /**
+     * CAP on the margin shaved off the propagated {@code X-Mesh-Timeout}
+     * budget when awaiting a {@link CompletableFuture} result. The caller's
+     * socket read timeout typically fires at roughly the same budget; ending
+     * the await slightly earlier lets the structured timeout error (a proper
+     * JSON-RPC error payload) reach the caller instead of racing — and
+     * losing to — the caller's transport-level timeout, which surfaces as an
+     * opaque read-timeout IOException (#1164 review follow-up).
+     *
+     * <p>The actual margin is proportional — {@code min(cap, budget/10)} —
+     * so small budgets keep most of their window: a fixed 2s margin ate 2/3
+     * of a 3s budget. Tiny budgets (under 10s) get little or no margin and
+     * accept the socket-timeout race; that trade beats forfeiting the
+     * useful await time.
+     */
+    static final long ASYNC_AWAIT_MARGIN_SECS = 2;
     /** Issue #895: shared empty {@code retryOn} array — sentinel for "no retry-eligible exceptions". */
     @SuppressWarnings("unchecked")
     private static final Class<? extends Throwable>[] EMPTY_RETRY_ON =
@@ -296,53 +314,18 @@ public class MeshToolWrapper implements McpToolHandler {
 
     /**
      * Generate JSON Schema for MCP, excluding injected parameters.
-     * Uses victools/jsonschema-generator for proper nested type handling.
+     *
+     * <p>Issue #1164 MED-2: delegates to the shared builder in
+     * {@link MeshSchemaSupport#buildToolInputSchema} — the SAME method the
+     * heartbeat catalog ({@link MeshToolRegistry}) uses — so the MCP-served
+     * schema and the registry-advertised schema can never drift. The shared
+     * builder selects exactly the {@code @Param}-annotated parameters, which
+     * is the same set as {@link #analyzeParameters}' {@code mcpParams}
+     * (injectable types are exempt; non-injectable params without
+     * {@code @Param} were already rejected at construction time).
      */
     private Map<String, Object> generateInputSchema() {
-        Map<String, Object> schema = new LinkedHashMap<>();
-        schema.put("type", "object");
-
-        Map<String, Object> properties = new LinkedHashMap<>();
-        List<String> required = new ArrayList<>();
-
-        for (ParamInfo param : mcpParams) {
-            // Use victools to generate schema for the parameter type
-            JsonNode paramSchema = SCHEMA_GENERATOR.generateSchema(param.type());
-            Map<String, Object> propSchema = convertJsonNodeToMap(paramSchema);
-
-            // Add description from @Param annotation if not already present
-            if (!param.description().isEmpty() && !propSchema.containsKey("description")) {
-                propSchema.put("description", param.description());
-            }
-
-            properties.put(param.name(), propSchema);
-
-            if (param.required()) {
-                required.add(param.name());
-            }
-        }
-
-        schema.put("properties", properties);
-        if (!required.isEmpty()) {
-            schema.put("required", required);
-        }
-
-        return schema;
-    }
-
-    /**
-     * Convert Jackson JsonNode to Map for schema representation.
-     */
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> convertJsonNodeToMap(JsonNode node) {
-        try {
-            return objectMapper.convertValue(node, Map.class);
-        } catch (Exception e) {
-            log.warn("Failed to convert JsonNode to Map: {}", e.getMessage());
-            Map<String, Object> fallback = new LinkedHashMap<>();
-            fallback.put("type", "object");
-            return fallback;
-        }
+        return MeshSchemaSupport.buildToolInputSchema(method);
     }
 
     // =========================================================================
@@ -587,8 +570,12 @@ public class MeshToolWrapper implements McpToolHandler {
         // TraceContext.getPropagatedHeaders() with a lowercased key.
         Map<String, String> propagated = TraceContext.getPropagatedHeaders();
         String jobIdHeader = propagated != null ? propagated.get("x-mesh-job-id") : null;
+        // Issue #1164 MED-5: parse the propagated X-Mesh-Timeout budget for
+        // EVERY inbound call (not only job dispatch) so CompletableFuture-
+        // returning tools are awaited against the caller's actual budget
+        // instead of the hard-coded 30s default.
         Long deadlineSecs = null;
-        if (jobIdHeader != null && !jobIdHeader.isEmpty()) {
+        if (propagated != null) {
             String timeoutHeader = propagated.get("x-mesh-timeout");
             if (timeoutHeader != null && !timeoutHeader.isEmpty()) {
                 try {
@@ -652,8 +639,9 @@ public class MeshToolWrapper implements McpToolHandler {
             throw new RuntimeException("Method access denied: " + e.getMessage(), e);
         }
 
-        // Handle async results (CompletableFuture)
-        result = awaitIfFuture(result);
+        // Handle async results (CompletableFuture) — bounded by the inbound
+        // X-Mesh-Timeout budget when present (issue #1164 MED-5).
+        result = awaitIfFuture(result, deadlineSecs);
 
         return result;
     }
@@ -736,16 +724,30 @@ public class MeshToolWrapper implements McpToolHandler {
     }
 
     /**
-     * Await a {@link CompletableFuture} result with the async timeout,
-     * unwrapping execution/interruption failures to match the synchronous
-     * invocation's exception contract. Non-future results pass through.
+     * Await a {@link CompletableFuture} result, unwrapping execution /
+     * interruption failures to match the synchronous invocation's exception
+     * contract. Non-future results pass through.
+     *
+     * <p>Issue #1164 MED-5: the await is bounded by the caller's propagated
+     * {@code X-Mesh-Timeout} budget when present, falling back to
+     * {@link #ASYNC_TIMEOUT_SECONDS} when absent. The timed-out future is
+     * cancelled, which frees this dispatch thread, cancels dependent stages,
+     * and turns a late {@code complete()} into a no-op. Note that
+     * {@link CompletableFuture#cancel} does NOT interrupt whatever thread is
+     * computing the value ({@code mayInterruptIfRunning} has no effect per
+     * its javadoc) — orphaned producer-side work runs to completion in the
+     * background.
+     *
+     * @param budgetSecs await budget in seconds, or null for the default
      */
-    private static Object awaitIfFuture(Object result) throws Exception {
+    static Object awaitIfFuture(Object result, Long budgetSecs) throws Exception {
         if (result instanceof CompletableFuture<?> future) {
+            long timeoutSecs = effectiveAsyncAwaitSecs(budgetSecs);
             try {
-                return future.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                return future.get(timeoutSecs, TimeUnit.SECONDS);
             } catch (TimeoutException e) {
-                throw new RuntimeException("Async operation timed out after " + ASYNC_TIMEOUT_SECONDS + " seconds");
+                future.cancel(true);
+                throw new RuntimeException("Async operation timed out after " + timeoutSecs + " seconds");
             } catch (ExecutionException e) {
                 Throwable cause = e.getCause();
                 if (cause instanceof Exception ex) throw ex;
@@ -756,6 +758,25 @@ public class MeshToolWrapper implements McpToolHandler {
             }
         }
         return result;
+    }
+
+    /**
+     * Effective async-await budget: the propagated {@code X-Mesh-Timeout} /
+     * job deadline when present and positive, otherwise the
+     * {@link #ASYNC_TIMEOUT_SECONDS} default (issue #1164 MED-5).
+     *
+     * <p>A present budget is reduced by a proportional margin —
+     * {@code min(}{@link #ASYNC_AWAIT_MARGIN_SECS}{@code , budget/10)},
+     * floor 1s — so the structured timeout error wins the race against the
+     * caller's socket read timeout without eating most of a small budget;
+     * see the margin constant's javadoc.
+     */
+    static long effectiveAsyncAwaitSecs(Long budgetSecs) {
+        if (budgetSecs == null || budgetSecs <= 0) {
+            return ASYNC_TIMEOUT_SECONDS;
+        }
+        long margin = Math.min(ASYNC_AWAIT_MARGIN_SECS, budgetSecs / 10);
+        return Math.max(1L, budgetSecs - margin);
     }
 
     /**
@@ -820,7 +841,7 @@ public class MeshToolWrapper implements McpToolHandler {
             }
             JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs);
             return runAsJobWithRegistryBinding(jobId, deadlineSecs,
-                () -> JobContext.withJob(snap, () -> invokeNoController(fullArgs)));
+                () -> JobContext.withJob(snap, () -> invokeNoController(fullArgs, deadlineSecs)));
         }
 
         // Construct the producer controller. Free in finally.
@@ -836,7 +857,7 @@ public class MeshToolWrapper implements McpToolHandler {
             JobContext.Snapshot snap = new JobContext.Snapshot(jobId, deadlineSecs);
             try {
                 return runAsJobWithRegistryBinding(jobId, deadlineSecs,
-                    () -> JobContext.withJob(snap, () -> invokeAndAutoComplete(fullArgs, controller)));
+                    () -> JobContext.withJob(snap, () -> invokeAndAutoComplete(fullArgs, controller, deadlineSecs)));
             } catch (Throwable t) {
                 // Defensive: runAsJobWithRegistryBinding can throw BEFORE
                 // invokeAndAutoComplete runs (snapshot serialization or
@@ -947,7 +968,7 @@ public class MeshToolWrapper implements McpToolHandler {
      * stays inside the JobContext snapshot so outbound headers still
      * carry the job id. (PR #891 review.)
      */
-    private Object invokeNoController(Object[] fullArgs) throws Exception {
+    private Object invokeNoController(Object[] fullArgs, Long deadlineSecs) throws Exception {
         Object result;
         try {
             result = method.invoke(bean, fullArgs);
@@ -958,11 +979,11 @@ public class MeshToolWrapper implements McpToolHandler {
         } catch (IllegalAccessException e) {
             throw new RuntimeException("Method access denied: " + e.getMessage(), e);
         }
-        result = awaitIfFuture(result);
+        result = awaitIfFuture(result, deadlineSecs);
         return result;
     }
 
-    private Object invokeAndAutoComplete(Object[] fullArgs, JobController controller) throws Exception {
+    private Object invokeAndAutoComplete(Object[] fullArgs, JobController controller, Long deadlineSecs) throws Exception {
         Object result;
         try {
             result = method.invoke(bean, fullArgs);
@@ -998,11 +1019,19 @@ public class MeshToolWrapper implements McpToolHandler {
         // deciding whether to auto-complete (matches the Python /
         // TypeScript async semantics).
         if (result instanceof CompletableFuture<?> future) {
+            // Issue #1164 MED-5: await against the job's actual budget
+            // (X-Mesh-Timeout / deadline) instead of the hard-coded 30s.
+            // Cancelling the timed-out future frees this dispatch thread,
+            // cancels dependent stages, and makes a late complete() a no-op
+            // — it does NOT interrupt the running work (CompletableFuture
+            // cancel semantics); orphaned work runs to completion.
+            long timeoutSecs = effectiveAsyncAwaitSecs(deadlineSecs);
             try {
-                result = future.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                result = future.get(timeoutSecs, TimeUnit.SECONDS);
             } catch (TimeoutException e) {
-                tryFail(controller, "async operation timed out after " + ASYNC_TIMEOUT_SECONDS + "s");
-                throw new RuntimeException("Async operation timed out after " + ASYNC_TIMEOUT_SECONDS + " seconds");
+                future.cancel(true);
+                tryFail(controller, "async operation timed out after " + timeoutSecs + "s");
+                throw new RuntimeException("Async operation timed out after " + timeoutSecs + " seconds");
             } catch (ExecutionException e) {
                 // Issue #895: same retryOn-aware handling as the synchronous
                 // throw path — a CompletableFuture that completes

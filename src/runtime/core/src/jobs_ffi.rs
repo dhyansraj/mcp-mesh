@@ -1232,6 +1232,51 @@ pub unsafe extern "C" fn mesh_await_job_cancel(job_id_ptr: *const c_char) -> i32
     0
 }
 
+/// Read-only probe: has the cancel token for `job_id` fired?
+///
+/// `mesh_await_job_cancel` resolves on BOTH explicit cancel and natural
+/// job end without telling the caller which one happened. Callers that
+/// must distinguish (the Java SDK's outbound-call cancel watcher — a
+/// natural-end wake must NOT abort still-healthy in-flight calls) probe
+/// this immediately after the await returns:
+///
+/// - explicit cancel: the registry entry is still present (teardown
+///   happens later, when the surrounding `run_as_job` scope ends) with
+///   its cancel token fired → returns `1`;
+/// - natural end: `unregister_active_job` already removed the entry →
+///   returns `0`;
+/// - re-claimed job under the same id: a fresh entry with an un-fired
+///   token → returns `0` (correct — the new attempt was not cancelled).
+///
+/// Unlike `mesh_cancel_active_job` this NEVER fires the token, so it is
+/// safe to call in races with a re-claim of the same job id.
+///
+/// # Returns
+/// `1` if an entry is registered for `job_id` and its cancel token has
+/// fired, `0` otherwise (not registered, or registered but not
+/// cancelled), `-1` on a NULL/invalid `job_id_ptr`.
+///
+/// # Safety
+/// `job_id_ptr` must be a valid C string for the duration of this call.
+#[no_mangle]
+pub unsafe extern "C" fn mesh_job_cancel_fired(job_id_ptr: *const c_char) -> i32 {
+    take_last_error();
+    let job_id = match req_cstr(job_id_ptr, "job_id") {
+        Ok(s) => s,
+        Err(()) => return -1,
+    };
+    match cancel_registry::get_state(job_id) {
+        Some((cancel, _ended)) => {
+            if cancel.is_cancelled() {
+                1
+            } else {
+                0
+            }
+        }
+        None => 0,
+    }
+}
+
 // =============================================================================
 // run_as_job — callback-based scope binding
 // =============================================================================
@@ -1471,6 +1516,43 @@ mod tests {
         let rc = unsafe { mesh_await_job_cancel(id_c.as_ptr()) };
         assert_eq!(rc, 0);
         unregisterer.join().expect("unregister thread panicked");
+    }
+
+    /// `mesh_job_cancel_fired` distinguishes the two `mesh_await_job_cancel`
+    /// wake reasons: `1` only when the registry still holds the entry AND
+    /// its cancel token fired; `0` for un-fired entries and for naturally
+    /// unregistered (ended) jobs. Read-only — must NOT fire the token.
+    #[test]
+    fn job_cancel_fired_distinguishes_cancel_from_natural_end() {
+        use tokio_util::sync::CancellationToken;
+
+        let job_id = format!("cancel-fired-probe-{}", uuid::Uuid::new_v4().simple());
+        let id_c = CString::new(job_id.clone()).unwrap();
+
+        // Not registered → 0.
+        assert_eq!(unsafe { mesh_job_cancel_fired(id_c.as_ptr()) }, 0);
+
+        // Registered, not cancelled → 0 (and the probe must not fire it).
+        let token = CancellationToken::new();
+        cancel_registry::register_active_job(&job_id, token.clone());
+        assert_eq!(unsafe { mesh_job_cancel_fired(id_c.as_ptr()) }, 0);
+        assert!(!token.is_cancelled(), "probe must be read-only");
+
+        // Explicit cancel → 1 (entry still present until natural teardown).
+        cancel_registry::cancel_active_job(&job_id);
+        assert_eq!(unsafe { mesh_job_cancel_fired(id_c.as_ptr()) }, 1);
+
+        // Natural teardown (unregister) → back to 0.
+        cancel_registry::unregister_active_job(&job_id);
+        assert_eq!(unsafe { mesh_job_cancel_fired(id_c.as_ptr()) }, 0);
+    }
+
+    /// Null pointer must be rejected with `-1` via the last-error slot,
+    /// same as the other req_cstr-guarded entry points.
+    #[test]
+    fn job_cancel_fired_rejects_null() {
+        let rc = unsafe { mesh_job_cancel_fired(ptr::null()) };
+        assert_eq!(rc, -1);
     }
 
     /// `mesh_run_as_job` must reject malformed JSON cleanly via the
