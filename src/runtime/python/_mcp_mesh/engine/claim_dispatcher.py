@@ -70,6 +70,25 @@ _MAX_CONCURRENT_DISPATCHES = 4
 # operator dashboards without spamming on a single transient blip.
 _CONSECUTIVE_FAILURES_ERROR_THRESHOLD = 5
 
+# Bounded wait for in-flight dispatch tasks during ``stop()``. Mirrors the
+# TypeScript ``ClaimDispatcher.stop(timeoutMs = 30_000)`` drain default
+# (``src/runtime/typescript/src/claim-dispatcher.ts``): long enough that a
+# typical job's terminal complete/fail flush finishes, short enough that a
+# runaway handler doesn't block shutdown forever.
+_STOP_DRAIN_TIMEOUT_SECS = 30.0
+
+# Bounded wait for cancelled stragglers AFTER the drain window. A handler
+# that swallows CancelledError (broad retry loops, shielded awaits) would
+# make an unbounded await hang ``stop()`` forever; past this window the
+# tasks are logged and abandoned.
+_STOP_CANCEL_WAIT_SECS = 5.0
+
+# Extra headroom on top of the shared drain budget in ``stop_dispatchers``:
+# covers the per-dispatcher poll-loop stop (<=5s), straggler-cancel wait
+# (<=_STOP_CANCEL_WAIT_SECS) and HTTP client close, which all happen
+# outside the drain window itself.
+_STOP_BUDGET_GRACE_SECS = 10.0
+
 
 class PythonClaimDispatcher:
     """Background task that claims pending jobs for a single capability
@@ -108,6 +127,12 @@ class PythonClaimDispatcher:
         self._dispatch_sem = asyncio.Semaphore(_MAX_CONCURRENT_DISPATCHES)
         # Consecutive failure tracker for log-level escalation (W1).
         self._consecutive_failures = 0
+        # Strong refs to in-flight dispatch tasks (issue #1162 LOW-5):
+        # asyncio only keeps a weak reference to tasks, so a long-running
+        # handler task with no other referent can be GC'd mid-flight. The
+        # set also lets stop() drain in-flight dispatches so their
+        # best-effort terminal fail() reports aren't killed with the loop.
+        self._dispatch_tasks: set[asyncio.Task] = set()
 
     async def _claim_once(self) -> list[dict]:
         """Single ``POST /jobs/claim`` call. Returns the list of claimed
@@ -332,7 +357,7 @@ class PythonClaimDispatcher:
                             job.get("id"),
                         )
                         if first:
-                            asyncio.create_task(self._dispatch_with_permit(job))
+                            self._spawn_dispatch(job)
                             permit_held = False  # ownership transferred
                             first = False
                         else:
@@ -341,7 +366,7 @@ class PythonClaimDispatcher:
                             # don't dispatch more concurrently than
                             # ``_MAX_CONCURRENT_DISPATCHES`` allows.
                             await self._dispatch_sem.acquire()
-                            asyncio.create_task(self._dispatch_with_permit(job))
+                            self._spawn_dispatch(job)
                     backoff = _POLL_BASE_SECS  # reset on success
                     continue
 
@@ -367,6 +392,16 @@ class PythonClaimDispatcher:
             self.instance_id,
         )
 
+    def _spawn_dispatch(self, claimed: dict) -> None:
+        """Spawn a dispatch task and retain a strong reference to it.
+
+        The done-callback discard keeps the set bounded to genuinely
+        in-flight tasks; ``stop()`` drains whatever remains.
+        """
+        task = asyncio.create_task(self._dispatch_with_permit(claimed))
+        self._dispatch_tasks.add(task)
+        task.add_done_callback(self._dispatch_tasks.discard)
+
     async def _dispatch_with_permit(self, claimed: dict) -> None:
         """Run ``_dispatch`` and guarantee the semaphore permit is released.
 
@@ -388,8 +423,26 @@ class PythonClaimDispatcher:
             self._run_loop(), name=f"mesh-claim-{self.capability}"
         )
 
-    async def stop(self) -> None:
-        """Signal the loop to exit and await it."""
+    async def stop(self, drain_timeout: float = _STOP_DRAIN_TIMEOUT_SECS) -> None:
+        """Signal the loop to exit, await it, then drain in-flight dispatches.
+
+        Drain order (mirrors the TypeScript ``ClaimDispatcher.stop()``):
+
+        1. stop the poll loop — no new claims/dispatches after this;
+        2. await in-flight dispatch tasks, bounded by ``drain_timeout``,
+           so handlers finish their terminal ``complete``/``fail`` reports
+           instead of dying with the loop;
+        3. cancel stragglers that outlive the window and await the
+           cancellations, bounded by ``_STOP_CANCEL_WAIT_SECS`` (permit
+           release is guaranteed by ``_dispatch_with_permit``'s
+           ``finally``; a handler that swallows CancelledError is logged
+           and abandoned rather than hanging stop() forever);
+        4. close the dispatcher-owned HTTP client.
+
+        Args:
+            drain_timeout: Bounded wait (seconds) for in-flight handlers.
+                ``<= 0`` skips the drain and cancels immediately (tests).
+        """
         self._stop.set()
         if self._task is not None:
             try:
@@ -401,6 +454,41 @@ class PythonClaimDispatcher:
                     self.capability,
                 )
                 self._task.cancel()
+
+        # Drain in-flight dispatch tasks (issue #1162 LOW-5). The poll loop
+        # is down so the set can only shrink from here.
+        pending = {t for t in self._dispatch_tasks if not t.done()}
+        if pending:
+            if drain_timeout > 0:
+                _done, pending = await asyncio.wait(pending, timeout=drain_timeout)
+            if pending:
+                logger.warning(
+                    "claim_dispatcher: stop() drain timed out for capability=%s "
+                    "with %d dispatch task(s) still in flight; cancelling",
+                    self.capability,
+                    len(pending),
+                )
+                for task in pending:
+                    task.cancel()
+                # Bounded: a handler that swallows CancelledError would
+                # otherwise hang stop() forever (post-#1162 review). The
+                # tasks only ever end cancelled or clean (_dispatch
+                # swallows handler exceptions), so abandoning here leaks
+                # no unretrieved exceptions.
+                _done, abandoned = await asyncio.wait(
+                    pending, timeout=_STOP_CANCEL_WAIT_SECS
+                )
+                if abandoned:
+                    logger.warning(
+                        "claim_dispatcher: %d dispatch task(s) for "
+                        "capability=%s did not exit within %.1fs of "
+                        "cancellation (handler may be swallowing "
+                        "CancelledError); abandoning",
+                        len(abandoned),
+                        self.capability,
+                        _STOP_CANCEL_WAIT_SECS,
+                    )
+
         # Close the dispatcher-owned HTTP client so connection pools
         # don't leak across agent restarts in long-lived test harnesses.
         client = self._http_client
@@ -413,6 +501,66 @@ class PythonClaimDispatcher:
                     "claim_dispatcher: http client close raised (%s); ignoring",
                     e,
                 )
+
+
+async def stop_dispatchers(
+    dispatchers: list,
+    drain_timeout: float = _STOP_DRAIN_TIMEOUT_SECS,
+    grace: float = _STOP_BUDGET_GRACE_SECS,
+) -> None:
+    """Stop multiple dispatchers concurrently under ONE shared drain budget.
+
+    Every dispatcher drains against the SAME ``drain_timeout`` window —
+    the ``stop()`` calls run in parallel via ``asyncio.gather`` — so N
+    dispatchers with in-flight jobs cost roughly one drain window of wall
+    time, not N stacked windows. Sequential 30s drains would starve
+    whatever the caller sequences after this (registry unregister, Rust
+    core shutdown) past a typical SIGTERM grace period (K8s default 30s),
+    getting the process SIGKILLed before cleanup runs.
+
+    The whole phase is additionally hard-capped at ``drain_timeout +
+    grace``: past that, the remaining ``stop()`` calls are cancelled and
+    abandoned with a warning. Never raises (short of outer cancellation)
+    — a wedged dispatcher must not prevent the registry cleanup that
+    callers run after this.
+
+    Args:
+        dispatchers: Dispatchers to stop (objects exposing
+            ``stop(drain_timeout=...)``).
+        drain_timeout: Shared in-flight-handler drain window, passed to
+            every ``stop()`` call.
+        grace: Headroom on top of ``drain_timeout`` for per-dispatcher
+            bookkeeping (poll-loop stop, straggler cancel, client close)
+            before the phase is abandoned wholesale.
+    """
+    if not dispatchers:
+        return
+
+    async def _stop_one(d: Any) -> None:
+        try:
+            await d.stop(drain_timeout=drain_timeout)
+        except Exception as e:
+            logger.warning(
+                "claim_dispatcher: error stopping dispatcher for "
+                "capability=%s: %s",
+                getattr(d, "capability", "?"),
+                e,
+            )
+
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*(_stop_one(d) for d in dispatchers)),
+            timeout=drain_timeout + grace,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "claim_dispatcher: shutdown of %d dispatcher(s) exceeded the "
+            "shared budget (%.1fs drain + %.1fs grace); abandoning "
+            "remaining drains so shutdown can proceed to registry cleanup",
+            len(dispatchers),
+            drain_timeout,
+            grace,
+        )
 
 
 def discover_task_handlers(

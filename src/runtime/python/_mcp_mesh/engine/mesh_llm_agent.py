@@ -188,7 +188,6 @@ class MeshLlmAgent:
         self.output_type = output_type
         self.system_prompt = config.system_prompt  # Public attribute for tests
         self.output_mode = config.output_mode  # Output mode override (strict/hint/text)
-        self._iteration_count = 0
         self._default_model_params = (
             default_model_params or {}
         )  # Decorator-level defaults
@@ -876,7 +875,13 @@ class MeshLlmAgent:
             # Replace context entirely
             result = await llm("What is the answer?", context={"only": "this"}, context_mode="replace")
         """
-        self._iteration_count = 0
+        # Issue #1162 MED-2: the iteration counter MUST be call-local. In
+        # non-template mode a single cached MeshLlmAgent instance is shared
+        # across concurrent invocations of the same @mesh.llm tool; an
+        # instance-level counter lets one call's reset/increments corrupt
+        # another's mid-loop state (defeating the max_iterations runaway
+        # defense, or tripping MaxIterationsError early).
+        iteration_count = 0
 
         # Issue #311: Track timing and token usage for _mesh_meta
         start_time = time.perf_counter()
@@ -892,10 +897,10 @@ class MeshLlmAgent:
         from _mcp_mesh.tracing.context import set_llm_metadata
 
         # Agentic loop
-        while self._iteration_count < self.max_iterations:
-            self._iteration_count += 1
+        while iteration_count < self.max_iterations:
+            iteration_count += 1
             logger.debug(
-                f"🔄 Iteration {self._iteration_count}/{self.max_iterations}..."
+                f"🔄 Iteration {iteration_count}/{self.max_iterations}..."
             )
 
             try:
@@ -1034,8 +1039,10 @@ class MeshLlmAgent:
 
                 # No tool calls - this is the final response
                 logger.debug("✅ Final response received from LLM")
+                # content can legally be None (e.g. max-token cutoffs); the
+                # f-string evaluates regardless of log level, so guard the slice.
                 logger.debug(
-                    f"📥 Raw LLM response: {assistant_message.content[:500]}..."
+                    f"📥 Raw LLM response: {(assistant_message.content or '')[:500]}..."
                 )
 
                 # Parse the response
@@ -1066,7 +1073,7 @@ class MeshLlmAgent:
             f"❌ Max iterations ({self.max_iterations}) exceeded without final response"
         )
         raise MaxIterationsError(
-            iteration_count=self._iteration_count,
+            iteration_count=iteration_count,
             max_allowed=self.max_iterations,
         )
 
@@ -1200,7 +1207,7 @@ class MeshLlmAgent:
 
         return resolved
 
-    def _parse_response(self, content: str) -> Any:
+    def _parse_response(self, content: Optional[str]) -> Any:
         """
         Parse LLM response into output type.
 
@@ -1208,7 +1215,8 @@ class MeshLlmAgent:
         For Pydantic models, delegates to ResponseParser.
 
         Args:
-            content: Response content from LLM
+            content: Response content from LLM (may be None — a legal
+                OpenAI-shape final message, e.g. on max-token cutoffs)
 
         Returns:
             Raw string (if output_type is str) or parsed Pydantic model instance
@@ -1216,6 +1224,21 @@ class MeshLlmAgent:
         Raises:
             ResponseParseError: If response doesn't match output_type schema or invalid JSON
         """
+        # content=None is a legal final-message shape (e.g. max-token
+        # cutoffs). For str output, normalize to "". For structured output,
+        # raise a proper parse error instead of letting None propagate into
+        # the parser as a TypeError (issue #1162).
+        if content is None:
+            if self.output_type is str:
+                return ""
+            raise ResponseParseError(
+                raw_content="",
+                expected_schema=getattr(
+                    self.output_type, "__name__", str(self.output_type)
+                ),
+                validation_errors="model returned empty content (content=None)",
+            )
+
         # For str return type, return content directly without parsing
         if self.output_type is str:
             return content

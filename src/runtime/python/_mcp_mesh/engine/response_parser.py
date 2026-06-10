@@ -13,15 +13,16 @@ from typing import Any, TypeVar, Union
 import mcp_mesh_core
 from pydantic import BaseModel, ValidationError
 
+# Issue #1162 LOW-4: the parser raises the single rich ResponseParseError
+# from llm_errors (raw_content / expected_schema / validation_errors attrs).
+# Re-exported here for back-compat — callers importing
+# `_mcp_mesh.engine.response_parser.ResponseParseError` get the same class
+# that `except llm_errors.ResponseParseError` catches.
+from .llm_errors import ResponseParseError
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
-
-
-class ResponseParseError(Exception):
-    """Raised when response parsing or validation fails."""
-
-    pass
 
 
 class ResponseParser:
@@ -80,7 +81,11 @@ class ResponseParser:
             raise
         except Exception as e:
             logger.error(f"❌ Unexpected error parsing response: {e}")
-            raise ResponseParseError(f"Unexpected parsing error: {e}")
+            raise ResponseParseError(
+                raw_content=str(content),
+                expected_schema=output_type.__name__,
+                validation_errors=f"Unexpected parsing error: {e}",
+            ) from e
 
     @staticmethod
     def _extract_json_from_mixed_content(content: str) -> str:
@@ -148,7 +153,11 @@ class ResponseParser:
                 return response_data
             except ValidationError:
                 # If wrapping doesn't work, raise the original JSON error
-                raise ResponseParseError(f"Invalid JSON response: {e}")
+                raise ResponseParseError(
+                    raw_content=content,
+                    expected_schema=output_type.__name__,
+                    validation_errors=f"Invalid JSON response: {e}",
+                ) from e
 
     @staticmethod
     def _is_list_annotation(annotation: Any) -> bool:
@@ -241,7 +250,12 @@ class ResponseParser:
                     response_data = {list_field_name: response_data}
                 else:
                     raise ResponseParseError(
-                        f"Response is a list but {output_type.__name__} has no list field to wrap into"
+                        raw_content=str(response_data),
+                        expected_schema=output_type.__name__,
+                        validation_errors=(
+                            f"Response is a list but {output_type.__name__} "
+                            f"has no list field to wrap into"
+                        ),
                     )
 
             # Defensive unwrap for LLM-side envelope hallucinations.
@@ -300,4 +314,8 @@ class ResponseParser:
                 f"Received data: {json.dumps(response_data, indent=2)}\n"
                 f"Validation errors: {e}"
             )
-            raise ResponseParseError(f"Response validation failed: {e}")
+            raise ResponseParseError(
+                raw_content=json.dumps(response_data, default=str),
+                expected_schema=output_type.__name__,
+                validation_errors=str(e),
+            ) from e

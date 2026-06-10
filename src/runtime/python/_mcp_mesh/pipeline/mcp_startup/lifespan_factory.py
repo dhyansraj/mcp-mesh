@@ -341,16 +341,25 @@ def _start_claim_dispatchers(app: Any) -> list:
 
 
 async def _stop_claim_dispatchers(dispatchers: list) -> None:
-    """Best-effort shutdown of claim dispatchers started by the lifespan."""
-    for d in dispatchers:
-        try:
-            await d.stop()
-        except Exception as e:
-            logger.warning(
-                "lifespan: error stopping claim dispatcher for capability=%s: %s",
-                getattr(d, "capability", "?"),
-                e,
-            )
+    """Best-effort shutdown of claim dispatchers started by the lifespan.
+
+    All dispatchers stop concurrently under ONE shared drain budget (see
+    :func:`_mcp_mesh.engine.claim_dispatcher.stop_dispatchers`) so the
+    registry cleanup sequenced after this in the lifespan ``finally``
+    block isn't starved by N stacked 30s drains past the SIGTERM grace
+    period. Never raises (short of outer cancellation): a drain failure
+    or timeout in one dispatcher must not prevent registry cleanup.
+    """
+    if not dispatchers:
+        return
+    try:
+        from ...engine.claim_dispatcher import stop_dispatchers
+
+        await stop_dispatchers(dispatchers)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning("lifespan: error stopping claim dispatchers: %s", e)
 
 
 async def _perform_registry_cleanup(
