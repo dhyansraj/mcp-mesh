@@ -25,11 +25,14 @@ spec:
       labels:
         {{- include "mcp-mesh-grafana.selectorLabels" . | nindent 8 }}
     spec:
+      {{- with include "mcp-mesh-grafana.imagePullSecrets" . }}
+      {{- . | nindent 6 }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.grafana.podSecurityContext | nindent 8 }}
       containers:
       - name: grafana
-        image: "{{ .Values.grafana.image.repository }}:{{ .Values.grafana.image.tag }}"
+        image: "{{ include "mcp-mesh-grafana.image" . }}"
         imagePullPolicy: {{ .Values.grafana.image.pullPolicy }}
         securityContext:
           {{- toYaml .Values.grafana.securityContext | nindent 10 }}

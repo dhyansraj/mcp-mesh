@@ -67,3 +67,44 @@ deployment.
 {{- fail "global.redis.password / global.redis.existingSecret cannot be combined with the bundled Redis chart: it runs without AUTH, so the credential every consumer connects with can never work. Disable the bundled subchart (redis.enabled=false) and point global.redis at an external Redis, or drop the global.redis credentials" -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+Render the image reference as [registry/]repository:tag. The registry prefix
+resolves as image.registry > global.imageRegistry > "" (implicit Docker Hub).
+The repository path is preserved — mirror images to the same paths in a
+private registry.
+*/}}
+{{- define "mcp-mesh-redis.image" -}}
+{{- $img := .Values.image -}}
+{{- $registry := $img.registry | default (dig "imageRegistry" "" (.Values.global | default dict)) | trimSuffix "/" -}}
+{{- $tag := $img.tag -}}
+{{- if $registry -}}
+{{- printf "%s/%s:%s" $registry $img.repository $tag -}}
+{{- else -}}
+{{- printf "%s:%s" $img.repository $tag -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+imagePullSecrets for the pod spec: global.imagePullSecrets merged with the
+chart's own imagePullSecrets, deduplicated by name. Entries may be maps
+({name: ...}, the Kubernetes shape) or bare strings. Renders nothing when
+both lists are empty.
+*/}}
+{{- define "mcp-mesh-redis.imagePullSecrets" -}}
+{{- $names := list -}}
+{{- $global := dig "imagePullSecrets" (list) (.Values.global | default dict) -}}
+{{- range concat ($global | default list) ((.Values.imagePullSecrets) | default list) -}}
+{{- $name := . -}}
+{{- if kindIs "map" . -}}{{- $name = get . "name" -}}{{- end -}}
+{{- if and $name (not (has $name $names)) -}}
+{{- $names = append $names $name -}}
+{{- end -}}
+{{- end -}}
+{{- if $names -}}
+imagePullSecrets:
+{{- range $names }}
+  - name: {{ . }}
+{{- end -}}
+{{- end -}}
+{{- end }}

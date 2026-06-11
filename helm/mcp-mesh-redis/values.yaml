@@ -6,9 +6,20 @@ redis:
   maxmemoryPolicy: "allkeys-lru"
 
 image:
+  # Registry prefix for the image. Resolution: this value >
+  # global.imageRegistry > "" (Docker Hub). The repository path is preserved:
+  # registry: my.registry.internal pulls my.registry.internal/redis —
+  # mirror Docker Hub library images to the same single-segment path.
+  registry: ""
   repository: redis
   tag: "7-alpine"
   pullPolicy: IfNotPresent
+
+# Pull secrets for this chart's pods, merged with global.imagePullSecrets
+# (deduplicated by name). Standard shape:
+#   imagePullSecrets:
+#     - name: my-registry-credentials
+imagePullSecrets: []
 
 # Service configuration
 service:

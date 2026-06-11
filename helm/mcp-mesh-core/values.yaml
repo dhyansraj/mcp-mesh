@@ -11,6 +11,21 @@ global:
   # Example: helm install my-core ... → set coreReleaseName: "my-core"
   coreReleaseName: "mcp-core"
 
+  # Private/air-gapped registry prefix applied to EVERY image in the stack:
+  # the registry, UI, postgres, redis, grafana, tempo, and the registry's
+  # wait-for-db busybox init container. Repository paths are preserved —
+  # with imageRegistry: my.registry.internal the charts pull
+  # my.registry.internal/mcpmesh/registry, my.registry.internal/postgres,
+  # my.registry.internal/grafana/grafana, my.registry.internal/busybox, ... —
+  # so mirror each image to the same path in your registry. Per-component
+  # overrides win (e.g. mcp-mesh-registry.image.registry).
+  imageRegistry: ""
+  # Pull secrets added to every pod spec, merged with each chart's own
+  # imagePullSecrets (deduplicated by name). Standard shape:
+  #   imagePullSecrets:
+  #     - name: my-registry-credentials
+  imagePullSecrets: []
+
   # Datastore endpoints, declared ONCE and inherited by every consumer:
   # the registry (DATABASE_URL/REDIS_URL), the UI (when enabled), and the
   # bundled postgres provisioning. The defaults below point at the bundled
@@ -314,9 +329,11 @@ commonAnnotations: {}
 networkPolicies:
   enabled: false
 
-# Pod disruption budgets (disabled by default)
-podDisruptionBudgets:
-  enabled: false
+# Pod disruption budgets are configured per subchart (this umbrella-level
+# flag was never consumed and has been removed). The registry PDB defaults
+# on and engages automatically at mcp-mesh-registry.replicaCount > 1 — see
+# mcp-mesh-registry.podDisruptionBudget. HA scheduling lives there too
+# (topologySpreadConstraints / defaultTopologySpread / autoscaling).
 
 # Service monitors for Prometheus (disabled by default)
 serviceMonitors:

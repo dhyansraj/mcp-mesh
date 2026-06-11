@@ -1,3 +1,4 @@
+{{- include "mcp-mesh-registry.validateMultiReplica" . -}}
 {{- $db := include "mcp-mesh-registry.databaseSettings" . | fromJson -}}
 {{- $redis := include "mcp-mesh-registry.redisSettings" . | fromJson -}}
 apiVersion: apps/v1
@@ -46,9 +47,8 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      {{- with .Values.imagePullSecrets }}
-      imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
+      {{- with include "mcp-mesh-registry.imagePullSecrets" . }}
+      {{- . | nindent 6 }}
       {{- end }}
       serviceAccountName: {{ include "mcp-mesh-registry.serviceAccountName" . }}
       securityContext:
@@ -57,7 +57,7 @@ spec:
       initContainers:
         # Wait for database (if using external DB)
         - name: wait-for-db
-          image: busybox:1.35
+          image: "{{ include "mcp-mesh-registry.imageRef" (dict "image" .Values.waitForDbImage "root" $) }}"
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -87,7 +87,7 @@ spec:
         - name: registry
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ include "mcp-mesh-registry.imageRef" (dict "image" .Values.image "root" $) }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http
@@ -346,6 +346,27 @@ spec:
       {{- with .Values.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml .Values.topologySpreadConstraints | nindent 8 }}
+      {{- else if and .Values.defaultTopologySpread.enabled (include "mcp-mesh-registry.multiReplica" .) }}
+      {{- /* Soft zone + node spread for multi-replica HA: ScheduleAnyway is
+             a no-op on single-node / single-zone clusters but keeps replicas
+             apart wherever real topology exists. */}}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "mcp-mesh-registry.selectorLabels" . | nindent 14 }}
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "mcp-mesh-registry.selectorLabels" . | nindent 14 }}
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:

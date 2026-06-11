@@ -49,3 +49,44 @@ Selector labels
 app.kubernetes.io/name: {{ include "mcp-mesh-grafana.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Render the image reference as [registry/]repository:tag. The registry prefix
+resolves as grafana.image.registry > global.imageRegistry > "" (implicit Docker Hub).
+The repository path is preserved — mirror images to the same paths in a
+private registry.
+*/}}
+{{- define "mcp-mesh-grafana.image" -}}
+{{- $img := .Values.grafana.image -}}
+{{- $registry := $img.registry | default (dig "imageRegistry" "" (.Values.global | default dict)) | trimSuffix "/" -}}
+{{- $tag := $img.tag -}}
+{{- if $registry -}}
+{{- printf "%s/%s:%s" $registry $img.repository $tag -}}
+{{- else -}}
+{{- printf "%s:%s" $img.repository $tag -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+imagePullSecrets for the pod spec: global.imagePullSecrets merged with the
+chart's own imagePullSecrets, deduplicated by name. Entries may be maps
+({name: ...}, the Kubernetes shape) or bare strings. Renders nothing when
+both lists are empty.
+*/}}
+{{- define "mcp-mesh-grafana.imagePullSecrets" -}}
+{{- $names := list -}}
+{{- $global := dig "imagePullSecrets" (list) (.Values.global | default dict) -}}
+{{- range concat ($global | default list) ((.Values.grafana.imagePullSecrets) | default list) -}}
+{{- $name := . -}}
+{{- if kindIs "map" . -}}{{- $name = get . "name" -}}{{- end -}}
+{{- if and $name (not (has $name $names)) -}}
+{{- $names = append $names $name -}}
+{{- end -}}
+{{- end -}}
+{{- if $names -}}
+imagePullSecrets:
+{{- range $names }}
+  - name: {{ . }}
+{{- end -}}
+{{- end -}}
+{{- end }}

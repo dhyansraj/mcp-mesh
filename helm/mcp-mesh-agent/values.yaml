@@ -31,6 +31,11 @@ global:
 replicaCount: 1
 
 image:
+  # Registry prefix for the image. Resolution: this value >
+  # global.imageRegistry > "" (Docker Hub). The repository path is preserved
+  # (registry: my.registry.internal pulls
+  # my.registry.internal/mcpmesh/python-runtime).
+  registry: ""
   # Default: Python base runtime image (has no agent code)
   # Available runtimes: mcpmesh/python-runtime, mcpmesh/typescript-runtime, mcpmesh/java-runtime
   # Override with your built agent image: --set image.repository=your-registry/my-agent
@@ -39,6 +44,10 @@ image:
   # Minor version tag tracks latest patch (0.8 → 0.8.x)
   tag: "2.4"
 
+# Pull secrets for this chart's pods, merged with global.imagePullSecrets
+# (deduplicated by name). Standard shape:
+#   imagePullSecrets:
+#     - name: my-registry-credentials
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
