@@ -1278,6 +1278,12 @@ def tool(
             # broken tool and surface a confusing AttributeError on first
             # invocation; that is exactly the failure mode this branch is
             # supposed to prevent.
+            #
+            # Remove the entry registered above before propagating —
+            # otherwise the registry keeps a half-registered tool (original
+            # function, no wrapper) whenever the raise does NOT kill the
+            # process (decoration inside a user try block, REPL/notebook).
+            DecoratorRegistry.unregister_mesh_tool(target.__name__)
             raise
         except Exception as e:
             # Log but don't fail - graceful degradation
@@ -1837,7 +1843,13 @@ def route(
         except StrictDIError:
             # MCP_MESH_STRICT_DI promotes DI ambiguity/skip warnings to
             # decoration-time errors; swallowing them here for graceful
-            # degradation would defeat the opt-in entirely.
+            # degradation would defeat the opt-in entirely. Remove the
+            # entry registered above before propagating so the registry
+            # does not keep a half-registered route when the raise does
+            # not kill the process.
+            DecoratorRegistry.unregister_custom_decorator(
+                "mesh_route", target.__name__
+            )
             raise
         except Exception as e:
             # Log but don't fail - graceful degradation
@@ -2120,7 +2132,11 @@ def a2a(
         except StrictDIError:
             # MCP_MESH_STRICT_DI promotes DI ambiguity/skip warnings to
             # decoration-time errors; swallowing them here for graceful
-            # degradation would defeat the opt-in entirely.
+            # degradation would defeat the opt-in entirely. Remove the
+            # entry registered above before propagating so the registry
+            # does not keep a half-registered A2A surface when the raise
+            # does not kill the process.
+            DecoratorRegistry.unregister_custom_decorator("mesh_a2a", target.__name__)
             raise
         except Exception as e:
             logger.error(

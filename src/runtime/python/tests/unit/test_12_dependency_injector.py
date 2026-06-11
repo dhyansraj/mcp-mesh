@@ -2006,3 +2006,105 @@ class TestPrescriptiveDiagnosticsAndStrictDI:
 
         strict_di._reset_strict_di_cache()
         assert strict_di.is_strict_di_enabled() is False
+
+
+class TestStrictDIDecorationFailureRegistryCleanup:
+    """Decorator blocks register with DecoratorRegistry BEFORE wrapper
+    creation (the graceful-degradation path depends on that ordering).
+    When wrapper creation raises an error that must propagate
+    (StrictDIError / contract ValueError), the half-registered entry —
+    original function, no wrapper — must be removed before the re-raise,
+    or any caller that survives the raise (decoration inside a user try
+    block, REPL/notebook) sees a stale registry entry advertised on the
+    next heartbeat."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_registry_and_strict_cache(self):
+        from _mcp_mesh.engine import strict_di
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+
+        DecoratorRegistry.clear_all()
+        strict_di._reset_strict_di_cache()
+        yield
+        DecoratorRegistry.clear_all()
+        strict_di._reset_strict_di_cache()
+
+    @staticmethod
+    def _enable_strict(monkeypatch):
+        from _mcp_mesh.engine import strict_di
+
+        monkeypatch.setenv("MCP_MESH_STRICT_DI", "true")
+        strict_di._reset_strict_di_cache()
+
+    def test_strict_tool_decoration_failure_leaves_no_registry_entry(
+        self, monkeypatch
+    ):
+        import mesh
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from _mcp_mesh.engine.strict_di import StrictDIError
+
+        self._enable_strict(monkeypatch)
+
+        with pytest.raises(StrictDIError):
+
+            @mesh.tool(capability="cap", dependencies=["dep1"])
+            def no_params_tool():
+                pass
+
+        assert "no_params_tool" not in DecoratorRegistry.get_mesh_tools()
+
+    def test_strict_route_decoration_failure_leaves_no_registry_entry(
+        self, monkeypatch
+    ):
+        import mesh
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from _mcp_mesh.engine.strict_di import StrictDIError
+
+        self._enable_strict(monkeypatch)
+
+        with pytest.raises(StrictDIError):
+
+            @mesh.route(dependencies=["dep1"])
+            def no_params_route():
+                pass
+
+        assert "no_params_route" not in DecoratorRegistry.get_all_by_type(
+            "mesh_route"
+        )
+
+    def test_strict_a2a_decoration_failure_leaves_no_registry_entry(
+        self, monkeypatch
+    ):
+        import mesh
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from _mcp_mesh.engine.strict_di import StrictDIError
+
+        self._enable_strict(monkeypatch)
+
+        with pytest.raises(StrictDIError):
+
+            @mesh.a2a(path="/agents/no-params", dependencies=["dep1"])
+            def no_params_a2a():
+                pass
+
+        assert "no_params_a2a" not in DecoratorRegistry.get_all_by_type("mesh_a2a")
+
+    def test_permissive_tool_decoration_registers_wrapper_unchanged(self):
+        """Control: the same ambiguous config in permissive mode warns,
+        registers, and swaps in the injection wrapper (register-then-update
+        flow intact)."""
+        import mesh
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+
+        def no_params_tool():
+            pass
+
+        original = no_params_tool
+        wrapped = mesh.tool(capability="cap", dependencies=["dep1"])(no_params_tool)
+
+        tools = DecoratorRegistry.get_mesh_tools()
+        assert "no_params_tool" in tools
+        # update_mesh_tool_function swapped the registered function to the
+        # returned wrapper, not the original.
+        assert tools["no_params_tool"].function is wrapped
+        assert tools["no_params_tool"].function is not original
