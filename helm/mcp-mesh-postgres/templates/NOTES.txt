@@ -1,0 +1,6 @@
+{{- /* Mirrors the mcp-mesh-postgres.password helper resolution. */ -}}
+{{- $g := dig "postgres" (dict) (.Values.global | default dict) | default dict }}
+{{- if eq (coalesce .Values.postgres.password $g.password "mcpmesh123") "mcpmesh123" }}
+WARNING: PostgreSQL is provisioned with the built-in development password.
+Set postgres.password (or global.postgres.password) for production.
+{{- end }}

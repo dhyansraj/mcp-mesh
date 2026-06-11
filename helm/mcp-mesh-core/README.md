@@ -93,7 +93,14 @@ mcp-mesh-postgres:
 
 To use a managed PostgreSQL/Redis (RDS, Cloud SQL, ElastiCache, ...), disable
 the bundled subcharts and point `global.*` at the managed endpoints — every
-consumer inherits them, no per-subchart overrides needed:
+consumer inherits them, no per-subchart overrides needed.
+
+Disabling the bundled subcharts (`postgres.enabled: false`,
+`redis.enabled: false`) is required, not optional: leaving them enabled
+alongside external credentials fails at template time, because the bundled
+Redis runs without AUTH and the bundled PostgreSQL provisions with the inline
+password — `global.redis.password` / `global.redis.existingSecret` /
+`global.postgres.existingSecret` could never work against them.
 
 ```yaml
 # values.yaml

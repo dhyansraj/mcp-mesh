@@ -22,4 +22,15 @@ Then visit: http://localhost:8000/health
 To deploy MCP agents, use the mcp-mesh-agent chart:
   helm install my-agent ../mcp-mesh-agent --set agent.script=my_script.py
 
+{{- /* Mirrors the mcp-mesh-postgres password resolution: subchart override >
+       global.postgres.password > built-in default. No warning when the
+       credential comes from an existing secret (password unused). */}}
+{{- $pgSub := dig "postgres" (dict) (index .Values "mcp-mesh-postgres" | default dict) }}
+{{- $gpg := dig "postgres" (dict) (.Values.global | default dict) | default dict }}
+{{- if and (not $gpg.existingSecret) (eq (coalesce $pgSub.password $gpg.password "mcpmesh123") "mcpmesh123") }}
+
+WARNING: PostgreSQL is using the built-in development password.
+Set global.postgres.password for production.
+{{- end }}
+
 For more information, visit: https://github.com/dhyansraj/mcp-mesh
