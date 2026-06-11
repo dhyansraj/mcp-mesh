@@ -258,7 +258,10 @@ def analyze_mesh_job_signature(func: Any) -> MeshJobResolution:
                 raise ValueError(
                     f"a tool function may declare at most one MeshJob parameter; "
                     f"function '{func.__name__}' declares both "
-                    f"'{mesh_job_param_name}' and '{param_name}'"
+                    f"'{mesh_job_param_name}' and '{param_name}'. Fix: keep a "
+                    f"single MeshJob parameter (e.g. "
+                    f"'{mesh_job_param_name}: MeshJob = None') and remove the "
+                    f"other(s)."
                 )
             mesh_job_param_index = i
             mesh_job_param_name = param_name
@@ -333,6 +336,13 @@ def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[boo
 
     Returns:
         Tuple of (is_valid, error_message)
+
+    Raises:
+        StrictDIError: When the slot/dependency counts mismatch AND
+            ``MCP_MESH_STRICT_DI`` is truthy — the ambiguity/skip class of
+            DI diagnostics is promoted from a heartbeat-time "skipping
+            tool" warning to a startup error. The error text is identical
+            to the returned ``error_message``.
     """
     func = _get_original_func(func)
     mesh_positions = get_mesh_agent_positions(func)
@@ -366,12 +376,51 @@ def validate_mesh_dependencies(func: Any, dependencies: list[dict]) -> tuple[boo
 
     expected = len(mesh_positions) + job_slots
     if len(dependencies) != expected:
-        return False, (
-            f"Function {func.__name__} has {len(mesh_positions)} McpMeshTool "
-            f"parameter(s) and {job_slots} MeshJob slot(s) "
-            f"but {len(dependencies)} dependencies declared. "
-            f"Each typed slot needs a corresponding dependency."
+        # Name each typed slot (declaration order) so the message shows the
+        # exact dep→param pairing positional binding uses, plus the fix.
+        try:
+            param_names_by_pos = list(inspect.signature(func).parameters.keys())
+        except (TypeError, ValueError):
+            param_names_by_pos = []
+        slot_entries = [(pos, "McpMeshTool") for pos in mesh_positions]
+        if resolution is not None and resolution.mesh_job_param_index is not None:
+            slot_entries.append((resolution.mesh_job_param_index, "MeshJob"))
+        slot_entries.sort()
+        slots_desc = (
+            ", ".join(
+                (
+                    f"'{param_names_by_pos[pos]}' ({kind})"
+                    if pos < len(param_names_by_pos)
+                    else f"<arg {pos}> ({kind})"
+                )
+                for pos, kind in slot_entries
+            )
+            or "none"
         )
+        from .strict_di import pluralize
+
+        message = (
+            f"Function {func.__name__} has "
+            f"{pluralize(len(mesh_positions), 'McpMeshTool parameter')} and "
+            f"{pluralize(job_slots, 'MeshJob slot')} "
+            f"but {pluralize(len(dependencies), 'dependency', 'dependencies')} "
+            f"declared. "
+            f"Each typed slot needs a corresponding dependency. "
+            f"Typed slots in declaration order: {slots_desc}; "
+            f"dependencies[i] pairs with the i-th slot positionally "
+            f"(parameter names are never matched). Fix: declare exactly "
+            f"{pluralize(expected, 'entry', 'entries')} in dependencies=[...], "
+            f"or add/remove "
+            f"typed parameters (e.g. 'my_dep: McpMeshTool = None') so the "
+            f"counts match."
+        )
+        # Opt-in strictness (MCP_MESH_STRICT_DI): promote the skip-class
+        # diagnostic to a startup error with the same prescriptive text.
+        from .strict_di import StrictDIError, is_strict_di_enabled
+
+        if is_strict_di_enabled():
+            raise StrictDIError(message)
+        return False, message
 
     return True, ""
 

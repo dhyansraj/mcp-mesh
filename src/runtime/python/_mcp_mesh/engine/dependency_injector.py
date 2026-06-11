@@ -20,6 +20,12 @@ from ..shared.logging_config import (
     get_trace_prefix,
 )
 from .signature_analyzer import get_mesh_agent_positions, has_llm_agent_parameter
+from .strict_di import (
+    StrictDIError,
+    is_strict_di_enabled,
+    pluralize,
+    warn_or_raise,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +314,128 @@ def _build_clean_signature(func: Any) -> inspect.Signature | None:
     return sig.replace(parameters=clean_params)
 
 
+def _describe_skipped_params(func: Callable, params: list[inspect.Parameter]) -> str:
+    """Render each parameter with the reason it was passed over for injection.
+
+    Used by the multi-parameter "none typed as McpMeshTool" diagnostic so
+    the warning names every skipped parameter and WHY it was skipped
+    (untyped vs annotated with a non-injectable type).
+
+    Reasons are classified with the SAME type resolution the eligibility
+    scan uses (``get_type_hints`` on the original function) — raw
+    ``p.annotation`` values are strings under
+    ``from __future__ import annotations`` and would misreport a perfectly
+    valid ``db: "McpMeshTool"`` as the self-contradictory "annotated as
+    McpMeshTool, not McpMeshTool". When the hints themselves cannot be
+    resolved (TYPE_CHECKING-only imports, dangling forward references) —
+    which is exactly the condition that made the eligibility scan fall back
+    to "no eligible parameters" — the reason states that failure explicitly
+    instead of misdiagnosing the annotation.
+    """
+    from typing import get_type_hints
+
+    from .signature_analyzer import _get_original_func, _is_mesh_tool_type
+
+    hints: Optional[dict[str, Any]] = None
+    try:
+        hints = get_type_hints(_get_original_func(func))
+    except Exception:
+        # Same failure the eligibility scan (``_scan_params``) swallowed —
+        # report it as the skip reason below rather than guessing from raw
+        # annotations.
+        hints = None
+
+    parts = []
+    for p in params:
+        if p.annotation is inspect.Parameter.empty:
+            parts.append(f"'{p.name}' (untyped)")
+        elif hints is None:
+            parts.append(
+                f"'{p.name}' (type hints could not be resolved — check "
+                f"TYPE_CHECKING imports / forward references)"
+            )
+        else:
+            resolved = hints.get(p.name)
+            if resolved is None:
+                parts.append(f"'{p.name}' (untyped)")
+            elif _is_mesh_tool_type(resolved):
+                # Defensive: eligibility uses this same resolution, so a
+                # mesh-typed parameter cannot land in a skipped list — but
+                # if a future skew ever puts one here, never emit the
+                # contradictory "annotated as McpMeshTool, not McpMeshTool".
+                parts.append(f"'{p.name}' (McpMeshTool)")
+            else:
+                ann_name = getattr(resolved, "__name__", None) or str(resolved)
+                parts.append(
+                    f"'{p.name}' (annotated as {ann_name}, not McpMeshTool)"
+                )
+    return ", ".join(parts)
+
+
+def _format_selected_pairings(
+    dependencies: list[str],
+    eligible_positions: list[int],
+    param_names: list[str],
+) -> str:
+    """Render the dep→param pairs positional pairing selects, in order.
+
+    ``dependencies[i]`` pairs with ``eligible_positions[i]`` (declaration
+    order); only the overlapping prefix is rendered. Out-of-range positions
+    (signature-view skew) degrade to a ``<arg N>`` placeholder instead of
+    raising — these strings feed diagnostics that must never crash dispatch.
+    """
+    pairs = []
+    for i, (dep, pos) in enumerate(zip(dependencies, eligible_positions)):
+        name = param_names[pos] if pos < len(param_names) else f"<arg {pos}>"
+        pairs.append(f"dependencies[{i}] '{dep}' → parameter '{name}'")
+    return ", ".join(pairs) if pairs else "nothing (no dependencies declared)"
+
+
+def _format_unfilled_slots_message(
+    func_label: str,
+    eligible_positions: list[int],
+    dependencies: list[str],
+    param_names: list[str],
+    tp: str = "",
+    unfilled_param_names: Optional[list[str]] = None,
+) -> str:
+    """Build the "more eligible slots than dependencies" diagnostic text.
+
+    Shared by the runtime warning in :func:`_prepare_injection_kwargs` and
+    the strict-mode decoration-time promotion in
+    :func:`analyze_injection_strategy`, so warn-mode and strict-mode users
+    read the exact same prescriptive message.
+
+    ``unfilled_param_names`` lets the call-time site pass the
+    genuinely-unfilled slots (after caller-supplied kwargs are accounted
+    for); when omitted, every eligible position beyond the declared
+    dependencies is reported (the decoration-time view, where no call
+    kwargs exist yet).
+    """
+    if unfilled_param_names is None:
+        untouched_positions = eligible_positions[len(dependencies):]
+        unfilled_param_names = [
+            param_names[pos] if pos < len(param_names) else f"<arg {pos}>"
+            for pos in untouched_positions
+        ]
+    selected = _format_selected_pairings(dependencies, eligible_positions, param_names)
+    param_word = "Parameter" if len(unfilled_param_names) == 1 else "Parameters"
+    return (
+        f"{tp}⚠️ Function '{func_label}' has "
+        f"{pluralize(len(eligible_positions), 'injection-eligible parameter')} "
+        f"(McpMeshTool/MeshJob) but only "
+        f"{pluralize(len(dependencies), 'dependency', 'dependencies')} "
+        f"declared. Positional pairing "
+        f"(declaration order) selected: {selected}. {param_word} "
+        f"{unfilled_param_names} will remain None. Fix: add one entry per "
+        f"unfilled parameter to dependencies=[...] (order matters — "
+        f"dependencies[i] pairs with the i-th McpMeshTool/MeshJob parameter; "
+        f"parameter names are never matched), or remove the "
+        f"McpMeshTool/MeshJob annotation from parameters that should not be "
+        f"injected."
+    )
+
+
 def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[int]:
     """
     Analyze function signature and determine McpMeshTool injection positions.
@@ -315,7 +443,12 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
     Rules:
     1. Single parameter: inject regardless of typing (with warning if not McpMeshTool)
     2. Multiple parameters: only inject into McpMeshTool typed parameters
-    3. Log warnings for mismatches and edge cases
+    3. Log prescriptive warnings for mismatches and edge cases; under
+       MCP_MESH_STRICT_DI the ambiguity/skip class of those warnings is
+       raised as :class:`StrictDIError` at decoration time instead
+       (informational warnings never raise; the only call-time strict
+       raise is the wrapper-rewrite bounds guard, which is not statically
+       detectable). Injection semantics are identical in both modes.
 
     Returns ONLY ``McpMeshTool`` positions — ``MeshJob`` positions are
     computed independently in :func:`_prepare_injection_kwargs` so the
@@ -367,25 +500,63 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
     # Detect whether the function declares any MeshJob param. The unified
     # positional injection path handles those alongside McpMeshTool slots,
     # so this function's diagnostics must NOT shout about "no injection
-    # target" when a MeshJob slot will consume the dependency.
+    # target" when a MeshJob slot will consume the dependency. The index
+    # (not just presence) is kept so diagnostics can name the dep→param
+    # pairings positional pairing selects.
     has_mesh_job_param = False
+    mesh_job_index: Optional[int] = None
     try:
         from .signature_analyzer import analyze_mesh_job_signature
 
         _mj = analyze_mesh_job_signature(func)
         has_mesh_job_param = _mj.mesh_job_param_name is not None
+        mesh_job_index = _mj.mesh_job_param_index
     except (TypeError, AttributeError):
         # Only narrow signature-introspection errors swallow silently;
         # ValueError (Phase-1 multiple-MeshJob contract violation) MUST
         # propagate per the resolver contract.
         pass
 
-    # No parameters at all
+    # Strict-mode decoration-time promotion of the "eligible slots will
+    # remain None" diagnostic, checked UP FRONT so every branch below —
+    # including the early returns for single-MeshJob-param and
+    # MeshJob-only multi-param functions — is covered. Counts TYPED
+    # eligible slots only (McpMeshTool + MeshJob); the untyped
+    # single-parameter heuristic slot is deliberately excluded so a plain
+    # zero-dependency tool like 'def greet(name)' never trips strict mode.
+    # Permissive mode keeps the existing per-call warning cadence in
+    # ``_prepare_injection_kwargs`` (with caller-supplied kwargs accounted
+    # for), so this site raises directly instead of using warn_or_raise —
+    # it must stay silent when strict is off.
+    if is_strict_di_enabled():
+        typed_eligible_positions = sorted(
+            set(mesh_positions)
+            | ({mesh_job_index} if mesh_job_index is not None else set())
+        )
+        if len(dependencies) < len(typed_eligible_positions):
+            raise StrictDIError(
+                _format_unfilled_slots_message(
+                    func_name,
+                    typed_eligible_positions,
+                    dependencies,
+                    [p.name for p in params],
+                )
+            )
+
+    # No parameters at all — every declared dependency is skipped.
+    # Ambiguity/skip class: raises under MCP_MESH_STRICT_DI.
     if param_count == 0:
         if dependencies:
-            logger.warning(
-                f"Function '{func_name}' has no parameters but {len(dependencies)} "
-                f"dependencies declared. Skipping injection."
+            warn_or_raise(
+                logger,
+                f"Function '{func_name}' has no parameters but "
+                f"{pluralize(len(dependencies), 'dependency', 'dependencies')} "
+                f"declared {dependencies} — there is no parameter to "
+                f"receive a proxy, so all declared dependencies are skipped. "
+                f"Positional pairing assigns dependencies[i] to the i-th "
+                f"McpMeshTool-typed parameter in declaration order (parameter "
+                f"names are never matched). Fix: declare one parameter per "
+                f"dependency, e.g. 'dep_0: McpMeshTool = None'.",
             )
         return []
 
@@ -400,11 +571,14 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
                 # position to record here.
                 return []
 
+            # Informational only — injection still happens, so this stays a
+            # plain warning even under MCP_MESH_STRICT_DI.
             param_name = params[0].name
             logger.warning(
                 f"Single parameter '{param_name}' in function '{func_name}' found, "
                 f"injecting {dependencies[0] if dependencies else 'dependency'} proxy "
-                f"(consider typing as McpMeshTool for clarity)"
+                f"(consider typing as McpMeshTool for clarity: "
+                f"'{param_name}: McpMeshTool = None')"
             )
         return [0]  # Inject into the single parameter
 
@@ -414,10 +588,30 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
     if param_count > 1 or has_hidden_params:
         if not mesh_positions:
             if dependencies and not has_mesh_job_param:
-                logger.warning(
-                    f"⚠️ Function '{func_name}' has {param_count} parameters but none are "
-                    f"typed as McpMeshTool. Skipping injection of {len(dependencies)} dependencies. "
-                    f"Consider typing dependency parameters as McpMeshTool."
+                # Ambiguity/skip class: every declared dependency is
+                # dropped because no parameter is annotation-eligible.
+                # Raises under MCP_MESH_STRICT_DI.
+                example_param = next(
+                    (
+                        p.name
+                        for p in params
+                        if p.annotation is inspect.Parameter.empty
+                    ),
+                    params[0].name,
+                )
+                warn_or_raise(
+                    logger,
+                    f"⚠️ Function '{func_name}' has "
+                    f"{pluralize(param_count, 'parameter')} but none are "
+                    f"typed as McpMeshTool. Skipping injection of "
+                    f"{pluralize(len(dependencies), 'dependency', 'dependencies')} "
+                    f"{dependencies}. Skipped parameters: "
+                    f"{_describe_skipped_params(func, params)}. Positional pairing assigns "
+                    f"dependencies[i] to the i-th McpMeshTool-typed parameter in "
+                    f"declaration order — '{dependencies[0]}' would go to the first "
+                    f"McpMeshTool-typed parameter (parameter names are never matched). "
+                    f"Fix: annotate the intended parameter(s), e.g. "
+                    f"'{example_param}: McpMeshTool = None'.",
                 )
             return []
 
@@ -426,16 +620,32 @@ def analyze_injection_strategy(func: Callable, dependencies: list[str]) -> list[
         # don't trigger spurious "excess dependencies" warnings.
         # NOTE: the inverse case (more eligible slots than dependencies) is
         # diagnosed at injection time inside ``_prepare_injection_kwargs``
-        # so it can name BOTH untouched McpMeshTool *and* MeshJob params —
-        # this strategy-time site sees McpMeshTool positions only.
-        eligible_count = len(mesh_positions) + (1 if has_mesh_job_param else 0)
+        # in permissive mode; under MCP_MESH_STRICT_DI it already raised at
+        # the up-front decoration-time check above.
+        param_names = [p.name for p in params]
+        eligible_positions = sorted(
+            set(mesh_positions)
+            | ({mesh_job_index} if mesh_job_index is not None else set())
+        )
+        eligible_count = len(eligible_positions)
         if len(dependencies) > eligible_count:
+            # Ambiguity/skip class: trailing dependencies are dropped.
+            # Raises under MCP_MESH_STRICT_DI.
             excess_deps = dependencies[eligible_count:]
-            logger.warning(
-                f"Function '{func_name}' has {len(dependencies)} dependencies "
-                f"but only {eligible_count} injectable parameter(s) "
-                f"(McpMeshTool + MeshJob). "
-                f"Dependencies {excess_deps} will not be injected."
+            selected = _format_selected_pairings(
+                dependencies, eligible_positions, param_names
+            )
+            warn_or_raise(
+                logger,
+                f"Function '{func_name}' has "
+                f"{pluralize(len(dependencies), 'dependency', 'dependencies')} "
+                f"but only {pluralize(eligible_count, 'injectable parameter')} "
+                f"(McpMeshTool + MeshJob). Positional pairing (declaration "
+                f"order) selected: {selected}. Dependencies {excess_deps} will "
+                f"not be injected — no injectable parameter remains for them. "
+                f"Fix: declare one McpMeshTool-typed parameter per excess "
+                f"dependency, e.g. 'extra_dep: McpMeshTool = None', or remove "
+                f"the excess entries from dependencies=[...].",
             )
 
         # Return McpMeshTool positions we can actually inject into. The
@@ -532,31 +742,49 @@ def _prepare_injection_kwargs(
     # Diagnostic: more eligible (McpMeshTool + MeshJob) slots than declared
     # dependencies — the trailing slots will silently stay None. Flagging
     # here (at injection time) covers cases the strategy-time warning at
-    # ``analyze_injection_strategy`` can't see, because it counts MeshJob
-    # positions too rather than McpMeshTool only.
+    # ``analyze_injection_strategy`` can't see (paths that bypass the
+    # multi-parameter branch). A slot the CALLER filled is not unfilled:
+    # the documented contract lets callers pass a fake/mock for any
+    # injectable slot (see the explicit-kwarg skip in the loop below), so
+    # the diagnostic only reports slots that genuinely remain None after
+    # accounting for caller-supplied kwargs. This is a permissive-mode
+    # warning ONLY — every statically-detectable unfilled configuration
+    # already raised at decoration time under MCP_MESH_STRICT_DI, and the
+    # sole call-time strict raise is the bounds guard below (the one
+    # condition not detectable at decoration).
     if len(eligible_positions) > len(dependencies):
+        unfilled_message = None
         try:
-            untouched_positions = eligible_positions[len(dependencies):]
             # ``params`` above is resolved from the same original signature
-            # the positions came from (#1105), so positions line up — but
-            # bounds-guard regardless.
-            untouched_param_names = [
+            # the positions came from (#1105), so positions line up — and
+            # the message builder bounds-guards regardless.
+            genuinely_unfilled = [
                 params[pos] if pos < len(params) else f"<arg {pos}>"
-                for pos in untouched_positions
+                for pos in eligible_positions[len(dependencies):]
+                if not (
+                    pos < len(params)
+                    and params[pos] in final_kwargs
+                    and final_kwargs.get(params[pos]) is not None
+                )
             ]
-            log.warning(
-                f"{tp}⚠️ Function '{func.__name__}' has {len(eligible_positions)} "
-                f"injection-eligible parameters (McpMeshTool/MeshJob) but only "
-                f"{len(dependencies)} dependency(ies) declared. Parameters "
-                f"{untouched_param_names} will remain None."
-            )
+            if genuinely_unfilled:
+                unfilled_message = _format_unfilled_slots_message(
+                    func.__name__,
+                    eligible_positions,
+                    dependencies,
+                    params,
+                    tp=tp,
+                    unfilled_param_names=genuinely_unfilled,
+                )
         except (TypeError, ValueError, IndexError) as e:
-            # The diagnostic is purely informational and must never crash
-            # dispatch regardless of wrapper/original signature shape.
+            # The message construction must never crash dispatch regardless
+            # of wrapper/original signature shape.
             log.debug(
                 f"{tp}untouched-positional diagnostic skipped for "
                 f"{func.__name__}: {e}"
             )
+        if unfilled_message is not None:
+            log.warning(unfilled_message)
 
     injected_count = 0
     injected_deps: list[str] = []
@@ -595,18 +823,27 @@ def _prepare_injection_kwargs(
 
         dep_name = dependencies[dep_index]
 
-        # Defensive bounds guard: positions are derived from the same
-        # original signature as ``params`` above, so this should never
+        # Defensive bounds guard (#1171): positions are derived from the
+        # same original signature as ``params`` above, so this should never
         # trigger — but a decorator chain we don't model could still skew
         # the views. Skip this one injection rather than crash dispatch;
-        # remaining deps keep their own positional slots.
+        # remaining deps keep their own positional slots. Ambiguity/skip
+        # class: raises under MCP_MESH_STRICT_DI (this condition is only
+        # detectable at call time, so strict promotes it here).
         if position >= len(params):
-            log.warning(
+            warn_or_raise(
+                log,
                 f"{tp}⚠️ Injection position {position} for dependency "
                 f"'{dep_name}' (dep_index={dep_index}) on '{func.__name__}' "
                 f"is out of bounds for its {len(params)}-parameter signature "
-                f"{params}. Skipping this injection — check for decorators "
-                f"that rewrite __signature__ without setting __wrapped__."
+                f"{params}. Positional pairing (declaration order) selected "
+                f"position {position}, but the resolved signature ends at "
+                f"index {len(params) - 1} — dependency '{dep_name}' is "
+                f"skipped and its parameter stays unset. Fix: ensure any "
+                f"decorator that rewrites __signature__ also sets "
+                f"__wrapped__ (use functools.wraps) so injection positions "
+                f"and parameter names resolve from the same "
+                f"original-function view.",
             )
             continue
 

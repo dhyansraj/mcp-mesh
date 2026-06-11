@@ -84,6 +84,16 @@ export MCP_MESH_SESSION_TTL=3600
 export MCP_MESH_TOOL_WORKERS=1
 ```
 
+### Strict DI Diagnostics (Python)
+
+```bash
+# Default: false. When truthy, ambiguous or skipped dependency-injection
+# configurations raise StrictDIError at decoration/startup instead of
+# warning. Injection semantics are unchanged — only the diagnostic
+# severity is promoted.
+export MCP_MESH_STRICT_DI=true
+```
+
 ### HTTP Server Settings
 
 ```bash

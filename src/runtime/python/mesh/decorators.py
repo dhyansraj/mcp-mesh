@@ -13,6 +13,7 @@ from typing import Any, TypeVar
 
 # Import from _mcp_mesh for registry and runtime integration
 from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+from _mcp_mesh.engine.strict_di import StrictDIError
 from _mcp_mesh.shared.config_resolver import ValidationRule, get_config_value
 from _mcp_mesh.shared.simple_shutdown import start_blocking_loop_with_shutdown_support
 
@@ -1270,7 +1271,9 @@ def tool(
             # ValueError is reserved for contract violations the user MUST
             # see at decoration time — currently the multi-``MeshJob``
             # rejection from ``analyze_mesh_job_signature`` (per
-            # MESHJOB_DDDI_CONTRACT.md) and any future signature-shape
+            # MESHJOB_DDDI_CONTRACT.md), ``StrictDIError`` (the
+            # MCP_MESH_STRICT_DI promotion of DI ambiguity/skip warnings,
+            # a ValueError subclass) and any future signature-shape
             # rejection. Graceful-degradation would silently advertise a
             # broken tool and surface a confusing AttributeError on first
             # invocation; that is exactly the failure mode this branch is
@@ -1831,6 +1834,11 @@ def route(
             _trigger_debounced_processing()
             return wrapped
 
+        except StrictDIError:
+            # MCP_MESH_STRICT_DI promotes DI ambiguity/skip warnings to
+            # decoration-time errors; swallowing them here for graceful
+            # degradation would defeat the opt-in entirely.
+            raise
         except Exception as e:
             # Log but don't fail - graceful degradation
             logger.error(
@@ -2109,6 +2117,11 @@ def a2a(
 
             _trigger_debounced_processing()
             return wrapped
+        except StrictDIError:
+            # MCP_MESH_STRICT_DI promotes DI ambiguity/skip warnings to
+            # decoration-time errors; swallowing them here for graceful
+            # degradation would defeat the opt-in entirely.
+            raise
         except Exception as e:
             logger.error(
                 f"A2A dependency injection setup failed for {target.__name__}: {e}"

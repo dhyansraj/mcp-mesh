@@ -7,6 +7,7 @@ from typing import Any
 from ...engine.decorator_registry import DecoratorRegistry
 from ...engine.dependency_injector import get_global_injector
 from ...engine.stream_introspection import detect_stream_type
+from ...engine.strict_di import StrictDIError
 from ..shared import PipelineResult, PipelineStatus, PipelineStep
 
 logger = logging.getLogger(__name__)
@@ -390,6 +391,12 @@ class RouteIntegrationStep(PipelineStep):
                 )
                 wrapped_handler._original_handler = original_handler
                 wrapped_handler._mesh_dependencies = dependency_names
+            except StrictDIError:
+                # MCP_MESH_STRICT_DI promotes DI ambiguity/skip warnings to
+                # startup errors; downgrading them to a "failed" step result
+                # here would defeat the opt-in entirely (mirrors the
+                # explicit re-raise branches in mesh.decorators).
+                raise
             except Exception as e:
                 self.logger.error(
                     f"Failed to create injection wrapper for {endpoint_name}: {e}"
