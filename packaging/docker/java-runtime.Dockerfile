@@ -5,16 +5,21 @@ FROM --platform=$TARGETPLATFORM eclipse-temurin:17-jdk-jammy
 
 ARG VERSION
 
-# Install runtime dependencies
+# Install runtime dependencies. uid/gid pinned to 999: the helm
+# mcp-mesh-agent chart forces runAsUser/runAsGroup/fsGroup 999, which must
+# match this user so files chowned to mcp-mesh in-image stay writable.
+# hadolint ignore=DL3008,DL3015
 RUN apt-get update && apt-get install -y \
     curl \
     wget \
     maven \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd -r mcp-mesh \
-    && useradd -r -g mcp-mesh mcp-mesh
+    && groupadd -r -g 999 mcp-mesh \
+    && useradd -r -u 999 -g mcp-mesh mcp-mesh
 
-# Pre-cache SDK dependencies from Maven Central
+# Pre-cache SDK dependencies from Maven Central (cd is scoped to this RUN;
+# the directory is removed at the end, so WORKDIR would be wrong here)
+# hadolint ignore=DL3003
 RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; fi && \
     echo "Pre-caching io.mcp-mesh SDK ${VERSION} from Maven Central" && \
     mkdir -p /tmp/warmup && \

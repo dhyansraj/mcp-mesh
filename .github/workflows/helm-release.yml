@@ -60,7 +60,7 @@ jobs:
 
       - name: Check Pod Security Standards compliance
         run: |
-          pip install pyyaml
+          pip install pyyaml==6.0.3
           python3 scripts/check_helm_pss.py
 
       - name: Login to GitHub Container Registry

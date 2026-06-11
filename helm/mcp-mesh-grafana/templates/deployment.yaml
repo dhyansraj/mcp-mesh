@@ -6,7 +6,7 @@
        API server drops it (losing PVC write access). */}}
 {{- range $field := list "fsGroup" "fsGroupChangePolicy" "supplementalGroups" "sysctls" }}
 {{- if hasKey ($.Values.grafana.securityContext | default dict) $field }}
-{{- fail (printf "grafana.securityContext.%s: grafana.securityContext is now the container security context; pod-level fields (fsGroup, runAsUser, ...) moved to grafana.podSecurityContext. Move your override there." $field) }}
+{{- fail (printf "grafana.securityContext.%s: grafana.securityContext is now the container security context; pod-only fields (fsGroup, fsGroupChangePolicy, supplementalGroups, sysctls) are invalid there and belong in grafana.podSecurityContext. Move your override there." $field) }}
 {{- end }}
 {{- end }}
 apiVersion: apps/v1

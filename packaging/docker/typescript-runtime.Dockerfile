@@ -5,13 +5,16 @@ FROM --platform=$TARGETPLATFORM node:22-slim
 
 ARG VERSION
 
-# Install runtime dependencies
+# Install runtime dependencies. uid/gid pinned to 999: the helm
+# mcp-mesh-agent chart forces runAsUser/runAsGroup/fsGroup 999, which must
+# match this user so files chowned to mcp-mesh in-image stay writable.
+# hadolint ignore=DL3008,DL3015
 RUN apt-get update && apt-get install -y \
     curl \
     wget \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd -r mcp-mesh \
-    && useradd -r -g mcp-mesh mcp-mesh
+    && groupadd -r -g 999 mcp-mesh \
+    && useradd -r -u 999 -g mcp-mesh mcp-mesh
 
 # Create app directory
 RUN mkdir -p /app && chown mcp-mesh:mcp-mesh /app

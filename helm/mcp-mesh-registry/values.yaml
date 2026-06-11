@@ -28,7 +28,11 @@ serviceAccount:
 podAnnotations: {}
 
 # Pod security context (hardened for Pod Security Standards "restricted";
-# seccompProfile here also covers the wait-for-db init container)
+# seccompProfile here also covers the wait-for-db init container).
+# Note: uid 999 intentionally differs from the mcpmesh/registry image's
+# built-in mcp-mesh user (1001). Any non-root uid works here: the root
+# filesystem is read-only and every writable path is a volume (/tmp emptyDir,
+# /data PVC/emptyDir) made group-writable via fsGroup.
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 999

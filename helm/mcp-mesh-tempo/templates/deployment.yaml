@@ -6,7 +6,7 @@
        API server drops it (losing PVC write access). */}}
 {{- range $field := list "fsGroup" "fsGroupChangePolicy" "supplementalGroups" "sysctls" }}
 {{- if hasKey ($.Values.tempo.securityContext | default dict) $field }}
-{{- fail (printf "tempo.securityContext.%s: tempo.securityContext is now the container security context; pod-level fields (fsGroup, runAsUser, ...) moved to tempo.podSecurityContext. Move your override there." $field) }}
+{{- fail (printf "tempo.securityContext.%s: tempo.securityContext is now the container security context; pod-only fields (fsGroup, fsGroupChangePolicy, supplementalGroups, sysctls) are invalid there and belong in tempo.podSecurityContext. Move your override there." $field) }}
 {{- end }}
 {{- end }}
 apiVersion: apps/v1

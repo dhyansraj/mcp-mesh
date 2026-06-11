@@ -39,6 +39,7 @@ def discover_charts() -> list[str]:
                   if (d / "Chart.yaml").is_file())
 
 WORKLOAD_KINDS = {"Deployment", "StatefulSet", "DaemonSet", "Job", "ReplicaSet"}
+POD_BEARING_KINDS = WORKLOAD_KINDS | {"Pod", "CronJob"}
 
 ALLOWED_VOLUME_TYPES = {
     "configMap", "csi", "downwardAPI", "emptyDir", "ephemeral",
@@ -145,8 +146,13 @@ def main() -> int:
         for doc in yaml.safe_load_all(rendered):
             if not isinstance(doc, dict):
                 continue
+            if doc.get("kind") not in POD_BEARING_KINDS:
+                continue
             spec, name = pod_spec_of(doc)
             if spec is None:
+                errors.append(
+                    f"{doc.get('kind')}/{name or '?'}: "
+                    "recognized workload kind but no pod spec found")
                 continue
             pods += 1
             errors.extend(check_pod(chart, name, spec))
