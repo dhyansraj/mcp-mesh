@@ -30,10 +30,22 @@ ui:
     # Full PostgreSQL DSN. When empty, the URL is composed from
     # global.postgres.* (the mcp-mesh-core umbrella shares one block with
     # every datastore consumer — host/port/name/username/password/sslmode,
-    # existingSecret modes included); an explicit value here always wins.
-    # When neither is set, the chart default applies:
-    #   postgresql://mcp_mesh_readonly:changeme@mcp-mesh-postgres:5432/mcp_mesh_registry?sslmode=disable
-    # Override with a read-only database credential for production.
+    # existingSecret and auto-generated-secret modes included); an explicit
+    # value here always wins.
+    #
+    # When neither is set, a credential-less placeholder renders so the chart
+    # stays lintable, but it cannot authenticate anywhere — the UI fails fast
+    # at startup until a real DSN is configured:
+    #   postgresql://mcp_mesh_readonly@mcp-mesh-postgres:5432/mcp_mesh_registry?sslmode=disable
+    #
+    # The UI only reads — for production, point this at a dedicated read-only
+    # role instead of the registry's read-write credential. The role is not
+    # provisioned by any chart; create it once against the registry database:
+    #   CREATE ROLE mcp_mesh_readonly LOGIN PASSWORD '<password>';
+    #   GRANT CONNECT ON DATABASE mcpmesh TO mcp_mesh_readonly;
+    #   GRANT USAGE ON SCHEMA public TO mcp_mesh_readonly;
+    #   GRANT SELECT ON ALL TABLES IN SCHEMA public TO mcp_mesh_readonly;
+    #   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO mcp_mesh_readonly;
     url: ""
   tracing:
     enabled: true

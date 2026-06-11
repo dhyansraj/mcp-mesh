@@ -22,15 +22,28 @@ Then visit: http://localhost:8000/health
 To deploy MCP agents, use the mcp-mesh-agent chart:
   helm install my-agent ../mcp-mesh-agent --set agent.script=my_script.py
 
-{{- /* Mirrors the mcp-mesh-postgres password resolution: subchart override >
-       global.postgres.password > built-in default. No warning when the
-       credential comes from an existing secret (password unused). */}}
+{{- /* Mirrors the mcp-mesh-postgres credential resolution: existing secret >
+       inline password (subchart override > global) > auto-generated. */}}
 {{- $pgSub := dig "postgres" (dict) (index .Values "mcp-mesh-postgres" | default dict) }}
 {{- $gpg := dig "postgres" (dict) (.Values.global | default dict) | default dict }}
-{{- if and (not $gpg.existingSecret) (eq (coalesce $pgSub.password $gpg.password "mcpmesh123") "mcpmesh123") }}
+{{- if and .Values.postgres.enabled (not (or $pgSub.existingSecret $gpg.existingSecret)) (not (or $pgSub.password $gpg.password)) }}
 
-WARNING: PostgreSQL is using the built-in development password.
-Set global.postgres.password for production.
+PostgreSQL password was auto-generated (provisioning and every consumer share
+it). Retrieve it with:
+  kubectl get secret {{ include "mcp-mesh-core.postgresCredentialsSecretName" . }} -n {{ .Release.Namespace }} \
+    -o jsonpath='{.data.password}' | base64 -d
+The secret is reused on upgrade and kept on uninstall so it stays in sync
+with the database files on the persistent volume.
+{{- end }}
+{{- $gf := dig "grafana" "config" (dict) (index .Values "mcp-mesh-grafana" | default dict) }}
+{{- if and .Values.grafana.enabled (not $gf.existingSecret) (not $gf.adminPassword) }}
+
+Grafana admin password was auto-generated. Retrieve it with:
+  kubectl get secret {{ include "mcp-mesh-core.grafanaSecretName" . }} -n {{ .Release.Namespace }} \
+    -o jsonpath='{.data.admin-password}' | base64 -d
+Grafana applies the generated value on first start only: if this release was
+upgraded from chart <= 2.4.0 with persistence enabled, the previous admin
+password remains active — see the chart README's upgrade notes.
 {{- end }}
 
 For more information, visit: https://github.com/dhyansraj/mcp-mesh

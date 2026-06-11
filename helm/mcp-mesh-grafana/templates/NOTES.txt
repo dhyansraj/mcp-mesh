@@ -1,0 +1,15 @@
+{{- if .Values.grafana.enabled }}
+{{- if .Values.grafana.config.existingSecret }}
+Grafana admin password comes from secret
+"{{ .Values.grafana.config.existingSecret }}" (key: {{ .Values.grafana.config.existingSecretPasswordKey | default "admin-password" }}).
+{{- else if not .Values.grafana.config.adminPassword }}
+Grafana admin password was auto-generated. Retrieve it with:
+
+  kubectl get secret {{ include "mcp-mesh-grafana.fullname" . }}-secret -n {{ .Release.Namespace }} \
+    -o jsonpath='{.data.admin-password}' | base64 -d
+
+The generated value is reused on helm upgrade. Grafana applies it only on
+first start — with persistence enabled, the password set at install time
+stays in effect (reset with: grafana-cli admin reset-admin-password).
+{{- end }}
+{{- end }}

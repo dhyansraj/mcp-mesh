@@ -39,8 +39,21 @@ spec:
               value: {{ include "mcp-mesh-postgres.database" . | quote }}
             - name: POSTGRES_USER
               value: {{ include "mcp-mesh-postgres.username" . | quote }}
+            {{- if include "mcp-mesh-postgres.existingSecret" . }}
             - name: POSTGRES_PASSWORD
-              value: {{ include "mcp-mesh-postgres.password" . | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mcp-mesh-postgres.existingSecret" . }}
+                  key: {{ include "mcp-mesh-postgres.existingSecretPasswordKey" . }}
+            {{- else }}
+            {{- /* Chart-managed Secret (inline or auto-generated password, see
+                   secret.yaml) — never templated into the pod spec. */}}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mcp-mesh-postgres.credentialsSecretName" . }}
+                  key: password
+            {{- end }}
             - name: PGDATA
               value: {{ .Values.postgres.postgresqlDataDir | quote }}
             {{- with .Values.extraEnvVars }}

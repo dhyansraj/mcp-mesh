@@ -55,6 +55,17 @@ Each `registry.database.*` connection field inherits `global.postgres.*` when
 left unset (the `mcp-mesh-core` umbrella shares one `global.postgres` block
 with every datastore consumer); an explicit value here always wins.
 
+With `global.postgres.generatedSecret: true` and no password/existingSecret
+configured at either level, the credential is read from the auto-generated
+Secret of the umbrella's bundled postgres chart
+(`<release>-mcp-mesh-postgres-credentials`, key `password`; name overridable
+via `global.postgres.generatedSecretName`) through the regular
+existingSecret machinery. An explicit password always wins over the
+generated secret. Standalone installs of this chart are unaffected unless
+that global is set — when reusing the umbrella values file for a standalone
+registry release, set `global.postgres.generatedSecretName` explicitly,
+because the default name is derived from the release name.
+
 | Parameter                          | Description                                       | Default               |
 | ---------------------------------- | ------------------------------------------------- | --------------------- |
 | `registry.host`                    | Registry host address                             | `"0.0.0.0"`           |

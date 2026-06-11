@@ -25,7 +25,23 @@ grafana:
     port: 3000
 
   config:
-    adminPassword: "admin"
+    # Password for the built-in "admin" user. Resolution order:
+    #   1. existingSecret below (no plaintext in values)
+    #   2. this value (rendered into the chart-managed Secret)
+    #   3. empty: auto-generated into the chart-managed Secret
+    #      "<fullname>-secret" (key: admin-password). The generated value is
+    #      reused on helm upgrade (lookup). Retrieve it with:
+    #        kubectl get secret <fullname>-secret -o jsonpath='{.data.admin-password}' | base64 -d
+    #      Note: lookup needs a cluster — `helm template | kubectl apply`
+    #      pipelines regenerate the value on every render; use helm
+    #      install/upgrade, or set an explicit password / existingSecret.
+    #      Grafana applies the password only on first start: with persistence
+    #      enabled, later changes to this value do not update a provisioned
+    #      instance (use grafana-cli admin reset-admin-password).
+    adminPassword: ""
+    # Read the admin password from an existing secret instead.
+    existingSecret: ""
+    existingSecretPasswordKey: "admin-password"
     allowSignUp: false
     installPlugins: "grafana-piechart-panel"
     # Base path for serving Grafana behind a path prefix

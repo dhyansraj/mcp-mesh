@@ -74,13 +74,54 @@ bundled PostgreSQL provisioning. Per-subchart values (e.g.
 `mcp-mesh-registry.registry.database.host`) override the global for that
 component only.
 
+#### Default: auto-generated database password
+
+With no credential configured, the bundled postgres chart generates a random
+password into the Secret `<release>-mcp-mesh-postgres-credentials` (key:
+`password`). Provisioning and every consumer (registry, UI) read it from that
+one Secret via `secretKeyRef` — no password is rendered into any manifest.
+
+```bash
+kubectl get secret mcp-core-mcp-mesh-postgres-credentials -n mcp-mesh \
+  -o jsonpath='{.data.password}' | base64 -d
+```
+
+Lifecycle:
+
+- `helm upgrade` reuses the existing value (the Secret is found via `lookup`).
+- The Secret carries `helm.sh/resource-policy: keep`: it survives
+  `helm uninstall`, exactly like the StatefulSet's PVC does, so a reinstall
+  under the same release name keeps matching the provisioned data directory.
+- **Template pipelines**: `lookup` needs a live cluster. Pure
+  `helm template | kubectl apply` (and GitOps tools that render without
+  cluster access) regenerate the value on every render — since PostgreSQL
+  only reads `POSTGRES_PASSWORD` at first initialization, that breaks
+  consumer auth. Use `helm install`/`helm upgrade`, or set an explicit
+  `global.postgres.password` / `global.postgres.existingSecret` in such
+  pipelines.
+- **Upgrading from charts ≤ 2.4.0 default installs**: earlier defaults
+  provisioned the database with a built-in development password. The data
+  directory keeps that password, so an upgrade with default values would
+  generate a fresh secret that no longer matches. Either keep the old
+  credential explicitly (`global.postgres.password=mcpmesh123` — and rotate
+  it with `ALTER USER`), or reset the database volume.
+  The same applies to Grafana: it applies `GF_SECURITY_ADMIN_PASSWORD` only
+  on first start, so with persistence enabled (the default) an upgrade keeps
+  the previous built-in `admin` password active and the newly generated
+  secret is never applied. Reset it in place
+  (`kubectl exec deploy/<release>-mcp-mesh-grafana -- grafana-cli admin
+  reset-admin-password <new-password>` — use the generated value from the
+  secret to keep it in sync), or delete the Grafana PVC before upgrading.
+
+#### Explicit credentials
+
 ```yaml
 # values.yaml
 global:
   postgres:
     name: "mcpmesh"
     username: "mcpmesh"
-    password: "change-me" # Change in production
+    password: "change-me" # wins over the generated secret everywhere
 
 mcp-mesh-postgres:
   persistence:
@@ -89,18 +130,41 @@ mcp-mesh-postgres:
     storageClass: "fast-ssd"
 ```
 
+Or with no plaintext in values, point provisioning and all consumers at one
+pre-created secret:
+
+```yaml
+global:
+  postgres:
+    existingSecret: "pg-credentials"
+    existingSecretPasswordKey: "password" # must be URL-safe (composed DSNs)
+```
+
+This works with the bundled postgres enabled: provisioning consumes the same
+key via `secretKeyRef`, so the database is initialized with exactly the
+credential every consumer connects with. (`existingSecretUrlKey` — full-DSN
+mode — additionally requires `existingSecretPasswordKey`, because
+provisioning needs a bare password key stored alongside the DSN.)
+
 ### External managed datastores
 
 To use a managed PostgreSQL/Redis (RDS, Cloud SQL, ElastiCache, ...), disable
 the bundled subcharts and point `global.*` at the managed endpoints — every
 consumer inherits them, no per-subchart overrides needed.
 
-Disabling the bundled subcharts (`postgres.enabled: false`,
-`redis.enabled: false`) is required, not optional: leaving them enabled
-alongside external credentials fails at template time, because the bundled
-Redis runs without AUTH and the bundled PostgreSQL provisions with the inline
-password — `global.redis.password` / `global.redis.existingSecret` /
-`global.postgres.existingSecret` could never work against them.
+Disabling the bundled Redis (`redis.enabled: false`) is required, not
+optional, when setting Redis credentials: it runs without AUTH, so
+`global.redis.password` / `global.redis.existingSecret` could never work
+against it and the render fails at template time. For PostgreSQL, disabling
+the bundled subchart is what makes the external endpoint authoritative;
+`global.postgres.existingSecret` itself is also valid *with* the bundled
+chart (provisioning consumes the same secret — see Database Configuration
+above). When disabling the bundled PostgreSQL, also set
+`global.postgres.generatedSecret: false`: nothing creates the auto-generated
+Secret anymore, and a configuration without an explicit credential (e.g. an
+external database using `trust` auth) would otherwise leave every consumer
+referencing a Secret that never exists (pods fail with
+`CreateContainerConfigError`).
 
 ```yaml
 # values.yaml
@@ -116,6 +180,9 @@ global:
     name: "mcpmesh"
     username: "mcpmesh"
     sslmode: "require"
+    # The bundled chart is disabled, so nothing creates the auto-generated
+    # Secret — switch generation off and supply the credential explicitly.
+    generatedSecret: false
     # Credential from an existing secret: either a key holding a full
     # postgres:// DSN (existingSecretUrlKey) or just the password
     existingSecret: "pg-credentials"
@@ -179,14 +246,46 @@ serviceMonitors:
 
 ## Security
 
-Production security recommendations:
+### Credential summary
+
+No chart ships a usable default password. Every credential is either
+auto-generated into a Secret or sourced from one you pre-create:
+
+| Credential          | Default                              | Secret / key                                                  | Override                                                                       |
+| ------------------- | ------------------------------------ | ------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| PostgreSQL          | auto-generated, shared by all consumers | `<release>-mcp-mesh-postgres-credentials` / `password`      | `global.postgres.password` or `global.postgres.existingSecret` + `existingSecretPasswordKey` (or `existingSecretUrlKey`) |
+| Grafana admin       | auto-generated                       | `<release>-mcp-mesh-grafana-secret` / `admin-password`        | `mcp-mesh-grafana.grafana.config.adminPassword` or `....config.existingSecret` + `existingSecretPasswordKey` |
+| Redis               | none (bundled Redis runs without AUTH) | —                                                            | `global.redis.password` / `global.redis.existingSecret` (external Redis only)  |
+| UI database         | inherits `global.postgres` (see below) | —                                                            | `mcp-mesh-ui.ui.database.url`                                                  |
+
+### Read-only database role for the UI
+
+The UI only reads. By default (umbrella) it connects with the shared
+`global.postgres` credential; for production, give it a dedicated read-only
+role. No chart provisions that role — create it once against the registry
+database:
+
+```sql
+CREATE ROLE mcp_mesh_readonly LOGIN PASSWORD '<password>';
+GRANT CONNECT ON DATABASE mcpmesh TO mcp_mesh_readonly;
+GRANT USAGE ON SCHEMA public TO mcp_mesh_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO mcp_mesh_readonly;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO mcp_mesh_readonly;
+```
+
+then point the UI at it:
+
+```yaml
+mcp-mesh-ui:
+  ui:
+    database:
+      url: "postgresql://mcp_mesh_readonly:<password>@mcp-core-mcp-mesh-postgres:5432/mcpmesh?sslmode=disable"
+```
+
+### Registry auth
 
 ```yaml
 # values.yaml
-mcp-mesh-postgres:
-  postgres:
-    password: "your-secure-password"
-
 mcp-mesh-registry:
   registry:
     security:
@@ -211,6 +310,8 @@ Note: This will delete all data in PostgreSQL. Back up data before uninstalling.
 | ------------------ | ------ | ------------ | ------------------------------------ |
 | `global.namespace` | string | `"mcp-mesh"` | Namespace for all components         |
 | `global.postgres.*` | object | bundled postgres | PostgreSQL endpoint/credentials inherited by all consumers (`host`, `port`, `name`, `username`, `password`, `sslmode`, `existingSecret`, `existingSecretUrlKey`, `existingSecretPasswordKey`, `tls.caSecret`, `tls.caKey`) |
+| `global.postgres.generatedSecret` | bool | `true` | Auto-generate the password into `<release>-mcp-mesh-postgres-credentials` when no `password`/`existingSecret` is set (provisioning and all consumers share it) |
+| `global.postgres.generatedSecretName` | string | `""` | Override the generated Secret's name (needed only with name/fullname overrides on the postgres subchart) |
 | `global.redis.*`   | object | bundled redis | Redis endpoint/credentials inherited by all consumers (`host`, `port`, `password`, `existingSecret`, `existingSecretUrlKey`, `existingSecretPasswordKey`, `tls.enabled`) |
 | `postgres.enabled` | bool   | `true`       | Enable PostgreSQL deployment         |
 | `redis.enabled`    | bool   | `true`       | Enable Redis deployment              |

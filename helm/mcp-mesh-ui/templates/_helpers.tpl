@@ -55,14 +55,45 @@ ui.database.url / ui.redis.url > global.* > chart default.
 {{- end }}
 
 {{/*
+Name of the auto-generated PostgreSQL credentials Secret created by the
+bundled mcp-mesh-postgres chart (global.postgres.generatedSecret mode).
+global.postgres.generatedSecretName overrides; the default mirrors the
+mcp-mesh-postgres chart's "<fullname>-credentials" — sibling subcharts in
+the mcp-mesh-core umbrella share .Release.Name, so both sides derive the
+same name. If the postgres subchart uses nameOverride/fullnameOverride, set
+global.postgres.generatedSecretName explicitly.
+*/}}
+{{- define "mcp-mesh-ui.generatedPostgresSecretName" -}}
+{{- $g := include "mcp-mesh-ui.globalPostgres" . | fromJson -}}
+{{- if $g.generatedSecretName -}}
+{{- $g.generatedSecretName -}}
+{{- else if contains "mcp-mesh-postgres" .Release.Name -}}
+{{- printf "%s-credentials" (.Release.Name | trunc 63 | trimSuffix "-") -}}
+{{- else -}}
+{{- printf "%s-credentials" (printf "%s-mcp-mesh-postgres" .Release.Name | trunc 63 | trimSuffix "-") -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Existing-secret name for the database credentials: set only when no explicit
 ui.database.url overrides the global layer. Non-empty means DATABASE_URL is
 consumed via secretKeyRef (urlKey mode) or composed via $(DATABASE_PASSWORD)
 (password mode) instead of being rendered into the chart Secret.
+
+With global.postgres.generatedSecret true and no password/existingSecret set
+anywhere, the auto-generated Secret of the bundled postgres chart is used
+(password-key mode, key "password" — the deployment's passwordKey default).
+An explicit global.postgres.password wins over the generated secret.
 */}}
 {{- define "mcp-mesh-ui.databaseExistingSecret" -}}
 {{- $g := include "mcp-mesh-ui.globalPostgres" . | fromJson -}}
-{{- if not .Values.ui.database.url -}}{{- $g.existingSecret | default "" -}}{{- end -}}
+{{- if not .Values.ui.database.url -}}
+{{- if $g.existingSecret -}}
+{{- $g.existingSecret -}}
+{{- else if and ($g.generatedSecret | default false) (not $g.password) -}}
+{{- include "mcp-mesh-ui.generatedPostgresSecretName" . -}}
+{{- end -}}
+{{- end -}}
 {{- end }}
 
 {{- define "mcp-mesh-ui.redisExistingSecret" -}}
@@ -102,7 +133,11 @@ secret supplies the credential (see databaseExistingSecret above).
 Registry semantics: any global connection part (host, port, name, username,
 password) composes a DSN with the remaining parts coalesced to their
 defaults — a password without a host still applies over the default host.
-The legacy readonly fallback renders only when no global part is set at all.
+The credential-less readonly placeholder renders only when no global part is
+set at all: it carries no password, so it cannot authenticate anywhere — the
+UI fails fast at startup with a clear database error instead of shipping a
+guessable default. Configure ui.database.url (ideally a read-only role) or
+global.postgres.* for a working deployment.
 */}}
 {{- define "mcp-mesh-ui.databaseURL" -}}
 {{- if .Values.ui.database.url -}}
@@ -114,7 +149,7 @@ The legacy readonly fallback renders only when no global part is set at all.
 {{- $pass := ($g.password | default "") | urlquery | replace "+" "%20" -}}
 {{- printf "postgresql://%s:%s@%s:%d/%s%s" $user $pass (coalesce $g.host "mcp-mesh-postgres") (coalesce $g.port 5432 | int) ($g.name | default "mcpmesh") (include "mcp-mesh-ui.databaseURLParams" .) -}}
 {{- else -}}
-{{- "postgresql://mcp_mesh_readonly:changeme@mcp-mesh-postgres:5432/mcp_mesh_registry?sslmode=disable" -}}
+{{- "postgresql://mcp_mesh_readonly@mcp-mesh-postgres:5432/mcp_mesh_registry?sslmode=disable" -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

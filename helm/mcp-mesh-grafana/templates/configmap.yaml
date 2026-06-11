@@ -12,9 +12,10 @@ data:
     http_port = 3000
     enable_gzip = true
 
-    [security]
-    admin_password = {{ .Values.grafana.config.adminPassword | quote }}
-
+    {{- /* The admin password is intentionally NOT in grafana.ini (a
+           ConfigMap): it reaches Grafana only via the
+           GF_SECURITY_ADMIN_PASSWORD env var (secretKeyRef in the
+           deployment), which overrides any ini value. */}}
     [users]
     allow_sign_up = {{ .Values.grafana.config.allowSignUp }}
 

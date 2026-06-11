@@ -26,8 +26,21 @@ spec:
           containerPort: 3000
           protocol: TCP
         env:
+        {{- if .Values.grafana.config.existingSecret }}
         - name: GF_SECURITY_ADMIN_PASSWORD
-          value: {{ .Values.grafana.config.adminPassword | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.grafana.config.existingSecret }}
+              key: {{ .Values.grafana.config.existingSecretPasswordKey | default "admin-password" }}
+        {{- else }}
+        {{- /* Chart-managed Secret (explicit or auto-generated password, see
+               secret.yaml) — never templated into the pod spec. */}}
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "mcp-mesh-grafana.fullname" . }}-secret
+              key: admin-password
+        {{- end }}
         - name: GF_USERS_ALLOW_SIGN_UP
           value: {{ .Values.grafana.config.allowSignUp | quote }}
         {{- if .Values.grafana.config.installPlugins }}
