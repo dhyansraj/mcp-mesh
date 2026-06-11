@@ -37,11 +37,16 @@ export const MAX_CONSECUTIVE_NEXT_EVENT_FAILURES = 18;
 /**
  * Find an available port by binding to port 0 and getting the OS-assigned port.
  * This is used when port=0 is specified to auto-assign a port.
+ *
+ * `host` must be the host the caller will actually bind — a port that is
+ * free on loopback is not necessarily bindable on `0.0.0.0` (issue #1194).
  */
-export async function findAvailablePort(): Promise<number> {
+export async function findAvailablePort(
+  host: string = "127.0.0.1"
+): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(0, host, () => {
       const address = server.address();
       if (address && typeof address === "object") {
         const port = address.port;
@@ -52,6 +57,83 @@ export async function findAvailablePort(): Promise<number> {
     });
     server.on("error", reject);
   });
+}
+
+/**
+ * Check whether a TCP port can be bound on the given host.
+ *
+ * Issue #1194: used to surface bind conflicts BEFORE the HTTP server and
+ * the registry heartbeat start, so a configured-but-unbindable port never
+ * reaches registration (phantom endpoint).
+ */
+export async function isPortBindable(
+  port: number,
+  host: string
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once("error", () => resolve(false));
+    server.listen(port, host, () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+/**
+ * Resolve the port the HTTP server should bind (issue #1194: adapt, don't crash).
+ *
+ * - `configuredPort === 0`: auto-assign via the OS (existing port-0 path).
+ * - configured port bindable: use it as-is.
+ * - configured port in use: fall back to an OS-assigned port and report
+ *   `fellBack: true` so the caller can log a prominent warning. The caller
+ *   MUST propagate the returned port into its config before starting the
+ *   heartbeat — the registry must only ever see the actually-bound port.
+ *
+ * Every probe — including the auto-assign and fallback paths — binds on
+ * `host`, the host the server will actually bind. Probing loopback for a
+ * server that binds `0.0.0.0` could hand back a port owned by another
+ * process on a non-loopback interface.
+ */
+export async function resolveBindPort(
+  configuredPort: number,
+  host: string
+): Promise<{ port: number; fellBack: boolean }> {
+  if (configuredPort === 0) {
+    return { port: await findAvailablePort(host), fellBack: false };
+  }
+  if (await isPortBindable(configuredPort, host)) {
+    return { port: configuredPort, fellBack: false };
+  }
+  return { port: await findAvailablePort(host), fellBack: true };
+}
+
+/**
+ * Resolve the startup bind port and emit the canonical conflict warning.
+ *
+ * Shared by `MeshAgent._autoStart()` and `MeshExpress.start()` so the
+ * resolve-and-warn behavior (and the warning text) cannot drift between
+ * the two entry points. The caller MUST write the returned port back into
+ * the config its heartbeat reads BEFORE starting tracing/server/heartbeat
+ * — registration must always carry the ACTUAL bound port (issue #1194).
+ */
+export async function resolveStartupBindPort(
+  configuredPort: number,
+  label: string
+): Promise<number> {
+  const bindHost = process.env.HOST ?? "0.0.0.0";
+  const resolved = await resolveBindPort(configuredPort, bindHost);
+  if (resolved.fellBack) {
+    console.warn(
+      `PORT CONFLICT: configured HTTP port ${configuredPort} on ${bindHost} ` +
+        `is already in use. Falling back to auto-assigned port ${resolved.port} — ` +
+        `the registry will be given the ACTUAL bound port. Another process ` +
+        `likely owns port ${configuredPort}; fix the port assignment to ` +
+        `silence this warning.`
+    );
+  } else if (resolved.port !== configuredPort) {
+    console.log(`Auto-assigned port ${resolved.port} for ${label}`);
+  }
+  return resolved.port;
 }
 
 // TypeScript-specific defaults (not in Rust core)

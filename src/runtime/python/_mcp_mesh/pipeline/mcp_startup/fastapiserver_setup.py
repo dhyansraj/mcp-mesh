@@ -1,8 +1,6 @@
 import asyncio
 import logging
 import os
-import socket
-import time
 from datetime import UTC, datetime
 from typing import Any, Optional
 
@@ -628,104 +626,13 @@ mcp_mesh_up{{agent="{agent_name}"}} 1
             self.logger.error(f"Failed to mount FastMCP server '{server_key}': {e}")
             raise
 
-    async def _start_fastapi_server(
-        self,
-        app: Any,
-        binding_config: dict[str, Any],
-        advertisement_config: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Start FastAPI server with uvicorn."""
-        bind_host = binding_config["bind_host"]
-        bind_port = binding_config["bind_port"]
-        external_host = advertisement_config["external_host"]
-        external_endpoint = advertisement_config["external_endpoint"]
-
-        try:
-            import asyncio
-
-            import uvicorn
-
-            # Resolve TLS config from Rust core
-            from ...shared.tls_config import get_tls_config
-
-            tls = get_tls_config()
-
-            ssl_kwargs = {}
-            if tls["enabled"] and tls.get("cert_path") and tls.get("key_path"):
-                import ssl
-
-                ssl_kwargs["ssl_certfile"] = tls["cert_path"]
-                ssl_kwargs["ssl_keyfile"] = tls["key_path"]
-                if tls.get("ca_path"):
-                    ssl_kwargs["ssl_ca_certs"] = tls["ca_path"]
-                    ssl_kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
-                self.logger.info(f"TLS enabled for HTTP server (mode={tls['mode']})")
-
-            # Create uvicorn config
-            config = uvicorn.Config(
-                app=app,
-                host=bind_host,
-                port=bind_port,
-                log_level="info",
-                access_log=False,  # Reduce noise
-                ws="websockets-sansio",  # Use modern websockets API (avoids deprecation warnings)
-                **ssl_kwargs,
-            )
-
-            # Create and start server
-            server = uvicorn.Server(config)
-
-            # Start server as background task
-            async def run_server():
-                try:
-                    await server.serve()
-                except Exception as e:
-                    self.logger.error(f"FastAPI server stopped with error: {e}")
-
-            server_task = asyncio.create_task(run_server())
-
-            # Wait for server to start and get actual port
-            # uvicorn sets server.started = True when ready
-            for _ in range(50):  # Max 5 seconds
-                await asyncio.sleep(0.1)
-                if server.started:
-                    break
-
-            # Get actual port from uvicorn sockets (critical for port=0 auto-assign)
-            actual_port = bind_port
-            if server.started and server.servers:
-                try:
-                    sock = server.servers[0].sockets[0]
-                    actual_port = sock.getsockname()[1]
-                    if actual_port != bind_port:
-                        self.logger.info(
-                            f"Auto-assigned port {actual_port} (requested: {bind_port})"
-                        )
-                except (IndexError, AttributeError, OSError) as e:
-                    self.logger.warning(f"Could not get actual port from uvicorn: {e}")
-                    actual_port = bind_port if bind_port != 0 else 8080
-            elif bind_port == 0:
-                self.logger.warning("Server not started, falling back to port 8080")
-                actual_port = 8080
-
-            # Build external endpoint
-            final_external_endpoint = (
-                external_endpoint or f"http://{external_host}:{actual_port}"
-            )
-
-            return {
-                "server": server,
-                "server_task": server_task,
-                "actual_port": actual_port,
-                "bind_address": f"{bind_host}:{actual_port}",
-                "external_endpoint": final_external_endpoint,
-            }
-
-        except ImportError as e:
-            raise Exception(f"uvicorn not available: {e}")
-        except Exception as e:
-            self.logger.error(f"Failed to start FastAPI server: {e}")
-            raise
+    # NOTE (issue #1194): the old `_start_fastapi_server` helper was removed.
+    # It was dead code (no callers) and embodied the exact bug from the
+    # issue: uvicorn bind errors died inside a background task, a 5s poll
+    # on `server.started` timed out silently, and the code then *assumed*
+    # the configured port — registering an endpoint nothing ever bound.
+    # Server startup now flows exclusively through pre-bound sockets
+    # (see `_mcp_mesh.shared.port_binding` and `startup_orchestrator`).
 
     def _get_timestamp(self) -> str:
         """Get current timestamp in ISO format."""

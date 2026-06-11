@@ -147,11 +147,19 @@ class SimpleShutdownCoordinator:
         self._registry_url: Optional[str] = None
         self._agent_id: Optional[str] = None
         self._shutdown_complete = False  # Flag to prevent race conditions
-        # Uvicorn Server handle (lazily registered by startup_orchestrator).
-        # When set, signal handlers flip ``server.should_exit`` so uvicorn
-        # runs its graceful shutdown (which drives the FastAPI lifespan exit
-        # phase) before the server thread returns. See issue #1029.
-        self._uvicorn_server: Optional[Any] = None
+        # Uvicorn Server handles (lazily registered by mesh/decorators.py
+        # and startup_orchestrator). Signal handlers flip
+        # ``server.should_exit`` on EVERY registered server so uvicorn runs
+        # its graceful shutdown (which drives the FastAPI lifespan exit
+        # phase) before each server thread returns. See issue #1029.
+        #
+        # This is a list, not a single slot: degenerate startups can leave
+        # more than one live server in the process (e.g. the immediate
+        # decorator server comes up but the pipeline does not reuse it and
+        # starts its own). A single slot would let the second registration
+        # overwrite the first, orphaning that server's NON-daemon thread on
+        # SIGTERM — the process would never exit.
+        self._uvicorn_servers: list[Any] = []
 
     def set_shutdown_context(self, registry_url: str, agent_id: str) -> None:
         """Set context for shutdown (used for logging)."""
@@ -162,7 +170,7 @@ class SimpleShutdownCoordinator:
         )
 
     def register_uvicorn_server(self, server: Any) -> None:
-        """Register the uvicorn Server instance so the signal handler can
+        """Register a uvicorn Server instance so the signal handler can
         request graceful shutdown via ``server.should_exit``.
 
         Without this hook, SIGTERM merely sets a flag on the main thread and
@@ -172,8 +180,16 @@ class SimpleShutdownCoordinator:
         ``should_exit``, runs its normal graceful-shutdown sequence
         (including the lifespan exit phase), and then ``server.run()``
         returns cleanly. See issue #1029.
+
+        Registrations accumulate (identity-deduplicated): every registered
+        server is signaled on SIGTERM/SIGINT, so a second server started in
+        a degenerate startup path cannot orphan the first one's non-daemon
+        thread.
         """
-        self._uvicorn_server = server
+        if server is None:
+            return
+        if not any(s is server for s in self._uvicorn_servers):
+            self._uvicorn_servers.append(server)
         logger.debug("📡 Uvicorn server registered with shutdown coordinator")
 
     def install_signal_handlers(self) -> None:
@@ -190,12 +206,13 @@ class SimpleShutdownCoordinator:
         def shutdown_signal_handler(signum, frame):
             # Avoid logging in signal handler to prevent reentrant call issues
             self._shutdown_requested = True
-            # Tell uvicorn to begin graceful shutdown — this lets the
-            # FastAPI lifespan finally block run before the server thread
-            # exits. Best-effort: if no server was registered (e.g. tests,
-            # API/A2A flows that don't own uvicorn), just set the flag.
-            server = self._uvicorn_server
-            if server is not None:
+            # Tell EVERY registered uvicorn server to begin graceful
+            # shutdown — this lets the FastAPI lifespan finally block run
+            # before each server thread exits. Best-effort: if no server
+            # was registered (e.g. tests, API/A2A flows that don't own
+            # uvicorn), just set the flag. Iterate over a snapshot — the
+            # handler runs async w.r.t. the interpreter.
+            for server in list(self._uvicorn_servers):
                 server.should_exit = True
 
         signal.signal(signal.SIGINT, shutdown_signal_handler)
@@ -280,12 +297,14 @@ def install_signal_handlers() -> None:
 
 
 def register_uvicorn_server(server: Any) -> None:
-    """Register the uvicorn Server instance (module-level function).
+    """Register a uvicorn Server instance (module-level function).
 
-    Internal coordination hook between ``startup_orchestrator`` and the
-    process-wide shutdown coordinator. Calling this after
-    :func:`install_signal_handlers` enables graceful FastAPI lifespan
-    teardown on SIGTERM/SIGINT (issue #1029).
+    Internal coordination hook between ``mesh/decorators.py`` /
+    ``startup_orchestrator`` and the process-wide shutdown coordinator.
+    Calling this after :func:`install_signal_handlers` enables graceful
+    FastAPI lifespan teardown on SIGTERM/SIGINT (issue #1029). All
+    registered servers are signaled — see
+    :meth:`SimpleShutdownCoordinator.register_uvicorn_server`.
     """
     _simple_shutdown_coordinator.register_uvicorn_server(server)
 

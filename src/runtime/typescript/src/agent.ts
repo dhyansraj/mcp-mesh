@@ -35,6 +35,7 @@ import {
   resolveConfig,
   generateAgentIdSuffix,
   findAvailablePort,
+  resolveStartupBindPort,
   MAX_CONSECUTIVE_NEXT_EVENT_FAILURES,
   NEXT_EVENT_BACKOFF_CAP_MS,
 } from "./config.js";
@@ -1100,11 +1101,20 @@ export class MeshAgent {
     // This ensures file:// templates resolve correctly regardless of cwd
     findAndSetBasePath();
 
-    // Handle httpPort=0: auto-assign an available port
-    if (this.config.httpPort === 0) {
-      const assignedPort = await findAvailablePort();
-      this.config = { ...this.config, httpPort: assignedPort };
-      console.log(`Auto-assigned port ${assignedPort} for agent`);
+    // Resolve the bind port BEFORE tracing/server/heartbeat so every
+    // downstream consumer sees the port we will actually bind (issue
+    // #1194: a conflict falls back to an OS-assigned port with a
+    // prominent warning — see resolveStartupBindPort). The heartbeat
+    // reads `this.config.httpPort`, so registration carries the ACTUAL
+    // port instead of a phantom endpoint.
+    {
+      const resolvedPort = await resolveStartupBindPort(
+        this.config.httpPort,
+        "agent"
+      );
+      if (resolvedPort !== this.config.httpPort) {
+        this.config = { ...this.config, httpPort: resolvedPort };
+      }
     }
 
     console.log(`Starting MCP Mesh agent: ${this.agentId}`);

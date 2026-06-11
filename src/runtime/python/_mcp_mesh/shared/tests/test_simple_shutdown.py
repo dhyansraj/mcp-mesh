@@ -38,27 +38,50 @@ def restore_signal_handlers():
 
 
 class TestRegisterUvicornServer:
-    """register_uvicorn_server stores the handle so the signal handler can flip
-    should_exit on it.
+    """register_uvicorn_server stores the handle(s) so the signal handler can
+    flip should_exit on every registered server.
     """
 
     def test_register_stores_server(self, coordinator):
         mock_server = SimpleNamespace(should_exit=False)
         coordinator.register_uvicorn_server(mock_server)
-        assert coordinator._uvicorn_server is mock_server
+        assert mock_server in coordinator._uvicorn_servers
+
+    def test_register_accumulates_multiple_servers(self, coordinator):
+        # Degenerate startups can leave two live servers in the process
+        # (immediate decorator server + pipeline-started server). The
+        # coordinator must keep BOTH — a single slot would orphan the
+        # first server's non-daemon thread on SIGTERM.
+        first = SimpleNamespace(should_exit=False)
+        second = SimpleNamespace(should_exit=False)
+        coordinator.register_uvicorn_server(first)
+        coordinator.register_uvicorn_server(second)
+        assert coordinator._uvicorn_servers == [first, second]
+
+    def test_register_is_identity_deduplicated(self, coordinator):
+        mock_server = SimpleNamespace(should_exit=False)
+        coordinator.register_uvicorn_server(mock_server)
+        coordinator.register_uvicorn_server(mock_server)
+        assert coordinator._uvicorn_servers == [mock_server]
+
+    def test_register_none_is_a_noop(self, coordinator):
+        coordinator.register_uvicorn_server(None)
+        assert coordinator._uvicorn_servers == []
 
     def test_module_level_function_delegates_to_global_coordinator(self):
         # The module-level helper just forwards to the global singleton.
         mock_server = SimpleNamespace(should_exit=False)
-        previous = simple_shutdown._simple_shutdown_coordinator._uvicorn_server
+        previous = list(
+            simple_shutdown._simple_shutdown_coordinator._uvicorn_servers
+        )
         try:
             simple_shutdown.register_uvicorn_server(mock_server)
             assert (
-                simple_shutdown._simple_shutdown_coordinator._uvicorn_server
-                is mock_server
+                mock_server
+                in simple_shutdown._simple_shutdown_coordinator._uvicorn_servers
             )
         finally:
-            simple_shutdown._simple_shutdown_coordinator._uvicorn_server = previous
+            simple_shutdown._simple_shutdown_coordinator._uvicorn_servers = previous
 
 
 class TestSignalHandlerRequestsUvicornShutdown:
@@ -96,6 +119,25 @@ class TestSignalHandlerRequestsUvicornShutdown:
         assert mock_server.should_exit is True
         assert coordinator.is_shutdown_requested() is True
 
+    def test_handler_flips_should_exit_on_every_registered_server(
+        self, coordinator, restore_signal_handlers
+    ):
+        # Both the immediate decorator server and a pipeline-started
+        # server must receive the graceful-shutdown request — neither
+        # non-daemon server thread may be orphaned on SIGTERM.
+        first = SimpleNamespace(should_exit=False)
+        second = SimpleNamespace(should_exit=False)
+        coordinator.register_uvicorn_server(first)
+        coordinator.register_uvicorn_server(second)
+        coordinator.install_signal_handlers()
+
+        installed = signal.getsignal(signal.SIGTERM)
+        installed(signal.SIGTERM, None)
+
+        assert first.should_exit is True
+        assert second.should_exit is True
+        assert coordinator.is_shutdown_requested() is True
+
     def test_handler_without_registered_server_just_sets_flag(
         self, coordinator, restore_signal_handlers
     ):
@@ -107,7 +149,7 @@ class TestSignalHandlerRequestsUvicornShutdown:
         installed(signal.SIGTERM, None)
 
         assert coordinator.is_shutdown_requested() is True
-        assert coordinator._uvicorn_server is None
+        assert coordinator._uvicorn_servers == []
 
     def test_handler_idempotent_when_server_already_exiting(
         self, coordinator, restore_signal_handlers

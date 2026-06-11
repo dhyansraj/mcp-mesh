@@ -262,15 +262,47 @@ class DebounceCoordinator:
 
                         heartbeat_task_fn = rust_heartbeat_task
 
+                    # Check if server was already reused from immediate uvicorn start
+                    server_reused = pipeline_context.get("server_reused", False)
+                    existing_server = pipeline_context.get("existing_server", {})
+
+                    # Issue #1194: when WE are about to start the server (no
+                    # reuse), bind the socket BEFORE the heartbeat starts so
+                    # registration carries the port this process actually
+                    # owns. On a conflict the helper falls back to an
+                    # OS-assigned port with a prominent warning; on total
+                    # bind failure it raises — loud failure, no phantom
+                    # registration. The reuse path already bound its socket
+                    # in the @mesh.agent decorator (existing_server.port).
+                    #
+                    # Window caveat: between this bind and uvicorn calling
+                    # listen() in _start_blocking_fastapi_server, the socket
+                    # is bound but NOT listening — connection attempts in
+                    # that window are REFUSED (there is no listen backlog
+                    # yet, so nothing is queued). The heartbeat may briefly
+                    # advertise an endpoint that refuses connections;
+                    # consumers retry through it once uvicorn is up.
+                    bound_socket = None
+                    if not server_reused:
+                        from ...shared.port_binding import (
+                            bind_server_socket_with_fallback,
+                        )
+
+                        bind_host = binding_config.get("bind_host", "0.0.0.0")
+                        bind_port = binding_config.get("bind_port", 8080)
+                        bound_socket, actual_port = (
+                            bind_server_socket_with_fallback(bind_host, bind_port)
+                        )
+                        binding_config["bind_port"] = actual_port
+                        # The heartbeat reads this to register the ACTUAL
+                        # bound port (see rust_heartbeat._resolve_registration_port).
+                        pipeline_context["bound_port"] = actual_port
+
                     self._setup_heartbeat_background(
                         heartbeat_config,
                         pipeline_context,
                         heartbeat_task_fn,
                     )
-
-                    # Check if server was already reused from immediate uvicorn start
-                    server_reused = pipeline_context.get("server_reused", False)
-                    existing_server = pipeline_context.get("existing_server", {})
 
                     if server_reused:
                         # Check server status to determine action
@@ -345,7 +377,9 @@ class DebounceCoordinator:
                                 )
                                 return
                     else:
-                        self._start_blocking_fastapi_server(fastapi_app, binding_config)
+                        self._start_blocking_fastapi_server(
+                            fastapi_app, binding_config, bound_socket=bound_socket
+                        )
                 else:
                     self.logger.warning(
                         "⚠️ Auto-run enabled but no FastAPI app prepared - exiting"
@@ -385,7 +419,10 @@ class DebounceCoordinator:
             raise
 
     def _start_blocking_fastapi_server(
-        self, app: Any, binding_config: dict[str, Any]
+        self,
+        app: Any,
+        binding_config: dict[str, Any],
+        bound_socket: Any = None,
     ) -> None:
         """Start FastAPI server with uvicorn (signal handlers already registered).
 
@@ -397,14 +434,28 @@ class DebounceCoordinator:
         uvicorn worker thread mid-flight and lifespan ``finally`` blocks
         (asyncpg pool close, in-flight httpx cancel, etc.) would silently
         leak. See issue #1029.
+
+        Issue #1194: when ``bound_socket`` is provided (pre-bound by the
+        caller before the heartbeat started), uvicorn serves on that socket
+        instead of binding itself — guaranteeing the registered port equals
+        the bound port. When it is None, the socket is bound here with the
+        same conflict-fallback semantics so uvicorn never gets a chance to
+        swallow a bind error.
         """
         try:
             import uvicorn
 
+            from ...shared.port_binding import bind_server_socket_with_fallback
             from ...shared.simple_shutdown import register_uvicorn_server
 
             bind_host = binding_config.get("bind_host", "0.0.0.0")
             bind_port = binding_config.get("bind_port", 8080)
+
+            if bound_socket is None:
+                bound_socket, bind_port = bind_server_socket_with_fallback(
+                    bind_host, bind_port
+                )
+                binding_config["bind_port"] = bind_port
 
             config = uvicorn.Config(
                 app,
@@ -426,8 +477,9 @@ class DebounceCoordinator:
 
             # Blocks until ``server.should_exit`` is set (via signal handler)
             # AND uvicorn finishes its graceful shutdown (which runs the
-            # FastAPI lifespan exit phase).
-            server.run()
+            # FastAPI lifespan exit phase). Serves on the pre-bound socket
+            # (issue #1194) so the registered port is the bound port.
+            server.run(sockets=[bound_socket])
 
         except KeyboardInterrupt:
             self.logger.info(
