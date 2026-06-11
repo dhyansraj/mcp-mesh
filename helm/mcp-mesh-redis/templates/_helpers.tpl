@@ -73,11 +73,17 @@ Render the image reference as [registry/]repository:tag. The registry prefix
 resolves as image.registry > global.imageRegistry > "" (implicit Docker Hub).
 The repository path is preserved — mirror images to the same paths in a
 private registry.
+The tag is upstream-versioned (no .Chart.AppVersion fallback — that tracks a
+different versioning line), so an empty tag can only come from an explicit
+override; fail loudly at template time instead of rendering an invalid ref.
 */}}
 {{- define "mcp-mesh-redis.image" -}}
 {{- $img := .Values.image -}}
 {{- $registry := $img.registry | default (dig "imageRegistry" "" (.Values.global | default dict)) | trimSuffix "/" -}}
 {{- $tag := $img.tag -}}
+{{- if not $tag -}}
+{{- fail "image.tag must not be empty; set the upstream image tag explicitly" -}}
+{{- end -}}
 {{- if $registry -}}
 {{- printf "%s/%s:%s" $registry $img.repository $tag -}}
 {{- else -}}
