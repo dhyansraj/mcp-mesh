@@ -1,3 +1,5 @@
+{{- $db := include "mcp-mesh-registry.databaseSettings" . | fromJson -}}
+{{- $redis := include "mcp-mesh-registry.redisSettings" . | fromJson -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -59,8 +61,8 @@ spec:
           command: ["sh", "-c"]
           args:
             - |
-              echo "Waiting for database at {{ .Values.registry.database.host }}:{{ .Values.registry.database.port }}..."
-              until nc -z {{ .Values.registry.database.host }} {{ .Values.registry.database.port }}; do
+              echo "Waiting for database at {{ $db.host }}:{{ $db.port | int }}..."
+              until nc -z {{ $db.host }} {{ $db.port | int }}; do
                 echo "Database not ready, waiting..."
                 sleep 2
               done
@@ -109,22 +111,22 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
-            {{- if and (ne .Values.registry.database.type "sqlite") .Values.registry.database.existingSecret }}
-            {{- if and (eq .Values.registry.database.type "postgres") .Values.registry.database.existingSecretUrlKey }}
+            {{- if and (ne .Values.registry.database.type "sqlite") $db.existingSecret }}
+            {{- if and (eq .Values.registry.database.type "postgres") $db.existingSecretUrlKey }}
             {{- /* Full DSN from the existing secret, consumed directly — no
                    composition, so the credentials need no URL-safety. The DSN
                    must carry its own sslmode/sslrootcert params. */}}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.registry.database.existingSecret }}
-                  key: {{ .Values.registry.database.existingSecretUrlKey }}
+                  name: {{ $db.existingSecret }}
+                  key: {{ $db.existingSecretUrlKey }}
             {{- else }}
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.registry.database.existingSecret }}
-                  key: {{ .Values.registry.database.existingSecretPasswordKey }}
+                  name: {{ $db.existingSecret }}
+                  key: {{ $db.existingSecretPasswordKey }}
             {{- if eq .Values.registry.database.type "postgres" }}
             {{- /* Composed via $(DATABASE_PASSWORD) expansion — DATABASE_PASSWORD
                    must be rendered above this entry. The password from the
@@ -163,15 +165,15 @@ spec:
             {{- end }}
             {{- end }}
             {{- if .Values.registry.redis.enabled }}
-            {{- if .Values.registry.redis.existingSecret }}
-            {{- if .Values.registry.redis.existingSecretUrlKey }}
+            {{- if $redis.existingSecret }}
+            {{- if $redis.existingSecretUrlKey }}
             {{- /* Full URL from the existing secret, consumed directly — no
                    composition, so the password needs no URL-safety. */}}
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.registry.redis.existingSecret }}
-                  key: {{ .Values.registry.redis.existingSecretUrlKey }}
+                  name: {{ $redis.existingSecret }}
+                  key: {{ $redis.existingSecretUrlKey }}
             {{- else }}
             {{- /* Password from the existing secret must be URL-safe: it is
                    interpolated into REDIS_URL via $(REDIS_PASSWORD) without
@@ -179,12 +181,12 @@ spec:
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.registry.redis.existingSecret }}
-                  key: {{ .Values.registry.redis.existingSecretPasswordKey | default "redis-password" }}
+                  name: {{ $redis.existingSecret }}
+                  key: {{ $redis.existingSecretPasswordKey }}
             - name: REDIS_URL
-              value: {{ printf "%s://:$(REDIS_PASSWORD)@%s:%v" (include "mcp-mesh-registry.redisScheme" .) .Values.registry.redis.host (.Values.registry.redis.port | default 6379) | quote }}
+              value: {{ printf "%s://:$(REDIS_PASSWORD)@%s:%d" (include "mcp-mesh-registry.redisScheme" .) $redis.host ($redis.port | int) | quote }}
             {{- end }}
-            {{- else if .Values.registry.redis.password }}
+            {{- else if $redis.password }}
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:
@@ -291,7 +293,7 @@ spec:
               mountPath: /run/spire/agent/sockets
               readOnly: true
             {{- end }}
-            {{- if .Values.registry.database.tls.caSecret }}
+            {{- if $db.tlsCaSecret }}
             - name: tls-postgres
               mountPath: /etc/service-tls/postgres
               readOnly: true
@@ -348,10 +350,10 @@ spec:
             path: /run/spire/agent/sockets
             type: DirectoryOrCreate
         {{- end }}
-        {{- if .Values.registry.database.tls.caSecret }}
+        {{- if $db.tlsCaSecret }}
         - name: tls-postgres
           secret:
-            secretName: {{ .Values.registry.database.tls.caSecret }}
+            secretName: {{ $db.tlsCaSecret }}
             defaultMode: 0400
         {{- end }}
         {{- if .Values.serviceTLS.redis.secretName }}

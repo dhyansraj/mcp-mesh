@@ -11,6 +11,46 @@ global:
   # Example: helm install my-core ... → set coreReleaseName: "my-core"
   coreReleaseName: "mcp-core"
 
+  # Datastore endpoints, declared ONCE and inherited by every consumer:
+  # the registry (DATABASE_URL/REDIS_URL), the UI (when enabled), and the
+  # bundled postgres provisioning. The defaults below point at the bundled
+  # subcharts. For a managed/external datastore, disable the bundled subchart
+  # (postgres.enabled / redis.enabled) and override these — see the
+  # "External managed datastores" recipe in the README. Per-subchart values
+  # (e.g. mcp-mesh-registry.registry.database.host) still win when set.
+  postgres:
+    host: "mcp-core-mcp-mesh-postgres"
+    port: 5432
+    name: "mcpmesh"
+    username: "mcpmesh"
+    password: "mcpmesh123"
+    # PostgreSQL SSL mode for managed endpoints: disable (default), require,
+    # verify-ca, verify-full
+    # sslmode: "require"
+    # CA certificate for verify-ca / verify-full (mounted into each consumer
+    # and appended to the DSN as sslrootcert)
+    # tls:
+    #   caSecret: ""
+    #   caKey: "ca.crt"
+    # Credentials from an existing secret instead of the inline password:
+    # either a full postgres:// DSN (urlKey mode) or just the password
+    # existingSecret: ""
+    # existingSecretUrlKey: ""       # key holding a complete DSN
+    # existingSecretPasswordKey: ""  # default: password (must be URL-safe)
+  redis:
+    host: "mcp-core-mcp-mesh-redis"
+    port: 6379
+    # AUTH password for managed endpoints (URL-encoded into REDIS_URL, which
+    # then renders into each consumer's secret instead of its configmap)
+    # password: ""
+    # Or credentials from an existing secret: a full redis://(s) URL (urlKey
+    # mode) or just the password
+    # existingSecret: ""
+    # existingSecretUrlKey: ""       # key holding a complete URL
+    # existingSecretPasswordKey: ""  # default: redis-password (URL-safe)
+    # tls:
+    #   enabled: true                # renders rediss://
+
 # Service hostname convention:
 # All internal service hostnames use short names (e.g., "mcp-core-mcp-mesh-redis")
 # which resolve within the same namespace via Kubernetes DNS.
@@ -38,12 +78,8 @@ ui:
   enabled: false
 
 # PostgreSQL configuration
+# (database name / credentials are inherited from global.postgres above)
 mcp-mesh-postgres:
-  postgres:
-    database: "mcpmesh"
-    username: "mcpmesh"
-    password: "mcpmesh123"
-
   persistence:
     enabled: true
     size: 10Gi
@@ -80,15 +116,12 @@ mcp-mesh-registry:
     repository: mcpmesh/registry
     tag: "2.4" # Minor version tracks latest patch
   registry:
-    # Database configuration (connects to PostgreSQL)
-    # Note: Hostnames use global.coreReleaseName prefix (default: "mcp-core")
+    # Database configuration (connects to PostgreSQL). The endpoint and
+    # credentials are inherited from global.postgres above; set
+    # registry.database.{host,port,name,username,password,...} here only to
+    # override them for the registry alone.
     database:
       type: "postgres"
-      host: "mcp-core-mcp-mesh-postgres"
-      port: 5432
-      name: "mcpmesh"
-      username: "mcpmesh"
-      password: "mcpmesh123"
       waitForDatabase: true # Wait for database to be ready before starting registry
 
     # Logging configuration (matches K8s examples)
@@ -99,13 +132,11 @@ mcp-mesh-registry:
 
     # Redis configuration — single source of truth for the registry's Redis
     # endpoint. Session storage and the distributed-trace stream share the
-    # derived REDIS_URL. For external/managed Redis, the registry subchart
-    # also supports registry.redis.password (or existingSecret) and
-    # registry.redis.tls.enabled (renders rediss://).
+    # derived REDIS_URL. The endpoint is inherited from global.redis above;
+    # set registry.redis.{host,port,password,existingSecret,tls,...} here
+    # only to override it for the registry alone.
     redis:
       enabled: true
-      host: "mcp-core-mcp-mesh-redis"
-      port: 6379
 
     # Observability configuration - matches k8s examples
     # (stream/consumer settings only; the Redis endpoint comes from
@@ -234,14 +265,13 @@ mcp-mesh-tempo:
         cpu: "500m"
 
 # UI Server configuration
+# (DATABASE_URL / REDIS_URL are composed from global.postgres / global.redis
+# above; set ui.database.url / ui.redis.url here only to override them for
+# the UI alone — e.g. a read-only database credential)
 mcp-mesh-ui:
   ui:
     registryURL: "http://mcp-core-mcp-mesh-registry:8000"
     basePath: "/ops/dashboard"  # default; override with custom image for different path
-    database:
-      url: "postgresql://mcp_mesh_readonly:changeme@mcp-core-mcp-mesh-postgres:5432/mcpmesh?sslmode=disable"
-    redis:
-      url: "redis://mcp-core-mcp-mesh-redis:6379"
     tempo:
       url: "http://mcp-core-mcp-mesh-tempo:3200"
       telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"

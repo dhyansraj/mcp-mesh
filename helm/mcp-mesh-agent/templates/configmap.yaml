@@ -90,5 +90,10 @@ data:
   {{- end }}
 
   # Redis configuration for session/trace storage
-  REDIS_URL: {{ .Values.agent.observability.distributedTracing.redisUrl | default "redis://mcp-core-mcp-mesh-redis:6379" | quote }}
+  {{- /* When the URL carries a credential (global.redis password /
+         existingSecret), it is sourced from a Secret in the deployment
+         instead of this configmap. */}}
+  {{- if eq (include "mcp-mesh-agent.redisURLSource" .) "configmap" }}
+  REDIS_URL: {{ include "mcp-mesh-agent.redisURL" . | quote }}
+  {{- end }}
   MCP_MESH_REDIS_TRACE_PUBLISHING: "true"
