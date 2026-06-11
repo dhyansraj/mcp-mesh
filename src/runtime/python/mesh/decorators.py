@@ -31,24 +31,26 @@ _SHARED_AGENT_ID: str | None = None
 # See _resolve_pending_consumer_self_tags below.
 _MESH_CONSUMER_SELF_SENTINEL = "__MESH_CONSUMER_SELF__"
 
+# Budget for waiting on ``uvicorn.Server.started`` after the immediate
+# server thread launches: MCP_MESH_SERVER_STARTUP_TIMEOUT (default 30s),
+# shared with the heartbeat's first-registration deferral. See
+# ``_mcp_mesh.shared.port_binding.get_server_startup_timeout`` — sized for
+# slow-but-healthy ASGI lifespans (model loading etc.), so a healthy slow
+# startup is not misclassified as wedged.
 
-def _find_available_port() -> int:
+
+class ImmediateServerStartupError(RuntimeError):
+    """The immediate uvicorn server bound its socket but can never serve.
+
+    Raised (and deliberately NOT swallowed by ``_start_uvicorn_immediately``'s
+    catch-all) when the server thread dies before ``server.started`` flips —
+    e.g. ``uvicorn.Config.load()`` failing on bad TLS cert/key paths after
+    the socket was already bound. A bound socket that can never serve is not
+    something the mesh can adapt around: registering it would advertise an
+    endpoint that refuses every connection, and the orchestrator fallback
+    server path does not carry the agent's TLS configuration. Failing the
+    decorator application loudly is the only honest outcome.
     """
-    Find an available port by binding to port 0 and getting the OS-assigned port.
-
-    This is used when http_port=0 is specified to auto-assign a port.
-    Works reliably on all platforms (macOS, Linux, Windows) without external tools.
-
-    Returns:
-        int: An available port number
-    """
-    import socket
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        s.listen(1)
-        port = s.getsockname()[1]
-    return port
 
 
 def _start_uvicorn_immediately(http_host: str, http_port: int):
@@ -485,29 +487,6 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
 
         logger.debug("📦 IMMEDIATE UVICORN: Added status endpoints")
 
-        # Port handling:
-        # - http_port=0 explicitly means auto-assign (let uvicorn choose)
-        # - http_port>0 means use that specific port
-        # Note: The default is 8080 only if http_port was never specified,
-        # which is handled upstream in the @mesh.agent decorator
-        port = http_port
-
-        # Handle http_port=0: find an available port BEFORE starting uvicorn
-        # This is more reliable than detecting the port after uvicorn starts
-        # and works on all platforms (Linux containers don't have lsof installed)
-        if port == 0:
-            port = _find_available_port()
-            logger.info(f"🎯 IMMEDIATE UVICORN: Auto-assigned port {port} for agent")
-
-        logger.debug(
-            f"🚀 IMMEDIATE UVICORN: Starting uvicorn server on {http_host}:{port}"
-        )
-
-        # Use uvicorn.run() for proper signal handling (enables FastAPI lifespan shutdown)
-        logger.debug(
-            "⚡ IMMEDIATE UVICORN: Starting server with uvicorn.run() for proper signal handling"
-        )
-
         # Resolve TLS config from Rust core
         from _mcp_mesh.shared.tls_config import get_tls_config
 
@@ -528,24 +507,65 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
                 ssl_kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
             logger.info(f"IMMEDIATE UVICORN: TLS enabled (mode={tls['mode']})")
 
+        # Port handling (issue #1194):
+        # - http_port=0 explicitly means auto-assign (OS picks a free port)
+        # - http_port>0 means use that specific port, falling back to an
+        #   OS-assigned port (with a prominent warning) if it is taken.
+        #
+        # The socket is bound HERE — synchronously, before uvicorn starts —
+        # and handed to uvicorn as a pre-bound socket. This makes bind
+        # failures impossible to swallow (previously uvicorn's bind error
+        # died inside the server thread and the agent registered a port it
+        # never bound — a phantom endpoint). The port recorded below is
+        # read back from the bound socket, so registration always carries
+        # the ACTUAL port.
+        from _mcp_mesh.shared.port_binding import bind_server_socket_with_fallback
+
+        bound_socket, port = bind_server_socket_with_fallback(http_host, http_port)
+        if http_port == 0:
+            logger.info(f"🎯 IMMEDIATE UVICORN: Auto-assigned port {port} for agent")
+        elif port != http_port:
+            # bind_server_socket_with_fallback already logged the prominent
+            # conflict warning; this line ties it to the agent lifecycle log.
+            logger.warning(
+                f"⚠️ IMMEDIATE UVICORN: configured port {http_port} unavailable - "
+                f"serving and registering on auto-assigned port {port} instead"
+            )
+
+        logger.debug(
+            f"🚀 IMMEDIATE UVICORN: Starting uvicorn server on {http_host}:{port}"
+        )
+
+        # Build the uvicorn Server explicitly so we can hand it the
+        # pre-bound socket (issue #1194). Serving on a socket we already
+        # own means the registered port is, by construction, the bound
+        # port. The Server object is also registered with the shutdown
+        # coordinator so SIGTERM/SIGINT flip ``server.should_exit`` and
+        # uvicorn runs its graceful shutdown (FastAPI lifespan exit phase).
+        uvicorn_config = uvicorn.Config(
+            app,
+            host=http_host,
+            port=port,
+            log_level="info",
+            timeout_graceful_shutdown=30,  # Allow time for registry cleanup
+            access_log=False,  # Reduce noise
+            ws="websockets-sansio",  # Use modern websockets API (avoids deprecation warnings)
+            **ssl_kwargs,
+        )
+        uvicorn_server = uvicorn.Server(uvicorn_config)
+
+        from _mcp_mesh.shared.simple_shutdown import register_uvicorn_server
+
+        register_uvicorn_server(uvicorn_server)
+
         # Start uvicorn server in background thread (NON-daemon to keep process alive)
         def run_server():
-            """Run uvicorn server in background thread with proper signal handling."""
+            """Run uvicorn server on the pre-bound socket in a background thread."""
             try:
                 logger.debug(
                     f"🌟 IMMEDIATE UVICORN: Starting server on {http_host}:{port}"
                 )
-                # Use uvicorn.run() instead of Server().run() for proper signal handling
-                uvicorn.run(
-                    app,
-                    host=http_host,
-                    port=port,
-                    log_level="info",
-                    timeout_graceful_shutdown=30,  # Allow time for registry cleanup
-                    access_log=False,  # Reduce noise
-                    ws="websockets-sansio",  # Use modern websockets API (avoids deprecation warnings)
-                    **ssl_kwargs,
-                )
+                uvicorn_server.run(sockets=[bound_socket])
             except Exception as e:
                 logger.error(f"❌ IMMEDIATE UVICORN: Server failed: {e}")
                 import traceback
@@ -560,33 +580,106 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
             "🔒 IMMEDIATE UVICORN: Server thread started (daemon=False) - can handle signals"
         )
 
-        # Store server reference in DecoratorRegistry BEFORE starting (critical timing)
+        # Store the bound-server record IMMEDIATELY with status "starting",
+        # then upgrade it to "running" once uvicorn proves serving. Two
+        # constraints meet here (issue #1194 + PR #1197 review):
+        #
+        # * The debounced startup pipeline (~1s after the last decorator)
+        #   races this thread's ASGI lifespan startup. If the record were
+        #   stored only after ``server.started`` flips, any lifespan slower
+        #   than the debounce delay would make ServerDiscoveryStep find
+        #   nothing and the pipeline would pre-bind a SECOND server on a
+        #   different port (duplicate server, registered port != the port
+        #   the agent's real app ends up on).
+        # * A bound socket is not a serving socket: uvicorn can still fail
+        #   AFTER the bind (e.g. ``Config.load()`` raising on unreadable TLS
+        #   cert/key paths) inside the server thread.
+        #
+        # The hard invariant stays bind-level — ``port`` is read back from
+        # the socket this process bound, so the record can never advertise a
+        # port nobody owns. Proven-serving is enforced as a *liveness
+        # deferral* at registration time instead: the heartbeat defers its
+        # first registration on ``server.started`` (bounded by the same
+        # budget; see startup_orchestrator._setup_heartbeat_background).
         server_info = {
             "app": app,
-            "server": None,  # No server object with uvicorn.run()
-            "config": None,  # No config object needed
+            "server": uvicorn_server,
+            "config": uvicorn_config,
             "host": http_host,
             "port": port,
             "thread": thread,  # Server thread (non-daemon)
             "type": "immediate_uvicorn_running",
-            "status": "running",  # Server is now running in background thread
+            "status": "starting",  # bound, serving not yet proven
         }
 
         # Import here to avoid circular imports
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from _mcp_mesh.shared.port_binding import get_server_startup_timeout
 
         DecoratorRegistry.store_immediate_uvicorn_server(server_info)
 
         logger.debug(
-            "🔄 IMMEDIATE UVICORN: Server reference stored in DecoratorRegistry BEFORE pipeline starts"
+            "🔄 IMMEDIATE UVICORN: Server reference stored in DecoratorRegistry"
         )
 
-        # Give server a moment to start
-        time.sleep(1)
+        startup_timeout = get_server_startup_timeout()
+        startup_deadline = time.monotonic() + startup_timeout
+        while not uvicorn_server.started and thread.is_alive():
+            if time.monotonic() >= startup_deadline:
+                break
+            time.sleep(0.05)
 
-        logger.debug(
-            f"✅ IMMEDIATE UVICORN: Uvicorn server running on {http_host}:{port} (daemon thread)"
-        )
+        if uvicorn_server.started:
+            # Upgrade in place — server discovery holds a reference to this
+            # same dict, so the status change is visible everywhere.
+            server_info["status"] = "running"
+            logger.debug(
+                f"✅ IMMEDIATE UVICORN: Uvicorn server running on {http_host}:{port} (non-daemon thread)"
+            )
+        elif not thread.is_alive():
+            # The server thread died before serving (run_server already
+            # logged the underlying exception + traceback). Remove the
+            # record so nothing reuses or registers it, release the bound
+            # socket — this process can never serve on it — and fail the
+            # decorator application loudly. Thread death surfaces within
+            # ~50ms here, well before the debounced pipeline (~1s) reads
+            # the registry.
+            DecoratorRegistry.clear_immediate_uvicorn_server()
+            try:
+                bound_socket.close()
+            except OSError:
+                pass
+            logger.error(
+                f"❌ IMMEDIATE UVICORN: server thread died before serving "
+                f"on {http_host}:{port} — the agent cannot serve; failing "
+                f"loudly (see the server error logged above)"
+            )
+            raise ImmediateServerStartupError(
+                f"immediate uvicorn server thread died before serving on "
+                f"{http_host}:{port} — see the server error logged above"
+            )
+        else:
+            # Budget expired with the thread ALIVE and the socket bound: the
+            # port is genuinely held by this process, so keep the record
+            # (status stays "starting") — the pipeline reuses THIS server
+            # instead of starting a duplicate, and registration carries the
+            # bound port. The heartbeat's own bounded deferral has the same
+            # budget, so registration may proceed before serving is proven;
+            # if uvicorn ultimately fails to serve, the thread dies and the
+            # process exits — a too-early registration is transient at
+            # worst, never a phantom bind. Note this also defers dependency
+            # resolution for consumers of this agent until registration —
+            # acceptable and arguably correct (don't advertise until
+            # serving); the settling-window grace (issue #1193) layers on
+            # top of this without being pre-empted here.
+            logger.warning(
+                f"⚠️ IMMEDIATE UVICORN: server has not reported started within "
+                f"{startup_timeout:.0f}s on {http_host}:{port} (slow ASGI "
+                f"lifespan startup?). The port IS bound by this process, so "
+                f"the server record is kept and startup continues; raise "
+                f"MCP_MESH_SERVER_STARTUP_TIMEOUT if your startup is "
+                f"legitimately slower."
+            )
 
         # Set up registry context for shutdown cleanup (use defaults initially)
         import os
@@ -602,6 +695,11 @@ def _start_uvicorn_immediately(http_host: str, http_port: int):
         # Uses simple shutdown with signal handlers for clean registry cleanup
         start_blocking_loop_with_shutdown_support(thread)
 
+    except ImmediateServerStartupError:
+        # Bound-but-can-never-serve is the loud-failure case: the pipeline
+        # fallback cannot honor this agent's TLS configuration, so quietly
+        # falling through would trade a dead endpoint for a wrong one.
+        raise
     except Exception as e:
         logger.error(
             f"❌ IMMEDIATE UVICORN: Failed to start immediate uvicorn server: {e}"

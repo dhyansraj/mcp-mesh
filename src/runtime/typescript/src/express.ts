@@ -55,7 +55,7 @@ import type { AgentConfig, ResolvedAgentConfig } from "./types.js";
 import {
   resolveConfig,
   generateAgentIdSuffix,
-  findAvailablePort,
+  resolveStartupBindPort,
   MAX_CONSECUTIVE_NEXT_EVENT_FAILURES,
   NEXT_EVENT_BACKOFF_CAP_MS,
 } from "./config.js";
@@ -214,11 +214,19 @@ export class MeshExpress {
     if (this.started) return;
     this.started = true;
 
-    // Handle httpPort=0: auto-assign an available port
-    if (this.config.httpPort === 0) {
-      const assignedPort = await findAvailablePort();
-      this.config = { ...this.config, httpPort: assignedPort };
-      console.log(`Auto-assigned port ${assignedPort} for service`);
+    // Resolve the bind port BEFORE the server and heartbeat start (issue
+    // #1194: a conflict falls back to an OS-assigned port with a
+    // prominent warning — see resolveStartupBindPort). The heartbeat
+    // reads `this.config.httpPort`, so registration carries the ACTUAL
+    // port instead of a phantom endpoint.
+    {
+      const resolvedPort = await resolveStartupBindPort(
+        this.config.httpPort,
+        "service"
+      );
+      if (resolvedPort !== this.config.httpPort) {
+        this.config = { ...this.config, httpPort: resolvedPort };
+      }
     }
 
     console.log(`Starting MeshExpress service: ${this.serviceId}`);

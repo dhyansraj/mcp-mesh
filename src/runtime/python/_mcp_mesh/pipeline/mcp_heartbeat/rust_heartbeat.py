@@ -77,6 +77,43 @@ def _get_rust_core():
     return _rust_core
 
 
+def _resolve_registration_port(http_port: int, context: dict[str, Any]) -> int:
+    """Resolve the HTTP port to register with the registry (issue #1194).
+
+    Invariant: never register a port the runtime did not bind. The actual
+    bound port is recorded in the pipeline context, either as:
+
+    * ``bound_port`` — set by the startup orchestrator when it pre-binds
+      the server socket before starting uvicorn, or
+    * ``existing_server.port`` — the immediate-uvicorn server record from
+      ``mesh/decorators.py``, whose port is read back from the bound socket.
+
+    When a bound port is known it is authoritative — including when it
+    differs from the configured port (port-conflict fallback). The
+    configured port is only used when no local bind information exists
+    (e.g. synthetic test contexts without a discovered server).
+    """
+    bound_port = context.get("bound_port") or 0
+    if not bound_port:
+        existing_server = context.get("existing_server") or {}
+        bound_port = existing_server.get("port") or 0
+
+    if bound_port > 0:
+        if http_port == 0:
+            logger.info(
+                f"Using detected port {bound_port} (agent_config had port=0)"
+            )
+        elif http_port != bound_port:
+            logger.warning(
+                f"⚠️ Registering ACTUAL bound port {bound_port} instead of "
+                f"configured port {http_port} — the configured port was "
+                f"unavailable at bind time (see PORT CONFLICT warning above)"
+            )
+        return bound_port
+
+    return http_port
+
+
 def _build_agent_spec(context: dict[str, Any]) -> Any:
     """
     Build AgentSpec from Python context.
@@ -111,18 +148,9 @@ def _build_agent_spec(context: dict[str, Any]) -> Any:
 
     # Get HTTP config
     http_host = agent_config.get("http_host", "localhost")
-    http_port = agent_config.get("http_port", 0)
-
-    # If port=0 (auto-assign), check for detected port from server discovery
-    if http_port == 0:
-        existing_server = context.get("existing_server")
-        if existing_server:
-            detected_port = existing_server.get("port", 0)
-            if detected_port > 0:
-                logger.info(
-                    f"Using detected port {detected_port} (agent_config had port=0)"
-                )
-                http_port = detected_port
+    http_port = _resolve_registration_port(
+        agent_config.get("http_port", 0), context
+    )
 
     namespace = agent_config.get("namespace", "default")
     version = agent_config.get("version", "1.0.0")
