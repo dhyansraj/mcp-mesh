@@ -102,10 +102,18 @@ meshctl status --registry-url http://remote:8000
 
 Lists agents, tools, or canonical schemas depending on flags.
 
+By default the agent table shows healthy agents only. Instances superseded by
+a newer registration of the same agent (common with watch-driven restarts)
+collapse into a dimmed `(+N superseded)` annotation, and down agents are
+counted in the footer rather than shown as named rows — unless a down instance
+declares a capability a live agent is missing, in which case it appears as a
+red row to explain the dependency gap. `--json` keeps the healthy-only default
+for script compatibility.
+
 ```bash
 # Agents (default)
-meshctl list                       # Healthy agents
-meshctl list --all                 # Include unhealthy (purged after MCP_MESH_RETENTION)
+meshctl list                       # Healthy agents (down agents counted in the footer)
+meshctl list --all                 # Every instance, incl. unhealthy (purged after MCP_MESH_RETENTION)
 meshctl list --wide                # Endpoints + tool counts
 meshctl list --filter hello        # Substring match on agent ID
 meshctl list --since 1h            # Active in the last hour

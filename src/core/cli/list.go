@@ -41,12 +41,18 @@ func NewListCommand() *cobra.Command {
 Shows agent status, dependency resolution, uptime, and endpoint information
 in a docker-compose-style format for easy monitoring.
 
-By default, only healthy agents are shown. Use --all to see all agents
-including unhealthy ones (purged after MCP_MESH_RETENTION, default 1h).
+By default the table shows healthy agents only. Instances superseded by a
+newer registration of the same agent (common with watch-driven restarts)
+collapse into a dimmed "(+N superseded)" annotation, and down agents are
+reported as a footer count rather than a named row — unless a down instance
+declares a capability that a live agent is missing, in which case it appears
+as a red row to explain the dependency gap. Use --all to see every instance
+(unhealthy instances are purged after MCP_MESH_RETENTION, default 1h).
+With --json, output keeps the healthy-only default for script compatibility.
 
 Examples:
-  meshctl list                                    # Show healthy agents only (default)
-  meshctl list --all                              # Show all agents including unhealthy
+  meshctl list                                    # Healthy agents (down agents counted in the footer)
+  meshctl list --all                              # Show every instance including unhealthy
   meshctl list --json                             # Output in JSON format
   meshctl list --filter hello                     # Filter by substring match on agent ID
   meshctl list --no-deps                          # Hide dependency status
@@ -307,6 +313,17 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 		output.Agents = enrichWithProcessInfo(output.Agents, processes)
 	}
 
+	// Supersession views are table-only (issue #1195); pure --json paths skip
+	// the computation. Global-vs-local split: the registry header reports the
+	// superseded count over the FULL agent set (headerView, computed before
+	// --filter/--since), while rows, the (+N superseded) annotations, and the
+	// footer counts all derive from a second view computed over the
+	// post-filter set so flag combinations can't contradict each other.
+	var headerView supersessionView
+	if !jsonOutput {
+		headerView = computeSupersessionView(output.Agents)
+	}
+
 	// Apply filters
 	if filterPattern != "" {
 		output.Agents = filterEnhancedAgents(output.Agents, filterPattern)
@@ -321,17 +338,30 @@ func runListCommand(cmd *cobra.Command, args []string) error {
 		output.Agents = filtered
 	}
 
-	// Apply healthy-only filter by default (unless --all is specified)
-	if !showAll {
-		output.Agents = filterHealthyAgents(output.Agents)
-	}
-
-	// Output results
+	// JSON keeps the long-standing healthy-only default — scripts depend on
+	// its filtering semantics, and issue #1195 is a table-rendering change only.
 	if jsonOutput {
+		if !showAll {
+			output.Agents = filterHealthyAgents(output.Agents)
+		}
 		return outputEnhancedJSON(output)
 	}
 
-	return outputDockerComposeStyle(output, verbose, noDeps, wide)
+	view := computeSupersessionView(output.Agents)
+
+	// Default view (no --all): healthy rows only, preserving the readiness
+	// contract that `meshctl list | grep -q <name>` matching implies a live
+	// agent. Superseded instances collapse into the (+N superseded)
+	// annotation; genuinely-down agents are reported as a nameless footer
+	// count — except a down instance declaring a capability some live agent
+	// is missing, which stays visible as a named red row because it explains
+	// the dependency gap (and readiness greps are failing anyway).
+	var summary listDefaultSummary
+	if !showAll {
+		output.Agents, summary = collapseDefaultView(output.Agents, view)
+	}
+
+	return outputDockerComposeStyle(output, headerView, view, summary, showAll, verbose, noDeps, wide)
 }
 
 // getRegistryStatus checks registry status and gathers uptime information
@@ -993,13 +1023,20 @@ func outputEnhancedJSON(output ListOutput) error {
 	return nil
 }
 
-// outputDockerComposeStyle creates a beautiful docker-compose-style table display
-func outputDockerComposeStyle(output ListOutput, verbose, noDeps, wide bool) error {
+// outputDockerComposeStyle creates a beautiful docker-compose-style table display.
+//
+// headerView is computed over the full agent set and feeds only the registry
+// status line; view is computed over the post --filter/--since set and drives
+// row annotations, --all dimming, and the footer (issue #1195).
+func outputDockerComposeStyle(output ListOutput, headerView, view supersessionView, summary listDefaultSummary, showAll, verbose, noDeps, wide bool) error {
 	// Show registry status first
-	showRegistryStatus(output.Registry)
+	showRegistryStatus(output.Registry, headerView.total)
 
 	if len(output.Agents) == 0 {
 		fmt.Println("No agents found")
+		if !showAll && (summary.hiddenSuperseded > 0 || summary.hiddenDownAgents > 0) {
+			fmt.Println(formatListFooter(0, 0, summary))
+		}
 		return nil
 	}
 
@@ -1012,7 +1049,33 @@ func outputDockerComposeStyle(output ListOutput, verbose, noDeps, wide bool) err
 
 	// Print agent rows
 	for _, agent := range output.Agents {
-		printAgentRow(agent, nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth, noDeps, wide, verbose)
+		annotation := ""
+		dim := false
+		if showAll {
+			// --all shows every instance; superseded ones render dimmed
+			// instead of red so they don't read as alarming (issue #1195).
+			dim = view.superseded[agent.ID]
+		} else if view.newestID[supersessionGroupKey(agent)] == agent.ID {
+			annotation = formatSupersededAnnotation(view.byName[supersessionGroupKey(agent)])
+		}
+		printAgentRow(agent, nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth, noDeps, wide, verbose, annotation, dim)
+	}
+
+	// Footer summary (default view only — --all keeps today's output).
+	// Counts are distinct declared names, not rows, so healthy replicas of
+	// the same agent don't inflate the "N agents" figure.
+	if !showAll {
+		displayedNames := make(map[string]bool)
+		healthyNames := make(map[string]bool)
+		for _, agent := range output.Agents {
+			key := supersessionGroupKey(agent)
+			displayedNames[key] = true
+			if isLiveStatus(agent.Status) {
+				healthyNames[key] = true
+			}
+		}
+		fmt.Println()
+		fmt.Println(formatListFooter(len(displayedNames), len(healthyNames), summary))
 	}
 
 	// Show additional details if verbose
@@ -1025,7 +1088,7 @@ func outputDockerComposeStyle(output ListOutput, verbose, noDeps, wide bool) err
 }
 
 // showRegistryStatus displays registry status with proper formatting
-func showRegistryStatus(registry RegistryStatus) {
+func showRegistryStatus(registry RegistryStatus, supersededCount int) {
 	statusColor := getStatusColor(registry.Status)
 	fmt.Printf("Registry: %s%s%s", statusColor, registry.Status, colorReset)
 
@@ -1034,11 +1097,8 @@ func showRegistryStatus(registry RegistryStatus) {
 	}
 
 	if registry.Status == "running" {
-		// Show healthy/unhealthy breakdown
-		fmt.Printf(" - %s%d healthy%s", colorGreen, registry.HealthyCount, colorReset)
-		if registry.UnhealthyCount > 0 {
-			fmt.Printf(", %s%d unhealthy%s", colorGray, registry.UnhealthyCount, colorReset)
-		}
+		// Show healthy/unhealthy/superseded breakdown (issue #1195)
+		fmt.Printf(" - %s", formatRegistryAgentCounts(registry.HealthyCount, registry.UnhealthyCount, supersededCount))
 	}
 
 	if registry.Uptime != "" {
@@ -1047,6 +1107,67 @@ func showRegistryStatus(registry RegistryStatus) {
 
 	fmt.Println()
 	fmt.Println()
+}
+
+// formatRegistryAgentCounts renders the agent count breakdown for the registry
+// status line. Superseded instances are split out of the unhealthy count and
+// rendered dim so they don't read as alarming; the remaining (genuinely
+// unhealthy) count is the alarm surface and renders red (issue #1195).
+func formatRegistryAgentCounts(healthy, unhealthy, superseded int) string {
+	// The counts come from two separate registry fetches; clamp so a
+	// momentary skew can't produce a negative unhealthy count.
+	if superseded > unhealthy {
+		superseded = unhealthy
+	}
+	genuine := unhealthy - superseded
+
+	s := fmt.Sprintf("%s%d healthy%s", colorGreen, healthy, colorReset)
+	if genuine > 0 {
+		s += fmt.Sprintf(", %s%d unhealthy%s", colorRed, genuine, colorReset)
+	}
+	if superseded > 0 {
+		s += fmt.Sprintf(", %s%d superseded%s", colorGray, superseded, colorReset)
+	}
+	return s
+}
+
+// formatSupersededAnnotation renders the dimmed per-row marker for hidden
+// superseded instances, e.g. " (+2 superseded)". Empty when count is zero.
+func formatSupersededAnnotation(count int) string {
+	if count <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" %s(+%d superseded)%s", colorGray, count, colorReset)
+}
+
+// formatListFooter renders the summary line printed after the default table,
+// e.g. "3 agents (3 healthy) - 1 agent down (use --all) - 2 superseded hidden".
+// displayed and healthy count distinct declared agent names among the rendered
+// rows. Down agents hidden from the table are reported namelessly in red; the
+// superseded clause is gray, and "(use --all)" rides on whichever hidden
+// clause appears first. Clauses are omitted when zero.
+func formatListFooter(displayed, healthy int, summary listDefaultSummary) string {
+	footer := fmt.Sprintf("%d agent%s (%d healthy)", displayed, pluralS(displayed), healthy)
+	if summary.hiddenDownAgents > 0 {
+		footer += fmt.Sprintf(" - %s%d agent%s down (use --all)%s",
+			colorRed, summary.hiddenDownAgents, pluralS(summary.hiddenDownAgents), colorReset)
+	}
+	if summary.hiddenSuperseded > 0 {
+		clause := fmt.Sprintf("%d superseded hidden", summary.hiddenSuperseded)
+		if summary.hiddenDownAgents == 0 {
+			clause += " (use --all)"
+		}
+		footer += fmt.Sprintf(" - %s%s%s", colorGray, clause, colorReset)
+	}
+	return footer
+}
+
+// pluralS returns "s" unless n == 1.
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // formatAgentTypeDisplay converts agent type to friendly display name.
@@ -1159,8 +1280,13 @@ func printTableSeparator(nameWidth, runtimeWidth, statusWidth, typeWidth, endpoi
 	fmt.Println(strings.Repeat("-", totalWidth))
 }
 
-// printAgentRow prints a single agent row in the table
-func printAgentRow(agent EnhancedAgent, nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth int, noDeps, wide, verbose bool) {
+// printAgentRow prints a single agent row in the table.
+//
+// annotation is an optional pre-colored suffix appended after the last column
+// (e.g. the dimmed "(+2 superseded)" marker). dim renders the status column in
+// gray regardless of status — used in --all for superseded instances so they
+// don't carry the same alarm as a genuinely-down agent (issue #1195).
+func printAgentRow(agent EnhancedAgent, nameWidth, runtimeWidth, statusWidth, typeWidth, endpointWidth int, noDeps, wide, verbose bool, annotation string, dim bool) {
 	// Name column
 	fmt.Printf("%-*s", nameWidth, truncateStringForList(agent.ID, nameWidth-2))
 
@@ -1178,8 +1304,12 @@ func printAgentRow(agent EnhancedAgent, nameWidth, runtimeWidth, statusWidth, ty
 	fmt.Printf(" %-*s", typeWidth, agentTypeDisplay)
 
 	// Status column with color (pad first, then colorize)
+	statusColor := getStatusColor(agent.Status)
+	if dim {
+		statusColor = colorGray
+	}
 	statusPadded := fmt.Sprintf("%-*s", statusWidth, agent.Status)
-	fmt.Printf(" %s%s%s", getStatusColor(agent.Status), statusPadded, colorReset)
+	fmt.Printf(" %s%s%s", statusColor, statusPadded, colorReset)
 
 	// Dependencies column (if not hidden)
 	if !noDeps {
@@ -1215,6 +1345,11 @@ func printAgentRow(agent EnhancedAgent, nameWidth, runtimeWidth, statusWidth, ty
 		fmt.Printf(" %-*s", maxCapabilityDisplayWidth, truncateStringForList(capabilities, maxCapabilityDisplayWidth))
 	}
 
+	// Superseded annotation (pre-colored, includes leading space)
+	if annotation != "" {
+		fmt.Printf("%s", annotation)
+	}
+
 	fmt.Println()
 }
 
@@ -1228,7 +1363,7 @@ func getStatusColor(status string) string {
 	case "unhealthy", "failed", "error":
 		return colorRed
 	default:
-		return colorReset
+		return colorYellow // unknown statuses read as warnings, never nominal/colorless
 	}
 }
 
@@ -1476,15 +1611,220 @@ func filterAgentsSince(agents []EnhancedAgent, since string) ([]EnhancedAgent, e
 	return filtered, nil
 }
 
+// isLiveStatus reports whether an agent status counts as live/healthy.
+func isLiveStatus(status string) bool {
+	switch strings.ToLower(status) {
+	case "healthy", "running":
+		return true
+	}
+	return false
+}
+
 // filterHealthyAgents filters for only healthy agents
 func filterHealthyAgents(agents []EnhancedAgent) []EnhancedAgent {
 	var filtered []EnhancedAgent
 	for _, agent := range agents {
-		if strings.ToLower(agent.Status) == "healthy" || strings.ToLower(agent.Status) == "running" {
+		if isLiveStatus(agent.Status) {
 			filtered = append(filtered, agent)
 		}
 	}
 	return filtered
+}
+
+// supersessionView captures which agent instances are considered superseded
+// for table rendering (issue #1195). Watch-driven dev loops re-register agents
+// under a new instance id (<name>-<suffix>) on every restart; the prior
+// instance lingers unhealthy until the retention purge. Those instances are
+// organically normal and should not carry the same alarm as a genuinely-down
+// agent.
+type supersessionView struct {
+	// superseded maps instance ID -> true when the instance is superseded.
+	superseded map[string]bool
+	// blocking maps instance ID -> true when the instance is down but
+	// declares a capability some live agent has an unresolved dependency on;
+	// such instances stay visible as named red rows in the default view
+	// because they explain the dependency gap.
+	blocking map[string]bool
+	// byName maps group key (declared agent name) -> number of superseded instances.
+	byName map[string]int
+	// newestID maps group key -> instance ID of the newest non-superseded
+	// instance; that row anchors the "(+N superseded)" annotation.
+	newestID map[string]string
+	// total is the overall number of superseded instances.
+	total int
+}
+
+// supersessionGroupKey returns the grouping key for supersession: the declared
+// agent name. Agents without a name fall back to their instance ID so they
+// never group together.
+func supersessionGroupKey(agent EnhancedAgent) string {
+	if agent.Name != "" {
+		return agent.Name
+	}
+	return agent.ID
+}
+
+// newerInstance reports whether a is strictly newer than b, ordered by
+// created_at with last-seen as the tiebreaker (the list API does not expose
+// updated_at).
+func newerInstance(a, b EnhancedAgent) bool {
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.After(b.CreatedAt)
+	}
+	var aSeen, bSeen time.Time
+	if a.LastHeartbeat != nil {
+		aSeen = *a.LastHeartbeat
+	}
+	if b.LastHeartbeat != nil {
+		bSeen = *b.LastHeartbeat
+	}
+	return aSeen.After(bSeen)
+}
+
+// unresolvedCapabilities returns the set of capability names that live agents
+// currently depend on but have not resolved. Used to keep stale instances that
+// might explain a dependency gap prominent instead of dimmed (issue #1195).
+func unresolvedCapabilities(agents []EnhancedAgent) map[string]bool {
+	caps := make(map[string]bool)
+	for _, agent := range agents {
+		if !isLiveStatus(agent.Status) {
+			continue
+		}
+		for _, res := range agent.DependencyResolutions {
+			switch strings.ToLower(res.Status) {
+			case "available", "resolved":
+				continue
+			}
+			if res.Capability != "" {
+				caps[res.Capability] = true
+			}
+		}
+	}
+	return caps
+}
+
+// declaresAnyCapability reports whether the agent declares any capability in
+// the given set.
+func declaresAnyCapability(agent EnhancedAgent, caps map[string]bool) bool {
+	if len(caps) == 0 {
+		return false
+	}
+	for _, tool := range agent.Tools {
+		if caps[tool.Capability] {
+			return true
+		}
+	}
+	return false
+}
+
+// computeSupersessionView classifies agent instances for table rendering
+// (issue #1195). An instance is superseded when all of the following hold:
+//
+//  1. A strictly newer instance of the same declared name exists (by
+//     created_at, tiebreak last_seen) — so a genuinely-down singleton is
+//     never superseded and stays prominent;
+//  2. The instance itself is not healthy — live replicas of the same name
+//     are never superseded;
+//  3. No live agent has an unresolved dependency on a capability this
+//     instance declares — a stale instance that might explain a dependency
+//     gap stays prominent.
+//
+// Down instances matching condition 3 are additionally recorded in
+// view.blocking (regardless of siblings) so the default view can promote them
+// to named red rows.
+func computeSupersessionView(agents []EnhancedAgent) supersessionView {
+	view := supersessionView{
+		superseded: make(map[string]bool),
+		blocking:   make(map[string]bool),
+		byName:     make(map[string]int),
+		newestID:   make(map[string]string),
+	}
+
+	groups := make(map[string][]EnhancedAgent)
+	for _, agent := range agents {
+		key := supersessionGroupKey(agent)
+		groups[key] = append(groups[key], agent)
+	}
+
+	blockingCaps := unresolvedCapabilities(agents)
+
+	for key, group := range groups {
+		for _, agent := range group {
+			if isLiveStatus(agent.Status) {
+				continue
+			}
+			if declaresAnyCapability(agent, blockingCaps) {
+				// Might explain a live agent's unresolved dependency —
+				// never superseded, promoted in the default view.
+				view.blocking[agent.ID] = true
+				continue
+			}
+			hasNewer := false
+			for _, other := range group {
+				if other.ID != agent.ID && newerInstance(other, agent) {
+					hasNewer = true
+					break
+				}
+			}
+			if !hasNewer {
+				continue // genuinely down — no newer instance replaced it
+			}
+			view.superseded[agent.ID] = true
+			view.byName[key]++
+			view.total++
+		}
+
+		// The newest non-superseded instance anchors the annotation.
+		var newest *EnhancedAgent
+		for i := range group {
+			if view.superseded[group[i].ID] {
+				continue
+			}
+			if newest == nil || newerInstance(group[i], *newest) {
+				newest = &group[i]
+			}
+		}
+		if newest != nil {
+			view.newestID[key] = newest.ID
+		}
+	}
+
+	return view
+}
+
+// listDefaultSummary carries the hidden-row counts for the default (collapsed)
+// table view's footer.
+type listDefaultSummary struct {
+	// hiddenSuperseded is the number of superseded instances dropped.
+	hiddenSuperseded int
+	// hiddenDownAgents is the number of distinct declared names hidden
+	// because they are down (not live, not superseded, not blocking).
+	hiddenDownAgents int
+}
+
+// collapseDefaultView reduces the agent list to the rows shown by the default
+// table (issue #1195): live instances plus down instances that explain a live
+// agent's unresolved dependency (view.blocking). Everything else is hidden and
+// counted in the returned summary — superseded instances per instance, other
+// down agents per distinct declared name — preserving the readiness-check
+// contract that a name appearing in default output implies a live agent
+// (unless it explains a dependency gap).
+func collapseDefaultView(agents []EnhancedAgent, view supersessionView) ([]EnhancedAgent, listDefaultSummary) {
+	var kept []EnhancedAgent
+	var summary listDefaultSummary
+	downNames := make(map[string]bool)
+	for _, agent := range agents {
+		switch {
+		case isLiveStatus(agent.Status) || view.blocking[agent.ID]:
+			kept = append(kept, agent)
+		case view.superseded[agent.ID]:
+			summary.hiddenSuperseded++
+		default:
+			downNames[supersessionGroupKey(agent)] = true
+		}
+	}
+	summary.hiddenDownAgents = len(downNames)
+	return kept, summary
 }
 
 // outputAgentDetails shows detailed information for a specific agent
