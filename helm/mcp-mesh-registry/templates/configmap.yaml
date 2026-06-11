@@ -1,4 +1,4 @@
-{{- include "mcp-mesh-registry.validateNoDeprecatedRedisUrl" . -}}
+{{- include "mcp-mesh-registry.validateNoRemovedKeys" . -}}
 {{- $db := include "mcp-mesh-registry.databaseSettings" . | fromJson -}}
 {{- $redis := include "mcp-mesh-registry.redisSettings" . | fromJson -}}
 apiVersion: v1

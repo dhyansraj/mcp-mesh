@@ -310,12 +310,13 @@ The core infrastructure follows this deployment pattern:
 
 ## Monitoring
 
-Enable monitoring with:
+Enable a Prometheus ServiceMonitor on the registry subchart:
 
 ```yaml
 # values.yaml
-serviceMonitors:
-  enabled: true
+mcp-mesh-registry:
+  serviceMonitor:
+    enabled: true
 ```
 
 ## Security

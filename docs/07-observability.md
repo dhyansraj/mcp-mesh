@@ -68,8 +68,6 @@ flowchart TB
 | `REDIS_URL`                            | `redis://localhost:6379`       | Redis for trace events                   |
 | `TELEMETRY_ENDPOINT`                   | -                              | Tempo OTLP endpoint                      |
 | `TRACE_EXPORTER_TYPE`                  | `otlp`                         | Export format: `otlp`, `console`, `json` |
-| `STREAM_NAME`                          | `mesh:trace`                   | Redis stream name                        |
-| `CONSUMER_GROUP`                       | `mcp-mesh-registry-processors` | Consumer group                           |
 
 **Agents (trace publishers):**
 

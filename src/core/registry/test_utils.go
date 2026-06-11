@@ -91,10 +91,8 @@ func setupTestService(t *testing.T) *EntService {
 
 	// Create test config with very long timeout for test stability
 	testRegistryConfig := &RegistryConfig{
-		CacheTTL:                 30,
 		DefaultTimeoutThreshold:  3600, // 1 hour - very long for tests
 		DefaultEvictionThreshold: 7200, // 2 hours
-		EnableResponseCache:      false,
 	}
 
 	// Create and return EntService

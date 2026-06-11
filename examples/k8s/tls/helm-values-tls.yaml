@@ -21,9 +21,6 @@
 # Registry values (consumed by mcp-mesh-core chart)
 # =============================================================================
 registry:
-  # Agent chart: switch registry URL from http to https
-  url: "https://mcp-core-mcp-mesh-registry:8000"
-
   # Core chart: registry server TLS configuration
   security:
     tls:

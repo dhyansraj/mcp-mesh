@@ -232,16 +232,6 @@ export MCP_MESH_RETENTION=1h
 - Hardcoded internal constants: sweep interval = 5m, event hard cap =
   100,000 rows.
 
-### Cache and Performance
-
-```bash
-# Response cache TTL (seconds)
-export CACHE_TTL=30
-
-# Enable response caching
-export ENABLE_RESPONSE_CACHE=true
-```
-
 ### Logging and Debug
 
 ```bash
@@ -404,16 +394,6 @@ export MCP_MESH_TELEMETRY_ENABLED=true
 ```bash
 # Comma-separated header prefixes to propagate across agent calls
 export MCP_MESH_PROPAGATE_HEADERS=x-request-id,x-trace,x-correlation
-```
-
-### Stream Consumer
-
-```bash
-# Redis stream name for trace events
-export STREAM_NAME=mesh:trace
-
-# Consumer group name
-export CONSUMER_GROUP=mcp-mesh-registry-processors
 ```
 
 ## UI Server
@@ -720,7 +700,6 @@ HOST=localhost
 PORT=8000
 DEFAULT_TIMEOUT_THRESHOLD=10  # Fast detection for development
 HEALTH_CHECK_INTERVAL=5       # Quick scans for development
-ENABLE_RESPONSE_CACHE=false   # Disable cache for testing
 ```
 
 #### Production Registry
@@ -733,8 +712,6 @@ HOST=0.0.0.0
 PORT=8000
 DEFAULT_TIMEOUT_THRESHOLD=20  # Balanced for production
 HEALTH_CHECK_INTERVAL=10      # Regular monitoring
-ENABLE_RESPONSE_CACHE=true
-CACHE_TTL=30
 DATABASE_URL=postgresql://user:pass@db:5432/mcp_mesh
 ```
 
@@ -745,8 +722,6 @@ DATABASE_URL=postgresql://user:pass@db:5432/mcp_mesh
 MCP_MESH_LOG_LEVEL=WARNING
 DEFAULT_TIMEOUT_THRESHOLD=5   # Ultra-fast detection
 HEALTH_CHECK_INTERVAL=2       # Very frequent monitoring
-CACHE_TTL=60                  # Longer cache for performance
-ENABLE_RESPONSE_CACHE=true
 ```
 
 ### Agent Development Environment

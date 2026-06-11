@@ -5,10 +5,8 @@ type Config struct {
 	Port                     int
 	Debug                    bool
 	DatabaseURL              string
-	CacheTTL                 int
 	DefaultTimeoutThreshold  int
 	DefaultEvictionThreshold int
-	EnableResponseCache      bool
 	HealthCheckInterval      int
 	StartupCleanupThreshold  int // Threshold in seconds for marking stale agents on startup
 }
@@ -16,11 +14,9 @@ type Config struct {
 // DefaultServiceConfig returns default service configuration
 func DefaultServiceConfig() *RegistryConfig {
 	return &RegistryConfig{
-		CacheTTL:                 30,
 		DefaultTimeoutThreshold:  60,
 		DefaultEvictionThreshold: 120,
 		StartupCleanupThreshold:  30, // Mark agents as stale if no heartbeat for 30s on startup
-		EnableResponseCache:      false, // NO CACHE - Multiple registry instances
 	}
 }
 

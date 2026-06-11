@@ -116,6 +116,47 @@ Detect if using Python runtime (checks agent.runtime first, then image name)
 {{- end }}
 
 {{/*
+Core release-name prefix for the default core service hostnames
+(<prefix>-mcp-mesh-{registry,redis,tempo}). global.coreReleaseName matches
+the release name the mcp-mesh-core umbrella was installed under — agents
+are separate releases, so .Release.Name cannot derive it. Explicit
+hostnames (registry.host, global.redis.host, telemetryEndpoint) always win.
+*/}}
+{{- define "mcp-mesh-agent.corePrefix" -}}
+{{- coalesce (dig "coreReleaseName" "" (.Values.global | default dict)) "mcp-core" -}}
+{{- end }}
+
+{{/*
+Removed-key guard. agent.environment was dead config — no template ever
+consumed it — so a values file carrying it would silently no-op while the
+user expects the variables to be injected. Fail loudly with migration
+guidance instead. Invoked unconditionally from the configmap.
+
+Carve-out: the v2.4.0 chart SHIPPED a 5-entry agent.environment map as a
+default (see `git show v2.4.0:helm/mcp-mesh-agent/values.yaml`). A values
+file copied from it carries those entries without any user intent, so
+entries exactly matching the old shipped defaults are tolerated; only a
+divergent value or an extra entry — user intent that would silently
+no-op — fails.
+*/}}
+{{- define "mcp-mesh-agent.validateNoRemovedKeys" -}}
+{{/* Old shipped defaults, verbatim from the v2.4.0 chart values.yaml. */}}
+{{- $oldEnvironmentDefaults := dict
+      "MCP_MESH_DISTRIBUTED_TRACING_ENABLED" "true"
+      "REDIS_URL" "redis://mcp-core-mcp-mesh-redis:6379"
+      "TELEMETRY_ENDPOINT" "mcp-core-mcp-mesh-tempo:4317"
+      "MCP_MESH_TRACING_ENABLED" "true"
+      "MCP_MESH_METRICS_ENABLED" "true" -}}
+{{- range $key, $val := (dig "environment" (dict) (.Values.agent | default dict)) | default dict -}}
+{{- if not (hasKey $oldEnvironmentDefaults $key) -}}
+{{- fail (printf "agent.environment was never consumed and has been removed (entry %s is not in the old shipped defaults, so it would silently no-op); add environment variables via the top-level env list (name/value entries) instead. REDIS_URL is derived from global.redis / agent.observability.distributedTracing.redisUrl" $key) -}}
+{{- else if ne (toString $val) (get $oldEnvironmentDefaults $key) -}}
+{{- fail (printf "agent.environment was never consumed and has been removed (%s=%q diverges from the old shipped default %q, so it would silently no-op); add environment variables via the top-level env list (name/value entries) instead. REDIS_URL is derived from global.redis / agent.observability.distributedTracing.redisUrl" $key (toString $val) (get $oldEnvironmentDefaults $key)) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Shared Redis settings (global.redis) as JSON — the same shape the
 mcp-mesh-core umbrella shares with its datastore consumers. This chart is
 standalone (not an umbrella subchart), so set the same global.redis values
@@ -175,7 +216,7 @@ carry the credential. Not used in the existing-secret modes.
 {{- if $g.password -}}
 {{- $auth = printf ":%s@" ($g.password | urlquery | replace "+" "%20") -}}
 {{- end -}}
-{{- printf "%s://%s%s:%d" (include "mcp-mesh-agent.redisScheme" .) $auth (coalesce $g.host "mcp-core-mcp-mesh-redis") (coalesce $g.port 6379 | int) -}}
+{{- printf "%s://%s%s:%d" (include "mcp-mesh-agent.redisScheme" .) $auth (coalesce $g.host (printf "%s-mcp-mesh-redis" (include "mcp-mesh-agent.corePrefix" .))) (coalesce $g.port 6379 | int) -}}
 {{- end -}}
 {{- end }}
 
@@ -185,7 +226,7 @@ via $(REDIS_PASSWORD) expansion, so the password must be URL-safe.
 */}}
 {{- define "mcp-mesh-agent.composedRedisURL" -}}
 {{- $g := include "mcp-mesh-agent.globalRedis" . | fromJson -}}
-{{- printf "%s://:$(REDIS_PASSWORD)@%s:%d" (include "mcp-mesh-agent.redisScheme" .) ($g.host | default "mcp-core-mcp-mesh-redis") (coalesce $g.port 6379 | int) -}}
+{{- printf "%s://:$(REDIS_PASSWORD)@%s:%d" (include "mcp-mesh-agent.redisScheme" .) ($g.host | default (printf "%s-mcp-mesh-redis" (include "mcp-mesh-agent.corePrefix" .))) (coalesce $g.port 6379 | int) -}}
 {{- end }}
 
 {{/*

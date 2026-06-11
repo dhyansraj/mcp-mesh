@@ -473,10 +473,6 @@ export DEFAULT_EVICTION_THRESHOLD=60  # Evict stale agents (seconds)
 # rows). Event rows are governed by a separate hardcoded 100k row cap.
 export MCP_MESH_RETENTION=1h
 
-# Caching
-export CACHE_TTL=30
-export ENABLE_RESPONSE_CACHE=true
-
 # CORS
 export ENABLE_CORS=true
 export ALLOWED_ORIGINS="*"

@@ -6,10 +6,6 @@ global:
   # Namespace for all components (used by namespaceCreate).
   # Usually matches the -n flag: helm install ... -n my-namespace --set global.namespace=my-namespace
   namespace: mcp-mesh
-  # Release name for mcp-mesh-core (used to construct service hostnames)
-  # Override this if you install mcp-mesh-core with a different release name
-  # Example: helm install my-core ... → set coreReleaseName: "my-core"
-  coreReleaseName: "mcp-core"
 
   # Private/air-gapped registry prefix applied to EVERY image in the stack:
   # the registry, UI, postgres, redis, grafana, tempo, and the registry's
@@ -87,7 +83,10 @@ global:
 
 # Service hostname convention:
 # All internal service hostnames use short names (e.g., "mcp-core-mcp-mesh-redis")
-# which resolve within the same namespace via Kubernetes DNS.
+# which resolve within the same namespace via Kubernetes DNS. The defaults
+# above assume the release name "mcp-core"; with a different release name,
+# override global.postgres.host, global.redis.host, and the
+# *-mcp-mesh-tempo endpoints to "<release>-mcp-mesh-<component>".
 # For cross-namespace access, override with FQDNs:
 #   --set mcp-mesh-registry.registry.redis.host=mcp-core-mcp-mesh-redis.other-ns.svc.cluster.local
 
@@ -172,41 +171,13 @@ mcp-mesh-registry:
     redis:
       enabled: true
 
-    # Observability configuration - matches k8s examples
-    # (stream/consumer settings only; the Redis endpoint comes from
-    # registry.redis above)
+    # Observability configuration (the Redis endpoint for the trace stream
+    # comes from registry.redis above; stream tuning is set via the env
+    # list: TRACE_BATCH_SIZE, TRACE_TIMEOUT, TELEMETRY_PROTOCOL, ...)
     observability:
       distributedTracing:
         enabled: true
-        exporterType: "otlp"
-        telemetryProtocol: "grpc"
-        batchSize: "100"
-        timeout: "5m"
-        prettyOutput: "false"
-        enableStats: "true"
-        streamName: "mesh:trace"
-        consumerGroup: "mcp-mesh-registry-processors"
       telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
-
-    # Additional environment variables for tracing (matches k8s examples)
-    environment:
-      MCP_MESH_DISTRIBUTED_TRACING_ENABLED: "true"
-      TRACE_EXPORTER_TYPE: "otlp"
-      TELEMETRY_PROTOCOL: "grpc"
-      TRACE_BATCH_SIZE: "100"
-      TRACE_TIMEOUT: "5m"
-      TRACE_PRETTY_OUTPUT: "false"
-      TRACE_ENABLE_STATS: "true"
-      STREAM_NAME: "mesh:trace"
-      CONSUMER_GROUP: "mcp-mesh-registry-processors"
-      MCP_MESH_TRACE_DEBUG: "true"
-      ENABLE_RESPONSE_CACHE: "true"
-      ENABLE_CORS: "true"
-      ENABLE_METRICS: "true"
-      ENABLE_PROMETHEUS: "true"
-      ENABLE_EVENTS: "true"
-      ACCESS_LOG: "true"
-      CACHE_TTL: "30"
 
     # Health check configuration
     healthCheck:
@@ -325,16 +296,14 @@ commonLabels:
 # Common annotations for all resources
 commonAnnotations: {}
 
-# Network policies (disabled by default)
-networkPolicies:
-  enabled: false
-
-# Pod disruption budgets are configured per subchart (this umbrella-level
-# flag was never consumed and has been removed). The registry PDB defaults
-# on and engages automatically at mcp-mesh-registry.replicaCount > 1 — see
-# mcp-mesh-registry.podDisruptionBudget. HA scheduling lives there too
-# (topologySpreadConstraints / defaultTopologySpread / autoscaling).
-
-# Service monitors for Prometheus (disabled by default)
-serviceMonitors:
-  enabled: false
+# Network policies, service monitors, and pod disruption budgets are
+# configured per subchart (the umbrella-level networkPolicies /
+# serviceMonitors / podDisruptionBudgets flags were never consumed and have
+# been removed):
+# - mcp-mesh-registry.networkPolicy.enabled (and networkPolicy.enabled on
+#   each agent release)
+# - mcp-mesh-registry.serviceMonitor.enabled / podMonitor.enabled
+# - mcp-mesh-registry.podDisruptionBudget — defaults on and engages
+#   automatically at mcp-mesh-registry.replicaCount > 1. HA scheduling
+#   lives there too (topologySpreadConstraints / defaultTopologySpread /
+#   autoscaling).

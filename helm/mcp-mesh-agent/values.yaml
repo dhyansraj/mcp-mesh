@@ -4,9 +4,12 @@
 
 # Global configuration
 global:
-  # Release name used when installing mcp-mesh-core
+  # Release name used when installing mcp-mesh-core. Prefixes the default
+  # core service hostnames: <coreReleaseName>-mcp-mesh-{registry,redis,tempo}.
   # Override this if you installed mcp-mesh-core with a different release name
   # Example: helm install my-core mcp-mesh-core ... → set coreReleaseName: "my-core"
+  # Explicit hostnames (registry.host, global.redis.host,
+  # agent.observability.telemetryEndpoint) always win over the prefix.
   coreReleaseName: "mcp-core"
   # Shared Redis endpoint for trace publishing — same shape as the
   # mcp-mesh-core umbrella's global.redis, so the umbrella's datastore values
@@ -137,13 +140,12 @@ tolerations: []
 
 affinity: {}
 
-# Registry configuration
-# Hostnames use global.coreReleaseName prefix (default: "mcp-core")
-# Override these if you installed mcp-mesh-core with a different release name
+# Registry connection. host left empty defaults to
+# "<global.coreReleaseName>-mcp-mesh-registry" (default:
+# "mcp-core-mcp-mesh-registry"); an explicit host always wins.
 registry:
-  host: "mcp-core-mcp-mesh-registry"
+  host: ""
   port: "8000"
-  url: "http://mcp-core-mcp-mesh-registry:8000"
 
 # Mesh configuration
 mesh:
@@ -245,16 +247,18 @@ agent:
       origins: ["*"]
 
   # Observability configuration
-  # Hostnames use global.coreReleaseName prefix (default: "mcp-core")
+  # Default hostnames use the global.coreReleaseName prefix (default: "mcp-core")
   observability:
     distributedTracing:
       enabled: true
       # Full Redis URL for trace publishing. Empty inherits global.redis.*
       # (see the global block above); an explicit value here always wins.
       # When neither is set, the chart default applies:
-      #   redis://mcp-core-mcp-mesh-redis:6379
+      #   redis://<global.coreReleaseName>-mcp-mesh-redis:6379
       redisUrl: ""
-    telemetryEndpoint: "mcp-core-mcp-mesh-tempo:4317"
+    # OTLP endpoint for trace export. Empty defaults to
+    # "<global.coreReleaseName>-mcp-mesh-tempo:4317".
+    telemetryEndpoint: ""
     tracing:
       enabled: true
     metrics:

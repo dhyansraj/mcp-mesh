@@ -197,8 +197,7 @@ registry:
     # Key holding a complete DSN in the existing secret (mode 1). Empty
     # selects mode 2. The chart's own Secret uses "database-url" for this.
     existingSecretUrlKey: ""
-    # Keys in the secret (mode 2)
-    existingSecretUsernameKey: "username"
+    # Key holding the password in the secret (mode 2)
     existingSecretPasswordKey: "" # default: password
 
   # Logging configuration (matches K8s examples)
@@ -306,21 +305,6 @@ registry:
     # inherits global.redis.tls.enabled when not set here). Pair with
     # serviceTLS.redis.* below to mount CA / client certificates.
     tls: {}
-
-    # CORS configuration
-    cors:
-      enabled: true
-      allowedOrigins:
-        - "*"
-      allowedMethods:
-        - "GET"
-        - "POST"
-        - "PUT"
-        - "DELETE"
-        - "OPTIONS"
-      allowedHeaders:
-        - "*"
-      allowCredentials: true
 
 # Per-service TLS configuration for external service connections
 # Each service connection can use its own CA, client cert, and key

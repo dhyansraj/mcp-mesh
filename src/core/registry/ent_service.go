@@ -51,12 +51,10 @@ type Dependency struct {
 
 // RegistryConfig holds registry-specific configuration
 type RegistryConfig struct {
-	CacheTTL                 int
 	DefaultTimeoutThreshold  int
 	DefaultEvictionThreshold int
 	HealthCheckInterval      int
 	StartupCleanupThreshold  int // Threshold in seconds for marking stale agents on startup (default: 30)
-	EnableResponseCache      bool
 	TracingEnabled           bool   // Enable distributed tracing
 	TlsMode                  string // "off", "auto", "strict" — from MCP_MESH_TLS_MODE
 	TrustBackend             string // comma-separated backend names — from MCP_MESH_TRUST_BACKEND
@@ -247,12 +245,10 @@ type EntService struct {
 func NewEntService(entDB *database.EntDatabase, config *RegistryConfig, logger *logger.Logger) *EntService {
 	if config == nil {
 		config = &RegistryConfig{
-			CacheTTL:                 30,
 			DefaultTimeoutThreshold:  60,
 			DefaultEvictionThreshold: 120,
 			HealthCheckInterval:      30, // Health check every 30 seconds
 			StartupCleanupThreshold:  30, // Mark agents as stale if no heartbeat for 30s on startup
-			EnableResponseCache:      true,
 		}
 	}
 

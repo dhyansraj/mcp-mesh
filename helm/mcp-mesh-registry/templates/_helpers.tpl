@@ -235,14 +235,75 @@ $(REDIS_PASSWORD)) or a full URL (consumed directly via existingSecretUrlKey).
 {{- end }}
 
 {{/*
-Removed-key guard. distributedTracing.redisUrl was dead config — no template
-ever consumed it — so honoring it now would silently switch endpoints on
-upgrade for values files still carrying it. Fail loudly with migration
-guidance instead. Invoked unconditionally from the configmap.
+Removed-key guards. These keys were dead config — no template ever consumed
+them — so a values file carrying one would silently no-op while the user
+expects effect. Fail loudly with migration guidance instead. Invoked
+unconditionally from the configmap.
+
+Carve-out: the v2.4.0 mcp-mesh-core umbrella SHIPPED these keys as defaults
+(nine distributedTracing.* keys including redisUrl, and a 17-entry
+registry.environment map — see `git show v2.4.0:helm/mcp-mesh-core/values.yaml`).
+A values file copied from it carries them without any user intent, so a key
+whose value exactly matches the old shipped default is tolerated; only a
+DIVERGING value — user intent that would silently no-op — fails.
+- distributedTracing.redisUrl: removed in favor of the shared registry.redis
+  endpoint (honoring a divergent value now would silently switch endpoints
+  on upgrade; the old default matches the derived default endpoint).
+- distributedTracing.* stream keys (streamName, consumerGroup, batchSize,
+  ...): never rendered into env; the binary reads TRACE_* env vars, settable
+  via the env list.
+- registry.environment: never rendered; use the top-level env list.
 */}}
-{{- define "mcp-mesh-registry.validateNoDeprecatedRedisUrl" -}}
-{{- if dig "observability" "distributedTracing" "redisUrl" "" .Values.registry -}}
-{{- fail "registry.observability.distributedTracing.redisUrl was never consumed and has been removed; configure registry.redis.{host,port,password,tls} instead — the trace stream shares that endpoint" -}}
+{{- define "mcp-mesh-registry.validateNoRemovedKeys" -}}
+{{/* Old shipped defaults, verbatim from the v2.4.0 umbrella values.yaml. */}}
+{{- $oldTracingDefaults := dict
+      "redisUrl" "redis://mcp-core-mcp-mesh-redis:6379"
+      "exporterType" "otlp"
+      "telemetryProtocol" "grpc"
+      "batchSize" "100"
+      "timeout" "5m"
+      "prettyOutput" "false"
+      "enableStats" "true"
+      "streamName" "mesh:trace"
+      "consumerGroup" "mcp-mesh-registry-processors" -}}
+{{- range $key, $val := (dig "observability" "distributedTracing" (dict) .Values.registry) | default dict -}}
+{{- if eq $key "enabled" -}}
+{{- else if not (hasKey $oldTracingDefaults $key) -}}
+{{- fail (printf "registry.observability.distributedTracing.%s was never consumed and has been removed; only 'enabled' lives under distributedTracing (telemetryEndpoint and exporterType sit directly under registry.observability). Stream tuning is set via the top-level env list: TRACE_BATCH_SIZE, TRACE_TIMEOUT, TRACE_PRETTY_OUTPUT, TRACE_ENABLE_STATS, TELEMETRY_PROTOCOL" $key) -}}
+{{- else if ne (toString $val) (get $oldTracingDefaults $key) -}}
+{{- if eq $key "redisUrl" -}}
+{{- fail (printf "registry.observability.distributedTracing.redisUrl was never consumed and has been removed (set to %q, diverging from the old shipped default, so it would silently no-op); configure registry.redis.{host,port,password,tls} instead — the trace stream shares that endpoint" (toString $val)) -}}
+{{- else -}}
+{{- fail (printf "registry.observability.distributedTracing.%s was never consumed and has been removed (set to %q, diverging from the old shipped default %q, so it would silently no-op). Stream tuning is set via the top-level env list: TRACE_BATCH_SIZE, TRACE_TIMEOUT, TRACE_PRETTY_OUTPUT, TRACE_ENABLE_STATS, TELEMETRY_PROTOCOL" $key (toString $val) (get $oldTracingDefaults $key)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{/* Old shipped 17-entry registry.environment, verbatim from the v2.4.0
+     umbrella values.yaml. */}}
+{{- $oldEnvironmentDefaults := dict
+      "MCP_MESH_DISTRIBUTED_TRACING_ENABLED" "true"
+      "TRACE_EXPORTER_TYPE" "otlp"
+      "TELEMETRY_PROTOCOL" "grpc"
+      "TRACE_BATCH_SIZE" "100"
+      "TRACE_TIMEOUT" "5m"
+      "TRACE_PRETTY_OUTPUT" "false"
+      "TRACE_ENABLE_STATS" "true"
+      "STREAM_NAME" "mesh:trace"
+      "CONSUMER_GROUP" "mcp-mesh-registry-processors"
+      "MCP_MESH_TRACE_DEBUG" "true"
+      "ENABLE_RESPONSE_CACHE" "true"
+      "ENABLE_CORS" "true"
+      "ENABLE_METRICS" "true"
+      "ENABLE_PROMETHEUS" "true"
+      "ENABLE_EVENTS" "true"
+      "ACCESS_LOG" "true"
+      "CACHE_TTL" "30" -}}
+{{- range $key, $val := (dig "environment" (dict) .Values.registry) | default dict -}}
+{{- if not (hasKey $oldEnvironmentDefaults $key) -}}
+{{- fail (printf "registry.environment was never consumed and has been removed (entry %s is not in the old shipped defaults, so it would silently no-op); add environment variables via the top-level env list (name/value entries) instead. Registry TLS/trust settings belong under registry.security" $key) -}}
+{{- else if ne (toString $val) (get $oldEnvironmentDefaults $key) -}}
+{{- fail (printf "registry.environment was never consumed and has been removed (%s=%q diverges from the old shipped default %q, so it would silently no-op); add environment variables via the top-level env list (name/value entries) instead" $key (toString $val) (get $oldEnvironmentDefaults $key)) -}}
+{{- end -}}
 {{- end -}}
 {{- end }}
 
@@ -267,12 +328,19 @@ The registry prefix resolves as <block>.registry > global.imageRegistry > ""
 global.imageRegistry=my.registry.internal this renders
 my.registry.internal/mcpmesh/registry and (for the init container)
 my.registry.internal/busybox — mirror images to the same paths.
-Call with (dict "image" <imageBlock> "root" $).
+Call with (dict "image" <imageBlock> "root" $) plus an optional
+"defaultTag" used when <imageBlock>.tag is empty. Only the chart's own
+image may fall back to Chart.AppVersion — that version is meaningless for
+third-party images like the busybox init container, so without a
+defaultTag an empty tag fails the render instead.
 */}}
 {{- define "mcp-mesh-registry.imageRef" -}}
 {{- $img := .image -}}
 {{- $registry := $img.registry | default (dig "imageRegistry" "" (.root.Values.global | default dict)) | trimSuffix "/" -}}
-{{- $tag := $img.tag | default .root.Chart.AppVersion -}}
+{{- $tag := $img.tag | default (.defaultTag | default "") -}}
+{{- if not $tag -}}
+{{- fail (printf "image tag for %s must not be empty" $img.repository) -}}
+{{- end -}}
 {{- if $registry -}}
 {{- printf "%s/%s:%s" $registry $img.repository $tag -}}
 {{- else -}}

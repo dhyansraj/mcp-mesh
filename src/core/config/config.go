@@ -23,10 +23,6 @@ type Config struct {
 	RegistryName        string `env:"REGISTRY_NAME" envDefault:"mcp-mesh-registry"`
 	HealthCheckInterval int    `env:"HEALTH_CHECK_INTERVAL" envDefault:"10"`
 
-	// Cache configuration
-	CacheTTL            int  `env:"CACHE_TTL" envDefault:"30"` // seconds
-	EnableResponseCache bool `env:"ENABLE_RESPONSE_CACHE" envDefault:"true"`
-
 	// Health monitoring configuration (optimized for 5-second HEAD heartbeats)
 	DefaultTimeoutThreshold  int `env:"DEFAULT_TIMEOUT_THRESHOLD" envDefault:"20"`   // seconds (4 missed heartbeats)
 	DefaultEvictionThreshold int `env:"DEFAULT_EVICTION_THRESHOLD" envDefault:"60"`  // seconds (reduced from 120)
@@ -56,8 +52,6 @@ func LoadFromEnv() *Config {
 		Port:                     getEnvInt("PORT", 8000),
 		RegistryName:             getEnvString("REGISTRY_NAME", "mcp-mesh-registry"),
 		HealthCheckInterval:      getEnvInt("HEALTH_CHECK_INTERVAL", 10),
-		CacheTTL:                 getEnvInt("CACHE_TTL", 30),
-		EnableResponseCache:      getEnvBool("ENABLE_RESPONSE_CACHE", true),
 		DefaultTimeoutThreshold:  getEnvInt("DEFAULT_TIMEOUT_THRESHOLD", 20),
 		DefaultEvictionThreshold: getEnvInt("DEFAULT_EVICTION_THRESHOLD", 60),
 		EnableCORS:               getEnvBool("ENABLE_CORS", true),
@@ -98,10 +92,6 @@ func (c *Config) Validate() error {
 
 	if c.HealthCheckInterval < 1 {
 		return fmt.Errorf("health check interval must be positive: %d", c.HealthCheckInterval)
-	}
-
-	if c.CacheTTL < 0 {
-		return fmt.Errorf("cache TTL must be non-negative: %d", c.CacheTTL)
 	}
 
 	// Validate log level (case insensitive)
