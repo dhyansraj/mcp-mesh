@@ -9,6 +9,27 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+# Pod security context (hardened for Pod Security Standards "restricted")
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000 # mcp-mesh user in the mcpmesh/ui image
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container security context. readOnlyRootFilesystem works because meshui is
+# a static Go binary whose only writable path, /tmp, is emptyDir-mounted.
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+
 service:
   type: ClusterIP
   port: 3080

@@ -47,8 +47,27 @@ tempo:
     retention: "1h"
     blockDuration: "5m"
 
-  # Security context
-  securityContext:
+  # Pod security context (hardened for Pod Security Standards "restricted").
+  # Renamed: this key was previously called securityContext (which is now the
+  # container security context below) — templating fails with a migration
+  # message if an old-shaped override still carries pod-level fields there.
+  podSecurityContext:
     runAsNonRoot: true
     runAsUser: 10001
+    runAsGroup: 10001
     fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Container security context. readOnlyRootFilesystem works because tempo
+  # only writes under /var/tempo (wal/blocks — PVC or emptyDir) and /tmp
+  # (emptyDir).
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001

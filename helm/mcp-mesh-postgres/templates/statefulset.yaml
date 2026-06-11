@@ -94,8 +94,19 @@ spec:
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
+            {{- /* Writable paths required with readOnlyRootFilesystem: the
+                   unix socket / pid dir and scratch space. */}}
+            - name: postgres-run
+              mountPath: /var/run/postgresql
+            - name: postgres-tmp
+              mountPath: /tmp
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+      volumes:
+        - name: postgres-run
+          emptyDir: {}
+        - name: postgres-tmp
+          emptyDir: {}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -43,10 +43,8 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "mcp-mesh-agent.serviceAccountName" . }}
-      {{- if .Values.podSecurityPolicy.enabled }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- end }}
       {{- if .Values.runtimeClassName }}
       runtimeClassName: {{ .Values.runtimeClassName }}
       {{- end }}
@@ -243,6 +241,8 @@ spec:
             defaultMode: 0400
         {{- end }}
         {{- if .Values.mesh.tls.spire.enabled }}
+        {{- /* hostPath volume: SPIRE mode is incompatible with the Pod
+               Security Standards "restricted" profile. */}}
         - name: spire-agent-socket
           hostPath:
             path: /run/spire/agent/sockets

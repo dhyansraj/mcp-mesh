@@ -58,6 +58,15 @@ spec:
         # Wait for database (if using external DB)
         - name: wait-for-db
           image: busybox:1.35
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
           command: ["sh", "-c"]
           args:
             - |
@@ -278,6 +287,17 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
+            {{- /* Writable scratch space — required with
+                   readOnlyRootFilesystem. */}}
+            - name: tmp
+              mountPath: /tmp
+            {{- if or .Values.persistence.enabled (eq .Values.registry.database.type "sqlite") }}
+            - name: data
+              mountPath: {{ .Values.persistence.mountPath }}
+              {{- if .Values.persistence.subPath }}
+              subPath: {{ .Values.persistence.subPath }}
+              {{- end }}
+            {{- end }}
             {{- if .Values.registry.security.tls.enabled }}
             - name: tls-certs
               mountPath: /etc/tls
@@ -332,6 +352,17 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if or .Values.persistence.enabled (eq .Values.registry.database.type "sqlite") }}
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (printf "%s-data" (include "mcp-mesh-registry.fullname" .)) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
         {{- if .Values.registry.security.tls.enabled }}
         - name: tls-certs
           secret:
@@ -345,6 +376,8 @@ spec:
             defaultMode: 0400
         {{- end }}
         {{- if .Values.registry.security.trust.spire.enabled }}
+        {{- /* hostPath volume: SPIRE mode is incompatible with the Pod
+               Security Standards "restricted" profile. */}}
         - name: spire-agent-socket
           hostPath:
             path: /run/spire/agent/sockets
@@ -377,4 +410,3 @@ spec:
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-# No persistent storage needed - registry is stateless and uses external database

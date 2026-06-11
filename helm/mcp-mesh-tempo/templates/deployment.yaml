@@ -1,4 +1,14 @@
 {{- if .Values.tempo.enabled }}
+{{- /* Migration guard: tempo.securityContext used to be the POD security
+       context (it carried fsGroup). It is now the CONTAINER security context
+       and pod-level settings live under tempo.podSecurityContext — an old
+       override here would put fsGroup in the container context, where the
+       API server drops it (losing PVC write access). */}}
+{{- range $field := list "fsGroup" "fsGroupChangePolicy" "supplementalGroups" "sysctls" }}
+{{- if hasKey ($.Values.tempo.securityContext | default dict) $field }}
+{{- fail (printf "tempo.securityContext.%s: tempo.securityContext is now the container security context; pod-level fields (fsGroup, runAsUser, ...) moved to tempo.podSecurityContext. Move your override there." $field) }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,11 +26,13 @@ spec:
         {{- include "mcp-mesh-tempo.selectorLabels" . | nindent 8 }}
     spec:
       securityContext:
-        {{- toYaml .Values.tempo.securityContext | nindent 8 }}
+        {{- toYaml .Values.tempo.podSecurityContext | nindent 8 }}
       containers:
       - name: tempo
         image: "{{ .Values.tempo.image.repository }}:{{ .Values.tempo.image.tag }}"
         imagePullPolicy: {{ .Values.tempo.image.pullPolicy }}
+        securityContext:
+          {{- toYaml .Values.tempo.securityContext | nindent 10 }}
         args:
           - -config.file=/etc/tempo.yaml
         ports:
@@ -41,10 +53,12 @@ spec:
           mountPath: /etc/tempo.yaml
           subPath: tempo.yaml
           readOnly: true
-        {{- if .Values.tempo.persistence.enabled }}
+        {{- /* /var/tempo (wal/blocks) and /tmp must be writable — always
+               volumes since the root filesystem is read-only. */}}
         - name: storage
           mountPath: /var/tempo
-        {{- end }}
+        - name: tmp
+          mountPath: /tmp
         livenessProbe:
           httpGet:
             path: /ready
@@ -67,9 +81,13 @@ spec:
       - name: config
         configMap:
           name: {{ include "mcp-mesh-tempo.fullname" . }}-config
-      {{- if .Values.tempo.persistence.enabled }}
       - name: storage
+        {{- if .Values.tempo.persistence.enabled }}
         persistentVolumeClaim:
           claimName: {{ include "mcp-mesh-tempo.fullname" . }}-pvc
-      {{- end }}
+        {{- else }}
+        emptyDir: {}
+        {{- end }}
+      - name: tmp
+        emptyDir: {}
 {{- end }}

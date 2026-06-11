@@ -63,8 +63,28 @@ grafana:
     configMaps:
       - mcp-mesh-dashboards
 
-  # Security context
+  # Pod security context (hardened for Pod Security Standards "restricted").
+  # Renamed: this key was previously called securityContext (which is now the
+  # container security context below) — templating fails with a migration
+  # message if an old-shaped override still carries pod-level fields there.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 472 # grafana user in the grafana/grafana image
+    runAsGroup: 472
+    fsGroup: 472
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Container security context. readOnlyRootFilesystem works because every
+  # path Grafana writes is a volume: /var/lib/grafana (data, sqlite db,
+  # GF_INSTALL_PLUGINS target — PVC or emptyDir) and /tmp (emptyDir, plugin
+  # download scratch); logs go to console (see grafana.ini in the configmap).
   securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
     runAsNonRoot: true
     runAsUser: 472
-    fsGroup: 472
+    runAsGroup: 472

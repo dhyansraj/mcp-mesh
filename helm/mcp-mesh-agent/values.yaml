@@ -54,18 +54,36 @@ serviceAccount:
 
 podAnnotations: {}
 
+# Pod security context (hardened for Pod Security Standards "restricted").
+# Upgrade note: this block is now ALWAYS applied — it was previously gated
+# behind the (removed) podSecurityPolicy.enabled flag and never rendered.
+# It covers every container in the pod, including user-supplied
+# initContainers: an init container that must run as root (e.g. a chown
+# image) now fails runAsNonRoot admission — give it its own securityContext
+# (per-container settings override the pod level). fsGroup: 999 also changes
+# group ownership of mounted volumes, including PVCs from extraVolumes.
 podSecurityContext:
   runAsNonRoot: true
-  runAsUser: 999 # mcp-mesh user in the container
+  runAsUser: 999 # mcp-mesh user in the runtime images
+  runAsGroup: 999
   fsGroup: 999
+  seccompProfile:
+    type: RuntimeDefault
 
+# Container security context
 securityContext:
+  allowPrivilegeEscalation: false
   capabilities:
     drop:
       - ALL
-  readOnlyRootFilesystem: false # Agents may need writable filesystem
+  # false: agents run arbitrary user code — Python writes __pycache__ under
+  # /app, runtimes use /tmp, and some agents install dependencies at startup.
+  # Set true (plus emptyDir mounts for the paths your agent writes) if your
+  # agent image tolerates a read-only root filesystem.
+  readOnlyRootFilesystem: false
   runAsNonRoot: true
-  runAsUser: 999 # mcp-mesh user in the container
+  runAsUser: 999 # mcp-mesh user in the runtime images
+  runAsGroup: 999
 
 service:
   type: ClusterIP
@@ -409,9 +427,8 @@ topologySpreadConstraints: []
 # Priority class name
 priorityClassName: ""
 
-# Security policies
-podSecurityPolicy:
-  enabled: false
+# Note: podSecurityPolicy.enabled was removed (PSP left Kubernetes in 1.25);
+# podSecurityContext above is now always applied. A leftover key is ignored.
 
 # Runtime class name (for container runtime selection)
 runtimeClassName: ""
