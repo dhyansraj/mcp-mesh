@@ -13,44 +13,53 @@
 #
 # Secret mapping (cert-manager Certificate -> K8s Secret -> Helm value):
 #
-#   mcp-mesh-root-ca          -> mcp-mesh-ca-secret      -> caSecret
-#   mcp-mesh-registry-cert    -> mcp-mesh-registry-tls   -> registry.security.tls.existingSecret
+#   mcp-mesh-root-ca          -> mcp-mesh-ca-secret      -> trust.caSecret / mesh.tls.caSecret
+#   mcp-mesh-registry-cert    -> mcp-mesh-registry-tls   -> tls.secretName
 #   mcp-mesh-agent-cert       -> mcp-mesh-agent-tls      -> mesh.tls.certSecret
 
 # =============================================================================
-# Registry values (consumed by mcp-mesh-core chart)
+# Registry values (consumed by the mcp-mesh-core umbrella chart)
+#
+# mcp-mesh-core is an umbrella chart: the registry runs in the
+# mcp-mesh-registry subchart, so its values MUST be nested under the
+# dependency name "mcp-mesh-registry". A top-level "registry:" key on the
+# umbrella only carries the enablement flag (registry.enabled) — anything
+# else under it is silently ignored.
 # =============================================================================
-registry:
-  # Core chart: registry server TLS configuration
-  security:
-    tls:
-      enabled: true
-      # "strict" requires valid TLS for all connections.
-      # Use "auto" to accept both TLS and plaintext during migration.
-      mode: "strict"
+mcp-mesh-registry:
+  registry:
+    security:
+      tls:
+        enabled: true
+        # "strict" requires valid TLS for all connections.
+        # Use "auto" to accept both TLS and plaintext during migration.
+        mode: "strict"
 
-      # cert-manager stores certs in standard tls.crt / tls.key fields.
-      # Secret: mcp-mesh-registry-tls (from Certificate "mcp-mesh-registry-cert")
-      existingSecret: "mcp-mesh-registry-tls"
-      certKey: "tls.crt"
-      keyKey: "tls.key"
+        # K8s TLS secret mounted at /etc/tls in the registry pod.
+        # cert-manager stores certs in standard tls.crt / tls.key fields.
+        # Secret: mcp-mesh-registry-tls (from Certificate "mcp-mesh-registry-cert")
+        secretName: "mcp-mesh-registry-tls"
+        certKey: "tls.crt"
+        keyKey: "tls.key"
 
-    trust:
-      # k8s-secrets backend reads CA certs from labeled Secrets.
-      # cert-manager populates ca.crt in the CA secret automatically.
-      backend: "k8s-secrets"
+      trust:
+        # k8s-secrets backend reads CA certs from labeled Secrets.
+        # cert-manager populates ca.crt in the CA secret automatically.
+        backend: "k8s-secrets"
 
-      # Direct CA secret reference for file-based trust.
-      # Secret: mcp-mesh-ca-secret (from Certificate "mcp-mesh-root-ca")
-      caSecret: "mcp-mesh-ca-secret"
+        # Direct CA secret reference for file-based trust.
+        # Secret: mcp-mesh-ca-secret (from Certificate "mcp-mesh-root-ca")
+        caSecret: "mcp-mesh-ca-secret"
 
-      k8sSecrets:
-        namespace: "mcp-mesh"
-        # Label selector to discover CA secrets.
-        # Add this label to mcp-mesh-ca-secret:
-        #   kubectl label secret mcp-mesh-ca-secret -n mcp-mesh \
-        #     mcp-mesh.io/trust=entity-ca
-        labelSelector: "mcp-mesh.io/trust=entity-ca"
+        k8sSecrets:
+          namespace: "mcp-mesh"
+          # Label selector to discover CA secrets. The self-signed root CA
+          # Certificate applies this label via secretTemplate (see
+          # selfsigned-root-ca.yaml); for the Vault flow, label the secret
+          # manually:
+          #   kubectl label secret mcp-mesh-ca-secret -n mcp-mesh \
+          #     mcp-mesh.io/trust=entity-ca
+          labelSelector: "mcp-mesh.io/trust=entity-ca"
 
 # =============================================================================
 # Agent mesh TLS values (consumed by mcp-mesh-agent chart)

@@ -130,11 +130,9 @@ here; an explicit value always wins.
 | Parameter                               | Description                      | Default   |
 | --------------------------------------- | -------------------------------- | --------- |
 | `registry.security.tls.enabled`         | Enable TLS                       | `false`   |
-| `registry.security.tls.existingSecret`  | Existing TLS secret              | `""`      |
+| `registry.security.tls.secretName`      | Existing TLS secret              | `""`      |
 | `registry.security.auth.enabled`        | Enable authentication            | `false`   |
 | `registry.security.auth.type`           | Auth type (token, basic, oauth2) | `"token"` |
-| `registry.security.cors.enabled`        | Enable CORS                      | `true`    |
-| `registry.security.cors.allowedOrigins` | Allowed origins                  | `["*"]`   |
 
 ### Ingress
 
@@ -304,7 +302,7 @@ registry:
   security:
     tls:
       enabled: true
-      existingSecret: my-tls-secret
+      secretName: my-tls-secret
 ```
 
 ### Production Configuration
