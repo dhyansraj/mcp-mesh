@@ -6,6 +6,7 @@ import org.springframework.boot.web.server.WebServer;
 import org.springframework.boot.web.server.context.WebServerInitializedEvent;
 import org.springframework.context.ApplicationListener;
 
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -78,6 +79,7 @@ class MeshPortUpdaterInvariantTest {
 
         listener(runtime).onApplicationEvent(eventWithPort(8080));
 
-        verify(runtime, never()).updatePort(8080);
+        // No update call at all — not merely "no update with this value".
+        verify(runtime, never()).updatePort(anyInt());
     }
 }

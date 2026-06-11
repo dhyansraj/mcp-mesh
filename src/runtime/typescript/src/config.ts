@@ -65,14 +65,27 @@ export async function findAvailablePort(
  * Issue #1194: used to surface bind conflicts BEFORE the HTTP server and
  * the registry heartbeat start, so a configured-but-unbindable port never
  * reaches registration (phantom endpoint).
+ *
+ * Resolves `false` ONLY for a genuine address-in-use conflict
+ * (`EADDRINUSE`) — the one condition the auto-assign fallback can adapt
+ * to. Any other bind failure (`EACCES` privileged port, `EADDRNOTAVAIL` /
+ * host misconfiguration, ...) REJECTS with the underlying error: falling
+ * back there would mask a real problem behind a misleading "port in use"
+ * warning, and the real server's own bind would hit the same error anyway.
  */
 export async function isPortBindable(
   port: number,
   host: string
 ): Promise<boolean> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const server = createServer();
-    server.once("error", () => resolve(false));
+    server.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        resolve(false);
+      } else {
+        reject(err);
+      }
+    });
     server.listen(port, host, () => {
       server.close(() => resolve(true));
     });
@@ -84,10 +97,14 @@ export async function isPortBindable(
  *
  * - `configuredPort === 0`: auto-assign via the OS (existing port-0 path).
  * - configured port bindable: use it as-is.
- * - configured port in use: fall back to an OS-assigned port and report
- *   `fellBack: true` so the caller can log a prominent warning. The caller
- *   MUST propagate the returned port into its config before starting the
- *   heartbeat — the registry must only ever see the actually-bound port.
+ * - configured port in use (`EADDRINUSE`): fall back to an OS-assigned port
+ *   and report `fellBack: true` so the caller can log a prominent warning.
+ *   The caller MUST propagate the returned port into its config before
+ *   starting the heartbeat — the registry must only ever see the
+ *   actually-bound port.
+ * - any other bind failure (`EACCES`, host errors, ...): the probe's
+ *   rejection propagates — adapt only to genuine conflicts, surface
+ *   everything else loudly.
  *
  * Every probe — including the auto-assign and fallback paths — binds on
  * `host`, the host the server will actually bind. Probing loopback for a
@@ -115,6 +132,11 @@ export async function resolveBindPort(
  * the two entry points. The caller MUST write the returned port back into
  * the config its heartbeat reads BEFORE starting tracing/server/heartbeat
  * — registration must always carry the ACTUAL bound port (issue #1194).
+ *
+ * The PORT CONFLICT warning is emitted only for a genuine `EADDRINUSE`
+ * fallback; non-conflict bind failures (`EACCES`, host errors, ...)
+ * propagate to the caller as rejections instead of being mislabeled as
+ * conflicts.
  */
 export async function resolveStartupBindPort(
   configuredPort: number,

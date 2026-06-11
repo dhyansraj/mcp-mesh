@@ -15,6 +15,65 @@ from .startup_pipeline import StartupPipeline
 logger = logging.getLogger(__name__)
 
 
+def wait_for_proven_serving(
+    started_check: Any,
+    label: str,
+    log: logging.Logger = logger,
+) -> bool:
+    """Bounded wait for the local HTTP server to prove it is serving.
+
+    Serving gate for the heartbeat's FIRST registration (PR #1197 review):
+    the registered port is always one this process BOUND (the bind-level
+    invariant enforced via the bound-socket authority), but a bound socket
+    is not a serving socket — uvicorn can still fail between bind and
+    serve. Deferring registration on the started-signal keeps a post-bind
+    startup failure from being advertised at all in the common case.
+
+    This is a *liveness deferral*, not a different invariant: on budget
+    expiry (``MCP_MESH_SERVER_STARTUP_TIMEOUT``, default 30s — sized for
+    slow-but-healthy ASGI lifespans) the caller proceeds with registration.
+    The port is genuinely held by this process, and a server that
+    ultimately fails to serve kills the process (and with it the
+    heartbeat), so a too-early registration is transient at worst.
+
+    Note: deferring registration also defers dependency resolution for
+    consumers of this agent — acceptable and arguably correct (don't
+    advertise a capability until the server can answer for it). The
+    settling-window grace (issue #1193) layers on top of this; nothing
+    here pre-empts it.
+
+    Returns True when the check reported serving within the budget; False
+    when the budget expired or the check itself failed (proceed either way).
+    """
+    import time
+
+    from ...shared.port_binding import get_server_startup_timeout
+
+    timeout = get_server_startup_timeout()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if started_check():
+                log.debug(f"Serving gate: server proven serving for {label}")
+                return True
+        except Exception as e:
+            # A broken check must never block registration forever — the
+            # bind-level invariant already holds; proceed.
+            log.warning(
+                f"Serving gate check failed for {label}: {e} — proceeding "
+                f"with registration (port is bound by this process)"
+            )
+            return False
+        time.sleep(0.1)
+    log.warning(
+        f"Serving gate: server did not report started within {timeout:.0f}s "
+        f"for {label} — proceeding with registration anyway (the port IS "
+        f"bound by this process; raise MCP_MESH_SERVER_STARTUP_TIMEOUT for "
+        f"legitimately slower startups)"
+    )
+    return False
+
+
 class DebounceCoordinator:
     """
     Coordinates decorator processing with debouncing to ensure single heartbeat.
@@ -264,26 +323,31 @@ class DebounceCoordinator:
 
                     # Check if server was already reused from immediate uvicorn start
                     server_reused = pipeline_context.get("server_reused", False)
-                    existing_server = pipeline_context.get("existing_server", {})
+                    existing_server = pipeline_context.get("existing_server", {}) or {}
+                    server_status = existing_server.get("status", "unknown")
+                    reused_server_obj = existing_server.get("server")
 
-                    # Issue #1194: when WE are about to start the server (no
-                    # reuse), bind the socket BEFORE the heartbeat starts so
+                    # A "configured" record WITHOUT a server object cannot be
+                    # started — the fallback below starts our own server. For
+                    # bind/registration purposes treat it as no-reuse, so the
+                    # heartbeat registers the port WE bind here instead of
+                    # the record's port that nothing will ever serve
+                    # (pipeline_context["bound_port"] takes precedence over
+                    # existing_server.port in _resolve_registration_port).
+                    starts_own_server = (not server_reused) or (
+                        server_status == "configured" and reused_server_obj is None
+                    )
+
+                    # Issue #1194: when WE are about to start the server,
+                    # bind the socket BEFORE the heartbeat starts so
                     # registration carries the port this process actually
                     # owns. On a conflict the helper falls back to an
                     # OS-assigned port with a prominent warning; on total
                     # bind failure it raises — loud failure, no phantom
                     # registration. The reuse path already bound its socket
                     # in the @mesh.agent decorator (existing_server.port).
-                    #
-                    # Window caveat: between this bind and uvicorn calling
-                    # listen() in _start_blocking_fastapi_server, the socket
-                    # is bound but NOT listening — connection attempts in
-                    # that window are REFUSED (there is no listen backlog
-                    # yet, so nothing is queued). The heartbeat may briefly
-                    # advertise an endpoint that refuses connections;
-                    # consumers retry through it once uvicorn is up.
                     bound_socket = None
-                    if not server_reused:
+                    if starts_own_server:
                         from ...shared.port_binding import (
                             bind_server_socket_with_fallback,
                         )
@@ -298,62 +362,85 @@ class DebounceCoordinator:
                         # bound port (see rust_heartbeat._resolve_registration_port).
                         pipeline_context["bound_port"] = actual_port
 
+                    # Serving gate (PR #1197 review): a bound socket is not a
+                    # serving socket — between the bind above and uvicorn's
+                    # listen(), connections are REFUSED, and a post-bind
+                    # startup failure could otherwise be registered. Hand the
+                    # heartbeat a started-signal so its FIRST registration
+                    # defers (bounded by MCP_MESH_SERVER_STARTUP_TIMEOUT)
+                    # until the server proves serving. ``server_holder`` is
+                    # populated by _start_blocking_fastapi_server before
+                    # server.run(); reuse paths check the existing uvicorn
+                    # Server directly (already True when status=="running").
+                    server_holder: dict[str, Any] = {}
+                    if starts_own_server:
+                        pipeline_context["server_started_check"] = lambda: bool(
+                            getattr(server_holder.get("server"), "started", False)
+                        )
+                    elif reused_server_obj is not None:
+                        pipeline_context["server_started_check"] = lambda: bool(
+                            getattr(reused_server_obj, "started", False)
+                        )
+
                     self._setup_heartbeat_background(
                         heartbeat_config,
                         pipeline_context,
                         heartbeat_task_fn,
                     )
 
-                    if server_reused:
-                        # Check server status to determine action
-                        server_status = existing_server.get("status", "unknown")
-
+                    if server_reused and not starts_own_server:
                         if server_status == "configured":
                             self.logger.info(
                                 "🔄 CONFIGURED SERVER: Starting configured uvicorn server within pipeline event loop"
                             )
-                            # Start the configured server within this event loop
-                            server_obj = existing_server.get("server")
-                            if server_obj:
-                                self.logger.info(
-                                    "🚀 CONFIGURED SERVER: Starting server.serve() within pipeline context"
-                                )
-                                # This runs in the same event loop as the pipeline - no conflict!
-                                import asyncio
+                            # Start the configured server within this event
+                            # loop. ``reused_server_obj`` is non-None here —
+                            # the no-server-object case was diverted to the
+                            # starts_own_server path above.
+                            server_obj = reused_server_obj
+                            self.logger.info(
+                                "🚀 CONFIGURED SERVER: Starting server.serve() within pipeline context"
+                            )
+                            # This runs in the same event loop as the pipeline - no conflict!
+                            import asyncio
 
-                                # Register so main-thread signal handlers can request
-                                # graceful shutdown via ``server.should_exit`` and the
-                                # FastAPI lifespan exit phase runs cleanly (issue #1029).
-                                from ...shared.simple_shutdown import (
-                                    register_uvicorn_server,
-                                )
+                            # Register so main-thread signal handlers can request
+                            # graceful shutdown via ``server.should_exit`` and the
+                            # FastAPI lifespan exit phase runs cleanly (issue #1029).
+                            from ...shared.simple_shutdown import (
+                                register_uvicorn_server,
+                            )
 
-                                register_uvicorn_server(server_obj)
+                            register_uvicorn_server(server_obj)
 
-                                # Define async function to run the server
-                                async def run_configured_server():
-                                    await server_obj.serve()
+                            # Define async function to run the server
+                            async def run_configured_server():
+                                await server_obj.serve()
 
-                                # Run the server in a fresh event loop (Timer thread has no live loop)
-                                asyncio.run(run_configured_server())
-                                self.logger.info(
-                                    "✅ CONFIGURED SERVER: Server started successfully"
-                                )
-                            else:
-                                self.logger.error(
-                                    "❌ CONFIGURED SERVER: No server object found, falling back to uvicorn.run()"
-                                )
-                                self._start_blocking_fastapi_server(
-                                    fastapi_app, binding_config
-                                )
-                        elif server_status == "running":
+                            # Run the server in a fresh event loop (Timer thread has no live loop)
+                            asyncio.run(run_configured_server())
+                            self.logger.info(
+                                "✅ CONFIGURED SERVER: Server started successfully"
+                            )
+                        elif server_status in ("running", "starting"):
+                            # "running": uvicorn already proved serving.
+                            # "starting": the immediate server's socket is
+                            # bound and its thread is alive, but the ASGI
+                            # lifespan startup outlived the decorator's wait
+                            # budget (slow model load etc.). Either way the
+                            # server lifecycle is owned by the decorator's
+                            # non-daemon thread + shutdown coordinator —
+                            # nothing to start here, and the heartbeat's
+                            # serving gate (set above) defers registration
+                            # until ``server.started`` flips or its budget
+                            # expires.
                             self.logger.debug(
-                                "🔄 RUNNING SERVER: Server already running with proper lifecycle, pipeline skipping uvicorn.run()"
+                                f"🔄 {server_status.upper()} SERVER: Server lifecycle owned by immediate-uvicorn thread, pipeline skipping uvicorn.run()"
                             )
                             self.logger.info(
-                                "✅ FastMCP mounted on running server - agent in normal operating state"
+                                "✅ FastMCP mounted on existing server - agent in normal operating state"
                             )
-                            # Server is already running in normal state - no further action needed
+                            # No further action needed on this thread
                             return
                         else:
                             self.logger.info(
@@ -377,8 +464,20 @@ class DebounceCoordinator:
                                 )
                                 return
                     else:
+                        if server_reused:
+                            # Degenerate "configured" record without a server
+                            # object — start our own server on the socket WE
+                            # bound above (the heartbeat registers bound_port,
+                            # never the dead record's port).
+                            self.logger.error(
+                                "❌ CONFIGURED SERVER: No server object found, "
+                                "starting our own server on a freshly bound socket"
+                            )
                         self._start_blocking_fastapi_server(
-                            fastapi_app, binding_config, bound_socket=bound_socket
+                            fastapi_app,
+                            binding_config,
+                            bound_socket=bound_socket,
+                            server_holder=server_holder,
                         )
                 else:
                     self.logger.warning(
@@ -423,6 +522,7 @@ class DebounceCoordinator:
         app: Any,
         binding_config: dict[str, Any],
         bound_socket: Any = None,
+        server_holder: dict[str, Any] | None = None,
     ) -> None:
         """Start FastAPI server with uvicorn (signal handlers already registered).
 
@@ -441,6 +541,12 @@ class DebounceCoordinator:
         the bound port. When it is None, the socket is bound here with the
         same conflict-fallback semantics so uvicorn never gets a chance to
         swallow a bind error.
+
+        ``server_holder`` (PR #1197 review): this method BLOCKS until
+        shutdown, so the caller cannot receive the ``uvicorn.Server`` as a
+        return value before serving starts. The holder dict is populated
+        with the server (``server_holder["server"]``) before ``run()`` so
+        the heartbeat's serving gate can observe ``server.started`` flip.
         """
         try:
             import uvicorn
@@ -467,6 +573,11 @@ class DebounceCoordinator:
                 ws="websockets-sansio",  # Use modern websockets API (avoids deprecation warnings)
             )
             server = uvicorn.Server(config)
+
+            # Expose the server to the heartbeat's serving gate BEFORE run()
+            # — registration defers on ``server.started`` (PR #1197 review).
+            if server_holder is not None:
+                server_holder["server"] = server
 
             # Register the server so main-thread signal handlers can request
             # graceful shutdown via ``server.should_exit`` (issue #1029).
@@ -532,6 +643,15 @@ class DebounceCoordinator:
                 self.logger.debug(
                     f"Starting background heartbeat thread for {entity_id}"
                 )
+                # Serving gate (PR #1197 review): when the caller provided a
+                # started-signal (MCP path — see _execute_processing), defer
+                # the FIRST registration until the local server proves
+                # serving, bounded by MCP_MESH_SERVER_STARTUP_TIMEOUT. The
+                # API/A2A paths set no check (the user owns their server) so
+                # this is a no-op there.
+                started_check = pipeline_context.get("server_started_check")
+                if callable(started_check):
+                    wait_for_proven_serving(started_check, entity_id, self.logger)
                 try:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)

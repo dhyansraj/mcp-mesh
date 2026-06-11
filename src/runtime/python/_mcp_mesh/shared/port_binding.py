@@ -22,6 +22,53 @@ import socket
 
 logger = logging.getLogger(__name__)
 
+# Default budget for waiting on proven-serving after the socket binds.
+# Sized for slow-but-healthy ASGI lifespans (model loading, connection-pool
+# warmup, schema migration checks) — NOT for the bind itself, which is
+# synchronous and already enforced by bind_server_socket_with_fallback.
+SERVER_STARTUP_TIMEOUT_DEFAULT_SECONDS = 30.0
+
+
+def get_server_startup_timeout() -> float:
+    """Budget (seconds) for waiting on a server to prove it is serving.
+
+    Configurable via ``MCP_MESH_SERVER_STARTUP_TIMEOUT`` (float seconds,
+    default 30). Two consumers share this budget:
+
+    * ``mesh.decorators._start_uvicorn_immediately`` — how long the
+      decorator waits for ``uvicorn.Server.started`` before declaring the
+      record "starting" (bound, not yet proven) and moving on.
+    * ``startup_orchestrator._setup_heartbeat_background`` — how long the
+      heartbeat defers its FIRST registration on the started-signal.
+
+    This is a *liveness deferral*, not a separate invariant: the hard
+    invariant stays bind-level (never register a port this process did not
+    bind). Expiry never fails startup — the port is genuinely held, so
+    registration proceeds; a server that ultimately cannot serve kills the
+    process (and with it the heartbeat), making a too-early registration
+    transient at worst.
+    """
+    from .config_resolver import ValidationRule, get_config_value
+
+    value = get_config_value(
+        "MCP_MESH_SERVER_STARTUP_TIMEOUT",
+        default=SERVER_STARTUP_TIMEOUT_DEFAULT_SECONDS,
+        rule=ValidationRule.FLOAT_RULE,
+    )
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError):
+        return SERVER_STARTUP_TIMEOUT_DEFAULT_SECONDS
+    if timeout <= 0:
+        logger.warning(
+            "MCP_MESH_SERVER_STARTUP_TIMEOUT must be > 0 (got %s); "
+            "using default %.0fs",
+            value,
+            SERVER_STARTUP_TIMEOUT_DEFAULT_SECONDS,
+        )
+        return SERVER_STARTUP_TIMEOUT_DEFAULT_SECONDS
+    return timeout
+
 
 def _bind(host: str, port: int) -> socket.socket:
     """Bind a TCP server socket to (host, port); close the socket on failure.

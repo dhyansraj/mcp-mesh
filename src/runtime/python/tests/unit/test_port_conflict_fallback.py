@@ -11,9 +11,13 @@ Covers:
 - End-to-end serving: uvicorn started on the pre-bound fallback socket
   actually answers HTTP on the auto-assigned port while the configured port
   stays owned by the conflicting listener.
-- Startup gate: a bound socket is not a serving socket — the immediate
-  server is only recorded as "running" (and thus registrable) after uvicorn
-  reports ``started``; post-bind startup failures store no server record.
+- Startup gate (PR #1197 review reconciliation): the bound-server record is
+  stored immediately (status "starting", bound-port authority intact) so the
+  debounced pipeline never starts a duplicate server during a slow ASGI
+  lifespan; the record upgrades to "running" once uvicorn reports
+  ``started``; a dead server thread clears the record, releases the socket
+  and fails loudly. Proven-serving is a registration-time liveness deferral
+  (``wait_for_proven_serving``) bounded by MCP_MESH_SERVER_STARTUP_TIMEOUT.
 """
 
 import logging
@@ -26,7 +30,14 @@ import pytest
 from _mcp_mesh.pipeline.mcp_heartbeat.rust_heartbeat import (
     _resolve_registration_port,
 )
-from _mcp_mesh.shared.port_binding import bind_server_socket_with_fallback
+from _mcp_mesh.pipeline.mcp_startup.startup_orchestrator import (
+    wait_for_proven_serving,
+)
+from _mcp_mesh.shared.port_binding import (
+    SERVER_STARTUP_TIMEOUT_DEFAULT_SECONDS,
+    bind_server_socket_with_fallback,
+    get_server_startup_timeout,
+)
 
 BIND_HOST = "127.0.0.1"
 
@@ -144,21 +155,34 @@ class TestResolveRegistrationPort:
 
 
 class TestImmediateServerStartupGate:
-    """Issue #1194 follow-up: a bound socket is not a serving socket.
+    """Issue #1194 follow-up + PR #1197 review: bound-record semantics.
 
-    ``_start_uvicorn_immediately`` must not record a "running" server (and
-    therefore must not let the heartbeat register the port) until uvicorn
-    reports ``started``. Previously a post-bind failure — e.g.
-    ``uvicorn.Config.load()`` raising on bad TLS cert paths — died inside
-    the server thread while the agent advertised a port that refused every
-    connection.
+    The hard invariant is bind-level: the recorded port is always read back
+    from a socket THIS process bound. The serving question is handled as a
+    liveness deferral: the record is stored immediately with status
+    "starting" (so the debounced pipeline reuses this server instead of
+    starting a duplicate during a slow ASGI lifespan), upgrades to
+    "running" once uvicorn reports ``started``, and a dead server thread
+    clears the record, releases the socket and fails loudly.
     """
 
     @pytest.fixture(autouse=True)
-    def clean_global_state(self):
-        """Isolate DecoratorRegistry + shutdown-coordinator global state."""
+    def clean_global_state(self, monkeypatch):
+        """Isolate DecoratorRegistry + shutdown-coordinator global state.
+
+        Also no-ops the blocking keep-alive loop — the survive paths of
+        ``_start_uvicorn_immediately`` now fall through to it (matching the
+        production flow), which would otherwise block the test forever.
+        """
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
         from _mcp_mesh.shared import simple_shutdown
+        from mesh import decorators
+
+        monkeypatch.setattr(
+            decorators,
+            "start_blocking_loop_with_shutdown_support",
+            lambda thread: None,
+        )
 
         DecoratorRegistry.clear_immediate_uvicorn_server()
         saved_servers = list(
@@ -204,11 +228,12 @@ class TestImmediateServerStartupGate:
         finally:
             sock.close()
 
-    def test_wedged_startup_stores_no_running_record(self, monkeypatch):
+    def test_budget_expiry_with_live_thread_keeps_bound_record(self, monkeypatch):
         """Thread alive but ``started`` never flips within the budget: the
-        function returns WITHOUT a running record (the pipeline's no-server
-        path takes over) and without raising — the wedged server may still
-        come up, and the shutdown coordinator signals all servers."""
+        bound record is KEPT (status "starting") so the pipeline reuses this
+        server instead of pre-binding a duplicate, and registration carries
+        the genuinely-held bound port. No raise — a slow-but-healthy
+        lifespan must not be misclassified as fatal."""
         import uvicorn
 
         from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
@@ -216,20 +241,143 @@ class TestImmediateServerStartupGate:
 
         release = threading.Event()
 
-        def wedged_run(self, sockets=None):
-            # Never flips self.started — wedged after the bind.
+        def slow_lifespan_run(self, sockets=None):
+            # Never flips self.started within the budget — e.g. a model
+            # load in the ASGI lifespan that outlives the wait window.
             release.wait(timeout=10)
 
-        monkeypatch.setattr(uvicorn.Server, "run", wedged_run)
-        monkeypatch.setattr(
-            decorators, "_IMMEDIATE_SERVER_STARTUP_TIMEOUT_SECONDS", 0.3
-        )
+        monkeypatch.setattr(uvicorn.Server, "run", slow_lifespan_run)
+        monkeypatch.setenv("MCP_MESH_SERVER_STARTUP_TIMEOUT", "0.3")
 
         try:
             decorators._start_uvicorn_immediately(BIND_HOST, 0)
-            assert DecoratorRegistry.get_immediate_uvicorn_server() is None
+
+            record = DecoratorRegistry.get_immediate_uvicorn_server()
+            assert record is not None
+            assert record["status"] == "starting"  # bound, not yet proven
+            assert record["port"] > 0
+            # Registration carries the bound port — never a phantom one.
+            assert (
+                _resolve_registration_port(0, {"existing_server": record})
+                == record["port"]
+            )
         finally:
             release.set()
+
+    def test_slow_lifespan_within_budget_upgrades_record_to_running(
+        self, monkeypatch
+    ):
+        """Slow-but-healthy startup: ``started`` flips late but within the
+        budget. The bound record must be discoverable (status "starting")
+        WHILE the lifespan is still starting — that is what stops the
+        debounced pipeline (~1s) from starting a duplicate server — and
+        must read "running" once uvicorn proves serving. Registration
+        carries the bound port throughout."""
+        import uvicorn
+
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from mesh import decorators
+
+        release = threading.Event()
+
+        def slow_then_started_run(self, sockets=None):
+            time.sleep(0.8)  # scaled-down stand-in for an 8s model load
+            self.started = True
+            release.wait(timeout=10)
+
+        monkeypatch.setattr(uvicorn.Server, "run", slow_then_started_run)
+        monkeypatch.setenv("MCP_MESH_SERVER_STARTUP_TIMEOUT", "30")
+
+        # Watcher plays the role of ServerDiscoveryStep: sample the registry
+        # mid-startup (debounce fires at ~1s in production, here at 0.4s —
+        # before ``started`` flips at 0.8s).
+        mid_startup_record: dict = {}
+
+        def sample_mid_startup():
+            time.sleep(0.4)
+            record = DecoratorRegistry.get_immediate_uvicorn_server()
+            if record is not None:
+                mid_startup_record.update(
+                    {"present": True, "status": record["status"]}
+                )
+
+        watcher = threading.Thread(target=sample_mid_startup, daemon=True)
+        watcher.start()
+
+        try:
+            decorators._start_uvicorn_immediately(BIND_HOST, 0)
+            watcher.join(timeout=5)
+
+            # Discovery during the slow lifespan found the bound record —
+            # exactly one server exists; no duplicate gets pre-bound.
+            assert mid_startup_record.get("present") is True
+            assert mid_startup_record.get("status") == "starting"
+
+            record = DecoratorRegistry.get_immediate_uvicorn_server()
+            assert record is not None
+            assert record["status"] == "running"  # proven serving
+            assert record["port"] > 0
+            assert (
+                _resolve_registration_port(0, {"existing_server": record})
+                == record["port"]
+            )
+        finally:
+            release.set()
+
+
+class TestServerStartupTimeout:
+    """MCP_MESH_SERVER_STARTUP_TIMEOUT resolution (shared serving budget)."""
+
+    def test_default_is_30_seconds(self, monkeypatch):
+        monkeypatch.delenv("MCP_MESH_SERVER_STARTUP_TIMEOUT", raising=False)
+        assert get_server_startup_timeout() == SERVER_STARTUP_TIMEOUT_DEFAULT_SECONDS
+        assert SERVER_STARTUP_TIMEOUT_DEFAULT_SECONDS == 30.0
+
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("MCP_MESH_SERVER_STARTUP_TIMEOUT", "8.5")
+        assert get_server_startup_timeout() == 8.5
+
+    def test_invalid_values_fall_back_to_default(self, monkeypatch):
+        for bad in ("not-a-number", "0", "-3"):
+            monkeypatch.setenv("MCP_MESH_SERVER_STARTUP_TIMEOUT", bad)
+            assert (
+                get_server_startup_timeout()
+                == SERVER_STARTUP_TIMEOUT_DEFAULT_SECONDS
+            )
+
+
+class TestHeartbeatServingGate:
+    """``wait_for_proven_serving``: the heartbeat's first-registration
+    deferral. A liveness deferral only — expiry or a broken check always
+    proceeds (the bind-level invariant already holds)."""
+
+    def test_returns_true_when_check_flips_within_budget(self, monkeypatch):
+        monkeypatch.setenv("MCP_MESH_SERVER_STARTUP_TIMEOUT", "5")
+        flip_at = time.monotonic() + 0.4
+        started_check = lambda: time.monotonic() >= flip_at  # noqa: E731
+
+        start = time.monotonic()
+        assert wait_for_proven_serving(started_check, "test-agent") is True
+        elapsed = time.monotonic() - start
+        assert 0.3 <= elapsed < 3.0  # deferred until the flip, not the budget
+
+    def test_returns_false_after_budget_and_proceeds(self, monkeypatch):
+        monkeypatch.setenv("MCP_MESH_SERVER_STARTUP_TIMEOUT", "0.3")
+
+        start = time.monotonic()
+        assert wait_for_proven_serving(lambda: False, "test-agent") is False
+        elapsed = time.monotonic() - start
+        assert elapsed < 3.0  # bounded — never blocks registration forever
+
+    def test_broken_check_proceeds_immediately(self, monkeypatch):
+        monkeypatch.setenv("MCP_MESH_SERVER_STARTUP_TIMEOUT", "30")
+
+        def broken_check():
+            raise RuntimeError("boom")
+
+        start = time.monotonic()
+        assert wait_for_proven_serving(broken_check, "test-agent") is False
+        assert time.monotonic() - start < 1.0
 
 
 class TestUvicornServesOnFallbackSocket:
