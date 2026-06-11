@@ -36,7 +36,7 @@ ui:
     # When neither is set, a credential-less placeholder renders so the chart
     # stays lintable, but it cannot authenticate anywhere — the UI fails fast
     # at startup until a real DSN is configured:
-    #   postgresql://mcp_mesh_readonly@mcp-mesh-postgres:5432/mcp_mesh_registry?sslmode=disable
+    #   postgresql://mcp_mesh_readonly@mcp-mesh-postgres:5432/mcpmesh?sslmode=disable
     #
     # The UI only reads — for production, point this at a dedicated read-only
     # role instead of the registry's read-write credential. The role is not

@@ -149,7 +149,7 @@ global.postgres.* for a working deployment.
 {{- $pass := ($g.password | default "") | urlquery | replace "+" "%20" -}}
 {{- printf "postgresql://%s:%s@%s:%d/%s%s" $user $pass (coalesce $g.host "mcp-mesh-postgres") (coalesce $g.port 5432 | int) ($g.name | default "mcpmesh") (include "mcp-mesh-ui.databaseURLParams" .) -}}
 {{- else -}}
-{{- "postgresql://mcp_mesh_readonly@mcp-mesh-postgres:5432/mcp_mesh_registry?sslmode=disable" -}}
+{{- "postgresql://mcp_mesh_readonly@mcp-mesh-postgres:5432/mcpmesh?sslmode=disable" -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
