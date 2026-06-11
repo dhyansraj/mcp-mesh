@@ -1,6 +1,16 @@
 {{- $gpg := include "mcp-mesh-ui.globalPostgres" . | fromJson -}}
 {{- $gredis := include "mcp-mesh-ui.globalRedis" . | fromJson -}}
 {{- $dbExisting := include "mcp-mesh-ui.databaseExistingSecret" . -}}
+{{- /* urlKey/passwordKey modes only apply to a user-supplied
+       global.postgres.existingSecret; the auto-generated secret carries a
+       bare "password" key, so stray keys set without their existingSecret
+       must not select DSN mode or a key that does not exist. */ -}}
+{{- $dbUrlKey := "" -}}
+{{- $dbPasswordKey := "password" -}}
+{{- if $gpg.existingSecret -}}
+{{- $dbUrlKey = $gpg.existingSecretUrlKey | default "" -}}
+{{- $dbPasswordKey = $gpg.existingSecretPasswordKey | default "password" -}}
+{{- end -}}
 {{- $redisExisting := include "mcp-mesh-ui.redisExistingSecret" . -}}
 {{- $pgCaSecret := ($gpg.tls | default dict).caSecret | default "" -}}
 apiVersion: apps/v1
@@ -45,7 +55,7 @@ spec:
               protocol: TCP
           env:
             {{- if $dbExisting }}
-            {{- if $gpg.existingSecretUrlKey }}
+            {{- if $dbUrlKey }}
             {{- /* Full DSN from the existing secret, consumed directly — no
                    composition, so the credentials need no URL-safety. The DSN
                    must carry its own sslmode/sslrootcert params. */}}
@@ -53,7 +63,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ $dbExisting }}
-                  key: {{ $gpg.existingSecretUrlKey }}
+                  key: {{ $dbUrlKey }}
             {{- else }}
             {{- /* Composed via $(DATABASE_PASSWORD) expansion — DATABASE_PASSWORD
                    must be rendered above this entry. */}}
@@ -61,7 +71,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: {{ $dbExisting }}
-                  key: {{ $gpg.existingSecretPasswordKey | default "password" }}
+                  key: {{ $dbPasswordKey }}
             - name: DATABASE_URL
               value: {{ include "mcp-mesh-ui.composedDatabaseURL" . | quote }}
             {{- end }}

@@ -1,6 +1,14 @@
-{{- /* Mirrors the mcp-mesh-postgres.password helper resolution. */ -}}
-{{- $g := dig "postgres" (dict) (.Values.global | default dict) | default dict }}
-{{- if eq (coalesce .Values.postgres.password $g.password "mcpmesh123") "mcpmesh123" }}
-WARNING: PostgreSQL is provisioned with the built-in development password.
-Set postgres.password (or global.postgres.password) for production.
+{{- /* Mirrors the credential resolution in _helpers.tpl: existing secret >
+       inline password > auto-generated. */ -}}
+{{- if include "mcp-mesh-postgres.existingSecret" . }}
+PostgreSQL is provisioned with the password from secret
+"{{ include "mcp-mesh-postgres.existingSecret" . }}" (key: {{ include "mcp-mesh-postgres.existingSecretPasswordKey" . }}).
+{{- else if not (include "mcp-mesh-postgres.password" .) }}
+PostgreSQL is provisioned with an auto-generated password. Retrieve it with:
+
+  kubectl get secret {{ include "mcp-mesh-postgres.credentialsSecretName" . }} -n {{ .Release.Namespace }} \
+    -o jsonpath='{.data.password}' | base64 -d
+
+The secret is reused on upgrade and kept on uninstall (helm.sh/resource-policy:
+keep) so it stays in sync with the database files on the persistent volume.
 {{- end }}

@@ -6,7 +6,22 @@ postgres:
   # credentials every consumer connects with); explicit values win.
   database: "" # default: mcpmesh (inherits global.postgres.name)
   username: "" # default: mcpmesh (inherits global.postgres.username)
-  password: "" # default: mcpmesh123 (inherits global.postgres.password)
+  # Provisioning password. When neither this nor global.postgres.password is
+  # set (and no existingSecret below), a random password is generated into
+  # the chart-managed Secret "<fullname>-credentials" (key: password,
+  # name overridable via global.postgres.generatedSecretName). The Secret is
+  # reused on upgrade (lookup) and kept on uninstall (resource-policy: keep)
+  # so it stays in sync with the data directory on the PVC. Retrieve it with:
+  #   kubectl get secret <fullname>-credentials -o jsonpath='{.data.password}' | base64 -d
+  # Note: lookup needs a cluster — `helm template | kubectl apply` pipelines
+  # regenerate the value on every render; use helm install/upgrade, or set an
+  # explicit password / existingSecret for GitOps template pipelines.
+  password: "" # inherits global.postgres.password
+  # Read the provisioning password from an existing secret instead
+  # (inherits global.postgres.existingSecret / existingSecretPasswordKey —
+  # the same secret every consumer composes its DSN from in the umbrella).
+  existingSecret: ""
+  existingSecretPasswordKey: "" # default: password
 
   # PostgreSQL configuration
   postgresqlDataDir: "/var/lib/postgresql/data/pgdata"

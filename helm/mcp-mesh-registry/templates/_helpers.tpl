@@ -63,28 +63,67 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
+Name of the auto-generated PostgreSQL credentials Secret created by the
+bundled mcp-mesh-postgres chart (global.postgres.generatedSecret mode).
+global.postgres.generatedSecretName overrides; the default mirrors the
+mcp-mesh-postgres chart's "<fullname>-credentials" — sibling subcharts in
+the mcp-mesh-core umbrella share .Release.Name, so both sides derive the
+same name. If the postgres subchart uses nameOverride/fullnameOverride, set
+global.postgres.generatedSecretName explicitly.
+*/}}
+{{- define "mcp-mesh-registry.generatedPostgresSecretName" -}}
+{{- $g := dig "postgres" (dict) (.Values.global | default dict) | default dict -}}
+{{- if $g.generatedSecretName -}}
+{{- $g.generatedSecretName -}}
+{{- else if contains "mcp-mesh-postgres" .Release.Name -}}
+{{- printf "%s-credentials" (.Release.Name | trunc 63 | trimSuffix "-") -}}
+{{- else -}}
+{{- printf "%s-credentials" (printf "%s-mcp-mesh-postgres" .Release.Name | trunc 63 | trimSuffix "-") -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Effective PostgreSQL connection settings as JSON. Per-field precedence:
 explicit registry.database.* > global.postgres.* (shared once by the
 mcp-mesh-core umbrella with every datastore consumer) > chart default.
 The chart defaults live here — values.yaml ships the inheritable fields
 empty so an unset field can fall through to the global. tls.* is flattened
 to tlsCaSecret/tlsCaKey for the consumers.
+
+When no password and no existing secret are configured anywhere and
+global.postgres.generatedSecret is true, the credential comes from the
+auto-generated Secret of the bundled postgres chart, consumed through the
+regular existingSecret machinery (password-key mode, key "password" — the
+generated password is alphanumeric, hence URL-safe for composition).
+An explicit password at either level always wins over the generated secret.
 */}}
 {{- define "mcp-mesh-registry.databaseSettings" -}}
 {{- $db := .Values.registry.database -}}
 {{- $g := dig "postgres" (dict) (.Values.global | default dict) | default dict -}}
 {{- $dbTls := $db.tls | default dict -}}
 {{- $gTls := $g.tls | default dict -}}
+{{- $password := or $db.password $g.password "" -}}
+{{- $existingSecret := or $db.existingSecret $g.existingSecret "" -}}
+{{- $urlKey := or $db.existingSecretUrlKey $g.existingSecretUrlKey "" -}}
+{{- $passwordKey := coalesce $db.existingSecretPasswordKey $g.existingSecretPasswordKey "password" -}}
+{{- if and (not $existingSecret) (not $password) ($g.generatedSecret | default false) -}}
+{{- $existingSecret = include "mcp-mesh-registry.generatedPostgresSecretName" . -}}
+{{- /* The generated secret only carries a bare "password" key — a stray
+       urlKey or passwordKey (set without its existingSecret) must not select
+       DSN mode or a key that does not exist in the generated secret. */ -}}
+{{- $urlKey = "" -}}
+{{- $passwordKey = "password" -}}
+{{- end -}}
 {{- dict
       "host" (coalesce $db.host $g.host "mcp-mesh-postgres")
       "port" (coalesce $db.port $g.port 5432 | int)
       "name" (coalesce $db.name $g.name "mcpmesh")
       "username" (coalesce $db.username $g.username "mcpmesh")
-      "password" (or $db.password $g.password "")
+      "password" $password
       "sslmode" (coalesce $db.sslmode $g.sslmode "disable")
-      "existingSecret" (or $db.existingSecret $g.existingSecret "")
-      "existingSecretUrlKey" (or $db.existingSecretUrlKey $g.existingSecretUrlKey "")
-      "existingSecretPasswordKey" (coalesce $db.existingSecretPasswordKey $g.existingSecretPasswordKey "password")
+      "existingSecret" $existingSecret
+      "existingSecretUrlKey" $urlKey
+      "existingSecretPasswordKey" $passwordKey
       "tlsCaSecret" (or $dbTls.caSecret $gTls.caSecret "")
       "tlsCaKey" (coalesce $dbTls.caKey $gTls.caKey "ca.crt")
     | toJson -}}

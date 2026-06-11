@@ -86,6 +86,26 @@ helm install my-agent helm/mcp-mesh-agent -n mcp-mesh \
   --set agent.script=""
 ```
 
+## Generated Credentials
+
+Charts ship no default passwords. On install, the PostgreSQL password and the
+Grafana admin password are auto-generated into Secrets (reused on upgrade):
+
+```bash
+# PostgreSQL (shared by provisioning, registry, and UI)
+kubectl get secret mcp-core-mcp-mesh-postgres-credentials -n mcp-mesh \
+  -o jsonpath='{.data.password}' | base64 -d
+
+# Grafana admin
+kubectl get secret mcp-core-mcp-mesh-grafana-secret -n mcp-mesh \
+  -o jsonpath='{.data.admin-password}' | base64 -d
+```
+
+Set explicit values (`global.postgres.password`,
+`mcp-mesh-grafana.grafana.config.adminPassword`) or pre-created secrets
+(`global.postgres.existingSecret`, `...grafana.config.existingSecret`) to
+override — see the [mcp-mesh-core README](./mcp-mesh-core/README.md).
+
 ## Verify Installation
 
 ```bash

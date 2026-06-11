@@ -1,9 +1,10 @@
-{{- /* Mirrors the mcp-mesh-ui.databaseURL fallback condition: the legacy
-       read-only DSN renders only when nothing else supplies the database
-       connection. */ -}}
+{{- /* Mirrors the mcp-mesh-ui.databaseURL fallback condition: the
+       credential-less read-only placeholder renders only when nothing else
+       supplies the database connection. */ -}}
 {{- $g := include "mcp-mesh-ui.globalPostgres" . | fromJson }}
-{{- if and (not .Values.ui.database.url) (not $g.existingSecret) (not (or $g.host $g.port $g.name $g.username $g.password)) }}
-WARNING: DATABASE_URL is using the built-in development fallback
-(read-only user "mcp_mesh_readonly" with a placeholder password).
-Set ui.database.url or global.postgres.* for production.
+{{- if and (not .Values.ui.database.url) (not (include "mcp-mesh-ui.databaseExistingSecret" .)) (not (or $g.host $g.port $g.name $g.username $g.password)) }}
+WARNING: DATABASE_URL is a credential-less placeholder (read-only user
+"mcp_mesh_readonly", no password) — the UI cannot reach a database until you
+set ui.database.url (ideally a dedicated read-only role; see the
+ui.database.url comment in values.yaml) or global.postgres.*.
 {{- end }}
