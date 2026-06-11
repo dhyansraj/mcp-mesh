@@ -90,8 +90,8 @@ meshctl list --wide
 # Filter by name pattern
 meshctl list --filter weather
 
-# Show only healthy agents
-meshctl list
+# Show every instance, including unhealthy and superseded ones
+meshctl list --all
 ```
 
 **Example output:**
@@ -102,6 +102,15 @@ weather-service  healthy   2m 30s     weather_data,forecast  date_service   http
 hello-world      healthy   1m 45s     greeting               date_service   http://localhost:9090
 system-agent     healthy   3m 12s     date_service,info      -              http://localhost:8080
 ```
+
+By default the table shows healthy agents only. Instances superseded by a
+newer registration of the same agent (common with watch-driven restarts)
+collapse into a dimmed `(+N superseded)` annotation, and down agents are
+counted in the footer rather than shown as named rows, e.g.
+`3 agents (3 healthy) - 1 agent down (use --all) - 2 superseded hidden`.
+Exception: a down instance that declares a capability a live agent is missing
+appears as a red row to explain the dependency gap. `--json` output keeps the
+healthy-only default for script compatibility.
 
 #### Detailed Status
 
