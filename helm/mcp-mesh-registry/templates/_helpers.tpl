@@ -253,6 +253,12 @@ DIVERGING value — user intent that would silently no-op — fails.
   ...): never rendered into env; the binary reads TRACE_* env vars, settable
   via the env list.
 - registry.environment: never rendered; use the top-level env list.
+- security.tls.existingSecret: the README documented this name but every
+  template reads security.tls.secretName; a carried value would mount an
+  empty secret name. Renamed — fail naming the consumed key.
+- security.tls.certFile/keyFile: never consumed; the cert and key paths are
+  fixed (/etc/tls/<certKey|keyKey>). Shipped as "" in the old values.yaml,
+  so empty is tolerated; only a non-empty value fails.
 */}}
 {{- define "mcp-mesh-registry.validateNoRemovedKeys" -}}
 {{/* Old shipped defaults, verbatim from the v2.4.0 umbrella values.yaml. */}}
@@ -303,6 +309,15 @@ DIVERGING value — user intent that would silently no-op — fails.
 {{- fail (printf "registry.environment was never consumed and has been removed (entry %s is not in the old shipped defaults, so it would silently no-op); add environment variables via the top-level env list (name/value entries) instead. Registry TLS/trust settings belong under registry.security" $key) -}}
 {{- else if ne (toString $val) (get $oldEnvironmentDefaults $key) -}}
 {{- fail (printf "registry.environment was never consumed and has been removed (%s=%q diverges from the old shipped default %q, so it would silently no-op); add environment variables via the top-level env list (name/value entries) instead" $key (toString $val) (get $oldEnvironmentDefaults $key)) -}}
+{{- end -}}
+{{- end -}}
+{{- $tls := (dig "security" "tls" (dict) .Values.registry) | default dict -}}
+{{- if get $tls "existingSecret" -}}
+{{- fail (printf "registry.security.tls.existingSecret was never consumed and has been renamed; the templates read registry.security.tls.secretName — set secretName: %q instead (mounted read-only at /etc/tls)" (toString (get $tls "existingSecret"))) -}}
+{{- end -}}
+{{- range $key := list "certFile" "keyFile" -}}
+{{- if get $tls $key -}}
+{{- fail (printf "registry.security.tls.%s was never consumed and has been removed (set to %q, so it would silently no-op); the cert and key are mounted from registry.security.tls.secretName at /etc/tls/<certKey|keyKey>" $key (toString (get $tls $key))) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

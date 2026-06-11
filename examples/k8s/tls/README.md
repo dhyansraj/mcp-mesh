@@ -44,6 +44,11 @@ kubectl apply -f selfsigned-cluster-issuer.yaml \
 # Wait for certificates to be ready
 kubectl get certificates -n mcp-mesh -w
 
+# The root CA Certificate labels its secret mcp-mesh.io/trust=entity-ca via
+# secretTemplate so the registry's k8s-secrets trust backend discovers it.
+# Verify the label is present:
+kubectl get secret mcp-mesh-ca-secret -n mcp-mesh --show-labels
+
 # Install MCP Mesh core with TLS enabled
 helm install mcp-core helm/mcp-mesh-core -n mcp-mesh \
   -f helm-values-tls.yaml
@@ -114,6 +119,15 @@ kubectl apply -f vault-issuer.yaml \
 
 # Wait for certificates
 kubectl get certificates -n mcp-mesh -w
+
+# No Certificate creates the CA trust secret in this flow, so create it from
+# the Vault root CA and label it for the registry's k8s-secrets trust backend
+# (helm-values-tls.yaml references mcp-mesh-ca-secret and selects on this label):
+vault read -field=certificate pki/cert/ca > vault-ca.crt
+kubectl create secret generic mcp-mesh-ca-secret -n mcp-mesh \
+  --from-file=ca.crt=vault-ca.crt
+kubectl label secret mcp-mesh-ca-secret -n mcp-mesh \
+  mcp-mesh.io/trust=entity-ca
 
 # Install with TLS values
 helm install mcp-core helm/mcp-mesh-core -n mcp-mesh \

@@ -15,6 +15,12 @@ spec:
     organizations:
       - mcp-mesh
   secretName: mcp-mesh-ca-secret
+  # Label the CA secret so the registry's k8s-secrets trust backend
+  # (labelSelector mcp-mesh.io/trust=entity-ca in helm-values-tls.yaml)
+  # discovers it. secretTemplate requires cert-manager >= v1.7.
+  secretTemplate:
+    labels:
+      mcp-mesh.io/trust: entity-ca
   privateKey:
     algorithm: ECDSA
     size: 256

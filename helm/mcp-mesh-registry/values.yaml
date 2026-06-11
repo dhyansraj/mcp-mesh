@@ -229,10 +229,9 @@ registry:
       enabled: false
       # TLS mode: off, auto, strict
       mode: "off"
-      certFile: ""
-      keyFile: ""
-      # Use existing TLS secret
-      existingSecret: ""
+      # Existing K8s TLS secret (e.g. from a cert-manager Certificate),
+      # mounted read-only at /etc/tls. Required when enabled.
+      secretName: ""
       certKey: "tls.crt"
       keyKey: "tls.key"
 
