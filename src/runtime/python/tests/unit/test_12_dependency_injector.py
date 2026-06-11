@@ -142,7 +142,7 @@ class TestAnalyzeInjectionStrategy:
             return_value=[],
         ):
             analyze_injection_strategy(func_no_params, ["dep1"])
-        assert "has no parameters but 1 dependencies declared" in caplog.text
+        assert "has no parameters but 1 dependency declared" in caplog.text
 
         caplog.clear()
 
@@ -1207,7 +1207,7 @@ class TestUnifiedPositionalInjection:
         # signature-analysis regression could skip the branch and the test
         # would still pass green while no longer guarding #1104.
         assert any(
-            "injection-eligible parameters (McpMeshTool/MeshJob)" in r.message
+            "injection-eligible parameter" in r.message
             and "will remain None" in r.message
             for r in caplog.records
         )
@@ -1452,3 +1452,659 @@ class TestHiddenWrapperParamFunctionalInjection:
             return anything
 
         assert analyze_injection_strategy(f, ["dep1"]) == [0]
+
+
+class TestPrescriptiveDiagnosticsAndStrictDI:
+    """Issue #1196: DI parameter-selection diagnostics name (a) the
+    parameter positional pairing would/did select per declaration order,
+    (b) each skipped parameter with the reason, and (c) the
+    copy-pasteable fix. ``MCP_MESH_STRICT_DI`` promotes exactly that
+    ambiguity/skip class to :class:`StrictDIError` with the SAME text;
+    informational warnings never raise, and injection semantics are
+    untouched in both modes (positional pairing by declaration order —
+    pinned by ``test_multiple_deps_pair_by_declaration_order_not_name``).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_strict_cache(self):
+        """Strict mode is resolved once per process and cached — reset
+        around every test so setenv/delenv actually take effect."""
+        from _mcp_mesh.engine import strict_di
+
+        strict_di._reset_strict_di_cache()
+        yield
+        strict_di._reset_strict_di_cache()
+
+    @staticmethod
+    def _enable_strict(monkeypatch):
+        from _mcp_mesh.engine import strict_di
+
+        monkeypatch.setenv("MCP_MESH_STRICT_DI", "true")
+        strict_di._reset_strict_di_cache()
+
+    @staticmethod
+    def _prep(func, dependencies, mesh_positions=None, kwargs=None):
+        """Drive _prepare_injection_kwargs like the runtime wrapper does."""
+        import logging as _log
+
+        from _mcp_mesh.engine.dependency_injector import _prepare_injection_kwargs
+        from _mcp_mesh.engine.signature_analyzer import get_mesh_agent_positions
+
+        if mesh_positions is None:
+            mesh_positions = get_mesh_agent_positions(func)
+        return _prepare_injection_kwargs(
+            func,
+            kwargs or {},
+            mesh_positions,
+            dependencies,
+            [None] * len(dependencies),
+            lambda _key: None,
+            _log.getLogger("test"),
+        )
+
+    # ------------------------------------------------------------------
+    # Prescriptive warning text (permissive mode — default)
+    # ------------------------------------------------------------------
+
+    def test_no_params_warning_is_prescriptive(self, caplog):
+        """No-parameters + declared deps: the skip warning names the
+        skipped dependencies, explains positional pairing, and shows the
+        copy-pasteable fix."""
+
+        def no_params():
+            pass
+
+        with caplog.at_level(logging.WARNING):
+            result = analyze_injection_strategy(no_params, ["dep1"])
+
+        assert result == []
+        text = caplog.text
+        assert "has no parameters but 1 dependency declared" in text
+        assert "['dep1']" in text  # the skipped dependencies, by name
+        assert "declaration order" in text
+        assert "dep_0: McpMeshTool = None" in text  # copy-pasteable fix
+
+    def test_multi_param_untyped_warning_names_selection_skips_and_fix(
+        self, caplog
+    ):
+        """Multi-param, none typed: the warning names each skipped
+        parameter WITH its reason (untyped / wrong annotation), states
+        what declaration-order pairing would select, and gives the fix."""
+
+        def multi(alpha, beta: str, gamma):
+            pass
+
+        with caplog.at_level(logging.WARNING):
+            result = analyze_injection_strategy(multi, ["cap_a", "cap_b"])
+
+        assert result == []
+        text = caplog.text
+        assert "none are typed as McpMeshTool" in text
+        # (b) each skipped parameter and the reason
+        assert "'alpha' (untyped)" in text
+        assert "'beta' (annotated as str, not McpMeshTool)" in text
+        assert "'gamma' (untyped)" in text
+        # (a) what positional pairing WOULD select, declaration order
+        assert (
+            "'cap_a' would go to the first McpMeshTool-typed parameter" in text
+        )
+        assert "parameter names are never matched" in text
+        # (c) copy-pasteable fix
+        assert "alpha: McpMeshTool = None" in text
+
+    def test_excess_deps_warning_names_pairings_and_fix(self, caplog):
+        """More deps than injectable slots: the warning names the dep→param
+        pairs that DID get selected, the excess deps, and the fix."""
+        from mesh.types import McpMeshTool
+
+        def f(a: str, db: McpMeshTool = None):
+            pass
+
+        with caplog.at_level(logging.WARNING):
+            result = analyze_injection_strategy(f, ["cap0", "cap1", "cap2"])
+
+        assert result == [1]
+        text = caplog.text
+        assert "will not be injected" in text
+        # (a) selected pairing, declaration order
+        assert "dependencies[0] 'cap0' → parameter 'db'" in text
+        # (b) the skipped deps, by name
+        assert "['cap1', 'cap2']" in text
+        # (c) copy-pasteable fix
+        assert "extra_dep: McpMeshTool = None" in text
+
+    def test_unfilled_slots_runtime_warning_names_pairings_and_fix(self, caplog):
+        """More eligible slots than deps (runtime diagnostic): the warning
+        names the selected pairs, the parameters left None, and the fix."""
+        from mesh.types import McpMeshTool
+
+        async def f(
+            a: str, dep0: McpMeshTool = None, dep1: McpMeshTool = None
+        ):
+            return (dep0, dep1)
+
+        with caplog.at_level(logging.WARNING):
+            self._prep(f, ["cap0"])
+
+        text = caplog.text
+        assert "injection-eligible parameters (McpMeshTool/MeshJob)" in text
+        assert "will remain None" in text
+        # (a) the selected pairing
+        assert "dependencies[0] 'cap0' → parameter 'dep0'" in text
+        # (b) the unfilled parameter, by name
+        assert "['dep1']" in text
+        # (c) the fix
+        assert "add one entry per unfilled parameter to dependencies=[...]" in text
+
+    def test_bounds_guard_warning_is_prescriptive(self, caplog):
+        """The #1171 bounds guard names the skipped dep, the out-of-range
+        position vs the real signature, and the __wrapped__ fix."""
+        from mesh.types import McpMeshTool
+
+        async def f(a: str, db: McpMeshTool = None):
+            return db
+
+        with caplog.at_level(logging.WARNING):
+            final_kwargs, count = self._prep(
+                f, ["cap0", "cap1"], mesh_positions=[1, 7]
+            )
+
+        assert count == 1
+        text = caplog.text
+        assert "out of bounds" in text
+        assert "'cap1'" in text  # the skipped dependency, by name
+        assert "selected position 7" in text
+        assert "ends at index 1" in text
+        assert "functools.wraps" in text  # the fix
+
+    def test_validate_mesh_dependencies_message_is_prescriptive(self):
+        """The heartbeat-time count-mismatch message names each typed slot
+        in declaration order and the exact fix."""
+        from _mcp_mesh.engine.signature_analyzer import validate_mesh_dependencies
+        from mesh.types import McpMeshTool
+
+        def f(a: str, db: McpMeshTool = None):
+            pass
+
+        is_valid, message = validate_mesh_dependencies(f, [{"capability": "c0"}, {"capability": "c1"}])
+
+        assert is_valid is False
+        assert "Each typed slot needs a corresponding dependency" in message
+        assert "'db' (McpMeshTool)" in message  # the slot, by name + kind
+        assert "parameter names are never matched" in message
+        assert "declare exactly 1 entry in dependencies=[...]" in message
+
+    # ------------------------------------------------------------------
+    # Strict mode: the ambiguity/skip class raises with the SAME text
+    # ------------------------------------------------------------------
+
+    def test_strict_no_params_raises_same_text(self, caplog, monkeypatch):
+        """Strict promotes the no-parameters skip warning to a
+        decoration-time StrictDIError carrying the identical message."""
+        from _mcp_mesh.engine.strict_di import StrictDIError
+
+        def no_params():
+            pass
+
+        # Capture the permissive-mode warning text first.
+        with caplog.at_level(logging.WARNING):
+            analyze_injection_strategy(no_params, ["dep1"])
+        warning_text = next(
+            r.message
+            for r in caplog.records
+            if "has no parameters" in r.message
+        )
+
+        self._enable_strict(monkeypatch)
+        with pytest.raises(StrictDIError) as exc_info:
+            analyze_injection_strategy(no_params, ["dep1"])
+
+        assert str(exc_info.value) == warning_text
+
+    def test_strict_multi_param_untyped_raises_same_text(
+        self, caplog, monkeypatch
+    ):
+        from _mcp_mesh.engine.strict_di import StrictDIError
+
+        def multi(alpha, beta: str, gamma):
+            pass
+
+        with caplog.at_level(logging.WARNING):
+            analyze_injection_strategy(multi, ["cap_a"])
+        warning_text = next(
+            r.message
+            for r in caplog.records
+            if "none are typed as McpMeshTool" in r.message
+        )
+
+        self._enable_strict(monkeypatch)
+        with pytest.raises(StrictDIError) as exc_info:
+            analyze_injection_strategy(multi, ["cap_a"])
+
+        assert str(exc_info.value) == warning_text
+
+    def test_strict_excess_deps_raises(self, monkeypatch):
+        from _mcp_mesh.engine.strict_di import StrictDIError
+        from mesh.types import McpMeshTool
+
+        def f(a: str, db: McpMeshTool = None):
+            pass
+
+        self._enable_strict(monkeypatch)
+        with pytest.raises(StrictDIError, match="will not be injected"):
+            analyze_injection_strategy(f, ["cap0", "cap1"])
+
+    def test_strict_unfilled_slots_raises_at_decoration_time(self, monkeypatch):
+        """Permissive mode flags unfilled eligible slots per-call only;
+        strict mode fails fast at decoration/startup via the strategy
+        analysis — same prescriptive text as the runtime warning."""
+        from _mcp_mesh.engine.strict_di import StrictDIError
+        from mesh.types import McpMeshTool
+
+        def f(a: str, dep0: McpMeshTool = None, dep1: McpMeshTool = None):
+            pass
+
+        self._enable_strict(monkeypatch)
+        with pytest.raises(StrictDIError, match="will remain None"):
+            analyze_injection_strategy(f, ["cap0"])
+
+    def test_strict_unfilled_slots_call_time_warns_never_raises(
+        self, caplog, monkeypatch
+    ):
+        """Call-time strict raising is reserved for the bounds guard: the
+        unfilled-slots class is statically detectable, so decoration owns
+        it. The injection-time diagnostic stays a warning even under
+        strict — otherwise a config that escaped decoration (or a direct
+        drive like this one) would fail on EVERY call instead of once at
+        startup."""
+        from mesh.types import McpMeshTool
+
+        async def f(
+            a: str, dep0: McpMeshTool = None, dep1: McpMeshTool = None
+        ):
+            return (dep0, dep1)
+
+        self._enable_strict(monkeypatch)
+        with caplog.at_level(logging.WARNING):
+            final_kwargs, count = self._prep(f, ["cap0"])  # no raise
+
+        assert count == 1
+        assert "will remain None" in caplog.text
+
+    def test_strict_zero_deps_with_eligible_slots_raises_at_decoration(
+        self, monkeypatch
+    ):
+        """Zero-declared-deps configs with typed eligible slots previously
+        escaped both the strategy-time promotion and the heartbeat
+        validator (gated on `if dependencies:`) and then raised on every
+        call. They are statically detectable, so strict must fail once at
+        decoration/startup instead."""
+        from _mcp_mesh.engine.dependency_injector import DependencyInjector
+        from _mcp_mesh.engine.strict_di import StrictDIError
+        from mesh.types import McpMeshTool, MeshJob
+
+        def submit(job: MeshJob = None):
+            pass
+
+        def fetch(a: str, db: McpMeshTool = None):
+            pass
+
+        self._enable_strict(monkeypatch)
+        # Single-MeshJob-param early return path.
+        with pytest.raises(StrictDIError, match="will remain None"):
+            analyze_injection_strategy(submit, [])
+        # Typed McpMeshTool slot with zero deps.
+        with pytest.raises(StrictDIError, match="will remain None"):
+            analyze_injection_strategy(fetch, [])
+        # End-to-end through the decoration surface (wrapper factory).
+        with pytest.raises(StrictDIError, match="will remain None"):
+            DependencyInjector().create_injection_wrapper(submit, [])
+
+    def test_strict_zero_deps_meshjob_does_not_raise_per_call(
+        self, caplog, monkeypatch
+    ):
+        """The same zero-deps MeshJob config driven at the call-time site
+        (bypassing decoration) warns instead of raising — per-call strict
+        raising is reserved for the bounds guard."""
+        from mesh.types import MeshJob
+
+        async def submit(job: MeshJob = None):
+            return job
+
+        self._enable_strict(monkeypatch)
+        with caplog.at_level(logging.WARNING):
+            self._prep(submit, [])  # no raise
+
+        assert "will remain None" in caplog.text
+
+    def test_strict_untyped_single_param_zero_deps_does_not_raise(
+        self, monkeypatch
+    ):
+        """A plain zero-dependency single-param tool ('def greet(name)')
+        has NO typed eligible slot — the heuristic slot must not trip the
+        decoration-time strict check, or every such tool would fail under
+        strict."""
+
+        def greet(name):
+            return name
+
+        self._enable_strict(monkeypatch)
+        assert analyze_injection_strategy(greet, []) == [0]
+
+    def test_caller_supplied_kwarg_fills_unfilled_slot_no_warning_no_raise(
+        self, caplog, monkeypatch
+    ):
+        """Documented contract: callers may pass an explicit value (e.g. a
+        mock) for any injectable slot. A slot the caller filled is not
+        unfilled — no permissive warning, no strict raise, and the call
+        proceeds with the caller's value."""
+        from mesh.types import McpMeshTool
+
+        def f(a: str, dep0: McpMeshTool = None, dep1: McpMeshTool = None):
+            return (dep0, dep1)
+
+        fake = MagicMock(name="caller_supplied_dep1")
+
+        # Permissive: previously a false "dep1 will remain None" warning.
+        with caplog.at_level(logging.WARNING):
+            final_kwargs, count = self._prep(
+                f, ["cap0"], kwargs={"a": "x", "dep1": fake}
+            )
+        assert "will remain None" not in caplog.text
+        assert final_kwargs["dep1"] is fake
+        result = f(**final_kwargs)
+        assert result[1] is fake
+
+        # Strict: the count-based check must not fire before the
+        # caller-supplied accounting — no raise either.
+        self._enable_strict(monkeypatch)
+        final_kwargs, count = self._prep(
+            f, ["cap0"], kwargs={"a": "x", "dep1": fake}
+        )
+        assert final_kwargs["dep1"] is fake
+
+    # ------------------------------------------------------------------
+    # Skip reasons resolve hints the same way eligibility does
+    # ------------------------------------------------------------------
+
+    def test_skip_reason_string_annotation_hint_failure_is_explicit(
+        self, caplog
+    ):
+        """A valid-looking `db: "McpMeshTool"` whose name cannot be
+        resolved (TYPE_CHECKING-only import) made eligibility fall back to
+        "no eligible parameters"; the skip reason must report that
+        hint-resolution failure — not the self-contradictory
+        'annotated as McpMeshTool, not McpMeshTool' read off the raw
+        annotation string."""
+        ns: dict = {}
+        exec(
+            "def f(a, db: 'McpMeshTool' = None):\n    return db\n",
+            ns,
+        )
+        f = ns["f"]
+
+        with caplog.at_level(logging.WARNING):
+            result = analyze_injection_strategy(f, ["cap0"])
+
+        assert result == []
+        text = caplog.text
+        assert "type hints could not be resolved" in text
+        assert "TYPE_CHECKING" in text
+        assert "annotated as McpMeshTool, not McpMeshTool" not in text
+
+    def test_skip_reason_optional_mesh_tool_not_misreported_under_hint_failure(
+        self, caplog
+    ):
+        """An eager Optional[McpMeshTool] param sharing a function with an
+        unresolvable forward ref: hints fail wholesale, so eligibility
+        skipped BOTH. The Optional[McpMeshTool] reason must state the
+        hint failure, not render the raw annotation as
+        'annotated as Union/Optional..., not McpMeshTool'."""
+        from typing import Optional as _Optional
+
+        from mesh.types import McpMeshTool
+
+        ns: dict = {"Optional": _Optional, "McpMeshTool": McpMeshTool}
+        exec(
+            "def f(a, db: Optional[McpMeshTool] = None,"
+            " c: 'Unresolvable' = None):\n    return db\n",
+            ns,
+        )
+        f = ns["f"]
+
+        with caplog.at_level(logging.WARNING):
+            result = analyze_injection_strategy(f, ["cap0"])
+
+        assert result == []
+        text = caplog.text
+        assert "type hints could not be resolved" in text
+        # No reason may claim any parameter is annotated as something
+        # other than McpMeshTool — the hints never resolved.
+        assert "not McpMeshTool" not in text
+
+    def test_string_annotation_that_resolves_is_eligible_no_skip_warning(
+        self, caplog
+    ):
+        """Parity check: when the string annotation DOES resolve, the
+        parameter is eligible and no skip diagnostic fires at all."""
+        from mesh.types import McpMeshTool
+
+        ns: dict = {"McpMeshTool": McpMeshTool}
+        exec(
+            "def f(a, db: 'McpMeshTool' = None):\n    return db\n",
+            ns,
+        )
+        f = ns["f"]
+
+        with caplog.at_level(logging.WARNING):
+            result = analyze_injection_strategy(f, ["cap0"])
+
+        assert result == [1]
+        assert "Skipping injection" not in caplog.text
+
+    def test_strict_bounds_guard_raises(self, monkeypatch):
+        """The bounds guard is only detectable at call time; strict
+        promotes it there."""
+        from _mcp_mesh.engine.strict_di import StrictDIError
+        from mesh.types import McpMeshTool
+
+        async def f(a: str, db: McpMeshTool = None):
+            return db
+
+        self._enable_strict(monkeypatch)
+        with pytest.raises(StrictDIError, match="out of bounds"):
+            self._prep(f, ["cap0", "cap1"], mesh_positions=[1, 7])
+
+    def test_strict_validate_mesh_dependencies_raises_same_text(
+        self, monkeypatch
+    ):
+        from _mcp_mesh.engine.signature_analyzer import validate_mesh_dependencies
+        from _mcp_mesh.engine.strict_di import StrictDIError
+        from mesh.types import McpMeshTool
+
+        def f(a: str, db: McpMeshTool = None):
+            pass
+
+        deps = [{"capability": "c0"}, {"capability": "c1"}]
+        _, permissive_message = validate_mesh_dependencies(f, deps)
+
+        self._enable_strict(monkeypatch)
+        with pytest.raises(StrictDIError) as exc_info:
+            validate_mesh_dependencies(f, deps)
+
+        assert str(exc_info.value) == permissive_message
+
+    # ------------------------------------------------------------------
+    # Strict mode boundaries: informational warnings + semantics untouched
+    # ------------------------------------------------------------------
+
+    def test_strict_informational_single_param_warning_does_not_raise(
+        self, caplog, monkeypatch
+    ):
+        """The single-untyped-parameter notice is informational (injection
+        HAPPENS) — strict mode must not promote it."""
+
+        def f(anything):
+            return anything
+
+        self._enable_strict(monkeypatch)
+        with caplog.at_level(logging.WARNING):
+            result = analyze_injection_strategy(f, ["dep1"])
+
+        assert result == [0]  # injection semantics unchanged under strict
+        assert "consider typing as McpMeshTool for clarity" in caplog.text
+
+    def test_strict_clean_configuration_does_not_raise(self, monkeypatch):
+        """A correctly-typed, correctly-counted function is untouched by
+        strict mode."""
+        from mesh.types import McpMeshTool
+
+        def f(a: str, db: McpMeshTool = None, other: McpMeshTool = None):
+            pass
+
+        self._enable_strict(monkeypatch)
+        assert analyze_injection_strategy(f, ["cap0", "cap1"]) == [1, 2]
+
+    def test_strict_unset_never_raises_warnings_only(self, caplog, monkeypatch):
+        """Default posture (env unset): every ambiguous scenario stays a
+        warning; nothing raises."""
+        from _mcp_mesh.engine import strict_di
+        from mesh.types import McpMeshTool
+
+        monkeypatch.delenv("MCP_MESH_STRICT_DI", raising=False)
+        strict_di._reset_strict_di_cache()
+
+        def no_params():
+            pass
+
+        def multi(alpha, beta):
+            pass
+
+        def excess(a: str, db: McpMeshTool = None):
+            pass
+
+        with caplog.at_level(logging.WARNING):
+            assert analyze_injection_strategy(no_params, ["d1"]) == []
+            assert analyze_injection_strategy(multi, ["d1"]) == []
+            assert analyze_injection_strategy(excess, ["d1", "d2"]) == [1]
+
+        # Three skip-class scenarios, three warnings, zero exceptions.
+        assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 3
+
+    def test_strict_env_resolved_once_per_process(self, monkeypatch):
+        """The env var is read once and cached: flipping it after the first
+        resolution has no effect until the cache is reset."""
+        from _mcp_mesh.engine import strict_di
+
+        monkeypatch.setenv("MCP_MESH_STRICT_DI", "true")
+        strict_di._reset_strict_di_cache()
+        assert strict_di.is_strict_di_enabled() is True
+
+        monkeypatch.setenv("MCP_MESH_STRICT_DI", "false")
+        # No reset — the cached resolution must win.
+        assert strict_di.is_strict_di_enabled() is True
+
+        strict_di._reset_strict_di_cache()
+        assert strict_di.is_strict_di_enabled() is False
+
+
+class TestStrictDIDecorationFailureRegistryCleanup:
+    """Decorator blocks register with DecoratorRegistry BEFORE wrapper
+    creation (the graceful-degradation path depends on that ordering).
+    When wrapper creation raises an error that must propagate
+    (StrictDIError / contract ValueError), the half-registered entry —
+    original function, no wrapper — must be removed before the re-raise,
+    or any caller that survives the raise (decoration inside a user try
+    block, REPL/notebook) sees a stale registry entry advertised on the
+    next heartbeat."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_registry_and_strict_cache(self):
+        from _mcp_mesh.engine import strict_di
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+
+        DecoratorRegistry.clear_all()
+        strict_di._reset_strict_di_cache()
+        yield
+        DecoratorRegistry.clear_all()
+        strict_di._reset_strict_di_cache()
+
+    @staticmethod
+    def _enable_strict(monkeypatch):
+        from _mcp_mesh.engine import strict_di
+
+        monkeypatch.setenv("MCP_MESH_STRICT_DI", "true")
+        strict_di._reset_strict_di_cache()
+
+    def test_strict_tool_decoration_failure_leaves_no_registry_entry(
+        self, monkeypatch
+    ):
+        import mesh
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from _mcp_mesh.engine.strict_di import StrictDIError
+
+        self._enable_strict(monkeypatch)
+
+        with pytest.raises(StrictDIError):
+
+            @mesh.tool(capability="cap", dependencies=["dep1"])
+            def no_params_tool():
+                pass
+
+        assert "no_params_tool" not in DecoratorRegistry.get_mesh_tools()
+
+    def test_strict_route_decoration_failure_leaves_no_registry_entry(
+        self, monkeypatch
+    ):
+        import mesh
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from _mcp_mesh.engine.strict_di import StrictDIError
+
+        self._enable_strict(monkeypatch)
+
+        with pytest.raises(StrictDIError):
+
+            @mesh.route(dependencies=["dep1"])
+            def no_params_route():
+                pass
+
+        assert "no_params_route" not in DecoratorRegistry.get_all_by_type(
+            "mesh_route"
+        )
+
+    def test_strict_a2a_decoration_failure_leaves_no_registry_entry(
+        self, monkeypatch
+    ):
+        import mesh
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+        from _mcp_mesh.engine.strict_di import StrictDIError
+
+        self._enable_strict(monkeypatch)
+
+        with pytest.raises(StrictDIError):
+
+            @mesh.a2a(path="/agents/no-params", dependencies=["dep1"])
+            def no_params_a2a():
+                pass
+
+        assert "no_params_a2a" not in DecoratorRegistry.get_all_by_type("mesh_a2a")
+
+    def test_permissive_tool_decoration_registers_wrapper_unchanged(self):
+        """Control: the same ambiguous config in permissive mode warns,
+        registers, and swaps in the injection wrapper (register-then-update
+        flow intact)."""
+        import mesh
+        from _mcp_mesh.engine.decorator_registry import DecoratorRegistry
+
+        def no_params_tool():
+            pass
+
+        original = no_params_tool
+        wrapped = mesh.tool(capability="cap", dependencies=["dep1"])(no_params_tool)
+
+        tools = DecoratorRegistry.get_mesh_tools()
+        assert "no_params_tool" in tools
+        # update_mesh_tool_function swapped the registered function to the
+        # returned wrapper, not the original.
+        assert tools["no_params_tool"].function is wrapped
+        assert tools["no_params_tool"].function is not original

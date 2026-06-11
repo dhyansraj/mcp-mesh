@@ -165,6 +165,18 @@ class DecoratorRegistry:
             )
 
     @classmethod
+    def unregister_mesh_tool(cls, func_name: str) -> None:
+        """Remove a registered mesh tool (decoration-failure cleanup).
+
+        Used when wrapper creation fails AFTER registration with an error
+        that must propagate (e.g. ``StrictDIError``) — without this, the
+        registry would keep advertising a half-registered tool whose
+        wrapper never materialized.
+        """
+        if cls._mesh_tools.pop(func_name, None) is not None:
+            logger.debug(f"🗑️ DecoratorRegistry: Unregistered mesh tool '{func_name}'")
+
+    @classmethod
     def register_mesh_resource(cls, func: Callable, metadata: dict[str, Any]) -> None:
         """Register a @mesh_resource decorated function (future use)."""
         decorated_func = DecoratedFunction(
@@ -258,6 +270,19 @@ class DecoratorRegistry:
         )
 
         cls._custom_decorators[decorator_type][func.__name__] = decorated_func
+
+    @classmethod
+    def unregister_custom_decorator(cls, decorator_type: str, func_name: str) -> None:
+        """Remove a registered custom decorator entry (decoration-failure cleanup).
+
+        Counterpart of :meth:`unregister_mesh_tool` for decorators stored
+        under a custom type (``mesh_route``, ``mesh_a2a``, ...).
+        """
+        entries = cls._custom_decorators.get(decorator_type)
+        if entries is not None and entries.pop(func_name, None) is not None:
+            logger.debug(
+                f"🗑️ DecoratorRegistry: Unregistered {decorator_type} '{func_name}'"
+            )
 
     @classmethod
     def get_mesh_agents(cls) -> dict[str, DecoratedFunction]:
