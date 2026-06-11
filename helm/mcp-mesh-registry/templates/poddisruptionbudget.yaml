@@ -1,4 +1,7 @@
-{{- if .Values.podDisruptionBudget.enabled }}
+{{- /* Renders only when more than one replica is guaranteed (see the
+       pdbEnabled helper) — a minAvailable PDB on a single-replica
+       deployment blocks node drains. */ -}}
+{{- if include "mcp-mesh-registry.pdbEnabled" . }}
 {{- if semverCompare ">=1.21-0" .Capabilities.KubeVersion.GitVersion -}}
 apiVersion: policy/v1
 {{- else -}}

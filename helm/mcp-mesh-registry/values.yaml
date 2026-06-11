@@ -7,11 +7,29 @@ replicaCount: 1
 workloadType: "Deployment" # Registry is stateless
 
 image:
+  # Registry prefix for the image. Resolution: this value >
+  # global.imageRegistry > "" (Docker Hub). The repository path is preserved:
+  # registry: my.registry.internal pulls my.registry.internal/mcpmesh/registry
+  # — mirror images to the same paths.
+  registry: ""
   repository: mcpmesh/registry
   pullPolicy: IfNotPresent
   # Minor version tag tracks latest patch (0.8 → 0.8.x)
   tag: "2.4"
 
+# Image for the wait-for-db init container (rendered for non-sqlite databases;
+# disable the init container via registry.database.waitForDatabase: false).
+# The registry prefix resolves like image.registry above — with
+# global.imageRegistry set, this pulls <registry>/busybox:1.35.
+waitForDbImage:
+  registry: ""
+  repository: busybox
+  tag: "1.35"
+
+# Pull secrets for this chart's pods, merged with global.imagePullSecrets
+# (deduplicated by name). Standard shape:
+#   imagePullSecrets:
+#     - name: my-registry-credentials
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
@@ -103,6 +121,26 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+# Explicit topology spread constraints. When set, they replace the built-in
+# soft defaults below entirely.
+topologySpreadConstraints: []
+  # - maxSkew: 1
+  #   topologyKey: topology.kubernetes.io/zone
+  #   whenUnsatisfiable: DoNotSchedule
+  #   labelSelector:
+  #     matchLabels:
+  #       app.kubernetes.io/name: mcp-mesh-registry
+
+# Built-in soft spread for HA: when no explicit topologySpreadConstraints are
+# set and more than one replica is possible (replicaCount > 1, or autoscaling
+# enabled with maxReplicas > 1), the registry pods get soft (ScheduleAnyway,
+# maxSkew 1) spread across zones and nodes. ScheduleAnyway is a no-op on
+# single-node / single-zone clusters, so this is safe to leave on. Hard
+# requirements (DoNotSchedule, pod anti-affinity) stay opt-in via
+# topologySpreadConstraints / affinity above.
+defaultTopologySpread:
+  enabled: true
 
 # Registry-specific configuration
 registry:
@@ -358,9 +396,12 @@ readinessProbe:
   timeoutSeconds: 3
   failureThreshold: 3
 
-# Pod disruption budget
+# Pod disruption budget. Enabled by default, but it only engages when the
+# registry is guaranteed more than one replica (replicaCount > 1, or
+# autoscaling.minReplicas > 1 with the HPA enabled) — a minAvailable PDB on
+# a single-replica deployment would block node drains.
 podDisruptionBudget:
-  enabled: false
+  enabled: true
   minAvailable: 1
   # maxUnavailable: 1
 

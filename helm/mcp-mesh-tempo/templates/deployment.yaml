@@ -25,11 +25,14 @@ spec:
       labels:
         {{- include "mcp-mesh-tempo.selectorLabels" . | nindent 8 }}
     spec:
+      {{- with include "mcp-mesh-tempo.imagePullSecrets" . }}
+      {{- . | nindent 6 }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.tempo.podSecurityContext | nindent 8 }}
       containers:
       - name: tempo
-        image: "{{ .Values.tempo.image.repository }}:{{ .Values.tempo.image.tag }}"
+        image: "{{ include "mcp-mesh-tempo.image" . }}"
         imagePullPolicy: {{ .Values.tempo.image.pullPolicy }}
         securityContext:
           {{- toYaml .Values.tempo.securityContext | nindent 10 }}

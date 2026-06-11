@@ -24,11 +24,14 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      {{- with include "mcp-mesh-postgres.imagePullSecrets" . }}
+      {{- . | nindent 6 }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: postgres
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ include "mcp-mesh-postgres.image" . }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: postgres

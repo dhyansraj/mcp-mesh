@@ -1,9 +1,20 @@
 grafana:
   enabled: true
   image:
+    # Registry prefix for the image. Resolution: this value >
+    # global.imageRegistry > "" (Docker Hub). The repository path is
+    # preserved (registry: my.registry.internal pulls
+    # my.registry.internal/grafana/grafana).
+    registry: ""
     repository: grafana/grafana
     tag: "12.3.1"
     pullPolicy: IfNotPresent
+
+  # Pull secrets for this chart's pods, merged with global.imagePullSecrets
+  # (deduplicated by name). Standard shape:
+  #   imagePullSecrets:
+  #     - name: my-registry-credentials
+  imagePullSecrets: []
 
   resources:
     requests:

@@ -225,6 +225,80 @@ mcp-mesh-registry:
             pathType: Prefix
 ```
 
+### Air-gapped / private registry installs
+
+`global.imageRegistry` repoints every image in the stack — the registry, UI,
+PostgreSQL, Redis, Grafana, Tempo, and the registry's wait-for-db busybox
+init container — to a private registry. `global.imagePullSecrets` adds pull
+secrets to every pod spec (merged with each chart's own `imagePullSecrets`,
+deduplicated by name):
+
+```yaml
+# values.yaml
+global:
+  imageRegistry: my.registry.internal
+  imagePullSecrets:
+    - name: my-registry-credentials
+```
+
+Repository paths are preserved, so mirror each image to the same path:
+
+| Source image          | Pulled as                                  |
+| --------------------- | ------------------------------------------ |
+| `mcpmesh/registry`    | `my.registry.internal/mcpmesh/registry`    |
+| `mcpmesh/ui`          | `my.registry.internal/mcpmesh/ui`          |
+| `postgres`            | `my.registry.internal/postgres`            |
+| `redis`               | `my.registry.internal/redis`               |
+| `grafana/grafana`     | `my.registry.internal/grafana/grafana`     |
+| `grafana/tempo`       | `my.registry.internal/grafana/tempo`       |
+| `busybox`             | `my.registry.internal/busybox`             |
+
+Docker Hub library images (`postgres`, `redis`, `busybox`) keep their
+single-segment name — mirror them to that same path; the charts do not
+rewrite repository paths. Per-component overrides win over the global (e.g.
+`mcp-mesh-registry.image.registry`). The standalone `mcp-mesh-agent` chart
+honors the same `global.imageRegistry` / `global.imagePullSecrets` values
+when passed to each agent release.
+
+### Registry high availability
+
+The registry is stateless when backed by PostgreSQL (the default), so it can
+run multi-replica:
+
+```yaml
+# values.yaml
+mcp-mesh-registry:
+  replicaCount: 3
+```
+
+That is the only required change. At more than one replica the chart
+automatically adds:
+
+- **Soft topology spread** across zones and nodes (`ScheduleAnyway`,
+  `maxSkew: 1`) — a no-op on single-node clusters, replica spreading
+  wherever real topology exists. Replace with explicit
+  `mcp-mesh-registry.topologySpreadConstraints` (or disable via
+  `mcp-mesh-registry.defaultTopologySpread.enabled: false`) for hard
+  requirements.
+- **A PodDisruptionBudget** (`minAvailable: 1`) so node drains keep at least
+  one registry running. It never renders at a single replica, where it would
+  block drains.
+
+For load-based scaling, enable the HPA instead of a fixed count:
+
+```yaml
+mcp-mesh-registry:
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 80
+```
+
+Multi-replica and autoscaling require an external database — with
+`registry.database.type=sqlite` the template fails, since sqlite is a
+single-writer local file.
+
 ## Architecture
 
 The core infrastructure follows this deployment pattern:
@@ -309,6 +383,8 @@ Note: This will delete all data in PostgreSQL. Back up data before uninstalling.
 | Key                | Type   | Default      | Description                          |
 | ------------------ | ------ | ------------ | ------------------------------------ |
 | `global.namespace` | string | `"mcp-mesh"` | Namespace for all components         |
+| `global.imageRegistry` | string | `""` | Registry prefix applied to every image (repository paths preserved — see "Air-gapped / private registry installs"); per-component `image.registry` overrides win |
+| `global.imagePullSecrets` | list | `[]` | Pull secrets (`- name: ...`) added to every pod spec, merged with each chart's own `imagePullSecrets` and deduplicated by name |
 | `global.postgres.*` | object | bundled postgres | PostgreSQL endpoint/credentials inherited by all consumers (`host`, `port`, `name`, `username`, `password`, `sslmode`, `existingSecret`, `existingSecretUrlKey`, `existingSecretPasswordKey`, `tls.caSecret`, `tls.caKey`) |
 | `global.postgres.generatedSecret` | bool | `true` | Auto-generate the password into `<release>-mcp-mesh-postgres-credentials` when no `password`/`existingSecret` is set (provisioning and all consumers share it) |
 | `global.postgres.generatedSecretName` | string | `""` | Override the generated Secret's name (needed only with name/fullname overrides on the postgres subchart) |

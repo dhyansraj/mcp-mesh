@@ -30,15 +30,25 @@ The following table lists the configurable parameters of the MCP Mesh Registry c
 
 ### General Configuration
 
-| Parameter          | Description                            | Default             |
-| ------------------ | -------------------------------------- | ------------------- |
-| `replicaCount`     | Number of registry replicas            | `1`                 |
-| `image.repository` | Registry image repository              | `mcp-mesh-registry` |
-| `image.pullPolicy` | Image pull policy                      | `IfNotPresent`      |
-| `image.tag`        | Image tag (overrides chart appVersion) | `""`                |
-| `imagePullSecrets` | Docker registry secret names           | `[]`                |
-| `nameOverride`     | Override chart name                    | `""`                |
-| `fullnameOverride` | Override full name                     | `""`                |
+| Parameter                  | Description                                                                | Default             |
+| -------------------------- | -------------------------------------------------------------------------- | ------------------- |
+| `replicaCount`             | Number of registry replicas (> 1 requires an external database)            | `1`                 |
+| `image.registry`           | Image registry prefix (overrides `global.imageRegistry`)                   | `""`                |
+| `image.repository`         | Registry image repository                                                   | `mcpmesh/registry`  |
+| `image.pullPolicy`         | Image pull policy                                                           | `IfNotPresent`      |
+| `image.tag`                | Image tag (overrides chart appVersion)                                      | `"2.4"`             |
+| `waitForDbImage.registry`  | wait-for-db init image registry prefix (overrides `global.imageRegistry`)  | `""`                |
+| `waitForDbImage.repository` | wait-for-db init image repository                                           | `busybox`           |
+| `waitForDbImage.tag`       | wait-for-db init image tag                                                  | `"1.35"`            |
+| `imagePullSecrets`         | Pull secrets, merged with `global.imagePullSecrets` (deduplicated by name) | `[]`                |
+| `nameOverride`             | Override chart name                                                         | `""`                |
+| `fullnameOverride`         | Override full name                                                          | `""`                |
+
+`global.imageRegistry` prefixes every image in the chart (the registry image
+and the wait-for-db init container) while preserving repository paths — with
+`global.imageRegistry=my.registry.internal` the chart pulls
+`my.registry.internal/mcpmesh/registry` and `my.registry.internal/busybox`.
+Mirror images to the same paths in a private registry.
 
 ### Service Configuration
 
@@ -154,6 +164,25 @@ here; an explicit value always wins.
 | `autoscaling.maxReplicas`                       | Maximum replicas          | `10`    |
 | `autoscaling.targetCPUUtilizationPercentage`    | Target CPU utilization    | `80`    |
 | `autoscaling.targetMemoryUtilizationPercentage` | Target memory utilization | `80`    |
+
+The registry is stateless when backed by an external database, so the HPA is
+safe to enable. Autoscaling (and `replicaCount > 1`) with
+`registry.database.type=sqlite` fails at template time: sqlite is a
+single-writer local file and cannot be shared across replicas.
+
+### HA Scheduling
+
+| Parameter                       | Description                                                                                                        | Default |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------- |
+| `defaultTopologySpread.enabled` | Soft zone + node spread (`ScheduleAnyway`) applied automatically when more than one replica is possible             | `true`  |
+| `topologySpreadConstraints`     | Explicit constraints; replace the built-in soft defaults entirely                                                   | `[]`    |
+| `podDisruptionBudget.enabled`   | PDB; engages only when more than one replica is guaranteed (`replicaCount > 1` or `autoscaling.minReplicas > 1`)    | `true`  |
+| `podDisruptionBudget.minAvailable` | Minimum available pods during voluntary disruptions                                                              | `1`     |
+
+At `replicaCount: 1` (the default) neither the spread constraints nor the PDB
+render — a `minAvailable` PDB on a single-replica deployment would block node
+drains. Hard placement requirements (`DoNotSchedule`, pod anti-affinity) stay
+opt-in via `topologySpreadConstraints` / `affinity`.
 
 ### Monitoring
 

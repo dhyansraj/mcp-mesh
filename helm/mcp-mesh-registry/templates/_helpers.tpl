@@ -261,6 +261,92 @@ true
 {{- end }}
 
 {{/*
+Render an image reference as [registry/]repository:tag from an image block.
+The registry prefix resolves as <block>.registry > global.imageRegistry > ""
+(implicit Docker Hub). Repository paths are preserved: with
+global.imageRegistry=my.registry.internal this renders
+my.registry.internal/mcpmesh/registry and (for the init container)
+my.registry.internal/busybox — mirror images to the same paths.
+Call with (dict "image" <imageBlock> "root" $).
+*/}}
+{{- define "mcp-mesh-registry.imageRef" -}}
+{{- $img := .image -}}
+{{- $registry := $img.registry | default (dig "imageRegistry" "" (.root.Values.global | default dict)) | trimSuffix "/" -}}
+{{- $tag := $img.tag | default .root.Chart.AppVersion -}}
+{{- if $registry -}}
+{{- printf "%s/%s:%s" $registry $img.repository $tag -}}
+{{- else -}}
+{{- printf "%s:%s" $img.repository $tag -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+imagePullSecrets for the pod spec: global.imagePullSecrets merged with the
+chart's own imagePullSecrets, deduplicated by name. Entries may be maps
+({name: ...}, the Kubernetes shape) or bare strings. Renders nothing when
+both lists are empty.
+*/}}
+{{- define "mcp-mesh-registry.imagePullSecrets" -}}
+{{- $names := list -}}
+{{- $global := dig "imagePullSecrets" (list) (.Values.global | default dict) -}}
+{{- range concat ($global | default list) (.Values.imagePullSecrets | default list) -}}
+{{- $name := . -}}
+{{- if kindIs "map" . -}}{{- $name = get . "name" -}}{{- end -}}
+{{- if and $name (not (has $name $names)) -}}
+{{- $names = append $names $name -}}
+{{- end -}}
+{{- end -}}
+{{- if $names -}}
+imagePullSecrets:
+{{- range $names }}
+  - name: {{ . }}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Multi-replica safety guard: sqlite is a single-writer local file — each
+replica would either get its own divergent database (emptyDir) or fight
+over one ReadWriteOnce volume. Fail at template time instead of deploying
+a broken topology. Invoked unconditionally from the deployment.
+*/}}
+{{- define "mcp-mesh-registry.validateMultiReplica" -}}
+{{- if eq .Values.registry.database.type "sqlite" -}}
+{{- if .Values.autoscaling.enabled -}}
+{{- fail "autoscaling.enabled requires an external database: sqlite is a single-writer local file and cannot be shared across replicas. Set registry.database.type=postgres, or disable autoscaling." -}}
+{{- end -}}
+{{- if gt (int .Values.replicaCount) 1 -}}
+{{- fail "replicaCount > 1 requires an external database: sqlite is a single-writer local file and cannot be shared across replicas. Set registry.database.type=postgres, or keep replicaCount=1." -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Whether more than one registry replica is possible: replicaCount > 1, or the
+HPA owns the replica count and can scale beyond one. Gates the default
+topology spread constraints.
+*/}}
+{{- define "mcp-mesh-registry.multiReplica" -}}
+{{- if .Values.autoscaling.enabled -}}
+{{- if gt (int .Values.autoscaling.maxReplicas) 1 -}}true{{- end -}}
+{{- else if gt (int .Values.replicaCount) 1 -}}true{{- end -}}
+{{- end }}
+
+{{/*
+Whether the PodDisruptionBudget renders. Enabled by default, but it only
+engages when the registry is guaranteed more than one replica
+(replicaCount > 1, or autoscaling.minReplicas > 1 with the HPA enabled):
+a minAvailable PDB on a single-replica deployment blocks node drains.
+*/}}
+{{- define "mcp-mesh-registry.pdbEnabled" -}}
+{{- if .Values.podDisruptionBudget.enabled -}}
+{{- if .Values.autoscaling.enabled -}}
+{{- if gt (int .Values.autoscaling.minReplicas) 1 -}}true{{- end -}}
+{{- else if gt (int .Values.replicaCount) 1 -}}true{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Get persistence volume claim name
 */}}
 {{- define "mcp-mesh-registry.pvcName" -}}
