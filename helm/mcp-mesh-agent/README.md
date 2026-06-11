@@ -110,6 +110,8 @@ helm uninstall my-agent -n mcp-mesh
 | `resources.requests.cpu`    | CPU request                            | `100m`                     |
 | `resources.requests.memory` | Memory request                         | `256Mi`                    |
 
+> **Upgrade note:** `podSecurityContext` (runAsNonRoot, uid/gid 999, fsGroup 999, RuntimeDefault seccomp) is now always applied — it was previously gated behind the removed `podSecurityPolicy.enabled` flag and never rendered. It covers user-supplied `initContainers` (an init container that must run as root needs its own `securityContext`, which overrides the pod level), and `fsGroup: 999` changes group ownership of mounted volumes, including PVCs from `extraVolumes`.
+
 ### Agent Code Configuration
 
 | Parameter                 | Description                               | Default        |

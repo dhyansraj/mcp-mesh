@@ -1,4 +1,14 @@
 {{- if .Values.grafana.enabled }}
+{{- /* Migration guard: grafana.securityContext used to be the POD security
+       context (it carried fsGroup). It is now the CONTAINER security context
+       and pod-level settings live under grafana.podSecurityContext — an old
+       override here would put fsGroup in the container context, where the
+       API server drops it (losing PVC write access). */}}
+{{- range $field := list "fsGroup" "fsGroupChangePolicy" "supplementalGroups" "sysctls" }}
+{{- if hasKey ($.Values.grafana.securityContext | default dict) $field }}
+{{- fail (printf "grafana.securityContext.%s: grafana.securityContext is now the container security context; pod-only fields (fsGroup, fsGroupChangePolicy, supplementalGroups, sysctls) are invalid there and belong in grafana.podSecurityContext. Move your override there." $field) }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,11 +26,13 @@ spec:
         {{- include "mcp-mesh-grafana.selectorLabels" . | nindent 8 }}
     spec:
       securityContext:
-        {{- toYaml .Values.grafana.securityContext | nindent 8 }}
+        {{- toYaml .Values.grafana.podSecurityContext | nindent 8 }}
       containers:
       - name: grafana
         image: "{{ .Values.grafana.image.repository }}:{{ .Values.grafana.image.tag }}"
         imagePullPolicy: {{ .Values.grafana.image.pullPolicy }}
+        securityContext:
+          {{- toYaml .Values.grafana.securityContext | nindent 10 }}
         ports:
         - name: http
           containerPort: 3000
@@ -71,10 +83,13 @@ spec:
           mountPath: /var/lib/grafana/dashboards
           readOnly: true
         {{- end }}
-        {{- if .Values.grafana.persistence.enabled }}
+        {{- /* /var/lib/grafana and /tmp must be writable (data, sqlite db,
+               plugin install) — always volumes since the root filesystem is
+               read-only. */}}
         - name: storage
           mountPath: /var/lib/grafana
-        {{- end }}
+        - name: tmp
+          mountPath: /tmp
         livenessProbe:
           httpGet:
             path: /api/health
@@ -108,9 +123,13 @@ spec:
         configMap:
           name: {{ include "mcp-mesh-grafana.fullname" . }}-dashboard
       {{- end }}
-      {{- if .Values.grafana.persistence.enabled }}
       - name: storage
+        {{- if .Values.grafana.persistence.enabled }}
         persistentVolumeClaim:
           claimName: {{ include "mcp-mesh-grafana.fullname" . }}-pvc
-      {{- end }}
+        {{- else }}
+        emptyDir: {}
+        {{- end }}
+      - name: tmp
+        emptyDir: {}
 {{- end }}

@@ -53,6 +53,16 @@ jobs:
             fi
           done
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check Pod Security Standards compliance
+        run: |
+          pip install pyyaml==6.0.3
+          python3 scripts/check_helm_pss.py
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:

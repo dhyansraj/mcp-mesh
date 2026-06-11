@@ -27,9 +27,14 @@ data:
 
     [paths]
     data = /var/lib/grafana
-    logs = /var/log/grafana
     plugins = /var/lib/grafana/plugins
     provisioning = /etc/grafana/provisioning
+
+    {{- /* Console-only logging: the root filesystem is read-only
+           (securityContext), so the file target under /var/log/grafana
+           would fail. */}}
+    [log]
+    mode = console
 
     [analytics]
     reporting_enabled = false

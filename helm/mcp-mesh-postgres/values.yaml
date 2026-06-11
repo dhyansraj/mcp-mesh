@@ -26,11 +26,6 @@ postgres:
   # PostgreSQL configuration
   postgresqlDataDir: "/var/lib/postgresql/data/pgdata"
 
-  # Security configuration
-  runAsUser: 999
-  runAsGroup: 999
-  fsGroup: 999
-
 image:
   repository: postgres
   tag: "15"
@@ -78,19 +73,36 @@ startupProbe:
   timeoutSeconds: 5
   failureThreshold: 30
 
-# Pod security context
+# Container security context (hardened for Pod Security Standards "restricted").
+# readOnlyRootFilesystem works because every path postgres writes is a volume:
+# the data directory (PVC) and /var/run/postgresql + /tmp (emptyDir, see the
+# statefulset).
 securityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop:
       - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
   runAsUser: 999
   runAsGroup: 999
 
-# Pod security context
+# Pod security context. Runs the official postgres image as its in-image
+# postgres user (uid 999) — no root and no chown initContainer needed:
+# fsGroup makes the PVC mount group-writable, the entrypoint skips its
+# root-only chown path when started non-root, and initdb creates the pgdata
+# subdirectory (postgres.postgresqlDataDir) itself with the right ownership.
 podSecurityContext:
-  runAsNonRoot: false
+  runAsNonRoot: true
+  runAsUser: 999
+  runAsGroup: 999
   fsGroup: 999
+  # Skip the recursive chown/chmod of the data volume when its root already
+  # has the right ownership — on a large database the recursive walk on every
+  # pod start is expensive.
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
 
 # Node selector
 nodeSelector: {}

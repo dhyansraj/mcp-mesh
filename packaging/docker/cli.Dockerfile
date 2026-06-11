@@ -7,15 +7,17 @@ ARG TARGETPLATFORM
 ARG VERSION
 
 # Install system dependencies
+# hadolint ignore=DL3008,DL3015
 RUN apt-get update && apt-get install -y \
     curl \
     wget \
     git \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd -r mcp-mesh \
-    && useradd -r -g mcp-mesh mcp-mesh
+    && groupadd -r -g 999 mcp-mesh \
+    && useradd -r -u 999 -g mcp-mesh mcp-mesh
 
 # Install both meshctl and registry using install.sh script
+# hadolint ignore=DL4006
 RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; fi && \
     echo "Installing meshctl and registry ${VERSION} using install.sh..." && \
     curl -sSL "https://raw.githubusercontent.com/dhyansraj/mcp-mesh/main/install.sh" | bash -s -- --all --version ${VERSION} --install-dir /usr/local/bin
@@ -23,7 +25,7 @@ RUN if [ -z "$VERSION" ]; then echo "VERSION build arg is required" && exit 1; f
 # Install mcp-mesh package from PyPI (remove 'v' prefix if present)
 RUN VERSION_NO_V="${VERSION#v}" && \
     echo "Installing mcp-mesh==${VERSION_NO_V} from PyPI" && \
-    pip install --no-cache-dir mcp-mesh==${VERSION_NO_V}
+    pip install --no-cache-dir "mcp-mesh==${VERSION_NO_V}"
 
 # Create workspace
 RUN mkdir -p /workspace && chown mcp-mesh:mcp-mesh /workspace

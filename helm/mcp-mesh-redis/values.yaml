@@ -5,10 +5,6 @@ redis:
   maxmemory: "256mb"
   maxmemoryPolicy: "allkeys-lru"
 
-  # Security
-  runAsUser: 999
-  runAsGroup: 999
-
 image:
   repository: redis
   tag: "7-alpine"
@@ -53,12 +49,16 @@ readinessProbe:
   timeoutSeconds: 3
   failureThreshold: 3
 
-# Pod security context
+# Container security context (hardened for Pod Security Standards
+# "restricted"). readOnlyRootFilesystem works because redis only writes /data,
+# which is always a volume (PVC or emptyDir).
 securityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop:
       - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
   runAsUser: 999
   runAsGroup: 999
 
@@ -67,6 +67,9 @@ podSecurityContext:
   runAsNonRoot: true
   runAsUser: 999
   runAsGroup: 999
+  fsGroup: 999
+  seccompProfile:
+    type: RuntimeDefault
 
 # Node selector
 nodeSelector: {}

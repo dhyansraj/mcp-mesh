@@ -27,18 +27,36 @@ serviceAccount:
 
 podAnnotations: {}
 
+# Pod security context (hardened for Pod Security Standards "restricted";
+# seccompProfile here also covers the wait-for-db init container).
+# Note: uid 999 intentionally differs from the mcpmesh/registry image's
+# built-in mcp-mesh user (1001). Any non-root uid works here: the root
+# filesystem is read-only and every writable path is a volume (/tmp emptyDir,
+# /data PVC/emptyDir) made group-writable via fsGroup.
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 999
+  runAsGroup: 999
   fsGroup: 999
+  seccompProfile:
+    type: RuntimeDefault
 
+# Container security context. readOnlyRootFilesystem works because the
+# registry is a static Go binary that only writes its database: /tmp is
+# emptyDir-mounted and /data is a volume in sqlite mode (PVC when
+# persistence.enabled, emptyDir otherwise). If you point an opt-in feature at
+# a path on the root filesystem (e.g. registry.security.trust.dir with the
+# localca/filestore backend and no caSecret), mount it via extraVolumes or
+# relax this setting.
 securityContext:
+  allowPrivilegeEscalation: false
   capabilities:
     drop:
       - ALL
-  readOnlyRootFilesystem: false # Registry may need to write temp files
+  readOnlyRootFilesystem: true
   runAsNonRoot: true
   runAsUser: 999
+  runAsGroup: 999
 
 service:
   type: ClusterIP
