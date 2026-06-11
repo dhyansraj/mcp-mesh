@@ -1,3 +1,4 @@
+{{- include "mcp-mesh-core.validateNoRemovedKeys" . -}}
 {{- if .Values.namespaceCreate }}
 apiVersion: v1
 kind: Namespace

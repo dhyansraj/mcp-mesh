@@ -21,11 +21,11 @@ agentCode:
   # configMapName: ""  # Auto-generated: {release-name}-code
   mountPath: "/app"
 
-# Registry connection
+# Registry connection (host empty defaults to
+# "<global.coreReleaseName>-mcp-mesh-registry")
 registry:
-  host: "mcp-core-mcp-mesh-registry"
+  host: ""
   port: "8000"
-  url: "http://mcp-core-mcp-mesh-registry:8000"
 
 # Container image
 image:

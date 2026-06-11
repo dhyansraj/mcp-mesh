@@ -7,7 +7,6 @@
 
 global:
   namespace: trip-planner
-  coreReleaseName: "mcp-core"
 
 # All components enabled
 postgres:
@@ -62,18 +61,14 @@ mcp-mesh-registry:
 
   registry:
     # SPIRE-based TLS for registry
-    environment:
-      MCP_MESH_TLS_MODE: "auto"
-      MCP_MESH_TLS_PROVIDER: "spire"
-      MCP_MESH_SPIRE_SOCKET: "/run/spire/agent/sockets/agent.sock"
-      MCP_MESH_TRUST_BACKEND: "spire"
-      ENABLE_RESPONSE_CACHE: "true"
-      ENABLE_CORS: "true"
-      ENABLE_METRICS: "true"
-      ENABLE_PROMETHEUS: "true"
-      ENABLE_EVENTS: "true"
-      ACCESS_LOG: "true"
-      CACHE_TTL: "30"
+    security:
+      tls:
+        mode: "auto"
+      trust:
+        backend: "spire"
+        spire:
+          enabled: true
+          socketPath: "/run/spire/agent/sockets/agent.sock"
 
   # Mount SPIRE agent socket into registry pod
   extraVolumes:

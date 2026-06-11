@@ -87,7 +87,7 @@ spec:
         - name: registry
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ include "mcp-mesh-registry.imageRef" (dict "image" .Values.image "root" $) }}"
+          image: "{{ include "mcp-mesh-registry.imageRef" (dict "image" .Values.image "root" $ "defaultTag" $.Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http

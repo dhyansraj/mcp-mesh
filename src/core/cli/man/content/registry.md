@@ -59,10 +59,6 @@ export DEFAULT_TIMEOUT_THRESHOLD=20  # Mark unhealthy after (seconds)
 export HEALTH_CHECK_INTERVAL=10      # Scan frequency (seconds)
 export DEFAULT_EVICTION_THRESHOLD=60 # Remove stale agents (seconds)
 
-# Caching
-export CACHE_TTL=30
-export ENABLE_RESPONSE_CACHE=true
-
 # Logging
 export MCP_MESH_LOG_LEVEL=INFO
 export MCP_MESH_DEBUG_MODE=false

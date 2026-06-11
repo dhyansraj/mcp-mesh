@@ -24,7 +24,8 @@ agent:
 ```bash
 helm install my-agent ./helm/mcp-mesh-agent \
   --set agent.script=/app/agents/hello_world.py \
-  --set registry.url=http://mcp-mesh-registry:8080
+  --set registry.host=mcp-mesh-registry \
+  --set registry.port="8080"
 ```
 
 ### Pros
@@ -68,7 +69,8 @@ kubectl create configmap my-agent-code --from-file=agent.py=./my-agent.py
 helm install my-agent ./helm/mcp-mesh-agent \
   --set agentCode.enabled=true \
   --set agentCode.configMapName=my-agent-code \
-  --set registry.url=http://mcp-mesh-registry:8080
+  --set registry.host=mcp-mesh-registry \
+  --set registry.port="8080"
 ```
 
 ### Pros
@@ -109,7 +111,8 @@ agentCode:
 helm install my-agent ./helm/mcp-mesh-agent \
   --set agentCode.enabled=true \
   --set agentCode.scriptPath=scripts/my-agent.py \
-  --set registry.url=http://mcp-mesh-registry:8080
+  --set registry.host=mcp-mesh-registry \
+  --set registry.port="8080"
 ```
 
 ### Pros

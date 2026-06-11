@@ -1,3 +1,5 @@
+{{- include "mcp-mesh-agent.validateNoRemovedKeys" . -}}
+{{- $corePrefix := include "mcp-mesh-agent.corePrefix" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -13,14 +15,15 @@ metadata:
   {{- end }}
 data:
   # Registry connection (configurable for federated networks) - matches working examples
-  REGISTRY_HOST: {{ .Values.registry.host | default "mcp-mesh-registry" | quote }}
+  {{- $registryHost := .Values.registry.host | default (printf "%s-mcp-mesh-registry" $corePrefix) }}
+  REGISTRY_HOST: {{ $registryHost | quote }}
   REGISTRY_PORT: {{ .Values.registry.port | default "8000" | quote }}
 
   # Complete registry URL (primary variable used by runtime)
   {{- if and .Values.mesh.tls.mode (ne .Values.mesh.tls.mode "off") }}
-  MCP_MESH_REGISTRY_URL: {{ printf "https://%s:%s" (.Values.registry.host | default "mcp-mesh-registry") (.Values.registry.port | default "8000" | toString) | quote }}
+  MCP_MESH_REGISTRY_URL: {{ printf "https://%s:%s" $registryHost (.Values.registry.port | default "8000" | toString) | quote }}
   {{- else }}
-  MCP_MESH_REGISTRY_URL: {{ printf "http://%s:%s" (.Values.registry.host | default "mcp-mesh-registry") (.Values.registry.port | default "8000" | toString) | quote }}
+  MCP_MESH_REGISTRY_URL: {{ printf "http://%s:%s" $registryHost (.Values.registry.port | default "8000" | toString) | quote }}
   {{- end }}
 
   # Service DNS for agent endpoint advertisement
@@ -59,7 +62,7 @@ data:
 
   # Observability configuration - matches Docker setup
   MCP_MESH_DISTRIBUTED_TRACING_ENABLED: {{ .Values.agent.observability.distributedTracing.enabled | default true | quote }}
-  TELEMETRY_ENDPOINT: {{ .Values.agent.observability.telemetryEndpoint | default "mcp-core-mcp-mesh-tempo:4317" | quote }}
+  TELEMETRY_ENDPOINT: {{ .Values.agent.observability.telemetryEndpoint | default (printf "%s-mcp-mesh-tempo:4317" $corePrefix) | quote }}
   MCP_MESH_TRACING_ENABLED: {{ .Values.agent.observability.tracing.enabled | default true | quote }}
   MCP_MESH_METRICS_ENABLED: {{ .Values.agent.observability.metrics.enabled | default true | quote }}
 
