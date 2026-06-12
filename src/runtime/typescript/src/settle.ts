@@ -34,6 +34,8 @@
  * diagnostics never interact with the settle window in any way.
  */
 
+import { performance } from "node:perf_hooks";
+
 export const SETTLE_TIMEOUT_DEFAULT_SECONDS = 20;
 
 /**
@@ -91,7 +93,12 @@ export interface PendingSettleDep {
  * `isSettled()` observes window expiry.
  */
 export class SettleState {
-  /** Window anchor — set by the FIRST registerDeclared() call. */
+  /**
+   * Window anchor — set by the FIRST registerDeclared() call. Monotonic
+   * (`performance.now()`) so wall-clock jumps (NTP steps, manual clock
+   * changes) never stretch or collapse the settle window; matches
+   * `time.monotonic()` in Python and `System.nanoTime()` in Java.
+   */
   private startMs: number | null = null;
   private readonly declared = new Set<string>();
   private readonly resolved = new Set<string>();
@@ -115,7 +122,7 @@ export class SettleState {
    */
   registerDeclared(depKey: string): void {
     if (this.startMs === null) {
-      this.startMs = Date.now();
+      this.startMs = performance.now();
     }
     this.declared.add(depKey);
   }
@@ -200,7 +207,7 @@ export class SettleState {
       // window must still open when the first declaration lands.
       return true;
     }
-    if (Date.now() - this.startMs >= timeoutSecs * 1000) {
+    if (performance.now() - this.startMs >= timeoutSecs * 1000) {
       this.settled = true;
       return true;
     }
@@ -214,7 +221,7 @@ export class SettleState {
     }
     return Math.max(
       0,
-      getSettleTimeoutSeconds() * 1000 - (Date.now() - this.startMs),
+      getSettleTimeoutSeconds() * 1000 - (performance.now() - this.startMs),
     );
   }
 
