@@ -169,6 +169,20 @@ data: {"step": 3, "complete": true}
     expect(results[2].complete).toBe(true);
   });
 
+  it("should parse data lines without the space after the colon (SSE spec: zero or one space)", () => {
+    const sse = `event: progress
+data:{"step": 1}
+
+event: done
+data: {"step": 2}
+`;
+    const results = parseSSEStream<{ step: number }>(sse);
+
+    expect(results).toHaveLength(2);
+    expect(results[0].step).toBe(1);
+    expect(results[1].step).toBe(2);
+  });
+
   it("should return empty array for non-SSE content", () => {
     const json = '{"result": 42}';
     const results = parseSSEStream(json);

@@ -416,6 +416,35 @@ mod tests {
         assert!(result.unwrap_err().contains("No valid JSON"));
     }
 
+    #[test]
+    fn test_parse_sse_comment_only_keepalive_errors() {
+        // #1201: a stream cut by the proxy's X-Mesh-Timeout cap can consist
+        // of nothing but an sse-starlette keepalive comment frame. Comment
+        // frames are not payload — this must error (Python's SSEParser
+        // surfaces it as RuntimeError), never parse as a result.
+        let sse = ": ping - 2026-06-09 12:00:00.000000+00:00\r\n\r\n";
+        assert!(parse_sse_response(sse).is_err());
+    }
+
+    #[test]
+    fn test_parse_sse_event_with_comments_but_no_data_errors() {
+        // Same cut-stream class with SSE markers present: zero data frames
+        // must error, not return empty success.
+        let sse = "event: message\n: ping - keepalive\n\n";
+        let result = parse_sse_response(sse);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No valid JSON"));
+    }
+
+    #[test]
+    fn test_parse_sse_comments_interleaved_with_data_ignored() {
+        // Keepalive comments around a real data frame don't disturb parsing.
+        let sse = ": ping - 1\n\nevent: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":\"ok\"}\n\n: ping - 2\n\n";
+        let result = parse_sse_response(sse).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["result"], "ok");
+    }
+
     // =========================================================================
     // extract_content
     // =========================================================================

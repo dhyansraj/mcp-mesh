@@ -67,8 +67,10 @@ export function parseSSEStream<T = unknown>(responseText: string): T[] {
   const lines = responseText.split("\n");
 
   for (const line of lines) {
-    if (line.startsWith("data: ")) {
-      const jsonData = line.slice(6);
+    if (line.startsWith("data:")) {
+      // Per the SSE spec the colon may be followed by zero or one space.
+      let jsonData = line.slice(5);
+      if (jsonData.startsWith(" ")) jsonData = jsonData.slice(1);
       if (jsonData.trim()) {
         results.push(JSON.parse(jsonData) as T);
       }

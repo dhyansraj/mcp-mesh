@@ -463,10 +463,11 @@ export async function callMcpTool(
           // Mirror the JSON path below: JSON-RPC errors and tool-level errors
           // (CallToolResult.isError) thrown by the SSE reader record an error
           // span instead of a success span. Aborts (timeout or job-cancel
-          // firing mid-read) are deliberately NOT published here — the outer
-          // catch owns abort/timeout accounting, and publishing in both
-          // places would emit two spans with the same spanId.
-          if (!isTimeoutError(sseErr)) {
+          // firing mid-read) and the proxy's in-band timeout marker (#1201)
+          // are deliberately NOT published here — the outer catch owns
+          // timeout accounting, and publishing in both places would emit two
+          // spans with the same spanId.
+          if (!isTimeoutError(sseErr) && !(sseErr instanceof ProxyTimeoutError)) {
             const sseErrMsg = sseErr instanceof Error ? sseErr.message : String(sseErr);
             publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, sseErrMsg, "error", requestBytes, sseResponseBytes);
           }
@@ -514,6 +515,17 @@ export async function callMcpTool(
       if (isTimeoutError(lastError)) {
         publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, "timeout", "error", requestBytes);
         throw new Error(`MCP call timed out after ${effectiveTimeout}ms`);
+      }
+
+      // Don't retry on the proxy's in-band timeout marker either (#1201):
+      // the X-Mesh-Timeout budget is definitively spent, so a retry would
+      // burn another full budget against an exchange the proxy already cut.
+      // Same accounting as the local abort above: one error span, immediate
+      // throw — the message names the proxy budget, matching meshctl's
+      // report of the same cut.
+      if (lastError instanceof ProxyTimeoutError) {
+        publishProxySpan(traceCtx, spanId, startTime, toolName, capability, endpoint, false, lastError.message, "error", requestBytes);
+        throw lastError;
       }
 
       // Retry everything else (network, HTTP, protocol, and tool-level
@@ -857,6 +869,36 @@ function toolErrorMessage(innerResult: unknown): string | null {
 }
 
 /**
+ * Terminal SSE comment frame the registry proxy appends when the upstream
+ * exchange is cut by the X-Mesh-Timeout budget mid-stream (#1201). Emitted as
+ * `: mesh-proxy-timeout budget=<N>s`. Comment frames are invisible to
+ * conforming SSE clients per the SSE spec, which makes this a spec-compliant
+ * in-band timeout signal.
+ * Keep in sync with proxyTimeoutCommentMarker in
+ * src/core/registry/ent_handlers.go and sseProxyTimeoutMarker in
+ * src/core/cli/call.go. The literal is pinned by
+ * src/core/registry/proxy_stream_test.go and the consumer tests in
+ * src/__tests__/proxy-sse-no-data.test.ts — a drift in either package breaks
+ * the partner's tests.
+ */
+const SSE_PROXY_TIMEOUT_MARKER = ": mesh-proxy-timeout";
+
+/**
+ * Thrown when an SSE stream ends without a result frame AND the registry
+ * proxy's timeout marker was seen: the X-Mesh-Timeout budget is definitively
+ * spent. callMcpTool classifies this like its local abort-timeouts — NOT
+ * retried (a retry would burn another full budget against an exchange the
+ * proxy already cut) and exactly one error span via the timeout accounting
+ * path — so the runtime-side report agrees with meshctl's for the same cut.
+ */
+class ProxyTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProxyTimeoutError";
+  }
+}
+
+/**
  * Read an SSE response from the MCP HTTP Streamable transport down to its
  * final content (the JSON-RPC `result`).
  *
@@ -872,6 +914,57 @@ async function readSSEResponseToContent(response: Response): Promise<string | Mu
   const decoder = new TextDecoder();
   let buffer = "";
   let result: string | MultiContentResult = "";
+  let sawResult = false;
+  let proxyTimeoutBudget: string | null = null;
+  let proxyTimeoutSignaled = false;
+
+  // Handle a single SSE line. Comment frames (":"-prefixed, e.g.
+  // sse-starlette's `: ping - <ts>` keepalives) and other non-data lines are
+  // ignored per the SSE spec — only `data:` frames carry payload (#1201) —
+  // except the proxy's terminal timeout marker, which is tracked so a
+  // result-less stream end can be reported as a definitive timeout.
+  const handleLine = (line: string): void => {
+    if (line.startsWith(SSE_PROXY_TIMEOUT_MARKER)) {
+      proxyTimeoutSignaled = true;
+      proxyTimeoutBudget = /budget=([0-9.]+s)/.exec(line)?.[1] ?? null;
+      return;
+    }
+    if (!line.startsWith("data:")) return;
+    // Per the SSE spec the colon may be followed by zero or one space:
+    // strip the field name, then at most one leading space.
+    let data = line.slice(5);
+    if (data.startsWith(" ")) data = data.slice(1);
+    if (data === "[DONE]") return;
+
+    let event: unknown;
+    try {
+      event = JSON.parse(data);
+    } catch {
+      // Ignore parse errors for non-JSON data events
+      return;
+    }
+
+    // Handle JSON-RPC response — mirror callMcpTool's JSON path exactly so
+    // callers can't distinguish transports: protocol-level error first,
+    // then tool-level isError, then content extraction.
+    const jsonRpcEvent = event as { result?: unknown; error?: { message?: string } };
+    if (jsonRpcEvent.error) {
+      throw new Error(
+        `MCP error: ${jsonRpcEvent.error.message ?? JSON.stringify(jsonRpcEvent.error)}`
+      );
+    }
+    // Key-presence (not truthiness) so legitimately falsy results
+    // (null, "", 0) are extracted just like the JSON path does. Events
+    // without a `result` key (e.g. notifications) are skipped.
+    if (event && typeof event === "object" && "result" in event) {
+      const toolErrMsg = toolErrorMessage(jsonRpcEvent.result);
+      if (toolErrMsg !== null) {
+        throw new Error(`MCP tool error: ${toolErrMsg}`);
+      }
+      sawResult = true;
+      result = extractContent(jsonRpcEvent.result);
+    }
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -884,39 +977,32 @@ async function readSSEResponseToContent(response: Response): Promise<string | Mu
     buffer = lines.pop() ?? ""; // Keep incomplete line
 
     for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        const data = line.slice(6);
-        if (data === "[DONE]") continue;
-
-        let event: unknown;
-        try {
-          event = JSON.parse(data);
-        } catch {
-          // Ignore parse errors for non-JSON data events
-          continue;
-        }
-
-        // Handle JSON-RPC response — mirror callMcpTool's JSON path exactly so
-        // callers can't distinguish transports: protocol-level error first,
-        // then tool-level isError, then content extraction.
-        const jsonRpcEvent = event as { result?: unknown; error?: { message?: string } };
-        if (jsonRpcEvent.error) {
-          throw new Error(
-            `MCP error: ${jsonRpcEvent.error.message ?? JSON.stringify(jsonRpcEvent.error)}`
-          );
-        }
-        // Key-presence (not truthiness) so legitimately falsy results
-        // (null, "", 0) are extracted just like the JSON path does. Events
-        // without a `result` key (e.g. notifications) are skipped.
-        if (event && typeof event === "object" && "result" in event) {
-          const toolErrMsg = toolErrorMessage(jsonRpcEvent.result);
-          if (toolErrMsg !== null) {
-            throw new Error(`MCP tool error: ${toolErrMsg}`);
-          }
-          result = extractContent(jsonRpcEvent.result);
-        }
-      }
+      handleLine(line);
     }
+  }
+
+  // Drain anything left in the decoder and buffer: a stream that ends
+  // without a trailing newline still has its last line pending here.
+  buffer += decoder.decode();
+  for (const line of buffer.split("\n")) {
+    handleLine(line);
+  }
+
+  // A stream that ended without ANY result frame is a cut exchange — e.g.
+  // the registry proxy's X-Mesh-Timeout budget expired mid-stream and only
+  // keepalive comment frames arrived (#1201). That must surface as an error,
+  // never as an empty-string success. When the proxy's terminal marker was
+  // seen, the cut is a definitive timeout (non-retryable); without it, the
+  // generic protocol error below stays retryable.
+  if (!sawResult) {
+    if (proxyTimeoutSignaled) {
+      throw new ProxyTimeoutError(
+        `MCP call timed out: registry proxy X-Mesh-Timeout budget${proxyTimeoutBudget ? ` (${proxyTimeoutBudget})` : ""} expired before the agent sent a response`
+      );
+    }
+    throw new Error(
+      "MCP SSE stream ended without a result frame (connection closed or proxy timeout before the agent responded)"
+    );
   }
 
   return result;
