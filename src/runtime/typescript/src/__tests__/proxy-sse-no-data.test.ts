@@ -137,6 +137,27 @@ describe("callMcpTool SSE no-data EOF handling (#1201)", () => {
     expect(value).toBe("fine");
   });
 
+  it("accepts a data frame without the space after the colon (SSE spec: zero or one space)", async () => {
+    const noSpaceFrame = `event: message\ndata:${JSON.stringify({
+      jsonrpc: "2.0",
+      id: "x",
+      result: { content: [{ type: "text", text: "fine" }] },
+    })}\n\n`;
+    mockFetch(() => rawSseResponse([noSpaceFrame]));
+
+    const value = await callMcpTool(ENDPOINT, TOOL, {}, DEFAULT_CALL_OPTIONS, CAPABILITY);
+    expect(value).toBe("fine");
+  });
+
+  it("skips the [DONE] sentinel in both spacing forms and still extracts the result", async () => {
+    mockFetch(() =>
+      rawSseResponse(["data: [DONE]\n\n", "data:[DONE]\n\n", RESULT_FRAME])
+    );
+
+    const value = await callMcpTool(ENDPOINT, TOOL, {}, DEFAULT_CALL_OPTIONS, CAPABILITY);
+    expect(value).toBe("fine");
+  });
+
   it("proxy timeout marker + no result frame → timeout-classified, not retried", async () => {
     // The registry proxy's terminal `: mesh-proxy-timeout budget=<N>s`
     // comment frame (#1201) marks the X-Mesh-Timeout budget as spent.

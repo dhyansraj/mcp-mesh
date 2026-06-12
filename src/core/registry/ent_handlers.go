@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -935,8 +936,17 @@ func (h *EntBusinessLogicHandlers) proxyRequest(c *gin.Context, target string, m
 	// produced. Flush after every chunk so streamed (SSE) responses aren't
 	// held back by the response writer's buffer; gin's ResponseWriter
 	// implements http.Flusher.
-	isSSE := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
-	relayProxyStream(c.Writer, resp.Body, isSSE, targetURL, proxyTimeout, start)
+	relayProxyStream(c.Writer, resp.Body, isSSEContentType(resp.Header.Get("Content-Type")), targetURL, proxyTimeout, start)
+}
+
+// isSSEContentType reports whether a Content-Type header value denotes an SSE
+// response. Parsed with mime.ParseMediaType (case-insensitive, parameters
+// like `; charset=utf-8` stripped) and matched exactly — a substring check
+// would false-positive on unrelated types that merely embed the string.
+// Unparseable values are treated as non-SSE.
+func isSSEContentType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	return err == nil && mediaType == "text/event-stream"
 }
 
 // proxyTimeoutCommentMarker is the terminal SSE comment frame appended by

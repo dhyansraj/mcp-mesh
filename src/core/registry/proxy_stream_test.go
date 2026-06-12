@@ -167,6 +167,34 @@ func TestRelayProxyStream_ClientGoneStopsRelay(t *testing.T) {
 	}
 }
 
+// TestIsSSEContentType pins the proxy's SSE detection to exact media-type
+// matching: parameterized and case-variant forms of text/event-stream are
+// SSE, while unrelated types that merely embed the string (which a substring
+// check would false-positive on) are not.
+func TestIsSSEContentType(t *testing.T) {
+	cases := []struct {
+		contentType string
+		want        bool
+	}{
+		{"text/event-stream", true},
+		{"text/event-stream; charset=utf-8", true},
+		{"TEXT/EVENT-STREAM", true},
+		{"application/json", false},
+		{"application/json; charset=utf-8", false},
+		{"text/event-stream-json", false},
+		{`application/json; note="text/event-stream"`, false},
+		{"", false},
+		{"not a media type;;;", false},
+	}
+	for _, c := range cases {
+		t.Run(c.contentType, func(t *testing.T) {
+			if got := isSSEContentType(c.contentType); got != c.want {
+				t.Errorf("isSSEContentType(%q) = %v, want %v", c.contentType, got, c.want)
+			}
+		})
+	}
+}
+
 func TestIsProxyTimeoutError(t *testing.T) {
 	cases := []struct {
 		name string

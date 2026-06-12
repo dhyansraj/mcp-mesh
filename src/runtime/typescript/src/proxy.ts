@@ -929,8 +929,11 @@ async function readSSEResponseToContent(response: Response): Promise<string | Mu
       proxyTimeoutBudget = /budget=([0-9.]+s)/.exec(line)?.[1] ?? null;
       return;
     }
-    if (!line.startsWith("data: ")) return;
-    const data = line.slice(6);
+    if (!line.startsWith("data:")) return;
+    // Per the SSE spec the colon may be followed by zero or one space:
+    // strip the field name, then at most one leading space.
+    let data = line.slice(5);
+    if (data.startsWith(" ")) data = data.slice(1);
     if (data === "[DONE]") return;
 
     let event: unknown;

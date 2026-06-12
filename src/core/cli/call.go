@@ -712,16 +712,24 @@ const sseProxyTimeoutMarker = ": mesh-proxy-timeout"
 // extractMCPResponseJSON returns the JSON-RPC payload bytes from an /mcp
 // response body, plus whether the body was SSE-shaped. Plain JSON bodies pass
 // through unchanged (fromSSE=false). SSE bodies (FastMCP streamable-HTTP
-// answers tools/call as text/event-stream) have their first non-empty data
-// frame extracted; comment frames (lines starting with ":", e.g.
-// sse-starlette's `: ping - <ts>` keepalives) are ignored per the SSE spec
-// (#1201).
+// answers tools/call as text/event-stream) are scanned for the TERMINAL
+// JSON-RPC response frame — the first data frame carrying a top-level
+// "result" or "error" key. MCP streamable-HTTP may interleave notification
+// frames (progress, logging: method+params, no result/error) on the same
+// stream BEFORE the response; those must be skipped, not returned — a
+// notification unmarshals "successfully" into MCPResponse with nil
+// Result/Error, which would silently surface the wrong payload. Comment
+// frames (lines starting with ":", e.g. sse-starlette's `: ping - <ts>`
+// keepalives) are ignored per the SSE spec (#1201).
 //
-// An SSE stream that ends without ANY data frame is an error, never a result:
-// it means the exchange was cut (typically by the X-Mesh-Timeout budget at
-// the registry proxy) before the agent answered. The error is timeout-shaped
-// when the proxy's terminal marker is present or the elapsed wall time
-// consumed the budget; otherwise it is reported as a protocol error.
+// An SSE stream that ends without a terminal response frame is an error,
+// never a result: it means the exchange was cut (typically by the
+// X-Mesh-Timeout budget at the registry proxy) before the agent answered.
+// The error is timeout-shaped when the proxy's terminal marker is present or
+// the elapsed wall time consumed the budget; otherwise it is reported as a
+// protocol error (noting any notification frames that did arrive). A data
+// frame that does not parse as JSON (cut mid-frame) is returned as-is so the
+// caller's unmarshal failure routes to sseTruncatedFrameError.
 //
 // fromSSE tells the caller whether a downstream JSON parse failure may fall
 // back to the raw body: only non-SSE bodies (legacy plain-text responses)
@@ -738,21 +746,46 @@ func extractMCPResponseJSON(body []byte, contentType string, elapsed time.Durati
 		return body, false, nil
 	}
 
+	var firstUnparseable []byte
+	sawNotifications := false
 	for _, line := range strings.Split(bodyStr, "\n") {
 		line = strings.TrimRight(line, "\r")
 		if strings.HasPrefix(line, ":") {
 			// SSE comment frame — never payload (SSE spec: ignore ":" lines).
 			continue
 		}
-		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-			if data != "" {
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" {
+			continue
+		}
+		var probe map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(data), &probe); err == nil {
+			if _, ok := probe["result"]; ok {
 				return []byte(data), true, nil
 			}
+			if _, ok := probe["error"]; ok {
+				return []byte(data), true, nil
+			}
+			// Valid JSON object without a terminal key — a JSON-RPC
+			// notification (progress/logging). Not the response; keep scanning.
+			sawNotifications = true
+			continue
+		}
+		// Not parseable as a JSON object — likely the response frame cut
+		// mid-payload. Remember the first one; only used if no complete
+		// terminal frame follows.
+		if firstUnparseable == nil {
+			firstUnparseable = []byte(data)
 		}
 	}
 
-	return nil, true, sseStreamEndedError(elapsed, timeoutSeconds, sseBodyProxyTimeoutSignaled(bodyStr))
+	if firstUnparseable != nil {
+		return firstUnparseable, true, nil
+	}
+	return nil, true, sseStreamEndedError(elapsed, timeoutSeconds, sseBodyProxyTimeoutSignaled(bodyStr), sawNotifications)
 }
 
 // sseBodyProxyTimeoutSignaled reports whether the SSE body contains the
@@ -769,20 +802,45 @@ func sseBodyProxyTimeoutSignaled(bodyStr string) bool {
 	return false
 }
 
-// sseStreamEndedError shapes the failure for an SSE response that carried no
-// data frame. proxyTimeoutSignaled means the registry proxy explicitly marked
-// the stream as cut by its timeout cap; without that signal, elapsed wall
-// time consuming the X-Mesh-Timeout budget (with 1s slack for network and
-// scheduling jitter) is treated as a timeout, and anything quicker as a
-// protocol error (the agent or proxy closed the stream early).
-func sseStreamEndedError(elapsed time.Duration, timeoutSeconds int, proxyTimeoutSignaled bool) error {
+// sseElapsedConsumedBudget reports whether the elapsed wall time consumed the
+// X-Mesh-Timeout budget. For budgets above 1s a 1s slack absorbs network and
+// scheduling jitter; for 1s-and-under budgets the slack would swallow the
+// whole budget (any close, however fast, would classify as a timeout), so the
+// comparison is against the full budget instead. Shared by the data-less
+// (sseStreamEndedError) and truncated-frame (sseTruncatedFrameError) paths so
+// the heuristic can't drift between them.
+func sseElapsedConsumedBudget(elapsed time.Duration, timeoutSeconds int) bool {
+	if timeoutSeconds <= 0 {
+		return false
+	}
 	budget := time.Duration(timeoutSeconds) * time.Second
-	if proxyTimeoutSignaled || (timeoutSeconds > 0 && elapsed >= budget-time.Second) {
+	threshold := budget
+	if budget > time.Second {
+		threshold = budget - time.Second
+	}
+	return elapsed >= threshold
+}
+
+// sseStreamEndedError shapes the failure for an SSE response that carried no
+// terminal response frame. proxyTimeoutSignaled means the registry proxy
+// explicitly marked the stream as cut by its timeout cap; without that
+// signal, elapsed wall time consuming the X-Mesh-Timeout budget (see
+// sseElapsedConsumedBudget) is treated as a timeout, and anything quicker as
+// a protocol error (the agent or proxy closed the stream early).
+// sawNotifications enriches the protocol error: the stream carried JSON-RPC
+// notification frames (so the agent was alive and talking) but never the
+// response.
+func sseStreamEndedError(elapsed time.Duration, timeoutSeconds int, proxyTimeoutSignaled, sawNotifications bool) error {
+	if proxyTimeoutSignaled || sseElapsedConsumedBudget(elapsed, timeoutSeconds) {
 		return sseBudgetTimeoutError(elapsed, timeoutSeconds, "expired before the agent sent a response")
 	}
+	detail := ""
+	if sawNotifications {
+		detail = " — the stream carried notification frames but never a terminal result/error frame"
+	}
 	return fmt.Errorf(
-		"agent closed the SSE stream after %s without sending a response (X-Mesh-Timeout budget: %ds)",
-		elapsed.Round(100*time.Millisecond), timeoutSeconds)
+		"agent closed the SSE stream after %s without sending a response%s (X-Mesh-Timeout budget: %ds)",
+		elapsed.Round(100*time.Millisecond), detail, timeoutSeconds)
 }
 
 // sseTruncatedFrameError shapes the failure for an SSE data frame that was
@@ -793,8 +851,7 @@ func sseStreamEndedError(elapsed time.Duration, timeoutSeconds int, proxyTimeout
 // the raw body: that would report the truncated envelope (marker included) as
 // a successful result with exit 0.
 func sseTruncatedFrameError(bodyStr string, elapsed time.Duration, timeoutSeconds int) error {
-	budget := time.Duration(timeoutSeconds) * time.Second
-	if sseBodyProxyTimeoutSignaled(bodyStr) || (timeoutSeconds > 0 && elapsed >= budget-time.Second) {
+	if sseBodyProxyTimeoutSignaled(bodyStr) || sseElapsedConsumedBudget(elapsed, timeoutSeconds) {
 		return sseBudgetTimeoutError(elapsed, timeoutSeconds, "expired mid-response, cutting the result frame short")
 	}
 	return fmt.Errorf(

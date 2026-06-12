@@ -640,6 +640,140 @@ func TestExtractMCPResponseJSON_SSEDetectionWithoutContentType(t *testing.T) {
 	}
 }
 
+// TestSSEElapsedConsumedBudget pins the timeout-classification heuristic
+// shared by the data-less and truncated-frame paths. The 1s slack only
+// applies to budgets above 1s — for a 1s budget the slack would swallow the
+// whole budget and classify ANY close (however fast) as a timeout.
+func TestSSEElapsedConsumedBudget(t *testing.T) {
+	cases := []struct {
+		name           string
+		elapsed        time.Duration
+		timeoutSeconds int
+		want           bool
+	}{
+		{"1s budget, quick close", 100 * time.Millisecond, 1, false},
+		{"1s budget, just under", 999 * time.Millisecond, 1, false},
+		{"1s budget, fully consumed", time.Second, 1, true},
+		{"30s budget, within slack", 29 * time.Second, 30, true},
+		{"30s budget, quick close", 5 * time.Second, 30, false},
+		{"no budget", time.Hour, 0, false},
+		{"negative budget", time.Hour, -5, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := sseElapsedConsumedBudget(c.elapsed, c.timeoutSeconds); got != c.want {
+				t.Errorf("sseElapsedConsumedBudget(%v, %d) = %v, want %v", c.elapsed, c.timeoutSeconds, got, c.want)
+			}
+		})
+	}
+}
+
+// TestExtractMCPResponseJSON_OneSecondBudgetQuickClose: with a 1s budget, a
+// stream that closes almost immediately is a protocol error, not a timeout —
+// the old budget−1s slack made the threshold zero and misclassified every
+// quick close.
+func TestExtractMCPResponseJSON_OneSecondBudgetQuickClose(t *testing.T) {
+	body := []byte("event: message\n\n")
+	_, _, err := extractMCPResponseJSON(body, sseContentType, 100*time.Millisecond, 1)
+	if err == nil {
+		t.Fatal("expected error for data-less SSE stream, got nil")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "timed out") {
+		t.Errorf("quick close on a 1s budget must not be reported as a timeout: %s", msg)
+	}
+	if !strings.Contains(msg, "without sending a response") {
+		t.Errorf("protocol error missing explanation: %s", msg)
+	}
+}
+
+// TestExtractMCPResponseJSON_NotificationThenResult: MCP streamable-HTTP may
+// emit JSON-RPC notification frames (progress, logging) on the SAME stream
+// before the terminal response. The notification must be skipped — it would
+// unmarshal "successfully" into MCPResponse with nil Result/Error — and the
+// terminal result frame returned.
+func TestExtractMCPResponseJSON_NotificationThenResult(t *testing.T) {
+	body := []byte("event: message\n" +
+		"data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"t\",\"message\":\"working...\"}}\n\n" +
+		"event: message\n" +
+		"data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}\n\n")
+	data, fromSSE, err := extractMCPResponseJSON(body, sseContentType, time.Second, 30)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fromSSE {
+		t.Error("expected fromSSE=true")
+	}
+	var resp MCPResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		t.Fatalf("extracted data is not valid JSON-RPC: %v\ndata: %s", err, data)
+	}
+	if resp.Result == nil {
+		t.Errorf("expected the terminal result frame, got: %s", data)
+	}
+	if strings.Contains(string(data), "notifications/progress") {
+		t.Errorf("notification frame returned instead of the response: %s", data)
+	}
+}
+
+// TestExtractMCPResponseJSON_NotificationThenError: a terminal frame carrying
+// a top-level "error" key is also the response — returned so the caller
+// surfaces the JSON-RPC error.
+func TestExtractMCPResponseJSON_NotificationThenError(t *testing.T) {
+	body := []byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{\"level\":\"info\"}}\n\n" +
+		"data: {\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32000,\"message\":\"boom\"}}\n\n")
+	data, _, err := extractMCPResponseJSON(body, sseContentType, time.Second, 30)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(string(data), "\"error\"") || strings.Contains(string(data), "notifications/message") {
+		t.Errorf("expected the terminal error frame, got: %s", data)
+	}
+}
+
+// TestExtractMCPResponseJSON_NotificationsOnlyErrors: a stream that carried
+// only notification frames and then closed is still a no-response condition —
+// it must error (mentioning the notifications), never return a notification
+// frame as the "result".
+func TestExtractMCPResponseJSON_NotificationsOnlyErrors(t *testing.T) {
+	body := []byte("event: message\n" +
+		"data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{\"progressToken\":\"t\",\"message\":\"working...\"}}\n\n")
+	_, _, err := extractMCPResponseJSON(body, sseContentType, 2*time.Second, 30)
+	if err == nil {
+		t.Fatal("expected error for notifications-only SSE stream, got nil")
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "timed out") {
+		t.Errorf("quick notifications-only close must not be reported as a timeout: %s", msg)
+	}
+	if !strings.Contains(msg, "notification") {
+		t.Errorf("error should mention that notification frames arrived: %s", msg)
+	}
+	if strings.Contains(msg, "working...") {
+		t.Errorf("raw notification payload leaked into the error: %s", msg)
+	}
+}
+
+// TestExtractMCPResponseJSON_NotificationThenTruncatedFrame: a notification
+// followed by a cut-mid-payload response frame must surface the unparseable
+// frame (so the caller routes to sseTruncatedFrameError), not the
+// notification.
+func TestExtractMCPResponseJSON_NotificationThenTruncatedFrame(t *testing.T) {
+	partial := "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"co"
+	body := []byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\n\n" +
+		"data: " + partial + "\n")
+	data, fromSSE, err := extractMCPResponseJSON(body, sseContentType, time.Second, 30)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fromSSE {
+		t.Error("expected fromSSE=true")
+	}
+	if string(data) != partial {
+		t.Errorf("expected the truncated frame back for downstream truncation handling, got: %s", data)
+	}
+}
+
 // TestCallMCPTool_CommentOnlySSEErrors wires the extraction through the full
 // callMCPTool path: an agent answering only a keepalive comment must produce
 // an error, not the comment text as a successful result.
