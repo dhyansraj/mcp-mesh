@@ -410,6 +410,23 @@ class TestDecorationTimeSseEndpoint:
         assert registered is not None
         assert registered["wrapper"] is decorated._mesh_inner_wrapper
 
+        # Re-entrancy: a second integration pass (the pipeline step is
+        # debounced and can re-run) must be a no-op with identical
+        # outcomes — same status/sse verdict, same served endpoint object,
+        # same registered inner wrapper.
+        result2 = step._integrate_single_route(app, route_info, None)
+        assert result2["status"] == "integrated"
+        assert result2["sse"] is True
+        endpoint2 = next(
+            r.endpoint
+            for r in app.router.routes
+            if getattr(r, "path", "") == "/api/chat"
+        )
+        assert endpoint2 is decorated
+        registered2 = DecoratorRegistry.get_route_wrapper("POST:/api/chat")
+        assert registered2 is not None
+        assert registered2["wrapper"] is decorated._mesh_inner_wrapper
+
     def test_dual_import_convergence_repoints_sse_endpoint(self, monkeypatch):
         """Dual-import scenario (``python main.py`` + ``from main import X``):
         decoration fires twice, producing TWO DI wrapper instances. The SSE
@@ -504,3 +521,126 @@ class TestDecorationTimeSseEndpoint:
         # Registration must not crash (no Stream[str] response_field).
         app = FastAPI()
         app.post("/api/chat")(decorated)
+
+
+# ---------------------------------------------------------------------------
+# Fail-fast on unsupported stream annotations (PR #1212 review)
+# ---------------------------------------------------------------------------
+
+
+class TestStreamAnnotationFailFast:
+    def test_stream_bytes_route_fails_at_decoration(self):
+        """An async-iterator return over a non-str type is a STREAM
+        annotation the runtime cannot fulfil — it must fail decoration with
+        a descriptive error, never silently degrade to a non-stream route
+        that accumulates-and-serializes the chunks."""
+
+        async def bad_route(
+            prompt: str, chat: mesh.McpMeshTool = None
+        ) -> mesh.Stream[bytes]:
+            yield b"chunk"
+
+        with pytest.raises(ValueError) as exc_info:
+            mesh.route(dependencies=["chat"])(bad_route)
+
+        message = str(exc_info.value)
+        assert "@mesh.route 'bad_route'" in message
+        assert "Stream[bytes]" in message
+        assert "str" in message
+
+    def test_failed_decoration_leaves_no_half_registered_route(self):
+        """The raise happens BEFORE DecoratorRegistry registration — no
+        half-registered route survives the failure."""
+
+        async def bad_route(prompt: str) -> mesh.Stream[bytes]:
+            yield b"chunk"
+
+        with pytest.raises(ValueError):
+            mesh.route(dependencies=[])(bad_route)
+
+        assert "bad_route" not in DecoratorRegistry.get_all_by_type(
+            "mesh_route"
+        )
+
+    def test_unresolvable_hint_on_non_stream_route_stays_quiet(self):
+        """Benign hint-resolution failure (forward ref to a name that does
+        not exist) on a NON-stream route keeps the current quiet path —
+        decorates fine, no SSE."""
+
+        async def plain(payload: dict) -> "NoSuchTypeAnywhere":  # noqa: F821
+            return payload
+
+        decorated = mesh.route(dependencies=[])(plain)
+        assert not getattr(decorated, "_mesh_is_sse_endpoint", False)
+
+
+# ---------------------------------------------------------------------------
+# Retired settle keys are terminal (PR #1212 review)
+# ---------------------------------------------------------------------------
+
+
+class TestRetiredKeyTerminal:
+    def test_late_sync_wait_on_retired_key_returns_immediately(
+        self, monkeypatch
+    ):
+        """A wait_for that STARTS after the key was retired must
+        short-circuit — the abandoned twin wrapper remains callable after
+        convergence, and its keys can never resolve."""
+        _set_budget(monkeypatch, "10")
+        state = get_settle_state()
+        state.register_declared("twin:dep_0")
+        state.register_declared("live:dep_0")  # keeps the latch open
+        state.retire_declared("twin:dep_0")
+        assert not state.is_settled()
+
+        import logging
+
+        start = time.monotonic()
+        state.wait_for("twin:dep_0", "chat_cap", logging.getLogger(__name__))
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.5
+
+    @pytest.mark.asyncio
+    async def test_late_async_wait_on_retired_key_returns_immediately(
+        self, monkeypatch
+    ):
+        _set_budget(monkeypatch, "10")
+        state = get_settle_state()
+        state.register_declared("twin:dep_0")
+        state.register_declared("live:dep_0")  # keeps the latch open
+        state.retire_declared("twin:dep_0")
+        assert not state.is_settled()
+
+        import logging
+
+        start = time.monotonic()
+        await state.wait_for_async(
+            "twin:dep_0", "chat_cap", logging.getLogger(__name__)
+        )
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.5
+        assert state.wait_count == 0  # short-circuited before parking
+
+    def test_retire_to_empty_flips_the_latch(self, monkeypatch):
+        """Retiring the LAST declared key (nothing left to converge) settles
+        the agent eagerly — the window does not stay pinned open until
+        timeout."""
+        _set_budget(monkeypatch, "10")
+        state = get_settle_state()
+        state.register_declared("twin:dep_0")
+        assert not state.is_settled()
+        state.retire_declared("twin:dep_0")
+        assert state.is_settled()
+
+    def test_retire_with_unresolved_keys_left_keeps_latch_open(
+        self, monkeypatch
+    ):
+        _set_budget(monkeypatch, "10")
+        state = get_settle_state()
+        state.register_declared("twin:dep_0")
+        state.register_declared("live:dep_0")
+        state.retire_declared("twin:dep_0")
+        assert not state.is_settled()
+        # ...and resolving the remaining live key then flips it eagerly.
+        state.mark_resolved("live:dep_0")
+        assert state.is_settled()

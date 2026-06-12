@@ -121,6 +121,12 @@ class SettleState:
         self._lock = threading.Lock()
         self._declared: set[str] = set()
         self._resolved: set[str] = set()
+        # Terminal-but-NOT-resolved keys (see retire_declared): retired by
+        # route-wrapper convergence because no update path will ever resolve
+        # them. Semantically distinct from _resolved — no proxy ever landed —
+        # but both mean "stop waiting": late waits short-circuit on retired
+        # keys exactly like resolved ones.
+        self._retired: set[str] = set()
         self._events: dict[str, threading.Event] = {}
         # Loop-native mirrors for async waiters: dep_key -> [(loop, event)].
         # Set via loop.call_soon_threadsafe from the resolution funnel so
@@ -193,16 +199,31 @@ class SettleState:
         Any waiter already parked on the retired key (a call that collected
         its pending set just before convergence) is woken so it proceeds
         immediately instead of dead-waiting a key that can never resolve.
+
+        Retired keys are TERMINAL: the key joins ``_retired`` and its
+        per-key event is created-and-set, so a LATE wait — the abandoned
+        twin wrapper remains callable after convergence (direct invocation,
+        or uvicorn serving the copy whose endpoint was converged away) —
+        short-circuits on both the sync and async paths instead of parking
+        for the remaining budget. Retired ≠ resolved (no proxy ever
+        landed), but both mean "stop waiting".
         """
         with self._lock:
             self._declared.discard(dep_key)
+            self._retired.add(dep_key)
             event = self._events.get(dep_key)
+            if event is None:
+                event = threading.Event()
+                self._events[dep_key] = event
             async_waiters = list(self._async_waiters.get(dep_key, ()))
-            if self._declared and self._declared <= self._resolved:
-                # Eager latch: the retired key was the last unresolved one.
+            if self._start is not None and self._declared <= self._resolved:
+                # Eager latch: the retired key was the last unresolved one —
+                # including retire-to-empty, where nothing declared remains
+                # to converge. Guarded on the window being anchored so a
+                # spurious retire before any declaration can never latch
+                # the grace shut for later declarations.
                 self._settled = True
-        if event is not None:
-            event.set()
+        event.set()
         for loop, async_event in async_waiters:
             try:
                 loop.call_soon_threadsafe(async_event.set)
@@ -300,7 +321,7 @@ class SettleState:
         loop = asyncio.get_running_loop()
         async_event = asyncio.Event()
         with self._lock:
-            if dep_key in self._resolved:
+            if dep_key in self._resolved or dep_key in self._retired:
                 return
             self._async_waiters.setdefault(dep_key, []).append(
                 (loop, async_event)

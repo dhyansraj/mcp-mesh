@@ -1729,6 +1729,27 @@ def route(
             **kwargs,
         }
 
+        # Detect the streaming return annotation UP FRONT so an unsupported
+        # stream element type (e.g. Stream[bytes]) fails decoration with a
+        # clear error instead of silently becoming a non-streaming route
+        # (the handler's chunks would be accumulated and serialized — the
+        # opposite of what the annotation asks for). detect_stream_type only
+        # raises for genuine async-iterator annotations over a non-str type;
+        # benign non-stream outcomes (no async-iterator return, unresolvable
+        # string hints, unparameterized iterators) report None and stay on
+        # the plain-route path. Raising HERE — before the DecoratorRegistry
+        # registration and the graceful-degradation try block below — keeps
+        # the failure loud (mirrors the @mesh.tool decoration-time contract)
+        # and leaves no half-registered route behind.
+        from _mcp_mesh.engine.stream_introspection import detect_stream_type
+
+        try:
+            is_stream_route = detect_stream_type(target) == "text"
+        except ValueError as e:
+            raise ValueError(
+                f"@mesh.route '{getattr(target, '__name__', '?')}': {e}"
+            ) from None
+
         # Store metadata on function
         target._mesh_route_metadata = metadata
 
@@ -1787,18 +1808,8 @@ def route(
             # SSE endpoint from the start removes the window entirely; the
             # integration step detects ``_mesh_is_sse_endpoint`` and only
             # registers the inner wrapper for heartbeat dependency updates.
-            try:
-                from _mcp_mesh.engine.stream_introspection import (
-                    detect_stream_type,
-                )
-
-                is_stream_route = detect_stream_type(target) == "text"
-            except Exception as e:
-                logger.debug(
-                    f"Stream-route detection skipped for {target.__name__}: {e}"
-                )
-                is_stream_route = False
-
+            # (``is_stream_route`` was detected — fail-fast on unsupported
+            # stream element types — before registration, above.)
             if is_stream_route:
                 try:
                     from _mcp_mesh.pipeline.api_startup.route_integration import (
