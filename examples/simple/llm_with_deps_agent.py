@@ -52,10 +52,18 @@ class AnalysisResponse(BaseModel):
 )
 async def smart_analyze(
     query: str,
-    time_service: mesh.McpMeshTool = None
+    time_service: mesh.McpMeshTool = None,
+    info: mesh.McpMeshTool = None,
+    llm: mesh.MeshLlmAgent = None,
 ) -> AnalysisResponse:
 
-    timestamp = await time_service()
+    # Get timestamp from dependency
+    timestamp = "unknown"
+    if time_service:
+        try:
+            timestamp = str(await time_service())
+        except Exception:
+            pass
 
     # Get system info from dependency
     system_info = "unknown"

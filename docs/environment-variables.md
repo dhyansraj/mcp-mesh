@@ -94,6 +94,33 @@ export MCP_MESH_TOOL_WORKERS=1
 export MCP_MESH_STRICT_DI=true
 ```
 
+### Dependency Settling Window (all runtimes)
+
+```bash
+# Float seconds, default: 20. 0 disables the grace entirely.
+#
+# During agent startup, declared dependencies resolve asynchronously (first
+# full heartbeat cycle). A call that arrives while a declared dependency is
+# still unresolved waits — bounded by the remaining window — for that
+# dependency's resolution event before proceeding. Event-driven: resolution
+# at 800ms unblocks at 800ms; the value is a ceiling, never a sleep.
+# The window starts when the agent's first dependency is declared during
+# startup (not at process start or module import).
+#
+# Once the agent settles (all declared dependencies resolved at least once,
+# OR the window expires), the latch is permanent: calls never wait again and
+# unresolved dependencies inject None/null exactly as before.
+#
+# Scope: dependency-injection call paths only (@mesh.tool, @mesh.route).
+# Startup-hook usage, module-scope captured deps, and @mesh.llm
+# provider/filter assembly are not covered.
+#
+# Tuning: lower it (e.g. 2–5) in integration tests that intentionally
+# exercise unresolved-dependency behavior, so degraded-path assertions
+# don't sit out the full default window.
+export MCP_MESH_SETTLE_TIMEOUT=20
+```
+
 ### HTTP Server Settings
 
 ```bash

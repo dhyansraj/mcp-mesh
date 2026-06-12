@@ -19,6 +19,12 @@ from ..shared.logging_config import (
     format_result_summary,
     get_trace_prefix,
 )
+from .settle import (
+    collect_pending_settle_deps,
+    get_settle_state,
+    wait_for_settle_async,
+    wait_for_settle_sync,
+)
 from .signature_analyzer import get_mesh_agent_positions, has_llm_agent_parameter
 from .strict_di import (
     StrictDIError,
@@ -158,6 +164,8 @@ def _make_stream_wrapper(
     dependencies: list[str],
     get_dependency_fn: Callable[[str], Any | None],
     log: logging.Logger,
+    settle_keys: Optional[list] = None,
+    settle_params: Optional[list] = None,
 ) -> Callable:
     """Build a wrapper that drives an async-iterator tool over MCP progress.
 
@@ -183,6 +191,21 @@ def _make_stream_wrapper(
         # FastMCP injects its Context under our internal name; pop it so
         # it never leaks into the user function's kwargs.
         progress_ctx = kwargs.pop(_MESH_PROGRESS_CTX_PARAM, None)
+
+        # Settling-window grace (#1193): bounded wait for declared-but-
+        # unresolved deps while the agent is still settling. No-op (single
+        # latch check) once settled. Caller-supplied slots (mock contract)
+        # are skipped via the kwargs consult.
+        pending_settle = collect_pending_settle_deps(
+            settle_keys,
+            dependencies,
+            stream_wrapper._mesh_injected_deps,
+            get_dependency_fn,
+            kwargs,
+            settle_params,
+        )
+        if pending_settle:
+            await wait_for_settle_async(pending_settle, log)
 
         final_kwargs, injected_count = _prepare_injection_kwargs(
             func,
@@ -1239,16 +1262,55 @@ class DependencyInjector:
         # never runs, the MeshJob auto-injection block never fires, and
         # consumer-side jobs silently lose their submitter (#bug 1).
         has_mesh_job_param = False
+        mesh_job_index: Optional[int] = None
         try:
             from .signature_analyzer import analyze_mesh_job_signature
 
             _mj = analyze_mesh_job_signature(func)
             has_mesh_job_param = _mj.mesh_job_param_name is not None
+            mesh_job_index = _mj.mesh_job_param_index
         except (TypeError, AttributeError):
             # Narrow catch: only swallow signature-introspection errors.
             # ValueError (multi-MeshJob contract violation per the Phase-1
             # resolver) MUST propagate so the wrapper fails fast.
             pass
+
+        # Settling-window grace (#1193): composite keys for the proxy slots
+        # this wrapper will inject, index-aligned with ``dependencies``.
+        # ``None`` marks slots the grace does not cover: MeshJob submitter
+        # slots (constructed locally, no resolution event) and excess
+        # dependencies with no parameter to land in. ``settle_params``
+        # carries the parameter NAME behind each slot so the call-time
+        # pending collection can skip caller-supplied slots (the documented
+        # mock contract). The declared set is registered with the
+        # process-wide settle state so the agent-level "all declared deps
+        # resolved" latch can flip eagerly — the FIRST registration anchors
+        # the settle window.
+        from .signature_analyzer import _get_original_func
+
+        settle_eligible = sorted(
+            set(mesh_positions)
+            | ({mesh_job_index} if mesh_job_index is not None else set())
+        )
+        try:
+            _settle_param_names = list(
+                inspect.signature(_get_original_func(func)).parameters.keys()
+            )
+        except (TypeError, ValueError):
+            _settle_param_names = []
+        settle_keys: list[Optional[str]] = [None] * len(dependencies)
+        settle_params: list[Optional[str]] = [None] * len(dependencies)
+        for _i, _pos in enumerate(settle_eligible):
+            if _i >= len(dependencies):
+                break
+            if _pos != mesh_job_index:
+                settle_keys[_i] = f"{func_id}:dep_{_i}"
+                if _pos < len(_settle_param_names):
+                    settle_params[_i] = _settle_param_names[_pos]
+        _settle_state = get_settle_state()
+        for _key in settle_keys:
+            if _key is not None:
+                _settle_state.register_declared(_key)
 
         # If no mesh positions to inject AND no MeshJob slot, fall back to
         # the minimal tracking wrapper. With a MeshJob slot we route to the
@@ -1265,6 +1327,8 @@ class DependencyInjector:
                     dependencies,
                     self.get_dependency,
                     wrapper_logger,
+                    settle_keys=settle_keys,
+                    settle_params=settle_params,
                 )
             elif inspect.iscoroutinefunction(func):
 
@@ -1344,11 +1408,30 @@ class DependencyInjector:
                 dependencies,
                 self.get_dependency,
                 wrapper_logger,
+                settle_keys=settle_keys,
+                settle_params=settle_params,
             )
         elif need_async_wrapper:
 
             @functools.wraps(func)
             async def dependency_wrapper(*args, **kwargs):
+                # Settling-window grace (#1193): bounded wait for declared-
+                # but-unresolved deps while the agent is still settling.
+                # No-op (single latch check) once settled. The wait is a
+                # loop-native asyncio.Event await (set by the resolution
+                # funnel via call_soon_threadsafe) — no executor, the loop
+                # stays free. Caller-supplied slots (mock contract) skip.
+                pending_settle = collect_pending_settle_deps(
+                    settle_keys,
+                    dependencies,
+                    dependency_wrapper._mesh_injected_deps,
+                    self.get_dependency,
+                    kwargs,
+                    settle_params,
+                )
+                if pending_settle:
+                    await wait_for_settle_async(pending_settle, wrapper_logger)
+
                 final_kwargs, injected_count = _prepare_injection_kwargs(
                     func,
                     kwargs,
@@ -1387,6 +1470,25 @@ class DependencyInjector:
 
             @functools.wraps(func)
             def dependency_wrapper(*args, **kwargs):
+                # Settling-window grace (#1193): sync tools are dispatched
+                # by FastMCP onto anyio.to_thread worker threads (see
+                # fastmcp.utilities.async_utils.call_sync_fn_in_threadpool),
+                # so a blocking threading.Event wait here never stalls an
+                # event loop (wait_for_settle_sync additionally probes for
+                # a running loop and skips if one is found). No-op (single
+                # latch check) once settled. Caller-supplied slots (mock
+                # contract) skip via the kwargs consult.
+                pending_settle = collect_pending_settle_deps(
+                    settle_keys,
+                    dependencies,
+                    dependency_wrapper._mesh_injected_deps,
+                    self.get_dependency,
+                    kwargs,
+                    settle_params,
+                )
+                if pending_settle:
+                    wait_for_settle_sync(pending_settle, wrapper_logger)
+
                 final_kwargs, injected_count = _prepare_injection_kwargs(
                     func,
                     kwargs,
@@ -1428,6 +1530,16 @@ class DependencyInjector:
             """Called when a dependency changes (index-based for duplicate capability support)."""
             if dep_index < len(dependency_wrapper._mesh_injected_deps):
                 dependency_wrapper._mesh_injected_deps[dep_index] = instance
+                if instance is not None:
+                    # Settling-window grace (#1193): this closure is the
+                    # single funnel for resolution across every path (MCP
+                    # register_dependency, API/A2A heartbeat direct calls)
+                    # — wake any settling call waiting on this dependency
+                    # AFTER the array slot is set so the woken call re-reads
+                    # a real proxy.
+                    get_settle_state().mark_resolved(
+                        f"{func_id}:dep_{dep_index}"
+                    )
                 if instance is None:
                     wrapper_logger.debug(
                         f"Removed dependency at index {dep_index} from {func_id}"
@@ -1449,6 +1561,12 @@ class DependencyInjector:
         dependency_wrapper._mesh_dependencies = dependencies
         dependency_wrapper._mesh_positions = mesh_positions
         dependency_wrapper._mesh_original_func = func
+        # Settling-window grace (#1193): exposed so secondary invocation
+        # paths built on this wrapper's arrays (e.g. the SSE route endpoint
+        # in route_integration) can apply the same bounded wait — including
+        # the caller-supplied (mock contract) skip via settle_params.
+        dependency_wrapper._mesh_settle_keys = settle_keys
+        dependency_wrapper._mesh_settle_params = settle_params
 
         # Register this wrapper for dependency updates
         logger.debug(

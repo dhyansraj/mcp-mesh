@@ -184,7 +184,7 @@ agent.addTool({
 
 ## Graceful Degradation
 
-Dependencies may be unavailable. Always handle `null`:
+Dependencies may be unavailable. During agent startup, calls on a declared-but-unresolved dependency first wait — bounded by the settle window (`MCP_MESH_SETTLE_TIMEOUT`, default 20s; the window starts when the agent's first dependency is declared) — for the resolution to land before degrading; once the agent settles, unresolved dependencies inject `null` immediately. Always handle `null`:
 
 ```typescript
 agent.addTool({

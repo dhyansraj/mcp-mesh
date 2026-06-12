@@ -48,6 +48,7 @@ import {
   spliceJobController,
 } from "./inbound-job-dispatch.js";
 import { MeshJobSubmitter } from "./mesh-job-submitter.js";
+import { getSettleState, type PendingSettleDep } from "./settle.js";
 import {
   ClaimDispatcher,
   stopDispatchers,
@@ -562,6 +563,17 @@ export class MeshAgent {
     );
     const depEndpoints = normalizedDeps.map((d) => d.capability);
 
+    // Settling-window grace (#1193): declare this tool's proxy deps with the
+    // process-wide settle state so the agent-level "all declared deps
+    // resolved" latch can flip eagerly. The MeshJob slot is excluded — its
+    // submitter is constructed locally, not resolved by an event.
+    const settleState = getSettleState();
+    normalizedDeps.forEach((_dep, depIndex) => {
+      if (depIndex !== def.meshJobDepIndex) {
+        settleState.registerDeclared(`${toolName}:dep_${depIndex}`);
+      }
+    });
+
     // Capture for closures — these reads must be live at invocation
     // time (e.g. registryUrl/agentId aren't set yet at addTool time).
     const isTaskTool = def.task === true;
@@ -599,6 +611,27 @@ export class MeshAgent {
     const wrappedExecute = async (
       args: z.infer<T>,
     ): Promise<string> => {
+      // Settling-window grace (#1193): while the agent is still settling,
+      // wait — bounded by the remaining settle budget — for any declared
+      // dep this call would inject that is still unresolved. No-op (single
+      // latch check) once settled; the deps array below is built AFTER the
+      // wait so it re-reads the resolution state.
+      if (normalizedDeps.length > 0 && !settleState.isSettled()) {
+        const pendingSettle: PendingSettleDep[] = [];
+        normalizedDeps.forEach((dep, depIndex) => {
+          const depKey = `${toolName}:dep_${depIndex}`;
+          if (
+            depIndex !== meshJobDepIndex &&
+            !this.resolvedDeps.has(depKey)
+          ) {
+            pendingSettle.push({ depKey, capability: dep.capability });
+          }
+        });
+        if (pendingSettle.length > 0) {
+          await settleState.awaitPending(pendingSettle);
+        }
+      }
+
       // Build positional deps array using composite keys (toolName:dep_index)
       // Phase 1 MeshJob substrate (consumer-side): if meshJobDepIndex is
       // set, swap the McpMeshTool proxy at that slot for a
@@ -887,6 +920,24 @@ export class MeshAgent {
     if (isTaskTool) {
       const capability = def.capability ?? toolName;
       const handler: ClaimHandler = async (payload, controller) => {
+        // Settling-window grace (#1193): claim dispatch gets the same
+        // bounded wait as the inbound HTTP path — a claim arriving during
+        // the settling window would otherwise see null deps.
+        if (normalizedDeps.length > 0 && !settleState.isSettled()) {
+          const pendingSettle: PendingSettleDep[] = [];
+          normalizedDeps.forEach((dep, depIndex) => {
+            const depKey = `${toolName}:dep_${depIndex}`;
+            if (
+              depIndex !== meshJobDepIndex &&
+              !this.resolvedDeps.has(depKey)
+            ) {
+              pendingSettle.push({ depKey, capability: dep.capability });
+            }
+          });
+          if (pendingSettle.length > 0) {
+            await settleState.awaitPending(pendingSettle);
+          }
+        }
         const liveDeps: (McpMeshTool | MeshJobSubmitter | null)[] = normalizedDeps.map(
           (dep, depIndex) => {
             if (depIndex === meshJobDepIndex) {
@@ -1806,6 +1857,10 @@ export class MeshAgent {
       const depKey = `${requestingFunction}:dep_${depIndex}`;
       const proxy = createProxy(endpoint, capability, functionName, kwargs);
       this.resolvedDeps.set(depKey, proxy);
+      // Settling-window grace (#1193): wake any settling call waiting on
+      // this dependency AFTER the proxy is stored so the woken call
+      // re-reads a real proxy.
+      getSettleState().markResolved(depKey);
 
       console.log(
         `Dependency available: ${capability} at ${endpoint} (tool: ${requestingFunction}, index: ${depIndex}, agent: ${agentId})`
@@ -1825,6 +1880,7 @@ export class MeshAgent {
           const depKey = `${toolName}:dep_${idx}`;
           const proxy = createProxy(endpoint, capability, functionName, kwargs);
           this.resolvedDeps.set(depKey, proxy);
+          getSettleState().markResolved(depKey);
           matchCount++;
         }
       });
@@ -1906,6 +1962,30 @@ export class MeshAgent {
    */
   getAllDependencies(): Map<string, McpMeshTool> {
     return new Map(this.resolvedDeps);
+  }
+
+  /**
+   * Inject a mock/fake proxy for a capability (the documented mock
+   * contract — see `meshctl man testing --typescript`).
+   *
+   * Fills the dependency slot of every registered tool that declares the
+   * capability and marks those slots resolved with the settle state, so
+   * the settling-window grace (#1193) never waits on a caller-supplied
+   * dependency.
+   */
+  setMockDependency(capability: string, mock: McpMeshTool): void {
+    for (const [toolName, meta] of this.tools.entries()) {
+      if (!meta.dependencies) continue;
+      meta.dependencies.forEach((dep, depIndex) => {
+        if (dep.capability === capability) {
+          const depKey = `${toolName}:dep_${depIndex}`;
+          this.resolvedDeps.set(depKey, mock);
+          // A caller-supplied slot needs no resolution event — count it
+          // as resolved so settling calls never wait on it.
+          getSettleState().markResolved(depKey);
+        }
+      });
+    }
   }
 
   /**

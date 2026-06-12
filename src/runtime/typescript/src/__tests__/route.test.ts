@@ -4,10 +4,30 @@
  * Tests mesh.route() Express middleware and RouteRegistry.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 import type { Request, Response, NextFunction } from "express";
 import { route, routeWithConfig, RouteRegistry } from "../route.js";
+import { resetSettleStateForTests } from "../settle.js";
 import type { McpMeshTool } from "../types.js";
+
+// These tests deliberately invoke route middleware with unresolved
+// dependencies to assert the degraded (null-injection) behavior. Disable
+// the settling-window grace (#1193) so they don't sit out the default 20s
+// window — the documented MCP_MESH_SETTLE_TIMEOUT=0 tuning case. The grace
+// itself is covered by settle-window.spec.ts.
+const savedSettleTimeout = process.env.MCP_MESH_SETTLE_TIMEOUT;
+beforeEach(() => {
+  process.env.MCP_MESH_SETTLE_TIMEOUT = "0";
+  resetSettleStateForTests();
+});
+afterAll(() => {
+  if (savedSettleTimeout === undefined) {
+    delete process.env.MCP_MESH_SETTLE_TIMEOUT;
+  } else {
+    process.env.MCP_MESH_SETTLE_TIMEOUT = savedSettleTimeout;
+  }
+  resetSettleStateForTests();
+});
 
 // Mock createProxy from proxy.ts
 vi.mock("../proxy.js", () => ({

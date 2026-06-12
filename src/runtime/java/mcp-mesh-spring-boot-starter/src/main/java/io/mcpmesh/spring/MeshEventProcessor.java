@@ -178,14 +178,16 @@ public class MeshEventProcessor implements SmartLifecycle {
                 event.getCapability(), event.getRequestingFunction(), event.getDepIndex());
         }
 
-        // Update legacy injector
-        injector.updateToolDependency(
-            event.getCapability(),
-            available ? event.getEndpoint() : null,
-            available ? event.getFunctionName() : null
-        );
-
-        // Update wrapper registry with composite key
+        // Update wrapper registry with composite key.
+        //
+        // Settling-window grace (#1193): the wrapper update counts down
+        // the per-consumer-slot settle latch (funcId:dep_N) INSIDE
+        // MeshToolWrapper.updateDependency, strictly after the wrapper's
+        // injectedDeps slot is written — a woken tool call re-reads a
+        // populated slot. It runs before the legacy injector update below,
+        // whose capability-keyed countdown serves the @MeshRoute path
+        // (shared per-capability proxy, updated there before its own
+        // countdown).
         if (event.getRequestingFunction() != null && event.getDepIndex() != null) {
             String compositeKey = MeshToolWrapperRegistry.buildDependencyKey(
                 event.getRequestingFunction(),
@@ -201,6 +203,14 @@ public class MeshEventProcessor implements SmartLifecycle {
                 wrapperRegistry.markDependencyUnavailable(compositeKey);
             }
         }
+
+        // Update legacy injector (also wakes @MeshRoute settle waiters on
+        // availability — capability-keyed; see MeshDependencyInjector)
+        injector.updateToolDependency(
+            event.getCapability(),
+            available ? event.getEndpoint() : null,
+            available ? event.getFunctionName() : null
+        );
     }
 
     private void handleDependencyAvailable(MeshEvent event) {

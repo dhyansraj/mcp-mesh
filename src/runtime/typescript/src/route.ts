@@ -33,6 +33,7 @@ import type { Request, Response, NextFunction, RequestHandler } from "express";
 import type { DependencySpec, McpMeshTool, DependencyKwargs, TagSpec } from "./types.js";
 import { normalizeDependency, runWithPropagatedHeaders, runWithTraceContext } from "./proxy.js";
 import { getApiRuntime, introspectExpressRoutes } from "./api-runtime.js";
+import { getSettleState, type PendingSettleDep } from "./settle.js";
 import {
   PROPAGATE_HEADERS,
   matchesPropagateHeader,
@@ -161,6 +162,15 @@ export class RouteRegistry {
       dependencyKwargs,
     });
 
+    // Settling-window grace (#1193): declare this route's deps with the
+    // process-wide settle state so the agent-level "all declared deps
+    // resolved" latch can flip eagerly. Keys are renamed alongside the
+    // route ID in updateRouteInfo().
+    const settleState = getSettleState();
+    normalizedDeps.forEach((_dep, depIndex) => {
+      settleState.registerDeclared(`${routeId}:dep_${depIndex}`);
+    });
+
     return routeId;
   }
 
@@ -197,6 +207,11 @@ export class RouteRegistry {
     const actualId = this.routeIdMapping.get(routeId) || routeId;
     const depKey = `${actualId}:dep_${depIndex}`;
     this.resolvedDeps.set(depKey, proxy);
+    // Settling-window grace (#1193): wake any settling request waiting on
+    // this dependency AFTER the proxy is stored so the woken request
+    // re-reads a real proxy. This is the single funnel for route deps —
+    // both the express runtime and the API runtime land here.
+    getSettleState().markResolved(depKey);
   }
 
   /**
@@ -279,6 +294,9 @@ export class RouteRegistry {
           this.resolvedDeps.set(newKey, dep);
           this.resolvedDeps.delete(oldKey);
         }
+        // Settling-window grace (#1193): keep the settle state's declared/
+        // resolved/waiter keys aligned with the remapped route ID.
+        getSettleState().renameDeclared(oldKey, newKey);
       }
     }
   }
@@ -382,6 +400,28 @@ export function route(
       if (!expressAutoDetected) {
         expressAutoDetected = true;
         performExpressAutoDetection(req);
+      }
+
+      // Settling-window grace (#1193): while the agent is still settling,
+      // wait — bounded by the remaining settle budget — for any declared
+      // dep this request would inject that is still unresolved. No-op
+      // (single latch check) once settled; deps are read AFTER the wait so
+      // they reflect the resolution state.
+      const settleState = getSettleState();
+      if (normalizedDeps.length > 0 && !settleState.isSettled()) {
+        const currentId = registry.resolveRouteId(routeRef.id);
+        const pendingSettle: PendingSettleDep[] = [];
+        normalizedDeps.forEach((dep, depIndex) => {
+          if (registry.getDependency(currentId, depIndex) === null) {
+            pendingSettle.push({
+              depKey: `${currentId}:dep_${depIndex}`,
+              capability: dep.capability,
+            });
+          }
+        });
+        if (pendingSettle.length > 0) {
+          await settleState.awaitPending(pendingSettle);
+        }
       }
 
       // Get resolved dependencies as object (use ref to get current ID after introspection)

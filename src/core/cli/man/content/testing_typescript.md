@@ -222,6 +222,8 @@ expect(mockCalculator).toHaveBeenCalledWith({ expression: "6*7" });
 expect(result).toBe("42");
 ```
 
+Call `setMockDependency` AFTER the tools are registered — it targets the registered tool's dependency slot. Mocks are not sticky: a later real `dependency_available` event overwrites them, by design for the no-registry unit-test context this API is meant for.
+
 ## Available MCP Methods
 
 | Method           | Description                  |

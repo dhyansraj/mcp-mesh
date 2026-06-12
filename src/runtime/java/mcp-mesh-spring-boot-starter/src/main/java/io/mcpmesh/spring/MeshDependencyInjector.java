@@ -52,6 +52,16 @@ public class MeshDependencyInjector {
         if (endpoint != null) {
             log.info("Dependency available: {} at {}", capability, endpoint);
             proxy.updateEndpoint(endpoint, functionName);
+            // Settling-window grace (#1193): this is the ROUTE funnel —
+            // @MeshRoute requests wait on capability keys because every
+            // route resolves through THIS injector's SHARED per-capability
+            // proxy, which the updateEndpoint above makes live before the
+            // countdown — a woken route request re-reads a live proxy
+            // regardless of which consumer's event fired. Tool wrappers do
+            // NOT use this key: their waits are per-consumer-slot
+            // composites counted down inside MeshToolWrapper
+            // .updateDependency (after that wrapper's slot is written).
+            MeshSettleState.getInstance().markResolved(capability);
         } else {
             log.info("Dependency unavailable: {}", capability);
             proxy.markUnavailable();

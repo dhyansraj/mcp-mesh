@@ -116,9 +116,28 @@ public class MeshRouteHandlerInterceptor implements HandlerInterceptor {
         Map<String, McpMeshTool> resolvedDeps = new LinkedHashMap<>();
         boolean allResolved = true;
 
+        io.mcpmesh.spring.MeshSettleState settleState =
+            io.mcpmesh.spring.MeshSettleState.getInstance();
         for (MeshRouteRegistry.DependencySpec dep : metadata.getDependencies()) {
             try {
                 McpMeshTool tool = resolveDependency(dep);
+                // Settling-window grace (#1193): while the agent is still
+                // settling, block — bounded by the remaining settle budget —
+                // on the per-capability latch, then re-resolve. CAPABILITY
+                // keying is deliberate (unlike the tool wrappers' per-slot
+                // composite keys): routes resolve through the injector's
+                // SHARED per-capability proxy, which updateToolDependency
+                // makes live BEFORE counting this latch down — a woken
+                // request re-reads a live proxy regardless of which
+                // consumer's event fired, so there is no wrong-consumer
+                // hazard here. Java route proxies typically
+                // exist-but-unavailable rather than null, so the wait is
+                // keyed on AVAILABILITY. No-op (single latch check) once
+                // settled. Blocking is fine on the servlet request thread.
+                if ((tool == null || !tool.isAvailable()) && !settleState.isSettled()) {
+                    settleState.awaitDependency(dep.getCapability(), dep.getCapability());
+                    tool = resolveDependency(dep);
+                }
                 if (tool != null && tool.isAvailable()) {
                     resolvedDeps.put(dep.getCapability(), tool);
                     // Also store by parameter name for @MeshInject

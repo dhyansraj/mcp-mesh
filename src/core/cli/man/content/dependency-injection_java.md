@@ -295,7 +295,7 @@ record Employee(int id, String name, String department) {}
 
 ## Graceful Degradation
 
-Dependencies may be unavailable if the providing agent is down or not yet started. Always handle `null` and check availability:
+Dependencies may be unavailable if the providing agent is down or not yet started. During agent startup, calls on a declared-but-unresolved dependency first wait — bounded by the settle window (`MCP_MESH_SETTLE_TIMEOUT`, default 20s; the window starts when the agent's first dependency is declared) — for the resolution to land before degrading; once the agent settles, unresolved dependencies inject `null`/unavailable proxies immediately. Always handle `null` and check availability:
 
 ```java
 @MeshTool(capability = "agent_status",

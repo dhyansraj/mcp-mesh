@@ -111,6 +111,21 @@ public class MeshToolWrapper implements McpToolHandler {
     // Dependency names for error messages
     private final List<String> dependencyNames;
 
+    // Positional pairing between the DECLARED dependency list and this
+    // method's injectable slots (issue #1193 fix round). Declared
+    // dependencies pair positionally with injectable parameters
+    // (McpMeshTool + MeshJob) in parameter order — the same contract as
+    // Python/TypeScript. The two index spaces differ whenever a MeshJob
+    // dependency is declared: e.g. dependencies = ["job_cap", "db_cap"]
+    // with params (MeshJob job, McpMeshTool db) has db_cap at DECLARED
+    // index 1 but McpMeshTool SLOT ordinal 0. Registry events carry the
+    // declared index; injectedDeps/meshToolReturnTypes are slot-ordinal
+    // arrays — these tables translate between the two.
+    /** Declared dep index → McpMeshTool slot ordinal; -1 = no proxy slot (MeshJob-backed or excess). */
+    private final int[] depIndexToSlot;
+    /** McpMeshTool slot ordinal → declared dep index; -1 = no declared dependency backs the slot. */
+    private final int[] slotToDepIndex;
+
     // Consumer-side: MeshJobSubmitter to inject when MeshJob slot is present
     // and this method depends on a task=true capability. Set by the runtime
     // wiring (MeshAutoConfiguration / MeshEventProcessor) once the registry
@@ -226,6 +241,32 @@ public class MeshToolWrapper implements McpToolHandler {
         this.injectedDeps = new AtomicReferenceArray<>(meshToolPositions.size());
         this.injectedLlmAgents = new AtomicReferenceArray<>(llmAgentPositions.size());
 
+        // Build the declared-index ↔ slot-ordinal translation (see field
+        // javadoc). Eligible positions = McpMeshTool + MeshJob parameter
+        // positions in parameter order; dependencies[k] pairs with the
+        // k-th eligible position.
+        this.depIndexToSlot = new int[this.dependencyNames.size()];
+        this.slotToDepIndex = new int[meshToolPositions.size()];
+        Arrays.fill(this.depIndexToSlot, -1);
+        Arrays.fill(this.slotToDepIndex, -1);
+        List<Integer> eligiblePositions = new ArrayList<>(meshToolPositions);
+        if (meshJobParamIndex != null) {
+            eligiblePositions.add(meshJobParamIndex);
+            Collections.sort(eligiblePositions);
+        }
+        for (int k = 0; k < eligiblePositions.size() && k < this.dependencyNames.size(); k++) {
+            int paramPos = eligiblePositions.get(k);
+            if (meshJobParamIndex != null && paramPos == meshJobParamIndex) {
+                // MeshJob-backed dependency: the submitter is wired
+                // locally (JobsRuntimeManager), never by a proxy event —
+                // no slot, no settle key.
+                continue;
+            }
+            int slot = meshToolPositions.indexOf(paramPos);
+            this.depIndexToSlot[k] = slot;
+            this.slotToDepIndex[slot] = k;
+        }
+
         // Generate input schema (excluding injected params)
         this.inputSchema = generateInputSchema();
 
@@ -333,18 +374,43 @@ public class MeshToolWrapper implements McpToolHandler {
     // =========================================================================
 
     /**
-     * Update a McpMeshTool dependency at the given index.
+     * Update a McpMeshTool dependency at the given DECLARED index.
      * Called by MeshToolWrapperRegistry when heartbeat resolves a dependency.
+     *
+     * <p>The declared index is translated to the McpMeshTool slot ordinal
+     * (they differ when a MeshJob dependency is declared — see
+     * {@link #depIndexToSlot}). Updates for MeshJob-backed or excess
+     * declared indices are ignored: a job dependency's resolution event
+     * must never land a proxy in (or evict) another parameter's slot.
+     *
+     * <p>Settling-window grace (#1193): a non-null available proxy counts
+     * down the per-consumer-slot settle latch ({@code funcId:dep_N}) AFTER
+     * the array slot is written, so a settling call woken by the latch
+     * re-reads a populated slot. Per-slot keying means only THIS wrapper's
+     * waiters wake — another tool sharing the capability keeps waiting for
+     * its own slot's event.
      *
      * @param depIndex The dependency index (0-based, in declaration order)
      * @param proxy    The resolved proxy (or null if unavailable)
      */
     @SuppressWarnings("rawtypes")
     public void updateDependency(int depIndex, McpMeshTool proxy) {
-        if (depIndex >= 0 && depIndex < injectedDeps.length()) {
-            injectedDeps.set(depIndex, proxy);
-            log.debug("Updated dependency {} at index {} for {}",
-                proxy != null ? proxy.getCapability() : "null", depIndex, funcId);
+        if (depIndex < 0 || depIndex >= depIndexToSlot.length) {
+            return;
+        }
+        int slot = depIndexToSlot[depIndex];
+        if (slot < 0) {
+            log.debug("Ignoring dependency update at declared index {} for {} — "
+                + "no McpMeshTool slot (MeshJob-backed or excess dependency)",
+                depIndex, funcId);
+            return;
+        }
+        injectedDeps.set(slot, proxy);
+        log.debug("Updated dependency {} at declared index {} (slot {}) for {}",
+            proxy != null ? proxy.getCapability() : "null", depIndex, slot, funcId);
+        if (proxy != null && proxy.isAvailable()) {
+            MeshSettleState.getInstance().markResolved(
+                MeshToolWrapperRegistry.buildDependencyKey(funcId, depIndex));
         }
     }
 
@@ -680,14 +746,39 @@ public class MeshToolWrapper implements McpToolHandler {
         }
 
         // Fill McpMeshTool dependencies (null if unavailable for graceful degradation)
+        MeshSettleState settleState = MeshSettleState.getInstance();
         for (int i = 0; i < meshToolPositions.size(); i++) {
             int paramPos = meshToolPositions.get(i);
             McpMeshTool proxy = injectedDeps.get(i);
+            // Declared dependency index backing this slot — NOT i: the two
+            // index spaces skew when a MeshJob dependency is declared
+            // (e.g. ["job_cap", "db_cap"] puts db_cap at declared index 1
+            // but slot ordinal 0). -1 = slot has no declared dependency.
+            int depIdx = slotToDepIndex[i];
+
+            // Settling-window grace (#1193): while the agent is still
+            // settling, block — bounded by the remaining settle budget — on
+            // THIS consumer slot's latch (composite funcId:dep_N key,
+            // counted down by updateDependency AFTER it writes the slot),
+            // then re-read the slot. A proxy may exist but be unavailable
+            // (endpoint not yet landed), so the wait is keyed on
+            // AVAILABILITY, not just null-ness. No-op (single latch check)
+            // once settled — fail-fast behavior is unchanged. Blocking is
+            // fine here: tool dispatch runs on Spring's request pool,
+            // never an event loop.
+            if ((proxy == null || !proxy.isAvailable())
+                    && depIdx >= 0
+                    && !settleState.isSettled()) {
+                settleState.awaitDependency(
+                    MeshToolWrapperRegistry.buildDependencyKey(funcId, depIdx),
+                    dependencyNames.get(depIdx));
+                proxy = injectedDeps.get(i);
+            }
 
             // Allow null for graceful degradation - tool method can check:
             //   if (dep != null && dep.isAvailable()) { ... } else { fallback }
             if (proxy == null) {
-                String depName = i < dependencyNames.size() ? dependencyNames.get(i) : "unknown";
+                String depName = depIdx >= 0 ? dependencyNames.get(depIdx) : "unknown";
                 log.debug("Dependency {} not available for {}, passing null for graceful degradation",
                     depName, funcId);
             }
@@ -1301,19 +1392,44 @@ public class MeshToolWrapper implements McpToolHandler {
     }
 
     /**
-     * Get the expected return type for a dependency at the given index.
+     * Get the expected return type for a dependency at the given DECLARED index.
      *
      * <p>This is extracted from the generic type parameter of McpMeshTool&lt;T&gt;.
      * For example, for {@code McpMeshTool<Integer>}, this returns {@code Integer.class}.
      *
-     * @param depIndex The dependency index
+     * <p>The declared index is translated to the McpMeshTool slot ordinal
+     * (the spaces skew when a MeshJob dependency is declared — see
+     * {@link #depIndexToSlot}).
+     *
+     * @param depIndex The dependency index (0-based, in declaration order)
      * @return The return type, or null if not specified or index out of bounds
      */
     public Type getDependencyReturnType(int depIndex) {
-        if (depIndex >= 0 && depIndex < meshToolReturnTypes.size()) {
-            return meshToolReturnTypes.get(depIndex);
+        if (depIndex >= 0 && depIndex < depIndexToSlot.length) {
+            int slot = depIndexToSlot[depIndex];
+            if (slot >= 0 && slot < meshToolReturnTypes.size()) {
+                return meshToolReturnTypes.get(slot);
+            }
         }
         return null;
+    }
+
+    /**
+     * Declared dependency indices backed by McpMeshTool slots — the
+     * indices whose composite keys ({@code funcId:dep_N}) participate in
+     * the settling-window grace (#1193). MeshJob-backed dependencies are
+     * excluded (the submitter is constructed locally, no resolution event
+     * will ever arrive for the slot), as are excess dependencies with no
+     * parameter to land in.
+     */
+    List<Integer> getSettleDepIndices() {
+        List<Integer> indices = new ArrayList<>();
+        for (int depIndex = 0; depIndex < depIndexToSlot.length; depIndex++) {
+            if (depIndexToSlot[depIndex] >= 0) {
+                indices.add(depIndex);
+            }
+        }
+        return indices;
     }
 
     /**
