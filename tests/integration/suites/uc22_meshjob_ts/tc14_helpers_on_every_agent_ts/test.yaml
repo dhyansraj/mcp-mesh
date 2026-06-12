@@ -45,23 +45,36 @@ test:
     workdir: /workspace
     command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
 
-  - name: "Wait for provider"
-    handler: wait
-    seconds: 15
-
   - name: "Start consumer"
     handler: shell
     workdir: /workspace
-    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   - name: "Start orchestrator (no task tools, no deps)"
     handler: shell
     workdir: /workspace
     command: meshctl start orchestrator-agent-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9113 -d
 
+  # Liveness only: poll for registration (replaces fixed sleeps). Dependency
+  # resolution is covered by the settle window (MCP_MESH_SETTLE_TIMEOUT=60).
+
   - name: "Wait for all 3 to register"
-    handler: wait
-    seconds: 28
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "long-task-provider-ts" && echo "$AGENTS" | grep -q "long-task-consumer-ts" && echo "$AGENTS" | grep -q "orchestrator-agent-ts"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
 
   - name: "Capture full agent IDs"
     handler: shell

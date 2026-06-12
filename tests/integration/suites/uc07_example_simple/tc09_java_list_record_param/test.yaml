@@ -56,42 +56,32 @@ test:
     workdir: /workspace
     command: |
       meshctl start /workspace/java-employee-service -d
-      meshctl start /workspace/java-greeter -d
-      meshctl start /workspace/java-rest-api -d
+      meshctl start /workspace/java-greeter --env MCP_MESH_SETTLE_TIMEOUT=60 -d
+      meshctl start /workspace/java-rest-api --env MCP_MESH_SETTLE_TIMEOUT=60 -d
       echo "All agents starting"
     capture: start_output
 
-  # Wait for all agents to register and dependencies to resolve
-  - name: "Wait for agents and dependency resolution"
+  # Liveness only: wait for all 3 agents to REGISTER. The old second loop
+  # (greeter DEPS column reaching 2-3/3) is gone — the settle window
+  # (MCP_MESH_SETTLE_TIMEOUT=60 on the consumers) covers dependency
+  # resolution for calls that arrive early.
+  - name: "Wait for all agents to register"
     handler: shell
     workdir: /workspace
     command: |
       echo "Waiting for all 3 agents to register..."
       for i in $(seq 1 45); do
         LIST=$(meshctl list 2>/dev/null || true)
-        HAS_EMPLOYEE=$(echo "$LIST" | grep -c "employee" || true)
-        HAS_GREETER=$(echo "$LIST" | grep -c "greeter" || true)
-        HAS_API=$(echo "$LIST" | grep -c "api" || true)
-        if [ "$HAS_EMPLOYEE" -gt 0 ] && [ "$HAS_GREETER" -gt 0 ] && [ "$HAS_API" -gt 0 ]; then
+        if echo "$LIST" | grep -q "employee" && echo "$LIST" | grep -q "greeter" && echo "$LIST" | grep -qi "api"; then
           echo "All agents registered after $((i*2))s"
-          break
-        fi
-        sleep 2
-      done
-      echo "Waiting for dependency resolution..."
-      for i in $(seq 1 30); do
-        LIST=$(meshctl list 2>/dev/null || true)
-        GREETER_LINE=$(echo "$LIST" | grep "greeter" || true)
-        if echo "$GREETER_LINE" | grep -qE "[2-3]/3"; then
-          echo "Dependencies resolved after additional $((i*2))s"
-          echo "$LIST"
+          meshctl list
           exit 0
         fi
         sleep 2
       done
-      echo "WARNING: Dependencies not fully resolved, proceeding anyway"
+      echo "ERROR: agents did not register within 90s"
       meshctl list 2>/dev/null || true
-      exit 0
+      exit 1
     capture: wait_agents
     timeout: 180
 

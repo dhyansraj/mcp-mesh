@@ -66,21 +66,22 @@ test:
   # Start java-calculator with tracing enabled
   - name: "Start java-calculator"
     handler: shell
-    command: "meshctl start /workspace/java-calculator --env-file .env -d"
+    command: "meshctl start /workspace/java-calculator --env-file .env --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: start_calculator
 
-  # Wait for agents to register and dependencies to resolve
+  # Liveness only: wait for both agents to REGISTER. The old "2/2 deps
+  # resolved" grep is gone — the settle window (MCP_MESH_SETTLE_TIMEOUT=60
+  # on java-calculator) covers dependency resolution.
   - name: "Wait for agent registration"
     handler: shell
     workdir: /workspace
     command: |
       echo "Waiting for Java agents to start and register..."
       for i in $(seq 1 45); do
-        # Check if both agents are registered and calculator has deps resolved
-        if meshctl list 2>/dev/null | grep -q "java-math-agent" && \
-           meshctl list 2>/dev/null | grep -q "java-calculator.*2/2"; then
-          echo "Both agents registered and deps resolved after ${i}s"
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "java-math-agent" && echo "$AGENTS" | grep -q "java-calculator"; then
+          echo "Both agents registered after $((i*2))s"
           exit 0
         fi
         sleep 2

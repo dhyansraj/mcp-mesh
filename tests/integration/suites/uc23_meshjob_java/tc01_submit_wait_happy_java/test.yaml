@@ -76,40 +76,33 @@ test:
   - name: "Start consumer (port 9121)"
     handler: shell
     workdir: /workspace
-    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 -d
+    command: meshctl start long-task-consumer-java --env MCP_MESH_HTTP_PORT=9121 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
-  - name: "Wait for Java consumer to be healthy + DI resolved"
+  # Liveness only: wait until all named agents are registered AND healthy
+  # (Java startup is slow and can flap). The old dependencies_resolved ==
+  # total_dependencies condition is gone — the settle window
+  # (MCP_MESH_SETTLE_TIMEOUT=60 on the consumer) covers DI resolution.
+  - name: "Wait for provider + consumer healthy"
     handler: shell
     workdir: /workspace
     command: |
-      # /agents.dependencies_resolved is a numeric count, not a bool —
-      # equals total_dependencies once every @Selector has a matched
-      # producer bound to the local proxy registry.
       for i in $(seq 1 60); do
-        ROW=$(curl -s http://localhost:8000/agents \
-          | jq -c '.agents[] | select(.name=="long-task-consumer-java")')
-        STATUS=$(echo "$ROW" | jq -r '.status' 2>/dev/null)
-        RESOLVED=$(echo "$ROW" | jq -r '.dependencies_resolved' 2>/dev/null)
-        TOTAL=$(echo "$ROW" | jq -r '.total_dependencies' 2>/dev/null)
-        # Provider must also still be healthy — Java's slow startup
-        # can cause it to flap, and resolved deps might transiently
-        # drop. Assert end-state where both are healthy + all wired.
-        PSTATUS=$(curl -s http://localhost:8000/agents \
-          | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
-        if [ "$STATUS" = "healthy" ] && [ "$PSTATUS" = "healthy" ] \
-           && [ "$RESOLVED" = "$TOTAL" ] && [ "$TOTAL" != "0" ] && [ "$TOTAL" != "null" ]; then
-          echo "consumer healthy with $RESOLVED/$TOTAL deps resolved after ${i}x2s"
+        AGENTS=$(curl -s http://localhost:8000/agents)
+        OK=1
+        S=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-provider-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] || OK=0
+        S=$(echo "$AGENTS" | jq -r '.agents[] | select(.name=="long-task-consumer-java") | .status' 2>/dev/null)
+        [ "$S" = "healthy" ] || OK=0
+        if [ "$OK" = "1" ]; then
+          echo "all agents healthy after ${i}x2s"
           exit 0
         fi
         sleep 2
       done
-      echo "ERROR: consumer not ready within 120s (status=$STATUS deps=$RESOLVED/$TOTAL provider_status=$PSTATUS)"
-      echo "=== consumer logs ==="
-      meshctl logs long-task-consumer-java 2>&1 | tail -50 || true
-      echo "=== provider logs ==="
+      echo "ERROR: agents not healthy within 120s"
       meshctl logs long-task-provider-java 2>&1 | tail -50 || true
-      echo "=== /agents ==="
-      curl -s http://localhost:8000/agents | jq '.agents[] | {name, status, dependencies_resolved, total_dependencies, last_seen}'
+      meshctl logs long-task-consumer-java 2>&1 | tail -50 || true
+      curl -s http://localhost:8000/agents | jq '.agents[] | {name, status, last_seen}'
       exit 1
     timeout: 150
 

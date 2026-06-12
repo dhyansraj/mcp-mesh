@@ -49,18 +49,32 @@ test:
     workdir: /workspace
     command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
 
-  - name: "Wait for system-agent registration"
-    handler: wait
-    seconds: 12
-
   - name: "Start date-a2a-agent (port 9090)"
     handler: shell
     workdir: /workspace
-    command: meshctl start date-a2a-agent/main.py -d
+    command: meshctl start date-a2a-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
-  - name: "Wait for DI resolution"
-    handler: wait
-    seconds: 18
+  # Liveness only: poll until the provider is registered and the A2A
+  # surface answers its card URL (replaces the fixed sleeps). DI resolution
+  # is covered by the settle window (MCP_MESH_SETTLE_TIMEOUT=60 on the
+  # date-a2a-agent).
+  - name: "Wait for provider + A2A surface"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "system-agent" && curl -fsS --max-time 2 http://localhost:9090/agents/date/.well-known/agent.json >/dev/null 2>&1; then
+          echo "provider registered + A2A surface listening after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: provider/A2A surface not up within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_ready
+    timeout: 90
 
   # tasks/list is part of A2A v1.0 but mcp-mesh does NOT implement it.
   # The dispatcher must emit a -32601 envelope rather than 404 / 500.

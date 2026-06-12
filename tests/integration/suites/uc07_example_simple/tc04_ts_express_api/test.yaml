@@ -54,12 +54,35 @@ test:
 
   - name: "Start Express API via meshctl"
     handler: shell
-    command: "meshctl start express-api/index.ts -d"
+    command: "meshctl start express-api/index.ts --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
 
-  - name: "Wait for all services to start"
-    handler: wait
-    seconds: 15
+  # Liveness only: poll for registration (replaces the fixed sleep).
+  # Dependency resolution is covered by the settle window
+  # (MCP_MESH_SETTLE_TIMEOUT=60 on the consumer agents).
+
+  # Liveness only: poll until both MCP agents are registered AND the Express
+  # HTTP server answers (replaces the fixed 15s sleep). Dependency resolution
+  # is covered by the settle window (MCP_MESH_SETTLE_TIMEOUT=60 on express-api).
+  - name: "Wait for agents to register and Express to listen"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for calculator, greeter and Express HTTP..."
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "calculator" && echo "$AGENTS" | grep -q "greeter" \
+           && curl -s --max-time 2 http://localhost:3000/health >/dev/null 2>&1; then
+          echo "All services up after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: services not up within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
 
   # Verify agents registered
   - name: "Verify agents registered"

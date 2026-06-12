@@ -49,18 +49,32 @@ test:
     workdir: /workspace
     command: meshctl start long-task-provider/main.py -d
 
-  - name: "Wait for provider"
-    handler: wait
-    seconds: 12
-
   - name: "Start report-a2a-agent (port 9091)"
     handler: shell
     workdir: /workspace
-    command: meshctl start report-a2a-agent/main.py -d
+    command: meshctl start report-a2a-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
-  - name: "Wait for DI resolution"
-    handler: wait
-    seconds: 18
+  # Liveness only: poll until the provider is registered and the A2A
+  # surface answers its card URL (replaces the fixed sleeps). DI resolution
+  # is covered by the settle window (MCP_MESH_SETTLE_TIMEOUT=60 on the
+  # report-a2a-agent).
+  - name: "Wait for provider + A2A surface"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "long-task-provider" && curl -fsS --max-time 2 http://localhost:9091/agents/report/.well-known/agent.json >/dev/null 2>&1; then
+          echo "provider registered + A2A surface listening after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: provider/A2A surface not up within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_ready
+    timeout: 90
 
   # -N disables curl output buffering (otherwise the stream is held in
   # the curl buffer until the stream closes anyway, but -N keeps stderr

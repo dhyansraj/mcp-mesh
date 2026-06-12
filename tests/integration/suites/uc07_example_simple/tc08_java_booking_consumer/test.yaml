@@ -69,12 +69,15 @@ test:
     capture: wait_schedule
     timeout: 120
 
-  # Start booking consumer
+  # Start booking consumer.
+  # MCP_MESH_SETTLE_TIMEOUT=60 (settling-window dependency grace, PR #1200):
+  # calls arriving before the schedule-agent deps resolve are held until
+  # resolution lands — the old "wait for 2/2 deps" polling step is gone.
   - name: "Start Java booking consumer"
     handler: shell
     workdir: /workspace
     command: |
-      meshctl start /workspace/java-booking-consumer -d
+      meshctl start /workspace/java-booking-consumer --env MCP_MESH_SETTLE_TIMEOUT=60 -d
       echo "Java booking consumer starting"
     capture: start_booking
 
@@ -95,24 +98,6 @@ test:
       meshctl logs booking 2>/dev/null | tail -30 || true
       exit 1
     capture: wait_booking
-    timeout: 120
-
-  # Wait for booking consumer's dependencies to resolve
-  - name: "Wait for booking deps to resolve"
-    handler: shell
-    workdir: /workspace
-    command: |
-      echo "Waiting for booking consumer deps (2/2)..."
-      for i in $(seq 1 30); do
-        if meshctl list 2>/dev/null | grep "booking" | grep -q "2/2"; then
-          echo "Booking deps resolved after $((i*3))s"
-          exit 0
-        fi
-        sleep 3
-      done
-      echo "WARNING: Booking deps may not be fully resolved, proceeding anyway"
-      meshctl list 2>/dev/null || true
-    capture: wait_deps
     timeout: 120
 
   # Verify both agents registered

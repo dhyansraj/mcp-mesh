@@ -47,14 +47,10 @@ test:
     workdir: /workspace
     command: meshctl start system-agent/main.py --env MCP_MESH_HTTP_PORT=9100 -d
 
-  - name: "Wait for system-agent registration"
-    handler: wait
-    seconds: 12
-
   - name: "Start date-a2a-agent (port 9090)"
     handler: shell
     workdir: /workspace
-    command: meshctl start date-a2a-agent/main.py -d
+    command: meshctl start date-a2a-agent/main.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   - name: "Wait for A2A surface heartbeat + card cache"
     handler: wait

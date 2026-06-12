@@ -42,18 +42,32 @@ test:
     workdir: /workspace
     command: meshctl start long-task-provider-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9110 -d
 
-  - name: "Wait for provider"
-    handler: wait
-    seconds: 15
-
   - name: "Start consumer (port 9111)"
     handler: shell
     workdir: /workspace
-    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 -d
+    command: meshctl start long-task-consumer-ts/src/index.ts --env MCP_MESH_HTTP_PORT=9111 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
-  - name: "Wait for consumer + DI resolution"
-    handler: wait
-    seconds: 22
+  # Liveness only: wait for both agents to REGISTER (meshctl call routes via
+  # the registry). Dependency resolution is covered by the settle window —
+  # no fixed dep-resolution sleep needed.
+  - name: "Wait for both agents to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      echo "Waiting for both agents to register..."
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "long-task-provider-ts" && echo "$AGENTS" | grep -q "long-task-consumer-ts"; then
+          echo "Both agents registered after ~${i}s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: agents did not register within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
 
   - name: "Submit generate_report (7 sections, ~14s) — get job_id"
     handler: shell

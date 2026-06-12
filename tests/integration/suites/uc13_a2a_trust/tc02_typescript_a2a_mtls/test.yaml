@@ -32,19 +32,33 @@ test:
     workdir: /workspace
     capture: system_start
 
-  - name: "Wait for system agent to register"
-    handler: wait
-    seconds: 10
-
   - name: "Start TypeScript greeter with TLS auto"
     handler: shell
-    command: "meshctl start ts-greeter/index.ts --tls-auto -d"
+    command: "meshctl start ts-greeter/index.ts --tls-auto --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: ts_start
 
-  - name: "Wait for TypeScript agent to register"
-    handler: wait
-    seconds: 10
+  # Liveness only: poll for both registrations (replaces fixed sleeps).
+  # Dependency resolution is covered by the settle window
+  # (MCP_MESH_SETTLE_TIMEOUT=60 on the greeter).
+
+  - name: "Wait for both agents to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "system-agent" && echo "$AGENTS" | grep -q "greeter-ts"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
 
   - name: "List agents"
     handler: shell

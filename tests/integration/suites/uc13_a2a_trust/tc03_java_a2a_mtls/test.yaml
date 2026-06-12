@@ -33,27 +33,26 @@ test:
     workdir: /workspace
     capture: system_start
 
-  - name: "Wait for system agent to register"
-    handler: wait
-    seconds: 10
-
   - name: "Start Java greeter with TLS auto"
     handler: shell
-    command: "meshctl start java-greeter --tls-auto -d"
+    command: "meshctl start java-greeter --tls-auto --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: java_start
 
-  - name: "Wait for Java agent to register"
+  # Liveness only: poll for both registrations. Dependency resolution is
+  # covered by the settle window (MCP_MESH_SETTLE_TIMEOUT=60 on the greeter).
+  - name: "Wait for both agents to register"
     handler: shell
     command: |
       for i in $(seq 1 45); do
-        if meshctl list 2>/dev/null | grep -q "greeter-java"; then
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "system-agent" && echo "$AGENTS" | grep -q "greeter-java"; then
           echo "REGISTERED after $((i*2)) seconds"
           exit 0
         fi
         sleep 2
       done
-      echo "TIMEOUT: Java agent did not register within 90s"
+      echo "TIMEOUT: agents did not register within 90s"
       meshctl list 2>/dev/null || true
       exit 1
     workdir: /workspace

@@ -34,17 +34,35 @@ test:
 
   - name: "Start fastmcp_agent (middle - depends on system_agent)"
     handler: shell
-    command: "meshctl start simple/fastmcp_agent.py -d"
+    command: "meshctl start simple/fastmcp_agent.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
 
   - name: "Start dependent_agent (top - depends on fastmcp_agent)"
     handler: shell
-    command: "meshctl start simple/dependent_agent.py -d"
+    command: "meshctl start simple/dependent_agent.py --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
 
+  # Liveness only: poll for registration (replaces the fixed sleep).
+  # Dependency resolution is covered by the settle window
+  # (MCP_MESH_SETTLE_TIMEOUT=60 on the consumer agents).
+
   - name: "Wait for agents to register"
-    handler: wait
-    seconds: 15
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "system-agent" && echo "$AGENTS" | grep -q "fastmcp-service" && echo "$AGENTS" | grep -q "dependent-service"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
 
   # Verify agents registered
   - name: "Verify agents registered"

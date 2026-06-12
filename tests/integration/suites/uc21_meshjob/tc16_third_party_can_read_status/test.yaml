@@ -60,14 +60,10 @@ test:
     workdir: /workspace
     command: meshctl start long-task-provider/main.py --env MCP_MESH_HTTP_PORT=9100 -d
 
-  - name: "Wait for provider"
-    handler: wait
-    seconds: 12
-
   - name: "Start consumer"
     handler: shell
     workdir: /workspace
-    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 -d
+    command: meshctl start long-task-consumer/main.py --env MCP_MESH_HTTP_PORT=9101 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   - name: "Start bystander X"
     handler: shell
@@ -79,9 +75,26 @@ test:
     workdir: /workspace
     command: meshctl start bystander-y/main.py --env MCP_MESH_HTTP_PORT=9105 -d
 
-  - name: "Wait for all 4 to register + DI to settle"
-    handler: wait
-    seconds: 25
+  # Liveness only: poll for registration (replaces fixed sleeps). Dependency
+  # resolution is covered by the settle window (MCP_MESH_SETTLE_TIMEOUT=60).
+
+  - name: "Wait for all 4 to register"
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "long-task-provider" && echo "$AGENTS" | grep -q "long-task-consumer" && echo "$AGENTS" | grep -q "bystander-x" && echo "$AGENTS" | grep -q "bystander-y"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_registration
+    timeout: 90
 
   - name: "Confirm all 4 agents in registry"
     handler: shell

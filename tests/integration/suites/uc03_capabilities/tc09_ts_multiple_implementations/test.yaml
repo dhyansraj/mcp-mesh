@@ -49,20 +49,56 @@ test:
     workdir: /workspace
     capture: start_providers
 
+  # Poll for provider registration (replaces the fixed sleep). Providers must
+  # be registered BEFORE the consumer starts: tag/selector matching at
+  # resolution time is the test subject, so ordering stays.
+
   - name: "Wait for providers registration"
-    handler: wait
-    seconds: 10
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "ts-fast-provider" && echo "$AGENTS" | grep -q "ts-accurate-provider"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_providers
+    timeout: 90
 
   # Start consumer
   - name: "Start TS tag consumer"
     handler: shell
-    command: "meshctl start ts-tag-consumer/src/index.ts -d"
+    command: "meshctl start ts-tag-consumer/src/index.ts --env MCP_MESH_SETTLE_TIMEOUT=60 -d"
     workdir: /workspace
     capture: start_consumer
 
+  # Liveness only: poll for consumer registration (meshctl call routes via
+  # the registry). Dependency resolution is covered by the settle window
+  # (MCP_MESH_SETTLE_TIMEOUT=60 on the consumer start).
+
   - name: "Wait for consumer registration"
-    handler: wait
-    seconds: 10
+    handler: shell
+    workdir: /workspace
+    command: |
+      for i in $(seq 1 60); do
+        AGENTS=$(meshctl list 2>/dev/null || true)
+        if echo "$AGENTS" | grep -q "ts-tag-consumer"; then
+          echo "Registered after $((i*1))s"
+          exit 0
+        fi
+        sleep 1
+      done
+      echo "ERROR: not registered within 60s"
+      meshctl list 2>/dev/null || true
+      exit 1
+    capture: wait_consumer
+    timeout: 90
 
   # Verify all agents registered
   - name: "Verify all agents registered"

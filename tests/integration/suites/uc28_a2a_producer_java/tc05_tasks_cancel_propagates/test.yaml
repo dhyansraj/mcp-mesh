@@ -48,14 +48,10 @@ test:
     workdir: /workspace
     command: meshctl start long-task-provider/main.py -d
 
-  - name: "Wait for provider"
-    handler: wait
-    seconds: 12
-
   - name: "Start producer-report-agent-java (port 9091)"
     handler: shell
     workdir: /workspace
-    command: meshctl start producer-report-agent-java --env MCP_MESH_HTTP_PORT=9091 -d
+    command: meshctl start producer-report-agent-java --env MCP_MESH_HTTP_PORT=9091 --env MCP_MESH_SETTLE_TIMEOUT=60 -d
 
   - name: "Wait for Java producer healthy + a2a"
     handler: shell
